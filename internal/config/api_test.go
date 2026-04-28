@@ -4,6 +4,10 @@ import "testing"
 
 func TestLoadAPIParsesDefaults(t *testing.T) {
 	t.Setenv("SANDBOX_API_KEYS", "test")
+	t.Setenv("SANDBOX_LISTEN_ADDR", "")
+	t.Setenv("SANDBOX_MAX_FILE_BYTES", "")
+	t.Setenv("SANDBOX_RUNNER_URL", "")
+	t.Setenv("SANDBOX_RUNNER_API_KEY", "")
 
 	cfg, err := LoadAPI()
 	if err != nil {

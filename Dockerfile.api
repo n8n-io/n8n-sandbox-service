@@ -15,8 +15,12 @@ RUN apk add --no-cache tini ca-certificates
 
 COPY --from=builder /out/api /usr/local/bin/sandbox-api
 
+RUN addgroup -S sandbox && adduser -S -G sandbox sandbox
+
 ENV SANDBOX_LISTEN_ADDR=:8080
 
 EXPOSE 8080
+
+USER sandbox:sandbox
 
 ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/sandbox-api"]

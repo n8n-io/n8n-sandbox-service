@@ -42,7 +42,6 @@ func NewRouter(mgr SandboxManager, cfg *config.Config) http.Handler {
 	mux.HandleFunc("DELETE /sandboxes/{id}/files", proxy)
 	mux.HandleFunc("POST /sandboxes/{id}/mkdir", proxy)
 	mux.HandleFunc("GET /sandboxes/{id}/stat", proxy)
-	mux.HandleFunc("GET /internal/sandboxes/{id}/daemon-url", GetDaemonURL(mgr))
 
 	// Apply middleware (outermost first)
 	var handler http.Handler = mux

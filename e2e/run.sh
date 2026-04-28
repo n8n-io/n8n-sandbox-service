@@ -10,9 +10,10 @@ RUNNER_IMAGE="n8n-sandbox-runner:latest-${ARCH}"
 SANDBOX_IMAGE="n8n-sandbox:latest-${ARCH}"
 REGISTRY_NAME="${N8N_SANDBOX_REGISTRY_NAME:-n8n-sandbox-registry}"
 REGISTRY_PORT="${REGISTRY_PORT:-5050}"
-REGISTRY_ADDR="host.docker.internal:${REGISTRY_PORT}"
+REGISTRY_ADDR="localhost:${REGISTRY_PORT}"
+REGISTRY_INTERNAL_ADDR="${REGISTRY_NAME}:5000"
 PUSH_SANDBOX_IMAGE="localhost:${REGISTRY_PORT}/n8n-sandbox:e2e-${ARCH}"
-REMOTE_SANDBOX_IMAGE="${REGISTRY_ADDR}/n8n-sandbox:e2e-${ARCH}"
+REMOTE_SANDBOX_IMAGE="${REGISTRY_INTERNAL_ADDR}/n8n-sandbox:e2e-${ARCH}"
 RUNNER_CONTAINER_NAME="sandbox-runner-e2e-$$"
 API_CONTAINER_NAME="sandbox-api-e2e-$$"
 NETWORK_NAME="sandbox-e2e-net-$$"
@@ -38,11 +39,21 @@ trap cleanup EXIT
 echo "Building service and sandbox images..."
 make -C "$PROJECT_DIR" docker-local
 
+docker network create "$NETWORK_NAME" >/dev/null
+
 if ! docker ps --format '{{.Names}}' | grep -qx "${REGISTRY_NAME}"; then
   echo "Starting local registry..."
   docker rm -f "${REGISTRY_NAME}" >/dev/null 2>&1 || true
-  docker run -d --restart unless-stopped --name "$REGISTRY_NAME" -p "${REGISTRY_PORT}:5000" registry:2 >/dev/null
+  docker run -d \
+    --restart unless-stopped \
+    --name "$REGISTRY_NAME" \
+    --network "$NETWORK_NAME" \
+    -p "${REGISTRY_PORT}:5000" \
+    registry:2 >/dev/null
   STARTED_REGISTRY=true
+else
+  # Reused registry may not be attached to this e2e network.
+  docker network connect "$NETWORK_NAME" "$REGISTRY_NAME" >/dev/null 2>&1 || true
 fi
 
 echo "Pushing sandbox image to local registry..."
@@ -56,16 +67,13 @@ else
   RUNTIME_ARGS+=(--runtime=sysbox-runc)
 fi
 
-docker network create "$NETWORK_NAME" >/dev/null
-
 echo "Starting runner service..."
 docker run -d \
   "${RUNTIME_ARGS[@]}" \
   --network "$NETWORK_NAME" \
-  --add-host host.docker.internal:host-gateway \
   -e "SANDBOX_API_KEYS=$RUNNER_INTERNAL_API_KEY" \
   -e "SANDBOX_DOCKER_SANDBOX_IMAGE=$REMOTE_SANDBOX_IMAGE" \
-  -e "SANDBOX_DOCKER_INSECURE_REGISTRIES=$REGISTRY_ADDR" \
+  -e "SANDBOX_DOCKER_INSECURE_REGISTRIES=$REGISTRY_INTERNAL_ADDR" \
   --name "$RUNNER_CONTAINER_NAME" \
   "$RUNNER_IMAGE"
 
