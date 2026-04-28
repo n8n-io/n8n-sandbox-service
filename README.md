@@ -95,7 +95,7 @@ curl -s -X DELETE http://localhost:8080/sandboxes/<id> \
 | `SANDBOX_API_KEYS` | *(required)* | Comma-separated list of valid external API keys |
 | `SANDBOX_RUNNER_URL` | `http://localhost:8081` | Base URL for forwarding requests to the runner |
 | `SANDBOX_RUNNER_API_KEY` | *(empty)* | Optional API key injected by the API when calling runner |
-| `SANDBOX_LISTEN_ADDR` | `:8080` | HTTP listen address |
+| `SANDBOX_API_LISTEN_ADDR` | `:8080` | HTTP listen address |
 | `SANDBOX_MAX_FILE_BYTES` | `10485760` | Maximum file upload size (10 MB) |
 
 ### Runner container
@@ -105,7 +105,7 @@ curl -s -X DELETE http://localhost:8080/sandboxes/<id> \
 | `SANDBOX_API_KEYS` | *(required)* | Comma-separated list of valid internal API keys accepted from the API container |
 | `SANDBOX_DOCKER_SANDBOX_IMAGE` | *(required)* | Docker image used for sandbox containers |
 | `SANDBOX_DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker daemon endpoint used by the runner |
-| `SANDBOX_LISTEN_ADDR` | `:8080` | HTTP listen address |
+| `SANDBOX_RUNNER_LISTEN_ADDR` | `:8080` | HTTP listen address |
 | `SANDBOX_DATA_DIR` | `/var/sandboxes` | Directory for SQLite state |
 | `SANDBOX_IDLE_TTL_SECONDS` | `3600` | Seconds of inactivity before a sandbox is reaped |
 | `SANDBOX_ENABLE_CGROUPS` | `true` | Whether Docker resource limits are applied |

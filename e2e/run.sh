@@ -28,6 +28,12 @@ cleanup() {
   docker rm "$API_CONTAINER_NAME" >/dev/null 2>&1 || true
   docker stop "$RUNNER_CONTAINER_NAME" >/dev/null 2>&1 || true
   docker rm "$RUNNER_CONTAINER_NAME" >/dev/null 2>&1 || true
+  
+  # If we reused an existing registry, disconnect it from our e2e network before cleanup
+  if ! $STARTED_REGISTRY && docker network inspect "$NETWORK_NAME" >/dev/null 2>&1; then
+    docker network disconnect "$NETWORK_NAME" "$REGISTRY_NAME" >/dev/null 2>&1 || true
+  fi
+  
   docker network rm "$NETWORK_NAME" >/dev/null 2>&1 || true
   if $STARTED_REGISTRY; then
     docker stop "$REGISTRY_NAME" >/dev/null 2>&1 || true
@@ -79,7 +85,7 @@ docker run -d \
 
 echo "Waiting for runner service..."
 for i in $(seq 1 60); do
-  if docker exec "$RUNNER_CONTAINER_NAME" wget -q -O - http://localhost:8080/healthz >/dev/null 2>&1; then
+  if docker exec "$RUNNER_CONTAINER_NAME" wget -q -O - --header="X-Api-Key: $RUNNER_INTERNAL_API_KEY" http://localhost:8080/healthz >/dev/null 2>&1; then
     echo "Runner is ready."
     break
   fi

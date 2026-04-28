@@ -8,7 +8,9 @@ import (
 )
 
 const (
-	defaultRunnerURL = "http://localhost:8081"
+	defaultListenAddr   = ":8080"
+	defaultMaxFileBytes = 10 * 1024 * 1024 // 10 MB
+	defaultRunnerURL    = "http://localhost:8081"
 )
 
 // APIConfig contains configuration for the public API gateway.
@@ -27,6 +29,9 @@ type APIConfig struct {
 
 	// RunnerAPIKey is the optional API key sent to runner via X-Api-Key.
 	RunnerAPIKey string
+
+	// DataDir is the directory for storing API state.
+	DataDir string
 }
 
 // LoadAPI reads API gateway configuration from environment variables.
@@ -35,6 +40,7 @@ func LoadAPI() (*APIConfig, error) {
 		ListenAddr:   defaultListenAddr,
 		MaxFileBytes: defaultMaxFileBytes,
 		RunnerURL:    defaultRunnerURL,
+		DataDir:      "/tmp/sandbox-api",
 	}
 
 	rawKeys := os.Getenv("SANDBOX_API_KEYS")
@@ -52,7 +58,7 @@ func LoadAPI() (*APIConfig, error) {
 		return nil, fmt.Errorf("SANDBOX_API_KEYS contains no valid keys")
 	}
 
-	if v := os.Getenv("SANDBOX_LISTEN_ADDR"); v != "" {
+	if v := os.Getenv("SANDBOX_API_LISTEN_ADDR"); v != "" {
 		cfg.ListenAddr = v
 	}
 
@@ -68,6 +74,10 @@ func LoadAPI() (*APIConfig, error) {
 		cfg.RunnerURL = v
 	}
 	cfg.RunnerAPIKey = os.Getenv("SANDBOX_RUNNER_API_KEY")
+
+	if v := os.Getenv("SANDBOX_DATA_DIR"); v != "" {
+		cfg.DataDir = v
+	}
 
 	return cfg, nil
 }

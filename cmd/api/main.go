@@ -6,11 +6,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/n8n-io/sandbox-service/internal/api"
-	"github.com/n8n-io/sandbox-service/internal/config"
+	"github.com/n8n-io/sandbox-service/internal/api/config"
+	"github.com/n8n-io/sandbox-service/internal/api/store"
 )
 
 func main() {
@@ -23,7 +25,23 @@ func main() {
 		os.Exit(1)
 	}
 
-	handler, err := api.NewGatewayRouter(cfg)
+	// Ensure data directory exists
+	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
+		slog.Error("create data dir", "error", err)
+		os.Exit(1)
+	}
+
+	// Open SQLite store for state management
+	dbPath := filepath.Join(cfg.DataDir, "api.db")
+	s, err := store.New(dbPath)
+	if err != nil {
+		slog.Error("open store", "error", err)
+		os.Exit(1)
+	}
+	defer s.Close()
+
+	// Create API gateway with state management
+	handler, err := api.NewGatewayRouter(s, cfg)
 	if err != nil {
 		slog.Error("failed to create api router", "error", err)
 		os.Exit(1)

@@ -23,7 +23,7 @@ RUN chmod +x /usr/local/bin/start-runner.sh \
     && mkdir -p /var/sandboxes
 
 ENV SANDBOX_DATA_DIR=/var/sandboxes
-ENV SANDBOX_LISTEN_ADDR=:8080
+ENV SANDBOX_RUNNER_LISTEN_ADDR=:8080
 ENV SANDBOX_DOCKER_HOST=unix:///var/run/docker.sock
 ENV SANDBOX_INTER_SANDBOX_NETWORK_ENABLED=false
 

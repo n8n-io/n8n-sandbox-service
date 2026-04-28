@@ -16,7 +16,7 @@ NETWORK_NAME=${N8N_SANDBOX_LOCAL_NETWORK:-n8n-sandbox-local}
 RUNNER_INTERNAL_API_KEY=${N8N_SANDBOX_RUNNER_API_KEY:-runner-local-key}
 
 echo "==> Building API, runner, and sandbox images for ${ARCH} ..."
-make docker-local
+cd "$(dirname "$0")/.." && make docker-local
 
 if ! docker ps --format '{{.Names}}' | grep -qx "${REGISTRY_NAME}"; then
   echo "==> Starting local registry ${REGISTRY_NAME} on port 5050 ..."
@@ -59,7 +59,7 @@ docker run -d \
 
 echo "==> Waiting for runner healthz ..."
 for i in $(seq 1 60); do
-  if docker exec "${RUNNER_CONTAINER_NAME}" wget -q -O - http://localhost:8080/healthz >/dev/null 2>&1; then
+  if docker exec "${RUNNER_CONTAINER_NAME}" wget -q -O - --header="X-Api-Key: ${RUNNER_INTERNAL_API_KEY}" http://localhost:8080/healthz >/dev/null 2>&1; then
     break
   fi
   if [ "$i" -eq 60 ]; then

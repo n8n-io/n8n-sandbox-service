@@ -1,26 +1,25 @@
 package api
 
 import (
-	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
-	"github.com/n8n-io/sandbox-service/internal/config"
+	"github.com/n8n-io/sandbox-service/internal/api/config"
+	"github.com/n8n-io/sandbox-service/internal/api/store"
 )
 
-func TestGatewayForwardsWithRunnerAPIKey(t *testing.T) {
-	var gotAuth string
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotAuth = r.Header.Get("X-Api-Key")
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
-	}))
-	defer upstream.Close()
+func TestGatewayHandlesSandboxList(t *testing.T) {
+	s, err := store.New(":memory:")
+	if err != nil {
+		t.Fatalf("create store: %v", err)
+	}
+	defer s.Close()
 
-	router, err := NewGatewayRouter(&config.APIConfig{
+	router, err := NewGatewayRouter(s, &config.APIConfig{
 		APIKeys:      map[string]struct{}{"public-key": {}},
-		RunnerURL:    upstream.URL,
+		RunnerURL:    "http://localhost:8081",
 		RunnerAPIKey: "runner-key",
 		MaxFileBytes: 1024,
 	})
@@ -36,21 +35,24 @@ func TestGatewayForwardsWithRunnerAPIKey(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected %d, got %d", http.StatusOK, rr.Code)
 	}
-	if gotAuth != "runner-key" {
-		t.Fatalf("expected upstream X-Api-Key to be runner key, got %q", gotAuth)
+
+	// Should return empty array for new database
+	expected := `[]`
+	if strings.TrimSpace(rr.Body.String()) != expected {
+		t.Fatalf("expected %s, got %s", expected, rr.Body.String())
 	}
 }
 
 func TestGatewayRejectsMissingPublicAPIKey(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.Copy(io.Discard, r.Body)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer upstream.Close()
+	s, err := store.New(":memory:")
+	if err != nil {
+		t.Fatalf("create store: %v", err)
+	}
+	defer s.Close()
 
-	router, err := NewGatewayRouter(&config.APIConfig{
+	router, err := NewGatewayRouter(s, &config.APIConfig{
 		APIKeys:      map[string]struct{}{"public-key": {}},
-		RunnerURL:    upstream.URL,
+		RunnerURL:    "http://localhost:8081",
 		RunnerAPIKey: "runner-key",
 		MaxFileBytes: 1024,
 	})
