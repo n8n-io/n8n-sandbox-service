@@ -3,9 +3,9 @@ SHELL := /bin/bash
 MODULE  := github.com/n8n-io/sandbox-service
 BINDIR  := bin
 
-.PHONY: all daemon server test clean docker docker-local docker-arm64 docker-amd64 docker-service-arm64 docker-service-amd64 docker-sandbox-arm64 docker-sandbox-amd64 fmt fmt-check vet
+.PHONY: all daemon server api test clean docker docker-local docker-arm64 docker-amd64 docker-api-arm64 docker-api-amd64 docker-runner-arm64 docker-runner-amd64 docker-sandbox-arm64 docker-sandbox-amd64 fmt fmt-check vet
 
-all: daemon server
+all: daemon server api
 
 ## fmt: Format all Go files.
 fmt:
@@ -35,6 +35,10 @@ daemon:
 server:
 	GOOS=linux go build -o $(BINDIR)/server ./cmd/server
 
+## api: Build the public API gateway server (Linux).
+api:
+	GOOS=linux go build -o $(BINDIR)/api ./cmd/api
+
 ## test: Run all tests.
 test:
 	go test ./...
@@ -45,25 +49,33 @@ clean:
 
 ARCH := $(shell uname -m | sed 's/aarch64/arm64/' | sed 's/x86_64/amd64/')
 
-## docker: Build the service image for ONLY linux/amd64.
-docker: docker-service-amd64
+## docker: Build API + runner images for linux/amd64.
+docker: docker-api-amd64 docker-runner-amd64
 
-## docker-local: Build both images for the current architecture.
-docker-local: docker-service-$(ARCH) docker-sandbox-$(ARCH)
+## docker-local: Build API, runner, and sandbox images for current architecture.
+docker-local: docker-api-$(ARCH) docker-runner-$(ARCH) docker-sandbox-$(ARCH)
 
-## docker-arm64: Build both service and sandbox images for linux/arm64.
-docker-arm64: docker-service-arm64 docker-sandbox-arm64
+## docker-arm64: Build API, runner, and sandbox images for linux/arm64.
+docker-arm64: docker-api-arm64 docker-runner-arm64 docker-sandbox-arm64
 
-## docker-amd64: Build both service and sandbox images for linux/amd64.
-docker-amd64: docker-service-amd64 docker-sandbox-amd64
+## docker-amd64: Build API, runner, and sandbox images for linux/amd64.
+docker-amd64: docker-api-amd64 docker-runner-amd64 docker-sandbox-amd64
 
-## docker-service-arm64: Build the service image for linux/arm64.
-docker-service-arm64:
-	docker buildx build --platform linux/arm64 -t n8n-sandbox-service:latest-arm64 --load .
+## docker-api-arm64: Build the API image for linux/arm64.
+docker-api-arm64:
+	docker buildx build -f Dockerfile.api --platform linux/arm64 -t n8n-sandbox-api:latest-arm64 --load .
 
-## docker-service-amd64: Build the service image for linux/amd64.
-docker-service-amd64:
-	docker buildx build --platform linux/amd64 -t n8n-sandbox-service:latest-amd64 --load .
+## docker-api-amd64: Build the API image for linux/amd64.
+docker-api-amd64:
+	docker buildx build -f Dockerfile.api --platform linux/amd64 -t n8n-sandbox-api:latest-amd64 --load .
+
+## docker-runner-arm64: Build the runner image for linux/arm64.
+docker-runner-arm64:
+	docker buildx build -f Dockerfile.runner --platform linux/arm64 -t n8n-sandbox-runner:latest-arm64 --load .
+
+## docker-runner-amd64: Build the runner image for linux/amd64.
+docker-runner-amd64:
+	docker buildx build -f Dockerfile.runner --platform linux/amd64 -t n8n-sandbox-runner:latest-amd64 --load .
 
 ## docker-sandbox-arm64: Build the sandbox image for linux/arm64.
 docker-sandbox-arm64:

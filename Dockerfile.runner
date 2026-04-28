@@ -1,8 +1,5 @@
 # syntax=docker/dockerfile:1
 
-# =============================================================================
-# Stage 1: Build the runner server binary
-# =============================================================================
 FROM golang:1.25-bookworm AS builder
 
 WORKDIR /src
@@ -12,7 +9,7 @@ COPY . .
 
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/runner ./cmd/server
 
-FROM docker:29.3.1-dind-alpine3.23 AS runner
+FROM docker:29.3.1-dind-alpine3.23
 
 RUN apk add --no-cache tini
 

@@ -5,22 +5,29 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 ARCH=$(uname -m | sed 's/aarch64/arm64/' | sed 's/x86_64/amd64/')
-SERVICE_IMAGE="n8n-sandbox-service:latest-${ARCH}"
+API_IMAGE="n8n-sandbox-api:latest-${ARCH}"
+RUNNER_IMAGE="n8n-sandbox-runner:latest-${ARCH}"
 SANDBOX_IMAGE="n8n-sandbox:latest-${ARCH}"
 REGISTRY_NAME="${N8N_SANDBOX_REGISTRY_NAME:-n8n-sandbox-registry}"
 REGISTRY_PORT="${REGISTRY_PORT:-5050}"
 REGISTRY_ADDR="host.docker.internal:${REGISTRY_PORT}"
 PUSH_SANDBOX_IMAGE="localhost:${REGISTRY_PORT}/n8n-sandbox:e2e-${ARCH}"
 REMOTE_SANDBOX_IMAGE="${REGISTRY_ADDR}/n8n-sandbox:e2e-${ARCH}"
-CONTAINER_NAME="sandbox-e2e-$$"
+RUNNER_CONTAINER_NAME="sandbox-runner-e2e-$$"
+API_CONTAINER_NAME="sandbox-api-e2e-$$"
+NETWORK_NAME="sandbox-e2e-net-$$"
 PORT="${PORT:-8080}"
 API_KEY="test"
+RUNNER_INTERNAL_API_KEY="runner-test"
 STARTED_REGISTRY=false
 
 cleanup() {
   echo "Stopping e2e resources..."
-  docker stop "$CONTAINER_NAME" >/dev/null 2>&1 || true
-  docker rm "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  docker stop "$API_CONTAINER_NAME" >/dev/null 2>&1 || true
+  docker rm "$API_CONTAINER_NAME" >/dev/null 2>&1 || true
+  docker stop "$RUNNER_CONTAINER_NAME" >/dev/null 2>&1 || true
+  docker rm "$RUNNER_CONTAINER_NAME" >/dev/null 2>&1 || true
+  docker network rm "$NETWORK_NAME" >/dev/null 2>&1 || true
   if $STARTED_REGISTRY; then
     docker stop "$REGISTRY_NAME" >/dev/null 2>&1 || true
     docker rm "$REGISTRY_NAME" >/dev/null 2>&1 || true
@@ -49,26 +56,52 @@ else
   RUNTIME_ARGS+=(--runtime=sysbox-runc)
 fi
 
-echo "Starting sandbox service on port $PORT..."
+docker network create "$NETWORK_NAME" >/dev/null
+
+echo "Starting runner service..."
 docker run -d \
   "${RUNTIME_ARGS[@]}" \
+  --network "$NETWORK_NAME" \
   --add-host host.docker.internal:host-gateway \
-  -p "$PORT:8080" \
-  -e "SANDBOX_API_KEYS=$API_KEY" \
+  -e "SANDBOX_API_KEYS=$RUNNER_INTERNAL_API_KEY" \
   -e "SANDBOX_DOCKER_SANDBOX_IMAGE=$REMOTE_SANDBOX_IMAGE" \
   -e "SANDBOX_DOCKER_INSECURE_REGISTRIES=$REGISTRY_ADDR" \
-  --name "$CONTAINER_NAME" \
-  "$SERVICE_IMAGE"
+  --name "$RUNNER_CONTAINER_NAME" \
+  "$RUNNER_IMAGE"
 
-echo "Waiting for service..."
+echo "Waiting for runner service..."
 for i in $(seq 1 60); do
-  if curl -sf "http://localhost:$PORT/healthz" >/dev/null 2>&1; then
-    echo "Service is ready."
+  if docker exec "$RUNNER_CONTAINER_NAME" wget -q -O - http://localhost:8080/healthz >/dev/null 2>&1; then
+    echo "Runner is ready."
     break
   fi
   if [ "$i" -eq 60 ]; then
-    echo "Service failed to start within 60s"
-    docker logs "$CONTAINER_NAME"
+    echo "Runner failed to start within 60s"
+    docker logs "$RUNNER_CONTAINER_NAME"
+    exit 1
+  fi
+  sleep 1
+done
+
+echo "Starting API service on port $PORT..."
+docker run -d \
+  --network "$NETWORK_NAME" \
+  -p "$PORT:8080" \
+  -e "SANDBOX_API_KEYS=$API_KEY" \
+  -e "SANDBOX_RUNNER_URL=http://$RUNNER_CONTAINER_NAME:8080" \
+  -e "SANDBOX_RUNNER_API_KEY=$RUNNER_INTERNAL_API_KEY" \
+  --name "$API_CONTAINER_NAME" \
+  "$API_IMAGE"
+
+echo "Waiting for API service..."
+for i in $(seq 1 60); do
+  if curl -sf "http://localhost:$PORT/healthz" >/dev/null 2>&1; then
+    echo "API is ready."
+    break
+  fi
+  if [ "$i" -eq 60 ]; then
+    echo "API failed to start within 60s"
+    docker logs "$API_CONTAINER_NAME"
     exit 1
   fi
   sleep 1
