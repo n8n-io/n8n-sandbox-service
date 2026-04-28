@@ -1,0 +1,626 @@
+# Sandbox Service API
+
+All endpoints except `/healthz` require the `X-Api-Key` header for authentication.
+
+## Error Response Format
+
+```json
+{
+  "error": "string",
+  "code": 400
+}
+```
+
+---
+
+## Endpoints
+
+### GET /healthz
+
+Health check. No authentication required.
+
+**Response:** `200 OK`
+
+```json
+{"status": "ok"}
+```
+
+**Example:**
+
+```bash
+curl http://localhost:8080/healthz
+```
+
+---
+
+### GET /sandboxes
+
+List all sandboxes, ordered by creation time (newest first).
+
+**Response:** `200 OK`
+
+```json
+[
+  {
+    "id": "uuid",
+    "status": "string",
+    "provider": "delhi",
+    "image_id": "img-...",
+    "created_at": 1700000000,
+    "last_active_at": 1700000000
+  }
+]
+```
+
+**Example:**
+
+```bash
+curl http://localhost:8080/sandboxes \
+  -H "X-Api-Key: YOUR_API_KEY"
+```
+
+---
+
+### POST /sandboxes
+
+Create a new sandbox.
+
+**Request Body:** Optional JSON object (empty body is allowed).
+
+```json
+{
+  "network_policy": {
+    "allowed_ips": ["8.8.8.8/32"],
+    "denied_ips": ["10.0.0.0/8"]
+  },
+  "resource_limits": {
+    "memory_mb": 512,
+    "cpu_percent": 150,
+    "pids_max": 128
+  },
+  "dockerfile_steps": ["RUN apt-get update", "RUN apt-get install -y git"]
+}
+```
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `network_policy` | object | no | Per-sandbox allow/deny CIDRs (`allowed_ips`, `denied_ips`) |
+| `resource_limits` | object | no | Per-sandbox Docker limits (`memory_mb`, `cpu_percent`, `pids_max`) |
+| `dockerfile_steps` | string[] | no | Raw Dockerfile instructions appended after `FROM <base>` to build a custom image. See details below. |
+
+#### `dockerfile_steps`
+
+Customizes the sandbox image at creation time. Each string is a raw Dockerfile instruction inserted after `FROM <base-image>` and built into a new Docker image before the sandbox container starts.
+
+The service generates a Dockerfile like:
+
+```dockerfile
+FROM <base-image>
+RUN apt-get update && apt-get install -y git
+RUN npm install -g typescript
+```
+
+**Caching:** Images are cached by a SHA-256 hash of the base image and the steps. Identical steps reuse the previously built image without rebuilding. Cached images can be managed via the `/images` endpoints.
+
+**Constraints:**
+
+- Each step must be a **non-empty string** — empty strings are rejected with `400`.
+- Builds use an **empty temporary directory** as context, so `COPY`/`ADD` with local paths will fail. Use `RUN curl`/`RUN wget` to fetch remote files instead.
+- The build has a **10-minute timeout**.
+- The container runs as user `1000:1000` regardless of the image. Include an explicit `USER` directive in your steps if you need a different user during the build.
+
+When `dockerfile_steps` are provided, the response `image_id` references the custom image record. When omitted, `image_id` is empty (the sandbox uses the default base image).
+
+**Response:** `201 Created`
+
+```json
+{
+  "id": "uuid",
+  "status": "string",
+  "provider": "delhi",
+  "image_id": "img-...",
+  "created_at": 1700000000,
+  "last_active_at": 1700000000
+}
+```
+
+
+**Errors:** `400` invalid JSON or invalid create options
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/sandboxes \
+  -H "X-Api-Key: YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"dockerfile_steps":["RUN apt-get update","RUN apt-get install -y git"]}'
+```
+
+---
+
+### GET /sandboxes/{id}
+
+Get sandbox details.
+
+**Path Parameters:**
+- `id` — Sandbox UUID
+
+**Response:** `200 OK`
+
+```json
+{
+  "id": "uuid",
+  "status": "string",
+  "provider": "delhi",
+  "image_id": "img-...",
+  "created_at": 1700000000,
+  "last_active_at": 1700000000
+}
+```
+
+**Errors:** `400` invalid id, `404` not found
+
+**Example:**
+
+```bash
+curl http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000 \
+  -H "X-Api-Key: YOUR_API_KEY"
+```
+
+---
+
+### DELETE /sandboxes/{id}
+
+Delete a sandbox.
+
+**Path Parameters:**
+- `id` — Sandbox UUID
+
+**Response:** `204 No Content`
+
+**Errors:** `400` invalid id
+
+**Example:**
+
+```bash
+curl -X DELETE http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000 \
+  -H "X-Api-Key: YOUR_API_KEY"
+```
+
+---
+
+### GET /images
+
+List all custom images, ordered by creation time (newest first).
+
+**Response:** `200 OK`
+
+```json
+[
+  {
+    "id": "img-...",
+    "tag": "sandbox-custom-...",
+    "base_image": "sandbox-base:latest",
+    "docker_image_id": "sha256:...",
+    "created_at": 1700000000
+  }
+]
+```
+
+**Example:**
+
+```bash
+curl http://localhost:8080/images \
+  -H "X-Api-Key: YOUR_API_KEY"
+```
+
+---
+
+### GET /images/{id}
+
+Get a custom image by ID or tag.
+
+**Path Parameters:**
+- `id` — Custom image ID (or tag)
+
+**Response:** `200 OK`
+
+```json
+{
+  "id": "img-...",
+  "tag": "sandbox-custom-...",
+  "base_image": "sandbox-base:latest",
+  "docker_image_id": "sha256:...",
+  "created_at": 1700000000
+}
+```
+
+**Errors:** `400` invalid image id, `404` image not found
+
+**Example:**
+
+```bash
+curl http://localhost:8080/images/img-123 \
+  -H "X-Api-Key: YOUR_API_KEY"
+```
+
+---
+
+### DELETE /images/{id}
+
+Delete a custom image.
+
+**Path Parameters:**
+- `id` — Custom image ID (or tag)
+
+**Response:** `204 No Content`
+
+**Errors:** `400` invalid image id, `404` image not found, `409` image is in use
+
+**Example:**
+
+```bash
+curl -X DELETE http://localhost:8080/images/img-123 \
+  -H "X-Api-Key: YOUR_API_KEY"
+```
+
+---
+
+### POST /sandboxes/{id}/exec
+
+Execute a command in a sandbox. Response is streamed as newline-delimited JSON.
+
+**Path Parameters:**
+- `id` — Sandbox UUID
+
+**Request Body:**
+
+```json
+{
+  "command": "echo hello",
+  "env": {"KEY": "value"},
+  "workdir": "/home",
+  "timeout_ms": 300000
+}
+```
+
+| Field        | Type                          | Required | Default        |
+|--------------|-------------------------------|----------|----------------|
+| `command`    | string                        | yes      |                |
+| `env`        | map[string]string             | no       | `{}`           |
+| `workdir`    | string                        | no       | `""`           |
+| `timeout_ms` | int64                         | no       | `300000` (5m)  |
+
+The command is always executed via `/bin/sh -c` so that shell features (tilde expansion,
+pipes, redirects, etc.) work consistently.
+
+`env` accepts an object of key-value pairs: `{"KEY": "VALUE"}`.
+
+**Response:** `200 OK` — `Content-Type: application/x-ndjson`
+
+Stream of JSON objects, one per line:
+
+```jsonl
+{"type": "stdout", "data": "hello\n"}
+{"type": "stderr", "data": "warning: ..."}
+{"type": "exit", "exit_code": 0, "success": true, "execution_time_ms": 42, "timed_out": false, "killed": false}
+{"type": "error", "error": "something went wrong"}
+```
+
+The `exit` event includes:
+- `success` — `true` when `exit_code == 0`
+- `execution_time_ms` — wall-clock execution time in milliseconds
+- `timed_out` — `true` if the process was killed due to timeout
+- `killed` — `true` if the process was terminated by a signal
+
+**Errors:** `400` invalid id or missing command
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/exec \
+  -H "X-Api-Key: YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"command": "echo hello", "timeout_ms": 10000}'
+```
+
+---
+
+### GET /sandboxes/{id}/files
+
+List files in a sandbox directory.
+
+**Path Parameters:**
+- `id` — Sandbox UUID
+
+**Query Parameters:**
+- `path` — Directory path (default: `/`)
+- `recursive` — `true` to list recursively (default: `false`)
+- `extension` — Filter by file extension, e.g. `.ts` (default: none)
+
+**Response:** `200 OK`
+
+```json
+[
+  {
+    "name": "file.txt",
+    "size": 1024,
+    "is_dir": false,
+    "type": "file",
+    "mod_time": "2024-01-01T00:00:00Z"
+  }
+]
+```
+
+**Errors:** `400` invalid id, `404` directory not found
+
+**Example:**
+
+```bash
+curl "http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/files?path=/home&recursive=true&extension=.ts" \
+  -H "X-Api-Key: YOUR_API_KEY"
+```
+
+---
+
+### GET /sandboxes/{id}/files/content
+
+Download a file from a sandbox.
+
+**Path Parameters:**
+- `id` — Sandbox UUID
+
+**Query Parameters:**
+- `path` — File path (required)
+
+**Response:** `200 OK` — `Content-Type: application/octet-stream`
+
+Raw file contents.
+
+**Errors:** `400` invalid id or missing path, `404` file not found
+
+**Example:**
+
+```bash
+curl "http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/files/content?path=/home/user/file.txt" \
+  -H "X-Api-Key: YOUR_API_KEY" \
+  -o file.txt
+```
+
+---
+
+### PUT /sandboxes/{id}/files
+
+Upload (write) a file to a sandbox.
+
+**Path Parameters:**
+- `id` — Sandbox UUID
+
+**Query Parameters:**
+- `path` — Destination file path (required)
+- `overwrite` — `false` to prevent overwriting existing files (default: `true`)
+
+**Request:**
+- `Content-Type: application/octet-stream`
+- Body: raw file contents
+- Max size: 10 MB (configurable via `SANDBOX_MAX_FILE_BYTES`)
+
+**Response:** `200 OK`
+
+**Errors:** `400` invalid id or missing path, `409` file exists (when `overwrite=false`)
+
+**Example:**
+
+```bash
+curl -X PUT "http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/files?path=/home/user/file.txt" \
+  -H "X-Api-Key: YOUR_API_KEY" \
+  -H "Content-Type: application/octet-stream" \
+  --data-binary @local-file.txt
+```
+
+---
+
+### POST /sandboxes/{id}/files
+
+Append data to a file in a sandbox. Creates the file if it doesn't exist.
+
+**Path Parameters:**
+- `id` — Sandbox UUID
+
+**Query Parameters:**
+- `path` — File path (required)
+
+**Request:**
+- `Content-Type: application/octet-stream`
+- Body: raw data to append
+- Max size: 10 MB (configurable via `SANDBOX_MAX_FILE_BYTES`)
+
+**Response:** `200 OK`
+
+**Errors:** `400` invalid id or missing path, `404` path not found
+
+**Example:**
+
+```bash
+curl -X POST "http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/files?path=/home/user/log.txt" \
+  -H "X-Api-Key: YOUR_API_KEY" \
+  -H "Content-Type: application/octet-stream" \
+  --data-binary "new log line\n"
+```
+
+---
+
+### DELETE /sandboxes/{id}/files
+
+Delete a file or directory from a sandbox.
+
+**Path Parameters:**
+- `id` — Sandbox UUID
+
+**Query Parameters:**
+- `path` — File or directory path (required)
+- `recursive` — `true` to remove non-empty directories (default: `false`)
+- `force` — `true` to ignore "not found" errors (default: `false`)
+
+**Response:** `204 No Content`
+
+**Errors:** `400` invalid id or missing path
+
+**Example:**
+
+```bash
+curl -X DELETE "http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/files?path=/home/user/dir&recursive=true&force=true" \
+  -H "X-Api-Key: YOUR_API_KEY"
+```
+
+---
+
+### POST /sandboxes/{id}/files/copy
+
+Copy a file or directory within a sandbox.
+
+**Path Parameters:**
+- `id` — Sandbox UUID
+
+**Request Body:**
+
+```json
+{
+  "src": "/home/user/file.txt",
+  "dest": "/home/user/file-copy.txt",
+  "recursive": false,
+  "overwrite": false
+}
+```
+
+| Field       | Type   | Required | Default |
+|-------------|--------|----------|---------|
+| `src`       | string | yes      |         |
+| `dest`      | string | yes      |         |
+| `recursive` | bool   | no       | `false` |
+| `overwrite` | bool   | no       | `false` |
+
+**Response:** `200 OK`
+
+**Errors:** `400` invalid id, missing src/dest, `404` source not found, `409` destination exists
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/files/copy \
+  -H "X-Api-Key: YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"src": "/home/file.txt", "dest": "/tmp/file.txt", "overwrite": true}'
+```
+
+---
+
+### POST /sandboxes/{id}/files/move
+
+Move (rename) a file or directory within a sandbox.
+
+**Path Parameters:**
+- `id` — Sandbox UUID
+
+**Request Body:**
+
+```json
+{
+  "src": "/home/user/old.txt",
+  "dest": "/home/user/new.txt",
+  "overwrite": false
+}
+```
+
+| Field       | Type   | Required | Default |
+|-------------|--------|----------|---------|
+| `src`       | string | yes      |         |
+| `dest`      | string | yes      |         |
+| `overwrite` | bool   | no       | `false` |
+
+**Response:** `200 OK`
+
+**Errors:** `400` invalid id, missing src/dest, `404` source not found, `409` destination exists
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/files/move \
+  -H "X-Api-Key: YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"src": "/home/old.txt", "dest": "/home/new.txt"}'
+```
+
+---
+
+### POST /sandboxes/{id}/mkdir
+
+Create a directory in a sandbox.
+
+**Path Parameters:**
+- `id` — Sandbox UUID
+
+**Query Parameters:**
+- `path` — Directory path (required)
+- `recursive` — `true` to create parent directories as needed (default: `false`)
+
+**Response:** `201 Created`
+
+**Errors:** `400` invalid id or missing path, `409` directory already exists
+
+**Example:**
+
+```bash
+curl -X POST "http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/mkdir?path=/home/user/newdir&recursive=true" \
+  -H "X-Api-Key: YOUR_API_KEY"
+```
+
+---
+
+### GET /sandboxes/{id}/stat
+
+Get file or directory metadata.
+
+**Path Parameters:**
+- `id` — Sandbox UUID
+
+**Query Parameters:**
+- `path` — File or directory path (required)
+
+**Response:** `200 OK`
+
+```json
+{
+  "name": "file.txt",
+  "path": "/home/user/file.txt",
+  "type": "file",
+  "size": 1024,
+  "created_at": "2024-01-01T00:00:00Z",
+  "modified_at": "2024-01-01T00:00:00Z"
+}
+```
+
+`exists()` can be derived: a `200` means the file exists, a `404` means it doesn't.
+
+**Errors:** `400` invalid id or missing path, `404` file not found
+
+**Example:**
+
+```bash
+curl "http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/stat?path=/home/user/file.txt" \
+  -H "X-Api-Key: YOUR_API_KEY"
+```
+
+---
+
+## Middleware
+
+Applied to all routes in order:
+
+1. **RecoveryMiddleware** — catches panics, returns `500`
+2. **LoggingMiddleware** — logs method, path, status, duration
+3. **AuthMiddleware** — validates `X-Api-Key` header (skipped for `/healthz`)
+
+## Abort Mechanism
+
+Closing the HTTP connection aborts the running command. The server detects client disconnection via context cancellation and kills the entire process group.
