@@ -74,6 +74,10 @@ func CreateSandbox(mgr ContainerManager) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "missing X-Sandbox-Id header")
 			return
 		}
+		if !isValidID(sandboxID) {
+			writeError(w, http.StatusBadRequest, "invalid sandbox id")
+			return
+		}
 
 		opts := &manager.CreateOptions{
 			NetworkPolicy:   req.NetworkPolicy,
@@ -101,14 +105,25 @@ func CreateSandbox(mgr ContainerManager) http.HandlerFunc {
 // GetSandbox handles GET /sandboxes/{id}
 func GetSandbox(mgr ContainerManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		if !isValidID(id) {
+		sandboxID := r.PathValue("id")
+		if !isValidID(sandboxID) {
 			writeError(w, http.StatusBadRequest, "invalid sandbox id")
 			return
 		}
 
-		// Try to get container info by container ID (same as sandbox ID for runner)
-		containerInfo, err := mgr.GetContainerInfo(r.Context(), id)
+		// Find container ID by sandbox ID using labels
+		containerID, err := mgr.FindContainerIDByLabel(r.Context(), sandboxID)
+		if err != nil {
+			if errors.Is(err, manager.ErrSandboxNotFound) {
+				writeError(w, http.StatusNotFound, err.Error())
+			} else {
+				writeError(w, http.StatusInternalServerError, err.Error())
+			}
+			return
+		}
+
+		// Get container info to get additional metadata
+		containerInfo, err := mgr.GetContainerInfo(r.Context(), containerID)
 		if err != nil {
 			if errors.Is(err, manager.ErrSandboxNotFound) {
 				writeError(w, http.StatusNotFound, err.Error())
@@ -119,7 +134,7 @@ func GetSandbox(mgr ContainerManager) http.HandlerFunc {
 		}
 
 		resp := &ContainerResponse{
-			ID:       containerInfo.ID,
+			ID:       sandboxID, // Return the original sandbox ID, not container ID
 			Status:   "running",
 			Provider: "delhi",
 			ImageID:  containerInfo.ImageTag,

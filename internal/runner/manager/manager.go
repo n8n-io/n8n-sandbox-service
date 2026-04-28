@@ -120,6 +120,11 @@ func (m *Manager) CreateContainer(ctx context.Context, sandboxID string, opts *C
 		opts = &CreateOptions{}
 	}
 
+	// Validate sandboxID length before slicing to prevent panic
+	if len(sandboxID) < 12 {
+		return nil, fmt.Errorf("sandbox ID must be at least 12 characters, got %d", len(sandboxID))
+	}
+
 	containerName := "sandbox-" + sandboxID[:12]
 	limits := m.effectiveLimits(opts.ResourceLimits)
 	imageName := m.config.DockerSandboxImage
