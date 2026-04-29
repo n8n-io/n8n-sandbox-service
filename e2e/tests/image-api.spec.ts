@@ -14,9 +14,9 @@ test.describe('Images API', () => {
     expect(resp.status).toBe(404);
   });
 
-  test('get image with invalid id returns 400', async ({ request }) => {
+  test('get image with unknown id returns 404', async ({ request }) => {
     const resp = await apiRequest(request, 'GET', '/images/invalid-id');
-    expect(resp.status).toBe(400);
+    expect(resp.status).toBe(404);
   });
 
   test('delete non-existent image returns 404', async ({ request }) => {
@@ -24,8 +24,8 @@ test.describe('Images API', () => {
     expect(resp.status).toBe(404);
   });
 
-  test('delete image with invalid id returns 400', async ({ request }) => {
+  test('delete image with unknown id returns 404', async ({ request }) => {
     const resp = await apiRequest(request, 'DELETE', '/images/invalid-id');
-    expect(resp.status).toBe(400);
+    expect(resp.status).toBe(404);
   });
 });

@@ -3,12 +3,14 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -126,12 +128,18 @@ func handleGetSandbox(s *store.Store) http.HandlerFunc {
 	}
 }
 
-func handleCreateSandbox(s *store.Store, runnerURL *url.URL, runnerAPIKey string) http.HandlerFunc {
+func handleCreateSandbox(s *store.Store, cfg *config.APIConfig, runnerURL *url.URL, runnerAPIKey string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req CreateSandboxRequest
 		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxFileBytes)
 			body, err := io.ReadAll(r.Body)
 			if err != nil {
+				var maxBytesErr *http.MaxBytesError
+				if errors.As(err, &maxBytesErr) {
+					writeError(w, http.StatusBadRequest, "failed to read request body: "+maxBytesErr.Error())
+					return
+				}
 				writeError(w, http.StatusBadRequest, "failed to read request body")
 				return
 			}
@@ -215,7 +223,7 @@ func handleDeleteSandbox(s *store.Store, runnerURL *url.URL, runnerAPIKey string
 func handleGetImage(proxy *httputil.ReverseProxy) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
-		if !isValidUUID(id) {
+		if !isValidImageRouteID(id) {
 			writeError(w, http.StatusBadRequest, "invalid image id")
 			return
 		}
@@ -226,12 +234,26 @@ func handleGetImage(proxy *httputil.ReverseProxy) http.HandlerFunc {
 func handleDeleteImage(proxy *httputil.ReverseProxy) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
-		if !isValidUUID(id) {
+		if !isValidImageRouteID(id) {
 			writeError(w, http.StatusBadRequest, "invalid image id")
 			return
 		}
 		proxy.ServeHTTP(w, r)
 	}
+}
+
+// isValidImageRouteID checks the /images/{id} path segment. Image IDs are not
+// sandbox UUIDs — they may be logical ids like "img-"+hex, Docker tags, or
+// registry references (see API.md). We only reject empty, oversized, or
+// traversal-like values; existence is decided by the runner.
+func isValidImageRouteID(id string) bool {
+	if id == "" || len(id) > 512 {
+		return false
+	}
+	if strings.Contains(id, "..") {
+		return false
+	}
+	return true
 }
 
 type ContainerInfo struct {

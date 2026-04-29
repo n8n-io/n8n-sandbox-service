@@ -50,7 +50,7 @@ func NewGatewayRouter(s *store.Store, cfg *config.APIConfig) (http.Handler, erro
 	mux.HandleFunc("GET /healthz", handleHealthz)
 
 	mux.HandleFunc("GET /sandboxes", handleListSandboxes(s))
-	mux.HandleFunc("POST /sandboxes", handleCreateSandbox(s, runnerURL, cfg.RunnerAPIKey))
+	mux.HandleFunc("POST /sandboxes", handleCreateSandbox(s, cfg, runnerURL, cfg.RunnerAPIKey))
 	mux.HandleFunc("GET /sandboxes/{id}", handleGetSandbox(s))
 	mux.HandleFunc("DELETE /sandboxes/{id}", handleDeleteSandbox(s, runnerURL, cfg.RunnerAPIKey))
 
