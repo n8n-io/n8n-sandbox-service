@@ -5,7 +5,7 @@ The n8n Sandbox Service provides isolated execution environments via a REST API.
 ## Runtime Model
 
 - The public API runs in a dedicated `n8n-sandbox-api` container.
-- A separate `n8n-sandbox-runner` container runs Docker-in-Docker and manages sandbox lifecycles.
+- One or more `n8n-sandbox-runner` containers run Docker-in-Docker and manage sandbox lifecycles (the local script starts two so you can exercise round-robin placement).
 - The runner container is expected to run with `sysbox-runc`.
 - Sandboxes are started from a separate Debian sandbox image referenced by `SANDBOX_DOCKER_SANDBOX_IMAGE`.
 - The API forwards sandbox and image requests to the runner; the runner talks to sandbox daemons over the inner Docker bridge on port `8081`.
@@ -18,7 +18,7 @@ Build all images:
 make docker-amd64
 ```
 
-Run locally:
+Run locally (starts the API plus **two** runners on a shared Docker network, both registered over gRPC):
 
 ```bash
 ./scripts/run-locally.sh
@@ -93,10 +93,14 @@ curl -s -X DELETE http://localhost:8080/sandboxes/<id> \
 | Variable | Default | Description |
 |---|---|---|
 | `SANDBOX_API_KEYS` | *(required)* | Comma-separated list of valid external API keys |
-| `SANDBOX_RUNNER_URL` | `http://localhost:8081` | Base URL for forwarding requests to the runner |
-| `SANDBOX_RUNNER_API_KEY` | *(empty)* | Optional API key injected by the API when calling runner |
-| `SANDBOX_API_LISTEN_ADDR` | `:8080` | HTTP listen address |
+| `SANDBOX_RUNNER_REGISTRATION_TOKEN` | *(required)* | Shared secret; runners authenticate to the private gRPC registration service with `Authorization: Bearer …` |
+| `SANDBOX_RUNNER_API_KEY` | *(empty)* | Optional API key injected by the API when calling runner HTTP |
+| `SANDBOX_API_LISTEN_ADDR` | `:8080` | Public HTTP listen address |
+| `SANDBOX_API_GRPC_LISTEN_ADDR` | `:9090` | Private gRPC listen address for runner registration streams |
+| `SANDBOX_DATA_DIR` | `/tmp/sandbox-api` | SQLite store directory |
 | `SANDBOX_MAX_FILE_BYTES` | `10485760` | Maximum file upload size (10 MB) |
+
+Runners register over gRPC and report health and capacity; the API picks a runner (round-robin) when creating sandboxes and stores that runner’s HTTP base URL for later proxying.
 
 ### Runner container
 
@@ -106,6 +110,11 @@ curl -s -X DELETE http://localhost:8080/sandboxes/<id> \
 | `SANDBOX_DOCKER_SANDBOX_IMAGE` | *(required)* | Docker image used for sandbox containers |
 | `SANDBOX_DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker daemon endpoint used by the runner |
 | `SANDBOX_RUNNER_LISTEN_ADDR` | `:8080` | HTTP listen address |
+| `SANDBOX_API_GRPC_ADDR` | *(empty)* | API `host:port` for gRPC registration (omit to disable registration) |
+| `SANDBOX_RUNNER_REGISTRATION_TOKEN` | *(empty)* | Must match `SANDBOX_RUNNER_REGISTRATION_TOKEN` on the API when `SANDBOX_API_GRPC_ADDR` is set |
+| `SANDBOX_RUNNER_HTTP_BASE_URL` | *(empty)* | Base URL the API uses to reach this runner (e.g. `http://runner:8080`); required when registering |
+| `SANDBOX_RUNNER_ID` | hostname | Stable runner id sent to the API |
+| `SANDBOX_RUNNER_CAPACITY_TOTAL` | `1000` | Reported capacity for placement (`0` = unlimited) |
 | `SANDBOX_DATA_DIR` | `/var/sandboxes` | Directory for SQLite state |
 | `SANDBOX_IDLE_TTL_SECONDS` | `3600` | Seconds of inactivity before a sandbox is reaped |
 | `SANDBOX_ENABLE_CGROUPS` | `true` | Whether Docker resource limits are applied |
@@ -120,8 +129,22 @@ Run unit tests:
 make test
 ```
 
-Run e2e tests against the Docker-backed runtime:
+Run the full e2e suite (all topologies sequentially: no runner → two runners → single runner + full Playwright):
 
 ```bash
-./e2e/run.sh
+./e2e/run-all.sh
 ```
+
+Run only one topology or the default single-runner suite:
+
+```bash
+./e2e/run.sh              # single runner + full Playwright suite
+./e2e/run-no-runner.sh    # API only — expects POST /sandboxes to return 503
+./e2e/run-two-runners.sh # two runners — placement routing per sandbox
+```
+
+Extra Playwright arguments can be passed to any script (for example `./e2e/run-all.sh --grep pattern`).
+
+`run-all.sh` runs **`make docker-local` once**; the per-topology scripts skip rebuilding when invoked from it (`E2E_SKIP_BUILD=1`). To rebuild before each phase, run the topology scripts individually instead.
+
+See **[e2e/README.md](e2e/README.md)** for how scripts map to specs, what a Playwright “worker” is, and how `resilience.spec.ts` uses the host `docker` CLI.

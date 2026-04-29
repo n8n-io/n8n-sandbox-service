@@ -7,7 +7,11 @@ import (
 
 func TestLoadAPIParsesDefaults(t *testing.T) {
 	os.Setenv("SANDBOX_API_KEYS", "test-key")
-	defer os.Unsetenv("SANDBOX_API_KEYS")
+	os.Setenv("SANDBOX_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	defer func() {
+		os.Unsetenv("SANDBOX_API_KEYS")
+		os.Unsetenv("SANDBOX_RUNNER_REGISTRATION_TOKEN")
+	}()
 
 	cfg, err := LoadAPI()
 	if err != nil {
@@ -22,8 +26,12 @@ func TestLoadAPIParsesDefaults(t *testing.T) {
 		t.Errorf("expected MaxFileBytes 10MB, got %d", cfg.MaxFileBytes)
 	}
 
-	if cfg.RunnerURL != "http://localhost:8081" {
-		t.Errorf("expected RunnerURL http://localhost:8081, got %s", cfg.RunnerURL)
+	if cfg.GRPCListenAddr != ":9090" {
+		t.Errorf("expected GRPCListenAddr :9090, got %s", cfg.GRPCListenAddr)
+	}
+
+	if cfg.RegistrationToken != "reg-token" {
+		t.Errorf("expected RegistrationToken reg-token, got %q", cfg.RegistrationToken)
 	}
 
 	if cfg.DataDir != "/tmp/sandbox-api" {
@@ -37,8 +45,20 @@ func TestLoadAPIParsesDefaults(t *testing.T) {
 
 func TestLoadAPIRequiresAPIKeys(t *testing.T) {
 	os.Unsetenv("SANDBOX_API_KEYS")
+	os.Setenv("SANDBOX_RUNNER_REGISTRATION_TOKEN", "x")
+	defer os.Unsetenv("SANDBOX_RUNNER_REGISTRATION_TOKEN")
 
 	if _, err := LoadAPI(); err == nil {
 		t.Error("expected LoadAPI() to fail without SANDBOX_API_KEYS")
+	}
+}
+
+func TestLoadAPIRequiresRegistrationToken(t *testing.T) {
+	os.Setenv("SANDBOX_API_KEYS", "test-key")
+	os.Unsetenv("SANDBOX_RUNNER_REGISTRATION_TOKEN")
+	defer os.Unsetenv("SANDBOX_API_KEYS")
+
+	if _, err := LoadAPI(); err == nil {
+		t.Error("expected LoadAPI() to fail without SANDBOX_RUNNER_REGISTRATION_TOKEN")
 	}
 }

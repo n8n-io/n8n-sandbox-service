@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package runner.v1;
+
+option go_package = "github.com/n8n-io/sandbox-service/internal/api/grpc/pb;pb";
+
+// RunnerRegistry receives bi-directional streams from sandbox runners.
+service RunnerRegistry {
+  rpc Connect(stream RunnerHeartbeat) returns (stream ControlMessage);
+}
+
+message RunnerHeartbeat {
+  string runner_id = 1;
+  string http_base_url = 2;
+  bool healthy = 3;
+  int32 capacity_total = 4;
+  int32 capacity_used = 5;
+}
+
+message ControlMessage {
+  bool ack = 1;
+}

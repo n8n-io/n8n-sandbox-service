@@ -532,6 +532,15 @@ func (m *Manager) inspectRunnerBridge(ctx context.Context) (*networkInspect, err
 	return &items[0], nil
 }
 
+// ManagedContainerCount returns how many sandbox containers this runner is managing.
+func (m *Manager) ManagedContainerCount(ctx context.Context) (int, error) {
+	ids, err := m.listManagedContainers(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return len(ids), nil
+}
+
 func (m *Manager) listManagedContainers(ctx context.Context) ([]string, error) {
 	out, err := m.runDocker(ctx, "ps", "-aq", "--filter", "label="+containerLabelManaged+"="+containerLabelManagedVal)
 	if err != nil {

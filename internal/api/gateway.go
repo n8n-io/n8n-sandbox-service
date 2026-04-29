@@ -15,25 +15,124 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/n8n-io/sandbox-service/internal/api/config"
+	"github.com/n8n-io/sandbox-service/internal/api/registry"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
 )
 
 // NewGatewayRouter creates the public API gateway that manages state and
-// coordinates with the runner service.
-func NewGatewayRouter(s *store.Store, cfg *config.APIConfig) (http.Handler, error) {
-	runnerURL, err := url.Parse(cfg.RunnerURL)
-	if err != nil {
-		return nil, err
+// coordinates with registered runner services.
+func NewGatewayRouter(s *store.Store, cfg *config.APIConfig, reg *registry.Registry) (http.Handler, error) {
+	runnerProxyForPick := func(w http.ResponseWriter, r *http.Request, limitBody bool, pick func() (*registry.Runner, error)) bool {
+		run, err := pick()
+		if err != nil {
+			if errors.Is(err, registry.ErrNoRunners) {
+				writeError(w, http.StatusServiceUnavailable, err.Error())
+			} else {
+				writeError(w, http.StatusInternalServerError, err.Error())
+			}
+			return false
+		}
+		u, err := url.Parse(run.HTTPBaseURL)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "invalid runner URL")
+			return false
+		}
+		proxy := newRunnerReverseProxy(u, cfg.RunnerAPIKey, cfg)
+		if limitBody {
+			r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxFileBytes)
+		}
+		proxy.ServeHTTP(w, r)
+		return true
 	}
 
-	proxy := &httputil.ReverseProxy{
+	sandboxProxyHandler := func(limitBody bool) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			id := r.PathValue("id")
+			if !isValidUUID(id) {
+				writeError(w, http.StatusBadRequest, "invalid sandbox id")
+				return
+			}
+
+			rec, err := s.Get(id)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			if rec == nil {
+				writeError(w, http.StatusNotFound, "sandbox not found")
+				return
+			}
+
+			if rec.RunnerHTTPBase == "" {
+				writeError(w, http.StatusBadGateway, "sandbox has no runner routing information")
+				return
+			}
+
+			u, err := url.Parse(rec.RunnerHTTPBase)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "invalid stored runner URL")
+				return
+			}
+
+			proxy := newRunnerReverseProxy(u, cfg.RunnerAPIKey, cfg)
+			if limitBody {
+				r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxFileBytes)
+			}
+			proxy.ServeHTTP(w, r)
+		}
+	}
+
+	imageProxyHandler := func(limitBody bool) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			_ = runnerProxyForPick(w, r, limitBody, reg.PickRoundRobin)
+		}
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	})
+
+	mux.HandleFunc("GET /sandboxes", handleListSandboxes(s))
+	mux.HandleFunc("POST /sandboxes", handleCreateSandbox(s, reg, cfg.RunnerAPIKey))
+	mux.HandleFunc("GET /sandboxes/{id}", handleGetSandbox(s))
+	mux.HandleFunc("DELETE /sandboxes/{id}", handleDeleteSandbox(s, cfg.RunnerAPIKey))
+
+	mux.HandleFunc("GET /images", imageProxyHandler(false))
+	mux.HandleFunc("GET /images/{id}", handleGetImage(reg, cfg))
+	mux.HandleFunc("DELETE /images/{id}", handleDeleteImage(reg, cfg))
+
+	mux.HandleFunc("POST /sandboxes/{id}/exec", sandboxProxyHandler(false))
+	mux.HandleFunc("POST /sandboxes/{id}/files/copy", sandboxProxyHandler(false))
+	mux.HandleFunc("POST /sandboxes/{id}/files/move", sandboxProxyHandler(false))
+	mux.HandleFunc("GET /sandboxes/{id}/files", sandboxProxyHandler(false))
+	mux.HandleFunc("GET /sandboxes/{id}/files/content", sandboxProxyHandler(false))
+	mux.HandleFunc("PUT /sandboxes/{id}/files", sandboxProxyHandler(true))
+	mux.HandleFunc("POST /sandboxes/{id}/files", sandboxProxyHandler(true))
+	mux.HandleFunc("DELETE /sandboxes/{id}/files", sandboxProxyHandler(false))
+	mux.HandleFunc("POST /sandboxes/{id}/mkdir", sandboxProxyHandler(false))
+	mux.HandleFunc("GET /sandboxes/{id}/stat", sandboxProxyHandler(false))
+
+	var handler http.Handler = mux
+	handler = AuthMiddleware(cfg.APIKeys)(handler)
+	handler = LoggingMiddleware(handler)
+	handler = CORSMiddleware(handler)
+	handler = RecoveryMiddleware(handler)
+	return handler, nil
+}
+
+func newRunnerReverseProxy(runnerURL *url.URL, runnerAPIKey string, cfg *config.APIConfig) *httputil.ReverseProxy {
+	target := *runnerURL
+	return &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
-			pr.SetURL(runnerURL)
+			pr.SetURL(&target)
 			pr.Out.URL.Path = pr.In.URL.Path
 			pr.Out.URL.RawQuery = pr.In.URL.RawQuery
-			pr.Out.Host = runnerURL.Host
-			if cfg.RunnerAPIKey != "" {
-				pr.Out.Header.Set("X-Api-Key", cfg.RunnerAPIKey)
+			pr.Out.Host = target.Host
+			if runnerAPIKey != "" {
+				pr.Out.Header.Set("X-Api-Key", runnerAPIKey)
 			} else {
 				pr.Out.Header.Del("X-Api-Key")
 			}
@@ -49,81 +148,9 @@ func NewGatewayRouter(s *store.Store, cfg *config.APIConfig) (http.Handler, erro
 				writeError(w, http.StatusBadRequest, "failed to read request body: http: request body too large")
 				return
 			}
-			writeError(w, http.StatusBadGateway, "runner unreachable")
+			writeError(w, http.StatusServiceUnavailable, "runner unavailable")
 		},
 	}
-
-	proxyHandler := func(limitBody bool) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			if limitBody {
-				r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxFileBytes)
-			}
-			proxy.ServeHTTP(w, r)
-		}
-	}
-
-	sandboxProxyHandler := func(s *store.Store, proxy *httputil.ReverseProxy, limitBody bool) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			id := r.PathValue("id")
-			if !isValidUUID(id) {
-				writeError(w, http.StatusBadRequest, "invalid sandbox id")
-				return
-			}
-
-			// Check if sandbox exists
-			rec, err := s.Get(id)
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, err.Error())
-				return
-			}
-			if rec == nil {
-				writeError(w, http.StatusNotFound, "sandbox not found")
-				return
-			}
-
-			if limitBody {
-				r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxFileBytes)
-			}
-			proxy.ServeHTTP(w, r)
-		}
-	}
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
-	})
-
-	// Sandbox CRUD - managed by API with state
-	mux.HandleFunc("GET /sandboxes", handleListSandboxes(s))
-	mux.HandleFunc("POST /sandboxes", handleCreateSandbox(s, runnerURL, cfg.RunnerAPIKey))
-	mux.HandleFunc("GET /sandboxes/{id}", handleGetSandbox(s))
-	mux.HandleFunc("DELETE /sandboxes/{id}", handleDeleteSandbox(s, runnerURL, cfg.RunnerAPIKey))
-
-	// Image CRUD - proxied to runner for now
-	mux.HandleFunc("GET /images", proxyHandler(false))
-	mux.HandleFunc("GET /images/{id}", handleGetImage(proxy))
-	mux.HandleFunc("DELETE /images/{id}", handleDeleteImage(proxy))
-
-	// Sandbox command/file endpoints proxied to runner.
-	mux.HandleFunc("POST /sandboxes/{id}/exec", sandboxProxyHandler(s, proxy, false))
-	mux.HandleFunc("POST /sandboxes/{id}/files/copy", sandboxProxyHandler(s, proxy, false))
-	mux.HandleFunc("POST /sandboxes/{id}/files/move", sandboxProxyHandler(s, proxy, false))
-	mux.HandleFunc("GET /sandboxes/{id}/files", sandboxProxyHandler(s, proxy, false))
-	mux.HandleFunc("GET /sandboxes/{id}/files/content", sandboxProxyHandler(s, proxy, false))
-	mux.HandleFunc("PUT /sandboxes/{id}/files", sandboxProxyHandler(s, proxy, true))
-	mux.HandleFunc("POST /sandboxes/{id}/files", sandboxProxyHandler(s, proxy, true))
-	mux.HandleFunc("DELETE /sandboxes/{id}/files", sandboxProxyHandler(s, proxy, false))
-	mux.HandleFunc("POST /sandboxes/{id}/mkdir", sandboxProxyHandler(s, proxy, false))
-	mux.HandleFunc("GET /sandboxes/{id}/stat", sandboxProxyHandler(s, proxy, false))
-
-	var handler http.Handler = mux
-	handler = AuthMiddleware(cfg.APIKeys)(handler)
-	handler = LoggingMiddleware(handler)
-	handler = CORSMiddleware(handler)
-	handler = RecoveryMiddleware(handler)
-	return handler, nil
 }
 
 // State-managed handlers that coordinate with runner service
@@ -181,9 +208,8 @@ func handleGetSandbox(s *store.Store) http.HandlerFunc {
 			writeError(w, http.StatusNotFound, "sandbox not found")
 			return
 		}
-		// Update last active
 		if err := s.UpdateLastActive(id); err != nil {
-			// Log but don't fail
+			// non-fatal
 		}
 		resp := &SandboxResponse{
 			ID:           rec.ID,
@@ -197,7 +223,7 @@ func handleGetSandbox(s *store.Store) http.HandlerFunc {
 	}
 }
 
-func handleCreateSandbox(s *store.Store, runnerURL *url.URL, runnerAPIKey string) http.HandlerFunc {
+func handleCreateSandbox(s *store.Store, reg *registry.Registry, runnerAPIKey string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req CreateSandboxRequest
 		if r.Body != nil {
@@ -214,31 +240,45 @@ func handleCreateSandbox(s *store.Store, runnerURL *url.URL, runnerAPIKey string
 			}
 		}
 
-		// Generate sandbox ID
+		run, err := reg.PickRoundRobin()
+		if err != nil {
+			if errors.Is(err, registry.ErrNoRunners) {
+				writeError(w, http.StatusServiceUnavailable, err.Error())
+			} else {
+				writeError(w, http.StatusInternalServerError, err.Error())
+			}
+			return
+		}
+
+		runnerURL, err := url.Parse(run.HTTPBaseURL)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "invalid runner URL")
+			return
+		}
+
 		sandboxID := generateUUID()
 		now := time.Now().Unix()
 
-		// Call runner to create container
 		containerInfo, err := callRunnerCreateContainer(runnerURL, runnerAPIKey, sandboxID, &req)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to create container: "+err.Error())
 			return
 		}
 
-		// Store sandbox state in database
 		record := &store.SandboxRecord{
-			ID:           sandboxID,
-			Status:       "running",
-			CreatedAt:    now,
-			LastActiveAt: now,
-			ContainerIP:  containerInfo.IP,
-			DaemonPort:   8081,
-			ImageID:      containerInfo.ImageTag,
+			ID:             sandboxID,
+			Status:         "running",
+			CreatedAt:      now,
+			LastActiveAt:   now,
+			ContainerIP:    containerInfo.IP,
+			DaemonPort:     8081,
+			ImageID:        containerInfo.ImageTag,
+			RunnerID:       run.ID,
+			RunnerHTTPBase: strings.TrimRight(run.HTTPBaseURL, "/"),
 		}
 		if err := s.Create(record); err != nil {
-			// Try to cleanup container on database failure
 			if cleanupErr := callRunnerDeleteContainer(runnerURL, runnerAPIKey, sandboxID, containerInfo.IP); cleanupErr != nil {
-				// Log but continue with error response
+				// best effort
 			}
 			writeError(w, http.StatusInternalServerError, "failed to store sandbox: "+err.Error())
 			return
@@ -256,7 +296,7 @@ func handleCreateSandbox(s *store.Store, runnerURL *url.URL, runnerAPIKey string
 	}
 }
 
-func handleDeleteSandbox(s *store.Store, runnerURL *url.URL, runnerAPIKey string) http.HandlerFunc {
+func handleDeleteSandbox(s *store.Store, runnerAPIKey string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if !isValidUUID(id) {
@@ -264,24 +304,23 @@ func handleDeleteSandbox(s *store.Store, runnerURL *url.URL, runnerAPIKey string
 			return
 		}
 
-		// Get sandbox record
 		rec, err := s.Get(id)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		if rec == nil {
-			// Delete is idempotent - return 204 even if sandbox doesn't exist
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 
-		// Call runner to delete container
-		if err := callRunnerDeleteContainer(runnerURL, runnerAPIKey, id, rec.ContainerIP); err != nil {
-			// Log but continue - container might already be gone
+		if rec.RunnerHTTPBase != "" {
+			runnerURL, err := url.Parse(rec.RunnerHTTPBase)
+			if err == nil {
+				_ = callRunnerDeleteContainer(runnerURL, runnerAPIKey, id, rec.ContainerIP)
+			}
 		}
 
-		// Delete from database
 		if err := s.Delete(id); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -291,25 +330,53 @@ func handleDeleteSandbox(s *store.Store, runnerURL *url.URL, runnerAPIKey string
 	}
 }
 
-func handleGetImage(proxy *httputil.ReverseProxy) http.HandlerFunc {
+func handleGetImage(reg *registry.Registry, cfg *config.APIConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if !isValidUUID(id) {
 			writeError(w, http.StatusBadRequest, "invalid image id")
 			return
 		}
-		proxy.ServeHTTP(w, r)
+		run, err := reg.PickRoundRobin()
+		if err != nil {
+			if errors.Is(err, registry.ErrNoRunners) {
+				writeError(w, http.StatusServiceUnavailable, err.Error())
+			} else {
+				writeError(w, http.StatusInternalServerError, err.Error())
+			}
+			return
+		}
+		u, err := url.Parse(run.HTTPBaseURL)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "invalid runner URL")
+			return
+		}
+		newRunnerReverseProxy(u, cfg.RunnerAPIKey, cfg).ServeHTTP(w, r)
 	}
 }
 
-func handleDeleteImage(proxy *httputil.ReverseProxy) http.HandlerFunc {
+func handleDeleteImage(reg *registry.Registry, cfg *config.APIConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if !isValidUUID(id) {
 			writeError(w, http.StatusBadRequest, "invalid image id")
 			return
 		}
-		proxy.ServeHTTP(w, r)
+		run, err := reg.PickRoundRobin()
+		if err != nil {
+			if errors.Is(err, registry.ErrNoRunners) {
+				writeError(w, http.StatusServiceUnavailable, err.Error())
+			} else {
+				writeError(w, http.StatusInternalServerError, err.Error())
+			}
+			return
+		}
+		u, err := url.Parse(run.HTTPBaseURL)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "invalid runner URL")
+			return
+		}
+		newRunnerReverseProxy(u, cfg.RunnerAPIKey, cfg).ServeHTTP(w, r)
 	}
 }
 
@@ -323,27 +390,23 @@ type ContainerInfo struct {
 }
 
 func callRunnerCreateContainer(runnerURL *url.URL, apiKey, sandboxID string, req *CreateSandboxRequest) (*ContainerInfo, error) {
-	// Prepare request body
 	reqBody, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	// Create HTTP request
-	url := fmt.Sprintf("%s/sandboxes", runnerURL.String())
-	httpReq, err := http.NewRequest("POST", url, bytes.NewReader(reqBody))
+	urlStr := fmt.Sprintf("%s/sandboxes", strings.TrimRight(runnerURL.String(), "/"))
+	httpReq, err := http.NewRequest("POST", urlStr, bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 
-	// Set headers
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("X-Sandbox-Id", sandboxID)
 	if apiKey != "" {
 		httpReq.Header.Set("X-Api-Key", apiKey)
 	}
 
-	// Make HTTP request
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(httpReq)
 	if err != nil {
@@ -351,13 +414,11 @@ func callRunnerCreateContainer(runnerURL *url.URL, apiKey, sandboxID string, req
 	}
 	defer resp.Body.Close()
 
-	// Check response status
 	if resp.StatusCode != http.StatusCreated {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("runner returned status %d: %s", resp.StatusCode, string(body))
 	}
 
-	// Parse response
 	var containerInfo ContainerInfo
 	if err := json.NewDecoder(resp.Body).Decode(&containerInfo); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
@@ -367,19 +428,16 @@ func callRunnerCreateContainer(runnerURL *url.URL, apiKey, sandboxID string, req
 }
 
 func callRunnerDeleteContainer(runnerURL *url.URL, apiKey, sandboxID, containerIP string) error {
-	// Create HTTP request
-	url := fmt.Sprintf("%s/sandboxes/%s", runnerURL.String(), sandboxID)
-	httpReq, err := http.NewRequest("DELETE", url, nil)
+	urlStr := fmt.Sprintf("%s/sandboxes/%s", strings.TrimRight(runnerURL.String(), "/"), sandboxID)
+	httpReq, err := http.NewRequest("DELETE", urlStr, nil)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
 
-	// Set headers
 	if apiKey != "" {
 		httpReq.Header.Set("X-Api-Key", apiKey)
 	}
 
-	// Make HTTP request
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(httpReq)
 	if err != nil {
@@ -387,7 +445,6 @@ func callRunnerDeleteContainer(runnerURL *url.URL, apiKey, sandboxID, containerI
 	}
 	defer resp.Body.Close()
 
-	// Check response status
 	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusNotFound {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("runner returned status %d: %s", resp.StatusCode, string(body))

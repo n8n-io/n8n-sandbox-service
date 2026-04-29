@@ -8,6 +8,8 @@ import (
 )
 
 const (
+	defaultRunnerCapacityTotal int32 = 1000
+
 	defaultIdleTTLSeconds = 3600
 	defaultMaxFileBytes   = 10 * 1024 * 1024 // 10 MB
 	defaultDataDir        = "/var/sandboxes"
@@ -68,6 +70,26 @@ type Config struct {
 	// InterSandboxNetworkEnabled enables sandbox-to-sandbox traffic on runner-bridge.
 	// Parsed from SANDBOX_INTER_SANDBOX_NETWORK_ENABLED (default false).
 	InterSandboxNetworkEnabled bool
+
+	// APIGRPCAddr is the host:port of the API's runner registration gRPC listener.
+	// Parsed from SANDBOX_API_GRPC_ADDR. When empty, registration is disabled.
+	APIGRPCAddr string
+
+	// RegistrationToken authenticates this runner to the API gRPC service.
+	// Parsed from SANDBOX_RUNNER_REGISTRATION_TOKEN.
+	RegistrationToken string
+
+	// RunnerID is the stable ID advertised to the API (placement / persistence).
+	// Parsed from SANDBOX_RUNNER_ID (default: machine hostname).
+	RunnerID string
+
+	// RunnerHTTPBaseURL is the base URL the API uses to reach this runner's HTTP API.
+	// Parsed from SANDBOX_RUNNER_HTTP_BASE_URL (required when SANDBOX_API_GRPC_ADDR is set).
+	RunnerHTTPBaseURL string
+
+	// CapacityTotal is reported to the API for placement (0 means unlimited).
+	// Parsed from SANDBOX_RUNNER_CAPACITY_TOTAL (default 1000).
+	CapacityTotal int32
 }
 
 // Load reads configuration from environment variables and returns a Config.
@@ -83,6 +105,11 @@ func Load() (*Config, error) {
 		DefaultCPUPercent: defaultCPUPercent,
 		DefaultPidsMax:    defaultPidsMax,
 		EnableCgroups:     defaultEnableCgroups,
+		CapacityTotal:     defaultRunnerCapacityTotal,
+	}
+
+	if h, err := os.Hostname(); err == nil && h != "" {
+		cfg.RunnerID = h
 	}
 
 	// SANDBOX_API_KEYS (required)
@@ -183,6 +210,31 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("SANDBOX_INTER_SANDBOX_NETWORK_ENABLED must be a boolean, got %q", v)
 		}
 		cfg.InterSandboxNetworkEnabled = enabled
+	}
+
+	cfg.APIGRPCAddr = strings.TrimSpace(os.Getenv("SANDBOX_API_GRPC_ADDR"))
+	cfg.RegistrationToken = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_REGISTRATION_TOKEN"))
+	cfg.RunnerHTTPBaseURL = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_HTTP_BASE_URL"))
+
+	if v := os.Getenv("SANDBOX_RUNNER_ID"); strings.TrimSpace(v) != "" {
+		cfg.RunnerID = strings.TrimSpace(v)
+	}
+
+	if v := os.Getenv("SANDBOX_RUNNER_CAPACITY_TOTAL"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 32)
+		if err != nil || n < 0 {
+			return nil, fmt.Errorf("SANDBOX_RUNNER_CAPACITY_TOTAL must be a non-negative integer, got %q", v)
+		}
+		cfg.CapacityTotal = int32(n)
+	}
+
+	if cfg.APIGRPCAddr != "" {
+		if cfg.RegistrationToken == "" {
+			return nil, fmt.Errorf("SANDBOX_RUNNER_REGISTRATION_TOKEN must be set when SANDBOX_API_GRPC_ADDR is set")
+		}
+		if cfg.RunnerHTTPBaseURL == "" {
+			return nil, fmt.Errorf("SANDBOX_RUNNER_HTTP_BASE_URL must be set when SANDBOX_API_GRPC_ADDR is set")
+		}
 	}
 
 	return cfg, nil

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/n8n-io/sandbox-service/internal/api/config"
+	"github.com/n8n-io/sandbox-service/internal/api/registry"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
 )
 
@@ -19,10 +20,9 @@ func TestGatewayHandlesSandboxList(t *testing.T) {
 
 	router, err := NewGatewayRouter(s, &config.APIConfig{
 		APIKeys:      map[string]struct{}{"public-key": {}},
-		RunnerURL:    "http://localhost:8081",
 		RunnerAPIKey: "runner-key",
 		MaxFileBytes: 1024,
-	})
+	}, registry.New())
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}
@@ -52,10 +52,9 @@ func TestGatewayRejectsMissingPublicAPIKey(t *testing.T) {
 
 	router, err := NewGatewayRouter(s, &config.APIConfig{
 		APIKeys:      map[string]struct{}{"public-key": {}},
-		RunnerURL:    "http://localhost:8081",
 		RunnerAPIKey: "runner-key",
 		MaxFileBytes: 1024,
-	})
+	}, registry.New())
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}

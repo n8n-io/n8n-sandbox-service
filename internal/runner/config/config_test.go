@@ -62,6 +62,10 @@ func TestLoadParsesDefaults(t *testing.T) {
 		t.Error("expected InterSandboxNetworkEnabled false")
 	}
 
+	if cfg.CapacityTotal != defaultRunnerCapacityTotal {
+		t.Errorf("expected CapacityTotal %d, got %d", defaultRunnerCapacityTotal, cfg.CapacityTotal)
+	}
+
 	if _, exists := cfg.APIKeys["test-key"]; !exists {
 		t.Error("expected test-key in APIKeys")
 	}

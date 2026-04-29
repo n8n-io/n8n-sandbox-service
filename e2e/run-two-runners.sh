@@ -10,14 +10,14 @@ RUNNER_IMAGE="n8n-sandbox-runner:latest-${ARCH}"
 SANDBOX_IMAGE="n8n-sandbox:latest-${ARCH}"
 REGISTRY_NAME="${N8N_SANDBOX_REGISTRY_NAME:-n8n-sandbox-registry}"
 REGISTRY_PORT="${REGISTRY_PORT:-5050}"
-REGISTRY_ADDR="localhost:${REGISTRY_PORT}"
 REGISTRY_INTERNAL_ADDR="${REGISTRY_NAME}:5000"
 PUSH_SANDBOX_IMAGE="localhost:${REGISTRY_PORT}/n8n-sandbox:e2e-${ARCH}"
 REMOTE_SANDBOX_IMAGE="${REGISTRY_INTERNAL_ADDR}/n8n-sandbox:e2e-${ARCH}"
-RUNNER_CONTAINER_NAME="sandbox-runner-e2e-$$"
-API_CONTAINER_NAME="sandbox-api-e2e-$$"
-NETWORK_NAME="sandbox-e2e-net-$$"
-PORT="${PORT:-8080}"
+RUNNER1_NAME="sandbox-runner-e2e-a-$$"
+RUNNER2_NAME="sandbox-runner-e2e-b-$$"
+API_CONTAINER_NAME="sandbox-api-e2e-2r-$$"
+NETWORK_NAME="sandbox-e2e-net-2r-$$"
+PORT="${PORT:-18081}"
 API_KEY="test"
 RUNNER_INTERNAL_API_KEY="runner-test"
 REG_TOKEN="${SANDBOX_RUNNER_REGISTRATION_TOKEN:-e2e-reg-token}"
@@ -27,10 +27,11 @@ cleanup() {
   echo "Stopping e2e resources..."
   docker stop "$API_CONTAINER_NAME" >/dev/null 2>&1 || true
   docker rm "$API_CONTAINER_NAME" >/dev/null 2>&1 || true
-  docker stop "$RUNNER_CONTAINER_NAME" >/dev/null 2>&1 || true
-  docker rm "$RUNNER_CONTAINER_NAME" >/dev/null 2>&1 || true
+  docker stop "$RUNNER1_NAME" >/dev/null 2>&1 || true
+  docker rm "$RUNNER1_NAME" >/dev/null 2>&1 || true
+  docker stop "$RUNNER2_NAME" >/dev/null 2>&1 || true
+  docker rm "$RUNNER2_NAME" >/dev/null 2>&1 || true
 
-  # If we reused an existing registry, disconnect it from our e2e network before cleanup
   if ! $STARTED_REGISTRY && docker network inspect "$NETWORK_NAME" >/dev/null 2>&1; then
     docker network disconnect "$NETWORK_NAME" "$REGISTRY_NAME" >/dev/null 2>&1 || true
   fi
@@ -61,7 +62,6 @@ if ! docker ps --format '{{.Names}}' | grep -qx "${REGISTRY_NAME}"; then
     registry:2 >/dev/null
   STARTED_REGISTRY=true
 else
-  # Reused registry may not be attached to this e2e network.
   docker network connect "$NETWORK_NAME" "$REGISTRY_NAME" >/dev/null 2>&1 || true
 fi
 
@@ -100,7 +100,7 @@ for i in $(seq 1 60); do
   sleep 1
 done
 
-echo "Starting runner service..."
+echo "Starting runner 1..."
 docker run -d \
   "${RUNTIME_ARGS[@]}" \
   --network "$NETWORK_NAME" \
@@ -109,26 +109,45 @@ docker run -d \
   -e "SANDBOX_DOCKER_INSECURE_REGISTRIES=$REGISTRY_INTERNAL_ADDR" \
   -e "SANDBOX_API_GRPC_ADDR=${API_CONTAINER_NAME}:9090" \
   -e "SANDBOX_RUNNER_REGISTRATION_TOKEN=$REG_TOKEN" \
-  -e "SANDBOX_RUNNER_HTTP_BASE_URL=http://${RUNNER_CONTAINER_NAME}:8080" \
-  -e "SANDBOX_RUNNER_ID=e2e-runner-$$" \
-  --name "$RUNNER_CONTAINER_NAME" \
+  -e "SANDBOX_RUNNER_HTTP_BASE_URL=http://${RUNNER1_NAME}:8080" \
+  -e "SANDBOX_RUNNER_ID=e2e-runner-a-$$" \
+  --name "$RUNNER1_NAME" \
   "$RUNNER_IMAGE"
 
-echo "Waiting for runner service..."
-for i in $(seq 1 60); do
-  if docker exec "$RUNNER_CONTAINER_NAME" wget -q -O - --header="X-Api-Key: $RUNNER_INTERNAL_API_KEY" http://localhost:8080/healthz >/dev/null 2>&1; then
-    echo "Runner is ready."
-    break
-  fi
-  if [ "$i" -eq 60 ]; then
-    echo "Runner failed to start within 60s"
-    docker logs "$RUNNER_CONTAINER_NAME"
-    exit 1
-  fi
-  sleep 1
-done
+echo "Starting runner 2..."
+docker run -d \
+  "${RUNTIME_ARGS[@]}" \
+  --network "$NETWORK_NAME" \
+  -e "SANDBOX_API_KEYS=$RUNNER_INTERNAL_API_KEY" \
+  -e "SANDBOX_DOCKER_SANDBOX_IMAGE=$REMOTE_SANDBOX_IMAGE" \
+  -e "SANDBOX_DOCKER_INSECURE_REGISTRIES=$REGISTRY_INTERNAL_ADDR" \
+  -e "SANDBOX_API_GRPC_ADDR=${API_CONTAINER_NAME}:9090" \
+  -e "SANDBOX_RUNNER_REGISTRATION_TOKEN=$REG_TOKEN" \
+  -e "SANDBOX_RUNNER_HTTP_BASE_URL=http://${RUNNER2_NAME}:8080" \
+  -e "SANDBOX_RUNNER_ID=e2e-runner-b-$$" \
+  --name "$RUNNER2_NAME" \
+  "$RUNNER_IMAGE"
 
-# Allow gRPC registration heartbeats to reach the API before placement tests run.
+wait_runner() {
+  local name=$1
+  echo "Waiting for $name..."
+  for i in $(seq 1 60); do
+    if docker exec "$name" wget -q -O - --header="X-Api-Key: $RUNNER_INTERNAL_API_KEY" http://localhost:8080/healthz >/dev/null 2>&1; then
+      echo "$name is ready."
+      return 0
+    fi
+    if [ "$i" -eq 60 ]; then
+      echo "$name failed to start within 60s"
+      docker logs "$name"
+      exit 1
+    fi
+    sleep 1
+  done
+}
+
+wait_runner "$RUNNER1_NAME"
+wait_runner "$RUNNER2_NAME"
+
 sleep 3
 
 cd "$SCRIPT_DIR"
@@ -138,25 +157,13 @@ if [ ! -d node_modules ]; then
 fi
 
 export E2E_API_CONTAINER_NAME="$API_CONTAINER_NAME"
-export E2E_RUNNER_CONTAINER_NAME="$RUNNER_CONTAINER_NAME"
+export E2E_RUNNER1_CONTAINER_NAME="$RUNNER1_NAME"
+export E2E_RUNNER2_CONTAINER_NAME="$RUNNER2_NAME"
+export E2E_RUNNER_INTERNAL_API_KEY="$RUNNER_INTERNAL_API_KEY"
 
-echo "Running e2e tests (excluding topology-only + resilience; API restart runs last)..."
-MAIN_SPECS=()
-shopt -s nullglob
-for f in tests/*.spec.ts; do
-  bn=$(basename "$f")
-  [[ "$bn" == resilience.spec.ts ]] && continue
-  [[ "$bn" == placement-no-runners.spec.ts ]] && continue
-  [[ "$bn" == placement-two-runners.spec.ts ]] && continue
-  MAIN_SPECS+=("$f")
-done
-shopt -u nullglob
-if [[ ${#MAIN_SPECS[@]} -eq 0 ]]; then
-  echo "No Playwright specs found under tests/ (after excluding placement + resilience specs)" >&2
-  exit 1
-fi
-BASE_URL="http://localhost:$PORT" SANDBOX_API_KEY="$API_KEY" npx playwright test "${MAIN_SPECS[@]}" "$@"
+echo "Running two-runner placement test..."
+BASE_URL="http://localhost:$PORT" SANDBOX_API_KEY="$API_KEY" npx playwright test tests/placement-two-runners.spec.ts "$@"
 
-echo "Running API resilience e2e..."
+echo "Running runner failure resilience e2e..."
 BASE_URL="http://localhost:$PORT" SANDBOX_API_KEY="$API_KEY" \
-  npx playwright test tests/resilience.spec.ts -g "API container restart" "$@"
+  npx playwright test tests/resilience.spec.ts -g "stopped runner" "$@"
