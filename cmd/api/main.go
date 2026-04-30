@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -12,7 +13,11 @@ import (
 
 	"github.com/n8n-io/sandbox-service/internal/api"
 	"github.com/n8n-io/sandbox-service/internal/api/config"
+	grpcapi "github.com/n8n-io/sandbox-service/internal/api/grpc"
+	"github.com/n8n-io/sandbox-service/internal/api/grpc/pb"
+	"github.com/n8n-io/sandbox-service/internal/api/registry"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
+	"google.golang.org/grpc"
 )
 
 func main() {
@@ -40,8 +45,10 @@ func main() {
 	}
 	defer s.Close()
 
+	reg := registry.New(cfg.HeartbeatGrace)
+
 	// Create API gateway with state management
-	handler, err := api.NewGatewayRouter(s, cfg)
+	handler, err := api.NewGatewayRouter(s, cfg, reg)
 	if err != nil {
 		slog.Error("failed to create api router", "error", err)
 		os.Exit(1)
@@ -56,10 +63,29 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
+	grpcLis, err := net.Listen("tcp", cfg.GRPCListenAddr)
+	if err != nil {
+		slog.Error("grpc listen", "addr", cfg.GRPCListenAddr, "error", err)
+		os.Exit(1)
+	}
+	grpcSrv := grpc.NewServer()
+	pb.RegisterRunnerRegistryServer(grpcSrv, &grpcapi.RunnerRegistryServer{
+		Token: cfg.RegistrationToken,
+		Reg:   reg,
+	})
+
 	serverErr := make(chan error, 1)
 	go func() {
-		slog.Info("api listening", "addr", cfg.ListenAddr, "runner_url", cfg.RunnerURL)
+		slog.Info("api listening", "addr", cfg.ListenAddr, "grpc_addr", cfg.GRPCListenAddr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			serverErr <- err
+		}
+	}()
+
+	go func() {
+		slog.Info("runner registry grpc listening", "addr", cfg.GRPCListenAddr)
+		if err := grpcSrv.Serve(grpcLis); err != nil {
+			slog.Error("grpc server error", "error", err)
 			serverErr <- err
 		}
 	}()
@@ -71,12 +97,14 @@ func main() {
 	case sig := <-quit:
 		slog.Info("received signal, shutting down api", "signal", sig)
 	case err := <-serverErr:
-		slog.Error("api server error", "error", err)
+		slog.Error("server error", "error", err)
 		os.Exit(1)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	// Active runner streams would block GracefulStop indefinitely; close RPCs on shutdown.
+	grpcSrv.Stop()
 	if err := srv.Shutdown(ctx); err != nil {
 		slog.Error("graceful shutdown failed", "error", err)
 	}

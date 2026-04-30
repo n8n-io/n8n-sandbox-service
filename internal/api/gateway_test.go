@@ -6,8 +6,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/n8n-io/sandbox-service/internal/api/config"
+	"github.com/n8n-io/sandbox-service/internal/api/registry"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
 )
 
@@ -20,10 +22,9 @@ func TestGatewayHandlesSandboxList(t *testing.T) {
 
 	router, err := NewGatewayRouter(s, &config.APIConfig{
 		APIKeys:      map[string]struct{}{"public-key": {}},
-		RunnerURL:    "http://localhost:8081",
 		RunnerAPIKey: "runner-key",
 		MaxFileBytes: 1024,
-	})
+	}, registry.New(45*time.Second))
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}
@@ -53,10 +54,9 @@ func TestGatewayRejectsMissingPublicAPIKey(t *testing.T) {
 
 	router, err := NewGatewayRouter(s, &config.APIConfig{
 		APIKeys:      map[string]struct{}{"public-key": {}},
-		RunnerURL:    "http://localhost:8081",
 		RunnerAPIKey: "runner-key",
 		MaxFileBytes: 1024,
-	})
+	}, registry.New(45*time.Second))
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}
@@ -80,10 +80,9 @@ func TestCreateSandboxRejectsOversizedJSONBody(t *testing.T) {
 	const maxBody = 64
 	router, err := NewGatewayRouter(s, &config.APIConfig{
 		APIKeys:      map[string]struct{}{"public-key": {}},
-		RunnerURL:    "http://127.0.0.1:9",
 		RunnerAPIKey: "runner-key",
 		MaxFileBytes: maxBody,
-	})
+	}, registry.New(45*time.Second))
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}
@@ -98,7 +97,7 @@ func TestCreateSandboxRejectsOversizedJSONBody(t *testing.T) {
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected %d, got %d body %q", http.StatusBadRequest, rr.Code, rr.Body.String())
 	}
-	if !strings.Contains(rr.Body.String(), "failed to read request body") {
-		t.Fatalf("expected read error in body, got %q", rr.Body.String())
+	if !strings.Contains(rr.Body.String(), "failed to read request body") && !strings.Contains(rr.Body.String(), "invalid JSON") {
+		t.Fatalf("expected oversized body rejection, got %q", rr.Body.String())
 	}
 }

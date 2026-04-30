@@ -61,7 +61,6 @@ func NewRouter(mgr ContainerManager, cfg *config.Config) http.Handler {
 	var handler http.Handler = mux
 	handler = AuthMiddleware(cfg.APIKeys)(handler)
 	handler = LoggingMiddleware(handler)
-	handler = CORSMiddleware(handler)
 	handler = RecoveryMiddleware(handler)
 
 	return handler

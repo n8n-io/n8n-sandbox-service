@@ -6,11 +6,11 @@ import (
 )
 
 func TestLoadParsesDefaults(t *testing.T) {
-	os.Setenv("SANDBOX_API_KEYS", "test-key")
-	os.Setenv("SANDBOX_DOCKER_SANDBOX_IMAGE", "test-image")
+	os.Setenv("SANDBOX_RUNNER_API_KEYS", "test-key")
+	os.Setenv("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE", "test-image")
 	defer func() {
-		os.Unsetenv("SANDBOX_API_KEYS")
-		os.Unsetenv("SANDBOX_DOCKER_SANDBOX_IMAGE")
+		os.Unsetenv("SANDBOX_RUNNER_API_KEYS")
+		os.Unsetenv("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE")
 	}()
 
 	cfg, err := Load()
@@ -62,27 +62,31 @@ func TestLoadParsesDefaults(t *testing.T) {
 		t.Error("expected InterSandboxNetworkEnabled false")
 	}
 
+	if cfg.CapacityTotal != defaultRunnerCapacityTotal {
+		t.Errorf("expected CapacityTotal %d, got %d", defaultRunnerCapacityTotal, cfg.CapacityTotal)
+	}
+
 	if _, exists := cfg.APIKeys["test-key"]; !exists {
 		t.Error("expected test-key in APIKeys")
 	}
 }
 
 func TestLoadRequiresAPIKeys(t *testing.T) {
-	os.Unsetenv("SANDBOX_API_KEYS")
-	os.Setenv("SANDBOX_DOCKER_SANDBOX_IMAGE", "test-image")
-	defer os.Unsetenv("SANDBOX_DOCKER_SANDBOX_IMAGE")
+	os.Unsetenv("SANDBOX_RUNNER_API_KEYS")
+	os.Setenv("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE", "test-image")
+	defer os.Unsetenv("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE")
 
 	if _, err := Load(); err == nil {
-		t.Error("expected Load() to fail without SANDBOX_API_KEYS")
+		t.Error("expected Load() to fail without SANDBOX_RUNNER_API_KEYS")
 	}
 }
 
 func TestLoadRequiresSandboxImage(t *testing.T) {
-	os.Setenv("SANDBOX_API_KEYS", "test-key")
-	os.Unsetenv("SANDBOX_DOCKER_SANDBOX_IMAGE")
-	defer os.Unsetenv("SANDBOX_API_KEYS")
+	os.Setenv("SANDBOX_RUNNER_API_KEYS", "test-key")
+	os.Unsetenv("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE")
+	defer os.Unsetenv("SANDBOX_RUNNER_API_KEYS")
 
 	if _, err := Load(); err == nil {
-		t.Error("expected Load() to fail without SANDBOX_DOCKER_SANDBOX_IMAGE")
+		t.Error("expected Load() to fail without SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE")
 	}
 }

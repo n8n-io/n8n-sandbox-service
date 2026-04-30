@@ -18,8 +18,9 @@ COPY --from=builder /out/api /usr/local/bin/sandbox-api
 RUN addgroup -S sandbox-api && adduser -S -G sandbox-api sandbox-api
 
 ENV SANDBOX_API_LISTEN_ADDR=:8080
+ENV SANDBOX_API_GRPC_LISTEN_ADDR=:9090
 
-EXPOSE 8080
+EXPOSE 8080 9090
 
 USER sandbox-api:sandbox-api
 

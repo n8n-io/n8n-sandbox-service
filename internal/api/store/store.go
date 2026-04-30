@@ -28,6 +28,8 @@ type SandboxRecord struct {
 	ImageID        string
 	NetworkPolicy  string // JSON-serialized NetworkPolicy
 	ResourceLimits string // JSON-serialized ResourceLimits
+	RunnerID       string // Runner that hosts this sandbox (from registration)
+	RunnerHTTPBase string // Base URL to reach that runner's HTTP API (for proxying)
 }
 
 // ImageRecord is the in-memory representation of a row in the images table.
@@ -84,6 +86,8 @@ func New(dbPath string) (*Store, error) {
 		{sql: addDaemonPortCol, name: "daemon_port"},
 		{sql: addImageIDCol, name: "image_id"},
 		{sql: dropContainerIDCol, name: "drop_container_id"},
+		{sql: addRunnerIDCol, name: "runner_id"},
+		{sql: addRunnerHTTPBaseURLCol, name: "runner_http_base_url"},
 	} {
 		if _, err := db.Exec(stmt.sql); err != nil {
 			// Ignore expected errors for idempotent migrations
@@ -110,9 +114,9 @@ func (s *Store) Close() error {
 func (s *Store) Create(record *SandboxRecord) error {
 	const q = `
 		INSERT INTO sandboxes
-			(id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, image_id, network_policy, resource_limits)
+			(id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, image_id, network_policy, resource_limits, runner_id, runner_http_base_url)
 		VALUES
-			(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	_, err := s.db.Exec(q,
 		record.ID,
@@ -126,6 +130,8 @@ func (s *Store) Create(record *SandboxRecord) error {
 		record.ImageID,
 		record.NetworkPolicy,
 		record.ResourceLimits,
+		record.RunnerID,
+		record.RunnerHTTPBase,
 	)
 	if err != nil {
 		return fmt.Errorf("store: create sandbox %s: %w", record.ID, err)
@@ -137,7 +143,7 @@ func (s *Store) Create(record *SandboxRecord) error {
 // record exists.
 func (s *Store) Get(id string) (*SandboxRecord, error) {
 	const q = `
-		SELECT id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, image_id, network_policy, resource_limits
+		SELECT id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, image_id, network_policy, resource_limits, runner_id, runner_http_base_url
 		FROM sandboxes
 		WHERE id = ?`
 
@@ -184,7 +190,7 @@ func (s *Store) Delete(id string) error {
 // List returns all sandbox records, ordered by creation time descending.
 func (s *Store) List() ([]*SandboxRecord, error) {
 	const q = `
-		SELECT id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, image_id, network_policy, resource_limits
+		SELECT id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, image_id, network_policy, resource_limits, runner_id, runner_http_base_url
 		FROM sandboxes
 		ORDER BY created_at DESC`
 
@@ -228,7 +234,7 @@ func (s *Store) MarkAllTerminated() error {
 // (now - maxAge) seconds and whose status is not "terminated".
 func (s *Store) ListStale(maxAge int64) ([]*SandboxRecord, error) {
 	const q = `
-		SELECT id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, image_id, network_policy, resource_limits
+		SELECT id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, image_id, network_policy, resource_limits, runner_id, runner_http_base_url
 		FROM sandboxes
 		WHERE last_active_at < ?
 		  AND status != 'terminated'`
@@ -275,6 +281,8 @@ func scanRecord(row scanner) (*SandboxRecord, error) {
 		&r.ImageID,
 		&r.NetworkPolicy,
 		&r.ResourceLimits,
+		&r.RunnerID,
+		&r.RunnerHTTPBase,
 	)
 	if err != nil {
 		return nil, err
