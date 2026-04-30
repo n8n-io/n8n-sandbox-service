@@ -1,0 +1,5 @@
+services:
+  runner-1:
+    privileged: true
+  runner-2:
+    privileged: true
