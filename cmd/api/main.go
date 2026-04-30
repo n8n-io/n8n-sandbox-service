@@ -45,7 +45,7 @@ func main() {
 	}
 	defer s.Close()
 
-	reg := registry.New()
+	reg := registry.New(cfg.HeartbeatGrace)
 
 	// Create API gateway with state management
 	handler, err := api.NewGatewayRouter(s, cfg, reg)

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/n8n-io/sandbox-service/internal/api/config"
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
@@ -23,7 +24,7 @@ func TestGatewayHandlesSandboxList(t *testing.T) {
 		APIKeys:      map[string]struct{}{"public-key": {}},
 		RunnerAPIKey: "runner-key",
 		MaxFileBytes: 1024,
-	}, registry.New())
+	}, registry.New(45*time.Second))
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}
@@ -55,7 +56,7 @@ func TestGatewayRejectsMissingPublicAPIKey(t *testing.T) {
 		APIKeys:      map[string]struct{}{"public-key": {}},
 		RunnerAPIKey: "runner-key",
 		MaxFileBytes: 1024,
-	}, registry.New())
+	}, registry.New(45*time.Second))
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}
@@ -81,7 +82,7 @@ func TestCreateSandboxRejectsOversizedJSONBody(t *testing.T) {
 		APIKeys:      map[string]struct{}{"public-key": {}},
 		RunnerAPIKey: "runner-key",
 		MaxFileBytes: maxBody,
-	}, registry.New())
+	}, registry.New(45*time.Second))
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}

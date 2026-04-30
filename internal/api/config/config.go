@@ -5,12 +5,14 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
 	defaultListenAddr     = ":8080"
 	defaultGRPCListenAddr = ":9090"
 	defaultMaxFileBytes   = 10 * 1024 * 1024 // 10 MB
+	defaultHeartbeatGrace = 45 * time.Second
 )
 
 // APIConfig contains configuration for the public API gateway.
@@ -35,6 +37,9 @@ type APIConfig struct {
 
 	// DataDir is the directory for storing API state.
 	DataDir string
+
+	// HeartbeatGrace is how long after the last gRPC heartbeat a runner may still be chosen for placement.
+	HeartbeatGrace time.Duration
 }
 
 // LoadAPI reads API gateway configuration from environment variables.
@@ -44,6 +49,7 @@ func LoadAPI() (*APIConfig, error) {
 		GRPCListenAddr: defaultGRPCListenAddr,
 		MaxFileBytes:   defaultMaxFileBytes,
 		DataDir:        "/tmp/sandbox-api",
+		HeartbeatGrace: defaultHeartbeatGrace,
 	}
 
 	rawKeys := os.Getenv("SANDBOX_API_KEYS")
@@ -86,6 +92,14 @@ func LoadAPI() (*APIConfig, error) {
 
 	if v := os.Getenv("SANDBOX_API_DATA_DIR"); v != "" {
 		cfg.DataDir = v
+	}
+
+	if v := os.Getenv("SANDBOX_API_RUNNER_HEARTBEAT_GRACE"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d <= 0 {
+			return nil, fmt.Errorf("SANDBOX_API_RUNNER_HEARTBEAT_GRACE must be a positive duration (e.g. 45s, 2m), got %q", v)
+		}
+		cfg.HeartbeatGrace = d
 	}
 
 	return cfg, nil

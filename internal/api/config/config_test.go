@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"testing"
+	"time"
 )
 
 func TestLoadAPIParsesDefaults(t *testing.T) {
@@ -40,6 +41,44 @@ func TestLoadAPIParsesDefaults(t *testing.T) {
 
 	if _, exists := cfg.APIKeys["test-key"]; !exists {
 		t.Error("expected test-key in APIKeys")
+	}
+
+	if cfg.HeartbeatGrace != 45*time.Second {
+		t.Errorf("expected HeartbeatGrace 45s, got %s", cfg.HeartbeatGrace)
+	}
+}
+
+func TestLoadAPIHeartbeatGraceFromEnv(t *testing.T) {
+	os.Setenv("SANDBOX_API_KEYS", "test-key")
+	os.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	os.Setenv("SANDBOX_API_RUNNER_HEARTBEAT_GRACE", "90s")
+	defer func() {
+		os.Unsetenv("SANDBOX_API_KEYS")
+		os.Unsetenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN")
+		os.Unsetenv("SANDBOX_API_RUNNER_HEARTBEAT_GRACE")
+	}()
+
+	cfg, err := LoadAPI()
+	if err != nil {
+		t.Fatalf("LoadAPI() failed: %v", err)
+	}
+	if cfg.HeartbeatGrace != 90*time.Second {
+		t.Fatalf("HeartbeatGrace: want 90s, got %s", cfg.HeartbeatGrace)
+	}
+}
+
+func TestLoadAPIRejectsInvalidHeartbeatGrace(t *testing.T) {
+	os.Setenv("SANDBOX_API_KEYS", "test-key")
+	os.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	os.Setenv("SANDBOX_API_RUNNER_HEARTBEAT_GRACE", "0s")
+	defer func() {
+		os.Unsetenv("SANDBOX_API_KEYS")
+		os.Unsetenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN")
+		os.Unsetenv("SANDBOX_API_RUNNER_HEARTBEAT_GRACE")
+	}()
+
+	if _, err := LoadAPI(); err == nil {
+		t.Fatal("expected LoadAPI to reject SANDBOX_API_RUNNER_HEARTBEAT_GRACE=0s")
 	}
 }
 

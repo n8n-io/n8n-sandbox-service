@@ -1,11 +1,7 @@
 package api
 
 import (
-	"errors"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
-	"strings"
 
 	"github.com/n8n-io/sandbox-service/internal/api/config"
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
@@ -51,34 +47,4 @@ func NewGatewayRouter(s *store.Store, cfg *config.APIConfig, reg *registry.Regis
 	handler = CORSMiddleware(handler)
 	handler = RecoveryMiddleware(handler)
 	return handler, nil
-}
-
-func newRunnerReverseProxy(runnerURL *url.URL, runnerAPIKey string, cfg *config.APIConfig) *httputil.ReverseProxy {
-	target := *runnerURL
-	return &httputil.ReverseProxy{
-		Rewrite: func(pr *httputil.ProxyRequest) {
-			pr.SetURL(&target)
-			pr.Out.URL.Path = pr.In.URL.Path
-			pr.Out.URL.RawQuery = pr.In.URL.RawQuery
-			pr.Out.Host = target.Host
-			if runnerAPIKey != "" {
-				pr.Out.Header.Set("X-Api-Key", runnerAPIKey)
-			} else {
-				pr.Out.Header.Del("X-Api-Key")
-			}
-		},
-		FlushInterval: -1,
-		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			var maxBytesErr *http.MaxBytesError
-			if errors.As(err, &maxBytesErr) {
-				writeError(w, http.StatusBadRequest, "failed to read request body: "+maxBytesErr.Error())
-				return
-			}
-			if strings.Contains(err.Error(), "request body too large") {
-				writeError(w, http.StatusBadRequest, "failed to read request body: http: request body too large")
-				return
-			}
-			writeError(w, http.StatusServiceUnavailable, "runner unavailable")
-		},
-	}
 }

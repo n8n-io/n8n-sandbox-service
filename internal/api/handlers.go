@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"regexp"
 	"strings"
@@ -28,11 +29,7 @@ func runnerProxyForPick(w http.ResponseWriter, r *http.Request, limitBody bool, 
 		}
 		return false
 	}
-	u, err := url.Parse(run.HTTPBaseURL)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "invalid runner URL")
-		return false
-	}
+	u, _ := url.Parse(strings.TrimRight(run.HTTPBaseURL, "/"))
 	proxy := newRunnerReverseProxy(u, cfg.RunnerAPIKey, cfg)
 	if limitBody {
 		r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxFileBytes)
@@ -65,12 +62,7 @@ func sandboxProxyHandler(s *store.Store, cfg *config.APIConfig) func(bool) http.
 				return
 			}
 
-			u, err := url.Parse(rec.RunnerHTTPBase)
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, "invalid stored runner URL")
-				return
-			}
-
+			u, _ := url.Parse(strings.TrimRight(rec.RunnerHTTPBase, "/"))
 			proxy := newRunnerReverseProxy(u, cfg.RunnerAPIKey, cfg)
 			if limitBody {
 				r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxFileBytes)
@@ -185,11 +177,7 @@ func handleCreateSandbox(s *store.Store, reg *registry.Registry, runnerAPIKey st
 			return
 		}
 
-		runnerURL, err := url.Parse(run.HTTPBaseURL)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "invalid runner URL")
-			return
-		}
+		runnerURL, _ := url.Parse(strings.TrimRight(run.HTTPBaseURL, "/"))
 
 		sandboxID := generateUUID()
 		now := time.Now().Unix()
@@ -250,10 +238,8 @@ func handleDeleteSandbox(s *store.Store, runnerAPIKey string) http.HandlerFunc {
 		}
 
 		if rec.RunnerHTTPBase != "" {
-			runnerURL, err := url.Parse(rec.RunnerHTTPBase)
-			if err == nil {
-				_ = callRunnerDeleteContainer(runnerURL, runnerAPIKey, id, rec.ContainerIP)
-			}
+			runnerURL, _ := url.Parse(strings.TrimRight(rec.RunnerHTTPBase, "/"))
+			_ = callRunnerDeleteContainer(runnerURL, runnerAPIKey, id, rec.ContainerIP)
 		}
 
 		if err := s.Delete(id); err != nil {
@@ -276,11 +262,7 @@ func handleGetImage(reg *registry.Registry, cfg *config.APIConfig) http.HandlerF
 			}
 			return
 		}
-		u, err := url.Parse(run.HTTPBaseURL)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "invalid runner URL")
-			return
-		}
+		u, _ := url.Parse(strings.TrimRight(run.HTTPBaseURL, "/"))
 		newRunnerReverseProxy(u, cfg.RunnerAPIKey, cfg).ServeHTTP(w, r)
 	}
 }
@@ -296,11 +278,7 @@ func handleDeleteImage(reg *registry.Registry, cfg *config.APIConfig) http.Handl
 			}
 			return
 		}
-		u, err := url.Parse(run.HTTPBaseURL)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "invalid runner URL")
-			return
-		}
+		u, _ := url.Parse(strings.TrimRight(run.HTTPBaseURL, "/"))
 		newRunnerReverseProxy(u, cfg.RunnerAPIKey, cfg).ServeHTTP(w, r)
 	}
 }
@@ -386,4 +364,34 @@ func generateUUID() string {
 
 func isValidUUID(id string) bool {
 	return id != "" && uuidRegex.MatchString(id)
+}
+
+func newRunnerReverseProxy(runnerURL *url.URL, runnerAPIKey string, cfg *config.APIConfig) *httputil.ReverseProxy {
+	target := *runnerURL
+	return &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(&target)
+			pr.Out.URL.Path = pr.In.URL.Path
+			pr.Out.URL.RawQuery = pr.In.URL.RawQuery
+			pr.Out.Host = target.Host
+			if runnerAPIKey != "" {
+				pr.Out.Header.Set("X-Api-Key", runnerAPIKey)
+			} else {
+				pr.Out.Header.Del("X-Api-Key")
+			}
+		},
+		FlushInterval: -1,
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			var maxBytesErr *http.MaxBytesError
+			if errors.As(err, &maxBytesErr) {
+				writeError(w, http.StatusBadRequest, "failed to read request body: "+maxBytesErr.Error())
+				return
+			}
+			if strings.Contains(err.Error(), "request body too large") {
+				writeError(w, http.StatusBadRequest, "failed to read request body: http: request body too large")
+				return
+			}
+			writeError(w, http.StatusServiceUnavailable, "runner unavailable")
+		},
+	}
 }

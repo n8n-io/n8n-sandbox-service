@@ -1,9 +1,6 @@
 package registry
 
-import (
-	"errors"
-	"testing"
-)
+import "testing"
 
 func TestIsValidRunnerHTTPBaseURL(t *testing.T) {
 	tests := []struct {
@@ -25,18 +22,9 @@ func TestIsValidRunnerHTTPBaseURL(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.in, func(t *testing.T) {
-			if got := isValidRunnerHTTPBaseURL(tt.in); got != tt.want {
-				t.Fatalf("isValidRunnerHTTPBaseURL(%q) = %v, want %v", tt.in, got, tt.want)
+			if got := IsValidRunnerHTTPBaseURL(tt.in); got != tt.want {
+				t.Fatalf("IsValidRunnerHTTPBaseURL(%q) = %v, want %v", tt.in, got, tt.want)
 			}
 		})
-	}
-}
-
-func TestUpsertRejectsInvalidHTTPBaseURL(t *testing.T) {
-	r := New()
-	r.Upsert("id", "not-a-url", true, 1, 0)
-	_, err := r.PickRoundRobin()
-	if !errors.Is(err, ErrNoRunners) {
-		t.Fatalf("PickRoundRobin: got %v, want %v", err, ErrNoRunners)
 	}
 }

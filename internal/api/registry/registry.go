@@ -10,8 +10,6 @@ import (
 // ErrNoRunners is returned when no runners are registered or eligible for placement.
 var ErrNoRunners = errors.New("no sandbox runners are registered or available")
 
-const heartbeatGrace = 45 * time.Second
-
 // Runner describes a registered sandbox runner.
 type Runner struct {
 	ID            string
@@ -24,28 +22,31 @@ type Runner struct {
 
 // Registry tracks runners that connect via gRPC and supports round-robin placement.
 type Registry struct {
-	mu        sync.Mutex
-	runners   map[string]*Runner // keyed by runner ID
-	order     []string           // first-registration order of runner IDs
-	rrCounter uint64
+	mu             sync.Mutex         // protects runners, order, and rrCounter
+	runners        map[string]*Runner // keyed by runner ID
+	order          []string           // first-registration order of runner IDs
+	rrCounter      uint64             // round-robin cursor into eligible list
+	heartbeatGrace time.Duration      // max age of LastSeen for placement eligibility
 }
 
-// New returns an empty registry.
-func New() *Registry {
+// New returns an empty registry. heartbeatGrace must be positive (how long after LastSeen a runner stays eligible).
+func New(heartbeatGrace time.Duration) *Registry {
+	if heartbeatGrace <= 0 {
+		heartbeatGrace = 45 * time.Second
+	}
 	return &Registry{
-		runners: make(map[string]*Runner),
+		runners:        make(map[string]*Runner),
+		heartbeatGrace: heartbeatGrace,
 	}
 }
 
-// Upsert updates or inserts a runner from a heartbeat.
+// Upsert updates or inserts a runner from a heartbeat. The caller must reject invalid
+// httpBaseURL before calling (e.g. gRPC registration validates with IsValidRunnerHTTPBaseURL).
 func (r *Registry) Upsert(id, httpBaseURL string, healthy bool, capTotal, capUsed int32) {
 	if id == "" || httpBaseURL == "" {
 		return
 	}
 	httpBaseURL = strings.TrimRight(httpBaseURL, "/")
-	if !isValidRunnerHTTPBaseURL(httpBaseURL) {
-		return
-	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -78,6 +79,7 @@ func (r *Registry) Remove(id string) {
 	r.order = out
 }
 
+// eligibleLocked returns healthy runners with spare capacity and a recent heartbeat; caller holds r.mu.
 func (r *Registry) eligibleLocked(now time.Time) []*Runner {
 	var eligible []*Runner
 	for _, id := range r.order {
@@ -85,7 +87,7 @@ func (r *Registry) eligibleLocked(now time.Time) []*Runner {
 		if !ok {
 			continue
 		}
-		if now.Sub(run.LastSeen) > heartbeatGrace {
+		if now.Sub(run.LastSeen) > r.heartbeatGrace {
 			continue
 		}
 		if !run.Healthy {

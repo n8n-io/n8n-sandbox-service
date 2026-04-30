@@ -46,7 +46,7 @@ func (s *RunnerRegistryServer) Connect(stream grpc.BidiStreamingServer[pb.Runner
 
 	// Bind to the first non-empty runner_id for this stream and reject changes so we
 	// never leave an earlier ID registered when the client disconnects.
-	var committedRunnerID string
+	var committedRunnerID, committedHTTPBase string
 	defer func() {
 		if committedRunnerID != "" {
 			s.Reg.Remove(committedRunnerID)
@@ -75,9 +75,17 @@ func (s *RunnerRegistryServer) Connect(stream grpc.BidiStreamingServer[pb.Runner
 				return status.Errorf(codes.InvalidArgument, "runner_id cannot change during connection")
 			}
 		}
+		httpBase := strings.TrimRight(hb.GetHttpBaseUrl(), "/")
+		if committedRunnerID != "" && httpBase == "" {
+			httpBase = committedHTTPBase
+		}
+		if httpBase == "" || !registry.IsValidRunnerHTTPBaseURL(httpBase) {
+			return status.Errorf(codes.InvalidArgument, "http_base_url must be an absolute http or https URL with a host")
+		}
+		committedHTTPBase = httpBase
 		s.Reg.Upsert(
 			committedRunnerID,
-			hb.GetHttpBaseUrl(),
+			httpBase,
 			hb.GetHealthy(),
 			hb.GetCapacityTotal(),
 			hb.GetCapacityUsed(),
