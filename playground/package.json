@@ -1,0 +1,9 @@
+{
+  "private": true,
+  "scripts": {
+    "start": "serve src"
+  },
+  "dependencies": {
+    "serve": "14.2.6"
+  }
+}
