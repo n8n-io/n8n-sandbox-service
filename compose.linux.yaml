@@ -1,0 +1,5 @@
+services:
+  runner-1:
+    runtime: sysbox-runc
+  runner-2:
+    runtime: sysbox-runc
