@@ -50,8 +50,6 @@ fi
 
 docker network create "$NETWORK_NAME" >/dev/null
 
-docker network create "$NETWORK_NAME" >/dev/null
-
 if ! docker ps --format '{{.Names}}' | grep -qx "${REGISTRY_NAME}"; then
   echo "Starting local registry..."
   docker rm -f "${REGISTRY_NAME}" >/dev/null 2>&1 || true

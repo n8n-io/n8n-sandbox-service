@@ -116,8 +116,8 @@ test.describe('Runner failure resilience', () => {
       !process.env.E2E_RUNNER1_CONTAINER_NAME || !process.env.E2E_RUNNER2_CONTAINER_NAME,
       'needs E2E_RUNNER1_CONTAINER_NAME and E2E_RUNNER2_CONTAINER_NAME (from e2e/run-two-runners.sh)',
     );
-    // Worst-case cleanup bounded (~65s) + test body; slightly above default 60s Playwright limit.
-    test.setTimeout(100_000);
+    // Align with runner bootstrap bounds on restart (dockerd wait can take up to 60s).
+    test.setTimeout(150_000);
 
     const runner1 = process.env.E2E_RUNNER1_CONTAINER_NAME!;
     const runner2 = process.env.E2E_RUNNER2_CONTAINER_NAME!;
@@ -171,9 +171,9 @@ test.describe('Runner failure resilience', () => {
     } finally {
       if (stoppedRunner) {
         docker(['start', stoppedRunner]);
-        // Tight deadlines + fast polling: exit as soon as DinD is usable (old code used 120×1s + 90×1s worst case).
-        await waitRunnerHTTPReady(stoppedRunner, runnerKey, 30_000, 250);
-        await waitInnerDockerReady(stoppedRunner, 30_000, 250);
+        // start-runner.sh waits for inner dockerd (up to 60s) before sandbox-runner starts listening.
+        await waitRunnerHTTPReady(stoppedRunner, runnerKey, 75_000, 250);
+        await waitInnerDockerReady(stoppedRunner, 45_000, 250);
         await sleep(2000);
       }
       await deleteSandbox(request, id1);
