@@ -38,7 +38,7 @@ type Config struct {
 	DataDir string
 
 	// ListenAddr is the TCP address the HTTP server listens on.
-	// Parsed from SANDBOX_LISTEN_ADDR (default :8080).
+	// Parsed from SANDBOX_RUNNER_LISTEN_ADDR (default :8080).
 	ListenAddr string
 
 	// DockerHost is the daemon endpoint used to manage sandbox containers.
@@ -124,8 +124,8 @@ func Load() (*Config, error) {
 		cfg.DataDir = v
 	}
 
-	// SANDBOX_LISTEN_ADDR (optional)
-	if v := os.Getenv("SANDBOX_LISTEN_ADDR"); v != "" {
+	// SANDBOX_RUNNER_LISTEN_ADDR (optional)
+	if v := os.Getenv("SANDBOX_RUNNER_LISTEN_ADDR"); v != "" {
 		cfg.ListenAddr = v
 	}
 

@@ -17,7 +17,6 @@ func TestStorePersistsDockerMetadata(t *testing.T) {
 		Status:         "running",
 		CreatedAt:      1,
 		LastActiveAt:   2,
-		ContainerID:    "container-1",
 		ContainerIP:    "172.30.0.2",
 		DaemonPort:     8081,
 		ImageID:        "img-1",
@@ -35,7 +34,7 @@ func TestStorePersistsDockerMetadata(t *testing.T) {
 	if got == nil {
 		t.Fatal("expected record")
 	}
-	if got.ContainerID != rec.ContainerID || got.ContainerIP != rec.ContainerIP || got.DaemonPort != rec.DaemonPort || got.ImageID != rec.ImageID {
+	if got.ContainerIP != rec.ContainerIP || got.DaemonPort != rec.DaemonPort || got.ImageID != rec.ImageID {
 		t.Fatalf("unexpected docker metadata: %+v", got)
 	}
 }

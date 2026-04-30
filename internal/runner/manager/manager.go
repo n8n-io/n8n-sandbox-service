@@ -16,13 +16,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/n8n-io/sandbox-service/internal/config"
-	"github.com/n8n-io/sandbox-service/internal/netrules"
-	"github.com/n8n-io/sandbox-service/internal/store"
+	"github.com/n8n-io/sandbox-service/internal/runner/config"
+	"github.com/n8n-io/sandbox-service/internal/runner/netrules"
 )
 
 // ErrSandboxNotFound is returned when a sandbox ID is not found or not running.
@@ -45,21 +43,23 @@ type CreateOptions struct {
 	DockerfileSteps []string
 }
 
-// Sandbox represents an active sandbox with its associated resources.
-type Sandbox struct {
-	ID            string
-	Record        *store.SandboxRecord
-	ContainerID   string
-	ContainerName string
-	ContainerIP   string
-	DaemonBaseURL string
+// ContainerInfo represents information about a created container.
+type ContainerInfo struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	IP       string `json:"ip"`
+	ImageTag string `json:"image_tag"`
 }
 
-// Manager orchestrates sandbox lifecycle.
+// ImageInfo represents information about a built image.
+type ImageInfo struct {
+	ID            string `json:"id"`
+	Tag           string `json:"tag"`
+	DockerImageID string `json:"docker_image_id"`
+}
+
+// Manager orchestrates container lifecycle without persistent state.
 type Manager struct {
-	mu        sync.RWMutex
-	sandboxes map[string]*Sandbox
-	store     *store.Store
 	config    *config.Config
 	gatewayIP string
 }
@@ -87,14 +87,11 @@ type networkInspect struct {
 	} `json:"IPAM"`
 }
 
-// New creates a new Manager. It reconciles any previous containers, ensures
-// the runner bridge exists, pulls the sandbox image, then marks stale DB rows
-// terminated.
-func New(s *store.Store, cfg *config.Config) (*Manager, error) {
+// New creates a new Manager. It reconciles any previous containers and ensures
+// the runner bridge exists.
+func New(cfg *config.Config) (*Manager, error) {
 	m := &Manager{
-		sandboxes: make(map[string]*Sandbox),
-		store:     s,
-		config:    cfg,
+		config: cfg,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -114,39 +111,36 @@ func New(s *store.Store, cfg *config.Config) (*Manager, error) {
 		return nil, fmt.Errorf("pull sandbox image: %w", err)
 	}
 
-	if err := s.MarkAllTerminated(); err != nil {
-		return nil, fmt.Errorf("mark stale sandboxes: %w", err)
-	}
-
 	return m, nil
 }
 
-// Create creates and starts a new sandbox.
-func (m *Manager) Create(ctx context.Context, opts *CreateOptions) (*store.SandboxRecord, error) {
+// CreateContainer creates and starts a new container.
+func (m *Manager) CreateContainer(ctx context.Context, sandboxID string, opts *CreateOptions) (*ContainerInfo, error) {
 	if opts == nil {
 		opts = &CreateOptions{}
 	}
 
-	id := uuid.New().String()
-	now := time.Now().Unix()
-	containerName := "sandbox-" + id[:12]
+	// Validate sandboxID length before slicing to prevent panic
+	if len(sandboxID) < 12 {
+		return nil, fmt.Errorf("sandbox ID must be at least 12 characters, got %d", len(sandboxID))
+	}
+
+	containerName := "sandbox-" + sandboxID[:12]
 	limits := m.effectiveLimits(opts.ResourceLimits)
 	imageName := m.config.DockerSandboxImage
-	imageID := ""
 
 	if len(opts.DockerfileSteps) > 0 {
-		imageRec, err := m.BuildImage(ctx, BuildImageOptions{
+		imageInfo, err := m.BuildImage(ctx, BuildImageOptions{
 			BaseImage:       m.config.DockerSandboxImage,
 			DockerfileSteps: opts.DockerfileSteps,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("build image: %w", err)
 		}
-		imageName = imageRec.Tag
-		imageID = imageRec.ID
+		imageName = imageInfo.Tag
 	}
 
-	containerID, err := m.createContainer(ctx, id, containerName, imageName, limits)
+	containerID, err := m.createContainer(ctx, sandboxID, containerName, imageName, limits)
 	if err != nil {
 		return nil, fmt.Errorf("create container: %w", err)
 	}
@@ -191,128 +185,65 @@ func (m *Manager) Create(ctx context.Context, opts *CreateOptions) (*store.Sandb
 		return nil, fmt.Errorf("connect to daemon: %w", err)
 	}
 
-	policyJSON := "{}"
-	if opts.NetworkPolicy != nil {
-		if b, err := json.Marshal(opts.NetworkPolicy); err == nil {
-			policyJSON = string(b)
-		}
+	containerInfo := &ContainerInfo{
+		ID:       containerID,
+		Name:     containerName,
+		IP:       containerIP,
+		ImageTag: imageName,
 	}
 
-	limitsJSON := "{}"
-	if b, err := json.Marshal(limits); err == nil {
-		limitsJSON = string(b)
-	}
-
-	record := &store.SandboxRecord{
-		ID:             id,
-		Status:         StatusRunning,
-		CreatedAt:      now,
-		LastActiveAt:   now,
-		ContainerID:    containerID,
-		ContainerIP:    containerIP,
-		DaemonPort:     daemonPort,
-		ImageID:        imageID,
-		NetworkPolicy:  policyJSON,
-		ResourceLimits: limitsJSON,
-	}
-	if err := m.store.Create(record); err != nil {
-		cleanupOnError(containerIP)
-		return nil, fmt.Errorf("store create: %w", err)
-	}
-
-	sb := &Sandbox{
-		ID:            id,
-		Record:        record,
-		ContainerID:   containerID,
-		ContainerName: containerName,
-		ContainerIP:   containerIP,
-		DaemonBaseURL: baseURL,
-	}
-
-	m.mu.Lock()
-	m.sandboxes[id] = sb
-	m.mu.Unlock()
-
-	slog.Info("sandbox created", "id", id, "container_id", containerID, "ip", containerIP)
-	return record, nil
+	slog.Info("container created", "sandbox_id", sandboxID, "container_id", containerID, "ip", containerIP)
+	return containerInfo, nil
 }
 
-// Get returns the sandbox record and updates last_active_at.
-func (m *Manager) Get(ctx context.Context, id string) (*store.SandboxRecord, error) {
-	m.mu.RLock()
-	sb, ok := m.sandboxes[id]
-	m.mu.RUnlock()
-
-	if !ok {
-		rec, err := m.store.Get(id)
-		if err != nil {
-			return nil, fmt.Errorf("store get: %w", err)
-		}
-		if rec == nil {
-			return nil, nil
-		}
-		return rec, nil
-	}
-
-	if err := m.store.UpdateLastActive(id); err != nil {
-		slog.Warn("update last_active_at", "id", id, "err", err)
-	}
-	sb.Record.LastActiveAt = time.Now().Unix()
-
-	return sb.Record, nil
-}
-
-// List returns all sandbox records from the store.
-func (m *Manager) List(ctx context.Context) ([]*store.SandboxRecord, error) {
-	return m.store.List()
-}
-
-// GetImage returns a custom image by ID or tag.
-func (m *Manager) GetImage(ctx context.Context, id string) (*store.ImageRecord, error) {
-	rec, err := m.store.GetImage(id)
+// GetContainerInfo returns information about a container by its ID.
+func (m *Manager) GetContainerInfo(ctx context.Context, containerID string) (*ContainerInfo, error) {
+	inspect, err := m.inspectContainer(ctx, containerID)
 	if err != nil {
-		return nil, fmt.Errorf("store get image: %w", err)
+		if isDockerNotFound(err) {
+			return nil, ErrSandboxNotFound
+		}
+		return nil, err
 	}
-	if rec == nil {
-		return nil, fmt.Errorf("%w: %s", ErrImageNotFound, id)
+
+	network, ok := inspect.NetworkSettings.Networks[runnerBridgeNetwork]
+	if !ok || network.IPAddress == "" {
+		return nil, fmt.Errorf("container %s has no IP on %s", containerID, runnerBridgeNetwork)
 	}
-	return rec, nil
+
+	return &ContainerInfo{
+		ID:   inspect.ID,
+		Name: inspect.Name,
+		IP:   network.IPAddress,
+	}, nil
 }
 
-// ListImages returns all custom images recorded in the store.
-func (m *Manager) ListImages(ctx context.Context) ([]*store.ImageRecord, error) {
-	return m.store.ListImages()
+// DaemonURL returns the daemon URL for a container by sandbox ID.
+func (m *Manager) DaemonURL(ctx context.Context, sandboxID string) (string, error) {
+	containerID, err := m.FindContainerIDByLabel(ctx, sandboxID)
+	if err != nil {
+		return "", err
+	}
+	info, err := m.GetContainerInfo(ctx, containerID)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("http://%s:%d", info.IP, daemonPort), nil
 }
 
-// DeleteImage removes a custom image if no running sandbox still references it.
-func (m *Manager) DeleteImage(ctx context.Context, id string) error {
-	rec, err := m.store.GetImage(id)
-	if err != nil {
-		return fmt.Errorf("store get image: %w", err)
-	}
-	if rec == nil {
-		return fmt.Errorf("%w: %s", ErrImageNotFound, id)
-	}
-
-	count, err := m.store.CountSandboxesByImageID(rec.ID)
-	if err != nil {
-		return fmt.Errorf("count sandboxes by image: %w", err)
-	}
-	if count > 0 {
-		return fmt.Errorf("%w: %s", ErrImageInUse, rec.ID)
-	}
-
-	if _, err := m.runDocker(ctx, "image", "rm", rec.Tag); err != nil && !isDockerNotFound(err) {
+// DeleteDockerImage removes a Docker image by tag.
+func (m *Manager) DeleteDockerImage(ctx context.Context, imageTag string) error {
+	if _, err := m.runDocker(ctx, "image", "rm", imageTag); err != nil {
+		if isDockerNotFound(err) {
+			return ErrImageNotFound
+		}
 		return err
-	}
-	if err := m.store.DeleteImage(rec.ID); err != nil {
-		return fmt.Errorf("store delete image: %w", err)
 	}
 	return nil
 }
 
-// BuildImage builds a custom Docker image (or returns a cached one) and persists it.
-func (m *Manager) BuildImage(ctx context.Context, opts BuildImageOptions) (*store.ImageRecord, error) {
+// BuildImage builds a custom Docker image and returns image information.
+func (m *Manager) BuildImage(ctx context.Context, opts BuildImageOptions) (*ImageInfo, error) {
 	if strings.TrimSpace(opts.BaseImage) == "" {
 		return nil, fmt.Errorf("base image is required")
 	}
@@ -320,48 +251,14 @@ func (m *Manager) BuildImage(ctx context.Context, opts BuildImageOptions) (*stor
 		return nil, fmt.Errorf("at least one dockerfile step is required")
 	}
 
-	hash := stepsHash(opts.BaseImage, opts.DockerfileSteps)
-
-	// Cache lookup.
-	cached, err := m.store.GetImageByStepsHash(hash)
-	if err != nil {
-		return nil, fmt.Errorf("lookup cached image: %w", err)
-	}
-	if cached != nil {
-		_, inspectErr := m.inspectImageID(ctx, cached.Tag)
-		if inspectErr == nil {
-			slog.Info("using cached image", "id", cached.ID, "tag", cached.Tag)
-			return cached, nil
-		}
-		if shouldDeleteCachedImageRecord(inspectErr) {
-			// Stale record: Docker image is gone.
-			if delErr := m.store.DeleteImage(cached.ID); delErr != nil {
-				slog.Warn("delete stale image record", "id", cached.ID, "err", delErr)
-			}
-		} else {
-			return nil, fmt.Errorf("inspect cached image %s: %w", cached.Tag, inspectErr)
-		}
-	}
-
 	dockerfile, err := buildDockerfile(opts.BaseImage, opts.DockerfileSteps)
 	if err != nil {
 		return nil, err
 	}
 
-	stepsJSON, err := json.Marshal(opts.DockerfileSteps)
-	if err != nil {
-		return nil, fmt.Errorf("marshal dockerfile steps: %w", err)
-	}
-
 	buildID := strings.ReplaceAll(uuid.NewString(), "-", "")
-	record := &store.ImageRecord{
-		ID:              "img-" + buildID,
-		Tag:             "sandbox-custom-" + buildID,
-		BaseImage:       opts.BaseImage,
-		StepsHash:       hash,
-		DockerfileSteps: string(stepsJSON),
-		CreatedAt:       time.Now().Unix(),
-	}
+	imageTag := "sandbox-custom-" + buildID
+	imageID := "img-" + buildID
 
 	buildCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
@@ -372,141 +269,47 @@ func (m *Manager) BuildImage(ctx context.Context, opts BuildImageOptions) (*stor
 	}
 	defer os.RemoveAll(tmpDir)
 
-	if _, err := m.runDockerWithStdin(buildCtx, strings.NewReader(dockerfile), "build", "-t", record.Tag, "-f", "-", filepath.Clean(tmpDir)); err != nil {
+	if _, err := m.runDockerWithStdin(buildCtx, strings.NewReader(dockerfile), "build", "-t", imageTag, "-f", "-", filepath.Clean(tmpDir)); err != nil {
 		return nil, err
 	}
 
-	record.DockerImageID, err = m.inspectImageID(buildCtx, record.Tag)
+	dockerImageID, err := m.inspectImageID(buildCtx, imageTag)
 	if err != nil {
 		return nil, err
 	}
 
-	cleanupBuiltImage := func() {
-		if _, cleanupErr := m.runDocker(context.Background(), "image", "rm", record.Tag); cleanupErr != nil && !isDockerNotFound(cleanupErr) {
-			slog.Warn("remove custom image after store failure", "tag", record.Tag, "err", cleanupErr)
+	return &ImageInfo{
+		ID:            imageID,
+		Tag:           imageTag,
+		DockerImageID: dockerImageID,
+	}, nil
+}
+
+// DeleteContainer stops and removes a container.
+func (m *Manager) DeleteContainer(ctx context.Context, containerID, containerIP string) error {
+	if err := netrules.Teardown(containerID, containerIP); err != nil {
+		slog.Warn("teardown network rules", "container_id", containerID, "err", err)
+	}
+
+	if containerID != "" {
+		if err := m.removeContainer(ctx, containerID); err != nil {
+			slog.Warn("remove container", "container_id", containerID, "err", err)
+			return err
 		}
 	}
 
-	if err := m.store.CreateImage(record); err != nil {
-		if errors.Is(err, store.ErrImageStepsHashConflict) {
-			for attempt := 0; attempt < 2; attempt++ {
-				existing, getErr := m.store.GetImageByStepsHash(record.StepsHash)
-				if getErr != nil {
-					cleanupBuiltImage()
-					return nil, fmt.Errorf("lookup existing image after steps hash conflict: %w", getErr)
-				}
-				if existing != nil {
-					if _, inspectErr := m.inspectImageID(ctx, existing.Tag); inspectErr == nil {
-						cleanupBuiltImage()
-						return existing, nil
-					} else if shouldDeleteCachedImageRecord(inspectErr) {
-						if delErr := m.store.DeleteImage(existing.ID); delErr != nil {
-							cleanupBuiltImage()
-							return nil, fmt.Errorf("delete stale image record after steps hash conflict: %w", delErr)
-						}
-					} else {
-						cleanupBuiltImage()
-						return nil, fmt.Errorf("inspect conflicting cached image %s: %w", existing.Tag, inspectErr)
-					}
-				}
-
-				retryErr := m.store.CreateImage(record)
-				if retryErr == nil {
-					return record, nil
-				}
-				if !errors.Is(retryErr, store.ErrImageStepsHashConflict) {
-					cleanupBuiltImage()
-					return nil, fmt.Errorf("store create image after steps hash conflict: %w", retryErr)
-				}
-			}
-		}
-		cleanupBuiltImage()
-		return nil, fmt.Errorf("store create image: %w", err)
-	}
-	return record, nil
-}
-
-// Delete stops and removes a sandbox.
-func (m *Manager) Delete(ctx context.Context, id string) error {
-	m.mu.Lock()
-	sb, ok := m.sandboxes[id]
-	if ok {
-		delete(m.sandboxes, id)
-	}
-	m.mu.Unlock()
-
-	if ok {
-		return m.cleanupSandbox(sb)
-	}
-
-	rec, err := m.store.Get(id)
-	if err != nil {
-		return fmt.Errorf("store get: %w", err)
-	}
-	if rec == nil {
-		return m.store.Delete(id)
-	}
-	return m.cleanupSandbox(&Sandbox{ID: id, Record: rec, ContainerID: rec.ContainerID, ContainerIP: rec.ContainerIP})
-}
-
-// DaemonURL returns the daemon base URL for the sandbox and updates last_active_at.
-func (m *Manager) DaemonURL(ctx context.Context, id string) (string, error) {
-	sb, err := m.getSandbox(id)
-	if err != nil {
-		return "", err
-	}
-	_ = m.store.UpdateLastActive(id)
-	return sb.DaemonBaseURL, nil
-}
-
-// Shutdown stops all sandboxes gracefully.
-func (m *Manager) Shutdown() {
-	m.mu.Lock()
-	sandboxes := make([]*Sandbox, 0, len(m.sandboxes))
-	for _, sb := range m.sandboxes {
-		sandboxes = append(sandboxes, sb)
-	}
-	m.sandboxes = make(map[string]*Sandbox)
-	m.mu.Unlock()
-
-	for _, sb := range sandboxes {
-		if err := m.cleanupSandbox(sb); err != nil {
-			slog.Warn("shutdown sandbox cleanup", "id", sb.ID, "err", err)
-		}
-	}
-}
-
-func (m *Manager) cleanupSandbox(sb *Sandbox) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	if err := netrules.Teardown(sb.ContainerID, sb.ContainerIP); err != nil {
-		slog.Warn("teardown network rules", "id", sb.ID, "container_id", sb.ContainerID, "err", err)
-	}
-
-	if sb.ContainerID != "" {
-		if err := m.removeContainer(ctx, sb.ContainerID); err != nil {
-			slog.Warn("remove container", "id", sb.ID, "container_id", sb.ContainerID, "err", err)
-		}
-	}
-
-	if err := m.store.Delete(sb.ID); err != nil {
-		slog.Warn("store delete", "id", sb.ID, "err", err)
-	}
-
-	slog.Info("sandbox deleted", "id", sb.ID, "container_id", sb.ContainerID)
+	slog.Info("container deleted", "container_id", containerID)
 	return nil
 }
 
-// getSandbox returns the active sandbox or an error.
-func (m *Manager) getSandbox(id string) (*Sandbox, error) {
-	m.mu.RLock()
-	sb, ok := m.sandboxes[id]
-	m.mu.RUnlock()
-	if !ok {
-		return nil, fmt.Errorf("%w: %s", ErrSandboxNotFound, id)
+// Shutdown cleans up all managed containers.
+func (m *Manager) Shutdown() {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	if err := m.reconcileContainers(ctx); err != nil {
+		slog.Warn("shutdown container cleanup", "err", err)
 	}
-	return sb, nil
 }
 
 // effectiveLimits merges per-sandbox overrides with global defaults.
@@ -739,6 +542,21 @@ func (m *Manager) listManagedContainers(ctx context.Context) ([]string, error) {
 		return nil, nil
 	}
 	return lines, nil
+}
+
+// FindContainerIDByLabel finds a container ID by sandbox ID using label filters.
+func (m *Manager) FindContainerIDByLabel(ctx context.Context, sandboxID string) (string, error) {
+	out, err := m.runDocker(ctx, "ps", "-aq",
+		"--filter", "label="+containerLabelManaged+"="+containerLabelManagedVal,
+		"--filter", "label="+containerLabelSandboxID+"="+sandboxID)
+	if err != nil {
+		return "", err
+	}
+	lines := strings.Fields(strings.TrimSpace(out))
+	if len(lines) == 0 || (len(lines) == 1 && lines[0] == "") {
+		return "", ErrSandboxNotFound
+	}
+	return lines[0], nil
 }
 
 func (m *Manager) runDocker(ctx context.Context, args ...string) (string, error) {

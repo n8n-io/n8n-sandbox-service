@@ -754,6 +754,31 @@ test.describe('Sandbox isolation', () => {
   });
 });
 
+test.describe('Deleted Sandbox 404 Tests', () => {
+  test('file operations on deleted sandbox return 404', async ({ request }) => {
+    const tempId = await createSandbox(request);
+    await deleteSandbox(request, tempId);
+
+    // Test all file endpoints return 404 for deleted sandbox
+    const endpoints = [
+      { method: 'GET', path: `/sandboxes/${tempId}/files` },
+      { method: 'GET', path: `/sandboxes/${tempId}/files/content?path=/tmp/test.txt` },
+      { method: 'PUT', path: `/sandboxes/${tempId}/files`, data: { path: '/tmp/test.txt', content: 'test' } },
+      { method: 'POST', path: `/sandboxes/${tempId}/files`, data: { path: '/tmp/test.txt', content: 'test' } },
+      { method: 'DELETE', path: `/sandboxes/${tempId}/files?path=/tmp/test.txt` },
+      { method: 'POST', path: `/sandboxes/${tempId}/files/copy`, data: { src: '/tmp/src.txt', dest: '/tmp/dest.txt' } },
+      { method: 'POST', path: `/sandboxes/${tempId}/files/move`, data: { src: '/tmp/src.txt', dest: '/tmp/dest.txt' } },
+      { method: 'POST', path: `/sandboxes/${tempId}/mkdir?path=/tmp/newdir` },
+      { method: 'GET', path: `/sandboxes/${tempId}/stat?path=/tmp/test.txt` },
+    ];
+
+    for (const endpoint of endpoints) {
+      const resp = await apiRequest(request, endpoint.method as any, endpoint.path, endpoint.data ? { data: endpoint.data } : {});
+      expect(resp.status, `${endpoint.method} ${endpoint.path} should return 404`).toBe(404);
+    }
+  });
+});
+
 test.describe('Healthz', () => {
   test('returns ok without auth', async ({ request }) => {
     const resp = await request.get('/healthz');
