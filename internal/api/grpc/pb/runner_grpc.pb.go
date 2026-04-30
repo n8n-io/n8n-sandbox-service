@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             v3.21.12
-// source: runner.proto
+// source: proto/runner/v1/runner.proto
 
 package pb
 
@@ -115,5 +115,5 @@ var RunnerRegistry_ServiceDesc = grpc.ServiceDesc{
 			ClientStreams: true,
 		},
 	},
-	Metadata: "runner.proto",
+	Metadata: "proto/runner/v1/runner.proto",
 }

@@ -2,7 +2,6 @@ package registry
 
 import (
 	"errors"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -44,7 +43,7 @@ func (r *Registry) Upsert(id, httpBaseURL string, healthy bool, capTotal, capUse
 		return
 	}
 	httpBaseURL = strings.TrimRight(httpBaseURL, "/")
-	if _, err := url.Parse(httpBaseURL); err != nil {
+	if !isValidRunnerHTTPBaseURL(httpBaseURL) {
 		return
 	}
 

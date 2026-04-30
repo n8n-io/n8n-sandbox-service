@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        v3.21.12
-// source: runner.proto
+// source: proto/runner/v1/runner.proto
 
 package pb
 
@@ -22,19 +22,20 @@ const (
 )
 
 type RunnerHeartbeat struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	RunnerId      string                 `protobuf:"bytes,1,opt,name=runner_id,json=runnerId,proto3" json:"runner_id,omitempty"`
-	HttpBaseUrl   string                 `protobuf:"bytes,2,opt,name=http_base_url,json=httpBaseUrl,proto3" json:"http_base_url,omitempty"`
-	Healthy       bool                   `protobuf:"varint,3,opt,name=healthy,proto3" json:"healthy,omitempty"`
-	CapacityTotal int32                  `protobuf:"varint,4,opt,name=capacity_total,json=capacityTotal,proto3" json:"capacity_total,omitempty"`
-	CapacityUsed  int32                  `protobuf:"varint,5,opt,name=capacity_used,json=capacityUsed,proto3" json:"capacity_used,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	RunnerId string                 `protobuf:"bytes,1,opt,name=runner_id,json=runnerId,proto3" json:"runner_id,omitempty"`
+	// Base URL the API uses to reach this runner's HTTP API (e.g. http://runner-a:8080).
+	HttpBaseUrl   string `protobuf:"bytes,2,opt,name=http_base_url,json=httpBaseUrl,proto3" json:"http_base_url,omitempty"`
+	Healthy       bool   `protobuf:"varint,3,opt,name=healthy,proto3" json:"healthy,omitempty"`
+	CapacityTotal int32  `protobuf:"varint,4,opt,name=capacity_total,json=capacityTotal,proto3" json:"capacity_total,omitempty"`
+	CapacityUsed  int32  `protobuf:"varint,5,opt,name=capacity_used,json=capacityUsed,proto3" json:"capacity_used,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RunnerHeartbeat) Reset() {
 	*x = RunnerHeartbeat{}
-	mi := &file_runner_proto_msgTypes[0]
+	mi := &file_proto_runner_v1_runner_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -46,7 +47,7 @@ func (x *RunnerHeartbeat) String() string {
 func (*RunnerHeartbeat) ProtoMessage() {}
 
 func (x *RunnerHeartbeat) ProtoReflect() protoreflect.Message {
-	mi := &file_runner_proto_msgTypes[0]
+	mi := &file_proto_runner_v1_runner_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -59,7 +60,7 @@ func (x *RunnerHeartbeat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunnerHeartbeat.ProtoReflect.Descriptor instead.
 func (*RunnerHeartbeat) Descriptor() ([]byte, []int) {
-	return file_runner_proto_rawDescGZIP(), []int{0}
+	return file_proto_runner_v1_runner_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *RunnerHeartbeat) GetRunnerId() string {
@@ -106,7 +107,7 @@ type ControlMessage struct {
 
 func (x *ControlMessage) Reset() {
 	*x = ControlMessage{}
-	mi := &file_runner_proto_msgTypes[1]
+	mi := &file_proto_runner_v1_runner_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -118,7 +119,7 @@ func (x *ControlMessage) String() string {
 func (*ControlMessage) ProtoMessage() {}
 
 func (x *ControlMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_runner_proto_msgTypes[1]
+	mi := &file_proto_runner_v1_runner_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -131,7 +132,7 @@ func (x *ControlMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ControlMessage.ProtoReflect.Descriptor instead.
 func (*ControlMessage) Descriptor() ([]byte, []int) {
-	return file_runner_proto_rawDescGZIP(), []int{1}
+	return file_proto_runner_v1_runner_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *ControlMessage) GetAck() bool {
@@ -141,11 +142,11 @@ func (x *ControlMessage) GetAck() bool {
 	return false
 }
 
-var File_runner_proto protoreflect.FileDescriptor
+var File_proto_runner_v1_runner_proto protoreflect.FileDescriptor
 
-const file_runner_proto_rawDesc = "" +
+const file_proto_runner_v1_runner_proto_rawDesc = "" +
 	"\n" +
-	"\frunner.proto\x12\trunner.v1\"\xb8\x01\n" +
+	"\x1cproto/runner/v1/runner.proto\x12\trunner.v1\"\xb8\x01\n" +
 	"\x0fRunnerHeartbeat\x12\x1b\n" +
 	"\trunner_id\x18\x01 \x01(\tR\brunnerId\x12\"\n" +
 	"\rhttp_base_url\x18\x02 \x01(\tR\vhttpBaseUrl\x12\x18\n" +
@@ -158,23 +159,23 @@ const file_runner_proto_rawDesc = "" +
 	"\aConnect\x12\x1a.runner.v1.RunnerHeartbeat\x1a\x19.runner.v1.ControlMessage(\x010\x01B;Z9github.com/n8n-io/sandbox-service/internal/api/grpc/pb;pbb\x06proto3"
 
 var (
-	file_runner_proto_rawDescOnce sync.Once
-	file_runner_proto_rawDescData []byte
+	file_proto_runner_v1_runner_proto_rawDescOnce sync.Once
+	file_proto_runner_v1_runner_proto_rawDescData []byte
 )
 
-func file_runner_proto_rawDescGZIP() []byte {
-	file_runner_proto_rawDescOnce.Do(func() {
-		file_runner_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_runner_proto_rawDesc), len(file_runner_proto_rawDesc)))
+func file_proto_runner_v1_runner_proto_rawDescGZIP() []byte {
+	file_proto_runner_v1_runner_proto_rawDescOnce.Do(func() {
+		file_proto_runner_v1_runner_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_proto_runner_v1_runner_proto_rawDesc), len(file_proto_runner_v1_runner_proto_rawDesc)))
 	})
-	return file_runner_proto_rawDescData
+	return file_proto_runner_v1_runner_proto_rawDescData
 }
 
-var file_runner_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
-var file_runner_proto_goTypes = []any{
+var file_proto_runner_v1_runner_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_proto_runner_v1_runner_proto_goTypes = []any{
 	(*RunnerHeartbeat)(nil), // 0: runner.v1.RunnerHeartbeat
 	(*ControlMessage)(nil),  // 1: runner.v1.ControlMessage
 }
-var file_runner_proto_depIdxs = []int32{
+var file_proto_runner_v1_runner_proto_depIdxs = []int32{
 	0, // 0: runner.v1.RunnerRegistry.Connect:input_type -> runner.v1.RunnerHeartbeat
 	1, // 1: runner.v1.RunnerRegistry.Connect:output_type -> runner.v1.ControlMessage
 	1, // [1:2] is the sub-list for method output_type
@@ -184,26 +185,26 @@ var file_runner_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for field type_name
 }
 
-func init() { file_runner_proto_init() }
-func file_runner_proto_init() {
-	if File_runner_proto != nil {
+func init() { file_proto_runner_v1_runner_proto_init() }
+func file_proto_runner_v1_runner_proto_init() {
+	if File_proto_runner_v1_runner_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_runner_proto_rawDesc), len(file_runner_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_runner_v1_runner_proto_rawDesc), len(file_proto_runner_v1_runner_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   2,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_runner_proto_goTypes,
-		DependencyIndexes: file_runner_proto_depIdxs,
-		MessageInfos:      file_runner_proto_msgTypes,
+		GoTypes:           file_proto_runner_v1_runner_proto_goTypes,
+		DependencyIndexes: file_proto_runner_v1_runner_proto_depIdxs,
+		MessageInfos:      file_proto_runner_v1_runner_proto_msgTypes,
 	}.Build()
-	File_runner_proto = out.File
-	file_runner_proto_goTypes = nil
-	file_runner_proto_depIdxs = nil
+	File_proto_runner_v1_runner_proto = out.File
+	file_proto_runner_v1_runner_proto_goTypes = nil
+	file_proto_runner_v1_runner_proto_depIdxs = nil
 }

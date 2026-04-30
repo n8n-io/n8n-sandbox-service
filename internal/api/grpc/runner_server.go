@@ -44,10 +44,12 @@ func (s *RunnerRegistryServer) Connect(stream grpc.BidiStreamingServer[pb.Runner
 		return status.Errorf(codes.Unauthenticated, "missing or invalid registration token")
 	}
 
-	var runnerID string
+	// Bind to the first non-empty runner_id for this stream and reject changes so we
+	// never leave an earlier ID registered when the client disconnects.
+	var committedRunnerID string
 	defer func() {
-		if runnerID != "" {
-			s.Reg.Remove(runnerID)
+		if committedRunnerID != "" {
+			s.Reg.Remove(committedRunnerID)
 		}
 	}()
 
@@ -59,9 +61,22 @@ func (s *RunnerRegistryServer) Connect(stream grpc.BidiStreamingServer[pb.Runner
 		if err != nil {
 			return err
 		}
-		runnerID = hb.GetRunnerId()
+		id := strings.TrimSpace(hb.GetRunnerId())
+		if committedRunnerID == "" {
+			if id == "" {
+				if err := stream.Send(&pb.ControlMessage{Ack: true}); err != nil {
+					return err
+				}
+				continue
+			}
+			committedRunnerID = id
+		} else {
+			if id != "" && id != committedRunnerID {
+				return status.Errorf(codes.InvalidArgument, "runner_id cannot change during connection")
+			}
+		}
 		s.Reg.Upsert(
-			runnerID,
+			committedRunnerID,
 			hb.GetHttpBaseUrl(),
 			hb.GetHealthy(),
 			hb.GetCapacityTotal(),

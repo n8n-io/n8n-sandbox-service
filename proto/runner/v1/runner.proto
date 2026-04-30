@@ -1,12 +1,11 @@
 syntax = "proto3";
 
-package sandbox.runner.v1;
+package runner.v1;
 
-option go_package = "github.com/n8n-io/sandbox-service/internal/api/grpc/pb;runnerpb";
+option go_package = "github.com/n8n-io/sandbox-service/internal/api/grpc/pb;pb";
 
-// RunnerRegistry accepts bi-directional streams from sandbox runners.
+// RunnerRegistry receives bi-directional streams from sandbox runners.
 service RunnerRegistry {
-  // Runners maintain this stream and send periodic heartbeats with capacity and health.
   rpc Connect(stream RunnerHeartbeat) returns (stream ControlMessage);
 }
 
