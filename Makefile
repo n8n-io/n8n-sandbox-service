@@ -3,7 +3,7 @@ SHELL := /bin/bash
 MODULE  := github.com/n8n-io/sandbox-service
 BINDIR  := bin
 
-.PHONY: all daemon runner api test clean docker docker-local docker-arm64 docker-amd64 docker-api-arm64 docker-api-amd64 docker-runner-arm64 docker-runner-amd64 docker-sandbox-arm64 docker-sandbox-amd64 fmt fmt-check vet playground
+.PHONY: all daemon runner api test clean docker docker-local docker-arm64 docker-amd64 docker-api-arm64 docker-api-amd64 docker-runner-arm64 docker-runner-amd64 docker-sandbox-arm64 docker-sandbox-amd64 fmt fmt-check vet playground up down
 
 all: daemon runner api
 
@@ -88,3 +88,11 @@ docker-sandbox-arm64:
 ## docker-sandbox-amd64: Build the sandbox image for linux/amd64.
 docker-sandbox-amd64:
 	docker buildx build -f Dockerfile.sandbox --platform linux/amd64 -t n8n-sandbox:latest-amd64 --load .
+
+## up: Build images and start all services locally with Docker Compose.
+up:
+	./scripts/run-locally.sh
+
+## down: Stop and remove all local Compose services.
+down:
+	docker compose down

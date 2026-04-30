@@ -1,0 +1,119 @@
+services:
+  registry:
+    image: registry:2
+    container_name: n8n-sandbox-registry
+    ports:
+      - "5050:5000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:5000/v2/"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+    networks:
+      - sandbox
+
+  sandbox-image:
+    profiles: ["build"]
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox
+    image: n8n-sandbox:latest-${ARCH}
+
+  sandbox-push:
+    image: docker:29.3.1-cli
+    depends_on:
+      registry:
+        condition: service_healthy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    entrypoint: sh
+    command:
+      - -c
+      - >-
+        docker tag n8n-sandbox:latest-${ARCH} localhost:5050/n8n-sandbox:latest-${ARCH} &&
+        docker push localhost:5050/n8n-sandbox:latest-${ARCH}
+    networks:
+      - sandbox
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    image: n8n-sandbox-api:latest-${ARCH}
+    container_name: n8n-sandbox-api-local
+    ports:
+      - "8080:8080"
+    environment:
+      SANDBOX_API_KEYS: test
+      SANDBOX_API_RUNNER_REGISTRATION_TOKEN: ${REG_TOKEN:-local-reg-token}
+      SANDBOX_API_RUNNER_API_KEY: ${RUNNER_API_KEY:-runner-local-key}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/healthz"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    networks:
+      - sandbox
+
+  runner-1:
+    build:
+      context: .
+      dockerfile: Dockerfile.runner
+    image: n8n-sandbox-runner:latest-${ARCH}
+    container_name: n8n-sandbox-runner-local-1
+    depends_on:
+      api:
+        condition: service_healthy
+      sandbox-push:
+        condition: service_completed_successfully
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      SANDBOX_RUNNER_API_KEYS: ${RUNNER_API_KEY:-runner-local-key}
+      SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE: registry:5000/n8n-sandbox:latest-${ARCH}
+      SANDBOX_RUNNER_DOCKER_INSECURE_REGISTRIES: registry:5000
+      SANDBOX_RUNNER_INTER_SANDBOX_NETWORK_ENABLED: "false"
+      SANDBOX_RUNNER_API_GRPC_ADDR: n8n-sandbox-api-local:9090
+      SANDBOX_RUNNER_REGISTRATION_TOKEN: ${REG_TOKEN:-local-reg-token}
+      SANDBOX_RUNNER_HTTP_BASE_URL: http://n8n-sandbox-runner-local-1:8080
+      SANDBOX_RUNNER_ID: local-runner-1
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "--header=X-Api-Key: ${RUNNER_API_KEY:-runner-local-key}", "http://localhost:8080/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 20s
+    networks:
+      - sandbox
+
+  runner-2:
+    image: n8n-sandbox-runner:latest-${ARCH}
+    container_name: n8n-sandbox-runner-local-2
+    depends_on:
+      runner-1:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      SANDBOX_RUNNER_API_KEYS: ${RUNNER_API_KEY:-runner-local-key}
+      SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE: registry:5000/n8n-sandbox:latest-${ARCH}
+      SANDBOX_RUNNER_DOCKER_INSECURE_REGISTRIES: registry:5000
+      SANDBOX_RUNNER_INTER_SANDBOX_NETWORK_ENABLED: "false"
+      SANDBOX_RUNNER_API_GRPC_ADDR: n8n-sandbox-api-local:9090
+      SANDBOX_RUNNER_REGISTRATION_TOKEN: ${REG_TOKEN:-local-reg-token}
+      SANDBOX_RUNNER_HTTP_BASE_URL: http://n8n-sandbox-runner-local-2:8080
+      SANDBOX_RUNNER_ID: local-runner-2
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "--header=X-Api-Key: ${RUNNER_API_KEY:-runner-local-key}", "http://localhost:8080/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 20s
+    networks:
+      - sandbox
+
+networks:
+  sandbox:
+    driver: bridge
