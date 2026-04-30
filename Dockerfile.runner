@@ -22,10 +22,10 @@ COPY scripts/start-runner.sh /usr/local/bin/start-runner.sh
 RUN chmod +x /usr/local/bin/start-runner.sh \
     && mkdir -p /var/sandboxes
 
-ENV SANDBOX_DATA_DIR=/var/sandboxes
+ENV SANDBOX_RUNNER_DATA_DIR=/var/sandboxes
 ENV SANDBOX_RUNNER_LISTEN_ADDR=:8080
-ENV SANDBOX_DOCKER_HOST=unix:///var/run/docker.sock
-ENV SANDBOX_INTER_SANDBOX_NETWORK_ENABLED=false
+ENV SANDBOX_RUNNER_DOCKER_HOST=unix:///var/run/docker.sock
+ENV SANDBOX_RUNNER_INTER_SANDBOX_NETWORK_ENABLED=false
 
 EXPOSE 8080
 

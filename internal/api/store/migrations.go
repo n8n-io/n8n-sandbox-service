@@ -43,3 +43,7 @@ const addDaemonPortCol = `ALTER TABLE sandboxes ADD COLUMN daemon_port INTEGER D
 const addImageIDCol = `ALTER TABLE sandboxes ADD COLUMN image_id TEXT DEFAULT ''`
 
 const dropContainerIDCol = `ALTER TABLE sandboxes DROP COLUMN container_id`
+
+const addRunnerIDCol = `ALTER TABLE sandboxes ADD COLUMN runner_id TEXT DEFAULT ''`
+
+const addRunnerHTTPBaseURLCol = `ALTER TABLE sandboxes ADD COLUMN runner_http_base_url TEXT DEFAULT ''`

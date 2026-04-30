@@ -378,7 +378,10 @@ func (m *Manager) reconcileContainers(ctx context.Context) error {
 			slog.Warn("teardown rules during reconcile", "container_id", id, "err", err)
 		}
 		if err := m.removeContainer(ctx, id); err != nil {
-			return err
+			// Best effort: startup should continue even if one stale managed
+			// container can't be removed immediately.
+			slog.Warn("remove container during reconcile", "container_id", id, "err", err)
+			continue
 		}
 	}
 	return nil
@@ -428,6 +431,10 @@ func (m *Manager) createRunnerBridge(ctx context.Context) (string, error) {
 }
 
 func (m *Manager) pullSandboxImage(ctx context.Context) error {
+	if _, err := m.runDocker(ctx, "image", "inspect", m.config.DockerSandboxImage); err == nil {
+		slog.Info("sandbox image already present, skipping pull", "image", m.config.DockerSandboxImage)
+		return nil
+	}
 	_, err := m.runDocker(ctx, "pull", m.config.DockerSandboxImage)
 	return err
 }
@@ -530,6 +537,15 @@ func (m *Manager) inspectRunnerBridge(ctx context.Context) (*networkInspect, err
 		return nil, fmt.Errorf("network inspect returned no results for %s", runnerBridgeNetwork)
 	}
 	return &items[0], nil
+}
+
+// ManagedContainerCount returns how many sandbox containers this runner is managing.
+func (m *Manager) ManagedContainerCount(ctx context.Context) (int, error) {
+	ids, err := m.listManagedContainers(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return len(ids), nil
 }
 
 func (m *Manager) listManagedContainers(ctx context.Context) ([]string, error) {

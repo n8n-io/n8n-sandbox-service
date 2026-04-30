@@ -4,8 +4,8 @@ set -eu
 DOCKERD_LOG=${DOCKERD_LOG:-/tmp/dockerd.log}
 
 INSECURE_ARGS=""
-if [ -n "${SANDBOX_DOCKER_INSECURE_REGISTRIES:-}" ]; then
-  for reg in $(echo "$SANDBOX_DOCKER_INSECURE_REGISTRIES" | tr ',' ' '); do
+if [ -n "${SANDBOX_RUNNER_DOCKER_INSECURE_REGISTRIES:-}" ]; then
+  for reg in $(echo "$SANDBOX_RUNNER_DOCKER_INSECURE_REGISTRIES" | tr ',' ' '); do
     INSECURE_ARGS="$INSECURE_ARGS --insecure-registry $reg"
   done
 fi
@@ -42,18 +42,22 @@ if ! iptables -n -L DOCKER-USER >/dev/null 2>&1; then
   done
 fi
 
-if [ -z "${SANDBOX_DOCKER_SANDBOX_IMAGE:-}" ]; then
-  echo "SANDBOX_DOCKER_SANDBOX_IMAGE must be set" >&2
+if [ -z "${SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE:-}" ]; then
+  echo "SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE must be set" >&2
   exit 1
 fi
 
 if ! docker network inspect runner-bridge >/dev/null 2>&1; then
   docker network create \
     --driver bridge \
-    --opt "com.docker.network.bridge.enable_icc=${SANDBOX_INTER_SANDBOX_NETWORK_ENABLED:-false}" \
+    --opt "com.docker.network.bridge.enable_icc=${SANDBOX_RUNNER_INTER_SANDBOX_NETWORK_ENABLED:-false}" \
     runner-bridge >/dev/null
 fi
 
-docker pull "${SANDBOX_DOCKER_SANDBOX_IMAGE}"
+# After `docker stop`/`docker start`, the inner graph usually still has this image; skipping pull
+# lets sandbox-runner start immediately so probes (e2e, orchestrators) see /healthz without waiting on the registry.
+if ! docker image inspect "${SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE}" >/dev/null 2>&1; then
+  docker pull "${SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE}"
+fi
 
 exec /usr/local/bin/sandbox-runner

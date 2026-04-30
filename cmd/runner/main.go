@@ -12,6 +12,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/runner"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 	"github.com/n8n-io/sandbox-service/internal/runner/manager"
+	"github.com/n8n-io/sandbox-service/internal/runner/register"
 )
 
 func main() {
@@ -43,6 +44,11 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+
+	go register.Run(ctx, cfg, mgr)
+
 	// Start server in background.
 	serverErr := make(chan error, 1)
 	go func() {
@@ -52,13 +58,9 @@ func main() {
 		}
 	}()
 
-	// Wait for SIGTERM or SIGINT.
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
-
 	select {
-	case sig := <-quit:
-		slog.Info("received signal, shutting down", "signal", sig)
+	case <-ctx.Done():
+		slog.Info("received signal, shutting down")
 	case err := <-serverErr:
 		slog.Error("server error", "error", err)
 		os.Exit(1)
@@ -66,9 +68,9 @@ func main() {
 
 	// Graceful shutdown sequence:
 	// 1. Stop accepting new HTTP requests
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := srv.Shutdown(ctx); err != nil {
+	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("graceful shutdown failed", "error", err)
 	}
 

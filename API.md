@@ -3,9 +3,15 @@
 All endpoints except `/healthz` require the `X-Api-Key` header for authentication.
 
 Runtime topology:
-- Public clients call the API container.
-- The API container forwards sandbox/image requests to the runner container.
-- The runner container manages sandbox lifecycle and proxies daemon operations.
+- Public clients call the API container over HTTP (authenticated with `X-Api-Key`).
+- Each runner opens a **private gRPC** bidirectional stream to the API (`RunnerRegistry.Connect`), authenticated with `Authorization: Bearer <SANDBOX_RUNNER_REGISTRATION_TOKEN>`. Heartbeats carry `runner_id`, `http_base_url`, health, and capacity. Each heartbeat must include an absolute `http` or `https` `http_base_url`, or omit it after the first to reuse the stream’s last URL; otherwise the RPC fails with `InvalidArgument`.
+- The API keeps an in-memory registry of runners and selects one using **round-robin** when it needs a runner (sandbox creation, image proxy pick). Creating a sandbox persists which runner owns it; later sandbox-scoped requests are proxied to **that** runner’s HTTP base URL.
+- If no runner is registered (or none are healthy / within capacity), operations that need a runner return **503** with a JSON error whose message explains that no runners are available.
+- Sandbox-scoped requests are proxied to the **stored** runner HTTP URL for that sandbox. If that runner is down or unreachable, the API returns **503** with JSON `error` **`runner unavailable`** (same shape as other API errors).
+
+Environment (API): `SANDBOX_API_RUNNER_REGISTRATION_TOKEN` (required), `SANDBOX_API_GRPC_LISTEN_ADDR` (default `:9090`), `SANDBOX_API_RUNNER_HEARTBEAT_GRACE` (default `45s` — max age of last gRPC heartbeat for a runner to be eligible for placement), plus existing HTTP settings.
+
+Environment (runner): `SANDBOX_RUNNER_API_GRPC_ADDR`, `SANDBOX_RUNNER_REGISTRATION_TOKEN`, `SANDBOX_RUNNER_HTTP_BASE_URL` (API-reachable base for this runner), optional `SANDBOX_RUNNER_ID`, `SANDBOX_RUNNER_CAPACITY_TOTAL`.
 
 ## Error Response Format
 
@@ -130,7 +136,7 @@ When `dockerfile_steps` are provided, the response `image_id` references the cus
 ```
 
 
-**Errors:** `400` invalid JSON or invalid create options
+**Errors:** `400` invalid JSON or invalid create options; `503` when no sandbox runners are registered or available (clear JSON `error` message)
 
 **Example:**
 
@@ -408,7 +414,7 @@ Upload (write) a file to a sandbox.
 **Request:**
 - `Content-Type: application/octet-stream`
 - Body: raw file contents
-- Max size: 10 MB (configurable via `SANDBOX_MAX_FILE_BYTES`)
+- Max size: 10 MB (configurable via `SANDBOX_API_MAX_FILE_BYTES`)
 
 **Response:** `200 OK`
 
@@ -438,7 +444,7 @@ Append data to a file in a sandbox. Creates the file if it doesn't exist.
 **Request:**
 - `Content-Type: application/octet-stream`
 - Body: raw data to append
-- Max size: 10 MB (configurable via `SANDBOX_MAX_FILE_BYTES`)
+- Max size: 10 MB (configurable via `SANDBOX_API_MAX_FILE_BYTES`)
 
 **Response:** `200 OK`
 

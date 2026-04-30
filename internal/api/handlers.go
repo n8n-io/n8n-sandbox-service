@@ -15,57 +15,79 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/n8n-io/sandbox-service/internal/api/config"
+	"github.com/n8n-io/sandbox-service/internal/api/registry"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
 )
 
-func handleHealthz(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"status":"ok"}`))
-}
-
-func newRunnerProxyHandler(cfg *config.APIConfig, proxy *httputil.ReverseProxy, limitBody bool) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if limitBody {
-			r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxFileBytes)
-		}
-		proxy.ServeHTTP(w, r)
-	}
-}
-
-func newSandboxProxyHandler(s *store.Store, cfg *config.APIConfig, proxy *httputil.ReverseProxy, limitBody bool) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		if !isValidUUID(id) {
-			writeError(w, http.StatusBadRequest, "invalid sandbox id")
-			return
-		}
-
-		rec, err := s.Get(id)
-		if err != nil {
+func runnerProxyForPick(w http.ResponseWriter, r *http.Request, limitBody bool, cfg *config.APIConfig, pick func() (*registry.Runner, error)) bool {
+	run, err := pick()
+	if err != nil {
+		if errors.Is(err, registry.ErrNoRunners) {
+			writeError(w, http.StatusServiceUnavailable, err.Error())
+		} else {
 			writeError(w, http.StatusInternalServerError, err.Error())
-			return
 		}
-		if rec == nil {
-			writeError(w, http.StatusNotFound, "sandbox not found")
-			return
-		}
+		return false
+	}
+	u, _ := url.Parse(strings.TrimRight(run.HTTPBaseURL, "/"))
+	proxy := newRunnerReverseProxy(u, cfg.RunnerAPIKey, cfg)
+	if limitBody {
+		r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxFileBytes)
+	}
+	proxy.ServeHTTP(w, r)
+	return true
+}
 
-		if limitBody {
-			r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxFileBytes)
+func sandboxProxyHandler(s *store.Store, cfg *config.APIConfig) func(bool) http.HandlerFunc {
+	return func(limitBody bool) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			id := r.PathValue("id")
+			if !isValidUUID(id) {
+				writeError(w, http.StatusBadRequest, "invalid sandbox id")
+				return
+			}
+
+			rec, err := s.Get(id)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			if rec == nil {
+				writeError(w, http.StatusNotFound, "sandbox not found")
+				return
+			}
+
+			if rec.RunnerHTTPBase == "" {
+				writeError(w, http.StatusBadGateway, "sandbox has no runner routing information")
+				return
+			}
+
+			u, _ := url.Parse(strings.TrimRight(rec.RunnerHTTPBase, "/"))
+			proxy := newRunnerReverseProxy(u, cfg.RunnerAPIKey, cfg)
+			if limitBody {
+				r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxFileBytes)
+			}
+			proxy.ServeHTTP(w, r)
 		}
-		proxy.ServeHTTP(w, r)
 	}
 }
 
-// CreateSandboxRequest is the JSON body for POST /sandboxes.
+func imageProxyHandler(reg *registry.Registry, cfg *config.APIConfig) func(bool) http.HandlerFunc {
+	return func(limitBody bool) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			_ = runnerProxyForPick(w, r, limitBody, cfg, reg.PickRoundRobin)
+		}
+	}
+}
+
+// State-managed handlers that coordinate with runner service
+
 type CreateSandboxRequest struct {
 	NetworkPolicy   interface{} `json:"network_policy,omitempty"`
 	ResourceLimits  interface{} `json:"resource_limits,omitempty"`
 	DockerfileSteps []string    `json:"dockerfile_steps,omitempty"`
 }
 
-// SandboxResponse is the JSON shape for sandbox resources.
 type SandboxResponse struct {
 	ID           string `json:"id"`
 	Status       string `json:"status"`
@@ -114,7 +136,7 @@ func handleGetSandbox(s *store.Store) http.HandlerFunc {
 			return
 		}
 		if err := s.UpdateLastActive(id); err != nil {
-			// Log but don't fail
+			// non-fatal
 		}
 		resp := &SandboxResponse{
 			ID:           rec.ID,
@@ -128,18 +150,12 @@ func handleGetSandbox(s *store.Store) http.HandlerFunc {
 	}
 }
 
-func handleCreateSandbox(s *store.Store, cfg *config.APIConfig, runnerURL *url.URL, runnerAPIKey string) http.HandlerFunc {
+func handleCreateSandbox(s *store.Store, reg *registry.Registry, runnerAPIKey string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req CreateSandboxRequest
 		if r.Body != nil {
-			r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxFileBytes)
 			body, err := io.ReadAll(r.Body)
 			if err != nil {
-				var maxBytesErr *http.MaxBytesError
-				if errors.As(err, &maxBytesErr) {
-					writeError(w, http.StatusBadRequest, "failed to read request body: "+maxBytesErr.Error())
-					return
-				}
 				writeError(w, http.StatusBadRequest, "failed to read request body")
 				return
 			}
@@ -151,6 +167,18 @@ func handleCreateSandbox(s *store.Store, cfg *config.APIConfig, runnerURL *url.U
 			}
 		}
 
+		run, err := reg.PickRoundRobin()
+		if err != nil {
+			if errors.Is(err, registry.ErrNoRunners) {
+				writeError(w, http.StatusServiceUnavailable, err.Error())
+			} else {
+				writeError(w, http.StatusInternalServerError, err.Error())
+			}
+			return
+		}
+
+		runnerURL, _ := url.Parse(strings.TrimRight(run.HTTPBaseURL, "/"))
+
 		sandboxID := generateUUID()
 		now := time.Now().Unix()
 
@@ -161,17 +189,19 @@ func handleCreateSandbox(s *store.Store, cfg *config.APIConfig, runnerURL *url.U
 		}
 
 		record := &store.SandboxRecord{
-			ID:           sandboxID,
-			Status:       "running",
-			CreatedAt:    now,
-			LastActiveAt: now,
-			ContainerIP:  containerInfo.IP,
-			DaemonPort:   8081,
-			ImageID:      containerInfo.ImageTag,
+			ID:             sandboxID,
+			Status:         "running",
+			CreatedAt:      now,
+			LastActiveAt:   now,
+			ContainerIP:    containerInfo.IP,
+			DaemonPort:     8081,
+			ImageID:        containerInfo.ImageTag,
+			RunnerID:       run.ID,
+			RunnerHTTPBase: strings.TrimRight(run.HTTPBaseURL, "/"),
 		}
 		if err := s.Create(record); err != nil {
 			if cleanupErr := callRunnerDeleteContainer(runnerURL, runnerAPIKey, sandboxID, containerInfo.IP); cleanupErr != nil {
-				// Log but continue with error response
+				// best effort
 			}
 			writeError(w, http.StatusInternalServerError, "failed to store sandbox: "+err.Error())
 			return
@@ -189,7 +219,7 @@ func handleCreateSandbox(s *store.Store, cfg *config.APIConfig, runnerURL *url.U
 	}
 }
 
-func handleDeleteSandbox(s *store.Store, runnerURL *url.URL, runnerAPIKey string) http.HandlerFunc {
+func handleDeleteSandbox(s *store.Store, runnerAPIKey string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if !isValidUUID(id) {
@@ -207,8 +237,9 @@ func handleDeleteSandbox(s *store.Store, runnerURL *url.URL, runnerAPIKey string
 			return
 		}
 
-		if err := callRunnerDeleteContainer(runnerURL, runnerAPIKey, id, rec.ContainerIP); err != nil {
-			// Log but continue - container might already be gone
+		if rec.RunnerHTTPBase != "" {
+			runnerURL, _ := url.Parse(strings.TrimRight(rec.RunnerHTTPBase, "/"))
+			_ = callRunnerDeleteContainer(runnerURL, runnerAPIKey, id, rec.ContainerIP)
 		}
 
 		if err := s.Delete(id); err != nil {
@@ -220,41 +251,39 @@ func handleDeleteSandbox(s *store.Store, runnerURL *url.URL, runnerAPIKey string
 	}
 }
 
-func handleGetImage(proxy *httputil.ReverseProxy) http.HandlerFunc {
+func handleGetImage(reg *registry.Registry, cfg *config.APIConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		if !isValidImageRouteID(id) {
-			writeError(w, http.StatusBadRequest, "invalid image id")
+		run, err := reg.PickRoundRobin()
+		if err != nil {
+			if errors.Is(err, registry.ErrNoRunners) {
+				writeError(w, http.StatusServiceUnavailable, err.Error())
+			} else {
+				writeError(w, http.StatusInternalServerError, err.Error())
+			}
 			return
 		}
-		proxy.ServeHTTP(w, r)
+		u, _ := url.Parse(strings.TrimRight(run.HTTPBaseURL, "/"))
+		newRunnerReverseProxy(u, cfg.RunnerAPIKey, cfg).ServeHTTP(w, r)
 	}
 }
 
-func handleDeleteImage(proxy *httputil.ReverseProxy) http.HandlerFunc {
+func handleDeleteImage(reg *registry.Registry, cfg *config.APIConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		if !isValidImageRouteID(id) {
-			writeError(w, http.StatusBadRequest, "invalid image id")
+		run, err := reg.PickRoundRobin()
+		if err != nil {
+			if errors.Is(err, registry.ErrNoRunners) {
+				writeError(w, http.StatusServiceUnavailable, err.Error())
+			} else {
+				writeError(w, http.StatusInternalServerError, err.Error())
+			}
 			return
 		}
-		proxy.ServeHTTP(w, r)
+		u, _ := url.Parse(strings.TrimRight(run.HTTPBaseURL, "/"))
+		newRunnerReverseProxy(u, cfg.RunnerAPIKey, cfg).ServeHTTP(w, r)
 	}
 }
 
-// isValidImageRouteID checks the /images/{id} path segment. Image IDs are not
-// sandbox UUIDs — they may be logical ids like "img-"+hex, Docker tags, or
-// registry references (see API.md). We only reject empty, oversized, or
-// traversal-like values; existence is decided by the runner.
-func isValidImageRouteID(id string) bool {
-	if id == "" || len(id) > 512 {
-		return false
-	}
-	if strings.Contains(id, "..") {
-		return false
-	}
-	return true
-}
+// Helper functions for calling runner service
 
 type ContainerInfo struct {
 	ID       string `json:"id"`
@@ -269,7 +298,7 @@ func callRunnerCreateContainer(runnerURL *url.URL, apiKey, sandboxID string, req
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	urlStr := fmt.Sprintf("%s/sandboxes", runnerURL.String())
+	urlStr := fmt.Sprintf("%s/sandboxes", strings.TrimRight(runnerURL.String(), "/"))
 	httpReq, err := http.NewRequest("POST", urlStr, bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
@@ -302,7 +331,7 @@ func callRunnerCreateContainer(runnerURL *url.URL, apiKey, sandboxID string, req
 }
 
 func callRunnerDeleteContainer(runnerURL *url.URL, apiKey, sandboxID, containerIP string) error {
-	urlStr := fmt.Sprintf("%s/sandboxes/%s", runnerURL.String(), sandboxID)
+	urlStr := fmt.Sprintf("%s/sandboxes/%s", strings.TrimRight(runnerURL.String(), "/"), sandboxID)
 	httpReq, err := http.NewRequest("DELETE", urlStr, nil)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
@@ -335,4 +364,34 @@ func generateUUID() string {
 
 func isValidUUID(id string) bool {
 	return id != "" && uuidRegex.MatchString(id)
+}
+
+func newRunnerReverseProxy(runnerURL *url.URL, runnerAPIKey string, cfg *config.APIConfig) *httputil.ReverseProxy {
+	target := *runnerURL
+	return &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(&target)
+			pr.Out.URL.Path = pr.In.URL.Path
+			pr.Out.URL.RawQuery = pr.In.URL.RawQuery
+			pr.Out.Host = target.Host
+			if runnerAPIKey != "" {
+				pr.Out.Header.Set("X-Api-Key", runnerAPIKey)
+			} else {
+				pr.Out.Header.Del("X-Api-Key")
+			}
+		},
+		FlushInterval: -1,
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			var maxBytesErr *http.MaxBytesError
+			if errors.As(err, &maxBytesErr) {
+				writeError(w, http.StatusBadRequest, "failed to read request body: "+maxBytesErr.Error())
+				return
+			}
+			if strings.Contains(err.Error(), "request body too large") {
+				writeError(w, http.StatusBadRequest, "failed to read request body: http: request body too large")
+				return
+			}
+			writeError(w, http.StatusServiceUnavailable, "runner unavailable")
+		},
+	}
 }

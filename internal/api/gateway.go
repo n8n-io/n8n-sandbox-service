@@ -1,73 +1,45 @@
 package api
 
 import (
-	"errors"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
-	"strings"
 
 	"github.com/n8n-io/sandbox-service/internal/api/config"
+	"github.com/n8n-io/sandbox-service/internal/api/registry"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
 )
 
 // NewGatewayRouter creates the public API gateway that manages state and
-// coordinates with the runner service.
-func NewGatewayRouter(s *store.Store, cfg *config.APIConfig) (http.Handler, error) {
-	runnerURL, err := url.Parse(cfg.RunnerURL)
-	if err != nil {
-		return nil, err
-	}
-
-	proxy := &httputil.ReverseProxy{
-		Rewrite: func(pr *httputil.ProxyRequest) {
-			pr.SetURL(runnerURL)
-			pr.Out.URL.Path = pr.In.URL.Path
-			pr.Out.URL.RawQuery = pr.In.URL.RawQuery
-			pr.Out.Host = runnerURL.Host
-			if cfg.RunnerAPIKey != "" {
-				pr.Out.Header.Set("X-Api-Key", cfg.RunnerAPIKey)
-			} else {
-				pr.Out.Header.Del("X-Api-Key")
-			}
-		},
-		FlushInterval: -1,
-		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			var maxBytesErr *http.MaxBytesError
-			if errors.As(err, &maxBytesErr) {
-				writeError(w, http.StatusBadRequest, "failed to read request body: "+maxBytesErr.Error())
-				return
-			}
-			if strings.Contains(err.Error(), "request body too large") {
-				writeError(w, http.StatusBadRequest, "failed to read request body: http: request body too large")
-				return
-			}
-			writeError(w, http.StatusBadGateway, "runner unreachable")
-		},
-	}
+// coordinates with registered runner services.
+func NewGatewayRouter(s *store.Store, cfg *config.APIConfig, reg *registry.Registry) (http.Handler, error) {
+	sandboxProxy := sandboxProxyHandler(s, cfg)
+	imageProxy := imageProxyHandler(reg, cfg)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", handleHealthz)
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	})
 
 	mux.HandleFunc("GET /sandboxes", handleListSandboxes(s))
-	mux.HandleFunc("POST /sandboxes", handleCreateSandbox(s, cfg, runnerURL, cfg.RunnerAPIKey))
+	mux.HandleFunc("POST /sandboxes", handleCreateSandbox(s, reg, cfg.RunnerAPIKey))
 	mux.HandleFunc("GET /sandboxes/{id}", handleGetSandbox(s))
-	mux.HandleFunc("DELETE /sandboxes/{id}", handleDeleteSandbox(s, runnerURL, cfg.RunnerAPIKey))
+	mux.HandleFunc("DELETE /sandboxes/{id}", handleDeleteSandbox(s, cfg.RunnerAPIKey))
 
-	mux.HandleFunc("GET /images", newRunnerProxyHandler(cfg, proxy, false))
-	mux.HandleFunc("GET /images/{id}", handleGetImage(proxy))
-	mux.HandleFunc("DELETE /images/{id}", handleDeleteImage(proxy))
+	mux.HandleFunc("GET /images", imageProxy(false))
+	mux.HandleFunc("GET /images/{id}", handleGetImage(reg, cfg))
+	mux.HandleFunc("DELETE /images/{id}", handleDeleteImage(reg, cfg))
 
-	mux.HandleFunc("POST /sandboxes/{id}/exec", newSandboxProxyHandler(s, cfg, proxy, false))
-	mux.HandleFunc("POST /sandboxes/{id}/files/copy", newSandboxProxyHandler(s, cfg, proxy, false))
-	mux.HandleFunc("POST /sandboxes/{id}/files/move", newSandboxProxyHandler(s, cfg, proxy, false))
-	mux.HandleFunc("GET /sandboxes/{id}/files", newSandboxProxyHandler(s, cfg, proxy, false))
-	mux.HandleFunc("GET /sandboxes/{id}/files/content", newSandboxProxyHandler(s, cfg, proxy, false))
-	mux.HandleFunc("PUT /sandboxes/{id}/files", newSandboxProxyHandler(s, cfg, proxy, true))
-	mux.HandleFunc("POST /sandboxes/{id}/files", newSandboxProxyHandler(s, cfg, proxy, true))
-	mux.HandleFunc("DELETE /sandboxes/{id}/files", newSandboxProxyHandler(s, cfg, proxy, false))
-	mux.HandleFunc("POST /sandboxes/{id}/mkdir", newSandboxProxyHandler(s, cfg, proxy, false))
-	mux.HandleFunc("GET /sandboxes/{id}/stat", newSandboxProxyHandler(s, cfg, proxy, false))
+	mux.HandleFunc("POST /sandboxes/{id}/exec", sandboxProxy(false))
+	mux.HandleFunc("POST /sandboxes/{id}/files/copy", sandboxProxy(false))
+	mux.HandleFunc("POST /sandboxes/{id}/files/move", sandboxProxy(false))
+	mux.HandleFunc("GET /sandboxes/{id}/files", sandboxProxy(false))
+	mux.HandleFunc("GET /sandboxes/{id}/files/content", sandboxProxy(false))
+	mux.HandleFunc("PUT /sandboxes/{id}/files", sandboxProxy(true))
+	mux.HandleFunc("POST /sandboxes/{id}/files", sandboxProxy(true))
+	mux.HandleFunc("DELETE /sandboxes/{id}/files", sandboxProxy(false))
+	mux.HandleFunc("POST /sandboxes/{id}/mkdir", sandboxProxy(false))
+	mux.HandleFunc("GET /sandboxes/{id}/stat", sandboxProxy(false))
 
 	var handler http.Handler = mux
 	handler = AuthMiddleware(cfg.APIKeys)(handler)
