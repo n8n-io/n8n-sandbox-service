@@ -33,9 +33,6 @@ if ! docker info >/dev/null 2>&1; then
 fi
 
 # Ensure the iptables binary uses the same backend (legacy vs nft) as dockerd.
-# dockerd-entrypoint.sh picks a backend and creates the DOCKER-USER chain in it;
-# if the default iptables binary points to the other backend, our netrules code
-# would write rules into a table that is never traversed.
 if ! iptables -n -L DOCKER-USER >/dev/null 2>&1; then
   for bin in iptables-legacy iptables-nft; do
     if command -v "$bin" >/dev/null 2>&1 && "$bin" -n -L DOCKER-USER >/dev/null 2>&1; then
@@ -59,4 +56,4 @@ fi
 
 docker pull "${SANDBOX_DOCKER_SANDBOX_IMAGE}"
 
-exec /usr/local/bin/sandbox-server
+exec /usr/local/bin/sandbox-runner

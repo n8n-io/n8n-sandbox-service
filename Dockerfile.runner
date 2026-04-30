@@ -1,0 +1,32 @@
+# syntax=docker/dockerfile:1
+
+# =============================================================================
+# Stage 1: Build the runner server binary
+# =============================================================================
+FROM golang:1.25-bookworm AS builder
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux go build -o /out/runner ./cmd/runner
+
+FROM docker:29.3.1-dind-alpine3.23 AS runner
+
+RUN apk add --no-cache tini
+
+COPY --from=builder /out/runner /usr/local/bin/sandbox-runner
+COPY scripts/start-runner.sh /usr/local/bin/start-runner.sh
+
+RUN chmod +x /usr/local/bin/start-runner.sh \
+    && mkdir -p /var/sandboxes
+
+ENV SANDBOX_DATA_DIR=/var/sandboxes
+ENV SANDBOX_RUNNER_LISTEN_ADDR=:8080
+ENV SANDBOX_DOCKER_HOST=unix:///var/run/docker.sock
+ENV SANDBOX_INTER_SANDBOX_NETWORK_ENABLED=false
+
+EXPOSE 8080
+
+ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/start-runner.sh"]

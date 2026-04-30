@@ -1,13 +1,27 @@
-package api
+package runner
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 
-	"github.com/n8n-io/sandbox-service/internal/config"
+	"github.com/n8n-io/sandbox-service/internal/runner/config"
+	"github.com/n8n-io/sandbox-service/internal/runner/manager"
 )
 
-// NewRouter creates the HTTP handler with all routes registered and middleware applied.
-func NewRouter(mgr SandboxManager, cfg *config.Config) http.Handler {
+// ContainerManager defines the interface for container operations.
+type ContainerManager interface {
+	CreateContainer(ctx context.Context, sandboxID string, opts *manager.CreateOptions) (*manager.ContainerInfo, error)
+	GetContainerInfo(ctx context.Context, containerID string) (*manager.ContainerInfo, error)
+	DeleteContainer(ctx context.Context, containerID, containerIP string) error
+	DaemonURL(ctx context.Context, containerID string) (string, error)
+	BuildImage(ctx context.Context, opts manager.BuildImageOptions) (*manager.ImageInfo, error)
+	DeleteDockerImage(ctx context.Context, imageTag string) error
+	FindContainerIDByLabel(ctx context.Context, sandboxID string) (string, error)
+}
+
+// NewRouter creates the HTTP handler for container operations.
+func NewRouter(mgr ContainerManager, cfg *config.Config) http.Handler {
 	mux := http.NewServeMux()
 
 	// Health check
@@ -17,7 +31,7 @@ func NewRouter(mgr SandboxManager, cfg *config.Config) http.Handler {
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 
-	// Sandbox CRUD
+	// Sandbox CRUD (stateless - no database persistence)
 	mux.HandleFunc("GET /sandboxes", ListSandboxes(mgr))
 	mux.HandleFunc("POST /sandboxes", CreateSandbox(mgr))
 	mux.HandleFunc("GET /sandboxes/{id}", GetSandbox(mgr))
@@ -51,4 +65,14 @@ func NewRouter(mgr SandboxManager, cfg *config.Config) http.Handler {
 	handler = RecoveryMiddleware(handler)
 
 	return handler
+}
+
+func writeJSON(w http.ResponseWriter, status int, data interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(data)
+}
+
+func writeError(w http.ResponseWriter, status int, message string) {
+	writeJSON(w, status, map[string]string{"error": message})
 }

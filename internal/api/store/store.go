@@ -23,7 +23,6 @@ type SandboxRecord struct {
 	LastActiveAt   int64
 	RootfsPath     string
 	SocketPath     string
-	ContainerID    string
 	ContainerIP    string
 	DaemonPort     int
 	ImageID        string
@@ -81,16 +80,19 @@ func New(dbPath string) (*Store, error) {
 		sql  string
 		name string
 	}{
-		{sql: addContainerIDCol, name: "container_id"},
 		{sql: addContainerIPCol, name: "container_ip"},
 		{sql: addDaemonPortCol, name: "daemon_port"},
 		{sql: addImageIDCol, name: "image_id"},
+		{sql: dropContainerIDCol, name: "drop_container_id"},
 	} {
 		if _, err := db.Exec(stmt.sql); err != nil {
-			if !strings.Contains(err.Error(), "duplicate column") {
-				_ = db.Close()
-				return nil, fmt.Errorf("store: add %s column: %w", stmt.name, err)
+			// Ignore expected errors for idempotent migrations
+			if strings.Contains(err.Error(), "duplicate column") ||
+				strings.Contains(err.Error(), "no such column") {
+				continue
 			}
+			_ = db.Close()
+			return nil, fmt.Errorf("store: migration %s: %w", stmt.name, err)
 		}
 	}
 
@@ -108,9 +110,9 @@ func (s *Store) Close() error {
 func (s *Store) Create(record *SandboxRecord) error {
 	const q = `
 		INSERT INTO sandboxes
-			(id, status, created_at, last_active_at, rootfs_path, socket_path, container_id, container_ip, daemon_port, image_id, network_policy, resource_limits)
+			(id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, image_id, network_policy, resource_limits)
 		VALUES
-			(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	_, err := s.db.Exec(q,
 		record.ID,
@@ -119,7 +121,6 @@ func (s *Store) Create(record *SandboxRecord) error {
 		record.LastActiveAt,
 		record.RootfsPath,
 		record.SocketPath,
-		record.ContainerID,
 		record.ContainerIP,
 		record.DaemonPort,
 		record.ImageID,
@@ -136,7 +137,7 @@ func (s *Store) Create(record *SandboxRecord) error {
 // record exists.
 func (s *Store) Get(id string) (*SandboxRecord, error) {
 	const q = `
-		SELECT id, status, created_at, last_active_at, rootfs_path, socket_path, container_id, container_ip, daemon_port, image_id, network_policy, resource_limits
+		SELECT id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, image_id, network_policy, resource_limits
 		FROM sandboxes
 		WHERE id = ?`
 
@@ -183,7 +184,7 @@ func (s *Store) Delete(id string) error {
 // List returns all sandbox records, ordered by creation time descending.
 func (s *Store) List() ([]*SandboxRecord, error) {
 	const q = `
-		SELECT id, status, created_at, last_active_at, rootfs_path, socket_path, container_id, container_ip, daemon_port, image_id, network_policy, resource_limits
+		SELECT id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, image_id, network_policy, resource_limits
 		FROM sandboxes
 		ORDER BY created_at DESC`
 
@@ -227,7 +228,7 @@ func (s *Store) MarkAllTerminated() error {
 // (now - maxAge) seconds and whose status is not "terminated".
 func (s *Store) ListStale(maxAge int64) ([]*SandboxRecord, error) {
 	const q = `
-		SELECT id, status, created_at, last_active_at, rootfs_path, socket_path, container_id, container_ip, daemon_port, image_id, network_policy, resource_limits
+		SELECT id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, image_id, network_policy, resource_limits
 		FROM sandboxes
 		WHERE last_active_at < ?
 		  AND status != 'terminated'`
@@ -269,7 +270,6 @@ func scanRecord(row scanner) (*SandboxRecord, error) {
 		&r.LastActiveAt,
 		&r.RootfsPath,
 		&r.SocketPath,
-		&r.ContainerID,
 		&r.ContainerIP,
 		&r.DaemonPort,
 		&r.ImageID,

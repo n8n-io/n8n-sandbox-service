@@ -10,7 +10,6 @@ CREATE TABLE IF NOT EXISTS sandboxes (
 	last_active_at  INTEGER NOT NULL,
 	rootfs_path     TEXT,
 	socket_path     TEXT,
-	container_id    TEXT,
 	container_ip    TEXT,
 	daemon_port     INTEGER DEFAULT 8081,
 	image_id        TEXT    DEFAULT '',
@@ -42,3 +41,5 @@ const addContainerIPCol = `ALTER TABLE sandboxes ADD COLUMN container_ip TEXT`
 const addDaemonPortCol = `ALTER TABLE sandboxes ADD COLUMN daemon_port INTEGER DEFAULT 8081`
 
 const addImageIDCol = `ALTER TABLE sandboxes ADD COLUMN image_id TEXT DEFAULT ''`
+
+const dropContainerIDCol = `ALTER TABLE sandboxes DROP COLUMN container_id`

@@ -6,14 +6,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
-	"github.com/n8n-io/sandbox-service/internal/api"
-	"github.com/n8n-io/sandbox-service/internal/config"
-	"github.com/n8n-io/sandbox-service/internal/manager"
-	"github.com/n8n-io/sandbox-service/internal/store"
+	"github.com/n8n-io/sandbox-service/internal/runner"
+	"github.com/n8n-io/sandbox-service/internal/runner/config"
+	"github.com/n8n-io/sandbox-service/internal/runner/manager"
 )
 
 func main() {
@@ -26,34 +24,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Ensure data directory exists.
-	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
-		slog.Error("create data dir", "error", err)
-		os.Exit(1)
-	}
-
-	// Open SQLite store.
-	dbPath := filepath.Join(cfg.DataDir, "sandboxes.db")
-	s, err := store.New(dbPath)
-	if err != nil {
-		slog.Error("open store", "error", err)
-		os.Exit(1)
-	}
-	defer s.Close()
-
-	// Create manager (marks stale sandboxes as terminated).
-	mgr, err := manager.New(s, cfg)
+	// Create stateless container manager.
+	mgr, err := manager.New(cfg)
 	if err != nil {
 		slog.Error("create manager", "error", err)
 		os.Exit(1)
 	}
 
-	// Start idle reaper.
-	reaperDone := make(chan struct{})
-	mgr.StartReaper(reaperDone)
-
 	// Build HTTP handler.
-	handler := api.NewRouter(mgr, cfg)
+	handler := runner.NewRouter(mgr, cfg)
 
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
@@ -93,10 +72,7 @@ func main() {
 		slog.Error("graceful shutdown failed", "error", err)
 	}
 
-	// 2. Stop reaper
-	close(reaperDone)
-
-	// 3. Kill all sandboxes, unmount, close clients
+	// 2. Clean up containers
 	mgr.Shutdown()
 
 	slog.Info("server stopped")

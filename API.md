@@ -2,6 +2,11 @@
 
 All endpoints except `/healthz` require the `X-Api-Key` header for authentication.
 
+Runtime topology:
+- Public clients call the API container.
+- The API container forwards sandbox/image requests to the runner container.
+- The runner container manages sandbox lifecycle and proxies daemon operations.
+
 ## Error Response Format
 
 ```json

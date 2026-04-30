@@ -1,4 +1,4 @@
-package api
+package runner
 
 import (
 	"context"
@@ -9,8 +9,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/n8n-io/sandbox-service/internal/config"
-	"github.com/n8n-io/sandbox-service/internal/manager"
+	"github.com/n8n-io/sandbox-service/internal/runner/config"
+	"github.com/n8n-io/sandbox-service/internal/runner/manager"
 )
 
 type proxyContextKey struct{}
@@ -20,19 +20,17 @@ type proxyTarget struct {
 	path string
 }
 
-// ProxyHandler returns a handler that reverse-proxies requests to the sandbox
-// daemon, stripping the /sandboxes/{id} prefix from the path.
-func ProxyHandler(mgr SandboxManager, cfg *config.Config) http.HandlerFunc {
+// ProxyHandler returns a handler that reverse-proxies requests to the sandbox daemon.
+func ProxyHandler(mgr ContainerManager, cfg *config.Config) http.HandlerFunc {
 	return proxyHandler(mgr, cfg, false)
 }
 
-// UploadProxyHandler is like ProxyHandler but enforces cfg.MaxFileBytes on the
-// request body before proxying.
-func UploadProxyHandler(mgr SandboxManager, cfg *config.Config) http.HandlerFunc {
+// UploadProxyHandler is like ProxyHandler but enforces cfg.MaxFileBytes on the request body.
+func UploadProxyHandler(mgr ContainerManager, cfg *config.Config) http.HandlerFunc {
 	return proxyHandler(mgr, cfg, true)
 }
 
-func proxyHandler(mgr SandboxManager, cfg *config.Config, limitBody bool) http.HandlerFunc {
+func proxyHandler(mgr ContainerManager, cfg *config.Config, limitBody bool) http.HandlerFunc {
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pt := pr.In.Context().Value(proxyContextKey{}).(*proxyTarget)
