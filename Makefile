@@ -3,7 +3,7 @@ SHELL := /bin/bash
 MODULE  := github.com/n8n-io/sandbox-service
 BINDIR  := bin
 
-.PHONY: all daemon runner api test clean docker docker-local docker-arm64 docker-amd64 docker-api-arm64 docker-api-amd64 docker-runner-arm64 docker-runner-amd64 docker-sandbox-arm64 docker-sandbox-amd64 fmt fmt-check vet
+.PHONY: all daemon runner api test clean docker docker-local docker-arm64 docker-amd64 docker-api-arm64 docker-api-amd64 docker-runner-arm64 docker-runner-amd64 docker-sandbox-arm64 docker-sandbox-amd64 fmt fmt-check vet playground
 
 all: daemon runner api
 
@@ -38,6 +38,10 @@ runner:
 ## api: Build the public API gateway server (Linux).
 api:
 	GOOS=linux go build -o $(BINDIR)/api ./cmd/api
+
+## playground: Start the playground UI (http://localhost:3000).
+playground:
+	cd playground && npm ci && npm start
 
 ## test: Run all tests.
 test:
