@@ -7,10 +7,10 @@ import (
 
 func TestLoadAPIParsesDefaults(t *testing.T) {
 	os.Setenv("SANDBOX_API_KEYS", "test-key")
-	os.Setenv("SANDBOX_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	os.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
 	defer func() {
 		os.Unsetenv("SANDBOX_API_KEYS")
-		os.Unsetenv("SANDBOX_RUNNER_REGISTRATION_TOKEN")
+		os.Unsetenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN")
 	}()
 
 	cfg, err := LoadAPI()
@@ -45,8 +45,8 @@ func TestLoadAPIParsesDefaults(t *testing.T) {
 
 func TestLoadAPIRequiresAPIKeys(t *testing.T) {
 	os.Unsetenv("SANDBOX_API_KEYS")
-	os.Setenv("SANDBOX_RUNNER_REGISTRATION_TOKEN", "x")
-	defer os.Unsetenv("SANDBOX_RUNNER_REGISTRATION_TOKEN")
+	os.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "x")
+	defer os.Unsetenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN")
 
 	if _, err := LoadAPI(); err == nil {
 		t.Error("expected LoadAPI() to fail without SANDBOX_API_KEYS")
@@ -55,10 +55,10 @@ func TestLoadAPIRequiresAPIKeys(t *testing.T) {
 
 func TestLoadAPIRequiresRegistrationToken(t *testing.T) {
 	os.Setenv("SANDBOX_API_KEYS", "test-key")
-	os.Unsetenv("SANDBOX_RUNNER_REGISTRATION_TOKEN")
+	os.Unsetenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN")
 	defer os.Unsetenv("SANDBOX_API_KEYS")
 
 	if _, err := LoadAPI(); err == nil {
-		t.Error("expected LoadAPI() to fail without SANDBOX_RUNNER_REGISTRATION_TOKEN")
+		t.Error("expected LoadAPI() to fail without SANDBOX_API_RUNNER_REGISTRATION_TOKEN")
 	}
 }

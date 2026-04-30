@@ -13,6 +13,17 @@ function docker(args: string[]): void {
   execFileSync('docker', args, { stdio: 'inherit' });
 }
 
+function dockerOutput(args: string[]): string {
+  try {
+    return execFileSync('docker', args, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+  } catch (err: unknown) {
+    const e = err as { stdout?: unknown; stderr?: unknown };
+    const stdout = e.stdout ? String(e.stdout) : '';
+    const stderr = e.stderr ? String(e.stderr) : '';
+    return `${stdout}\n${stderr}`.trim();
+  }
+}
+
 /** Poll until success or deadline; fast poll so we exit as soon as the service is up (not 1s granularity). */
 async function waitForAPI(request: APIRequestContext, deadlineMs: number, pollMs: number): Promise<void> {
   const deadline = Date.now() + deadlineMs;
@@ -171,9 +182,17 @@ test.describe('Runner failure resilience', () => {
     } finally {
       if (stoppedRunner) {
         docker(['start', stoppedRunner]);
-        // start-runner.sh waits for inner dockerd (up to 60s) before sandbox-runner starts listening.
-        await waitRunnerHTTPReady(stoppedRunner, runnerKey, 75_000, 250);
-        await waitInnerDockerReady(stoppedRunner, 45_000, 250);
+        try {
+          // start-runner.sh waits for inner dockerd (up to 60s) before sandbox-runner starts listening.
+          await waitRunnerHTTPReady(stoppedRunner, runnerKey, 75_000, 250);
+          await waitInnerDockerReady(stoppedRunner, 45_000, 250);
+        } catch (err) {
+          const logs = dockerOutput(['logs', stoppedRunner]);
+          throw new Error(
+            `runner restart readiness failed for ${stoppedRunner}: ${String(err)}\n\n` +
+              `===== docker logs ${stoppedRunner} =====\n${logs}`,
+          );
+        }
         await sleep(2000);
       }
       await deleteSandbox(request, id1);

@@ -69,22 +69,22 @@ func LoadAPI() (*APIConfig, error) {
 		cfg.GRPCListenAddr = v
 	}
 
-	cfg.RegistrationToken = os.Getenv("SANDBOX_RUNNER_REGISTRATION_TOKEN")
+	cfg.RegistrationToken = os.Getenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN")
 	if cfg.RegistrationToken == "" {
-		return nil, fmt.Errorf("SANDBOX_RUNNER_REGISTRATION_TOKEN must be set")
+		return nil, fmt.Errorf("SANDBOX_API_RUNNER_REGISTRATION_TOKEN must be set")
 	}
 
-	if v := os.Getenv("SANDBOX_MAX_FILE_BYTES"); v != "" {
+	if v := os.Getenv("SANDBOX_API_MAX_FILE_BYTES"); v != "" {
 		n, err := strconv.ParseInt(v, 10, 64)
 		if err != nil || n <= 0 {
-			return nil, fmt.Errorf("SANDBOX_MAX_FILE_BYTES must be a positive integer, got %q", v)
+			return nil, fmt.Errorf("SANDBOX_API_MAX_FILE_BYTES must be a positive integer, got %q", v)
 		}
 		cfg.MaxFileBytes = n
 	}
 
-	cfg.RunnerAPIKey = os.Getenv("SANDBOX_RUNNER_API_KEY")
+	cfg.RunnerAPIKey = os.Getenv("SANDBOX_API_RUNNER_API_KEY")
 
-	if v := os.Getenv("SANDBOX_DATA_DIR"); v != "" {
+	if v := os.Getenv("SANDBOX_API_DATA_DIR"); v != "" {
 		cfg.DataDir = v
 	}
 

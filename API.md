@@ -9,9 +9,9 @@ Runtime topology:
 - If no runner is registered (or none are healthy / within capacity), operations that need a runner return **503** with a JSON error whose message explains that no runners are available.
 - Sandbox-scoped requests are proxied to the **stored** runner HTTP URL for that sandbox. If that runner is down or unreachable, the API returns **503** with JSON `error` **`runner unavailable`** (same shape as other API errors).
 
-Environment (API): `SANDBOX_RUNNER_REGISTRATION_TOKEN` (required), `SANDBOX_API_GRPC_LISTEN_ADDR` (default `:9090`), plus existing HTTP settings.
+Environment (API): `SANDBOX_API_RUNNER_REGISTRATION_TOKEN` (required), `SANDBOX_API_GRPC_LISTEN_ADDR` (default `:9090`), plus existing HTTP settings.
 
-Environment (runner): `SANDBOX_API_GRPC_ADDR`, `SANDBOX_RUNNER_REGISTRATION_TOKEN`, `SANDBOX_RUNNER_HTTP_BASE_URL` (API-reachable base for this runner), optional `SANDBOX_RUNNER_ID`, `SANDBOX_RUNNER_CAPACITY_TOTAL`.
+Environment (runner): `SANDBOX_RUNNER_API_GRPC_ADDR`, `SANDBOX_RUNNER_REGISTRATION_TOKEN`, `SANDBOX_RUNNER_HTTP_BASE_URL` (API-reachable base for this runner), optional `SANDBOX_RUNNER_ID`, `SANDBOX_RUNNER_CAPACITY_TOTAL`.
 
 ## Error Response Format
 
@@ -414,7 +414,7 @@ Upload (write) a file to a sandbox.
 **Request:**
 - `Content-Type: application/octet-stream`
 - Body: raw file contents
-- Max size: 10 MB (configurable via `SANDBOX_MAX_FILE_BYTES`)
+- Max size: 10 MB (configurable via `SANDBOX_API_MAX_FILE_BYTES`)
 
 **Response:** `200 OK`
 
@@ -444,7 +444,7 @@ Append data to a file in a sandbox. Creates the file if it doesn't exist.
 **Request:**
 - `Content-Type: application/octet-stream`
 - Body: raw data to append
-- Max size: 10 MB (configurable via `SANDBOX_MAX_FILE_BYTES`)
+- Max size: 10 MB (configurable via `SANDBOX_API_MAX_FILE_BYTES`)
 
 **Response:** `200 OK`
 

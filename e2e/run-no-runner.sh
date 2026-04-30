@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Starts only the API (no runner containers). Requires SANDBOX_RUNNER_REGISTRATION_TOKEN on the API.
+# Starts only the API (no runner containers). Requires SANDBOX_API_RUNNER_REGISTRATION_TOKEN on the API.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -11,7 +11,7 @@ API_CONTAINER_NAME="sandbox-api-e2e-norunner-$$"
 NETWORK_NAME="sandbox-e2e-net-norunner-$$"
 PORT="${PORT:-18080}"
 API_KEY="test"
-REG_TOKEN="${SANDBOX_RUNNER_REGISTRATION_TOKEN:-e2e-reg-token}"
+REG_TOKEN="${SANDBOX_API_RUNNER_REGISTRATION_TOKEN:-e2e-reg-token}"
 
 cleanup() {
   echo "Stopping e2e resources..."
@@ -33,7 +33,7 @@ docker run -d \
   --network "$NETWORK_NAME" \
   -p "$PORT:8080" \
   -e "SANDBOX_API_KEYS=$API_KEY" \
-  -e "SANDBOX_RUNNER_REGISTRATION_TOKEN=$REG_TOKEN" \
+  -e "SANDBOX_API_RUNNER_REGISTRATION_TOKEN=$REG_TOKEN" \
   --name "$API_CONTAINER_NAME" \
   "$API_IMAGE"
 

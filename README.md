@@ -7,7 +7,7 @@ The n8n Sandbox Service provides isolated execution environments via a REST API.
 - The public API runs in a dedicated `n8n-sandbox-api` container.
 - One or more `n8n-sandbox-runner` containers run Docker-in-Docker and manage sandbox lifecycles (the local script starts two so you can exercise round-robin placement).
 - The runner container is expected to run with `sysbox-runc`.
-- Sandboxes are started from a separate Debian sandbox image referenced by `SANDBOX_DOCKER_SANDBOX_IMAGE`.
+- Sandboxes are started from a separate Debian sandbox image referenced by `SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE`.
 - The API forwards sandbox and image requests to the runner; the runner talks to sandbox daemons over the inner Docker bridge on port `8081`.
 
 ## Quick Start
@@ -93,12 +93,12 @@ curl -s -X DELETE http://localhost:8080/sandboxes/<id> \
 | Variable | Default | Description |
 |---|---|---|
 | `SANDBOX_API_KEYS` | *(required)* | Comma-separated list of valid external API keys |
-| `SANDBOX_RUNNER_REGISTRATION_TOKEN` | *(required)* | Shared secret; runners authenticate to the private gRPC registration service with `Authorization: Bearer …` |
-| `SANDBOX_RUNNER_API_KEY` | *(empty)* | Optional API key injected by the API when calling runner HTTP |
+| `SANDBOX_API_RUNNER_REGISTRATION_TOKEN` | *(required)* | Shared secret; runners authenticate to the private gRPC registration service with `Authorization: Bearer …` |
+| `SANDBOX_API_RUNNER_API_KEY` | *(empty)* | Optional API key injected by the API when calling runner HTTP |
 | `SANDBOX_API_LISTEN_ADDR` | `:8080` | Public HTTP listen address |
 | `SANDBOX_API_GRPC_LISTEN_ADDR` | `:9090` | Private gRPC listen address for runner registration streams |
-| `SANDBOX_DATA_DIR` | `/tmp/sandbox-api` | SQLite store directory |
-| `SANDBOX_MAX_FILE_BYTES` | `10485760` | Maximum file upload size (10 MB) |
+| `SANDBOX_API_DATA_DIR` | `/tmp/sandbox-api` | SQLite store directory |
+| `SANDBOX_API_MAX_FILE_BYTES` | `10485760` | Maximum file upload size (10 MB) |
 
 Runners register over gRPC and report health and capacity; the API picks a runner (round-robin) when creating sandboxes and stores that runner’s HTTP base URL for later proxying.
 
@@ -106,20 +106,20 @@ Runners register over gRPC and report health and capacity; the API picks a runne
 
 | Variable | Default | Description |
 |---|---|---|
-| `SANDBOX_API_KEYS` | *(required)* | Comma-separated list of valid internal API keys accepted from the API container |
-| `SANDBOX_DOCKER_SANDBOX_IMAGE` | *(required)* | Docker image used for sandbox containers |
-| `SANDBOX_DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker daemon endpoint used by the runner |
+| `SANDBOX_RUNNER_API_KEYS` | *(required)* | Comma-separated list of valid internal API keys accepted from the API container |
+| `SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE` | *(required)* | Docker image used for sandbox containers |
+| `SANDBOX_RUNNER_DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker daemon endpoint used by the runner |
 | `SANDBOX_RUNNER_LISTEN_ADDR` | `:8080` | HTTP listen address |
-| `SANDBOX_API_GRPC_ADDR` | *(empty)* | API `host:port` for gRPC registration (omit to disable registration) |
-| `SANDBOX_RUNNER_REGISTRATION_TOKEN` | *(empty)* | Must match `SANDBOX_RUNNER_REGISTRATION_TOKEN` on the API when `SANDBOX_API_GRPC_ADDR` is set |
+| `SANDBOX_RUNNER_API_GRPC_ADDR` | *(empty)* | API `host:port` for gRPC registration (omit to disable registration) |
+| `SANDBOX_RUNNER_REGISTRATION_TOKEN` | *(empty)* | Must match `SANDBOX_API_RUNNER_REGISTRATION_TOKEN` on the API when `SANDBOX_RUNNER_API_GRPC_ADDR` is set |
 | `SANDBOX_RUNNER_HTTP_BASE_URL` | *(empty)* | Base URL the API uses to reach this runner (e.g. `http://runner:8080`); required when registering |
 | `SANDBOX_RUNNER_ID` | hostname | Stable runner id sent to the API |
 | `SANDBOX_RUNNER_CAPACITY_TOTAL` | `1000` | Reported capacity for placement (`0` = unlimited) |
-| `SANDBOX_DATA_DIR` | `/var/sandboxes` | Directory for SQLite state |
-| `SANDBOX_IDLE_TTL_SECONDS` | `3600` | Seconds of inactivity before a sandbox is reaped |
-| `SANDBOX_ENABLE_CGROUPS` | `true` | Whether Docker resource limits are applied |
-| `SANDBOX_INTER_SANDBOX_NETWORK_ENABLED` | `false` | Whether sandboxes may talk to each other on `runner-bridge` |
-| `SANDBOX_DOCKER_INSECURE_REGISTRIES` | *(empty)* | Comma-separated insecure registries passed to dockerd |
+| `SANDBOX_RUNNER_DATA_DIR` | `/var/sandboxes` | Directory for SQLite state |
+| `SANDBOX_RUNNER_IDLE_TTL_SECONDS` | `3600` | Seconds of inactivity before a sandbox is reaped |
+| `SANDBOX_RUNNER_ENABLE_CGROUPS` | `true` | Whether Docker resource limits are applied |
+| `SANDBOX_RUNNER_INTER_SANDBOX_NETWORK_ENABLED` | `false` | Whether sandboxes may talk to each other on `runner-bridge` |
+| `SANDBOX_RUNNER_DOCKER_INSECURE_REGISTRIES` | *(empty)* | Comma-separated insecure registries passed to dockerd |
 
 ## Development
 

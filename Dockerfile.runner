@@ -22,11 +22,10 @@ COPY scripts/start-runner.sh /usr/local/bin/start-runner.sh
 RUN chmod +x /usr/local/bin/start-runner.sh \
     && mkdir -p /var/sandboxes
 
-ENV SANDBOX_DATA_DIR=/var/sandboxes
+ENV SANDBOX_RUNNER_DATA_DIR=/var/sandboxes
 ENV SANDBOX_RUNNER_LISTEN_ADDR=:8080
-ENV SANDBOX_DOCKER_HOST=unix:///var/run/docker.sock
-ENV SANDBOX_INTER_SANDBOX_NETWORK_ENABLED=false
-# When set with SANDBOX_RUNNER_REGISTRATION_TOKEN and SANDBOX_RUNNER_HTTP_BASE_URL, the runner registers with the API over gRPC.
+ENV SANDBOX_RUNNER_DOCKER_HOST=unix:///var/run/docker.sock
+ENV SANDBOX_RUNNER_INTER_SANDBOX_NETWORK_ENABLED=false
 
 EXPOSE 8080
 
