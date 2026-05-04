@@ -89,10 +89,10 @@ docker-sandbox-arm64:
 docker-sandbox-amd64:
 	docker buildx build -f Dockerfile.sandbox --platform linux/amd64 -t n8n-sandbox:latest-amd64 --load .
 
-## up: Build images and start all services locally with Docker Compose.
+## up: Bootstrap local .tls/ if needed, build images, start Compose (mTLS on gRPC by default).
 up:
 	./scripts/run-locally.sh
 
-## down: Stop and remove all local Compose services.
+## down: Stop and remove all local Compose services (same compose files as make up).
 down:
-	docker compose down
+	bash scripts/docker-compose-local.sh down

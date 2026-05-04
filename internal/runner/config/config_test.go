@@ -90,3 +90,18 @@ func TestLoadRequiresSandboxImage(t *testing.T) {
 		t.Error("expected Load() to fail without SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE")
 	}
 }
+
+func TestLoadRejectsPartialGRPCTLS(t *testing.T) {
+	os.Setenv("SANDBOX_RUNNER_API_KEYS", "test-key")
+	os.Setenv("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE", "img")
+	os.Setenv("SANDBOX_RUNNER_GRPC_TLS_CA_FILE", "/tmp/ca.crt")
+	defer func() {
+		os.Unsetenv("SANDBOX_RUNNER_API_KEYS")
+		os.Unsetenv("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE")
+		os.Unsetenv("SANDBOX_RUNNER_GRPC_TLS_CA_FILE")
+	}()
+
+	if _, err := Load(); err == nil {
+		t.Fatal("expected Load to reject partial SANDBOX_RUNNER_GRPC_TLS_*")
+	}
+}
