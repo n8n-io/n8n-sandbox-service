@@ -2,7 +2,7 @@
 # Generate a private CA plus API gRPC server and runner client leaf PEMs for local mTLS.
 # Writes to the repo's .tls/ directory by default (gitignored).
 #
-# Skips generation if .tls/grpc-server.crt (and peers) already exist unless SANDBOX_TLS_REGEN=1.
+# Skips generation if the full CA + server + client PEM set already exists unless SANDBOX_TLS_REGEN=1.
 #
 # Environment:
 #   REPO_ROOT  — repository root (default: parent of scripts/)
@@ -19,7 +19,13 @@ CLIENT_DNS="${CLIENT_DNS:-sandbox-runner-mtls-client}"
 
 mkdir -p "$OUT_DIR"
 
-if [[ "${SANDBOX_TLS_REGEN:-}" != "1" ]] && [[ -f "$OUT_DIR/grpc-server.crt" ]] && [[ -f "$OUT_DIR/grpc-client.crt" ]] && [[ -f "$OUT_DIR/ca.crt" ]]; then
+tls_complete() {
+	[[ -f "$OUT_DIR/ca.crt" ]] && [[ -f "$OUT_DIR/ca.key" ]] \
+		&& [[ -f "$OUT_DIR/grpc-server.crt" ]] && [[ -f "$OUT_DIR/grpc-server.key" ]] \
+		&& [[ -f "$OUT_DIR/grpc-client.crt" ]] && [[ -f "$OUT_DIR/grpc-client.key" ]]
+}
+
+if [[ "${SANDBOX_TLS_REGEN:-}" != "1" ]] && tls_complete; then
 	echo "TLS material already present in $OUT_DIR (set SANDBOX_TLS_REGEN=1 to regenerate)"
 	exit 0
 fi
