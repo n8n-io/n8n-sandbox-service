@@ -74,6 +74,22 @@ describe("readNdjsonStream", () => {
     ]);
   });
 
+  it("preserves UTF-8 characters split across chunk boundaries", async () => {
+    const stream = Readable.from([
+      Buffer.from('{"type":"stdout","data":"caf'),
+      Buffer.from([0xc3]),
+      Buffer.from([0xa9]),
+      Buffer.from('"}\n'),
+    ]);
+
+    const events = [];
+    for await (const event of readNdjsonStream(stream)) {
+      events.push(event);
+    }
+
+    expect(events).toEqual([{ type: "stdout", data: "café" }]);
+  });
+
   it("returns error event for invalid JSON", async () => {
     const stream = streamFrom(["not-json"]);
 

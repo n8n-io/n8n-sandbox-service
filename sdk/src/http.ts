@@ -54,6 +54,7 @@ export class HttpClient {
         headers: options.headers,
         signal: options.signal,
         responseType: "stream",
+        validateStatus: () => true,
       });
 
       if (response.status >= 400) {
@@ -77,8 +78,15 @@ export class HttpClient {
         headers: options.headers,
         signal: options.signal,
         responseType: "arraybuffer",
+        validateStatus: () => true,
       });
-      return Buffer.from(response.data);
+
+      const body = Buffer.from(response.data);
+      if (response.status >= 400) {
+        throw createErrorFromResponse(response.status, this.tryParseJson(body.toString("utf-8")));
+      }
+
+      return body;
     } catch (error) {
       throw this.toServiceError(error);
     }

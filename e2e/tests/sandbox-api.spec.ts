@@ -8,6 +8,7 @@ import {
   downloadFile,
   apiRequest,
 } from './helpers';
+import { SandboxServiceError } from '@n8n/sandbox-client';
 
 const API_KEY = process.env.SANDBOX_API_KEY || 'test';
 
@@ -268,25 +269,18 @@ test.describe('File operations', () => {
     const downloaded = await downloadFile(sandboxId, 'tmp/after.txt');
     expect(downloaded).toBe('move me');
 
-    let exists = true;
-    try {
-      await client.stat(sandboxId, '/tmp/before.txt');
-    } catch {
-      exists = false;
-    }
-    expect(exists).toBe(false);
+    const error = await client.stat(sandboxId, '/tmp/before.txt').catch((e) => e);
+    expect(error).toBeInstanceOf(SandboxServiceError);
+    expect((error as SandboxServiceError).status).toBe(404);
   });
 
   test('delete file', async () => {
     await uploadFile(sandboxId, 'tmp/todelete.txt', 'bye');
     await client.deleteFile(sandboxId, '/tmp/todelete.txt');
-    let exists = true;
-    try {
-      await client.stat(sandboxId, '/tmp/todelete.txt');
-    } catch {
-      exists = false;
-    }
-    expect(exists).toBe(false);
+
+    const error = await client.stat(sandboxId, '/tmp/todelete.txt').catch((e) => e);
+    expect(error).toBeInstanceOf(SandboxServiceError);
+    expect((error as SandboxServiceError).status).toBe(404);
   });
 
   test('delete with force on non-existent', async ({ request }) => {
@@ -628,13 +622,9 @@ test.describe('File operations', () => {
     const downloaded = await downloadFile(sandboxId, '/tmp/move dest/new name.txt');
     expect(downloaded).toBe('moving');
 
-    let exists = true;
-    try {
-      await client.stat(sandboxId, '/tmp/move src/old name.txt');
-    } catch {
-      exists = false;
-    }
-    expect(exists).toBe(false);
+    const error = await client.stat(sandboxId, '/tmp/move src/old name.txt').catch((e) => e);
+    expect(error).toBeInstanceOf(SandboxServiceError);
+    expect((error as SandboxServiceError).status).toBe(404);
   });
 
   // --- File visibility between API and exec ---

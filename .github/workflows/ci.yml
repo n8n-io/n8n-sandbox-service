@@ -78,5 +78,9 @@ jobs:
         with:
           node-version: "22"
 
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4
+        with:
+          version: 10
+
       - name: Run e2e tests
         run: PRIVILEGED=1 e2e/run.sh

@@ -1,12 +1,14 @@
 import type { Readable } from "node:stream";
+import { StringDecoder } from "node:string_decoder";
 import type { ExecEvent } from "./types";
 
 /** Yields parsed exec events from an NDJSON stream, one per line. */
 export async function* readNdjsonStream(stream: Readable): AsyncGenerator<ExecEvent> {
   let pending = "";
+  const decoder = new StringDecoder("utf-8");
 
   for await (const chunk of stream) {
-    pending += Buffer.isBuffer(chunk) ? chunk.toString("utf-8") : String(chunk);
+    pending += decoder.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf-8"));
 
     let newlineIndex = pending.indexOf("\n");
     while (newlineIndex !== -1) {
@@ -18,6 +20,8 @@ export async function* readNdjsonStream(stream: Readable): AsyncGenerator<ExecEv
       newlineIndex = pending.indexOf("\n");
     }
   }
+
+  pending += decoder.end();
 
   const last = pending.trim();
   if (last.length > 0) {
