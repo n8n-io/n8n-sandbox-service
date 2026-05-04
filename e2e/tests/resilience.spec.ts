@@ -104,19 +104,19 @@ test.describe('API restart resilience', () => {
 
     const apiContainer = process.env.E2E_API_CONTAINER_NAME!;
 
-    const id = await createSandbox(request);
+    const id = await createSandbox();
     try {
-      await exec(request, id, `printf '%s' ok > /tmp/api-restart-marker`);
+      await exec(id, `printf '%s' ok > /tmp/api-restart-marker`);
 
       docker(['restart', apiContainer]);
 
       await waitForAPI(request, 75_000, 250);
       await sleep(3000);
 
-      const r = await exec(request, id, 'cat /tmp/api-restart-marker');
+      const r = await exec(id, 'cat /tmp/api-restart-marker');
       expect(r.stdout.trim()).toBe('ok');
     } finally {
-      await deleteSandbox(request, id);
+      await deleteSandbox(id);
     }
   });
 });
@@ -134,11 +134,11 @@ test.describe('Runner failure resilience', () => {
     const runner2 = process.env.E2E_RUNNER2_CONTAINER_NAME!;
     const runnerKey = process.env.E2E_RUNNER_INTERNAL_API_KEY || 'runner-test';
 
-    const id1 = await createSandbox(request);
-    const id2 = await createSandbox(request);
+    const id1 = await createSandbox();
+    const id2 = await createSandbox();
 
     // gRPC registration order is not guaranteed (either runner may heartbeat first), so do not
-    // assume id1 maps to runner1. Detect which host actually runs each sandbox’s inner container.
+    // assume id1 maps to runner1. Detect which host actually runs each sandbox's inner container.
     let id1On1 = false;
     let id1On2 = false;
     for (let i = 0; i < 30; i++) {
@@ -156,7 +156,7 @@ test.describe('Runner failure resilience', () => {
 
     let stoppedRunner = '';
     try {
-      await exec(request, id1, `printf '%s' only-on-r1 > /tmp/dead-runner-marker`);
+      await exec(id1, `printf '%s' only-on-r1 > /tmp/dead-runner-marker`);
 
       stoppedRunner = deadRunner;
       docker(['stop', stoppedRunner]);
@@ -169,15 +169,15 @@ test.describe('Runner failure resilience', () => {
       const errBody = (await bad.json()) as { error?: string };
       expect(errBody.error?.toLowerCase()).toContain('runner unavailable');
 
-      const good = await exec(request, id2, `printf '%s' alive`);
+      const good = await exec(id2, `printf '%s' alive`);
       expect(good.stdout.trim()).toBe('alive');
 
-      const id3 = await createSandbox(request);
+      const id3 = await createSandbox();
       try {
-        const r3 = await exec(request, id3, `printf '%s' new`);
+        const r3 = await exec(id3, `printf '%s' new`);
         expect(r3.stdout.trim()).toBe('new');
       } finally {
-        await deleteSandbox(request, id3);
+        await deleteSandbox(id3);
       }
     } finally {
       if (stoppedRunner) {
@@ -195,8 +195,8 @@ test.describe('Runner failure resilience', () => {
         }
         await sleep(2000);
       }
-      await deleteSandbox(request, id1);
-      await deleteSandbox(request, id2);
+      await deleteSandbox(id1);
+      await deleteSandbox(id2);
     }
   });
 });

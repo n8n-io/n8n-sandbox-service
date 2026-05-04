@@ -5,6 +5,7 @@ import {
   exec,
   uploadFile,
   downloadFile,
+  apiRequest,
 } from './helpers';
 
 /**
@@ -14,106 +15,107 @@ import {
 test.describe('File API and Exec API path consistency', () => {
   let sandboxId: string;
 
-  test.beforeAll(async ({ request }) => {
-    sandboxId = await createSandbox(request);
+  test.beforeAll(async () => {
+    sandboxId = await createSandbox();
   });
 
-  test.afterAll(async ({ request }) => {
-    await deleteSandbox(request, sandboxId);
+  test.afterAll(async () => {
+    await deleteSandbox(sandboxId);
   });
 
-  test('file written via file API is readable via exec', async ({ request }) => {
+  test('file written via file API is readable via exec', async () => {
     const path = '/tmp/test-file-api-to-exec.txt';
     const content = 'hello from file API';
 
-    await uploadFile(request, sandboxId, path, content);
+    await uploadFile(sandboxId, path, content);
 
-    const result = await exec(request, sandboxId, `cat ${path}`);
+    const result = await exec(sandboxId, `cat ${path}`);
     expect(result.exit?.exit_code).toBe(0);
     expect(result.stdout.trim()).toBe(content);
   });
 
-  test('file written via exec is readable via file API', async ({ request }) => {
+  test('file written via exec is readable via file API', async () => {
     const path = '/tmp/test-exec-to-file-api.txt';
     const content = 'hello from exec';
 
-    const writeResult = await exec(request, sandboxId, `echo -n '${content}' > ${path}`);
+    const writeResult = await exec(sandboxId, `echo -n '${content}' > ${path}`);
     expect(writeResult.exit?.exit_code).toBe(0);
 
-    const downloaded = await downloadFile(request, sandboxId, path);
+    const downloaded = await downloadFile(sandboxId, path);
     expect(downloaded).toBe(content);
   });
 
-  test('directory created via exec is listable via file API', async ({ request }) => {
+  test('directory created via exec is listable via file API', async () => {
     const dir = '/tmp/exec-created-dir';
 
-    const mkdirResult = await exec(request, sandboxId, `mkdir -p ${dir}/sub && touch ${dir}/sub/a.txt ${dir}/sub/b.txt`);
+    const mkdirResult = await exec(sandboxId, `mkdir -p ${dir}/sub && touch ${dir}/sub/a.txt ${dir}/sub/b.txt`);
     expect(mkdirResult.exit?.exit_code).toBe(0);
 
     // Download one of the files via file API to confirm visibility
-    const content = await downloadFile(request, sandboxId, `${dir}/sub/a.txt`);
+    const content = await downloadFile(sandboxId, `${dir}/sub/a.txt`);
     expect(content).toBeDefined();
   });
 
-  test('file written via file API in nested dir is executable via exec', async ({ request }) => {
+  test('file written via file API in nested dir is executable via exec', async () => {
     const dir = '/home/user/scripts';
     const scriptPath = `${dir}/greet.sh`;
     const scriptContent = '#!/bin/sh\necho "hello $1"';
 
     // Create dir via exec, write script via file API
-    await exec(request, sandboxId, `mkdir -p ${dir}`);
-    await uploadFile(request, sandboxId, scriptPath, scriptContent);
+    await exec(sandboxId, `mkdir -p ${dir}`);
+    await uploadFile(sandboxId, scriptPath, scriptContent);
 
     // Make executable and run via exec
-    await exec(request, sandboxId, `chmod +x ${scriptPath}`);
-    const result = await exec(request, sandboxId, `${scriptPath} world`);
+    await exec(sandboxId, `chmod +x ${scriptPath}`);
+    const result = await exec(sandboxId, `${scriptPath} world`);
     expect(result.exit?.exit_code).toBe(0);
     expect(result.stdout.trim()).toBe('hello world');
   });
 
-  test('file overwritten via exec reflects in file API', async ({ request }) => {
+  test('file overwritten via exec reflects in file API', async () => {
     const path = '/tmp/overwrite-test.txt';
 
-    await uploadFile(request, sandboxId, path, 'version 1');
-    const v1 = await downloadFile(request, sandboxId, path);
+    await uploadFile(sandboxId, path, 'version 1');
+    const v1 = await downloadFile(sandboxId, path);
     expect(v1).toBe('version 1');
 
-    await exec(request, sandboxId, `echo -n 'version 2' > ${path}`);
-    const v2 = await downloadFile(request, sandboxId, path);
+    await exec(sandboxId, `echo -n 'version 2' > ${path}`);
+    const v2 = await downloadFile(sandboxId, path);
     expect(v2).toBe('version 2');
   });
 
   test('file deleted via exec is gone from file API', async ({ request }) => {
     const path = '/tmp/delete-test.txt';
 
-    await uploadFile(request, sandboxId, path, 'to be deleted');
+    await uploadFile(sandboxId, path, 'to be deleted');
     // Confirm it exists
-    const content = await downloadFile(request, sandboxId, path);
+    const content = await downloadFile(sandboxId, path);
     expect(content).toBe('to be deleted');
 
-    await exec(request, sandboxId, `rm ${path}`);
+    await exec(sandboxId, `rm ${path}`);
 
     // File API should return an error for the missing file
-    const resp = await request.get(
+    const resp = await apiRequest(
+      request,
+      'GET',
       `/sandboxes/${sandboxId}/files/content?path=${encodeURIComponent(path)}`,
-      { headers: { 'X-Api-Key': process.env.SANDBOX_API_KEY || 'test' } },
     );
-    expect(resp.status()).not.toBe(200);
+    expect(resp.status).not.toBe(200);
   });
 
-  test('file API write and exec read agree on multiline content', async ({ request }) => {
+  test('file API write and exec read agree on multiline content', async () => {
     const path = '/tmp/multiline-test.txt';
     const content = 'line1\nline2\nline3';
 
-    await uploadFile(request, sandboxId, path, content);
+    await uploadFile(sandboxId, path, content);
 
     // Use wc -l via exec to confirm line count
-    const result = await exec(request, sandboxId, `wc -l < ${path}`);
+    const result = await exec(sandboxId, `wc -l < ${path}`);
     expect(result.exit?.exit_code).toBe(0);
     expect(result.stdout.trim()).toBe('2');
 
     // Confirm full content via exec
-    const catResult = await exec(request, sandboxId, `cat ${path}`);
+    const catResult = await exec(sandboxId, `cat ${path}`);
     expect(catResult.stdout.trim()).toBe(content);
   });
 });

@@ -3,7 +3,7 @@ SHELL := /bin/bash
 MODULE  := github.com/n8n-io/sandbox-service
 BINDIR  := bin
 
-.PHONY: all daemon runner api test clean docker docker-local docker-arm64 docker-amd64 docker-api-arm64 docker-api-amd64 docker-runner-arm64 docker-runner-amd64 docker-sandbox-arm64 docker-sandbox-amd64 fmt fmt-check vet playground up down
+.PHONY: all daemon runner api test clean docker docker-local docker-arm64 docker-amd64 docker-api-arm64 docker-api-amd64 docker-runner-arm64 docker-runner-amd64 docker-sandbox-arm64 docker-sandbox-amd64 fmt fmt-check vet playground up down sdk sdk-install sdk-build sdk-typecheck sdk-test sdk-fmt sdk-fmt-check sdk-lint
 
 all: daemon runner api
 
@@ -88,6 +88,37 @@ docker-sandbox-arm64:
 ## docker-sandbox-amd64: Build the sandbox image for linux/amd64.
 docker-sandbox-amd64:
 	docker buildx build -f Dockerfile.sandbox --platform linux/amd64 -t n8n-sandbox:latest-amd64 --load .
+
+## sdk: Install, build, typecheck, and test the SDK.
+sdk: sdk-install sdk-build sdk-typecheck sdk-test
+
+## sdk-install: Install SDK dependencies.
+sdk-install:
+	cd sdk && pnpm install
+
+## sdk-build: Build the SDK.
+sdk-build:
+	cd sdk && pnpm build
+
+## sdk-typecheck: Typecheck the SDK.
+sdk-typecheck:
+	cd sdk && pnpm typecheck
+
+## sdk-test: Run SDK tests.
+sdk-test:
+	cd sdk && pnpm test
+
+## sdk-fmt: Format SDK code with oxfmt.
+sdk-fmt:
+	cd sdk && pnpm fmt
+
+## sdk-fmt-check: Check SDK code formatting.
+sdk-fmt-check:
+	cd sdk && pnpm fmt:check
+
+## sdk-lint: Lint SDK code with oxlint.
+sdk-lint:
+	cd sdk && pnpm lint
 
 ## up: Build images and start all services locally with Docker Compose.
 up:

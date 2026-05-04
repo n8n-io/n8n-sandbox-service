@@ -1,0 +1,58 @@
+import type { Readable } from "node:stream";
+import type { ExecEvent } from "./types";
+
+/** Yields parsed exec events from an NDJSON stream, one per line. */
+export async function* readNdjsonStream(stream: Readable): AsyncGenerator<ExecEvent> {
+  let pending = "";
+
+  for await (const chunk of stream) {
+    pending += Buffer.isBuffer(chunk) ? chunk.toString("utf-8") : String(chunk);
+
+    let newlineIndex = pending.indexOf("\n");
+    while (newlineIndex !== -1) {
+      const line = pending.slice(0, newlineIndex).trim();
+      pending = pending.slice(newlineIndex + 1);
+      if (line.length > 0) {
+        yield parseExecEvent(line);
+      }
+      newlineIndex = pending.indexOf("\n");
+    }
+  }
+
+  const last = pending.trim();
+  if (last.length > 0) {
+    yield parseExecEvent(last);
+  }
+}
+
+/** Parses a single NDJSON line into a typed exec event. Returns an error event on invalid input. */
+export function parseExecEvent(line: string): ExecEvent {
+  try {
+    const json = JSON.parse(line) as Record<string, unknown>;
+    const type = json.type;
+
+    if (type === "stdout" && typeof json.data === "string") {
+      return { type: "stdout", data: json.data };
+    }
+    if (type === "stderr" && typeof json.data === "string") {
+      return { type: "stderr", data: json.data };
+    }
+    if (type === "exit") {
+      return {
+        type: "exit",
+        exit_code: json.exit_code as number,
+        success: json.success as boolean,
+        execution_time_ms: json.execution_time_ms as number,
+        timed_out: json.timed_out as boolean,
+        killed: json.killed as boolean,
+      };
+    }
+    if (type === "error" && typeof json.error === "string") {
+      return { type: "error", error: json.error };
+    }
+
+    return { type: "error", error: "Invalid exec event payload" };
+  } catch {
+    return { type: "error", error: "Invalid exec event payload" };
+  }
+}

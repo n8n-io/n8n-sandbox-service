@@ -1,3 +1,5 @@
 .claude/settings.local.json
 .local
 bin/
+node_modules
+*.tsbuildinfo
