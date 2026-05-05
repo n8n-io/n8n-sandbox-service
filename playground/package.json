@@ -1,9 +1,17 @@
 {
   "private": true,
+  "type": "module",
   "scripts": {
-    "start": "serve src"
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "start": "vite"
   },
   "dependencies": {
-    "serve": "14.2.6"
+    "@n8n/sandbox-client": "file:../sdk"
+  },
+  "devDependencies": {
+    "vite": "^6.0.0",
+    "vite-plugin-node-polyfills": "^0.26.0"
   }
 }

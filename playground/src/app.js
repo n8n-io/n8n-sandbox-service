@@ -1,3 +1,5 @@
+import { SandboxClient } from '@n8n/sandbox-client';
+
 const $ = (sel) => document.querySelector(sel);
 const baseUrlInput = $('#base-url');
 const apiKeyInput = $('#api-key');
@@ -13,6 +15,20 @@ let selectedSandboxId = null;
 let commandHistory = [];
 let historyIndex = -1;
 let currentAbortController = null;
+let client = null;
+
+// --- SDK client ---
+
+function getClient() {
+  const baseUrl = baseUrlInput.value.trim().replace(/\/+$/, '');
+  const apiKey = apiKeyInput.value.trim();
+  if (!client || client._baseUrl !== baseUrl || client._apiKey !== apiKey) {
+    client = new SandboxClient({ baseUrl, apiKey });
+    client._baseUrl = baseUrl;
+    client._apiKey = apiKey;
+  }
+  return client;
+}
 
 // --- Persistence ---
 
@@ -26,44 +42,11 @@ function loadSettings() {
 function saveSettings() {
   localStorage.setItem('sandbox-base-url', baseUrlInput.value.trim());
   localStorage.setItem('sandbox-api-key', apiKeyInput.value.trim());
+  client = null;
 }
 
 baseUrlInput.addEventListener('change', saveSettings);
 apiKeyInput.addEventListener('change', saveSettings);
-
-// --- API helpers ---
-
-function apiBase() {
-  return baseUrlInput.value.trim().replace(/\/+$/, '');
-}
-
-function headers() {
-  return {
-    'X-Api-Key': apiKeyInput.value.trim(),
-    'Content-Type': 'application/json',
-  };
-}
-
-async function apiRequest(method, path, body) {
-  const opts = { method, headers: headers() };
-  if (body !== undefined) opts.body = JSON.stringify(body);
-  const res = await fetch(`${apiBase()}${path}`, opts);
-  if (res.status === 204) return null;
-  if (!res.ok) {
-    const text = await res.text();
-    let msg = `${res.status} ${res.statusText}`;
-    try {
-      const err = JSON.parse(text);
-      if (err.error) msg = `${err.code || res.status}: ${err.error}`;
-    } catch { msg += `: ${text}`; }
-    throw new Error(msg);
-  }
-  const contentType = res.headers.get('content-type');
-  if (contentType && contentType.includes('application/json')) {
-    return res.json();
-  }
-  return res.text();
-}
 
 // --- Output ---
 
@@ -87,7 +70,13 @@ async function refreshSandboxes() {
   }
   try {
     setStatus('Loading sandboxes...');
-    const sandboxes = await apiRequest('GET', '/sandboxes');
+    const c = getClient();
+    const baseUrl = baseUrlInput.value.trim().replace(/\/+$/, '');
+    const res = await fetch(`${baseUrl}/sandboxes`, {
+      headers: { 'X-Api-Key': apiKeyInput.value.trim() },
+    });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    const sandboxes = await res.json();
     renderSandboxes(Array.isArray(sandboxes) ? sandboxes : []);
     setStatus(`${sandboxes.length} sandbox(es)`);
   } catch (e) {
@@ -150,10 +139,62 @@ function selectSandbox(sb) {
 
 // --- Create sandbox ---
 
+async function createSandbox() {
+  if (!apiKeyInput.value.trim()) {
+    setStatus('Enter an API key first');
+    return;
+  }
+
+  createBtn.disabled = true;
+  try {
+    setStatus('Creating sandbox...');
+    appendOutput('Creating sandbox...', 'info');
+    const t0 = performance.now();
+    const sb = await getClient().createSandbox();
+    const elapsed = ((performance.now() - t0) / 1000).toFixed(2);
+    appendOutput(`Sandbox created: ${sb.id} (${sb.status}) in ${elapsed}s`, 'info');
+    setStatus(`Created: ${sb.id.slice(0, 12)} (${elapsed}s)`);
+    await refreshSandboxes();
+    selectSandbox(sb);
+  } catch (e) {
+    appendOutput(`Error creating sandbox: ${e.message}`, 'error');
+    setStatus(`Create failed: ${e.message}`);
+  } finally {
+    createBtn.disabled = false;
+  }
+}
+
+// --- Delete sandbox ---
+
+async function deleteSandbox(id) {
+  try {
+    setStatus(`Deleting ${id.slice(0, 12)}...`);
+    const t0 = performance.now();
+    await getClient().deleteSandbox(id);
+    const elapsed = ((performance.now() - t0) / 1000).toFixed(2);
+    if (selectedSandboxId === id) {
+      selectedSandboxId = null;
+      cmdInput.disabled = true;
+      runBtn.disabled = true;
+    }
+    appendOutput(`Sandbox deleted: ${id} (${elapsed}s)`, 'info');
+    await refreshSandboxes();
+  } catch (e) {
+    appendOutput(`Error deleting sandbox: ${e.message}`, 'error');
+    setStatus(`Delete failed: ${e.message}`);
+  }
+}
+
+// --- Execute command (streaming NDJSON via native fetch for real-time output) ---
+
 async function execInSandbox(sandboxId, command, timeoutMs = 300000, signal) {
-  const res = await fetch(`${apiBase()}/sandboxes/${sandboxId}/exec`, {
+  const baseUrl = baseUrlInput.value.trim().replace(/\/+$/, '');
+  const res = await fetch(`${baseUrl}/sandboxes/${sandboxId}/exec`, {
     method: 'POST',
-    headers: headers(),
+    headers: {
+      'X-Api-Key': apiKeyInput.value.trim(),
+      'Content-Type': 'application/json',
+    },
     body: JSON.stringify({ command, timeout_ms: timeoutMs }),
     signal,
   });
@@ -205,54 +246,6 @@ async function execInSandbox(sandboxId, command, timeoutMs = 300000, signal) {
 
   return exitCode;
 }
-
-async function createSandbox() {
-  if (!apiKeyInput.value.trim()) {
-    setStatus('Enter an API key first');
-    return;
-  }
-
-  createBtn.disabled = true;
-  try {
-    setStatus('Creating sandbox...');
-    appendOutput('Creating sandbox...', 'info');
-    const t0 = performance.now();
-    const sb = await apiRequest('POST', '/sandboxes', {});
-    const elapsed = ((performance.now() - t0) / 1000).toFixed(2);
-    appendOutput(`Sandbox created: ${sb.id} (${sb.status}) in ${elapsed}s`, 'info');
-    setStatus(`Created: ${sb.id.slice(0, 12)} (${elapsed}s)`);
-    await refreshSandboxes();
-    selectSandbox(sb);
-  } catch (e) {
-    appendOutput(`Error creating sandbox: ${e.message}`, 'error');
-    setStatus(`Create failed: ${e.message}`);
-  } finally {
-    createBtn.disabled = false;
-  }
-}
-
-// --- Delete sandbox ---
-
-async function deleteSandbox(id) {
-  try {
-    setStatus(`Deleting ${id.slice(0, 12)}...`);
-    const t0 = performance.now();
-    await apiRequest('DELETE', `/sandboxes/${id}`);
-    const elapsed = ((performance.now() - t0) / 1000).toFixed(2);
-    if (selectedSandboxId === id) {
-      selectedSandboxId = null;
-      cmdInput.disabled = true;
-      runBtn.disabled = true;
-    }
-    appendOutput(`Sandbox deleted: ${id} (${elapsed}s)`, 'info');
-    await refreshSandboxes();
-  } catch (e) {
-    appendOutput(`Error deleting sandbox: ${e.message}`, 'error');
-    setStatus(`Delete failed: ${e.message}`);
-  }
-}
-
-// --- Execute command (streaming NDJSON) ---
 
 async function executeCommand() {
   const cmd = cmdInput.value.trim();
@@ -325,7 +318,6 @@ cmdInput.addEventListener('keydown', (e) => {
       cmdInput.value = '';
     }
   } else if (e.key === 'c' && e.ctrlKey) {
-    // Ctrl+C aborts the current command
     if (currentAbortController) {
       currentAbortController.abort();
       appendOutput('^C', 'error');
@@ -363,7 +355,7 @@ async function browseFiles(dir) {
   filePathInput.value = dir;
 
   try {
-    const files = await apiRequest('GET', `/sandboxes/${selectedSandboxId}/files?path=${encodeURIComponent(dir)}`);
+    const files = await getClient().listFiles(selectedSandboxId, { path: dir });
     renderFileList(dir, files);
   } catch (e) {
     fileListEl.innerHTML = `<li style="color:#f44747; padding:8px 12px; font-size:12px;">Error: ${e.message}</li>`;
@@ -373,7 +365,6 @@ async function browseFiles(dir) {
 function renderFileList(dir, files) {
   fileListEl.innerHTML = '';
 
-  // parent directory entry
   if (dir !== '/') {
     const parentLi = document.createElement('li');
     parentLi.innerHTML = '<span class="file-icon">..</span><span class="file-entry-name">..</span>';
@@ -392,10 +383,9 @@ function renderFileList(dir, files) {
     return;
   }
 
-  // sort: directories first, then alphabetically
   files.sort((a, b) => {
-    if (a.is_dir && !b.is_dir) return -1;
-    if (!a.is_dir && b.is_dir) return 1;
+    if (a.isDir && !b.isDir) return -1;
+    if (!a.isDir && b.isDir) return 1;
     return a.name.localeCompare(b.name);
   });
 
@@ -404,7 +394,7 @@ function renderFileList(dir, files) {
 
     const icon = document.createElement('span');
     icon.className = 'file-icon';
-    icon.textContent = f.is_dir ? '\u{1F4C1}' : '\u{1F4C4}';
+    icon.textContent = f.isDir ? '\u{1F4C1}' : '\u{1F4C4}';
 
     const name = document.createElement('span');
     name.className = 'file-entry-name';
@@ -413,7 +403,7 @@ function renderFileList(dir, files) {
     li.appendChild(icon);
     li.appendChild(name);
 
-    if (!f.is_dir) {
+    if (!f.isDir) {
       const size = document.createElement('span');
       size.className = 'file-entry-size';
       size.textContent = formatSize(f.size);
@@ -422,7 +412,7 @@ function renderFileList(dir, files) {
 
     const fullPath = normalizePath(dir + '/' + f.name);
 
-    if (f.is_dir) {
+    if (f.isDir) {
       li.addEventListener('click', () => browseFiles(fullPath));
     } else {
       li.addEventListener('click', () => viewFile(fullPath));
@@ -449,16 +439,8 @@ async function viewFile(filePath) {
   fileViewer.classList.add('active');
 
   try {
-    const res = await fetch(
-      `${apiBase()}/sandboxes/${selectedSandboxId}/files/content?path=${encodeURIComponent(filePath)}`,
-      { headers: { 'X-Api-Key': apiKeyInput.value.trim() } }
-    );
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(text);
-    }
-    const text = await res.text();
-    fileContentEl.textContent = text;
+    const buf = await getClient().readFile(selectedSandboxId, filePath);
+    fileContentEl.textContent = buf.toString('utf-8');
   } catch (e) {
     fileContentEl.textContent = `Error loading file: ${e.message}`;
   }
@@ -484,21 +466,7 @@ async function saveFile() {
   fileSaveBtn.disabled = true;
 
   try {
-    const res = await fetch(
-      `${apiBase()}/sandboxes/${selectedSandboxId}/files?path=${encodeURIComponent(currentViewingFile)}`,
-      {
-        method: 'PUT',
-        headers: {
-          'X-Api-Key': apiKeyInput.value.trim(),
-          'Content-Type': 'application/octet-stream',
-        },
-        body: content,
-      }
-    );
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(text);
-    }
+    await getClient().writeFile(selectedSandboxId, currentViewingFile, content);
     fileContentEl.textContent = content;
     cancelEditing();
     setStatus(`Saved: ${currentViewingFile}`);
@@ -517,21 +485,7 @@ async function createNewFile() {
   const fullPath = filePath.startsWith('/') ? filePath : normalizePath(filePathInput.value + '/' + filePath);
 
   try {
-    const res = await fetch(
-      `${apiBase()}/sandboxes/${selectedSandboxId}/files?path=${encodeURIComponent(fullPath)}`,
-      {
-        method: 'PUT',
-        headers: {
-          'X-Api-Key': apiKeyInput.value.trim(),
-          'Content-Type': 'application/octet-stream',
-        },
-        body: '',
-      }
-    );
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(text);
-    }
+    await getClient().writeFile(selectedSandboxId, fullPath, '');
     newFilePathInput.value = '';
     setStatus(`Created: ${fullPath}`);
     browseFiles(filePathInput.value);
