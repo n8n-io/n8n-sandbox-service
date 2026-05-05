@@ -1,3 +1,4 @@
+import { SandboxServiceError } from "./errors";
 import type { HttpClient } from "./http";
 import { readNdjsonStream } from "./ndjson";
 import type { ExecRequest, ExecResult } from "./types";
@@ -38,7 +39,7 @@ export async function exec(
         request.onStderr?.(event.data);
         break;
       case "error":
-        throw new Error(event.error);
+        throw new SandboxServiceError(event.error, 0);
       case "exit":
         exitMeta = {
           exitCode: event.exit_code,
@@ -52,7 +53,7 @@ export async function exec(
   }
 
   if (!exitMeta) {
-    throw new Error("Sandbox exec stream ended without an exit event");
+    throw new SandboxServiceError("Sandbox exec stream ended without an exit event", 0);
   }
 
   return {

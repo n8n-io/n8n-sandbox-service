@@ -95,7 +95,7 @@ test.describe('File API and Exec API path consistency', () => {
     expect(content).toBe('to be deleted');
 
     const rmResult = await exec(sandboxId, `rm -f ${path}`);
-    expect(rmResult.exit?.exit_code).toBe(0);
+    expect(rmResult.exitCode).toBe(0);
 
     // After unlink, some setups (busy CI / overlay) can briefly still serve the file;
     // poll until the file API observes the delete.

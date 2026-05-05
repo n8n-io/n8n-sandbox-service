@@ -1,5 +1,6 @@
 import { Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
+import { SandboxServiceError } from "../src/errors.js";
 import { exec } from "../src/exec.js";
 import type { HttpClient } from "../src/http.js";
 
@@ -68,18 +69,20 @@ describe("exec", () => {
     expect(stderrChunks).toEqual(["b"]);
   });
 
-  it("throws on error event", async () => {
+  it("throws SandboxServiceError on error event", async () => {
     const http = createMockHttp(['{"type":"error","error":"command not found"}']);
 
-    await expect(exec(http, "sandbox-1", { command: "bad" })).rejects.toThrow("command not found");
+    const err = await exec(http, "sandbox-1", { command: "bad" }).catch((e) => e);
+    expect(err).toBeInstanceOf(SandboxServiceError);
+    expect(err.message).toBe("command not found");
   });
 
-  it("throws if stream ends without exit event", async () => {
+  it("throws SandboxServiceError if stream ends without exit event", async () => {
     const http = createMockHttp(['{"type":"stdout","data":"partial"}']);
 
-    await expect(exec(http, "sandbox-1", { command: "incomplete" })).rejects.toThrow(
-      "Sandbox exec stream ended without an exit event",
-    );
+    const err = await exec(http, "sandbox-1", { command: "incomplete" }).catch((e) => e);
+    expect(err).toBeInstanceOf(SandboxServiceError);
+    expect(err.message).toBe("Sandbox exec stream ended without an exit event");
   });
 
   it("passes correct request body to http layer", async () => {

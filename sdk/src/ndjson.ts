@@ -41,14 +41,21 @@ export function parseExecEvent(line: string): ExecEvent {
     if (type === "stderr" && typeof json.data === "string") {
       return { type: "stderr", data: json.data };
     }
-    if (type === "exit") {
+    if (
+      type === "exit" &&
+      typeof json.exit_code === "number" &&
+      typeof json.success === "boolean" &&
+      typeof json.execution_time_ms === "number" &&
+      typeof json.timed_out === "boolean" &&
+      typeof json.killed === "boolean"
+    ) {
       return {
         type: "exit",
-        exit_code: json.exit_code as number,
-        success: json.success as boolean,
-        execution_time_ms: json.execution_time_ms as number,
-        timed_out: json.timed_out as boolean,
-        killed: json.killed as boolean,
+        exit_code: json.exit_code,
+        success: json.success,
+        execution_time_ms: json.execution_time_ms,
+        timed_out: json.timed_out,
+        killed: json.killed,
       };
     }
     if (type === "error" && typeof json.error === "string") {

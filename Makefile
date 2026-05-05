@@ -40,7 +40,7 @@ api:
 	GOOS=linux go build -o $(BINDIR)/api ./cmd/api
 
 ## playground: Start the playground UI (http://localhost:5173).
-playground: sdk-build
+playground: sdk-install sdk-build
 	cd playground && npm install && npm start
 
 ## test: Run all tests.
