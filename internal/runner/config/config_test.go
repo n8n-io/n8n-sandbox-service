@@ -90,3 +90,17 @@ func TestLoadRequiresSandboxImage(t *testing.T) {
 		t.Error("expected Load() to fail without SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE")
 	}
 }
+
+func TestLoadRejectsPartialGRPCTLS(t *testing.T) {
+	t.Setenv("SANDBOX_RUNNER_API_KEYS", "test-key")
+	t.Setenv("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE", "img")
+	// Isolate from the process environment: inherited CERT+KEY would satisfy mTLS and make this test fail.
+	t.Setenv("SANDBOX_RUNNER_GRPC_TLS_CA_FILE", "/tmp/ca.crt")
+	t.Setenv("SANDBOX_RUNNER_GRPC_TLS_CERT_FILE", "")
+	t.Setenv("SANDBOX_RUNNER_GRPC_TLS_KEY_FILE", "")
+	t.Setenv("SANDBOX_RUNNER_GRPC_TLS_SERVER_NAME", "")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("expected Load to reject partial SANDBOX_RUNNER_GRPC_TLS_*")
+	}
+}

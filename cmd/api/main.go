@@ -17,6 +17,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/grpc/pb"
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
+	"github.com/n8n-io/sandbox-service/internal/grpctls"
 	"google.golang.org/grpc"
 )
 
@@ -68,7 +69,21 @@ func main() {
 		slog.Error("grpc listen", "addr", cfg.GRPCListenAddr, "error", err)
 		os.Exit(1)
 	}
-	grpcSrv := grpc.NewServer()
+	var grpcOpts []grpc.ServerOption
+	if cfg.GRPCServerCertFile != "" {
+		creds, err := grpctls.NewServerTransportCredentials(
+			cfg.GRPCServerCertFile,
+			cfg.GRPCServerKeyFile,
+			cfg.GRPCClientCAFile,
+		)
+		if err != nil {
+			slog.Error("grpc tls credentials", "error", err)
+			os.Exit(1)
+		}
+		grpcOpts = append(grpcOpts, grpc.Creds(creds))
+		slog.Info("runner registry grpc mTLS enabled")
+	}
+	grpcSrv := grpc.NewServer(grpcOpts...)
 	pb.RegisterRunnerRegistryServer(grpcSrv, &grpcapi.RunnerRegistryServer{
 		Token: cfg.RegistrationToken,
 		Reg:   reg,

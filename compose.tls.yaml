@@ -1,0 +1,29 @@
+# Overlay: mTLS for runner → API registration gRPC (default with make up / scripts/run-locally.sh).
+# Material is generated under ./.tls by scripts/bootstrap-local-mtls.sh (idempotent).
+
+services:
+  api:
+    volumes:
+      - ./.tls:/grpc-tls:ro
+    environment:
+      SANDBOX_API_GRPC_TLS_CERT_FILE: /grpc-tls/grpc-server.crt
+      SANDBOX_API_GRPC_TLS_KEY_FILE: /grpc-tls/grpc-server.key
+      SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE: /grpc-tls/ca.crt
+
+  runner-1:
+    volumes:
+      - ./.tls:/grpc-tls:ro
+    environment:
+      SANDBOX_RUNNER_GRPC_TLS_CA_FILE: /grpc-tls/ca.crt
+      SANDBOX_RUNNER_GRPC_TLS_CERT_FILE: /grpc-tls/grpc-client.crt
+      SANDBOX_RUNNER_GRPC_TLS_KEY_FILE: /grpc-tls/grpc-client.key
+      SANDBOX_RUNNER_GRPC_TLS_SERVER_NAME: n8n-sandbox-api-local
+
+  runner-2:
+    volumes:
+      - ./.tls:/grpc-tls:ro
+    environment:
+      SANDBOX_RUNNER_GRPC_TLS_CA_FILE: /grpc-tls/ca.crt
+      SANDBOX_RUNNER_GRPC_TLS_CERT_FILE: /grpc-tls/grpc-client.crt
+      SANDBOX_RUNNER_GRPC_TLS_KEY_FILE: /grpc-tls/grpc-client.key
+      SANDBOX_RUNNER_GRPC_TLS_SERVER_NAME: n8n-sandbox-api-local
