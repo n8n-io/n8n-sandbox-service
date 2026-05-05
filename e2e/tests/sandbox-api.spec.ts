@@ -37,8 +37,8 @@ test.describe('Sandbox lifecycle', () => {
 
     const result = await exec(id, 'echo hello world');
     expect(result.stdout).toBe('hello world\n');
-    expect(result.exit?.success).toBe(true);
-    expect(result.exit?.exit_code).toBe(0);
+    expect(result.success).toBe(true);
+    expect(result.exitCode).toBe(0);
 
     await deleteSandbox(id);
 
@@ -80,24 +80,24 @@ test.describe('Exec', () => {
   test('simple echo', async () => {
     const result = await exec(sandboxId, 'echo hello');
     expect(result.stdout).toBe('hello\n');
-    expect(result.exit?.success).toBe(true);
+    expect(result.success).toBe(true);
   });
 
   test('command with args', async () => {
     const result = await exec(sandboxId, 'ls /tmp');
-    expect(result.exit?.success).toBe(true);
+    expect(result.success).toBe(true);
   });
 
   test('stderr output', async () => {
     const result = await exec(sandboxId, 'echo error >&2');
     expect(result.stderr).toContain('error');
-    expect(result.exit?.success).toBe(true);
+    expect(result.success).toBe(true);
   });
 
   test('non-zero exit code', async () => {
     const result = await exec(sandboxId, 'exit 42');
-    expect(result.exit?.exit_code).toBe(42);
-    expect(result.exit?.success).toBe(false);
+    expect(result.exitCode).toBe(42);
+    expect(result.success).toBe(false);
   });
 
   test('environment variables as map', async () => {
@@ -127,7 +127,7 @@ test.describe('Exec', () => {
   test('tilde expands in shell command', async () => {
     const result = await exec(sandboxId, 'echo ~/');
     expect(result.stdout.trim()).toBe('/home/user/');
-    expect(result.exit?.success).toBe(true);
+    expect(result.success).toBe(true);
   });
 
   test('missing command returns 400', async ({ request }) => {
@@ -143,21 +143,20 @@ test.describe('Exec', () => {
     const elapsed = Date.now() - start;
 
     expect(elapsed).toBeLessThan(10_000);
-    expect(result.exit?.timed_out).toBe(true);
-    expect(result.exit?.killed).toBe(true);
+    expect(result.timedOut).toBe(true);
+    expect(result.killed).toBe(true);
   });
 
-  test('execution_time_ms is always present in exit event', async () => {
+  test('executionTimeMs is always present', async () => {
     const result = await exec(sandboxId, 'true');
-    expect(result.exit).toBeTruthy();
-    expect(result.exit).toHaveProperty('execution_time_ms');
-    expect(typeof result.exit!.execution_time_ms).toBe('number');
+    expect(result).toHaveProperty('executionTimeMs');
+    expect(typeof result.executionTimeMs).toBe('number');
   });
 
-  test('exit_code is present even when 0', async () => {
+  test('exitCode is present even when 0', async () => {
     const result = await exec(sandboxId, 'true');
-    expect(result.exit).toHaveProperty('exit_code');
-    expect(result.exit!.exit_code).toBe(0);
+    expect(result).toHaveProperty('exitCode');
+    expect(result.exitCode).toBe(0);
   });
 
   test('sandbox runs as non-root user', async () => {
@@ -633,7 +632,7 @@ test.describe('File operations', () => {
     await uploadFile(sandboxId, '/tmp/exec-visible.txt', 'from api');
     const result = await exec(sandboxId, 'cat /tmp/exec-visible.txt');
     expect(result.stdout).toBe('from api\n');
-    expect(result.exit?.success).toBe(true);
+    expect(result.success).toBe(true);
   });
 
   test('file created by exec is downloadable via API', async () => {
@@ -648,7 +647,7 @@ test.describe('File operations', () => {
     expect(downloaded).toBe('spaced content');
     const result = await exec(sandboxId, "cat '/tmp/space dir/space file.txt'");
     expect(result.stdout).toBe('spaced content\n');
-    expect(result.exit?.success).toBe(true);
+    expect(result.success).toBe(true);
   });
 });
 

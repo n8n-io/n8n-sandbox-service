@@ -1,34 +1,12 @@
 import { APIRequestContext } from '@playwright/test';
-import { SandboxClient, type CreateSandboxOptions } from '@n8n/sandbox-client';
+import { SandboxClient, type CreateSandboxOptions, type ExecResult } from '@n8n/sandbox-client';
 
 const API_KEY = process.env.SANDBOX_API_KEY || 'test';
 const BASE_URL = process.env.BASE_URL || 'http://localhost:8080';
 
 export const client = new SandboxClient({ baseUrl: BASE_URL, apiKey: API_KEY });
 
-interface ExecOptions {
-  env?: Record<string, string>;
-  workdir?: string;
-  timeoutMs?: number;
-}
-
-interface ExecEvent {
-  type: string;
-  data?: string;
-  exit_code?: number;
-  success?: boolean;
-  execution_time_ms?: number;
-  timed_out?: boolean;
-  killed?: boolean;
-  error?: string;
-}
-
-export interface ExecResult {
-  stdout: string;
-  stderr: string;
-  exit: ExecEvent | null;
-  events: ExecEvent[];
-}
+export type { ExecResult };
 
 function headers(extra?: Record<string, string>): Record<string, string> {
   return { 'X-Api-Key': API_KEY, ...extra };
@@ -46,30 +24,14 @@ export async function deleteSandbox(id: string): Promise<void> {
 export async function exec(
   id: string,
   command: string,
-  opts?: ExecOptions,
+  opts?: { env?: Record<string, string>; workdir?: string; timeoutMs?: number },
 ): Promise<ExecResult> {
-  const result = await client.exec(id, {
+  return client.exec(id, {
     command,
     env: opts?.env,
     workdir: opts?.workdir,
     timeoutMs: opts?.timeoutMs,
   });
-
-  const exit: ExecEvent = {
-    type: 'exit',
-    exit_code: result.exitCode,
-    success: result.success,
-    execution_time_ms: result.executionTimeMs,
-    timed_out: result.timedOut,
-    killed: result.killed,
-  };
-
-  return {
-    stdout: result.stdout,
-    stderr: result.stderr,
-    exit,
-    events: [],
-  };
 }
 
 export async function uploadFile(

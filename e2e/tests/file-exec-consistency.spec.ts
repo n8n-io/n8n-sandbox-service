@@ -32,7 +32,7 @@ test.describe('File API and Exec API path consistency', () => {
     await uploadFile(sandboxId, path, content);
 
     const result = await exec(sandboxId, `cat ${path}`);
-    expect(result.exit?.exit_code).toBe(0);
+    expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe(content);
   });
 
@@ -41,7 +41,7 @@ test.describe('File API and Exec API path consistency', () => {
     const content = 'hello from exec';
 
     const writeResult = await exec(sandboxId, `echo -n '${content}' > ${path}`);
-    expect(writeResult.exit?.exit_code).toBe(0);
+    expect(writeResult.exitCode).toBe(0);
 
     const downloaded = await downloadFile(sandboxId, path);
     expect(downloaded).toBe(content);
@@ -51,7 +51,7 @@ test.describe('File API and Exec API path consistency', () => {
     const dir = '/tmp/exec-created-dir';
 
     const mkdirResult = await exec(sandboxId, `mkdir -p ${dir}/sub && touch ${dir}/sub/a.txt ${dir}/sub/b.txt`);
-    expect(mkdirResult.exit?.exit_code).toBe(0);
+    expect(mkdirResult.exitCode).toBe(0);
 
     // Download one of the files via file API to confirm visibility
     const content = await downloadFile(sandboxId, `${dir}/sub/a.txt`);
@@ -70,7 +70,7 @@ test.describe('File API and Exec API path consistency', () => {
     // Make executable and run via exec
     await exec(sandboxId, `chmod +x ${scriptPath}`);
     const result = await exec(sandboxId, `${scriptPath} world`);
-    expect(result.exit?.exit_code).toBe(0);
+    expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe('hello world');
   });
 
@@ -128,7 +128,7 @@ test.describe('File API and Exec API path consistency', () => {
 
     // Use wc -l via exec to confirm line count
     const result = await exec(sandboxId, `wc -l < ${path}`);
-    expect(result.exit?.exit_code).toBe(0);
+    expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe('2');
 
     // Confirm full content via exec

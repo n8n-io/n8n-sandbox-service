@@ -18,7 +18,7 @@ test.describe('Network isolation', () => {
       const result = await exec(id, pyGet('http://httpbin.org/ip', 15), {
         timeoutMs: 30_000,
       });
-      expect(result.exit?.exit_code).toBe(0);
+      expect(result.exitCode).toBe(0);
       expect(result.stdout.trim()).toBe('200');
     } finally {
       await deleteSandbox(id);
@@ -39,7 +39,7 @@ test.describe('Network isolation', () => {
         const result = await exec(id, pyConnect(ip, 80, 3), {
           timeoutMs: 10_000,
         });
-        expect(result.exit?.exit_code, `expected private IP ${ip} to be unreachable`).not.toBe(0);
+        expect(result.exitCode, `expected private IP ${ip} to be unreachable`).not.toBe(0);
       }
     } finally {
       await deleteSandbox(id);
@@ -52,7 +52,7 @@ test.describe('Network isolation', () => {
     try {
       // Get sandbox 2's IP
       const ipResult = await exec(id2, 'hostname -I', { timeoutMs: 5_000 });
-      expect(ipResult.exit?.exit_code).toBe(0);
+      expect(ipResult.exitCode).toBe(0);
       const sandbox2IP = ipResult.stdout.trim();
       expect(sandbox2IP).toBeTruthy();
 
@@ -70,7 +70,7 @@ import time; time.sleep(30)
       const result = await exec(id1, pyConnect(sandbox2IP, 9999, 3), {
         timeoutMs: 10_000,
       });
-      expect(result.exit?.exit_code, `expected sandbox 1 to not reach sandbox 2 at ${sandbox2IP}`).not.toBe(0);
+      expect(result.exitCode, `expected sandbox 1 to not reach sandbox 2 at ${sandbox2IP}`).not.toBe(0);
     } finally {
       await deleteSandbox(id1);
       await deleteSandbox(id2);
@@ -88,13 +88,13 @@ import time; time.sleep(30)
       const denied = await exec(id, pyConnect('8.8.8.8', 53, 3), {
         timeoutMs: 10_000,
       });
-      expect(denied.exit?.exit_code, 'expected denied IP 8.8.8.8 to be unreachable').not.toBe(0);
+      expect(denied.exitCode, 'expected denied IP 8.8.8.8 to be unreachable').not.toBe(0);
 
       // Other public IPs should still work
       const allowed = await exec(id, pyGet('http://httpbin.org/ip', 15), {
         timeoutMs: 30_000,
       });
-      expect(allowed.exit?.exit_code).toBe(0);
+      expect(allowed.exitCode).toBe(0);
     } finally {
       await deleteSandbox(id);
     }
@@ -109,7 +109,7 @@ import time; time.sleep(30)
     try {
       // Verify sandbox works with allow-list policy
       const result = await exec(id, 'echo allow-list-ok', { timeoutMs: 5_000 });
-      expect(result.exit?.exit_code).toBe(0);
+      expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('allow-list-ok');
     } finally {
       await deleteSandbox(id);
@@ -120,7 +120,7 @@ import time; time.sleep(30)
     const id = await createSandbox();
     try {
       const result = await exec(id, 'echo backward-compat-ok', { timeoutMs: 5_000 });
-      expect(result.exit?.exit_code).toBe(0);
+      expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('backward-compat-ok');
     } finally {
       await deleteSandbox(id);
@@ -131,7 +131,7 @@ import time; time.sleep(30)
     const id = await createSandbox();
     try {
       const result = await exec(id, pyResolve('example.com'), { timeoutMs: 10_000 });
-      expect(result.exit?.exit_code).toBe(0);
+      expect(result.exitCode).toBe(0);
       // Should resolve to an IP address
       expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
     } finally {
