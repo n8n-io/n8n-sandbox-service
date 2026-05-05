@@ -55,7 +55,6 @@ List all sandboxes, ordered by creation time (newest first).
   {
     "id": "uuid",
     "status": "string",
-    "provider": "delhi",
     "created_at": 1700000000,
     "last_active_at": 1700000000
   }

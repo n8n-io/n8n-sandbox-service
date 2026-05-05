@@ -19,7 +19,6 @@ type CreateSandboxRequest struct{}
 type ContainerResponse struct {
 	ID           string `json:"id"`
 	Status       string `json:"status"`
-	Provider     string `json:"provider"`
 	CreatedAt    int64  `json:"created_at"`
 	LastActiveAt int64  `json:"last_active_at"`
 }
@@ -72,9 +71,8 @@ func CreateSandbox(mgr ContainerManager) http.HandlerFunc {
 		}
 
 		resp := &ContainerResponse{
-			ID:       sandboxID,
-			Status:   "running",
-			Provider: "delhi",
+			ID:     sandboxID,
+			Status: "running",
 		}
 		writeJSON(w, http.StatusCreated, resp)
 	}
@@ -99,9 +97,8 @@ func GetSandbox(mgr ContainerManager) http.HandlerFunc {
 		}
 
 		resp := &ContainerResponse{
-			ID:       sandboxID,
-			Status:   "running",
-			Provider: "delhi",
+			ID:     sandboxID,
+			Status: "running",
 		}
 		writeJSON(w, http.StatusOK, resp)
 	}

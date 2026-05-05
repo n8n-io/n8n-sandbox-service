@@ -77,7 +77,6 @@ func sandboxProxyHandler(s *store.Store, cfg *config.APIConfig) func(bool) http.
 type SandboxResponse struct {
 	ID           string `json:"id"`
 	Status       string `json:"status"`
-	Provider     string `json:"provider"`
 	CreatedAt    int64  `json:"created_at"`
 	LastActiveAt int64  `json:"last_active_at"`
 }
@@ -94,7 +93,6 @@ func handleListSandboxes(s *store.Store) http.HandlerFunc {
 			resp[i] = &SandboxResponse{
 				ID:           rec.ID,
 				Status:       rec.Status,
-				Provider:     "delhi",
 				CreatedAt:    rec.CreatedAt,
 				LastActiveAt: rec.LastActiveAt,
 			}
@@ -125,7 +123,6 @@ func handleGetSandbox(s *store.Store) http.HandlerFunc {
 		resp := &SandboxResponse{
 			ID:           rec.ID,
 			Status:       rec.Status,
-			Provider:     "delhi",
 			CreatedAt:    rec.CreatedAt,
 			LastActiveAt: time.Now().Unix(),
 		}
@@ -177,7 +174,6 @@ func handleCreateSandbox(s *store.Store, reg *registry.Registry, runnerAPIKey st
 		resp := &SandboxResponse{
 			ID:           sandboxID,
 			Status:       "running",
-			Provider:     "delhi",
 			CreatedAt:    now,
 			LastActiveAt: now,
 		}
