@@ -15,8 +15,6 @@ type ContainerManager interface {
 	GetContainerInfo(ctx context.Context, containerID string) (*manager.ContainerInfo, error)
 	DeleteContainer(ctx context.Context, containerID, containerIP string) error
 	DaemonURL(ctx context.Context, containerID string) (string, error)
-	BuildImage(ctx context.Context, opts manager.BuildImageOptions) (*manager.ImageInfo, error)
-	DeleteDockerImage(ctx context.Context, imageTag string) error
 	FindContainerIDByLabel(ctx context.Context, sandboxID string) (string, error)
 }
 
@@ -36,11 +34,6 @@ func NewRouter(mgr ContainerManager, cfg *config.Config) http.Handler {
 	mux.HandleFunc("POST /sandboxes", CreateSandbox(mgr))
 	mux.HandleFunc("GET /sandboxes/{id}", GetSandbox(mgr))
 	mux.HandleFunc("DELETE /sandboxes/{id}", DeleteSandbox(mgr))
-
-	// Image CRUD
-	mux.HandleFunc("GET /images", ListImages(mgr))
-	mux.HandleFunc("GET /images/{id}", GetImage(mgr))
-	mux.HandleFunc("DELETE /images/{id}", DeleteImage(mgr))
 
 	// Proxy exec, files, mkdir, stat to daemon
 	proxy := ProxyHandler(mgr, cfg)
