@@ -12,7 +12,6 @@ import (
 // coordinates with registered runner services.
 func NewGatewayRouter(s *store.Store, cfg *config.APIConfig, reg *registry.Registry) (http.Handler, error) {
 	sandboxProxy := sandboxProxyHandler(s, cfg)
-	imageProxy := imageProxyHandler(reg, cfg)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -25,10 +24,6 @@ func NewGatewayRouter(s *store.Store, cfg *config.APIConfig, reg *registry.Regis
 	mux.HandleFunc("POST /sandboxes", handleCreateSandbox(s, reg, cfg.RunnerAPIKey))
 	mux.HandleFunc("GET /sandboxes/{id}", handleGetSandbox(s))
 	mux.HandleFunc("DELETE /sandboxes/{id}", handleDeleteSandbox(s, cfg.RunnerAPIKey))
-
-	mux.HandleFunc("GET /images", imageProxy(false))
-	mux.HandleFunc("GET /images/{id}", handleGetImage(reg, cfg))
-	mux.HandleFunc("DELETE /images/{id}", handleDeleteImage(reg, cfg))
 
 	mux.HandleFunc("POST /sandboxes/{id}/exec", sandboxProxy(false))
 	mux.HandleFunc("POST /sandboxes/{id}/files/copy", sandboxProxy(false))

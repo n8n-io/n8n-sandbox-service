@@ -72,27 +72,11 @@ func sandboxProxyHandler(s *store.Store, cfg *config.APIConfig) func(bool) http.
 	}
 }
 
-func imageProxyHandler(reg *registry.Registry, cfg *config.APIConfig) func(bool) http.HandlerFunc {
-	return func(limitBody bool) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			_ = runnerProxyForPick(w, r, limitBody, cfg, reg.PickRoundRobin)
-		}
-	}
-}
-
 // State-managed handlers that coordinate with runner service
-
-type CreateSandboxRequest struct {
-	NetworkPolicy   interface{} `json:"network_policy,omitempty"`
-	ResourceLimits  interface{} `json:"resource_limits,omitempty"`
-	DockerfileSteps []string    `json:"dockerfile_steps,omitempty"`
-}
 
 type SandboxResponse struct {
 	ID           string `json:"id"`
 	Status       string `json:"status"`
-	Provider     string `json:"provider"`
-	ImageID      string `json:"image_id"`
 	CreatedAt    int64  `json:"created_at"`
 	LastActiveAt int64  `json:"last_active_at"`
 }
@@ -109,8 +93,6 @@ func handleListSandboxes(s *store.Store) http.HandlerFunc {
 			resp[i] = &SandboxResponse{
 				ID:           rec.ID,
 				Status:       rec.Status,
-				Provider:     "delhi",
-				ImageID:      rec.ImageID,
 				CreatedAt:    rec.CreatedAt,
 				LastActiveAt: rec.LastActiveAt,
 			}
@@ -141,8 +123,6 @@ func handleGetSandbox(s *store.Store) http.HandlerFunc {
 		resp := &SandboxResponse{
 			ID:           rec.ID,
 			Status:       rec.Status,
-			Provider:     "delhi",
-			ImageID:      rec.ImageID,
 			CreatedAt:    rec.CreatedAt,
 			LastActiveAt: time.Now().Unix(),
 		}
@@ -152,21 +132,6 @@ func handleGetSandbox(s *store.Store) http.HandlerFunc {
 
 func handleCreateSandbox(s *store.Store, reg *registry.Registry, runnerAPIKey string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var req CreateSandboxRequest
-		if r.Body != nil {
-			body, err := io.ReadAll(r.Body)
-			if err != nil {
-				writeError(w, http.StatusBadRequest, "failed to read request body")
-				return
-			}
-			if len(body) > 0 {
-				if err := json.Unmarshal(body, &req); err != nil {
-					writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
-					return
-				}
-			}
-		}
-
 		run, err := reg.PickRoundRobin()
 		if err != nil {
 			if errors.Is(err, registry.ErrNoRunners) {
@@ -182,7 +147,7 @@ func handleCreateSandbox(s *store.Store, reg *registry.Registry, runnerAPIKey st
 		sandboxID := generateUUID()
 		now := time.Now().Unix()
 
-		containerInfo, err := callRunnerCreateContainer(runnerURL, runnerAPIKey, sandboxID, &req)
+		containerInfo, err := callRunnerCreateContainer(runnerURL, runnerAPIKey, sandboxID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to create container: "+err.Error())
 			return
@@ -195,7 +160,6 @@ func handleCreateSandbox(s *store.Store, reg *registry.Registry, runnerAPIKey st
 			LastActiveAt:   now,
 			ContainerIP:    containerInfo.IP,
 			DaemonPort:     8081,
-			ImageID:        containerInfo.ImageTag,
 			RunnerID:       run.ID,
 			RunnerHTTPBase: strings.TrimRight(run.HTTPBaseURL, "/"),
 		}
@@ -210,8 +174,6 @@ func handleCreateSandbox(s *store.Store, reg *registry.Registry, runnerAPIKey st
 		resp := &SandboxResponse{
 			ID:           sandboxID,
 			Status:       "running",
-			Provider:     "delhi",
-			ImageID:      containerInfo.ImageTag,
 			CreatedAt:    now,
 			LastActiveAt: now,
 		}
@@ -251,55 +213,17 @@ func handleDeleteSandbox(s *store.Store, runnerAPIKey string) http.HandlerFunc {
 	}
 }
 
-func handleGetImage(reg *registry.Registry, cfg *config.APIConfig) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		run, err := reg.PickRoundRobin()
-		if err != nil {
-			if errors.Is(err, registry.ErrNoRunners) {
-				writeError(w, http.StatusServiceUnavailable, err.Error())
-			} else {
-				writeError(w, http.StatusInternalServerError, err.Error())
-			}
-			return
-		}
-		u, _ := url.Parse(strings.TrimRight(run.HTTPBaseURL, "/"))
-		newRunnerReverseProxy(u, cfg.RunnerAPIKey, cfg).ServeHTTP(w, r)
-	}
-}
-
-func handleDeleteImage(reg *registry.Registry, cfg *config.APIConfig) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		run, err := reg.PickRoundRobin()
-		if err != nil {
-			if errors.Is(err, registry.ErrNoRunners) {
-				writeError(w, http.StatusServiceUnavailable, err.Error())
-			} else {
-				writeError(w, http.StatusInternalServerError, err.Error())
-			}
-			return
-		}
-		u, _ := url.Parse(strings.TrimRight(run.HTTPBaseURL, "/"))
-		newRunnerReverseProxy(u, cfg.RunnerAPIKey, cfg).ServeHTTP(w, r)
-	}
-}
-
 // Helper functions for calling runner service
 
 type ContainerInfo struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	IP       string `json:"ip"`
-	ImageTag string `json:"image_tag"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	IP   string `json:"ip"`
 }
 
-func callRunnerCreateContainer(runnerURL *url.URL, apiKey, sandboxID string, req *CreateSandboxRequest) (*ContainerInfo, error) {
-	reqBody, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
-	}
-
+func callRunnerCreateContainer(runnerURL *url.URL, apiKey, sandboxID string) (*ContainerInfo, error) {
 	urlStr := fmt.Sprintf("%s/sandboxes", strings.TrimRight(runnerURL.String(), "/"))
-	httpReq, err := http.NewRequest("POST", urlStr, bytes.NewReader(reqBody))
+	httpReq, err := http.NewRequest("POST", urlStr, bytes.NewReader([]byte("{}")))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}

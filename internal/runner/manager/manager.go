@@ -3,8 +3,6 @@ package manager
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,12 +11,10 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 	"github.com/n8n-io/sandbox-service/internal/runner/netrules"
 )
@@ -37,25 +33,13 @@ const (
 )
 
 // CreateOptions holds optional parameters for sandbox creation.
-type CreateOptions struct {
-	NetworkPolicy   *NetworkPolicy
-	ResourceLimits  *ResourceLimits
-	DockerfileSteps []string
-}
+type CreateOptions struct{}
 
 // ContainerInfo represents information about a created container.
 type ContainerInfo struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	IP       string `json:"ip"`
-	ImageTag string `json:"image_tag"`
-}
-
-// ImageInfo represents information about a built image.
-type ImageInfo struct {
-	ID            string `json:"id"`
-	Tag           string `json:"tag"`
-	DockerImageID string `json:"docker_image_id"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	IP   string `json:"ip"`
 }
 
 // Manager orchestrates container lifecycle without persistent state.
@@ -126,21 +110,9 @@ func (m *Manager) CreateContainer(ctx context.Context, sandboxID string, opts *C
 	}
 
 	containerName := "sandbox-" + sandboxID[:12]
-	limits := m.effectiveLimits(opts.ResourceLimits)
-	imageName := m.config.DockerSandboxImage
+	limits := m.defaultLimits()
 
-	if len(opts.DockerfileSteps) > 0 {
-		imageInfo, err := m.BuildImage(ctx, BuildImageOptions{
-			BaseImage:       m.config.DockerSandboxImage,
-			DockerfileSteps: opts.DockerfileSteps,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("build image: %w", err)
-		}
-		imageName = imageInfo.Tag
-	}
-
-	containerID, err := m.createContainer(ctx, sandboxID, containerName, imageName, limits)
+	containerID, err := m.createContainer(ctx, sandboxID, containerName, m.config.DockerSandboxImage, limits)
 	if err != nil {
 		return nil, fmt.Errorf("create container: %w", err)
 	}
@@ -169,12 +141,7 @@ func (m *Manager) CreateContainer(ctx context.Context, sandboxID string, opts *C
 		return nil, fmt.Errorf("inspect container ip: %w", err)
 	}
 
-	var allowedIPs, deniedIPs []string
-	if opts.NetworkPolicy != nil {
-		allowedIPs = opts.NetworkPolicy.AllowedIPs
-		deniedIPs = opts.NetworkPolicy.DeniedIPs
-	}
-	if err := netrules.ApplyPolicy(containerID, containerIP, m.gatewayIP, daemonPort, allowedIPs, deniedIPs); err != nil {
+	if err := netrules.ApplyPolicy(containerID, containerIP, m.gatewayIP, daemonPort); err != nil {
 		cleanupOnError(containerIP)
 		return nil, fmt.Errorf("apply network rules: %w", err)
 	}
@@ -186,10 +153,9 @@ func (m *Manager) CreateContainer(ctx context.Context, sandboxID string, opts *C
 	}
 
 	containerInfo := &ContainerInfo{
-		ID:       containerID,
-		Name:     containerName,
-		IP:       containerIP,
-		ImageTag: imageName,
+		ID:   containerID,
+		Name: containerName,
+		IP:   containerIP,
 	}
 
 	slog.Info("container created", "sandbox_id", sandboxID, "container_id", containerID, "ip", containerIP)
@@ -231,60 +197,6 @@ func (m *Manager) DaemonURL(ctx context.Context, sandboxID string) (string, erro
 	return fmt.Sprintf("http://%s:%d", info.IP, daemonPort), nil
 }
 
-// DeleteDockerImage removes a Docker image by tag.
-func (m *Manager) DeleteDockerImage(ctx context.Context, imageTag string) error {
-	if _, err := m.runDocker(ctx, "image", "rm", imageTag); err != nil {
-		if isDockerNotFound(err) {
-			return ErrImageNotFound
-		}
-		return err
-	}
-	return nil
-}
-
-// BuildImage builds a custom Docker image and returns image information.
-func (m *Manager) BuildImage(ctx context.Context, opts BuildImageOptions) (*ImageInfo, error) {
-	if strings.TrimSpace(opts.BaseImage) == "" {
-		return nil, fmt.Errorf("base image is required")
-	}
-	if len(opts.DockerfileSteps) == 0 {
-		return nil, fmt.Errorf("at least one dockerfile step is required")
-	}
-
-	dockerfile, err := buildDockerfile(opts.BaseImage, opts.DockerfileSteps)
-	if err != nil {
-		return nil, err
-	}
-
-	buildID := strings.ReplaceAll(uuid.NewString(), "-", "")
-	imageTag := "sandbox-custom-" + buildID
-	imageID := "img-" + buildID
-
-	buildCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
-	defer cancel()
-
-	tmpDir, err := os.MkdirTemp("", "sandbox-image-build-*")
-	if err != nil {
-		return nil, fmt.Errorf("create build context dir: %w", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	if _, err := m.runDockerWithStdin(buildCtx, strings.NewReader(dockerfile), "build", "-t", imageTag, "-f", "-", filepath.Clean(tmpDir)); err != nil {
-		return nil, err
-	}
-
-	dockerImageID, err := m.inspectImageID(buildCtx, imageTag)
-	if err != nil {
-		return nil, err
-	}
-
-	return &ImageInfo{
-		ID:            imageID,
-		Tag:           imageTag,
-		DockerImageID: dockerImageID,
-	}, nil
-}
-
 // DeleteContainer stops and removes a container.
 func (m *Manager) DeleteContainer(ctx context.Context, containerID, containerIP string) error {
 	if err := netrules.Teardown(containerID, containerIP); err != nil {
@@ -312,25 +224,12 @@ func (m *Manager) Shutdown() {
 	}
 }
 
-// effectiveLimits merges per-sandbox overrides with global defaults.
-func (m *Manager) effectiveLimits(requested *ResourceLimits) *ResourceLimits {
-	limits := &ResourceLimits{
+func (m *Manager) defaultLimits() *ResourceLimits {
+	return &ResourceLimits{
 		MemoryMB:   m.config.DefaultMemoryMB,
 		CPUPercent: m.config.DefaultCPUPercent,
 		PidsMax:    m.config.DefaultPidsMax,
 	}
-	if requested != nil {
-		if requested.MemoryMB > 0 {
-			limits.MemoryMB = requested.MemoryMB
-		}
-		if requested.CPUPercent > 0 {
-			limits.CPUPercent = requested.CPUPercent
-		}
-		if requested.PidsMax > 0 {
-			limits.PidsMax = requested.PidsMax
-		}
-	}
-	return limits
 }
 
 func waitForDaemon(ctx context.Context, baseURL string) error {
@@ -600,55 +499,6 @@ func (m *Manager) runDockerWithStdin(ctx context.Context, stdin io.Reader, args 
 	return stdout.String(), nil
 }
 
-func (m *Manager) ensureDockerImageExists(ctx context.Context, image string) error {
-	if _, err := m.inspectImageID(ctx, image); err != nil {
-		if isDockerNotFound(err) {
-			return fmt.Errorf("custom image %s is missing from docker; rebuild it before reuse", image)
-		}
-		return err
-	}
-	return nil
-}
-
-func (m *Manager) inspectImageID(ctx context.Context, image string) (string, error) {
-	out, err := m.runDocker(ctx, "image", "inspect", "--format", "{{.Id}}", image)
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(out), nil
-}
-
-func buildDockerfile(baseImage string, dockerfileSteps []string) (string, error) {
-	baseImage = strings.TrimSpace(baseImage)
-	if baseImage == "" {
-		return "", fmt.Errorf("base image is required")
-	}
-
-	lines := []string{
-		"FROM " + baseImage,
-	}
-	for i, step := range dockerfileSteps {
-		step = strings.TrimSpace(step)
-		if step == "" {
-			return "", fmt.Errorf("dockerfile_steps[%d] must be a non-empty string", i)
-		}
-		lines = append(lines, step)
-	}
-	lines = append(lines, "")
-	return strings.Join(lines, "\n"), nil
-}
-
-func stepsHash(baseImage string, dockerfileSteps []string) string {
-	h := sha256.New()
-	h.Write([]byte(baseImage))
-	h.Write([]byte{0})
-	for _, step := range dockerfileSteps {
-		h.Write([]byte(step))
-		h.Write([]byte{0})
-	}
-	return hex.EncodeToString(h.Sum(nil))
-}
-
 func isDockerNotFound(err error) bool {
 	if err == nil {
 		return false
@@ -658,8 +508,4 @@ func isDockerNotFound(err error) bool {
 		strings.Contains(msg, "no such network") ||
 		strings.Contains(msg, "no such image") ||
 		strings.Contains(msg, "not found")
-}
-
-func shouldDeleteCachedImageRecord(err error) bool {
-	return err != nil && isDockerNotFound(err)
 }
