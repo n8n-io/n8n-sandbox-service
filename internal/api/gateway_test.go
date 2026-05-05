@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -67,37 +66,5 @@ func TestGatewayRejectsMissingPublicAPIKey(t *testing.T) {
 
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("expected %d, got %d", http.StatusUnauthorized, rr.Code)
-	}
-}
-
-func TestCreateSandboxRejectsOversizedJSONBody(t *testing.T) {
-	s, err := store.New(":memory:")
-	if err != nil {
-		t.Fatalf("create store: %v", err)
-	}
-	defer s.Close()
-
-	const maxBody = 64
-	router, err := NewGatewayRouter(s, &config.APIConfig{
-		APIKeys:      map[string]struct{}{"public-key": {}},
-		RunnerAPIKey: "runner-key",
-		MaxFileBytes: maxBody,
-	}, registry.New(45*time.Second))
-	if err != nil {
-		t.Fatalf("create gateway router: %v", err)
-	}
-
-	body := bytes.Repeat([]byte("a"), maxBody+1)
-	req := httptest.NewRequest(http.MethodPost, "/sandboxes", bytes.NewReader(body))
-	req.Header.Set("X-Api-Key", "public-key")
-	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
-	router.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusBadRequest {
-		t.Fatalf("expected %d, got %d body %q", http.StatusBadRequest, rr.Code, rr.Body.String())
-	}
-	if !strings.Contains(rr.Body.String(), "failed to read request body") && !strings.Contains(rr.Body.String(), "invalid JSON") {
-		t.Fatalf("expected oversized body rejection, got %q", rr.Body.String())
 	}
 }

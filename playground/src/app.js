@@ -150,9 +150,6 @@ function selectSandbox(sb) {
 
 // --- Create sandbox ---
 
-const imageIdInput = $('#image-id-input');
-const setupCmdsInput = $('#setup-cmds-input');
-
 async function execInSandbox(sandboxId, command, timeoutMs = 300000, signal) {
   const res = await fetch(`${apiBase()}/sandboxes/${sandboxId}/exec`, {
     method: 'POST',
@@ -214,34 +211,15 @@ async function createSandbox() {
     setStatus('Enter an API key first');
     return;
   }
-  const imageId = imageIdInput.value.trim();
-  const setupRaw = setupCmdsInput.value.trim();
-  const dockerfileSteps = setupRaw
-    ? setupRaw.split('\n').map((l) => l.trim()).filter(Boolean)
-    : [];
-
-  const body = {};
-  if (imageId) body.image_id = imageId;
-  if (dockerfileSteps.length > 0) body.dockerfile_steps = dockerfileSteps;
 
   createBtn.disabled = true;
   try {
-    if (dockerfileSteps.length > 0) {
-      setStatus('Creating sandbox (building image)...');
-      appendOutput(`Creating sandbox with Dockerfile steps:\n  ${dockerfileSteps.join('\n  ')}`, 'info');
-    } else if (imageId) {
-      setStatus('Creating sandbox from image...');
-      appendOutput(`Creating sandbox from image: ${imageId}`, 'info');
-    } else {
-      setStatus('Creating sandbox...');
-      appendOutput('Creating sandbox...', 'info');
-    }
+    setStatus('Creating sandbox...');
+    appendOutput('Creating sandbox...', 'info');
     const t0 = performance.now();
-    const sb = await apiRequest('POST', '/sandboxes', body);
+    const sb = await apiRequest('POST', '/sandboxes', {});
     const elapsed = ((performance.now() - t0) / 1000).toFixed(2);
-    let msg = `Sandbox created: ${sb.id} (${sb.status}) in ${elapsed}s`;
-    if (sb.image_id) msg += ` [image: ${sb.image_id}]`;
-    appendOutput(msg, 'info');
+    appendOutput(`Sandbox created: ${sb.id} (${sb.status}) in ${elapsed}s`, 'info');
     setStatus(`Created: ${sb.id.slice(0, 12)} (${elapsed}s)`);
     await refreshSandboxes();
     selectSandbox(sb);
@@ -273,78 +251,6 @@ async function deleteSandbox(id) {
     setStatus(`Delete failed: ${e.message}`);
   }
 }
-
-// --- Images ---
-
-const imageListEl = $('#image-list');
-const imagesRefreshBtn = $('#images-refresh-btn');
-
-async function refreshImages() {
-  if (!apiKeyInput.value.trim()) return;
-  try {
-    const images = await apiRequest('GET', '/images');
-    renderImages(Array.isArray(images) ? images : []);
-  } catch (e) {
-    imageListEl.innerHTML = `<li style="color:#f44747;">Error: ${e.message}</li>`;
-  }
-}
-
-function renderImages(images) {
-  imageListEl.innerHTML = '';
-  if (images.length === 0) {
-    const li = document.createElement('li');
-    li.style.color = '#666';
-    li.textContent = 'No images';
-    imageListEl.appendChild(li);
-    return;
-  }
-  for (const img of images) {
-    const li = document.createElement('li');
-
-    const idSpan = document.createElement('span');
-    idSpan.className = 'image-id';
-    idSpan.textContent = img.id;
-    idSpan.title = `Click to copy ID\nStatus: ${img.status}\nSource: ${img.source_sandbox_id || 'n/a'}`;
-    idSpan.addEventListener('click', () => {
-      navigator.clipboard.writeText(img.id);
-      imageIdInput.value = img.id;
-      setStatus(`Copied ${img.id}`);
-    });
-
-    const sizeSpan = document.createElement('span');
-    sizeSpan.className = 'image-size';
-    sizeSpan.textContent = img.size_bytes != null ? formatSize(img.size_bytes) : '';
-
-    const deleteBtn = document.createElement('button');
-    deleteBtn.className = 'image-delete';
-    deleteBtn.textContent = 'x';
-    deleteBtn.title = 'Delete image';
-    deleteBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      deleteImage(img.id);
-    });
-
-    li.appendChild(idSpan);
-    li.appendChild(sizeSpan);
-    li.appendChild(deleteBtn);
-    imageListEl.appendChild(li);
-  }
-}
-
-async function deleteImage(id) {
-  try {
-    setStatus(`Deleting image ${id}...`);
-    await apiRequest('DELETE', `/images/${id}`);
-    appendOutput(`Image deleted: ${id}`, 'info');
-    setStatus(`Deleted: ${id}`);
-    await refreshImages();
-  } catch (e) {
-    appendOutput(`Error deleting image: ${e.message}`, 'error');
-    setStatus(`Delete failed: ${e.message}`);
-  }
-}
-
-imagesRefreshBtn.addEventListener('click', refreshImages);
 
 // --- Execute command (streaming NDJSON) ---
 
@@ -672,7 +578,7 @@ function setStatus(msg) {
 // --- Event listeners ---
 
 createBtn.addEventListener('click', createSandbox);
-refreshBtn.addEventListener('click', () => { refreshSandboxes(); refreshImages(); });
+refreshBtn.addEventListener('click', refreshSandboxes);
 runBtn.addEventListener('click', executeCommand);
 
 // --- File panel resize ---

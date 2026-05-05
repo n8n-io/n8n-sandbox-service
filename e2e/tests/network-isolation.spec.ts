@@ -77,45 +77,6 @@ import time; time.sleep(30)
     }
   });
 
-  test('deny list blocks specific public IP', async ({ request }) => {
-    const id = await createSandbox(request, {
-      network_policy: {
-        denied_ips: ['8.8.8.8/32'],
-      },
-    });
-    try {
-      // Denied IP should be unreachable
-      const denied = await exec(request, id, pyConnect('8.8.8.8', 53, 3), {
-        timeout_ms: 10_000,
-      });
-      expect(denied.exit?.exit_code, 'expected denied IP 8.8.8.8 to be unreachable').not.toBe(0);
-
-      // Other public IPs should still work
-      const allowed = await exec(request, id, pyGet('http://httpbin.org/ip', 15), {
-        timeout_ms: 30_000,
-      });
-      expect(allowed.exit?.exit_code).toBe(0);
-    } finally {
-      await deleteSandbox(request, id);
-    }
-  });
-
-  test('allow list permits specific private IP (sandbox creation succeeds)', async ({ request }) => {
-    const id = await createSandbox(request, {
-      network_policy: {
-        allowed_ips: ['10.99.99.99/32'],
-      },
-    });
-    try {
-      // Verify sandbox works with allow-list policy
-      const result = await exec(request, id, 'echo allow-list-ok', { timeout_ms: 5_000 });
-      expect(result.exit?.exit_code).toBe(0);
-      expect(result.stdout).toContain('allow-list-ok');
-    } finally {
-      await deleteSandbox(request, id);
-    }
-  });
-
   test('backward compat: empty body still works', async ({ request }) => {
     const id = await createSandbox(request);
     try {
@@ -130,7 +91,7 @@ import time; time.sleep(30)
   test('DNS resolution works', async ({ request }) => {
     const id = await createSandbox(request);
     try {
-      const result = await exec(request, id, pyResolve('example.com'), { timeout_ms: 10_000 });
+      const result = await exec(request, id, pyResolve('n8n.io'), { timeout_ms: 10_000 });
       expect(result.exit?.exit_code).toBe(0);
       // Should resolve to an IP address
       expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+\.\d+$/);

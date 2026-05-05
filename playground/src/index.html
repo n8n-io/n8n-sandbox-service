@@ -186,49 +186,6 @@
 
     .sandbox-delete:hover { color: #f44747; background: #3c3c3c; }
 
-    #image-list {
-      list-style: none;
-      margin-top: 8px;
-    }
-
-    #image-list li {
-      padding: 4px 8px;
-      font-size: 11px;
-      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-      border-radius: 3px;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-
-    #image-list li:hover { background: #2a2d2e; }
-
-    .image-id {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      cursor: pointer;
-    }
-
-    .image-id:hover { color: #569cd6; }
-
-    .image-size {
-      font-size: 10px;
-      color: #666;
-      flex-shrink: 0;
-      margin-left: auto;
-    }
-
-    .image-delete {
-      font-size: 10px;
-      padding: 2px 6px;
-      background: transparent;
-      color: #888;
-      flex-shrink: 0;
-    }
-
-    .image-delete:hover { color: #f44747; background: #3c3c3c; }
-
     #center {
       flex: 1;
       display: flex;
@@ -548,10 +505,6 @@
       </div>
       <div class="panel">
         <div class="panel-title">Create Sandbox</div>
-        <label for="image-id-input">Image ID (optional)</label>
-        <input type="text" id="image-id-input" placeholder="img-..." />
-        <label for="setup-cmds-input">Dockerfile Steps (one per line)</label>
-        <textarea id="setup-cmds-input" rows="3" placeholder="RUN apt-get update &amp;&amp; apt-get install -y curl&#10;RUN npm install -g typescript"></textarea>
         <div class="btn-row">
           <button id="create-btn">Create</button>
         </div>
@@ -562,13 +515,6 @@
           <button id="refresh-btn" style="float:right; padding:2px 8px; font-size:10px;">Refresh</button>
         </div>
         <ul id="sandbox-list"></ul>
-      </div>
-      <div class="panel" style="flex:1; border-bottom:none; min-height:100px;">
-        <div class="panel-title">
-          Images
-          <button id="images-refresh-btn" style="float:right; padding:2px 8px; font-size:10px;">Refresh</button>
-        </div>
-        <ul id="image-list"></ul>
       </div>
     </div>
     <div id="center">
