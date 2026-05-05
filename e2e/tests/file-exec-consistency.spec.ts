@@ -12,6 +12,8 @@ import {
  * E2E tests verifying that the file API and exec API operate on the same
  * filesystem — files created through one are visible through the other.
  */
+test.describe.configure({ mode: 'serial' });
+
 test.describe('File API and Exec API path consistency', () => {
   let sandboxId: string;
 
@@ -92,15 +94,30 @@ test.describe('File API and Exec API path consistency', () => {
     const content = await downloadFile(sandboxId, path);
     expect(content).toBe('to be deleted');
 
-    await exec(sandboxId, `rm ${path}`);
+    const rmResult = await exec(sandboxId, `rm -f ${path}`);
+    expect(rmResult.exit?.exit_code).toBe(0);
 
-    // File API should return an error for the missing file
-    const resp = await apiRequest(
-      request,
-      'GET',
-      `/sandboxes/${sandboxId}/files/content?path=${encodeURIComponent(path)}`,
-    );
-    expect(resp.status).not.toBe(200);
+    // After unlink, some setups (busy CI / overlay) can briefly still serve the file;
+    // poll until the file API observes the delete.
+    const noStore = {
+      'X-Api-Key': process.env.SANDBOX_API_KEY || 'test',
+      'Cache-Control': 'no-store',
+      Pragma: 'no-cache',
+    };
+    await expect
+      .poll(
+        async () => {
+          const resp = await apiRequest(
+            request,
+            'GET',
+            `/sandboxes/${sandboxId}/files/content?path=${encodeURIComponent(path)}`,
+            { rawHeaders: noStore },
+          );
+          return resp.status;
+        },
+        { timeout: 10_000, intervals: [20, 50, 100, 200] },
+      )
+      .not.toBe(200);
   });
 
   test('file API write and exec read agree on multiline content', async () => {

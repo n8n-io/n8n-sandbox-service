@@ -18,11 +18,7 @@ Build all images:
 make docker-amd64
 ```
 
-Run locally (starts the API plus **two** runners on a shared Docker network, both registered over gRPC):
-
-```bash
-./scripts/run-locally.sh
-```
+Run locally with Docker Compose (API plus two runners on a shared network). `make up` runs `scripts/bootstrap-local-mtls.sh` once to populate `.tls/` (gitignored), then start Compose with mTLS for runner→API gRPC by default. Use `SANDBOX_COMPOSE_TLS=0` if you need plaintext gRPC (for example without OpenSSL). See [Runner registration gRPC (mTLS)](#runner-registration-grpc-mtls).
 
 Verify the API:
 
@@ -100,6 +96,9 @@ curl -s -X DELETE http://localhost:8080/sandboxes/<id> \
 | `SANDBOX_API_DATA_DIR` | `/tmp/sandbox-api` | SQLite store directory |
 | `SANDBOX_API_MAX_FILE_BYTES` | `10485760` | Maximum file upload size (10 MB) |
 | `SANDBOX_API_RUNNER_HEARTBEAT_GRACE` | `45s` | How long after the last gRPC heartbeat a runner remains eligible for placement (Go [`time.ParseDuration`](https://pkg.go.dev/time#ParseDuration) syntax, e.g. `45s`, `2m`) |
+| `SANDBOX_API_GRPC_TLS_CERT_FILE` | *(empty)* | Server certificate (PEM) for the registration gRPC listener; set with key + client CA for mTLS |
+| `SANDBOX_API_GRPC_TLS_KEY_FILE` | *(empty)* | Server private key (PEM) |
+| `SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE` | *(empty)* | CA bundle (PEM) that signed runner client certificates |
 
 Runners register over gRPC and report health and capacity; the API picks a runner (round-robin) when creating sandboxes and stores that runner’s HTTP base URL for later proxying.
 
@@ -123,6 +122,24 @@ Runners register over gRPC and report health and capacity; the API picks a runne
 | `SANDBOX_RUNNER_ENABLE_CGROUPS` | `true` | Whether Docker resource limits are applied |
 | `SANDBOX_RUNNER_INTER_SANDBOX_NETWORK_ENABLED` | `false` | Whether sandboxes may talk to each other on `runner-bridge` |
 | `SANDBOX_RUNNER_DOCKER_INSECURE_REGISTRIES` | *(empty)* | Comma-separated insecure registries passed to dockerd |
+| `SANDBOX_RUNNER_GRPC_TLS_CA_FILE` | *(empty)* | CA (PEM) that signed the API’s gRPC server cert |
+| `SANDBOX_RUNNER_GRPC_TLS_CERT_FILE` | *(empty)* | This runner’s client certificate (PEM) for mTLS |
+| `SANDBOX_RUNNER_GRPC_TLS_KEY_FILE` | *(empty)* | Client key (PEM) |
+| `SANDBOX_RUNNER_GRPC_TLS_SERVER_NAME` | *(empty)* | TLS name to verify on the API cert (defaults to the host from `SANDBOX_RUNNER_API_GRPC_ADDR`) |
+
+## Runner registration gRPC (mTLS)
+
+**Local Docker Compose:** `make up` runs `scripts/bootstrap-local-mtls.sh`, which writes a private CA plus leaf certs into `.tls/` at the repo root. If those files already exist, bootstrap does nothing unless you set `SANDBOX_TLS_REGEN=1`. Compose uses `compose.tls.yaml` by default to mount `.tls` and set `SANDBOX_*_GRPC_TLS_*`. Set `SANDBOX_COMPOSE_TLS=0` to skip the overlay and use plaintext gRPC.
+
+**Kubernetes:** Use your own CA (often `cert-manager`). Mount PEMs from `Certificate` secrets and set the same env vars as in the tables above. See [`deploy/k8s/cert-manager/README.md`](deploy/k8s/cert-manager/README.md).
+
+**Registration vs lifecycle over gRPC:** Today runners dial the API over gRPC for registration only; sandbox work is still proxied over HTTP.
+
+**Bearer token:** Still required in metadata (`Authorization: Bearer …`) in addition to mTLS for registration.
+
+**Why this matters for trust:** mTLS ties the registration gRPC stream to a client certificate issued by your CA. A random host on the network cannot complete TLS to the API’s registry listener, so it cannot open a stream and inject a fake `runner_id` / `http_base_url` into placement. Legitimate runners still prove possession of the registration `Bearer` token in metadata. Together, only workloads you issued credentials to can show up in the runner registry; the API therefore only forwards new sandbox and proxy traffic to runners that actually authenticated on that channel (HTTP calls to a runner still use your normal `X-Api-Key` / stored routing as today).
+
+**Rotation:** The API and runner reload leaf cert/key PEMs from disk when the files change (next TLS handshake), so in Kubernetes `cert-manager` (or any process that writes renewed files into the mounted paths) can rotate leaves without restarting pods. Local bootstrap issues long‑lived dev certs; they do not auto‑renew on a timer. When they eventually expire—or whenever you want fresh material—delete `.tls/` or set `SANDBOX_TLS_REGEN=1` and run `scripts/bootstrap-local-mtls.sh` again (then restart containers or wait for the next TLS handshake so reloaded leaf material is used). Rotating the CA both sides trust means updating the mounted CA PEMs and typically rolling workloads.
 
 ## Development
 
@@ -148,6 +165,6 @@ Run only one topology or the default single-runner suite:
 
 Extra Playwright arguments can be passed to any script (for example `./e2e/run-all.sh --grep pattern`).
 
-`run-all.sh` runs **`make docker-local` once**; the per-topology scripts skip rebuilding when invoked from it (`E2E_SKIP_BUILD=1`). To rebuild before each phase, run the topology scripts individually instead.
+`run-all.sh` runs `make docker-local` once. The per-topology scripts skip rebuilding when invoked from it (`E2E_SKIP_BUILD=1`). To rebuild before each phase, run the topology scripts individually instead.
 
-See **[e2e/README.md](e2e/README.md)** for how scripts map to specs, what a Playwright “worker” is, and how `resilience.spec.ts` uses the host `docker` CLI.
+See [e2e/README.md](e2e/README.md) for how scripts map to specs, what a Playwright “worker” is, and how `resilience.spec.ts` uses the host `docker` CLI.

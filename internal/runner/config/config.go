@@ -90,6 +90,12 @@ type Config struct {
 	// CapacityTotal is reported to the API for placement (0 means unlimited).
 	// Parsed from SANDBOX_RUNNER_CAPACITY_TOTAL (default 1000).
 	CapacityTotal int32
+
+	// mTLS for registration gRPC (optional). All three must be set together.
+	GRPCServerCAFile   string
+	GRPCClientCertFile string
+	GRPCClientKeyFile  string
+	GRPCServerName     string
 }
 
 // Load reads configuration from environment variables and returns a Config.
@@ -226,6 +232,25 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("SANDBOX_RUNNER_CAPACITY_TOTAL must be a non-negative integer, got %q", v)
 		}
 		cfg.CapacityTotal = int32(n)
+	}
+
+	cfg.GRPCServerCAFile = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_GRPC_TLS_CA_FILE"))
+	cfg.GRPCClientCertFile = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_GRPC_TLS_CERT_FILE"))
+	cfg.GRPCClientKeyFile = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_GRPC_TLS_KEY_FILE"))
+	cfg.GRPCServerName = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_GRPC_TLS_SERVER_NAME"))
+
+	tlsN := 0
+	if cfg.GRPCServerCAFile != "" {
+		tlsN++
+	}
+	if cfg.GRPCClientCertFile != "" {
+		tlsN++
+	}
+	if cfg.GRPCClientKeyFile != "" {
+		tlsN++
+	}
+	if tlsN != 0 && tlsN != 3 {
+		return nil, fmt.Errorf("SANDBOX_RUNNER_GRPC_TLS_CA_FILE, SANDBOX_RUNNER_GRPC_TLS_CERT_FILE, and SANDBOX_RUNNER_GRPC_TLS_KEY_FILE must all be set together for mTLS")
 	}
 
 	if cfg.APIGRPCAddr != "" {

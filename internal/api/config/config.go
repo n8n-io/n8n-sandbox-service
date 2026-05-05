@@ -40,6 +40,11 @@ type APIConfig struct {
 
 	// HeartbeatGrace is how long after the last gRPC heartbeat a runner may still be chosen for placement.
 	HeartbeatGrace time.Duration
+
+	// Runner gRPC mTLS (optional). All three must be set together.
+	GRPCServerCertFile string
+	GRPCServerKeyFile  string
+	GRPCClientCAFile   string
 }
 
 // LoadAPI reads API gateway configuration from environment variables.
@@ -100,6 +105,24 @@ func LoadAPI() (*APIConfig, error) {
 			return nil, fmt.Errorf("SANDBOX_API_RUNNER_HEARTBEAT_GRACE must be a positive duration (e.g. 45s, 2m), got %q", v)
 		}
 		cfg.HeartbeatGrace = d
+	}
+
+	cfg.GRPCServerCertFile = strings.TrimSpace(os.Getenv("SANDBOX_API_GRPC_TLS_CERT_FILE"))
+	cfg.GRPCServerKeyFile = strings.TrimSpace(os.Getenv("SANDBOX_API_GRPC_TLS_KEY_FILE"))
+	cfg.GRPCClientCAFile = strings.TrimSpace(os.Getenv("SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE"))
+
+	tlsN := 0
+	if cfg.GRPCServerCertFile != "" {
+		tlsN++
+	}
+	if cfg.GRPCServerKeyFile != "" {
+		tlsN++
+	}
+	if cfg.GRPCClientCAFile != "" {
+		tlsN++
+	}
+	if tlsN != 0 && tlsN != 3 {
+		return nil, fmt.Errorf("SANDBOX_API_GRPC_TLS_CERT_FILE, SANDBOX_API_GRPC_TLS_KEY_FILE, and SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE must all be set together for mTLS")
 	}
 
 	return cfg, nil

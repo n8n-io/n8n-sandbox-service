@@ -120,10 +120,10 @@ sdk-fmt-check:
 sdk-lint:
 	cd sdk && pnpm lint
 
-## up: Build images and start all services locally with Docker Compose.
+## up: Bootstrap local .tls/ if needed, build images, start Compose (mTLS on gRPC by default).
 up:
 	./scripts/run-locally.sh
 
-## down: Stop and remove all local Compose services.
+## down: Stop and remove all local Compose services (same compose files as make up).
 down:
-	docker compose down
+	bash scripts/docker-compose-local.sh down
