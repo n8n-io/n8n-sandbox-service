@@ -24,7 +24,7 @@ type SandboxRecord struct {
 	DaemonPort            int
 	RunnerID              string // Runner that hosts this sandbox (from registration)
 	RunnerHTTPBase        string // Base URL to reach that runner's HTTP API (for proxying)
-	RunnerControlGRPCAddr string // host:port for SandboxControl gRPC (optional; empty => HTTP lifecycle)
+	RunnerControlGRPCAddr string // host:port for SandboxControl gRPC
 }
 
 // Store wraps a *sql.DB and exposes CRUD operations for SandboxRecord rows.

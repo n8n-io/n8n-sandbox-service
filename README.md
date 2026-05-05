@@ -104,7 +104,7 @@ curl -s -X DELETE http://localhost:8080/sandboxes/<id> \
 | `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE` | *(empty)* | API client key (PEM) |
 | `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_SERVER_NAME` | *(empty)* | TLS verify name when it must differ from the dial host (defaults to the runner host) |
 
-Runners register over gRPC and report health, capacity, and an optional **control gRPC address**. When a runner advertises `control_grpc_addr`, the API uses **gRPC** for sandbox create/delete on that runner; otherwise it uses the runner HTTP API. Exec/files and other proxy routes always use HTTP.
+Runners register over gRPC and report health, capacity, and a **control gRPC address**. Sandbox create/delete are gRPC-only (`SandboxControl` on the runner). Exec/files and other proxy routes always use HTTP.
 
 **Heartbeat grace:** Runners stay in the in-memory registry while their gRPC stream is open. Between heartbeats, the API still considers a runner usable for new placements only if its last heartbeat was within `SANDBOX_API_RUNNER_HEARTBEAT_GRACE`. After that window, the runner is skipped until the next heartbeat (or dropped when the stream ends). Tune this if heartbeats are infrequent or the network is slow, so runners are not marked stale too aggressively.
 
