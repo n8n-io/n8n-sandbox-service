@@ -13,12 +13,17 @@ fi
 # shellcheck disable=SC2086
 dockerd-entrypoint.sh $INSECURE_ARGS >"$DOCKERD_LOG" 2>&1 &
 DOCKERD_PID=$!
+RUNNER_PID=""
 
 cleanup() {
+  if [ -n "$RUNNER_PID" ]; then
+    kill "$RUNNER_PID" >/dev/null 2>&1 || true
+  fi
   kill "$DOCKERD_PID" >/dev/null 2>&1 || true
-  wait "$DOCKERD_PID" >/dev/null 2>&1 || true
+  wait >/dev/null 2>&1 || true
 }
-trap cleanup INT TERM
+trap cleanup EXIT
+trap 'exit 143' INT TERM
 
 for _ in $(seq 1 60); do
   if docker info >/dev/null 2>&1; then
@@ -60,4 +65,6 @@ if ! docker image inspect "${SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE}" >/dev/null 2>
   docker pull "${SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE}"
 fi
 
-exec /usr/local/bin/sandbox-runner
+/usr/local/bin/sandbox-runner &
+RUNNER_PID=$!
+wait "$RUNNER_PID"

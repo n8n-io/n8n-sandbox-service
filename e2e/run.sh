@@ -131,6 +131,11 @@ done
 # Allow gRPC registration heartbeats to reach the API before placement tests run.
 sleep 3
 
+if [[ "${E2E_SKIP_BUILD:-}" != "1" ]]; then
+  echo "Building SDK..."
+  make -C "$PROJECT_DIR" sdk-install sdk-build
+fi
+
 cd "$SCRIPT_DIR"
 if [ ! -d node_modules ]; then
   echo "Installing dependencies..."
