@@ -23,6 +23,19 @@ type SandboxControlGRPC struct {
 
 var _ pb.SandboxControlServer = (*SandboxControlGRPC)(nil)
 
+func toGRPCError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.Canceled) {
+		return status.Error(codes.Canceled, context.Canceled.Error())
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return status.Error(codes.DeadlineExceeded, context.DeadlineExceeded.Error())
+	}
+	return status.Errorf(codes.Internal, "%v", err)
+}
+
 func (s *SandboxControlGRPC) checkAPIKey(ctx context.Context) error {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
@@ -52,7 +65,7 @@ func (s *SandboxControlGRPC) CreateSandbox(ctx context.Context, req *pb.CreateSa
 	}
 	info, err := s.Mgr.CreateContainer(ctx, sandboxID, &manager.CreateOptions{})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, toGRPCError(err)
 	}
 	ip := ""
 	if info != nil {
@@ -75,17 +88,17 @@ func (s *SandboxControlGRPC) DeleteSandbox(ctx context.Context, req *pb.DeleteSa
 		if errors.Is(err, manager.ErrSandboxNotFound) {
 			return &pb.DeleteSandboxResponse{}, nil
 		}
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, toGRPCError(err)
 	}
 	cinfo, err := s.Mgr.GetContainerInfo(ctx, containerID)
 	if err != nil {
 		if errors.Is(err, manager.ErrSandboxNotFound) {
 			return &pb.DeleteSandboxResponse{}, nil
 		}
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, toGRPCError(err)
 	}
 	if err := s.Mgr.DeleteContainer(ctx, containerID, cinfo.IP); err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, toGRPCError(err)
 	}
 	return &pb.DeleteSandboxResponse{}, nil
 }

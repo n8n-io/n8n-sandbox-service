@@ -114,7 +114,17 @@ func main() {
 	}
 
 	if controlGRPC != nil {
-		controlGRPC.Stop()
+		done := make(chan struct{})
+		go func() {
+			controlGRPC.GracefulStop()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			slog.Warn("control grpc graceful shutdown timed out; forcing stop")
+			controlGRPC.Stop()
+		}
 	}
 
 	// 2. Clean up containers

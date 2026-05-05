@@ -107,6 +107,21 @@ type Config struct {
 	ControlGRPCClientCAFile   string
 }
 
+func validateHostPort(v string) error {
+	host, port, err := net.SplitHostPort(strings.TrimSpace(v))
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(host) == "" {
+		return fmt.Errorf("host is empty")
+	}
+	p, err := strconv.Atoi(port)
+	if err != nil || p <= 0 || p > 65535 {
+		return fmt.Errorf("invalid port %q", port)
+	}
+	return nil
+}
+
 // ResolvedControlGRPCAdvertiseAddr returns the host:port sent in heartbeats when the control server is enabled.
 func (c *Config) ResolvedControlGRPCAdvertiseAddr() string {
 	if strings.TrimSpace(c.ControlGRPCListenAddr) == "" {
@@ -296,6 +311,11 @@ func Load() (*Config, error) {
 	cfg.ControlGRPCServerCertFile = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE"))
 	cfg.ControlGRPCServerKeyFile = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE"))
 	cfg.ControlGRPCClientCAFile = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE"))
+	if cfg.ControlGRPCAdvertiseAddr != "" {
+		if err := validateHostPort(cfg.ControlGRPCAdvertiseAddr); err != nil {
+			return nil, fmt.Errorf("SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR must be host:port, got %q: %w", cfg.ControlGRPCAdvertiseAddr, err)
+		}
+	}
 
 	if cfg.ControlGRPCListenAddr != "" {
 		if cfg.ResolvedControlGRPCAdvertiseAddr() == "" {

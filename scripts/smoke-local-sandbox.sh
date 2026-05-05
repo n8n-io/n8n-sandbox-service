@@ -33,14 +33,20 @@ if [ -z "${sid}" ] || [ "${sid}" = "null" ]; then
 fi
 
 echo "==> POST ${BASE}/sandboxes/${sid}/exec"
+tmp_exec_out="$(mktemp)"
+trap 'rm -f "${tmp_exec_out}"' EXIT HUP INT TERM
 curl -fsSN -X POST "${BASE}/sandboxes/${sid}/exec" \
 	-H "X-Api-Key: ${KEY}" \
 	-H "Content-Type: application/json" \
-	-d '{"command":"echo hello world","timeout_ms":60000}' |
-	while IFS= read -r line || [ -n "${line}" ]; do
-		[ -z "${line}" ] && continue
-		printf '%s\n' "${line}" | jq .
-	done
+	-d '{"command":"echo hello world","timeout_ms":60000}' >"${tmp_exec_out}"
+
+while IFS= read -r line || [ -n "${line}" ]; do
+	[ -z "${line}" ] && continue
+	printf '%s\n' "${line}" | jq .
+done <"${tmp_exec_out}"
+
+rm -f "${tmp_exec_out}"
+trap - EXIT HUP INT TERM
 
 echo "==> DELETE ${BASE}/sandboxes/${sid}"
 http_code="$(curl -fsS -o /dev/null -w "%{http_code}" -X DELETE "${BASE}/sandboxes/${sid}" -H "X-Api-Key: ${KEY}")"

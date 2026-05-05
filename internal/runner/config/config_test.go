@@ -118,3 +118,13 @@ func TestLoadRejectsPartialControlGRPCTLS(t *testing.T) {
 		t.Fatal("expected Load to reject partial SANDBOX_RUNNER_CONTROL_GRPC_TLS_*")
 	}
 }
+
+func TestLoadRejectsInvalidControlGRPCAdvertiseAddr(t *testing.T) {
+	t.Setenv("SANDBOX_RUNNER_API_KEYS", "test-key")
+	t.Setenv("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE", "img")
+	t.Setenv("SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR", "runner-without-port")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("expected Load to reject invalid SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR")
+	}
+}
