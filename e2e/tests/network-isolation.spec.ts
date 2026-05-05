@@ -91,7 +91,7 @@ import time; time.sleep(30)
   test('DNS resolution works', async ({ request }) => {
     const id = await createSandbox(request);
     try {
-      const result = await exec(request, id, pyResolve('example.com'), { timeout_ms: 10_000 });
+      const result = await exec(request, id, pyResolve('n8n.io'), { timeout_ms: 10_000 });
       expect(result.exit?.exit_code).toBe(0);
       // Should resolve to an IP address
       expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
