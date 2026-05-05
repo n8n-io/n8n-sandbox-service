@@ -62,8 +62,8 @@ export function parseExecEvent(line: string): ExecEvent {
       return { type: "error", error: json.error };
     }
 
-    return { type: "error", error: "Invalid exec event payload" };
-  } catch {
-    return { type: "error", error: "Invalid exec event payload" };
+    return { type: "error", error: `Invalid exec event payload: ${line}` };
+  } catch (error) {
+    return { type: "error", error: `Invalid exec event payload: ${error instanceof Error ? error.message : String(error)}` };
   }
 }
