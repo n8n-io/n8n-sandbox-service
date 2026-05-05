@@ -36,6 +36,13 @@ COPY --from=builder /out/daemon /usr/local/bin/sandbox-daemon
 
 USER 1000:1000
 WORKDIR /home/user
+
+RUN mkdir -p workspace/src workspace/chunks workspace/node-types
+COPY --chown=1000:1000 sandbox-workspace/package.json workspace/package.json
+COPY --chown=1000:1000 sandbox-workspace/tsconfig.json workspace/tsconfig.json
+COPY --chown=1000:1000 sandbox-workspace/build.mjs workspace/build.mjs
+RUN cd workspace && npm install --ignore-scripts
+
 EXPOSE 8081
 
 CMD ["/usr/local/bin/sandbox-daemon", "--listen-addr", ":8081", "--base-dir", "/"]
