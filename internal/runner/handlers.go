@@ -6,8 +6,6 @@ import (
 	"io"
 	"net/http"
 	"regexp"
-	"strconv"
-	"strings"
 
 	"github.com/n8n-io/sandbox-service/internal/runner/manager"
 )
@@ -15,18 +13,13 @@ import (
 var uuidRegex = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // CreateSandboxRequest is the optional JSON body for POST /sandboxes.
-type CreateSandboxRequest struct {
-	NetworkPolicy   *manager.NetworkPolicy  `json:"network_policy,omitempty"`
-	ResourceLimits  *manager.ResourceLimits `json:"resource_limits,omitempty"`
-	DockerfileSteps []string                `json:"dockerfile_steps,omitempty"`
-}
+type CreateSandboxRequest struct{}
 
 // ContainerResponse is the JSON response for container operations.
 type ContainerResponse struct {
 	ID           string `json:"id"`
 	Status       string `json:"status"`
 	Provider     string `json:"provider"`
-	ImageID      string `json:"image_id"`
 	CreatedAt    int64  `json:"created_at"`
 	LastActiveAt int64  `json:"last_active_at"`
 }
@@ -60,14 +53,6 @@ func CreateSandbox(mgr ContainerManager) http.HandlerFunc {
 			}
 		}
 
-		// Validate dockerfile steps
-		for i, step := range req.DockerfileSteps {
-			if strings.TrimSpace(step) == "" {
-				writeError(w, http.StatusBadRequest, "dockerfile_steps["+strconv.Itoa(i)+"] must be a non-empty string")
-				return
-			}
-		}
-
 		// Get sandbox ID from header (set by API gateway)
 		sandboxID := r.Header.Get("X-Sandbox-Id")
 		if sandboxID == "" {
@@ -79,24 +64,17 @@ func CreateSandbox(mgr ContainerManager) http.HandlerFunc {
 			return
 		}
 
-		opts := &manager.CreateOptions{
-			NetworkPolicy:   req.NetworkPolicy,
-			ResourceLimits:  req.ResourceLimits,
-			DockerfileSteps: req.DockerfileSteps,
-		}
+		opts := &manager.CreateOptions{}
 
-		containerInfo, err := mgr.CreateContainer(r.Context(), sandboxID, opts)
-		if err != nil {
+		if _, err := mgr.CreateContainer(r.Context(), sandboxID, opts); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 
-		// Return container info in sandbox response format
 		resp := &ContainerResponse{
 			ID:       sandboxID,
 			Status:   "running",
 			Provider: "delhi",
-			ImageID:  containerInfo.ImageTag,
 		}
 		writeJSON(w, http.StatusCreated, resp)
 	}
@@ -111,20 +89,7 @@ func GetSandbox(mgr ContainerManager) http.HandlerFunc {
 			return
 		}
 
-		// Find container ID by sandbox ID using labels
-		containerID, err := mgr.FindContainerIDByLabel(r.Context(), sandboxID)
-		if err != nil {
-			if errors.Is(err, manager.ErrSandboxNotFound) {
-				writeError(w, http.StatusNotFound, err.Error())
-			} else {
-				writeError(w, http.StatusInternalServerError, err.Error())
-			}
-			return
-		}
-
-		// Get container info to get additional metadata
-		containerInfo, err := mgr.GetContainerInfo(r.Context(), containerID)
-		if err != nil {
+		if _, err := mgr.FindContainerIDByLabel(r.Context(), sandboxID); err != nil {
 			if errors.Is(err, manager.ErrSandboxNotFound) {
 				writeError(w, http.StatusNotFound, err.Error())
 			} else {
@@ -134,10 +99,9 @@ func GetSandbox(mgr ContainerManager) http.HandlerFunc {
 		}
 
 		resp := &ContainerResponse{
-			ID:       sandboxID, // Return the original sandbox ID, not container ID
+			ID:       sandboxID,
 			Status:   "running",
 			Provider: "delhi",
-			ImageID:  containerInfo.ImageTag,
 		}
 		writeJSON(w, http.StatusOK, resp)
 	}
@@ -180,25 +144,6 @@ func DeleteSandbox(mgr ContainerManager) http.HandlerFunc {
 		}
 
 		w.WriteHeader(http.StatusNoContent)
-	}
-}
-
-// Placeholder handlers for images - runner doesn't manage image metadata anymore
-func ListImages(mgr ContainerManager) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, []interface{}{})
-	}
-}
-
-func GetImage(mgr ContainerManager) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusNotFound, "image not found")
-	}
-}
-
-func DeleteImage(mgr ContainerManager) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusNotFound, "image not found")
 	}
 }
 

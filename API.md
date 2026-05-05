@@ -56,7 +56,6 @@ List all sandboxes, ordered by creation time (newest first).
     "id": "uuid",
     "status": "string",
     "provider": "delhi",
-    "image_id": "img-...",
     "created_at": 1700000000,
     "last_active_at": 1700000000
   }
@@ -74,53 +73,9 @@ curl http://localhost:8080/sandboxes \
 
 ### POST /sandboxes
 
-Create a new sandbox.
+Create a new sandbox. No request body is required.
 
-**Request Body:** Optional JSON object (empty body is allowed).
-
-```json
-{
-  "network_policy": {
-    "allowed_ips": ["8.8.8.8/32"],
-    "denied_ips": ["10.0.0.0/8"]
-  },
-  "resource_limits": {
-    "memory_mb": 512,
-    "cpu_percent": 150,
-    "pids_max": 128
-  },
-  "dockerfile_steps": ["RUN apt-get update", "RUN apt-get install -y git"]
-}
-```
-
-| Field | Type | Required | Notes |
-|---|---|---|---|
-| `network_policy` | object | no | Per-sandbox allow/deny CIDRs (`allowed_ips`, `denied_ips`) |
-| `resource_limits` | object | no | Per-sandbox Docker limits (`memory_mb`, `cpu_percent`, `pids_max`) |
-| `dockerfile_steps` | string[] | no | Raw Dockerfile instructions appended after `FROM <base>` to build a custom image. See details below. |
-
-#### `dockerfile_steps`
-
-Customizes the sandbox image at creation time. Each string is a raw Dockerfile instruction inserted after `FROM <base-image>` and built into a new Docker image before the sandbox container starts.
-
-The service generates a Dockerfile like:
-
-```dockerfile
-FROM <base-image>
-RUN apt-get update && apt-get install -y git
-RUN npm install -g typescript
-```
-
-**Caching:** Images are cached by a SHA-256 hash of the base image and the steps. Identical steps reuse the previously built image without rebuilding. Cached images can be managed via the `/images` endpoints.
-
-**Constraints:**
-
-- Each step must be a **non-empty string** — empty strings are rejected with `400`.
-- Builds use an **empty temporary directory** as context, so `COPY`/`ADD` with local paths will fail. Use `RUN curl`/`RUN wget` to fetch remote files instead.
-- The build has a **10-minute timeout**.
-- The container runs as user `1000:1000` regardless of the image. Include an explicit `USER` directive in your steps if you need a different user during the build.
-
-When `dockerfile_steps` are provided, the response `image_id` references the custom image record. When omitted, `image_id` is empty (the sandbox uses the default base image).
+Resource limits (memory, CPU, process count) are configured on the runner via environment variables. Network policy blocks all private IP ranges and allows public internet access.
 
 **Response:** `201 Created`
 
@@ -129,22 +84,18 @@ When `dockerfile_steps` are provided, the response `image_id` references the cus
   "id": "uuid",
   "status": "string",
   "provider": "delhi",
-  "image_id": "img-...",
   "created_at": 1700000000,
   "last_active_at": 1700000000
 }
 ```
 
-
-**Errors:** `400` invalid JSON or invalid create options; `503` when no sandbox runners are registered or available (clear JSON `error` message)
+**Errors:** `503` when no sandbox runners are registered or available
 
 **Example:**
 
 ```bash
 curl -X POST http://localhost:8080/sandboxes \
-  -H "X-Api-Key: YOUR_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"dockerfile_steps":["RUN apt-get update","RUN apt-get install -y git"]}'
+  -H "X-Api-Key: YOUR_API_KEY"
 ```
 
 ---
@@ -163,7 +114,6 @@ Get sandbox details.
   "id": "uuid",
   "status": "string",
   "provider": "delhi",
-  "image_id": "img-...",
   "created_at": 1700000000,
   "last_active_at": 1700000000
 }
@@ -195,83 +145,6 @@ Delete a sandbox.
 
 ```bash
 curl -X DELETE http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000 \
-  -H "X-Api-Key: YOUR_API_KEY"
-```
-
----
-
-### GET /images
-
-List all custom images, ordered by creation time (newest first).
-
-**Response:** `200 OK`
-
-```json
-[
-  {
-    "id": "img-...",
-    "tag": "sandbox-custom-...",
-    "base_image": "sandbox-base:latest",
-    "docker_image_id": "sha256:...",
-    "created_at": 1700000000
-  }
-]
-```
-
-**Example:**
-
-```bash
-curl http://localhost:8080/images \
-  -H "X-Api-Key: YOUR_API_KEY"
-```
-
----
-
-### GET /images/{id}
-
-Get a custom image by ID or tag.
-
-**Path Parameters:**
-- `id` — Custom image ID (or tag)
-
-**Response:** `200 OK`
-
-```json
-{
-  "id": "img-...",
-  "tag": "sandbox-custom-...",
-  "base_image": "sandbox-base:latest",
-  "docker_image_id": "sha256:...",
-  "created_at": 1700000000
-}
-```
-
-**Errors:** `400` invalid image id, `404` image not found
-
-**Example:**
-
-```bash
-curl http://localhost:8080/images/img-123 \
-  -H "X-Api-Key: YOUR_API_KEY"
-```
-
----
-
-### DELETE /images/{id}
-
-Delete a custom image.
-
-**Path Parameters:**
-- `id` — Custom image ID (or tag)
-
-**Response:** `204 No Content`
-
-**Errors:** `400` invalid image id, `404` image not found, `409` image is in use
-
-**Example:**
-
-```bash
-curl -X DELETE http://localhost:8080/images/img-123 \
   -H "X-Api-Key: YOUR_API_KEY"
 ```
 

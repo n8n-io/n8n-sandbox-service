@@ -35,7 +35,7 @@ func ingressChainName(containerID string) string {
 
 // ApplyPolicy configures per-sandbox egress rules plus ingress protection for
 // the daemon port.
-func ApplyPolicy(containerID, sourceIP, gatewayIP string, daemonPort int, allowedCIDRs, deniedCIDRs []string) error {
+func ApplyPolicy(containerID, sourceIP, gatewayIP string, daemonPort int) error {
 	if containerID == "" {
 		return fmt.Errorf("container id is required")
 	}
@@ -62,19 +62,9 @@ func ApplyPolicy(containerID, sourceIP, gatewayIP string, daemonPort int, allowe
 	if err := run("iptables", "-A", egressChain, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"); err != nil {
 		return fmt.Errorf("allow established traffic: %w", err)
 	}
-	for _, cidr := range allowedCIDRs {
-		if err := run("iptables", "-A", egressChain, "-d", cidr, "-j", "ACCEPT"); err != nil {
-			return fmt.Errorf("allow %s: %w", cidr, err)
-		}
-	}
 	for _, cidr := range privateRangesV4 {
 		if err := run("iptables", "-A", egressChain, "-d", cidr, "-j", "DROP"); err != nil {
 			return fmt.Errorf("drop private range %s: %w", cidr, err)
-		}
-	}
-	for _, cidr := range deniedCIDRs {
-		if err := run("iptables", "-A", egressChain, "-d", cidr, "-j", "DROP"); err != nil {
-			return fmt.Errorf("deny %s: %w", cidr, err)
 		}
 	}
 	if err := run("iptables", "-A", egressChain, "-j", "ACCEPT"); err != nil {
