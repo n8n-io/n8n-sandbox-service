@@ -98,7 +98,9 @@ describe("readNdjsonStream", () => {
       events.push(event);
     }
 
-    expect(events).toEqual([{ type: "error", error: "Invalid exec event payload" }]);
+    expect(events).toEqual([
+      { type: "error", error: expect.stringContaining("Invalid exec event payload") },
+    ]);
   });
 
   it("returns error event for unknown event type", async () => {
@@ -109,7 +111,9 @@ describe("readNdjsonStream", () => {
       events.push(event);
     }
 
-    expect(events).toEqual([{ type: "error", error: "Invalid exec event payload" }]);
+    expect(events).toEqual([
+      { type: "error", error: 'Invalid exec event payload: {"type":"unknown","foo":"bar"}' },
+    ]);
   });
 
   it("skips empty lines", async () => {
@@ -153,7 +157,7 @@ describe("parseExecEvent", () => {
   it("returns error for malformed JSON", () => {
     expect(parseExecEvent("{")).toEqual({
       type: "error",
-      error: "Invalid exec event payload",
+      error: expect.stringContaining("Invalid exec event payload"),
     });
   });
 
@@ -162,7 +166,7 @@ describe("parseExecEvent", () => {
       parseExecEvent('{"type":"exit","exit_code":"zero","success":true,"execution_time_ms":42,"timed_out":false,"killed":false}'),
     ).toEqual({
       type: "error",
-      error: "Invalid exec event payload",
+      error: 'Invalid exec event payload: {"type":"exit","exit_code":"zero","success":true,"execution_time_ms":42,"timed_out":false,"killed":false}',
     });
   });
 });
