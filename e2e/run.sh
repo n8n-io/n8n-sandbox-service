@@ -137,9 +137,9 @@ if [[ "${E2E_SKIP_BUILD:-}" != "1" ]]; then
 fi
 
 cd "$SCRIPT_DIR"
-if [ ! -d node_modules ]; then
+if [ ! -d node_modules ] || [ ! -f node_modules/@n8n/sandbox-client/dist/index.js ]; then
   echo "Installing dependencies..."
-  npm install
+  npm ci
 fi
 
 export E2E_API_CONTAINER_NAME="$API_CONTAINER_NAME"

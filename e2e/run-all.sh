@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs all e2e topologies in sequence: no runner → two runners → single runner (full Playwright suite).
-# Builds Docker images once up front; phases reuse them (see E2E_SKIP_BUILD in sibling scripts).
+# Builds Docker images + SDK once up front; phases reuse them (see E2E_SKIP_BUILD in sibling scripts).
 # Extra args are passed through to the Playwright invocation in each phase.
 set -euo pipefail
 
@@ -9,6 +9,9 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 echo "Building Docker images (once for all phases)..."
 make -C "$PROJECT_DIR" docker-local
+
+echo "Building SDK once for all phases..."
+make -C "$PROJECT_DIR" sdk-install sdk-build
 
 export E2E_SKIP_BUILD=1
 
