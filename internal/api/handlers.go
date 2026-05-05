@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/n8n-io/sandbox-service/internal/api/config"
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
+	"github.com/n8n-io/sandbox-service/internal/api/runnerctl"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
 )
 
@@ -130,7 +131,19 @@ func handleGetSandbox(s *store.Store) http.HandlerFunc {
 	}
 }
 
-func handleCreateSandbox(s *store.Store, reg *registry.Registry, runnerAPIKey string) http.HandlerFunc {
+func runnerControlTLS(cfg *config.APIConfig) *runnerctl.TLS {
+	if cfg.RunnerControlGRPCClientCAFile == "" {
+		return nil
+	}
+	return &runnerctl.TLS{
+		CAFile:     cfg.RunnerControlGRPCClientCAFile,
+		CertFile:   cfg.RunnerControlGRPCClientCertFile,
+		KeyFile:    cfg.RunnerControlGRPCClientKeyFile,
+		ServerName: cfg.RunnerControlGRPCClientServerName,
+	}
+}
+
+func handleCreateSandbox(s *store.Store, reg *registry.Registry, cfg *config.APIConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		run, err := reg.PickRoundRobin()
 		if err != nil {
@@ -142,30 +155,47 @@ func handleCreateSandbox(s *store.Store, reg *registry.Registry, runnerAPIKey st
 			return
 		}
 
-		runnerURL, _ := url.Parse(strings.TrimRight(run.HTTPBaseURL, "/"))
+		controlAddr := strings.TrimSpace(run.ControlGRPCAddr)
+		tlsCfg := runnerControlTLS(cfg)
 
 		sandboxID := generateUUID()
 		now := time.Now().Unix()
 
-		containerInfo, err := callRunnerCreateContainer(runnerURL, runnerAPIKey, sandboxID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to create container: "+err.Error())
-			return
+		var containerIP string
+		if controlAddr != "" {
+			gresp, err := runnerctl.CreateSandbox(r.Context(), controlAddr, cfg.RunnerAPIKey, tlsCfg, sandboxID, "{}")
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to create container: "+err.Error())
+				return
+			}
+			containerIP = gresp.GetContainerIp()
+		} else {
+			runnerURL, _ := url.Parse(strings.TrimRight(run.HTTPBaseURL, "/"))
+			containerInfo, err := callRunnerCreateContainer(runnerURL, cfg.RunnerAPIKey, sandboxID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to create container: "+err.Error())
+				return
+			}
+			containerIP = containerInfo.IP
 		}
 
 		record := &store.SandboxRecord{
-			ID:             sandboxID,
-			Status:         "running",
-			CreatedAt:      now,
-			LastActiveAt:   now,
-			ContainerIP:    containerInfo.IP,
-			DaemonPort:     8081,
-			RunnerID:       run.ID,
-			RunnerHTTPBase: strings.TrimRight(run.HTTPBaseURL, "/"),
+			ID:                    sandboxID,
+			Status:                "running",
+			CreatedAt:             now,
+			LastActiveAt:          now,
+			ContainerIP:           containerIP,
+			DaemonPort:            8081,
+			RunnerID:              run.ID,
+			RunnerHTTPBase:        strings.TrimRight(run.HTTPBaseURL, "/"),
+			RunnerControlGRPCAddr: controlAddr,
 		}
 		if err := s.Create(record); err != nil {
-			if cleanupErr := callRunnerDeleteContainer(runnerURL, runnerAPIKey, sandboxID, containerInfo.IP); cleanupErr != nil {
-				// best effort
+			if controlAddr != "" {
+				_ = runnerctl.DeleteSandbox(r.Context(), controlAddr, cfg.RunnerAPIKey, tlsCfg, sandboxID)
+			} else {
+				runnerURL, _ := url.Parse(strings.TrimRight(run.HTTPBaseURL, "/"))
+				_ = callRunnerDeleteContainer(runnerURL, cfg.RunnerAPIKey, sandboxID, containerIP)
 			}
 			writeError(w, http.StatusInternalServerError, "failed to store sandbox: "+err.Error())
 			return
@@ -181,7 +211,7 @@ func handleCreateSandbox(s *store.Store, reg *registry.Registry, runnerAPIKey st
 	}
 }
 
-func handleDeleteSandbox(s *store.Store, runnerAPIKey string) http.HandlerFunc {
+func handleDeleteSandbox(s *store.Store, cfg *config.APIConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if !isValidUUID(id) {
@@ -199,9 +229,12 @@ func handleDeleteSandbox(s *store.Store, runnerAPIKey string) http.HandlerFunc {
 			return
 		}
 
-		if rec.RunnerHTTPBase != "" {
+		tlsCfg := runnerControlTLS(cfg)
+		if rec.RunnerControlGRPCAddr != "" {
+			_ = runnerctl.DeleteSandbox(r.Context(), rec.RunnerControlGRPCAddr, cfg.RunnerAPIKey, tlsCfg, id)
+		} else if rec.RunnerHTTPBase != "" {
 			runnerURL, _ := url.Parse(strings.TrimRight(rec.RunnerHTTPBase, "/"))
-			_ = callRunnerDeleteContainer(runnerURL, runnerAPIKey, id, rec.ContainerIP)
+			_ = callRunnerDeleteContainer(runnerURL, cfg.RunnerAPIKey, id, rec.ContainerIP)
 		}
 
 		if err := s.Delete(id); err != nil {

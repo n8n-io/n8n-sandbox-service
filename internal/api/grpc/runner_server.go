@@ -86,6 +86,7 @@ func (s *RunnerRegistryServer) Connect(stream grpc.BidiStreamingServer[pb.Runner
 		s.Reg.Upsert(
 			committedRunnerID,
 			httpBase,
+			strings.TrimSpace(hb.GetControlGrpcAddr()),
 			hb.GetHealthy(),
 			hb.GetCapacityTotal(),
 			hb.GetCapacityUsed(),

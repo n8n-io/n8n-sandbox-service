@@ -3,7 +3,7 @@ SHELL := /bin/bash
 MODULE  := github.com/n8n-io/sandbox-service
 BINDIR  := bin
 
-.PHONY: all daemon runner api test clean docker docker-local docker-arm64 docker-amd64 docker-api-arm64 docker-api-amd64 docker-runner-arm64 docker-runner-amd64 docker-sandbox-arm64 docker-sandbox-amd64 fmt fmt-check vet playground up down
+.PHONY: all daemon runner api test clean docker docker-local docker-arm64 docker-amd64 docker-api-arm64 docker-api-amd64 docker-runner-arm64 docker-runner-amd64 docker-sandbox-arm64 docker-sandbox-amd64 fmt fmt-check vet playground up down smoke
 
 all: daemon runner api
 
@@ -96,3 +96,7 @@ up:
 ## down: Stop and remove all local Compose services (same compose files as make up).
 down:
 	bash scripts/docker-compose-local.sh down
+
+## smoke: Create a sandbox, run `echo hello world` via exec, pretty-print JSON (needs `make up`).
+smoke:
+	sh scripts/smoke-local-sandbox.sh

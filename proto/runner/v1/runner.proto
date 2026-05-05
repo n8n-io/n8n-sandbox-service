@@ -4,20 +4,41 @@ package runner.v1;
 
 option go_package = "github.com/n8n-io/sandbox-service/internal/api/grpc/pb;pb";
 
-// RunnerRegistry receives bi-directional streams from sandbox runners.
 service RunnerRegistry {
   rpc Connect(stream RunnerHeartbeat) returns (stream ControlMessage);
 }
 
+// SandboxControl: API → runner for sandbox create/delete (HTTP remains for exec/files proxy).
+service SandboxControl {
+  rpc CreateSandbox(CreateSandboxRequest) returns (CreateSandboxResponse);
+  rpc DeleteSandbox(DeleteSandboxRequest) returns (DeleteSandboxResponse);
+}
+
 message RunnerHeartbeat {
   string runner_id = 1;
-  // Base URL the API uses to reach this runner's HTTP API (e.g. http://runner-a:8080).
   string http_base_url = 2;
   bool healthy = 3;
   int32 capacity_total = 4;
   int32 capacity_used = 5;
+  string control_grpc_addr = 6;
 }
 
 message ControlMessage {
   bool ack = 1;
 }
+
+message CreateSandboxRequest {
+  string sandbox_id = 1;
+  string create_json = 2;
+}
+
+message CreateSandboxResponse {
+  string sandbox_id = 1;
+  string container_ip = 2;
+}
+
+message DeleteSandboxRequest {
+  string sandbox_id = 1;
+}
+
+message DeleteSandboxResponse {}

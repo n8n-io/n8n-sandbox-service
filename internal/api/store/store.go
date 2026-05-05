@@ -14,16 +14,17 @@ import (
 
 // SandboxRecord is the in-memory representation of a row in the sandboxes table.
 type SandboxRecord struct {
-	ID             string
-	Status         string
-	CreatedAt      int64
-	LastActiveAt   int64
-	RootfsPath     string
-	SocketPath     string
-	ContainerIP    string
-	DaemonPort     int
-	RunnerID       string // Runner that hosts this sandbox (from registration)
-	RunnerHTTPBase string // Base URL to reach that runner's HTTP API (for proxying)
+	ID                    string
+	Status                string
+	CreatedAt             int64
+	LastActiveAt          int64
+	RootfsPath            string
+	SocketPath            string
+	ContainerIP           string
+	DaemonPort            int
+	RunnerID              string // Runner that hosts this sandbox (from registration)
+	RunnerHTTPBase        string // Base URL to reach that runner's HTTP API (for proxying)
+	RunnerControlGRPCAddr string // host:port for SandboxControl gRPC (optional; empty => HTTP lifecycle)
 }
 
 // Store wraps a *sql.DB and exposes CRUD operations for SandboxRecord rows.
@@ -62,6 +63,7 @@ func New(dbPath string) (*Store, error) {
 		{sql: dropContainerIDCol, name: "drop_container_id"},
 		{sql: addRunnerIDCol, name: "runner_id"},
 		{sql: addRunnerHTTPBaseURLCol, name: "runner_http_base_url"},
+		{sql: addRunnerControlGRPCAddrCol, name: "runner_control_grpc_addr"},
 	} {
 		if _, err := db.Exec(stmt.sql); err != nil {
 			// Ignore expected errors for idempotent migrations
@@ -88,9 +90,9 @@ func (s *Store) Close() error {
 func (s *Store) Create(record *SandboxRecord) error {
 	const q = `
 		INSERT INTO sandboxes
-			(id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url)
+			(id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr)
 		VALUES
-			(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	_, err := s.db.Exec(q,
 		record.ID,
@@ -103,6 +105,7 @@ func (s *Store) Create(record *SandboxRecord) error {
 		record.DaemonPort,
 		record.RunnerID,
 		record.RunnerHTTPBase,
+		record.RunnerControlGRPCAddr,
 	)
 	if err != nil {
 		return fmt.Errorf("store: create sandbox %s: %w", record.ID, err)
@@ -114,7 +117,7 @@ func (s *Store) Create(record *SandboxRecord) error {
 // record exists.
 func (s *Store) Get(id string) (*SandboxRecord, error) {
 	const q = `
-		SELECT id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url
+		SELECT id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr
 		FROM sandboxes
 		WHERE id = ?`
 
@@ -161,7 +164,7 @@ func (s *Store) Delete(id string) error {
 // List returns all sandbox records, ordered by creation time descending.
 func (s *Store) List() ([]*SandboxRecord, error) {
 	const q = `
-		SELECT id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url
+		SELECT id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr
 		FROM sandboxes
 		ORDER BY created_at DESC`
 
@@ -205,7 +208,7 @@ func (s *Store) MarkAllTerminated() error {
 // (now - maxAge) seconds and whose status is not "terminated".
 func (s *Store) ListStale(maxAge int64) ([]*SandboxRecord, error) {
 	const q = `
-		SELECT id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url
+		SELECT id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr
 		FROM sandboxes
 		WHERE last_active_at < ?
 		  AND status != 'terminated'`
@@ -251,6 +254,7 @@ func scanRecord(row scanner) (*SandboxRecord, error) {
 		&r.DaemonPort,
 		&r.RunnerID,
 		&r.RunnerHTTPBase,
+		&r.RunnerControlGRPCAddr,
 	)
 	if err != nil {
 		return nil, err

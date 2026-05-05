@@ -12,12 +12,13 @@ var ErrNoRunners = errors.New("no sandbox runners are registered or available")
 
 // Runner describes a registered sandbox runner.
 type Runner struct {
-	ID            string
-	HTTPBaseURL   string
-	Healthy       bool
-	CapacityTotal int32
-	CapacityUsed  int32
-	LastSeen      time.Time
+	ID              string
+	HTTPBaseURL     string
+	ControlGRPCAddr string // optional; when set, API uses gRPC for sandbox create/delete
+	Healthy         bool
+	CapacityTotal   int32
+	CapacityUsed    int32
+	LastSeen        time.Time
 }
 
 // Registry tracks runners that connect via gRPC and supports round-robin placement.
@@ -42,11 +43,12 @@ func New(heartbeatGrace time.Duration) *Registry {
 
 // Upsert updates or inserts a runner from a heartbeat. The caller must reject invalid
 // httpBaseURL before calling (e.g. gRPC registration validates with IsValidRunnerHTTPBaseURL).
-func (r *Registry) Upsert(id, httpBaseURL string, healthy bool, capTotal, capUsed int32) {
+func (r *Registry) Upsert(id, httpBaseURL, controlGRPCAddr string, healthy bool, capTotal, capUsed int32) {
 	if id == "" || httpBaseURL == "" {
 		return
 	}
 	httpBaseURL = strings.TrimRight(httpBaseURL, "/")
+	controlGRPCAddr = strings.TrimSpace(controlGRPCAddr)
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -56,12 +58,13 @@ func (r *Registry) Upsert(id, httpBaseURL string, healthy bool, capTotal, capUse
 	}
 
 	r.runners[id] = &Runner{
-		ID:            id,
-		HTTPBaseURL:   httpBaseURL,
-		Healthy:       healthy,
-		CapacityTotal: capTotal,
-		CapacityUsed:  capUsed,
-		LastSeen:      time.Now(),
+		ID:              id,
+		HTTPBaseURL:     httpBaseURL,
+		ControlGRPCAddr: controlGRPCAddr,
+		Healthy:         healthy,
+		CapacityTotal:   capTotal,
+		CapacityUsed:    capUsed,
+		LastSeen:        time.Now(),
 	}
 }
 

@@ -107,6 +107,21 @@ func TestLoadAPIRejectsPartialGRPCTLS(t *testing.T) {
 	}
 }
 
+func TestLoadAPIRejectsPartialRunnerControlGRPCTLS(t *testing.T) {
+	os.Setenv("SANDBOX_API_KEYS", "test-key")
+	os.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	os.Setenv("SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE", "/tmp/ca.crt")
+	defer func() {
+		os.Unsetenv("SANDBOX_API_KEYS")
+		os.Unsetenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN")
+		os.Unsetenv("SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE")
+	}()
+
+	if _, err := LoadAPI(); err == nil {
+		t.Fatal("expected LoadAPI to reject partial SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_*")
+	}
+}
+
 func TestLoadAPIRequiresRegistrationToken(t *testing.T) {
 	os.Setenv("SANDBOX_API_KEYS", "test-key")
 	os.Unsetenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN")

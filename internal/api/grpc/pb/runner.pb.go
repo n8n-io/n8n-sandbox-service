@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        v3.21.12
-// source: proto/runner/v1/runner.proto
+// source: runner/v1/runner.proto
 
 package pb
 
@@ -22,20 +22,20 @@ const (
 )
 
 type RunnerHeartbeat struct {
-	state    protoimpl.MessageState `protogen:"open.v1"`
-	RunnerId string                 `protobuf:"bytes,1,opt,name=runner_id,json=runnerId,proto3" json:"runner_id,omitempty"`
-	// Base URL the API uses to reach this runner's HTTP API (e.g. http://runner-a:8080).
-	HttpBaseUrl   string `protobuf:"bytes,2,opt,name=http_base_url,json=httpBaseUrl,proto3" json:"http_base_url,omitempty"`
-	Healthy       bool   `protobuf:"varint,3,opt,name=healthy,proto3" json:"healthy,omitempty"`
-	CapacityTotal int32  `protobuf:"varint,4,opt,name=capacity_total,json=capacityTotal,proto3" json:"capacity_total,omitempty"`
-	CapacityUsed  int32  `protobuf:"varint,5,opt,name=capacity_used,json=capacityUsed,proto3" json:"capacity_used,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	RunnerId        string                 `protobuf:"bytes,1,opt,name=runner_id,json=runnerId,proto3" json:"runner_id,omitempty"`
+	HttpBaseUrl     string                 `protobuf:"bytes,2,opt,name=http_base_url,json=httpBaseUrl,proto3" json:"http_base_url,omitempty"`
+	Healthy         bool                   `protobuf:"varint,3,opt,name=healthy,proto3" json:"healthy,omitempty"`
+	CapacityTotal   int32                  `protobuf:"varint,4,opt,name=capacity_total,json=capacityTotal,proto3" json:"capacity_total,omitempty"`
+	CapacityUsed    int32                  `protobuf:"varint,5,opt,name=capacity_used,json=capacityUsed,proto3" json:"capacity_used,omitempty"`
+	ControlGrpcAddr string                 `protobuf:"bytes,6,opt,name=control_grpc_addr,json=controlGrpcAddr,proto3" json:"control_grpc_addr,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *RunnerHeartbeat) Reset() {
 	*x = RunnerHeartbeat{}
-	mi := &file_proto_runner_v1_runner_proto_msgTypes[0]
+	mi := &file_runner_v1_runner_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -47,7 +47,7 @@ func (x *RunnerHeartbeat) String() string {
 func (*RunnerHeartbeat) ProtoMessage() {}
 
 func (x *RunnerHeartbeat) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_runner_v1_runner_proto_msgTypes[0]
+	mi := &file_runner_v1_runner_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -60,7 +60,7 @@ func (x *RunnerHeartbeat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunnerHeartbeat.ProtoReflect.Descriptor instead.
 func (*RunnerHeartbeat) Descriptor() ([]byte, []int) {
-	return file_proto_runner_v1_runner_proto_rawDescGZIP(), []int{0}
+	return file_runner_v1_runner_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *RunnerHeartbeat) GetRunnerId() string {
@@ -98,6 +98,13 @@ func (x *RunnerHeartbeat) GetCapacityUsed() int32 {
 	return 0
 }
 
+func (x *RunnerHeartbeat) GetControlGrpcAddr() string {
+	if x != nil {
+		return x.ControlGrpcAddr
+	}
+	return ""
+}
+
 type ControlMessage struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Ack           bool                   `protobuf:"varint,1,opt,name=ack,proto3" json:"ack,omitempty"`
@@ -107,7 +114,7 @@ type ControlMessage struct {
 
 func (x *ControlMessage) Reset() {
 	*x = ControlMessage{}
-	mi := &file_proto_runner_v1_runner_proto_msgTypes[1]
+	mi := &file_runner_v1_runner_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -119,7 +126,7 @@ func (x *ControlMessage) String() string {
 func (*ControlMessage) ProtoMessage() {}
 
 func (x *ControlMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_runner_v1_runner_proto_msgTypes[1]
+	mi := &file_runner_v1_runner_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -132,7 +139,7 @@ func (x *ControlMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ControlMessage.ProtoReflect.Descriptor instead.
 func (*ControlMessage) Descriptor() ([]byte, []int) {
-	return file_proto_runner_v1_runner_proto_rawDescGZIP(), []int{1}
+	return file_runner_v1_runner_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *ControlMessage) GetAck() bool {
@@ -142,69 +149,278 @@ func (x *ControlMessage) GetAck() bool {
 	return false
 }
 
-var File_proto_runner_v1_runner_proto protoreflect.FileDescriptor
+type CreateSandboxRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SandboxId     string                 `protobuf:"bytes,1,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
+	CreateJson    string                 `protobuf:"bytes,2,opt,name=create_json,json=createJson,proto3" json:"create_json,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
 
-const file_proto_runner_v1_runner_proto_rawDesc = "" +
+func (x *CreateSandboxRequest) Reset() {
+	*x = CreateSandboxRequest{}
+	mi := &file_runner_v1_runner_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateSandboxRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateSandboxRequest) ProtoMessage() {}
+
+func (x *CreateSandboxRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_runner_v1_runner_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateSandboxRequest.ProtoReflect.Descriptor instead.
+func (*CreateSandboxRequest) Descriptor() ([]byte, []int) {
+	return file_runner_v1_runner_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *CreateSandboxRequest) GetSandboxId() string {
+	if x != nil {
+		return x.SandboxId
+	}
+	return ""
+}
+
+func (x *CreateSandboxRequest) GetCreateJson() string {
+	if x != nil {
+		return x.CreateJson
+	}
+	return ""
+}
+
+type CreateSandboxResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SandboxId     string                 `protobuf:"bytes,1,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
+	ContainerIp   string                 `protobuf:"bytes,2,opt,name=container_ip,json=containerIp,proto3" json:"container_ip,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateSandboxResponse) Reset() {
+	*x = CreateSandboxResponse{}
+	mi := &file_runner_v1_runner_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateSandboxResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateSandboxResponse) ProtoMessage() {}
+
+func (x *CreateSandboxResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_runner_v1_runner_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateSandboxResponse.ProtoReflect.Descriptor instead.
+func (*CreateSandboxResponse) Descriptor() ([]byte, []int) {
+	return file_runner_v1_runner_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *CreateSandboxResponse) GetSandboxId() string {
+	if x != nil {
+		return x.SandboxId
+	}
+	return ""
+}
+
+func (x *CreateSandboxResponse) GetContainerIp() string {
+	if x != nil {
+		return x.ContainerIp
+	}
+	return ""
+}
+
+type DeleteSandboxRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SandboxId     string                 `protobuf:"bytes,1,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteSandboxRequest) Reset() {
+	*x = DeleteSandboxRequest{}
+	mi := &file_runner_v1_runner_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteSandboxRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteSandboxRequest) ProtoMessage() {}
+
+func (x *DeleteSandboxRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_runner_v1_runner_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteSandboxRequest.ProtoReflect.Descriptor instead.
+func (*DeleteSandboxRequest) Descriptor() ([]byte, []int) {
+	return file_runner_v1_runner_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *DeleteSandboxRequest) GetSandboxId() string {
+	if x != nil {
+		return x.SandboxId
+	}
+	return ""
+}
+
+type DeleteSandboxResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteSandboxResponse) Reset() {
+	*x = DeleteSandboxResponse{}
+	mi := &file_runner_v1_runner_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteSandboxResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteSandboxResponse) ProtoMessage() {}
+
+func (x *DeleteSandboxResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_runner_v1_runner_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteSandboxResponse.ProtoReflect.Descriptor instead.
+func (*DeleteSandboxResponse) Descriptor() ([]byte, []int) {
+	return file_runner_v1_runner_proto_rawDescGZIP(), []int{5}
+}
+
+var File_runner_v1_runner_proto protoreflect.FileDescriptor
+
+const file_runner_v1_runner_proto_rawDesc = "" +
 	"\n" +
-	"\x1cproto/runner/v1/runner.proto\x12\trunner.v1\"\xb8\x01\n" +
+	"\x16runner/v1/runner.proto\x12\trunner.v1\"\xe4\x01\n" +
 	"\x0fRunnerHeartbeat\x12\x1b\n" +
 	"\trunner_id\x18\x01 \x01(\tR\brunnerId\x12\"\n" +
 	"\rhttp_base_url\x18\x02 \x01(\tR\vhttpBaseUrl\x12\x18\n" +
 	"\ahealthy\x18\x03 \x01(\bR\ahealthy\x12%\n" +
 	"\x0ecapacity_total\x18\x04 \x01(\x05R\rcapacityTotal\x12#\n" +
-	"\rcapacity_used\x18\x05 \x01(\x05R\fcapacityUsed\"\"\n" +
+	"\rcapacity_used\x18\x05 \x01(\x05R\fcapacityUsed\x12*\n" +
+	"\x11control_grpc_addr\x18\x06 \x01(\tR\x0fcontrolGrpcAddr\"\"\n" +
 	"\x0eControlMessage\x12\x10\n" +
-	"\x03ack\x18\x01 \x01(\bR\x03ack2V\n" +
+	"\x03ack\x18\x01 \x01(\bR\x03ack\"V\n" +
+	"\x14CreateSandboxRequest\x12\x1d\n" +
+	"\n" +
+	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\x12\x1f\n" +
+	"\vcreate_json\x18\x02 \x01(\tR\n" +
+	"createJson\"Y\n" +
+	"\x15CreateSandboxResponse\x12\x1d\n" +
+	"\n" +
+	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\x12!\n" +
+	"\fcontainer_ip\x18\x02 \x01(\tR\vcontainerIp\"5\n" +
+	"\x14DeleteSandboxRequest\x12\x1d\n" +
+	"\n" +
+	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\"\x17\n" +
+	"\x15DeleteSandboxResponse2V\n" +
 	"\x0eRunnerRegistry\x12D\n" +
-	"\aConnect\x12\x1a.runner.v1.RunnerHeartbeat\x1a\x19.runner.v1.ControlMessage(\x010\x01B;Z9github.com/n8n-io/sandbox-service/internal/api/grpc/pb;pbb\x06proto3"
+	"\aConnect\x12\x1a.runner.v1.RunnerHeartbeat\x1a\x19.runner.v1.ControlMessage(\x010\x012\xb8\x01\n" +
+	"\x0eSandboxControl\x12R\n" +
+	"\rCreateSandbox\x12\x1f.runner.v1.CreateSandboxRequest\x1a .runner.v1.CreateSandboxResponse\x12R\n" +
+	"\rDeleteSandbox\x12\x1f.runner.v1.DeleteSandboxRequest\x1a .runner.v1.DeleteSandboxResponseB;Z9github.com/n8n-io/sandbox-service/internal/api/grpc/pb;pbb\x06proto3"
 
 var (
-	file_proto_runner_v1_runner_proto_rawDescOnce sync.Once
-	file_proto_runner_v1_runner_proto_rawDescData []byte
+	file_runner_v1_runner_proto_rawDescOnce sync.Once
+	file_runner_v1_runner_proto_rawDescData []byte
 )
 
-func file_proto_runner_v1_runner_proto_rawDescGZIP() []byte {
-	file_proto_runner_v1_runner_proto_rawDescOnce.Do(func() {
-		file_proto_runner_v1_runner_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_proto_runner_v1_runner_proto_rawDesc), len(file_proto_runner_v1_runner_proto_rawDesc)))
+func file_runner_v1_runner_proto_rawDescGZIP() []byte {
+	file_runner_v1_runner_proto_rawDescOnce.Do(func() {
+		file_runner_v1_runner_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_runner_v1_runner_proto_rawDesc), len(file_runner_v1_runner_proto_rawDesc)))
 	})
-	return file_proto_runner_v1_runner_proto_rawDescData
+	return file_runner_v1_runner_proto_rawDescData
 }
 
-var file_proto_runner_v1_runner_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
-var file_proto_runner_v1_runner_proto_goTypes = []any{
-	(*RunnerHeartbeat)(nil), // 0: runner.v1.RunnerHeartbeat
-	(*ControlMessage)(nil),  // 1: runner.v1.ControlMessage
+var file_runner_v1_runner_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_runner_v1_runner_proto_goTypes = []any{
+	(*RunnerHeartbeat)(nil),       // 0: runner.v1.RunnerHeartbeat
+	(*ControlMessage)(nil),        // 1: runner.v1.ControlMessage
+	(*CreateSandboxRequest)(nil),  // 2: runner.v1.CreateSandboxRequest
+	(*CreateSandboxResponse)(nil), // 3: runner.v1.CreateSandboxResponse
+	(*DeleteSandboxRequest)(nil),  // 4: runner.v1.DeleteSandboxRequest
+	(*DeleteSandboxResponse)(nil), // 5: runner.v1.DeleteSandboxResponse
 }
-var file_proto_runner_v1_runner_proto_depIdxs = []int32{
+var file_runner_v1_runner_proto_depIdxs = []int32{
 	0, // 0: runner.v1.RunnerRegistry.Connect:input_type -> runner.v1.RunnerHeartbeat
-	1, // 1: runner.v1.RunnerRegistry.Connect:output_type -> runner.v1.ControlMessage
-	1, // [1:2] is the sub-list for method output_type
-	0, // [0:1] is the sub-list for method input_type
+	2, // 1: runner.v1.SandboxControl.CreateSandbox:input_type -> runner.v1.CreateSandboxRequest
+	4, // 2: runner.v1.SandboxControl.DeleteSandbox:input_type -> runner.v1.DeleteSandboxRequest
+	1, // 3: runner.v1.RunnerRegistry.Connect:output_type -> runner.v1.ControlMessage
+	3, // 4: runner.v1.SandboxControl.CreateSandbox:output_type -> runner.v1.CreateSandboxResponse
+	5, // 5: runner.v1.SandboxControl.DeleteSandbox:output_type -> runner.v1.DeleteSandboxResponse
+	3, // [3:6] is the sub-list for method output_type
+	0, // [0:3] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
 	0, // [0:0] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
 }
 
-func init() { file_proto_runner_v1_runner_proto_init() }
-func file_proto_runner_v1_runner_proto_init() {
-	if File_proto_runner_v1_runner_proto != nil {
+func init() { file_runner_v1_runner_proto_init() }
+func file_runner_v1_runner_proto_init() {
+	if File_runner_v1_runner_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_runner_v1_runner_proto_rawDesc), len(file_proto_runner_v1_runner_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_runner_v1_runner_proto_rawDesc), len(file_runner_v1_runner_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   6,
 			NumExtensions: 0,
-			NumServices:   1,
+			NumServices:   2,
 		},
-		GoTypes:           file_proto_runner_v1_runner_proto_goTypes,
-		DependencyIndexes: file_proto_runner_v1_runner_proto_depIdxs,
-		MessageInfos:      file_proto_runner_v1_runner_proto_msgTypes,
+		GoTypes:           file_runner_v1_runner_proto_goTypes,
+		DependencyIndexes: file_runner_v1_runner_proto_depIdxs,
+		MessageInfos:      file_runner_v1_runner_proto_msgTypes,
 	}.Build()
-	File_proto_runner_v1_runner_proto = out.File
-	file_proto_runner_v1_runner_proto_goTypes = nil
-	file_proto_runner_v1_runner_proto_depIdxs = nil
+	File_runner_v1_runner_proto = out.File
+	file_runner_v1_runner_proto_goTypes = nil
+	file_runner_v1_runner_proto_depIdxs = nil
 }

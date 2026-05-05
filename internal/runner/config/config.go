@@ -2,6 +2,8 @@ package config
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -96,6 +98,33 @@ type Config struct {
 	GRPCClientCertFile string
 	GRPCClientKeyFile  string
 	GRPCServerName     string
+
+	// SandboxControl gRPC (API → runner). Empty SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR disables the server.
+	ControlGRPCListenAddr     string
+	ControlGRPCAdvertiseAddr  string
+	ControlGRPCServerCertFile string
+	ControlGRPCServerKeyFile  string
+	ControlGRPCClientCAFile   string
+}
+
+// ResolvedControlGRPCAdvertiseAddr returns the host:port sent in heartbeats when the control server is enabled.
+func (c *Config) ResolvedControlGRPCAdvertiseAddr() string {
+	if strings.TrimSpace(c.ControlGRPCListenAddr) == "" {
+		return ""
+	}
+	if adv := strings.TrimSpace(c.ControlGRPCAdvertiseAddr); adv != "" {
+		return adv
+	}
+	u, err := url.Parse(c.RunnerHTTPBaseURL)
+	if err != nil || u.Hostname() == "" {
+		return ""
+	}
+	host := u.Hostname()
+	port := "9091"
+	if _, p, err := net.SplitHostPort(c.ControlGRPCListenAddr); err == nil && p != "" {
+		port = p
+	}
+	return net.JoinHostPort(host, port)
 }
 
 // Load reads configuration from environment variables and returns a Config.
@@ -259,6 +288,31 @@ func Load() (*Config, error) {
 		}
 		if cfg.RunnerHTTPBaseURL == "" {
 			return nil, fmt.Errorf("SANDBOX_RUNNER_HTTP_BASE_URL must be set when SANDBOX_RUNNER_API_GRPC_ADDR is set")
+		}
+	}
+
+	cfg.ControlGRPCListenAddr = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR"))
+	cfg.ControlGRPCAdvertiseAddr = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR"))
+	cfg.ControlGRPCServerCertFile = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE"))
+	cfg.ControlGRPCServerKeyFile = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE"))
+	cfg.ControlGRPCClientCAFile = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE"))
+
+	if cfg.ControlGRPCListenAddr != "" {
+		if cfg.ResolvedControlGRPCAdvertiseAddr() == "" {
+			return nil, fmt.Errorf("SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR or SANDBOX_RUNNER_HTTP_BASE_URL must be set when SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR is set")
+		}
+		ctlN := 0
+		if cfg.ControlGRPCServerCertFile != "" {
+			ctlN++
+		}
+		if cfg.ControlGRPCServerKeyFile != "" {
+			ctlN++
+		}
+		if cfg.ControlGRPCClientCAFile != "" {
+			ctlN++
+		}
+		if ctlN != 0 && ctlN != 3 {
+			return nil, fmt.Errorf("SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE, SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE, and SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE must all be set together for control-plane mTLS")
 		}
 	}
 

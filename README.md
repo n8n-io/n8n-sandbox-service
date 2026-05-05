@@ -99,8 +99,12 @@ curl -s -X DELETE http://localhost:8080/sandboxes/<id> \
 | `SANDBOX_API_GRPC_TLS_CERT_FILE` | *(empty)* | Server certificate (PEM) for the registration gRPC listener; set with key + client CA for mTLS |
 | `SANDBOX_API_GRPC_TLS_KEY_FILE` | *(empty)* | Server private key (PEM) |
 | `SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE` | *(empty)* | CA bundle (PEM) that signed runner client certificates |
+| `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE` | *(empty)* | CA (PEM) that signed runner **SandboxControl** server certs; set with cert + key for mTLS when dialing runners |
+| `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE` | *(empty)* | API client certificate (PEM) for SandboxControl |
+| `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE` | *(empty)* | API client key (PEM) |
+| `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_SERVER_NAME` | *(empty)* | TLS verify name when it must differ from the dial host (defaults to the runner host) |
 
-Runners register over gRPC and report health and capacity; the API picks a runner (round-robin) when creating sandboxes and stores that runner’s HTTP base URL for later proxying.
+Runners register over gRPC and report health, capacity, and an optional **control gRPC address**. When a runner advertises `control_grpc_addr`, the API uses **gRPC** for sandbox create/delete on that runner; otherwise it uses the runner HTTP API. Exec/files and other proxy routes always use HTTP.
 
 **Heartbeat grace:** Runners stay in the in-memory registry while their gRPC stream is open. Between heartbeats, the API still considers a runner usable for new placements only if its last heartbeat was within `SANDBOX_API_RUNNER_HEARTBEAT_GRACE`. After that window, the runner is skipped until the next heartbeat (or dropped when the stream ends). Tune this if heartbeats are infrequent or the network is slow, so runners are not marked stale too aggressively.
 
@@ -126,18 +130,25 @@ Runners register over gRPC and report health and capacity; the API picks a runne
 | `SANDBOX_RUNNER_GRPC_TLS_CERT_FILE` | *(empty)* | This runner’s client certificate (PEM) for mTLS |
 | `SANDBOX_RUNNER_GRPC_TLS_KEY_FILE` | *(empty)* | Client key (PEM) |
 | `SANDBOX_RUNNER_GRPC_TLS_SERVER_NAME` | *(empty)* | TLS name to verify on the API cert (defaults to the host from `SANDBOX_RUNNER_API_GRPC_ADDR`) |
+| `SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR` | *(empty)* | Listen address for **SandboxControl** gRPC (for example `:9091`); empty disables the control server |
+| `SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR` | *(derived)* | `host:port` sent to the API in heartbeats; required if listen is set and `SANDBOX_RUNNER_HTTP_BASE_URL` cannot be used to derive host/port |
+| `SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE` | *(empty)* | Server cert (PEM) for SandboxControl; set with key + client CA for mTLS |
+| `SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE` | *(empty)* | Server private key (PEM) |
+| `SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE` | *(empty)* | CA (PEM) that signed API client certificates for SandboxControl |
 
 ## Runner registration gRPC (mTLS)
 
 **Local Docker Compose:** `make up` runs `scripts/bootstrap-local-mtls.sh`, which writes a private CA plus leaf certs into `.tls/` at the repo root. If those files already exist, bootstrap does nothing unless you set `SANDBOX_TLS_REGEN=1`. Compose uses `compose.tls.yaml` by default to mount `.tls` and set `SANDBOX_*_GRPC_TLS_*`. Set `SANDBOX_COMPOSE_TLS=0` to skip the overlay and use plaintext gRPC.
 
-**Kubernetes:** Use your own CA (often `cert-manager`). Mount PEMs from `Certificate` secrets and set the same env vars as in the tables above. See [`deploy/k8s/cert-manager/README.md`](deploy/k8s/cert-manager/README.md).
+**Kubernetes:** Use your own CA (often `cert-manager`). Mount PEMs from `Certificate` secrets and set the same env vars as in the tables above. See [`docs/cert-manager-k8s.md`](docs/cert-manager-k8s.md).
 
-**Registration vs lifecycle over gRPC:** Today runners dial the API over gRPC for registration only; sandbox work is still proxied over HTTP.
+**Registration vs lifecycle:** Runners dial the API over gRPC for registration. Sandbox **create/delete** use the runner’s **SandboxControl** gRPC address when advertised; **exec/files** and other sandbox routes are still proxied over HTTP.
+
+**Debugging gRPC:** See [`docs/grpcurl-debug.md`](docs/grpcurl-debug.md).
 
 **Bearer token:** Still required in metadata (`Authorization: Bearer …`) in addition to mTLS for registration.
 
-**Why this matters for trust:** mTLS ties the registration gRPC stream to a client certificate issued by your CA. A random host on the network cannot complete TLS to the API’s registry listener, so it cannot open a stream and inject a fake `runner_id` / `http_base_url` into placement. Legitimate runners still prove possession of the registration `Bearer` token in metadata. Together, only workloads you issued credentials to can show up in the runner registry; the API therefore only forwards new sandbox and proxy traffic to runners that actually authenticated on that channel (HTTP calls to a runner still use your normal `X-Api-Key` / stored routing as today).
+**Why this matters for trust:** mTLS ties the registration gRPC stream to a client certificate issued by your CA. A random host on the network cannot complete TLS to the API’s registry listener, so it cannot open a stream and inject a fake `runner_id` / `http_base_url` into placement. Legitimate runners still prove possession of the registration `Bearer` token in metadata. Together, only workloads you issued credentials to can show up in the runner registry. Optional mTLS on **SandboxControl** ensures only your API (presenting the control client cert) can ask a runner to create or delete sandboxes over gRPC; runners still accept the same `X-Api-Key` on that RPC as on HTTP. HTTP proxy traffic continues to use `X-Api-Key` and stored routing.
 
 **Rotation:** The API and runner reload leaf cert/key PEMs from disk when the files change (next TLS handshake), so in Kubernetes `cert-manager` (or any process that writes renewed files into the mounted paths) can rotate leaves without restarting pods. Local bootstrap issues long‑lived dev certs; they do not auto‑renew on a timer. When they eventually expire—or whenever you want fresh material—delete `.tls/` or set `SANDBOX_TLS_REGEN=1` and run `scripts/bootstrap-local-mtls.sh` again (then restart containers or wait for the next TLS handshake so reloaded leaf material is used). Rotating the CA both sides trust means updating the mounted CA PEMs and typically rolling workloads.
 

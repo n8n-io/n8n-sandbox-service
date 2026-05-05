@@ -115,11 +115,12 @@ func connectOnce(ctx context.Context, cfg *config.Config, mgr *manager.Manager) 
 			n = 0
 		}
 		hb := &pb.RunnerHeartbeat{
-			RunnerId:      cfg.RunnerID,
-			HttpBaseUrl:   cfg.RunnerHTTPBaseURL,
-			Healthy:       true,
-			CapacityTotal: cfg.CapacityTotal,
-			CapacityUsed:  int32(n),
+			RunnerId:        cfg.RunnerID,
+			HttpBaseUrl:     cfg.RunnerHTTPBaseURL,
+			Healthy:         true,
+			CapacityTotal:   cfg.CapacityTotal,
+			CapacityUsed:    int32(n),
+			ControlGrpcAddr: cfg.ResolvedControlGRPCAdvertiseAddr(),
 		}
 		return stream.Send(hb)
 	}
