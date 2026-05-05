@@ -18,32 +18,6 @@ PROTO_FILE=proto/runner/v1/runner.proto
 
 The runner listens on `SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR` (compose default advertise addresses: `n8n-sandbox-runner-local-1:9091` and `n8n-sandbox-runner-local-2:9091` on the Docker `sandbox` network).
 
-**Plaintext (no TLS on the control port)** — for example when not using `compose.tls.yaml`:
-
-```bash
-grpcurl \
-  -import-path "$PROTO_IMPORT" -proto "$PROTO_FILE" \
-  -H "x-api-key: ${RUNNER_API_KEY:-runner-local-key}" \
-  -d "{\"sandbox_id\":\"$(uuidgen | tr '[:upper:]' '[:lower:]')\",\"create_json\":\"{}\"}" \
-  n8n-sandbox-runner-local-1:9091 \
-  runner.v1.SandboxControl/CreateSandbox
-```
-
-Replace the address with the runner you are probing. Use the same API key as `SANDBOX_RUNNER_API_KEYS` / `SANDBOX_API_RUNNER_API_KEY`.
-
-Delete (idempotent on the runner if the sandbox does not exist):
-
-```bash
-grpcurl \
-  -import-path "$PROTO_IMPORT" -proto "$PROTO_FILE" \
-  -H "x-api-key: ${RUNNER_API_KEY:-runner-local-key}" \
-  -d '{"sandbox_id":"PASTE-UUID"}' \
-  n8n-sandbox-runner-local-1:9091 \
-  runner.v1.SandboxControl/DeleteSandbox
-```
-
-**mTLS** (after `scripts/bootstrap-local-mtls.sh` and `compose.tls.yaml`):
-
 ```bash
 TLS_DIR=.tls
 grpcurl \
