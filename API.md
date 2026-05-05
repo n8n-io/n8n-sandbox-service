@@ -9,9 +9,9 @@ Runtime topology:
 - If no runner is registered (or none are healthy / within capacity), operations that need a runner return **503** with a JSON error whose message explains that no runners are available.
 - Sandbox-scoped requests are proxied to the **stored** runner HTTP URL for that sandbox. If that runner is down or unreachable, the API returns **503** with JSON `error` **`runner unavailable`** (same shape as other API errors).
 
-Environment (API): `SANDBOX_API_RUNNER_REGISTRATION_TOKEN` (required), `SANDBOX_API_GRPC_LISTEN_ADDR` (default `:9090`), `SANDBOX_API_RUNNER_HEARTBEAT_GRACE` (default `45s` — max age of last gRPC heartbeat for a runner to be eligible for placement), plus existing HTTP settings.
+Environment (API): `SANDBOX_API_RUNNER_REGISTRATION_TOKEN` (required), `SANDBOX_API_GRPC_LISTEN_ADDR` (default `:9090`), `SANDBOX_API_RUNNER_HEARTBEAT_GRACE` (default `45s` — max age of last gRPC heartbeat for a runner to be eligible for placement), plus existing HTTP settings. Optional mTLS: `SANDBOX_API_GRPC_TLS_CERT_FILE`, `SANDBOX_API_GRPC_TLS_KEY_FILE`, `SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE` (all three together).
 
-Environment (runner): `SANDBOX_RUNNER_API_GRPC_ADDR`, `SANDBOX_RUNNER_REGISTRATION_TOKEN`, `SANDBOX_RUNNER_HTTP_BASE_URL` (API-reachable base for this runner), optional `SANDBOX_RUNNER_ID`, `SANDBOX_RUNNER_CAPACITY_TOTAL`.
+Environment (runner): `SANDBOX_RUNNER_API_GRPC_ADDR`, `SANDBOX_RUNNER_REGISTRATION_TOKEN`, `SANDBOX_RUNNER_HTTP_BASE_URL` (API-reachable base for this runner), optional `SANDBOX_RUNNER_ID`, `SANDBOX_RUNNER_CAPACITY_TOTAL`. Optional mTLS: `SANDBOX_RUNNER_GRPC_TLS_CA_FILE`, `SANDBOX_RUNNER_GRPC_TLS_CERT_FILE`, `SANDBOX_RUNNER_GRPC_TLS_KEY_FILE` (all three together), optional `SANDBOX_RUNNER_GRPC_TLS_SERVER_NAME`.
 
 ## Error Response Format
 
