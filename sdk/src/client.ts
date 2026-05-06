@@ -14,7 +14,6 @@ import { HttpClient } from "./http";
 import { createSandbox, getSandbox, deleteSandbox } from "./sandboxes";
 import type {
   CopyFileRequest,
-  CreateSandboxOptions,
   DeleteFileOptions,
   ExecRequest,
   ExecResult,
@@ -45,8 +44,8 @@ export class SandboxClient {
   /**
    * Creates a new sandbox.
    */
-  async createSandbox(options?: CreateSandboxOptions): Promise<SandboxRecord> {
-    return createSandbox(this.http, options);
+  async createSandbox(): Promise<SandboxRecord> {
+    return createSandbox(this.http);
   }
 
   /**

@@ -1,7 +1,7 @@
 {
   "name": "@n8n/sandbox-client",
-  "version": "1.0.0",
-  "description": "TypeScript client for the n8n sandbox service API",
+  "version": "0.0.1",
+  "description": "Client for the n8n sandbox service API",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
@@ -30,7 +30,7 @@
     "pnpm": ">=10.22.0"
   },
   "dependencies": {
-    "axios": "1.15.0"
+    "axios": "^1.15.0"
   },
   "devDependencies": {
     "@types/node": "^22.16.0",
