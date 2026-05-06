@@ -22,6 +22,9 @@ API_KEY="test"
 RUNNER_INTERNAL_API_KEY="runner-test"
 REG_TOKEN="${SANDBOX_API_RUNNER_REGISTRATION_TOKEN:-e2e-reg-token}"
 STARTED_REGISTRY=false
+TLS_DIR="$(mktemp -d)"
+API_TLS_DNS="sandbox-api-e2e-mtls"
+RUNNER_CONTROL_ALIAS="runner-control"
 
 cleanup() {
   echo "Stopping e2e resources..."
@@ -40,6 +43,7 @@ cleanup() {
     docker stop "$REGISTRY_NAME" >/dev/null 2>&1 || true
     docker rm "$REGISTRY_NAME" >/dev/null 2>&1 || true
   fi
+  rm -rf "$TLS_DIR"
 }
 trap cleanup EXIT
 
@@ -47,6 +51,10 @@ if [[ "${E2E_SKIP_BUILD:-}" != "1" ]]; then
   echo "Building service and sandbox images..."
   make -C "$PROJECT_DIR" docker-local
 fi
+
+echo "Bootstrapping e2e mTLS material..."
+OUT_DIR="$TLS_DIR" API_DNS="$API_TLS_DNS" CONTROL_SANS="$RUNNER_CONTROL_ALIAS" \
+  bash "$PROJECT_DIR/scripts/bootstrap-local-mtls.sh"
 
 docker network create "$NETWORK_NAME" >/dev/null
 
@@ -80,9 +88,16 @@ echo "Starting API service on port $PORT..."
 docker run -d \
   --network "$NETWORK_NAME" \
   -p "$PORT:8080" \
+  -v "$TLS_DIR:/grpc-tls:ro" \
   -e "SANDBOX_API_KEYS=$API_KEY" \
   -e "SANDBOX_API_RUNNER_REGISTRATION_TOKEN=$REG_TOKEN" \
   -e "SANDBOX_API_RUNNER_API_KEY=$RUNNER_INTERNAL_API_KEY" \
+  -e "SANDBOX_API_GRPC_TLS_CERT_FILE=/grpc-tls/grpc-server.crt" \
+  -e "SANDBOX_API_GRPC_TLS_KEY_FILE=/grpc-tls/grpc-server.key" \
+  -e "SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE=/grpc-tls/ca.crt" \
+  -e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE=/grpc-tls/ca.crt" \
+  -e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE=/grpc-tls/control-grpc-api-client.crt" \
+  -e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE=/grpc-tls/control-grpc-api-client.key" \
   --name "$API_CONTAINER_NAME" \
   "$API_IMAGE"
 
@@ -104,14 +119,23 @@ echo "Starting runner service..."
 docker run -d \
   "${RUNTIME_ARGS[@]}" \
   --network "$NETWORK_NAME" \
+  --network-alias "$RUNNER_CONTROL_ALIAS" \
+  -v "$TLS_DIR:/grpc-tls:ro" \
   -e "SANDBOX_RUNNER_API_KEYS=$RUNNER_INTERNAL_API_KEY" \
   -e "SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE=$REMOTE_SANDBOX_IMAGE" \
   -e "SANDBOX_RUNNER_DOCKER_INSECURE_REGISTRIES=$REGISTRY_INTERNAL_ADDR" \
   -e "SANDBOX_RUNNER_API_GRPC_ADDR=${API_CONTAINER_NAME}:9090" \
   -e "SANDBOX_RUNNER_REGISTRATION_TOKEN=$REG_TOKEN" \
+  -e "SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE=/grpc-tls/ca.crt" \
+  -e "SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE=/grpc-tls/grpc-client.crt" \
+  -e "SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE=/grpc-tls/grpc-client.key" \
+  -e "SANDBOX_RUNNER_REGISTRATION_GRPC_SERVER_NAME=$API_TLS_DNS" \
   -e "SANDBOX_RUNNER_HTTP_BASE_URL=http://${RUNNER_CONTAINER_NAME}:8080" \
   -e "SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR=:9091" \
-  -e "SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR=${RUNNER_CONTAINER_NAME}:9091" \
+  -e "SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR=${RUNNER_CONTROL_ALIAS}:9091" \
+  -e "SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE=/grpc-tls/control-grpc-server.crt" \
+  -e "SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE=/grpc-tls/control-grpc-server.key" \
+  -e "SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE=/grpc-tls/ca.crt" \
   -e "SANDBOX_RUNNER_ID=e2e-runner-$$" \
   --name "$RUNNER_CONTAINER_NAME" \
   "$RUNNER_IMAGE"
@@ -141,7 +165,7 @@ fi
 cd "$SCRIPT_DIR"
 if [ ! -d node_modules ] || [ ! -f node_modules/@n8n/sandbox-client/dist/index.js ]; then
   echo "Installing dependencies..."
-  npm ci
+  pnpm install --frozen-lockfile
 fi
 
 export E2E_API_CONTAINER_NAME="$API_CONTAINER_NAME"

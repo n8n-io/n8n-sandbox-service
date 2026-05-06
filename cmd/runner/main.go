@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/n8n-io/sandbox-service/internal/api/grpc/pb"
 	"github.com/n8n-io/sandbox-service/internal/grpctls"
@@ -55,38 +54,28 @@ func main() {
 
 	go register.Run(ctx, cfg, mgr)
 
-	var controlGRPC *grpc.Server
-	if cfg.ControlGRPCListenAddr != "" {
-		lis, err := net.Listen("tcp", cfg.ControlGRPCListenAddr)
-		if err != nil {
-			slog.Error("control grpc listen", "addr", cfg.ControlGRPCListenAddr, "error", err)
-			os.Exit(1)
-		}
-		var opts []grpc.ServerOption
-		if cfg.ControlGRPCServerCertFile != "" {
-			creds, err := grpctls.NewServerTransportCredentials(
-				cfg.ControlGRPCServerCertFile,
-				cfg.ControlGRPCServerKeyFile,
-				cfg.ControlGRPCClientCAFile,
-			)
-			if err != nil {
-				slog.Error("control grpc tls", "error", err)
-				os.Exit(1)
-			}
-			opts = append(opts, grpc.Creds(creds))
-			slog.Info("sandbox control grpc mTLS enabled", "addr", cfg.ControlGRPCListenAddr)
-		} else {
-			opts = append(opts, grpc.Creds(insecure.NewCredentials()))
-			slog.Info("sandbox control grpc listening (no TLS)", "addr", cfg.ControlGRPCListenAddr)
-		}
-		controlGRPC = grpc.NewServer(opts...)
-		pb.RegisterSandboxControlServer(controlGRPC, &runner.SandboxControlGRPC{Mgr: mgr, Cfg: cfg})
-		go func() {
-			if err := controlGRPC.Serve(lis); err != nil {
-				slog.Error("control grpc serve", "error", err)
-			}
-		}()
+	lis, err := net.Listen("tcp", cfg.ControlGRPCListenAddr)
+	if err != nil {
+		slog.Error("control grpc listen", "addr", cfg.ControlGRPCListenAddr, "error", err)
+		os.Exit(1)
 	}
+	creds, err := grpctls.NewServerTransportCredentials(
+		cfg.ControlGRPCServerCertFile,
+		cfg.ControlGRPCServerKeyFile,
+		cfg.ControlGRPCClientCAFile,
+	)
+	if err != nil {
+		slog.Error("control grpc tls", "error", err)
+		os.Exit(1)
+	}
+	slog.Info("sandbox control grpc mTLS enabled", "addr", cfg.ControlGRPCListenAddr)
+	controlGRPC := grpc.NewServer(grpc.Creds(creds))
+	pb.RegisterSandboxControlServer(controlGRPC, &runner.SandboxControlGRPC{Mgr: mgr, Cfg: cfg})
+	go func() {
+		if err := controlGRPC.Serve(lis); err != nil {
+			slog.Error("control grpc serve", "error", err)
+		}
+	}()
 
 	// Start server in background.
 	serverErr := make(chan error, 1)
@@ -113,18 +102,16 @@ func main() {
 		slog.Error("graceful shutdown failed", "error", err)
 	}
 
-	if controlGRPC != nil {
-		done := make(chan struct{})
-		go func() {
-			controlGRPC.GracefulStop()
-			close(done)
-		}()
-		select {
-		case <-done:
-		case <-time.After(10 * time.Second):
-			slog.Warn("control grpc graceful shutdown timed out; forcing stop")
-			controlGRPC.Stop()
-		}
+	done := make(chan struct{})
+	go func() {
+		controlGRPC.GracefulStop()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		slog.Warn("control grpc graceful shutdown timed out; forcing stop")
+		controlGRPC.Stop()
 	}
 
 	// 2. Clean up containers

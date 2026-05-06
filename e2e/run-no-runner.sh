@@ -12,12 +12,15 @@ NETWORK_NAME="sandbox-e2e-net-norunner-$$"
 PORT="${PORT:-18080}"
 API_KEY="test"
 REG_TOKEN="${SANDBOX_API_RUNNER_REGISTRATION_TOKEN:-e2e-reg-token}"
+TLS_DIR="$(mktemp -d)"
+API_TLS_DNS="sandbox-api-e2e-mtls"
 
 cleanup() {
   echo "Stopping e2e resources..."
   docker stop "$API_CONTAINER_NAME" >/dev/null 2>&1 || true
   docker rm "$API_CONTAINER_NAME" >/dev/null 2>&1 || true
   docker network rm "$NETWORK_NAME" >/dev/null 2>&1 || true
+  rm -rf "$TLS_DIR"
 }
 trap cleanup EXIT
 
@@ -26,14 +29,25 @@ if [[ "${E2E_SKIP_BUILD:-}" != "1" ]]; then
   make -C "$PROJECT_DIR" "docker-api-${ARCH}"
 fi
 
+echo "Bootstrapping e2e mTLS material..."
+OUT_DIR="$TLS_DIR" API_DNS="$API_TLS_DNS" CONTROL_SANS="runner-control" \
+  bash "$PROJECT_DIR/scripts/bootstrap-local-mtls.sh"
+
 docker network create "$NETWORK_NAME" >/dev/null
 
 echo "Starting API only on port $PORT..."
 docker run -d \
   --network "$NETWORK_NAME" \
   -p "$PORT:8080" \
+  -v "$TLS_DIR:/grpc-tls:ro" \
   -e "SANDBOX_API_KEYS=$API_KEY" \
   -e "SANDBOX_API_RUNNER_REGISTRATION_TOKEN=$REG_TOKEN" \
+  -e "SANDBOX_API_GRPC_TLS_CERT_FILE=/grpc-tls/grpc-server.crt" \
+  -e "SANDBOX_API_GRPC_TLS_KEY_FILE=/grpc-tls/grpc-server.key" \
+  -e "SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE=/grpc-tls/ca.crt" \
+  -e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE=/grpc-tls/ca.crt" \
+  -e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE=/grpc-tls/control-grpc-api-client.crt" \
+  -e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE=/grpc-tls/control-grpc-api-client.key" \
   --name "$API_CONTAINER_NAME" \
   "$API_IMAGE"
 
@@ -59,7 +73,7 @@ fi
 cd "$SCRIPT_DIR"
 if [ ! -d node_modules ] || [ ! -f node_modules/@n8n/sandbox-client/dist/index.js ]; then
   echo "Installing dependencies..."
-  npm ci
+  pnpm install --frozen-lockfile
 fi
 
 echo "Running no-runner placement test..."

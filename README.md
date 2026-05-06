@@ -96,12 +96,12 @@ curl -s -X DELETE http://localhost:8080/sandboxes/<id> \
 | `SANDBOX_API_DATA_DIR` | `/tmp/sandbox-api` | SQLite store directory |
 | `SANDBOX_API_MAX_FILE_BYTES` | `10485760` | Maximum file upload size (10 MB) |
 | `SANDBOX_API_RUNNER_HEARTBEAT_GRACE` | `45s` | How long after the last gRPC heartbeat a runner remains eligible for placement (Go [`time.ParseDuration`](https://pkg.go.dev/time#ParseDuration) syntax, e.g. `45s`, `2m`) |
-| `SANDBOX_API_GRPC_TLS_CERT_FILE` | *(empty)* | Server certificate (PEM) for the registration gRPC listener; set with key + client CA for mTLS |
-| `SANDBOX_API_GRPC_TLS_KEY_FILE` | *(empty)* | Server private key (PEM) |
-| `SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE` | *(empty)* | CA bundle (PEM) that signed runner client certificates |
-| `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE` | *(empty)* | CA (PEM) that signed runner **SandboxControl** server certs; set with cert + key for mTLS when dialing runners |
-| `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE` | *(empty)* | API client certificate (PEM) for SandboxControl |
-| `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE` | *(empty)* | API client key (PEM) |
+| `SANDBOX_API_GRPC_TLS_CERT_FILE` | *(required)* | Server certificate (PEM) for the registration gRPC listener |
+| `SANDBOX_API_GRPC_TLS_KEY_FILE` | *(required)* | Server private key (PEM) |
+| `SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE` | *(required)* | CA bundle (PEM) that signed runner client certificates |
+| `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE` | *(required)* | CA (PEM) that signed runner **SandboxControl** server certs |
+| `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE` | *(required)* | API client certificate (PEM) for SandboxControl |
+| `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE` | *(required)* | API client key (PEM) |
 | `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_SERVER_NAME` | *(empty)* | TLS verify name when it must differ from the dial host (defaults to the runner host) |
 
 Runners register over gRPC and report health, capacity, and a **control gRPC address**. Sandbox create/delete are gRPC-only (`SandboxControl` on the runner). Exec/files and other proxy routes always use HTTP.
@@ -126,15 +126,15 @@ Runners register over gRPC and report health, capacity, and a **control gRPC add
 | `SANDBOX_RUNNER_ENABLE_CGROUPS` | `true` | Whether Docker resource limits are applied |
 | `SANDBOX_RUNNER_INTER_SANDBOX_NETWORK_ENABLED` | `false` | Whether sandboxes may talk to each other on `runner-bridge` |
 | `SANDBOX_RUNNER_DOCKER_INSECURE_REGISTRIES` | *(empty)* | Comma-separated insecure registries passed to dockerd |
-| `SANDBOX_RUNNER_GRPC_TLS_CA_FILE` | *(empty)* | CA (PEM) that signed the API’s gRPC server cert |
-| `SANDBOX_RUNNER_GRPC_TLS_CERT_FILE` | *(empty)* | This runner’s client certificate (PEM) for mTLS |
-| `SANDBOX_RUNNER_GRPC_TLS_KEY_FILE` | *(empty)* | Client key (PEM) |
-| `SANDBOX_RUNNER_GRPC_TLS_SERVER_NAME` | *(empty)* | TLS name to verify on the API cert (defaults to the host from `SANDBOX_RUNNER_API_GRPC_ADDR`) |
-| `SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR` | *(empty)* | Listen address for **SandboxControl** gRPC (for example `:9091`); empty disables the control server |
+| `SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE` | *(empty)* | CA (PEM) that signed the API registration gRPC server cert |
+| `SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE` | *(empty)* | Runner client cert (PEM) for registration mTLS |
+| `SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE` | *(empty)* | Runner client key (PEM) for registration mTLS |
+| `SANDBOX_RUNNER_REGISTRATION_GRPC_SERVER_NAME` | *(empty)* | TLS name to verify on the API registration cert (defaults to host from `SANDBOX_RUNNER_API_GRPC_ADDR`) |
+| `SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR` | `:9091` | Listen address for **SandboxControl** gRPC |
 | `SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR` | *(derived)* | `host:port` sent to the API in heartbeats; required if listen is set and `SANDBOX_RUNNER_HTTP_BASE_URL` cannot be used to derive host/port |
-| `SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE` | *(empty)* | Server cert (PEM) for SandboxControl; set with key + client CA for mTLS |
-| `SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE` | *(empty)* | Server private key (PEM) |
-| `SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE` | *(empty)* | CA (PEM) that signed API client certificates for SandboxControl |
+| `SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE` | *(required)* | Server cert (PEM) for SandboxControl |
+| `SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE` | *(required)* | Server private key (PEM) |
+| `SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE` | *(required)* | CA (PEM) that signed API client certificates for SandboxControl |
 
 ## Runner registration gRPC (mTLS)
 
