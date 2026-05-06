@@ -161,6 +161,13 @@ describe("parseExecEvent", () => {
     });
   });
 
+  it("treats object with error property but no type as error event", () => {
+    expect(parseExecEvent('{"error":"internal server error"}')).toEqual({
+      type: "error",
+      error: "internal server error",
+    });
+  });
+
   it("returns error for exit event with wrong field types", () => {
     expect(
       parseExecEvent('{"type":"exit","exit_code":"zero","success":true,"execution_time_ms":42,"timed_out":false,"killed":false}'),
