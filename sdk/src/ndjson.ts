@@ -1,6 +1,38 @@
 import type { Readable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
-import type { ExecEvent } from "./types";
+import type {
+  ExecEvent,
+  ExecStdoutEvent,
+  ExecStderrEvent,
+  ExecExitEvent,
+  ExecErrorEvent,
+} from "./types";
+
+type JsonObject = Record<string, unknown>;
+
+function isStdoutEvent(json: JsonObject): json is ExecStdoutEvent {
+  return json.type === "stdout" && typeof json.data === "string";
+}
+
+function isStderrEvent(json: JsonObject): json is ExecStderrEvent {
+  return json.type === "stderr" && typeof json.data === "string";
+}
+
+function isExitEvent(json: JsonObject): json is ExecExitEvent {
+  return (
+    json.type === "exit" &&
+    typeof json.exit_code === "number" &&
+    typeof json.success === "boolean" &&
+    typeof json.execution_time_ms === "number" &&
+    typeof json.timed_out === "boolean" &&
+    typeof json.killed === "boolean"
+  );
+}
+
+function isErrorEvent(json: JsonObject): json is ExecErrorEvent {
+  if (typeof json.error !== "string") return false;
+  return json.type === "error" || json.type === undefined;
+}
 
 /** Yields parsed exec events from an NDJSON stream, one per line. */
 export async function* readNdjsonStream(stream: Readable): AsyncGenerator<ExecEvent> {
@@ -32,35 +64,12 @@ export async function* readNdjsonStream(stream: Readable): AsyncGenerator<ExecEv
 /** Parses a single NDJSON line into a typed exec event. Returns an error event on invalid input. */
 export function parseExecEvent(line: string): ExecEvent {
   try {
-    const json = JSON.parse(line) as Record<string, unknown>;
-    const type = json.type;
+    const json = JSON.parse(line) as JsonObject;
 
-    if (type === "stdout" && typeof json.data === "string") {
-      return { type: "stdout", data: json.data };
-    }
-    if (type === "stderr" && typeof json.data === "string") {
-      return { type: "stderr", data: json.data };
-    }
-    if (
-      type === "exit" &&
-      typeof json.exit_code === "number" &&
-      typeof json.success === "boolean" &&
-      typeof json.execution_time_ms === "number" &&
-      typeof json.timed_out === "boolean" &&
-      typeof json.killed === "boolean"
-    ) {
-      return {
-        type: "exit",
-        exit_code: json.exit_code,
-        success: json.success,
-        execution_time_ms: json.execution_time_ms,
-        timed_out: json.timed_out,
-        killed: json.killed,
-      };
-    }
-    if (type === "error" && typeof json.error === "string") {
-      return { type: "error", error: json.error };
-    }
+    if (isStdoutEvent(json)) return json;
+    if (isStderrEvent(json)) return json;
+    if (isExitEvent(json)) return json;
+    if (isErrorEvent(json)) return { type: "error", error: json.error };
 
     return { type: "error", error: `Invalid exec event payload: ${line}` };
   } catch (error) {
