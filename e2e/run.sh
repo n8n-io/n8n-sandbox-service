@@ -12,7 +12,6 @@ RUNNER_IMAGE="n8n-sandbox-runner:latest-${ARCH}"
 SANDBOX_IMAGE="n8n-sandbox:latest-${ARCH}"
 REGISTRY_NAME="${N8N_SANDBOX_REGISTRY_NAME:-n8n-sandbox-registry}"
 REGISTRY_PORT="${REGISTRY_PORT:-5050}"
-REGISTRY_ADDR="localhost:${REGISTRY_PORT}"
 REGISTRY_INTERNAL_ADDR="${REGISTRY_NAME}:5000"
 PUSH_SANDBOX_IMAGE="localhost:${REGISTRY_PORT}/n8n-sandbox:e2e-${ARCH}"
 REMOTE_SANDBOX_IMAGE="${REGISTRY_INTERNAL_ADDR}/n8n-sandbox:e2e-${ARCH}"
@@ -33,6 +32,14 @@ API_TLS_DNS="${E2E_API_TLS_DNS:-sandbox-api-e2e-mtls}"
 RUNNER_CONTROL_ALIAS="runner-control"
 
 cleanup() {
+  local exit_code=$?
+  if [ $exit_code -ne 0 ]; then
+    echo "=== API container logs ==="
+    docker logs "$API_CONTAINER_NAME" 2>&1 || true
+    echo "=== Runner container logs ==="
+    docker logs "$RUNNER_CONTAINER_NAME" 2>&1 || true
+  fi
+
 	echo "Stopping e2e resources..."
 	docker stop "$API_CONTAINER_NAME" >/dev/null 2>&1 || true
 	docker rm "$API_CONTAINER_NAME" >/dev/null 2>&1 || true
