@@ -148,6 +148,8 @@ Runners register over gRPC and report health, capacity, and a **control gRPC add
 
 **Security FAQ (draft):** See [`docs/security-faq.md`](docs/security-faq.md).
 
+**Weak points + hardening plan (draft):** See [`docs/security-weak-points-and-hardening.md`](docs/security-weak-points-and-hardening.md).
+
 **Bearer token:** Still required in metadata (`Authorization: Bearer …`) in addition to mTLS for registration.
 
 **Why this matters for trust:** mTLS ties the registration gRPC stream to a client certificate issued by your CA. A random host on the network cannot complete TLS to the API’s registry listener, so it cannot open a stream and inject a fake `runner_id` / `http_base_url` into placement. Legitimate runners still prove possession of the registration `Bearer` token in metadata. Together, only workloads you issued credentials to can show up in the runner registry. Optional mTLS on **SandboxControl** ensures only your API (presenting the control client cert) can ask a runner to create or delete sandboxes over gRPC; runners still accept the same `X-Api-Key` on that RPC as on HTTP. HTTP proxy traffic continues to use `X-Api-Key` and stored routing.

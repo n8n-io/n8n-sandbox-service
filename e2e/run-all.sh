@@ -11,11 +11,14 @@ API_TLS_DNS="sandbox-api-e2e-mtls"
 CONTROL_SANS="runner-control,runner-control-a,runner-control-b"
 
 normalize_tls_permissions() {
-  # Containers run as different UIDs (API is non-root), so mounted TLS files must be world-readable.
   chmod 755 "$TLS_DIR"
-  for f in "$TLS_DIR"/*.crt "$TLS_DIR"/*.key; do
+  for f in "$TLS_DIR"/*.crt; do
     [[ -e "$f" ]] || continue
     chmod 644 "$f"
+  done
+  for f in "$TLS_DIR"/*.key; do
+    [[ -e "$f" ]] || continue
+    chmod 600 "$f"
   done
 }
 

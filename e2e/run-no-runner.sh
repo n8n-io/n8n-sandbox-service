@@ -21,9 +21,13 @@ API_TLS_DNS="${E2E_API_TLS_DNS:-sandbox-api-e2e-mtls}"
 
 normalize_tls_permissions() {
   chmod 755 "$TLS_DIR"
-  for f in "$TLS_DIR"/*.crt "$TLS_DIR"/*.key; do
+  for f in "$TLS_DIR"/*.crt; do
     [[ -e "$f" ]] || continue
     chmod 644 "$f"
+  done
+  for f in "$TLS_DIR"/*.key; do
+    [[ -e "$f" ]] || continue
+    chmod 600 "$f"
   done
 }
 
@@ -56,6 +60,7 @@ docker network create "$NETWORK_NAME" >/dev/null
 
 echo "Starting API only on port $PORT..."
 docker run -d \
+  --user 0:0 \
   --network "$NETWORK_NAME" \
   -p "$PORT:8080" \
   -v "$TLS_DIR:/grpc-tls:ro" \
