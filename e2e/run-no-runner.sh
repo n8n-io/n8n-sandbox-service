@@ -12,15 +12,29 @@ NETWORK_NAME="sandbox-e2e-net-norunner-$$"
 PORT="${PORT:-18080}"
 API_KEY="test"
 REG_TOKEN="${SANDBOX_API_RUNNER_REGISTRATION_TOKEN:-e2e-reg-token}"
-TLS_DIR="$(mktemp -d)"
-API_TLS_DNS="sandbox-api-e2e-mtls"
+TLS_DIR="${E2E_TLS_DIR:-$(mktemp -d)}"
+TLS_DIR_OWNED=0
+if [[ -z "${E2E_TLS_DIR:-}" ]]; then
+  TLS_DIR_OWNED=1
+fi
+API_TLS_DNS="${E2E_API_TLS_DNS:-sandbox-api-e2e-mtls}"
+
+normalize_tls_permissions() {
+  chmod 755 "$TLS_DIR"
+  for f in "$TLS_DIR"/*.crt "$TLS_DIR"/*.key; do
+    [[ -e "$f" ]] || continue
+    chmod 644 "$f"
+  done
+}
 
 cleanup() {
   echo "Stopping e2e resources..."
   docker stop "$API_CONTAINER_NAME" >/dev/null 2>&1 || true
   docker rm "$API_CONTAINER_NAME" >/dev/null 2>&1 || true
   docker network rm "$NETWORK_NAME" >/dev/null 2>&1 || true
-  rm -rf "$TLS_DIR"
+  if [[ "$TLS_DIR_OWNED" == "1" ]]; then
+    rm -rf "$TLS_DIR"
+  fi
 }
 trap cleanup EXIT
 
@@ -29,9 +43,14 @@ if [[ "${E2E_SKIP_BUILD:-}" != "1" ]]; then
   make -C "$PROJECT_DIR" "docker-api-${ARCH}"
 fi
 
-echo "Bootstrapping e2e mTLS material..."
-OUT_DIR="$TLS_DIR" API_DNS="$API_TLS_DNS" CONTROL_SANS="runner-control" \
-  bash "$PROJECT_DIR/scripts/bootstrap-local-mtls.sh"
+if [[ "$TLS_DIR_OWNED" == "1" ]]; then
+  echo "Bootstrapping e2e mTLS material..."
+  OUT_DIR="$TLS_DIR" API_DNS="$API_TLS_DNS" CONTROL_SANS="runner-control" \
+    bash "$PROJECT_DIR/scripts/bootstrap-local-mtls.sh"
+else
+  echo "Using shared e2e mTLS material from E2E_TLS_DIR..."
+fi
+normalize_tls_permissions
 
 docker network create "$NETWORK_NAME" >/dev/null
 
