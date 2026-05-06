@@ -33,7 +33,15 @@ func UploadProxyHandler(mgr ContainerManager, cfg *config.Config) http.HandlerFu
 func proxyHandler(mgr ContainerManager, cfg *config.Config, limitBody bool) http.HandlerFunc {
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
-			pt := pr.In.Context().Value(proxyContextKey{}).(*proxyTarget)
+			// Comma-ok assertion: the context key is missing when
+			// httputil.ReverseProxy replays Rewrite on a internally-constructed
+			// request (e.g. 100-continue handshake, connection-level retry after
+			// an idle-connection reset). Bail out so the request fails at the
+			// transport layer and is handled by ErrorHandler instead of panicking.
+			pt, ok := pr.In.Context().Value(proxyContextKey{}).(*proxyTarget)
+			if !ok || pt == nil {
+				return
+			}
 			pr.SetURL(pt.url)
 			pr.Out.URL.Path = pt.path
 			pr.Out.URL.RawQuery = pr.In.URL.RawQuery
