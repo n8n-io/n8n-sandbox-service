@@ -84,3 +84,24 @@ jobs:
 
       - name: Run e2e tests
         run: PRIVILEGED=1 e2e/run.sh
+
+  # This job is required by GitHub branch protection rules.
+  # PRs cannot be merged unless this job passes.
+  required-checks:
+    name: Required Checks
+    needs: [check, sdk, docker, e2e]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate required checks
+        run: |
+          echo "Results: $RESULTS"
+          for result in $(echo "$RESULTS" | jq -r '.[] | .result'); do
+            if [ "$result" = "failure" ] || [ "$result" = "cancelled" ]; then
+              echo "One or more required checks failed or were cancelled"
+              exit 1
+            fi
+          done
+          echo "All required checks passed"
+        env:
+          RESULTS: ${{ toJSON(needs) }}
