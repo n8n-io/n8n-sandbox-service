@@ -24,3 +24,5 @@ const dropContainerIDCol = `ALTER TABLE sandboxes DROP COLUMN container_id`
 const addRunnerIDCol = `ALTER TABLE sandboxes ADD COLUMN runner_id TEXT DEFAULT ''`
 
 const addRunnerHTTPBaseURLCol = `ALTER TABLE sandboxes ADD COLUMN runner_http_base_url TEXT DEFAULT ''`
+
+const addRunnerControlGRPCAddrCol = `ALTER TABLE sandboxes ADD COLUMN runner_control_grpc_addr TEXT DEFAULT ''`

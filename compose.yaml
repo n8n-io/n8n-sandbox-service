@@ -78,6 +78,8 @@ services:
       SANDBOX_RUNNER_API_GRPC_ADDR: n8n-sandbox-api-local:9090
       SANDBOX_RUNNER_REGISTRATION_TOKEN: ${REG_TOKEN:-local-reg-token}
       SANDBOX_RUNNER_HTTP_BASE_URL: http://n8n-sandbox-runner-local-1:8080
+      SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR: ":9091"
+      SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR: n8n-sandbox-runner-local-1:9091
       SANDBOX_RUNNER_ID: local-runner-1
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "--header=X-Api-Key: ${RUNNER_API_KEY:-runner-local-key}", "http://localhost:8080/healthz"]
@@ -104,6 +106,8 @@ services:
       SANDBOX_RUNNER_API_GRPC_ADDR: n8n-sandbox-api-local:9090
       SANDBOX_RUNNER_REGISTRATION_TOKEN: ${REG_TOKEN:-local-reg-token}
       SANDBOX_RUNNER_HTTP_BASE_URL: http://n8n-sandbox-runner-local-2:8080
+      SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR: ":9091"
+      SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR: n8n-sandbox-runner-local-2:9091
       SANDBOX_RUNNER_ID: local-runner-2
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "--header=X-Api-Key: ${RUNNER_API_KEY:-runner-local-key}", "http://localhost:8080/healthz"]

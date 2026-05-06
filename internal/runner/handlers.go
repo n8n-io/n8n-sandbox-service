@@ -21,6 +21,7 @@ type ContainerResponse struct {
 	Status       string `json:"status"`
 	CreatedAt    int64  `json:"created_at"`
 	LastActiveAt int64  `json:"last_active_at"`
+	IP           string `json:"ip,omitempty"`
 }
 
 // ListSandboxes handles GET /sandboxes - returns empty for stateless runner
@@ -65,7 +66,8 @@ func CreateSandbox(mgr ContainerManager) http.HandlerFunc {
 
 		opts := &manager.CreateOptions{}
 
-		if _, err := mgr.CreateContainer(r.Context(), sandboxID, opts); err != nil {
+		info, err := mgr.CreateContainer(r.Context(), sandboxID, opts)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -73,6 +75,9 @@ func CreateSandbox(mgr ContainerManager) http.HandlerFunc {
 		resp := &ContainerResponse{
 			ID:     sandboxID,
 			Status: "running",
+		}
+		if info != nil {
+			resp.IP = info.IP
 		}
 		writeJSON(w, http.StatusCreated, resp)
 	}

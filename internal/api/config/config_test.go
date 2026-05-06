@@ -6,13 +6,20 @@ import (
 	"time"
 )
 
+func setRequiredGRPCMTLS(t *testing.T) {
+	t.Helper()
+	t.Setenv("SANDBOX_API_GRPC_TLS_CERT_FILE", "/tmp/api-grpc.crt")
+	t.Setenv("SANDBOX_API_GRPC_TLS_KEY_FILE", "/tmp/api-grpc.key")
+	t.Setenv("SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE", "/tmp/api-grpc-ca.crt")
+	t.Setenv("SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE", "/tmp/control-ca.crt")
+	t.Setenv("SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE", "/tmp/control-client.crt")
+	t.Setenv("SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE", "/tmp/control-client.key")
+}
+
 func TestLoadAPIParsesDefaults(t *testing.T) {
-	os.Setenv("SANDBOX_API_KEYS", "test-key")
-	os.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
-	defer func() {
-		os.Unsetenv("SANDBOX_API_KEYS")
-		os.Unsetenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN")
-	}()
+	t.Setenv("SANDBOX_API_KEYS", "test-key")
+	t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	setRequiredGRPCMTLS(t)
 
 	cfg, err := LoadAPI()
 	if err != nil {
@@ -49,14 +56,10 @@ func TestLoadAPIParsesDefaults(t *testing.T) {
 }
 
 func TestLoadAPIHeartbeatGraceFromEnv(t *testing.T) {
-	os.Setenv("SANDBOX_API_KEYS", "test-key")
-	os.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
-	os.Setenv("SANDBOX_API_RUNNER_HEARTBEAT_GRACE", "90s")
-	defer func() {
-		os.Unsetenv("SANDBOX_API_KEYS")
-		os.Unsetenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN")
-		os.Unsetenv("SANDBOX_API_RUNNER_HEARTBEAT_GRACE")
-	}()
+	t.Setenv("SANDBOX_API_KEYS", "test-key")
+	t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	t.Setenv("SANDBOX_API_RUNNER_HEARTBEAT_GRACE", "90s")
+	setRequiredGRPCMTLS(t)
 
 	cfg, err := LoadAPI()
 	if err != nil {
@@ -68,14 +71,10 @@ func TestLoadAPIHeartbeatGraceFromEnv(t *testing.T) {
 }
 
 func TestLoadAPIRejectsInvalidHeartbeatGrace(t *testing.T) {
-	os.Setenv("SANDBOX_API_KEYS", "test-key")
-	os.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
-	os.Setenv("SANDBOX_API_RUNNER_HEARTBEAT_GRACE", "0s")
-	defer func() {
-		os.Unsetenv("SANDBOX_API_KEYS")
-		os.Unsetenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN")
-		os.Unsetenv("SANDBOX_API_RUNNER_HEARTBEAT_GRACE")
-	}()
+	t.Setenv("SANDBOX_API_KEYS", "test-key")
+	t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	t.Setenv("SANDBOX_API_RUNNER_HEARTBEAT_GRACE", "0s")
+	setRequiredGRPCMTLS(t)
 
 	if _, err := LoadAPI(); err == nil {
 		t.Fatal("expected LoadAPI to reject SANDBOX_API_RUNNER_HEARTBEAT_GRACE=0s")
@@ -93,17 +92,32 @@ func TestLoadAPIRequiresAPIKeys(t *testing.T) {
 }
 
 func TestLoadAPIRejectsPartialGRPCTLS(t *testing.T) {
-	os.Setenv("SANDBOX_API_KEYS", "test-key")
-	os.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
-	os.Setenv("SANDBOX_API_GRPC_TLS_CERT_FILE", "/tmp/x.crt")
-	defer func() {
-		os.Unsetenv("SANDBOX_API_KEYS")
-		os.Unsetenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN")
-		os.Unsetenv("SANDBOX_API_GRPC_TLS_CERT_FILE")
-	}()
+	t.Setenv("SANDBOX_API_KEYS", "test-key")
+	t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	t.Setenv("SANDBOX_API_GRPC_TLS_CERT_FILE", "/tmp/x.crt")
+	t.Setenv("SANDBOX_API_GRPC_TLS_KEY_FILE", "")
+	t.Setenv("SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE", "")
+	t.Setenv("SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE", "/tmp/control-ca.crt")
+	t.Setenv("SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE", "/tmp/control-client.crt")
+	t.Setenv("SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE", "/tmp/control-client.key")
 
 	if _, err := LoadAPI(); err == nil {
 		t.Fatal("expected LoadAPI to reject partial SANDBOX_API_GRPC_TLS_*")
+	}
+}
+
+func TestLoadAPIRejectsPartialRunnerControlGRPCTLS(t *testing.T) {
+	t.Setenv("SANDBOX_API_KEYS", "test-key")
+	t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	t.Setenv("SANDBOX_API_GRPC_TLS_CERT_FILE", "/tmp/api-grpc.crt")
+	t.Setenv("SANDBOX_API_GRPC_TLS_KEY_FILE", "/tmp/api-grpc.key")
+	t.Setenv("SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE", "/tmp/api-grpc-ca.crt")
+	t.Setenv("SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE", "/tmp/ca.crt")
+	t.Setenv("SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE", "")
+	t.Setenv("SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE", "")
+
+	if _, err := LoadAPI(); err == nil {
+		t.Fatal("expected LoadAPI to reject partial SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_*")
 	}
 }
 

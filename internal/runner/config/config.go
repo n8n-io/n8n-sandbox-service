@@ -2,6 +2,8 @@ package config
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -10,15 +12,16 @@ import (
 const (
 	defaultRunnerCapacityTotal int32 = 1000
 
-	defaultIdleTTLSeconds = 3600
-	defaultMaxFileBytes   = 10 * 1024 * 1024 // 10 MB
-	defaultDataDir        = "/var/sandboxes"
-	defaultListenAddr     = ":8080"
-	defaultMemoryMB       = 512
-	defaultCPUPercent     = 100
-	defaultPidsMax        = 256
-	defaultEnableCgroups  = true
-	defaultDockerHost     = "unix:///var/run/docker.sock"
+	defaultIdleTTLSeconds        = 3600
+	defaultMaxFileBytes          = 10 * 1024 * 1024 // 10 MB
+	defaultDataDir               = "/var/sandboxes"
+	defaultListenAddr            = ":8080"
+	defaultMemoryMB              = 512
+	defaultCPUPercent            = 100
+	defaultPidsMax               = 256
+	defaultEnableCgroups         = true
+	defaultDockerHost            = "unix:///var/run/docker.sock"
+	defaultControlGRPCListenAddr = ":9091"
 )
 
 // Config holds all runtime configuration parsed from environment variables.
@@ -72,7 +75,7 @@ type Config struct {
 	InterSandboxNetworkEnabled bool
 
 	// APIGRPCAddr is the host:port of the API's runner registration gRPC listener.
-	// Parsed from SANDBOX_RUNNER_API_GRPC_ADDR. When empty, registration is disabled.
+	// Parsed from SANDBOX_RUNNER_API_GRPC_ADDR.
 	APIGRPCAddr string
 
 	// RegistrationToken authenticates this runner to the API gRPC service.
@@ -84,34 +87,91 @@ type Config struct {
 	RunnerID string
 
 	// RunnerHTTPBaseURL is the base URL the API uses to reach this runner's HTTP API.
-	// Parsed from SANDBOX_RUNNER_HTTP_BASE_URL (required when SANDBOX_RUNNER_API_GRPC_ADDR is set).
+	// Parsed from SANDBOX_RUNNER_HTTP_BASE_URL.
 	RunnerHTTPBaseURL string
 
 	// CapacityTotal is reported to the API for placement (0 means unlimited).
 	// Parsed from SANDBOX_RUNNER_CAPACITY_TOTAL (default 1000).
 	CapacityTotal int32
 
-	// mTLS for registration gRPC (optional). All three must be set together.
+	// mTLS for registration gRPC client (required).
 	GRPCServerCAFile   string
 	GRPCClientCertFile string
 	GRPCClientKeyFile  string
 	GRPCServerName     string
+
+	// SandboxControl gRPC (API → runner). Always enabled; listen addr defaults to :9091.
+	ControlGRPCListenAddr     string
+	ControlGRPCAdvertiseAddr  string
+	ControlGRPCServerCertFile string
+	ControlGRPCServerKeyFile  string
+	ControlGRPCClientCAFile   string
+}
+
+func validateHostPort(v string) error {
+	host, port, err := net.SplitHostPort(strings.TrimSpace(v))
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(host) == "" {
+		return fmt.Errorf("host is empty")
+	}
+	p, err := strconv.Atoi(port)
+	if err != nil || p <= 0 || p > 65535 {
+		return fmt.Errorf("invalid port %q", port)
+	}
+	return nil
+}
+
+func validateListenAddr(v string) error {
+	host, port, err := net.SplitHostPort(strings.TrimSpace(v))
+	if err != nil {
+		return err
+	}
+	// listen host may be empty (":9091"), loopback, or explicit interface
+	_ = host
+	p, err := strconv.Atoi(port)
+	if err != nil || p <= 0 || p > 65535 {
+		return fmt.Errorf("invalid port %q", port)
+	}
+	return nil
+}
+
+// ResolvedControlGRPCAdvertiseAddr returns the host:port sent in heartbeats when the control server is enabled.
+func (c *Config) ResolvedControlGRPCAdvertiseAddr() string {
+	if strings.TrimSpace(c.ControlGRPCListenAddr) == "" {
+		return ""
+	}
+	if adv := strings.TrimSpace(c.ControlGRPCAdvertiseAddr); adv != "" {
+		return adv
+	}
+	u, err := url.Parse(c.RunnerHTTPBaseURL)
+	if err != nil || u.Hostname() == "" {
+		return ""
+	}
+	host := u.Hostname()
+	port := "9091"
+	if _, p, err := net.SplitHostPort(c.ControlGRPCListenAddr); err == nil && p != "" {
+		port = p
+	}
+	return net.JoinHostPort(host, port)
 }
 
 // Load reads configuration from environment variables and returns a Config.
 // It returns an error if any required variable is missing or malformed.
 func Load() (*Config, error) {
 	cfg := &Config{
-		IdleTTLSeconds:    defaultIdleTTLSeconds,
-		MaxFileBytes:      defaultMaxFileBytes,
-		DataDir:           defaultDataDir,
-		ListenAddr:        defaultListenAddr,
-		DockerHost:        defaultDockerHost,
-		DefaultMemoryMB:   defaultMemoryMB,
-		DefaultCPUPercent: defaultCPUPercent,
-		DefaultPidsMax:    defaultPidsMax,
-		EnableCgroups:     defaultEnableCgroups,
-		CapacityTotal:     defaultRunnerCapacityTotal,
+		IdleTTLSeconds:        defaultIdleTTLSeconds,
+		MaxFileBytes:          defaultMaxFileBytes,
+		DataDir:               defaultDataDir,
+		ListenAddr:            defaultListenAddr,
+		DockerHost:            defaultDockerHost,
+		DefaultMemoryMB:       defaultMemoryMB,
+		DefaultCPUPercent:     defaultCPUPercent,
+		DefaultPidsMax:        defaultPidsMax,
+		EnableCgroups:         defaultEnableCgroups,
+		CapacityTotal:         defaultRunnerCapacityTotal,
+		ControlGRPCListenAddr: defaultControlGRPCListenAddr,
 	}
 
 	if h, err := os.Hostname(); err == nil && h != "" {
@@ -234,10 +294,10 @@ func Load() (*Config, error) {
 		cfg.CapacityTotal = int32(n)
 	}
 
-	cfg.GRPCServerCAFile = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_GRPC_TLS_CA_FILE"))
-	cfg.GRPCClientCertFile = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_GRPC_TLS_CERT_FILE"))
-	cfg.GRPCClientKeyFile = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_GRPC_TLS_KEY_FILE"))
-	cfg.GRPCServerName = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_GRPC_TLS_SERVER_NAME"))
+	cfg.GRPCServerCAFile = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE"))
+	cfg.GRPCClientCertFile = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE"))
+	cfg.GRPCClientKeyFile = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE"))
+	cfg.GRPCServerName = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_REGISTRATION_GRPC_SERVER_NAME"))
 
 	tlsN := 0
 	if cfg.GRPCServerCAFile != "" {
@@ -249,17 +309,51 @@ func Load() (*Config, error) {
 	if cfg.GRPCClientKeyFile != "" {
 		tlsN++
 	}
-	if tlsN != 0 && tlsN != 3 {
-		return nil, fmt.Errorf("SANDBOX_RUNNER_GRPC_TLS_CA_FILE, SANDBOX_RUNNER_GRPC_TLS_CERT_FILE, and SANDBOX_RUNNER_GRPC_TLS_KEY_FILE must all be set together for mTLS")
+	if tlsN != 3 {
+		return nil, fmt.Errorf("SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE, SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE, and SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE are required for registration mTLS")
 	}
 
-	if cfg.APIGRPCAddr != "" {
-		if cfg.RegistrationToken == "" {
-			return nil, fmt.Errorf("SANDBOX_RUNNER_REGISTRATION_TOKEN must be set when SANDBOX_RUNNER_API_GRPC_ADDR is set")
+	if cfg.APIGRPCAddr == "" {
+		return nil, fmt.Errorf("SANDBOX_RUNNER_API_GRPC_ADDR must be set")
+	}
+	if cfg.RegistrationToken == "" {
+		return nil, fmt.Errorf("SANDBOX_RUNNER_REGISTRATION_TOKEN must be set")
+	}
+	if cfg.RunnerHTTPBaseURL == "" {
+		return nil, fmt.Errorf("SANDBOX_RUNNER_HTTP_BASE_URL must be set")
+	}
+
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR")); v != "" {
+		cfg.ControlGRPCListenAddr = v
+	}
+	cfg.ControlGRPCAdvertiseAddr = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR"))
+	cfg.ControlGRPCServerCertFile = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE"))
+	cfg.ControlGRPCServerKeyFile = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE"))
+	cfg.ControlGRPCClientCAFile = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE"))
+	if err := validateListenAddr(cfg.ControlGRPCListenAddr); err != nil {
+		return nil, fmt.Errorf("SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR must be host:port (e.g. :9091), got %q: %w", cfg.ControlGRPCListenAddr, err)
+	}
+	if cfg.ControlGRPCAdvertiseAddr != "" {
+		if err := validateHostPort(cfg.ControlGRPCAdvertiseAddr); err != nil {
+			return nil, fmt.Errorf("SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR must be host:port, got %q: %w", cfg.ControlGRPCAdvertiseAddr, err)
 		}
-		if cfg.RunnerHTTPBaseURL == "" {
-			return nil, fmt.Errorf("SANDBOX_RUNNER_HTTP_BASE_URL must be set when SANDBOX_RUNNER_API_GRPC_ADDR is set")
-		}
+	}
+
+	if cfg.ResolvedControlGRPCAdvertiseAddr() == "" {
+		return nil, fmt.Errorf("SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR or SANDBOX_RUNNER_HTTP_BASE_URL must resolve a control gRPC host:port")
+	}
+	ctlN := 0
+	if cfg.ControlGRPCServerCertFile != "" {
+		ctlN++
+	}
+	if cfg.ControlGRPCServerKeyFile != "" {
+		ctlN++
+	}
+	if cfg.ControlGRPCClientCAFile != "" {
+		ctlN++
+	}
+	if ctlN != 3 {
+		return nil, fmt.Errorf("SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE, SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE, and SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE are required for control-plane mTLS")
 	}
 
 	return cfg, nil

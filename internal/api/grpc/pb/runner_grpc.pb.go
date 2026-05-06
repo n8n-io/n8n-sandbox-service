@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             v3.21.12
-// source: proto/runner/v1/runner.proto
+// source: runner/v1/runner.proto
 
 package pb
 
@@ -25,8 +25,6 @@ const (
 // RunnerRegistryClient is the client API for RunnerRegistry service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
-//
-// RunnerRegistry receives bi-directional streams from sandbox runners.
 type RunnerRegistryClient interface {
 	Connect(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[RunnerHeartbeat, ControlMessage], error)
 }
@@ -55,8 +53,6 @@ type RunnerRegistry_ConnectClient = grpc.BidiStreamingClient[RunnerHeartbeat, Co
 // RunnerRegistryServer is the server API for RunnerRegistry service.
 // All implementations must embed UnimplementedRunnerRegistryServer
 // for forward compatibility.
-//
-// RunnerRegistry receives bi-directional streams from sandbox runners.
 type RunnerRegistryServer interface {
 	Connect(grpc.BidiStreamingServer[RunnerHeartbeat, ControlMessage]) error
 	mustEmbedUnimplementedRunnerRegistryServer()
@@ -115,5 +111,149 @@ var RunnerRegistry_ServiceDesc = grpc.ServiceDesc{
 			ClientStreams: true,
 		},
 	},
-	Metadata: "proto/runner/v1/runner.proto",
+	Metadata: "runner/v1/runner.proto",
+}
+
+const (
+	SandboxControl_CreateSandbox_FullMethodName = "/runner.v1.SandboxControl/CreateSandbox"
+	SandboxControl_DeleteSandbox_FullMethodName = "/runner.v1.SandboxControl/DeleteSandbox"
+)
+
+// SandboxControlClient is the client API for SandboxControl service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// SandboxControl: API → runner for sandbox create/delete (HTTP remains for exec/files proxy).
+type SandboxControlClient interface {
+	CreateSandbox(ctx context.Context, in *CreateSandboxRequest, opts ...grpc.CallOption) (*CreateSandboxResponse, error)
+	DeleteSandbox(ctx context.Context, in *DeleteSandboxRequest, opts ...grpc.CallOption) (*DeleteSandboxResponse, error)
+}
+
+type sandboxControlClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewSandboxControlClient(cc grpc.ClientConnInterface) SandboxControlClient {
+	return &sandboxControlClient{cc}
+}
+
+func (c *sandboxControlClient) CreateSandbox(ctx context.Context, in *CreateSandboxRequest, opts ...grpc.CallOption) (*CreateSandboxResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateSandboxResponse)
+	err := c.cc.Invoke(ctx, SandboxControl_CreateSandbox_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *sandboxControlClient) DeleteSandbox(ctx context.Context, in *DeleteSandboxRequest, opts ...grpc.CallOption) (*DeleteSandboxResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteSandboxResponse)
+	err := c.cc.Invoke(ctx, SandboxControl_DeleteSandbox_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// SandboxControlServer is the server API for SandboxControl service.
+// All implementations must embed UnimplementedSandboxControlServer
+// for forward compatibility.
+//
+// SandboxControl: API → runner for sandbox create/delete (HTTP remains for exec/files proxy).
+type SandboxControlServer interface {
+	CreateSandbox(context.Context, *CreateSandboxRequest) (*CreateSandboxResponse, error)
+	DeleteSandbox(context.Context, *DeleteSandboxRequest) (*DeleteSandboxResponse, error)
+	mustEmbedUnimplementedSandboxControlServer()
+}
+
+// UnimplementedSandboxControlServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedSandboxControlServer struct{}
+
+func (UnimplementedSandboxControlServer) CreateSandbox(context.Context, *CreateSandboxRequest) (*CreateSandboxResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateSandbox not implemented")
+}
+func (UnimplementedSandboxControlServer) DeleteSandbox(context.Context, *DeleteSandboxRequest) (*DeleteSandboxResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteSandbox not implemented")
+}
+func (UnimplementedSandboxControlServer) mustEmbedUnimplementedSandboxControlServer() {}
+func (UnimplementedSandboxControlServer) testEmbeddedByValue()                        {}
+
+// UnsafeSandboxControlServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to SandboxControlServer will
+// result in compilation errors.
+type UnsafeSandboxControlServer interface {
+	mustEmbedUnimplementedSandboxControlServer()
+}
+
+func RegisterSandboxControlServer(s grpc.ServiceRegistrar, srv SandboxControlServer) {
+	// If the following call pancis, it indicates UnimplementedSandboxControlServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&SandboxControl_ServiceDesc, srv)
+}
+
+func _SandboxControl_CreateSandbox_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateSandboxRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SandboxControlServer).CreateSandbox(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SandboxControl_CreateSandbox_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SandboxControlServer).CreateSandbox(ctx, req.(*CreateSandboxRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SandboxControl_DeleteSandbox_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteSandboxRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SandboxControlServer).DeleteSandbox(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SandboxControl_DeleteSandbox_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SandboxControlServer).DeleteSandbox(ctx, req.(*DeleteSandboxRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// SandboxControl_ServiceDesc is the grpc.ServiceDesc for SandboxControl service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var SandboxControl_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "runner.v1.SandboxControl",
+	HandlerType: (*SandboxControlServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "CreateSandbox",
+			Handler:    _SandboxControl_CreateSandbox_Handler,
+		},
+		{
+			MethodName: "DeleteSandbox",
+			Handler:    _SandboxControl_DeleteSandbox_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "runner/v1/runner.proto",
 }

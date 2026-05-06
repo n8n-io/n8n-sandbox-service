@@ -8,9 +8,27 @@ import (
 func TestLoadParsesDefaults(t *testing.T) {
 	os.Setenv("SANDBOX_RUNNER_API_KEYS", "test-key")
 	os.Setenv("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE", "test-image")
+	os.Setenv("SANDBOX_RUNNER_API_GRPC_ADDR", "api:9090")
+	os.Setenv("SANDBOX_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	os.Setenv("SANDBOX_RUNNER_HTTP_BASE_URL", "http://runner:8080")
+	os.Setenv("SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE", "/tmp/reg-ca.crt")
+	os.Setenv("SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE", "/tmp/reg.crt")
+	os.Setenv("SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE", "/tmp/reg.key")
+	os.Setenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE", "/tmp/control.crt")
+	os.Setenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE", "/tmp/control.key")
+	os.Setenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE", "/tmp/control-ca.crt")
 	defer func() {
 		os.Unsetenv("SANDBOX_RUNNER_API_KEYS")
 		os.Unsetenv("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE")
+		os.Unsetenv("SANDBOX_RUNNER_API_GRPC_ADDR")
+		os.Unsetenv("SANDBOX_RUNNER_REGISTRATION_TOKEN")
+		os.Unsetenv("SANDBOX_RUNNER_HTTP_BASE_URL")
+		os.Unsetenv("SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE")
+		os.Unsetenv("SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE")
+		os.Unsetenv("SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE")
+		os.Unsetenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE")
+		os.Unsetenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE")
+		os.Unsetenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE")
 	}()
 
 	cfg, err := Load()
@@ -65,6 +83,9 @@ func TestLoadParsesDefaults(t *testing.T) {
 	if cfg.CapacityTotal != defaultRunnerCapacityTotal {
 		t.Errorf("expected CapacityTotal %d, got %d", defaultRunnerCapacityTotal, cfg.CapacityTotal)
 	}
+	if cfg.ControlGRPCListenAddr != ":9091" {
+		t.Errorf("expected ControlGRPCListenAddr :9091, got %s", cfg.ControlGRPCListenAddr)
+	}
 
 	if _, exists := cfg.APIKeys["test-key"]; !exists {
 		t.Error("expected test-key in APIKeys")
@@ -94,13 +115,76 @@ func TestLoadRequiresSandboxImage(t *testing.T) {
 func TestLoadRejectsPartialGRPCTLS(t *testing.T) {
 	t.Setenv("SANDBOX_RUNNER_API_KEYS", "test-key")
 	t.Setenv("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE", "img")
+	t.Setenv("SANDBOX_RUNNER_API_GRPC_ADDR", "api:9090")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	t.Setenv("SANDBOX_RUNNER_HTTP_BASE_URL", "http://runner:8080")
+	t.Setenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE", "/tmp/control.crt")
+	t.Setenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE", "/tmp/control.key")
+	t.Setenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE", "/tmp/control-ca.crt")
 	// Isolate from the process environment: inherited CERT+KEY would satisfy mTLS and make this test fail.
-	t.Setenv("SANDBOX_RUNNER_GRPC_TLS_CA_FILE", "/tmp/ca.crt")
-	t.Setenv("SANDBOX_RUNNER_GRPC_TLS_CERT_FILE", "")
-	t.Setenv("SANDBOX_RUNNER_GRPC_TLS_KEY_FILE", "")
-	t.Setenv("SANDBOX_RUNNER_GRPC_TLS_SERVER_NAME", "")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE", "/tmp/ca.crt")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE", "")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE", "")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_GRPC_SERVER_NAME", "")
 
 	if _, err := Load(); err == nil {
-		t.Fatal("expected Load to reject partial SANDBOX_RUNNER_GRPC_TLS_*")
+		t.Fatal("expected Load to reject partial SANDBOX_RUNNER_REGISTRATION_GRPC_*")
+	}
+}
+
+func TestLoadRejectsPartialControlGRPCTLS(t *testing.T) {
+	t.Setenv("SANDBOX_RUNNER_API_KEYS", "test-key")
+	t.Setenv("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE", "img")
+	t.Setenv("SANDBOX_RUNNER_API_GRPC_ADDR", "api:9090")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	t.Setenv("SANDBOX_RUNNER_HTTP_BASE_URL", "http://runner:8080")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE", "/tmp/reg-ca.crt")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE", "/tmp/reg.crt")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE", "/tmp/reg.key")
+	t.Setenv("SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR", ":9091")
+	t.Setenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE", "/tmp/srv.crt")
+	t.Setenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE", "")
+	t.Setenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE", "")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("expected Load to reject partial SANDBOX_RUNNER_CONTROL_GRPC_TLS_*")
+	}
+}
+
+func TestLoadRejectsInvalidControlGRPCAdvertiseAddr(t *testing.T) {
+	t.Setenv("SANDBOX_RUNNER_API_KEYS", "test-key")
+	t.Setenv("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE", "img")
+	t.Setenv("SANDBOX_RUNNER_API_GRPC_ADDR", "api:9090")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	t.Setenv("SANDBOX_RUNNER_HTTP_BASE_URL", "http://runner:8080")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE", "/tmp/reg-ca.crt")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE", "/tmp/reg.crt")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE", "/tmp/reg.key")
+	t.Setenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE", "/tmp/control.crt")
+	t.Setenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE", "/tmp/control.key")
+	t.Setenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE", "/tmp/control-ca.crt")
+	t.Setenv("SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR", "runner-without-port")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("expected Load to reject invalid SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR")
+	}
+}
+
+func TestLoadRejectsInvalidControlGRPCListenAddr(t *testing.T) {
+	t.Setenv("SANDBOX_RUNNER_API_KEYS", "test-key")
+	t.Setenv("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE", "img")
+	t.Setenv("SANDBOX_RUNNER_API_GRPC_ADDR", "api:9090")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	t.Setenv("SANDBOX_RUNNER_HTTP_BASE_URL", "http://runner:8080")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE", "/tmp/reg-ca.crt")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE", "/tmp/reg.crt")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE", "/tmp/reg.key")
+	t.Setenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE", "/tmp/control.crt")
+	t.Setenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE", "/tmp/control.key")
+	t.Setenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE", "/tmp/control-ca.crt")
+	t.Setenv("SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR", "not-an-addr")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("expected Load to reject invalid SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR")
 	}
 }
