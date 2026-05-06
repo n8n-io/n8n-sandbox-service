@@ -27,11 +27,12 @@ func assertInvalidArgument(t *testing.T, err error) {
 
 func testHeartbeat(runnerID string) *pb.RunnerHeartbeat {
 	return &pb.RunnerHeartbeat{
-		RunnerId:      runnerID,
-		HttpBaseUrl:   "http://runner:8080",
-		Healthy:       true,
-		CapacityTotal: 10,
-		CapacityUsed:  0,
+		RunnerId:        runnerID,
+		HttpBaseUrl:     "http://runner:8080",
+		ControlGrpcAddr: "runner:9091",
+		Healthy:         true,
+		CapacityTotal:   10,
+		CapacityUsed:    0,
 	}
 }
 
@@ -60,11 +61,12 @@ func TestConnectRejectsInvalidHTTPBaseURL(t *testing.T) {
 	}
 
 	hb := &pb.RunnerHeartbeat{
-		RunnerId:      "r1",
-		HttpBaseUrl:   "ftp://host",
-		Healthy:       true,
-		CapacityTotal: 10,
-		CapacityUsed:  0,
+		RunnerId:        "r1",
+		HttpBaseUrl:     "ftp://host",
+		ControlGrpcAddr: "runner:9091",
+		Healthy:         true,
+		CapacityTotal:   10,
+		CapacityUsed:    0,
 	}
 	if err := stream.Send(hb); err != nil {
 		assertInvalidArgument(t, err)
@@ -167,5 +169,47 @@ func TestConnectEmptyRunnerIDAfterCommitUsesCommittedID(t *testing.T) {
 
 	if _, err := reg.PickRoundRobin(); err != nil {
 		t.Fatalf("expected runner still registered: %v", err)
+	}
+}
+
+func TestConnectRequiresControlGRPCAddr(t *testing.T) {
+	reg := registry.New(time.Hour)
+	token := "test-token"
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := grpc.NewServer()
+	pb.RegisterRunnerRegistryServer(srv, &RunnerRegistryServer{Token: token, Reg: reg})
+	go func() { _ = srv.Serve(lis) }()
+	defer srv.Stop()
+
+	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	ctx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+token)
+	stream, err := pb.NewRunnerRegistryClient(conn).Connect(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	hb := &pb.RunnerHeartbeat{
+		RunnerId:      "r1",
+		HttpBaseUrl:   "http://runner:8080",
+		Healthy:       true,
+		CapacityTotal: 10,
+		CapacityUsed:  0,
+	}
+	if err := stream.Send(hb); err != nil {
+		assertInvalidArgument(t, err)
+	} else {
+		if _, err := stream.Recv(); err == nil {
+			t.Fatal("expected error for missing control_grpc_addr")
+		} else {
+			assertInvalidArgument(t, err)
+		}
 	}
 }

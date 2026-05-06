@@ -1,11 +1,7 @@
 package api
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -16,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/n8n-io/sandbox-service/internal/api/config"
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
+	"github.com/n8n-io/sandbox-service/internal/api/runnerctl"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
 )
 
@@ -130,7 +127,19 @@ func handleGetSandbox(s *store.Store) http.HandlerFunc {
 	}
 }
 
-func handleCreateSandbox(s *store.Store, reg *registry.Registry, runnerAPIKey string) http.HandlerFunc {
+func runnerControlTLS(cfg *config.APIConfig) *runnerctl.TLS {
+	if cfg.RunnerControlGRPCClientCAFile == "" {
+		return nil
+	}
+	return &runnerctl.TLS{
+		CAFile:     cfg.RunnerControlGRPCClientCAFile,
+		CertFile:   cfg.RunnerControlGRPCClientCertFile,
+		KeyFile:    cfg.RunnerControlGRPCClientKeyFile,
+		ServerName: cfg.RunnerControlGRPCClientServerName,
+	}
+}
+
+func handleCreateSandbox(s *store.Store, reg *registry.Registry, cfg *config.APIConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		run, err := reg.PickRoundRobin()
 		if err != nil {
@@ -142,31 +151,31 @@ func handleCreateSandbox(s *store.Store, reg *registry.Registry, runnerAPIKey st
 			return
 		}
 
-		runnerURL, _ := url.Parse(strings.TrimRight(run.HTTPBaseURL, "/"))
+		controlAddr := run.ControlGRPCAddr
+		tlsCfg := runnerControlTLS(cfg)
 
 		sandboxID := generateUUID()
 		now := time.Now().Unix()
-
-		containerInfo, err := callRunnerCreateContainer(runnerURL, runnerAPIKey, sandboxID)
+		gresp, err := runnerctl.CreateSandbox(r.Context(), controlAddr, cfg.RunnerAPIKey, tlsCfg, sandboxID, "{}")
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to create container: "+err.Error())
 			return
 		}
+		containerIP := gresp.GetContainerIp()
 
 		record := &store.SandboxRecord{
-			ID:             sandboxID,
-			Status:         "running",
-			CreatedAt:      now,
-			LastActiveAt:   now,
-			ContainerIP:    containerInfo.IP,
-			DaemonPort:     8081,
-			RunnerID:       run.ID,
-			RunnerHTTPBase: strings.TrimRight(run.HTTPBaseURL, "/"),
+			ID:                    sandboxID,
+			Status:                "running",
+			CreatedAt:             now,
+			LastActiveAt:          now,
+			ContainerIP:           containerIP,
+			DaemonPort:            8081,
+			RunnerID:              run.ID,
+			RunnerHTTPBase:        strings.TrimRight(run.HTTPBaseURL, "/"),
+			RunnerControlGRPCAddr: controlAddr,
 		}
 		if err := s.Create(record); err != nil {
-			if cleanupErr := callRunnerDeleteContainer(runnerURL, runnerAPIKey, sandboxID, containerInfo.IP); cleanupErr != nil {
-				// best effort
-			}
+			_ = runnerctl.DeleteSandbox(r.Context(), controlAddr, cfg.RunnerAPIKey, tlsCfg, sandboxID)
 			writeError(w, http.StatusInternalServerError, "failed to store sandbox: "+err.Error())
 			return
 		}
@@ -181,7 +190,7 @@ func handleCreateSandbox(s *store.Store, reg *registry.Registry, runnerAPIKey st
 	}
 }
 
-func handleDeleteSandbox(s *store.Store, runnerAPIKey string) http.HandlerFunc {
+func handleDeleteSandbox(s *store.Store, cfg *config.APIConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if !isValidUUID(id) {
@@ -199,9 +208,11 @@ func handleDeleteSandbox(s *store.Store, runnerAPIKey string) http.HandlerFunc {
 			return
 		}
 
-		if rec.RunnerHTTPBase != "" {
-			runnerURL, _ := url.Parse(strings.TrimRight(rec.RunnerHTTPBase, "/"))
-			_ = callRunnerDeleteContainer(runnerURL, runnerAPIKey, id, rec.ContainerIP)
+		controlAddr := rec.RunnerControlGRPCAddr
+		tlsCfg := runnerControlTLS(cfg)
+		if err := runnerctl.DeleteSandbox(r.Context(), controlAddr, cfg.RunnerAPIKey, tlsCfg, id); err != nil {
+			writeError(w, http.StatusBadGateway, "failed to delete container: "+err.Error())
+			return
 		}
 
 		if err := s.Delete(id); err != nil {
@@ -211,73 +222,6 @@ func handleDeleteSandbox(s *store.Store, runnerAPIKey string) http.HandlerFunc {
 
 		w.WriteHeader(http.StatusNoContent)
 	}
-}
-
-// Helper functions for calling runner service
-
-type ContainerInfo struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	IP   string `json:"ip"`
-}
-
-func callRunnerCreateContainer(runnerURL *url.URL, apiKey, sandboxID string) (*ContainerInfo, error) {
-	urlStr := fmt.Sprintf("%s/sandboxes", strings.TrimRight(runnerURL.String(), "/"))
-	httpReq, err := http.NewRequest("POST", urlStr, bytes.NewReader([]byte("{}")))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("X-Sandbox-Id", sandboxID)
-	if apiKey != "" {
-		httpReq.Header.Set("X-Api-Key", apiKey)
-	}
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("http request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusCreated {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("runner returned status %d: %s", resp.StatusCode, string(body))
-	}
-
-	var containerInfo ContainerInfo
-	if err := json.NewDecoder(resp.Body).Decode(&containerInfo); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
-	}
-
-	return &containerInfo, nil
-}
-
-func callRunnerDeleteContainer(runnerURL *url.URL, apiKey, sandboxID, containerIP string) error {
-	urlStr := fmt.Sprintf("%s/sandboxes/%s", strings.TrimRight(runnerURL.String(), "/"), sandboxID)
-	httpReq, err := http.NewRequest("DELETE", urlStr, nil)
-	if err != nil {
-		return fmt.Errorf("create request: %w", err)
-	}
-
-	if apiKey != "" {
-		httpReq.Header.Set("X-Api-Key", apiKey)
-	}
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(httpReq)
-	if err != nil {
-		return fmt.Errorf("http request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusNotFound {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("runner returned status %d: %s", resp.StatusCode, string(body))
-	}
-
-	return nil
 }
 
 var uuidRegex = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)

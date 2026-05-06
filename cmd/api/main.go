@@ -69,21 +69,17 @@ func main() {
 		slog.Error("grpc listen", "addr", cfg.GRPCListenAddr, "error", err)
 		os.Exit(1)
 	}
-	var grpcOpts []grpc.ServerOption
-	if cfg.GRPCServerCertFile != "" {
-		creds, err := grpctls.NewServerTransportCredentials(
-			cfg.GRPCServerCertFile,
-			cfg.GRPCServerKeyFile,
-			cfg.GRPCClientCAFile,
-		)
-		if err != nil {
-			slog.Error("grpc tls credentials", "error", err)
-			os.Exit(1)
-		}
-		grpcOpts = append(grpcOpts, grpc.Creds(creds))
-		slog.Info("runner registry grpc mTLS enabled")
+	creds, err := grpctls.NewServerTransportCredentials(
+		cfg.GRPCServerCertFile,
+		cfg.GRPCServerKeyFile,
+		cfg.GRPCClientCAFile,
+	)
+	if err != nil {
+		slog.Error("grpc tls credentials", "error", err)
+		os.Exit(1)
 	}
-	grpcSrv := grpc.NewServer(grpcOpts...)
+	slog.Info("runner registry grpc mTLS enabled")
+	grpcSrv := grpc.NewServer(grpc.Creds(creds))
 	pb.RegisterRunnerRegistryServer(grpcSrv, &grpcapi.RunnerRegistryServer{
 		Token: cfg.RegistrationToken,
 		Reg:   reg,

@@ -3,12 +3,17 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"google.golang.org/grpc"
+
+	"github.com/n8n-io/sandbox-service/internal/api/grpc/pb"
+	"github.com/n8n-io/sandbox-service/internal/grpctls"
 	"github.com/n8n-io/sandbox-service/internal/runner"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 	"github.com/n8n-io/sandbox-service/internal/runner/manager"
@@ -49,6 +54,29 @@ func main() {
 
 	go register.Run(ctx, cfg, mgr)
 
+	lis, err := net.Listen("tcp", cfg.ControlGRPCListenAddr)
+	if err != nil {
+		slog.Error("control grpc listen", "addr", cfg.ControlGRPCListenAddr, "error", err)
+		os.Exit(1)
+	}
+	creds, err := grpctls.NewServerTransportCredentials(
+		cfg.ControlGRPCServerCertFile,
+		cfg.ControlGRPCServerKeyFile,
+		cfg.ControlGRPCClientCAFile,
+	)
+	if err != nil {
+		slog.Error("control grpc tls", "error", err)
+		os.Exit(1)
+	}
+	slog.Info("sandbox control grpc mTLS enabled", "addr", cfg.ControlGRPCListenAddr)
+	controlGRPC := grpc.NewServer(grpc.Creds(creds))
+	pb.RegisterSandboxControlServer(controlGRPC, &runner.SandboxControlGRPC{Mgr: mgr, Cfg: cfg})
+	go func() {
+		if err := controlGRPC.Serve(lis); err != nil {
+			slog.Error("control grpc serve", "error", err)
+		}
+	}()
+
 	// Start server in background.
 	serverErr := make(chan error, 1)
 	go func() {
@@ -72,6 +100,18 @@ func main() {
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("graceful shutdown failed", "error", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		controlGRPC.GracefulStop()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		slog.Warn("control grpc graceful shutdown timed out; forcing stop")
+		controlGRPC.Stop()
 	}
 
 	// 2. Clean up containers

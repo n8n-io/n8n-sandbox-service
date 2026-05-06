@@ -15,8 +15,8 @@ A browser-based UI for interacting with the sandbox service API. Useful for manu
 ## Usage
 
 ```sh
-npm ci
-npm start
+pnpm install --frozen-lockfile
+pnpm start
 ```
 
 Then open `http://localhost:3000` in your browser.

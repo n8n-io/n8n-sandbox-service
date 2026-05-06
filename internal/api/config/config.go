@@ -41,10 +41,16 @@ type APIConfig struct {
 	// HeartbeatGrace is how long after the last gRPC heartbeat a runner may still be chosen for placement.
 	HeartbeatGrace time.Duration
 
-	// Runner gRPC mTLS (optional). All three must be set together.
+	// Runner registration gRPC mTLS (required). All three must be set.
 	GRPCServerCertFile string
 	GRPCServerKeyFile  string
 	GRPCClientCAFile   string
+
+	// API as mTLS client dialing runner SandboxControl (required). All three must be set.
+	RunnerControlGRPCClientCAFile     string
+	RunnerControlGRPCClientCertFile   string
+	RunnerControlGRPCClientKeyFile    string
+	RunnerControlGRPCClientServerName string // optional; defaults to runner dial host
 }
 
 // LoadAPI reads API gateway configuration from environment variables.
@@ -121,8 +127,27 @@ func LoadAPI() (*APIConfig, error) {
 	if cfg.GRPCClientCAFile != "" {
 		tlsN++
 	}
-	if tlsN != 0 && tlsN != 3 {
-		return nil, fmt.Errorf("SANDBOX_API_GRPC_TLS_CERT_FILE, SANDBOX_API_GRPC_TLS_KEY_FILE, and SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE must all be set together for mTLS")
+	if tlsN != 3 {
+		return nil, fmt.Errorf("SANDBOX_API_GRPC_TLS_CERT_FILE, SANDBOX_API_GRPC_TLS_KEY_FILE, and SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE are required for runner-registry mTLS")
+	}
+
+	cfg.RunnerControlGRPCClientCAFile = strings.TrimSpace(os.Getenv("SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE"))
+	cfg.RunnerControlGRPCClientCertFile = strings.TrimSpace(os.Getenv("SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE"))
+	cfg.RunnerControlGRPCClientKeyFile = strings.TrimSpace(os.Getenv("SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE"))
+	cfg.RunnerControlGRPCClientServerName = strings.TrimSpace(os.Getenv("SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_SERVER_NAME"))
+
+	ctlN := 0
+	if cfg.RunnerControlGRPCClientCAFile != "" {
+		ctlN++
+	}
+	if cfg.RunnerControlGRPCClientCertFile != "" {
+		ctlN++
+	}
+	if cfg.RunnerControlGRPCClientKeyFile != "" {
+		ctlN++
+	}
+	if ctlN != 3 {
+		return nil, fmt.Errorf("SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE, SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE, and SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE are required for control-plane mTLS")
 	}
 
 	return cfg, nil
