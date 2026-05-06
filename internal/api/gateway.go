@@ -39,7 +39,9 @@ func NewGatewayRouter(s *store.Store, cfg *config.APIConfig, reg *registry.Regis
 	var handler http.Handler = mux
 	handler = AuthMiddleware(cfg.APIKeys)(handler)
 	handler = LoggingMiddleware(handler)
-	handler = CORSMiddleware(handler)
+	if cfg.EnableCORS {
+		handler = CORSMiddleware(handler)
+	}
 	handler = RecoveryMiddleware(handler)
 	return handler, nil
 }

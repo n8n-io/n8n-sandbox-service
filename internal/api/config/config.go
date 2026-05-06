@@ -41,6 +41,9 @@ type APIConfig struct {
 	// HeartbeatGrace is how long after the last gRPC heartbeat a runner may still be chosen for placement.
 	HeartbeatGrace time.Duration
 
+	// EnableCORS enables CORS headers (allow all origins). Default false.
+	EnableCORS bool
+
 	// Runner registration gRPC mTLS (required). All three must be set.
 	GRPCServerCertFile string
 	GRPCServerKeyFile  string
@@ -103,6 +106,14 @@ func LoadAPI() (*APIConfig, error) {
 
 	if v := os.Getenv("SANDBOX_API_DATA_DIR"); v != "" {
 		cfg.DataDir = v
+	}
+
+	if v := os.Getenv("SANDBOX_API_ENABLE_CORS"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("SANDBOX_API_ENABLE_CORS must be a boolean, got %q", v)
+		}
+		cfg.EnableCORS = b
 	}
 
 	if v := os.Getenv("SANDBOX_API_RUNNER_HEARTBEAT_GRACE"); v != "" {
