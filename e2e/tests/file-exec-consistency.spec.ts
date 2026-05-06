@@ -63,11 +63,8 @@ test.describe('File API and Exec API path consistency', () => {
     const scriptPath = `${dir}/greet.sh`;
     const scriptContent = '#!/bin/sh\necho "hello $1"';
 
-    // Create dir via exec, write script via file API
-    await exec(sandboxId, `mkdir -p ${dir}`);
     await uploadFile(sandboxId, scriptPath, scriptContent);
 
-    // Make executable and run via exec
     await exec(sandboxId, `chmod +x ${scriptPath}`);
     const result = await exec(sandboxId, `${scriptPath} world`);
     expect(result.exitCode).toBe(0);
