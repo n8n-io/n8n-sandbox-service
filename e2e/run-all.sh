@@ -6,24 +6,15 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=e2e/lib/common.sh
+source "$SCRIPT_DIR/lib/common.sh"
+
 TLS_DIR="$(mktemp -d)"
 API_TLS_DNS="sandbox-api-e2e-mtls"
 CONTROL_SANS="runner-control,runner-control-a,runner-control-b"
 
-normalize_tls_permissions() {
-  chmod 755 "$TLS_DIR"
-  for f in "$TLS_DIR"/*.crt; do
-    [[ -e "$f" ]] || continue
-    chmod 644 "$f"
-  done
-  for f in "$TLS_DIR"/*.key; do
-    [[ -e "$f" ]] || continue
-    chmod 600 "$f"
-  done
-}
-
 cleanup() {
-  rm -rf "$TLS_DIR"
+	rm -rf "$TLS_DIR"
 }
 trap cleanup EXIT
 
@@ -35,8 +26,8 @@ make -C "$PROJECT_DIR" sdk-install sdk-build
 
 echo "Bootstrapping e2e mTLS material once for all phases..."
 OUT_DIR="$TLS_DIR" API_DNS="$API_TLS_DNS" CONTROL_SANS="$CONTROL_SANS" \
-  bash "$PROJECT_DIR/scripts/bootstrap-local-mtls.sh"
-normalize_tls_permissions
+	bash "$PROJECT_DIR/scripts/bootstrap-local-mtls.sh"
+e2e_normalize_tls_permissions "$TLS_DIR"
 
 export E2E_SKIP_BUILD=1
 export E2E_TLS_DIR="$TLS_DIR"
