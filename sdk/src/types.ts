@@ -10,8 +10,6 @@ export interface SandboxClientOptions {
 export interface SandboxRecord {
   id: string;
   status: string;
-  provider: string;
-  imageId: string;
   /** Unix timestamp (seconds) when the sandbox was created. */
   createdAt: number;
   /** Unix timestamp (seconds) of last activity. */
@@ -73,23 +71,6 @@ export interface ExecResult {
   success: boolean;
 }
 
-/** Options for creating a new sandbox. */
-export interface CreateSandboxOptions {
-  /** Dockerfile steps builder for custom image creation. */
-  dockerfile?: { build(): string[] };
-  /** Per-sandbox network allow/deny CIDRs. */
-  networkPolicy?: {
-    allowedIps?: string[];
-    deniedIps?: string[];
-  };
-  /** Per-sandbox resource constraints. */
-  resourceLimits?: {
-    memoryMb?: number;
-    cpuPercent?: number;
-    pidsMax?: number;
-  };
-}
-
 /** Accepted content types for file write operations. */
 export type FileContent = string | Buffer | Uint8Array;
 
@@ -131,8 +112,6 @@ export interface DeleteFileOptions {
 export type SandboxWireResponse = {
   id: string;
   status: string;
-  provider: string;
-  image_id?: string;
   created_at: number;
   last_active_at: number;
 };

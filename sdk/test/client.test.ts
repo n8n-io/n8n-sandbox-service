@@ -37,22 +37,16 @@ describe("SandboxClient", () => {
     mock.requestJson.mockResolvedValue({
       id: "abc",
       status: "running",
-      provider: "delhi",
-      image_id: "",
       created_at: 1000,
       last_active_at: 1000,
     });
 
     const result = await client.createSandbox();
 
-    expect(mock.requestJson).toHaveBeenCalledWith("POST", "/sandboxes", {
-      data: undefined,
-    });
+    expect(mock.requestJson).toHaveBeenCalledWith("POST", "/sandboxes");
     expect(result).toEqual({
       id: "abc",
       status: "running",
-      provider: "delhi",
-      imageId: "",
       createdAt: 1000,
       lastActiveAt: 1000,
     });
@@ -63,7 +57,6 @@ describe("SandboxClient", () => {
     mock.requestJson.mockResolvedValue({
       id: "xyz",
       status: "running",
-      provider: "delhi",
       created_at: 2000,
       last_active_at: 2000,
     });

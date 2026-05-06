@@ -1,5 +1,5 @@
 import { APIRequestContext } from '@playwright/test';
-import { SandboxClient, type CreateSandboxOptions, type ExecResult } from '@n8n/sandbox-client';
+import { SandboxClient, type ExecResult } from '@n8n/sandbox-client';
 
 const API_KEY = process.env.SANDBOX_API_KEY || 'test';
 const BASE_URL = process.env.BASE_URL || 'http://localhost:8080';
@@ -12,8 +12,8 @@ function headers(extra?: Record<string, string>): Record<string, string> {
   return { 'X-Api-Key': API_KEY, ...extra };
 }
 
-export async function createSandbox(options?: CreateSandboxOptions): Promise<string> {
-  const record = await client.createSandbox(options);
+export async function createSandbox(): Promise<string> {
+  const record = await client.createSandbox();
   return record.id;
 }
 
