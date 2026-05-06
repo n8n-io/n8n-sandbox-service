@@ -1,6 +1,6 @@
 # @n8n/sandbox-client
 
-TypeScript client for the n8n sandbox service API.
+Client for the n8n sandbox service API.
 
 ## Install
 
