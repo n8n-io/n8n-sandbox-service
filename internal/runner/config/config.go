@@ -75,7 +75,7 @@ type Config struct {
 	InterSandboxNetworkEnabled bool
 
 	// APIGRPCAddr is the host:port of the API's runner registration gRPC listener.
-	// Parsed from SANDBOX_RUNNER_API_GRPC_ADDR. When empty, registration is disabled.
+	// Parsed from SANDBOX_RUNNER_API_GRPC_ADDR.
 	APIGRPCAddr string
 
 	// RegistrationToken authenticates this runner to the API gRPC service.
@@ -87,14 +87,14 @@ type Config struct {
 	RunnerID string
 
 	// RunnerHTTPBaseURL is the base URL the API uses to reach this runner's HTTP API.
-	// Parsed from SANDBOX_RUNNER_HTTP_BASE_URL (required when SANDBOX_RUNNER_API_GRPC_ADDR is set).
+	// Parsed from SANDBOX_RUNNER_HTTP_BASE_URL.
 	RunnerHTTPBaseURL string
 
 	// CapacityTotal is reported to the API for placement (0 means unlimited).
 	// Parsed from SANDBOX_RUNNER_CAPACITY_TOTAL (default 1000).
 	CapacityTotal int32
 
-	// mTLS for registration gRPC client.
+	// mTLS for registration gRPC client (required).
 	GRPCServerCAFile   string
 	GRPCClientCertFile string
 	GRPCClientKeyFile  string
@@ -309,17 +309,18 @@ func Load() (*Config, error) {
 	if cfg.GRPCClientKeyFile != "" {
 		tlsN++
 	}
-	if tlsN != 0 && tlsN != 3 {
-		return nil, fmt.Errorf("SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE, SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE, and SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE must all be set together for registration mTLS")
+	if tlsN != 3 {
+		return nil, fmt.Errorf("SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE, SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE, and SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE are required for registration mTLS")
 	}
 
-	if cfg.APIGRPCAddr != "" {
-		if cfg.RegistrationToken == "" {
-			return nil, fmt.Errorf("SANDBOX_RUNNER_REGISTRATION_TOKEN must be set when SANDBOX_RUNNER_API_GRPC_ADDR is set")
-		}
-		if cfg.RunnerHTTPBaseURL == "" {
-			return nil, fmt.Errorf("SANDBOX_RUNNER_HTTP_BASE_URL must be set when SANDBOX_RUNNER_API_GRPC_ADDR is set")
-		}
+	if cfg.APIGRPCAddr == "" {
+		return nil, fmt.Errorf("SANDBOX_RUNNER_API_GRPC_ADDR must be set")
+	}
+	if cfg.RegistrationToken == "" {
+		return nil, fmt.Errorf("SANDBOX_RUNNER_REGISTRATION_TOKEN must be set")
+	}
+	if cfg.RunnerHTTPBaseURL == "" {
+		return nil, fmt.Errorf("SANDBOX_RUNNER_HTTP_BASE_URL must be set")
 	}
 
 	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR")); v != "" {
@@ -338,8 +339,8 @@ func Load() (*Config, error) {
 		}
 	}
 
-	if cfg.APIGRPCAddr != "" && cfg.ResolvedControlGRPCAdvertiseAddr() == "" {
-		return nil, fmt.Errorf("SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR or SANDBOX_RUNNER_HTTP_BASE_URL must resolve a control gRPC host:port when SANDBOX_RUNNER_API_GRPC_ADDR is set")
+	if cfg.ResolvedControlGRPCAdvertiseAddr() == "" {
+		return nil, fmt.Errorf("SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR or SANDBOX_RUNNER_HTTP_BASE_URL must resolve a control gRPC host:port")
 	}
 	ctlN := 0
 	if cfg.ControlGRPCServerCertFile != "" {

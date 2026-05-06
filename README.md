@@ -18,7 +18,7 @@ Build all images:
 make docker-amd64
 ```
 
-Run locally with Docker Compose (API plus two runners on a shared network). `make up` runs `scripts/bootstrap-local-mtls.sh` once to populate `.tls/` (gitignored), then start Compose with mTLS for runner→API gRPC by default. Use `SANDBOX_COMPOSE_TLS=0` if you need plaintext gRPC (for example without OpenSSL). See [Runner registration gRPC (mTLS)](#runner-registration-grpc-mtls).
+Run locally with Docker Compose (API plus two runners on a shared network). `make up` runs `scripts/bootstrap-local-mtls.sh` once to populate `.tls/` (gitignored), then starts Compose with required mTLS for registration and control gRPC. See [Runner registration gRPC (mTLS)](#runner-registration-grpc-mtls).
 
 Verify the API:
 
@@ -116,9 +116,9 @@ Runners register over gRPC and report health, capacity, and a **control gRPC add
 | `SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE` | *(required)* | Docker image used for sandbox containers |
 | `SANDBOX_RUNNER_DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker daemon endpoint used by the runner |
 | `SANDBOX_RUNNER_LISTEN_ADDR` | `:8080` | HTTP listen address |
-| `SANDBOX_RUNNER_API_GRPC_ADDR` | *(empty)* | API `host:port` for gRPC registration (omit to disable registration) |
-| `SANDBOX_RUNNER_REGISTRATION_TOKEN` | *(empty)* | Must match `SANDBOX_API_RUNNER_REGISTRATION_TOKEN` on the API when `SANDBOX_RUNNER_API_GRPC_ADDR` is set |
-| `SANDBOX_RUNNER_HTTP_BASE_URL` | *(empty)* | Base URL the API uses to reach this runner (e.g. `http://runner:8080`); required when registering |
+| `SANDBOX_RUNNER_API_GRPC_ADDR` | *(required)* | API `host:port` for gRPC registration |
+| `SANDBOX_RUNNER_REGISTRATION_TOKEN` | *(required)* | Must match `SANDBOX_API_RUNNER_REGISTRATION_TOKEN` on the API |
+| `SANDBOX_RUNNER_HTTP_BASE_URL` | *(required)* | Base URL the API uses to reach this runner (e.g. `http://runner:8080`) |
 | `SANDBOX_RUNNER_ID` | hostname | Stable runner id sent to the API |
 | `SANDBOX_RUNNER_CAPACITY_TOTAL` | `1000` | Reported capacity for placement (`0` = unlimited) |
 | `SANDBOX_RUNNER_DATA_DIR` | `/var/sandboxes` | Directory for SQLite state |
@@ -126,9 +126,9 @@ Runners register over gRPC and report health, capacity, and a **control gRPC add
 | `SANDBOX_RUNNER_ENABLE_CGROUPS` | `true` | Whether Docker resource limits are applied |
 | `SANDBOX_RUNNER_INTER_SANDBOX_NETWORK_ENABLED` | `false` | Whether sandboxes may talk to each other on `runner-bridge` |
 | `SANDBOX_RUNNER_DOCKER_INSECURE_REGISTRIES` | *(empty)* | Comma-separated insecure registries passed to dockerd |
-| `SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE` | *(empty)* | CA (PEM) that signed the API registration gRPC server cert |
-| `SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE` | *(empty)* | Runner client cert (PEM) for registration mTLS |
-| `SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE` | *(empty)* | Runner client key (PEM) for registration mTLS |
+| `SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE` | *(required)* | CA (PEM) that signed the API registration gRPC server cert |
+| `SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE` | *(required)* | Runner client cert (PEM) for registration mTLS |
+| `SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE` | *(required)* | Runner client key (PEM) for registration mTLS |
 | `SANDBOX_RUNNER_REGISTRATION_GRPC_SERVER_NAME` | *(empty)* | TLS name to verify on the API registration cert (defaults to host from `SANDBOX_RUNNER_API_GRPC_ADDR`) |
 | `SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR` | `:9091` | Listen address for **SandboxControl** gRPC |
 | `SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR` | *(derived)* | `host:port` sent to the API in heartbeats; required if listen is set and `SANDBOX_RUNNER_HTTP_BASE_URL` cannot be used to derive host/port |
@@ -138,13 +138,15 @@ Runners register over gRPC and report health, capacity, and a **control gRPC add
 
 ## Runner registration gRPC (mTLS)
 
-**Local Docker Compose:** `make up` runs `scripts/bootstrap-local-mtls.sh`, which writes a private CA plus leaf certs into `.tls/` at the repo root. If those files already exist, bootstrap does nothing unless you set `SANDBOX_TLS_REGEN=1`. Compose uses `compose.tls.yaml` by default to mount `.tls` and set `SANDBOX_*_GRPC_TLS_*`. Set `SANDBOX_COMPOSE_TLS=0` to skip the overlay and use plaintext gRPC.
+**Local Docker Compose:** `make up` runs `scripts/bootstrap-local-mtls.sh`, which writes a private CA plus leaf certs into `.tls/` at the repo root. If those files already exist, bootstrap does nothing unless you set `SANDBOX_TLS_REGEN=1`. Compose always mounts `.tls` via `compose.tls.yaml` and sets required `SANDBOX_*_GRPC_TLS_*` variables.
 
 **Kubernetes:** Use your own CA (often `cert-manager`). Mount PEMs from `Certificate` secrets and set the same env vars as in the tables above. See [`docs/cert-manager-k8s.md`](docs/cert-manager-k8s.md).
 
 **Registration vs lifecycle:** Runners dial the API over gRPC for registration. Sandbox **create/delete** use the runner’s **SandboxControl** gRPC address when advertised; **exec/files** and other sandbox routes are still proxied over HTTP.
 
 **Debugging gRPC:** See [`docs/grpcurl-debug.md`](docs/grpcurl-debug.md).
+
+**Security FAQ (draft):** See [`docs/security-faq.md`](docs/security-faq.md).
 
 **Bearer token:** Still required in metadata (`Authorization: Bearer …`) in addition to mTLS for registration.
 

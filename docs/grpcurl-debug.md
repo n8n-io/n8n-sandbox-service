@@ -37,7 +37,7 @@ The bootstrap script puts **both** compose runner hostnames in the **same** cont
 
 Registration uses a **client-streaming / server-streaming** RPC (`Connect`), not a single unary call. `grpcurl` can be awkward here; prefer exercising registration by running a runner process or a small Go test client.
 
-For a quick **TLS sanity check** that the API registry port answers with TLS (and optional client cert requirement), you can use `openssl` instead of `grpcurl`:
+For a quick **TLS sanity check** that the API registry port answers with TLS (and requires client certificates), you can use `openssl` instead of `grpcurl`:
 
 ```bash
 openssl s_client -connect localhost:9090 -servername n8n-sandbox-api-local -brief </dev/null

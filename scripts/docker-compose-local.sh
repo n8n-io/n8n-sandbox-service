@@ -12,9 +12,6 @@ if [[ "$(uname)" == "Darwin" ]]; then
 else
 	COMPOSE_FILES+=(-f compose.linux.yaml)
 fi
-
-if [[ "${SANDBOX_COMPOSE_TLS:-1}" != "0" ]]; then
-	COMPOSE_FILES+=(-f compose.tls.yaml)
-fi
+COMPOSE_FILES+=(-f compose.tls.yaml)
 
 exec docker compose "${COMPOSE_FILES[@]}" "$@"

@@ -8,24 +8,20 @@ import (
 	"strings"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
 	"github.com/n8n-io/sandbox-service/internal/api/grpc/pb"
 	"github.com/n8n-io/sandbox-service/internal/grpctls"
 )
 
-// TLS holds optional mTLS material for the API dialing a runner (all three PEM paths required when used).
+// TLS holds required mTLS material for the API dialing a runner.
 type TLS struct {
 	CAFile, CertFile, KeyFile string
 	ServerName                string // optional; defaults to dial host
 }
 
 func dialOpts(target string, tlsCfg *TLS) ([]grpc.DialOption, error) {
-	if tlsCfg == nil || (tlsCfg.CAFile == "" && tlsCfg.CertFile == "" && tlsCfg.KeyFile == "") {
-		return []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}, nil
-	}
-	if tlsCfg.CAFile == "" || tlsCfg.CertFile == "" || tlsCfg.KeyFile == "" {
+	if tlsCfg == nil || tlsCfg.CAFile == "" || tlsCfg.CertFile == "" || tlsCfg.KeyFile == "" {
 		return nil, fmt.Errorf("runnerctl: CA, cert, and key must all be set for control-plane mTLS")
 	}
 	serverName := strings.TrimSpace(tlsCfg.ServerName)

@@ -13,8 +13,8 @@ var ErrNoRunners = errors.New("no sandbox runners are registered or available")
 // Runner describes a registered sandbox runner.
 type Runner struct {
 	ID              string
-	HTTPBaseURL     string
-	ControlGRPCAddr string // optional; when set, API uses gRPC for sandbox create/delete
+	HTTPBaseURL     string // Endpoints proxied to the sandbox
+	ControlGRPCAddr string // Sandbox lifecycle methods
 	Healthy         bool
 	CapacityTotal   int32
 	CapacityUsed    int32

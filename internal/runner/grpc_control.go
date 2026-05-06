@@ -67,11 +67,10 @@ func (s *SandboxControlGRPC) CreateSandbox(ctx context.Context, req *pb.CreateSa
 	if err != nil {
 		return nil, toGRPCError(err)
 	}
-	ip := ""
-	if info != nil {
-		ip = info.IP
+	if info == nil {
+		return nil, status.Error(codes.Internal, "create container returned nil info")
 	}
-	return &pb.CreateSandboxResponse{SandboxId: sandboxID, ContainerIp: ip}, nil
+	return &pb.CreateSandboxResponse{SandboxId: sandboxID, ContainerIp: info.IP}, nil
 }
 
 // DeleteSandbox removes the sandbox container if it exists.

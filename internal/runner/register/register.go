@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
 	"github.com/n8n-io/sandbox-service/internal/api/grpc/pb"
@@ -20,11 +19,6 @@ import (
 
 // Run maintains a registration stream to the API until ctx is cancelled.
 func Run(ctx context.Context, cfg *config.Config, mgr *manager.Manager) {
-	if cfg.APIGRPCAddr == "" || cfg.RegistrationToken == "" {
-		slog.Warn("runner registration skipped (set SANDBOX_RUNNER_API_GRPC_ADDR and SANDBOX_RUNNER_REGISTRATION_TOKEN)")
-		return
-	}
-
 	backoff := time.Second
 	for {
 		select {
@@ -56,29 +50,24 @@ func Run(ctx context.Context, cfg *config.Config, mgr *manager.Manager) {
 }
 
 func connectOnce(ctx context.Context, cfg *config.Config, mgr *manager.Manager) error {
-	var dialOpts []grpc.DialOption
-	if cfg.GRPCServerCAFile != "" {
-		serverName := cfg.GRPCServerName
-		if serverName == "" {
-			host, _, err := net.SplitHostPort(cfg.APIGRPCAddr)
-			if err != nil {
-				return err
-			}
-			serverName = host
-		}
-		creds, err := grpctls.NewClientTransportCredentials(
-			cfg.GRPCServerCAFile,
-			cfg.GRPCClientCertFile,
-			cfg.GRPCClientKeyFile,
-			serverName,
-		)
+	serverName := cfg.GRPCServerName
+	if serverName == "" {
+		host, _, err := net.SplitHostPort(cfg.APIGRPCAddr)
 		if err != nil {
 			return err
 		}
-		dialOpts = append(dialOpts, grpc.WithTransportCredentials(creds))
-	} else {
-		dialOpts = append(dialOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		serverName = host
 	}
+	creds, err := grpctls.NewClientTransportCredentials(
+		cfg.GRPCServerCAFile,
+		cfg.GRPCClientCertFile,
+		cfg.GRPCClientKeyFile,
+		serverName,
+	)
+	if err != nil {
+		return err
+	}
+	dialOpts := []grpc.DialOption{grpc.WithTransportCredentials(creds)}
 
 	conn, err := grpc.NewClient(cfg.APIGRPCAddr, dialOpts...)
 	if err != nil {

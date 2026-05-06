@@ -151,16 +151,11 @@ func handleCreateSandbox(s *store.Store, reg *registry.Registry, cfg *config.API
 			return
 		}
 
-		controlAddr := strings.TrimSpace(run.ControlGRPCAddr)
+		controlAddr := run.ControlGRPCAddr
 		tlsCfg := runnerControlTLS(cfg)
 
 		sandboxID := generateUUID()
 		now := time.Now().Unix()
-
-		if controlAddr == "" {
-			writeError(w, http.StatusServiceUnavailable, "runner has no control gRPC address")
-			return
-		}
 		gresp, err := runnerctl.CreateSandbox(r.Context(), controlAddr, cfg.RunnerAPIKey, tlsCfg, sandboxID, "{}")
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to create container: "+err.Error())
@@ -213,13 +208,12 @@ func handleDeleteSandbox(s *store.Store, cfg *config.APIConfig) http.HandlerFunc
 			return
 		}
 
-		controlAddr := strings.TrimSpace(rec.RunnerControlGRPCAddr)
-		if controlAddr == "" {
-			writeError(w, http.StatusBadGateway, "sandbox has no runner control gRPC address")
+		controlAddr := rec.RunnerControlGRPCAddr
+		tlsCfg := runnerControlTLS(cfg)
+		if err := runnerctl.DeleteSandbox(r.Context(), controlAddr, cfg.RunnerAPIKey, tlsCfg, id); err != nil {
+			writeError(w, http.StatusBadGateway, "failed to delete container: "+err.Error())
 			return
 		}
-		tlsCfg := runnerControlTLS(cfg)
-		_ = runnerctl.DeleteSandbox(r.Context(), controlAddr, cfg.RunnerAPIKey, tlsCfg, id)
 
 		if err := s.Delete(id); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
