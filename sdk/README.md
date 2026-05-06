@@ -1,6 +1,6 @@
 # @n8n/sandbox-client
 
-TypeScript client for the n8n sandbox service API.
+Client for the n8n sandbox service API.
 
 ## Install
 
@@ -25,27 +25,6 @@ const client = new SandboxClient({
 // Create a sandbox
 const sandbox = await client.createSandbox();
 console.log(sandbox.id); // UUID
-
-// Create with custom image
-import { DockerfileStepsBuilder } from '@n8n/sandbox-client';
-
-const dockerfile = new DockerfileStepsBuilder()
-  .run('apt-get update && apt-get install -y git')
-  .run('npm install -g typescript');
-
-const sandbox = await client.createSandbox({ dockerfile });
-
-// Create with network policy and resource limits
-const sandbox = await client.createSandbox({
-  networkPolicy: {
-    deniedIps: ['10.0.0.0/8'],
-  },
-  resourceLimits: {
-    memoryMb: 512,
-    cpuPercent: 150,
-    pidsMax: 128,
-  },
-});
 
 // Get sandbox info
 const info = await client.getSandbox(sandbox.id);
