@@ -11,6 +11,41 @@ const pyConnect = (ip: string, port: number = 80, timeout: number = 3) =>
 const pyResolve = (host: string) =>
   `python3 -c "import socket; print(socket.gethostbyname('${host}'))"`;
 
+function isTransientExecError(err: unknown): boolean {
+  const status = (err as { status?: number })?.status;
+  if (status === 502 || status === 503) {
+    return true;
+  }
+  const msg = String((err as Error)?.message || '').toLowerCase();
+  return (
+    msg.includes('internal server error') ||
+    msg.includes('daemon unreachable') ||
+    msg.includes('sandbox exec stream ended without an exit event')
+  );
+}
+
+async function execWithTransientRetry(
+  id: string,
+  command: string,
+  timeoutMs: number,
+  retryWindowMs: number = 12_000,
+) {
+  const deadline = Date.now() + retryWindowMs;
+  let lastErr: unknown;
+  while (Date.now() < deadline) {
+    try {
+      return await exec(id, command, { timeoutMs });
+    } catch (err) {
+      lastErr = err;
+      if (!isTransientExecError(err)) {
+        throw err;
+      }
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }
+  throw new Error(`exec did not recover within ${retryWindowMs}ms: ${String(lastErr)}`);
+}
+
 test.describe('Network isolation', () => {
   test('sandbox can reach public internet', async () => {
     const id = await createSandbox();
@@ -36,9 +71,7 @@ test.describe('Network isolation', () => {
       ];
 
       for (const ip of privateIPs) {
-        const result = await exec(id, pyConnect(ip, 80, 3), {
-          timeoutMs: 10_000,
-        });
+        const result = await execWithTransientRetry(id, pyConnect(ip, 80, 3), 10_000);
         expect(result.exitCode, `expected private IP ${ip} to be unreachable`).not.toBe(0);
       }
     } finally {
@@ -51,25 +84,23 @@ test.describe('Network isolation', () => {
     const id2 = await createSandbox();
     try {
       // Get sandbox 2's IP
-      const ipResult = await exec(id2, 'hostname -I', { timeoutMs: 5_000 });
+      const ipResult = await execWithTransientRetry(id2, 'hostname -I', 5_000);
       expect(ipResult.exitCode).toBe(0);
       const sandbox2IP = ipResult.stdout.trim();
       expect(sandbox2IP).toBeTruthy();
 
       // Start a TCP listener in sandbox 2 on port 9999
-      await exec(id2, `python3 -c "
+      await execWithTransientRetry(id2, `python3 -c "
 import socket, threading
 s = socket.socket()
 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 s.bind(('0.0.0.0', 9999))
 s.listen(1)
 import time; time.sleep(30)
-" &`, { timeoutMs: 5_000 });
+" &`, 5_000);
 
       // Sandbox 1 should not be able to reach sandbox 2
-      const result = await exec(id1, pyConnect(sandbox2IP, 9999, 3), {
-        timeoutMs: 10_000,
-      });
+      const result = await execWithTransientRetry(id1, pyConnect(sandbox2IP, 9999, 3), 10_000);
       expect(result.exitCode, `expected sandbox 1 to not reach sandbox 2 at ${sandbox2IP}`).not.toBe(0);
     } finally {
       await deleteSandbox(id1);
@@ -80,7 +111,7 @@ import time; time.sleep(30)
   test('DNS resolution works', async () => {
     const id = await createSandbox();
     try {
-      const result = await exec(id, pyResolve('example.com'), { timeoutMs: 10_000 });
+      const result = await execWithTransientRetry(id, pyResolve('example.com'), 10_000);
       expect(result.exitCode).toBe(0);
       // Should resolve to an IP address
       expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
