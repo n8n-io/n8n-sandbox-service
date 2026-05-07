@@ -90,14 +90,14 @@ test.describe('Network isolation', () => {
       expect(sandbox2IP).toBeTruthy();
 
       // Start a TCP listener in sandbox 2 on port 9999
-      await execWithTransientRetry(id2, `python3 -c "
+      await exec(id2, `python3 -c "
 import socket, threading
 s = socket.socket()
 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 s.bind(('0.0.0.0', 9999))
 s.listen(1)
 import time; time.sleep(30)
-" &`, 5_000);
+" &`, { timeoutMs: 5_000 });
 
       // Sandbox 1 should not be able to reach sandbox 2
       const result = await execWithTransientRetry(id1, pyConnect(sandbox2IP, 9999, 3), 10_000);
