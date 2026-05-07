@@ -1,4 +1,6 @@
 import { APIRequestContext } from '@playwright/test';
+import * as http from 'node:http';
+import * as https from 'node:https';
 import { SandboxClient, type ExecResult } from '@n8n/sandbox-client';
 
 const API_KEY = process.env.SANDBOX_API_KEY || 'test';
@@ -50,6 +52,68 @@ export async function downloadFile(
   const filePath = path.startsWith('/') ? path : `/${path}`;
   const buf = await client.readFile(id, filePath);
   return buf.toString('utf-8');
+}
+
+/**
+ * Starts an exec via a streaming HTTP request, reads until the session event
+ * arrives, then destroys the response (simulating a client disconnect).
+ * Returns the exec_id from the session event.
+ */
+export function startAndDisconnect(sandboxId: string, command: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const url = new URL(`${BASE_URL}/sandboxes/${sandboxId}/exec`);
+    const reqFn = url.protocol === 'https:' ? https.request : http.request;
+    const body = JSON.stringify({ command });
+    let resolved = false;
+
+    const req = reqFn(
+      url,
+      {
+        method: 'POST',
+        headers: {
+          'X-Api-Key': API_KEY,
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(body).toString(),
+        },
+      },
+      (res) => {
+        let buffer = '';
+        const onData = (chunk: Buffer) => {
+          buffer += chunk.toString('utf-8');
+          let idx = buffer.indexOf('\n');
+          while (idx !== -1) {
+            const line = buffer.slice(0, idx).trim();
+            buffer = buffer.slice(idx + 1);
+            if (line.length > 0) {
+              const event = JSON.parse(line);
+              if (event.type === 'session' && event.exec_id) {
+                resolved = true;
+                res.removeListener('data', onData);
+                res.destroy();
+                resolve(event.exec_id as string);
+                return;
+              }
+            }
+            idx = buffer.indexOf('\n');
+          }
+        };
+        res.on('data', onData);
+        res.on('end', () => {
+          if (!resolved) reject(new Error('stream ended without session event'));
+        });
+        res.on('error', (err) => {
+          if (!resolved) {
+            console.error('startAndDisconnect stream error:', err);
+            reject(err);
+          }
+        });
+      },
+    );
+
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
 }
 
 export async function apiRequest(

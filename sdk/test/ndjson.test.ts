@@ -9,8 +9,8 @@ function streamFrom(lines: string[]): Readable {
 describe("readNdjsonStream", () => {
   it("parses stdout and stderr events", async () => {
     const stream = streamFrom([
-      '{"type":"stdout","data":"hello\\n"}',
-      '{"type":"stderr","data":"warn"}',
+      '{"seq":1,"type":"stdout","data":"hello\\n"}',
+      '{"seq":2,"type":"stderr","data":"warn"}',
     ]);
 
     const events = [];
@@ -19,14 +19,14 @@ describe("readNdjsonStream", () => {
     }
 
     expect(events).toEqual([
-      { type: "stdout", data: "hello\n" },
-      { type: "stderr", data: "warn" },
+      { seq: 1, type: "stdout", data: "hello\n" },
+      { seq: 2, type: "stderr", data: "warn" },
     ]);
   });
 
   it("parses exit events", async () => {
     const stream = streamFrom([
-      '{"type":"exit","exit_code":0,"success":true,"execution_time_ms":42,"timed_out":false,"killed":false}',
+      '{"seq":3,"type":"exit","exit_code":0,"success":true,"execution_time_ms":42,"timed_out":false,"killed":false}',
     ]);
 
     const events = [];
@@ -36,6 +36,7 @@ describe("readNdjsonStream", () => {
 
     expect(events).toEqual([
       {
+        seq: 3,
         type: "exit",
         exit_code: 0,
         success: true,
@@ -47,20 +48,20 @@ describe("readNdjsonStream", () => {
   });
 
   it("parses error events", async () => {
-    const stream = streamFrom(['{"type":"error","error":"something broke"}']);
+    const stream = streamFrom(['{"seq":1,"type":"error","error":"something broke"}']);
 
     const events = [];
     for await (const event of readNdjsonStream(stream)) {
       events.push(event);
     }
 
-    expect(events).toEqual([{ type: "error", error: "something broke" }]);
+    expect(events).toEqual([{ seq: 1, type: "error", error: "something broke" }]);
   });
 
   it("handles chunked data split across boundaries", async () => {
     const stream = Readable.from([
-      Buffer.from('{"type":"stdout","data":"a"}\n{"type"'),
-      Buffer.from(':"stdout","data":"b"}\n'),
+      Buffer.from('{"seq":1,"type":"stdout","data":"a"}\n{"seq":2'),
+      Buffer.from(',"type":"stdout","data":"b"}\n'),
     ]);
 
     const events = [];
@@ -69,14 +70,14 @@ describe("readNdjsonStream", () => {
     }
 
     expect(events).toEqual([
-      { type: "stdout", data: "a" },
-      { type: "stdout", data: "b" },
+      { seq: 1, type: "stdout", data: "a" },
+      { seq: 2, type: "stdout", data: "b" },
     ]);
   });
 
   it("preserves UTF-8 characters split across chunk boundaries", async () => {
     const stream = Readable.from([
-      Buffer.from('{"type":"stdout","data":"caf'),
+      Buffer.from('{"seq":1,"type":"stdout","data":"caf'),
       Buffer.from([0xc3]),
       Buffer.from([0xa9]),
       Buffer.from('"}\n'),
@@ -87,7 +88,7 @@ describe("readNdjsonStream", () => {
       events.push(event);
     }
 
-    expect(events).toEqual([{ type: "stdout", data: "café" }]);
+    expect(events).toEqual([{ seq: 1, type: "stdout", data: "café" }]);
   });
 
   it("returns error event for invalid JSON", async () => {
@@ -117,38 +118,48 @@ describe("readNdjsonStream", () => {
   });
 
   it("skips empty lines", async () => {
-    const stream = Readable.from([Buffer.from('\n\n{"type":"stdout","data":"ok"}\n\n')]);
+    const stream = Readable.from([Buffer.from('\n\n{"seq":1,"type":"stdout","data":"ok"}\n\n')]);
 
     const events = [];
     for await (const event of readNdjsonStream(stream)) {
       events.push(event);
     }
 
-    expect(events).toEqual([{ type: "stdout", data: "ok" }]);
+    expect(events).toEqual([{ seq: 1, type: "stdout", data: "ok" }]);
   });
 
   it("handles trailing data without newline", async () => {
-    const stream = Readable.from([Buffer.from('{"type":"stdout","data":"last"}')]);
+    const stream = Readable.from([Buffer.from('{"seq":1,"type":"stdout","data":"last"}')]);
 
     const events = [];
     for await (const event of readNdjsonStream(stream)) {
       events.push(event);
     }
 
-    expect(events).toEqual([{ type: "stdout", data: "last" }]);
+    expect(events).toEqual([{ seq: 1, type: "stdout", data: "last" }]);
   });
 });
 
 describe("parseExecEvent", () => {
+  it("parses session event", () => {
+    expect(parseExecEvent('{"seq":0,"type":"session","exec_id":"abc-123"}')).toEqual({
+      seq: 0,
+      type: "session",
+      exec_id: "abc-123",
+    });
+  });
+
   it("parses stdout event", () => {
-    expect(parseExecEvent('{"type":"stdout","data":"hello"}')).toEqual({
+    expect(parseExecEvent('{"seq":1,"type":"stdout","data":"hello"}')).toEqual({
+      seq: 1,
       type: "stdout",
       data: "hello",
     });
   });
 
   it("parses stderr event", () => {
-    expect(parseExecEvent('{"type":"stderr","data":"err"}')).toEqual({
+    expect(parseExecEvent('{"seq":2,"type":"stderr","data":"err"}')).toEqual({
+      seq: 2,
       type: "stderr",
       data: "err",
     });
@@ -170,10 +181,10 @@ describe("parseExecEvent", () => {
 
   it("returns error for exit event with wrong field types", () => {
     expect(
-      parseExecEvent('{"type":"exit","exit_code":"zero","success":true,"execution_time_ms":42,"timed_out":false,"killed":false}'),
+      parseExecEvent('{"seq":1,"type":"exit","exit_code":"zero","success":true,"execution_time_ms":42,"timed_out":false,"killed":false}'),
     ).toEqual({
       type: "error",
-      error: 'Invalid exec event payload: {"type":"exit","exit_code":"zero","success":true,"execution_time_ms":42,"timed_out":false,"killed":false}',
+      error: 'Invalid exec event payload: {"seq":1,"type":"exit","exit_code":"zero","success":true,"execution_time_ms":42,"timed_out":false,"killed":false}',
     });
   });
 });

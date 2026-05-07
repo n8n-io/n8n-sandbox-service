@@ -1,68 +1,132 @@
+import { randomUUID } from "node:crypto";
 import { SandboxServiceError } from "./errors";
+import { ExecStreamConsumer } from "./exec-stream-consumer";
 import type { HttpClient } from "./http";
-import { readNdjsonStream } from "./ndjson";
 import type { ExecRequest, ExecResult } from "./types";
+
+const MAX_RESUME_RETRIES = 10;
+const RESUME_DELAY_MS = 250;
+const TRANSIENT_ERROR_CODES = new Set([
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "EPIPE",
+  "ETIMEDOUT",
+  "ECONNABORTED",
+  "ERR_STREAM_PREMATURE_CLOSE",
+]);
 
 export async function exec(
   http: HttpClient,
   id: string,
   request: ExecRequest,
 ): Promise<ExecResult> {
-  const { stream } = await http.requestStream("POST", `/sandboxes/${id}/exec`, {
-    data: {
-      command: request.command,
-      env: request.env,
-      workdir: request.workdir,
-      timeout_ms: request.timeoutMs,
-    },
-    signal: request.abortSignal,
-  });
+  const execId = randomUUID();
+  const consumer = new ExecStreamConsumer(request.onStdout, request.onStderr);
+  let retries = 0;
 
-  let stdout = "";
-  let stderr = "";
-  let exitMeta: {
-    exitCode: number;
-    executionTimeMs: number;
-    timedOut: boolean;
-    killed: boolean;
-    success: boolean;
-  } | null = null;
+  const onError = async (error: unknown) => {
+    if (request.abortSignal?.aborted) {
+      await cancelExecSession(http, id, execId).catch(() => {});
+      throw error;
+    }
+    if (consumer.isDone) return;
+    if (!isTransientError(error)) throw error;
+    if (++retries > MAX_RESUME_RETRIES) throw error;
+    await delay(RESUME_DELAY_MS);
+  };
 
-  for await (const event of readNdjsonStream(stream)) {
-    switch (event.type) {
-      case "stdout":
-        stdout += event.data;
-        request.onStdout?.(event.data);
-        break;
-      case "stderr":
-        stderr += event.data;
-        request.onStderr?.(event.data);
-        break;
-      case "error":
-        throw new SandboxServiceError(event.error, 0);
-      case "exit":
-        exitMeta = {
-          exitCode: event.exit_code,
-          executionTimeMs: event.execution_time_ms,
-          timedOut: event.timed_out,
-          killed: event.killed,
-          success: event.success,
-        };
-        break;
+  // Phase 1: Start command via POST (idempotent via exec_id)
+  while (!consumer.isDone) {
+    try {
+      const { stream } = await http.requestStream(
+        "POST",
+        `/sandboxes/${id}/exec`,
+        {
+          data: {
+            command: request.command,
+            env: request.env,
+            workdir: request.workdir,
+            timeout_ms: request.timeoutMs,
+            exec_id: execId,
+          },
+          signal: request.abortSignal,
+        },
+      );
+      await consumer.consume(stream);
+      break;
+    } catch (error) {
+      await onError(error);
+      if (consumer.lastSeq >= 0) break; // Received events, switch to resume
     }
   }
 
-  if (!exitMeta) {
-    throw new SandboxServiceError("Sandbox exec stream ended without an exit event", 0);
+  // Phase 2: Resume via GET (exec_id always known)
+  while (!consumer.isDone) {
+    try {
+      const params: Record<string, string> = { follow: "true" };
+      if (consumer.lastSeq >= 0) params.after = String(consumer.lastSeq);
+      const { stream } = await http.requestStream(
+        "GET",
+        `/sandboxes/${id}/exec/${execId}`,
+        { params, signal: request.abortSignal },
+      );
+      await consumer.consume(stream);
+      break;
+    } catch (error) {
+      await onError(error);
+    }
   }
 
-  return {
-    exitCode: exitMeta.exitCode,
-    stdout,
-    stderr,
-    executionTimeMs: exitMeta.executionTimeMs,
-    timedOut: exitMeta.timedOut,
-    killed: exitMeta.killed,
-    success: exitMeta.success,
-  };
+  return consumer.result();
+}
+
+export async function resumeExecSession(
+  http: HttpClient,
+  sandboxId: string,
+  execId: string,
+  afterSeq?: number,
+): Promise<ExecResult> {
+  const params: Record<string, string> = {};
+  if (afterSeq !== undefined) {
+    params.after = String(afterSeq);
+  }
+
+  const { stream } = await http.requestStream(
+    "GET",
+    `/sandboxes/${sandboxId}/exec/${execId}`,
+    { params },
+  );
+
+  const consumer = new ExecStreamConsumer();
+  await consumer.consume(stream);
+  return consumer.result();
+}
+
+export async function cancelExecSession(
+  http: HttpClient,
+  sandboxId: string,
+  execId: string,
+): Promise<void> {
+  await http.requestVoid(
+    "DELETE",
+    `/sandboxes/${sandboxId}/exec/${execId}`,
+  );
+}
+
+function isTransientError(error: unknown): boolean {
+  if (error instanceof SandboxServiceError) {
+    return error.status === 0 || error.status === 503;
+  }
+  if (!(error instanceof Error)) return false;
+
+  const code = (error as NodeJS.ErrnoException).code;
+  if (code) {
+    return TRANSIENT_ERROR_CODES.has(code);
+  }
+
+  return false;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

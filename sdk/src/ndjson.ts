@@ -2,6 +2,7 @@ import type { Readable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import type {
   ExecEvent,
+  ExecSessionEvent,
   ExecStdoutEvent,
   ExecStderrEvent,
   ExecExitEvent,
@@ -10,12 +11,16 @@ import type {
 
 type JsonObject = Record<string, unknown>;
 
+function isSessionEvent(json: JsonObject): json is ExecSessionEvent {
+  return json.type === "session" && typeof json.exec_id === "string" && typeof json.seq === "number";
+}
+
 function isStdoutEvent(json: JsonObject): json is ExecStdoutEvent {
-  return json.type === "stdout" && typeof json.data === "string";
+  return json.type === "stdout" && typeof json.data === "string" && typeof json.seq === "number";
 }
 
 function isStderrEvent(json: JsonObject): json is ExecStderrEvent {
-  return json.type === "stderr" && typeof json.data === "string";
+  return json.type === "stderr" && typeof json.data === "string" && typeof json.seq === "number";
 }
 
 function isExitEvent(json: JsonObject): json is ExecExitEvent {
@@ -25,7 +30,8 @@ function isExitEvent(json: JsonObject): json is ExecExitEvent {
     typeof json.success === "boolean" &&
     typeof json.execution_time_ms === "number" &&
     typeof json.timed_out === "boolean" &&
-    typeof json.killed === "boolean"
+    typeof json.killed === "boolean" &&
+    typeof json.seq === "number"
   );
 }
 
@@ -66,10 +72,11 @@ export function parseExecEvent(line: string): ExecEvent {
   try {
     const json = JSON.parse(line) as JsonObject;
 
+    if (isSessionEvent(json)) return json;
     if (isStdoutEvent(json)) return json;
     if (isStderrEvent(json)) return json;
     if (isExitEvent(json)) return json;
-    if (isErrorEvent(json)) return { type: "error", error: json.error };
+    if (isErrorEvent(json)) return { ...json, type: "error" as const };
 
     return { type: "error", error: `Invalid exec event payload: ${line}` };
   } catch (error) {
