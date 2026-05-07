@@ -2,18 +2,6 @@
 
 All endpoints except `/healthz` require the `X-Api-Key` header for authentication.
 
-Runtime topology:
-- Public clients call the API container over HTTP (authenticated with `X-Api-Key`).
-- Each runner opens a **private gRPC** bidirectional stream to the API (`RunnerRegistry.Connect`), authenticated with `Authorization: Bearer <SANDBOX_RUNNER_REGISTRATION_TOKEN>`. Heartbeats carry `runner_id`, `http_base_url`, required `control_grpc_addr`, health, and capacity. Each heartbeat must include an absolute `http` or `https` `http_base_url` and a non-empty `control_grpc_addr` (or omit either after the first to reuse the stream’s last value); otherwise the RPC fails with `InvalidArgument`.
-- The API keeps an in-memory registry of runners and selects one using **round-robin** when it needs a runner (sandbox creation, image proxy pick). Creating a sandbox persists which runner owns it. Sandbox **create/delete** use gRPC (`SandboxControl` on the runner). Sandbox-scoped **proxy** requests (exec, files, mkdir, stat, …) always go to **that** runner’s HTTP base URL.
-- If a sandbox container exits on its assigned runner (for example crash/OOM), Docker restart policy restarts it and the same sandbox ID remains bound to that runner.
-- If no runner is registered (or none are healthy / within capacity), operations that need a runner return **503** with a JSON error whose message explains that no runners are available.
-- Sandbox-scoped requests are proxied to the **stored** runner HTTP URL for that sandbox. If that runner is down or unreachable, the API returns **503** with JSON `error` **`runner unavailable`** (same shape as other API errors).
-
-Environment (API): `SANDBOX_API_RUNNER_REGISTRATION_TOKEN` (required), `SANDBOX_API_GRPC_LISTEN_ADDR` (default `:9090`), `SANDBOX_API_RUNNER_HEARTBEAT_GRACE` (default `45s` — max age of last gRPC heartbeat for a runner to be eligible for placement), `SANDBOX_API_ENABLE_CORS` (default `false`, enables CORS middleware allowing all origins), plus existing HTTP settings. mTLS for registration is required: `SANDBOX_API_GRPC_TLS_CERT_FILE`, `SANDBOX_API_GRPC_TLS_KEY_FILE`, `SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE`. mTLS for dialing runner SandboxControl is required: `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE`, `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE`, `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE`; `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_SERVER_NAME` remains optional.
-
-Environment (runner): `SANDBOX_RUNNER_API_KEYS`, `SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE`, `SANDBOX_RUNNER_API_GRPC_ADDR`, `SANDBOX_RUNNER_REGISTRATION_TOKEN`, and `SANDBOX_RUNNER_HTTP_BASE_URL` are required (`SANDBOX_RUNNER_ID`, `SANDBOX_RUNNER_CAPACITY_TOTAL` remain optional). mTLS for registration is required: `SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE`, `SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE`, `SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE`; `SANDBOX_RUNNER_REGISTRATION_GRPC_SERVER_NAME` remains optional. SandboxControl listener defaults to `SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR=:9091`; `SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR` remains optional (derived from `SANDBOX_RUNNER_HTTP_BASE_URL` when unset). mTLS for SandboxControl is required: `SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE`, `SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE`, `SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE`.
-
 ## Error Response Format
 
 ```json
@@ -495,17 +483,3 @@ curl "http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/stat?
   -H "X-Api-Key: YOUR_API_KEY"
 ```
 
----
-
-## Middleware
-
-Applied to all routes in order:
-
-1. **RecoveryMiddleware** — catches panics, returns `500`
-2. **CORSMiddleware** — allows all origins; only active when `SANDBOX_API_ENABLE_CORS=true`
-3. **LoggingMiddleware** — logs method, path, status, duration
-4. **AuthMiddleware** — validates `X-Api-Key` header (skipped for `/healthz`)
-
-## Abort Mechanism
-
-Closing the HTTP connection aborts the running command. The server detects client disconnection via context cancellation and kills the entire process group.
