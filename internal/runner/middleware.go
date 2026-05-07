@@ -28,6 +28,10 @@ func AuthMiddleware(apiKeys map[string]struct{}) func(http.Handler) http.Handler
 // LoggingMiddleware logs HTTP requests.
 func LoggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" {
+			next.ServeHTTP(w, r)
+			return
+		}
 		start := time.Now()
 		next.ServeHTTP(w, r)
 		slog.Info("request",
