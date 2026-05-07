@@ -1,6 +1,7 @@
 import axios, { type AxiosInstance, type Method, isAxiosError } from "axios";
 import type { Readable } from "node:stream";
 import { SandboxServiceError, createErrorFromResponse } from "./errors";
+import type { RetryOptions } from "./types";
 
 export interface RequestOptions {
   data?: unknown;
@@ -9,10 +10,19 @@ export interface RequestOptions {
   signal?: AbortSignal;
 }
 
+interface NormalizedRetryOptions {
+  attempts: number;
+  baseDelayMs: number;
+  maxDelayMs: number;
+  retryOnStatuses: Set<number>;
+  jitter: boolean;
+}
+
 export class HttpClient {
   private readonly instance: AxiosInstance;
+  private readonly retry: NormalizedRetryOptions;
 
-  constructor(baseUrl: string, apiKey?: string) {
+  constructor(baseUrl: string, apiKey?: string, retry?: RetryOptions) {
     const normalizedBase = baseUrl.replace(/\/+$/, "");
     if (!normalizedBase) {
       throw new Error("Sandbox service URL is not configured");
@@ -22,10 +32,17 @@ export class HttpClient {
       baseURL: normalizedBase,
       headers: apiKey ? { "X-Api-Key": apiKey } : {},
     });
+    this.retry = {
+      attempts: Math.max(0, retry?.attempts ?? 0),
+      baseDelayMs: Math.max(0, retry?.baseDelayMs ?? 200),
+      maxDelayMs: Math.max(0, retry?.maxDelayMs ?? 2000),
+      retryOnStatuses: new Set(retry?.retryOnStatuses ?? [429, 502, 503]),
+      jitter: retry?.jitter ?? true,
+    };
   }
 
   async requestJson<T>(method: Method, path: string, options: RequestOptions = {}): Promise<T> {
-    try {
+    return this.withRetry(async () => {
       const response = await this.instance.request<T>({
         method,
         url: path,
@@ -35,9 +52,7 @@ export class HttpClient {
         signal: options.signal,
       });
       return response.data;
-    } catch (error) {
-      throw this.toServiceError(error);
-    }
+    }, options.signal);
   }
 
   async requestStream(
@@ -45,7 +60,7 @@ export class HttpClient {
     path: string,
     options: RequestOptions = {},
   ): Promise<{ stream: Readable; status: number }> {
-    try {
+    return this.withRetry(async () => {
       const response = await this.instance.request<Readable>({
         method,
         url: path,
@@ -63,14 +78,11 @@ export class HttpClient {
       }
 
       return { stream: response.data, status: response.status };
-    } catch (error) {
-      if (error instanceof SandboxServiceError) throw error;
-      throw this.toServiceError(error);
-    }
+    }, options.signal);
   }
 
   async requestBuffer(method: Method, path: string, options: Omit<RequestOptions, "data"> = {}): Promise<Buffer> {
-    try {
+    return this.withRetry(async () => {
       const response = await this.instance.request<ArrayBuffer>({
         method,
         url: path,
@@ -87,13 +99,11 @@ export class HttpClient {
       }
 
       return body;
-    } catch (error) {
-      throw this.toServiceError(error);
-    }
+    }, options.signal);
   }
 
   async requestVoid(method: Method, path: string, options: RequestOptions = {}): Promise<void> {
-    try {
+    return this.withRetry(async () => {
       await this.instance.request({
         method,
         url: path,
@@ -102,9 +112,7 @@ export class HttpClient {
         headers: options.headers,
         signal: options.signal,
       });
-    } catch (error) {
-      throw this.toServiceError(error);
-    }
+    }, options.signal);
   }
 
   private toServiceError(error: unknown): SandboxServiceError {
@@ -116,6 +124,60 @@ export class HttpClient {
 
     const message = error instanceof Error ? error.message : "Unknown sandbox service error";
     return new SandboxServiceError(message, 0);
+  }
+
+  private async withRetry<T>(
+    operation: () => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    let attempt = 0;
+    while (true) {
+      try {
+        return await operation();
+      } catch (error) {
+        const serviceError = this.toServiceError(error);
+        if (!this.shouldRetry(serviceError, attempt, signal)) {
+          throw serviceError;
+        }
+
+        const delayMs = this.retryDelayMs(attempt);
+        await this.sleep(delayMs, signal);
+        attempt += 1;
+      }
+    }
+  }
+
+  private shouldRetry(error: SandboxServiceError, attempt: number, signal?: AbortSignal): boolean {
+    if (signal?.aborted) return false;
+    if (attempt >= this.retry.attempts) return false;
+    if (error.status === 0) return true;
+    return this.retry.retryOnStatuses.has(error.status);
+  }
+
+  private retryDelayMs(attempt: number): number {
+    const base = this.retry.baseDelayMs * (2 ** attempt);
+    const capped = Math.min(base, this.retry.maxDelayMs);
+    if (!this.retry.jitter) return capped;
+    const factor = 0.5 + Math.random(); // [0.5, 1.5)
+    return Math.floor(capped * factor);
+  }
+
+  private sleep(ms: number, signal?: AbortSignal): Promise<void> {
+    if (ms <= 0) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      }, ms);
+      const onAbort = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+        reject(new SandboxServiceError("Request aborted", 0));
+      };
+      if (signal) {
+        signal.addEventListener("abort", onAbort);
+      }
+    });
   }
 
   private async drainStream(stream: Readable): Promise<string> {

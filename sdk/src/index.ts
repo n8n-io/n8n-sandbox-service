@@ -2,6 +2,7 @@ export { SandboxClient } from "./client";
 export { SandboxServiceError } from "./errors";
 export type {
   SandboxClientOptions,
+  RetryOptions,
   SandboxRecord,
   FileEntry,
   FileStat,

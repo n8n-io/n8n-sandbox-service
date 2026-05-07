@@ -4,6 +4,28 @@ export interface SandboxClientOptions {
   apiKey?: string;
   /** Base URL of the sandbox service API. */
   baseUrl?: string;
+  /** Optional retry policy for transient request failures. */
+  retry?: RetryOptions;
+}
+
+/** Retry policy for transient HTTP failures. */
+export interface RetryOptions {
+  /**
+   * Number of retry attempts after the initial request.
+   * Example: 3 means at most 4 total attempts.
+   */
+  attempts?: number;
+  /** Initial backoff delay in milliseconds. Defaults to 200. */
+  baseDelayMs?: number;
+  /** Maximum backoff delay in milliseconds. Defaults to 2000. */
+  maxDelayMs?: number;
+  /**
+   * HTTP statuses that should be retried. Defaults to [429, 502, 503].
+   * Network/transport errors (status 0) are always considered retryable.
+   */
+  retryOnStatuses?: number[];
+  /** Enable delay jitter (0.5x..1.5x). Defaults to true. */
+  jitter?: boolean;
 }
 
 /** Metadata for a sandbox instance. */

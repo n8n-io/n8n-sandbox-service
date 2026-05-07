@@ -36,7 +36,7 @@ export class SandboxClient {
    * Creates a sandbox service client.
    */
   constructor(options: SandboxClientOptions) {
-    this.http = new HttpClient(options.baseUrl ?? "", options.apiKey);
+    this.http = new HttpClient(options.baseUrl ?? "", options.apiKey, options.retry);
   }
 
   // #region Sandbox lifecycle
