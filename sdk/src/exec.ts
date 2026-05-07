@@ -49,7 +49,9 @@ export async function exec(
         signal: request.abortSignal,
       });
       await consumer.consume(stream);
-      break;
+      // Stream can end without a terminal event (e.g. load-balancer timeout) — only
+      // break if we actually received the exit event, otherwise retry.
+      if (consumer.isDone) break;
     } catch (error) {
       await onError(error);
       if (consumer.lastSeq >= 0) break; // Received events, switch to resume
@@ -66,7 +68,7 @@ export async function exec(
         signal: request.abortSignal,
       });
       await consumer.consume(stream);
-      break;
+      if (consumer.isDone) break;
     } catch (error) {
       await onError(error);
     }

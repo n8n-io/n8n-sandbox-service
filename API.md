@@ -208,7 +208,7 @@ via `GET /sandboxes/{id}/exec/{exec_id}?after=<seq>&follow=true`. Completed sess
 are retained for 10 minutes. If the buffer is exhausted, old events are discarded and
 stale resume requests return `410 Gone`.
 
-**Errors:** `400` invalid id or missing command, `410` if session exists but history is no longer retained
+**Errors:** `400` invalid id or missing command, `404` sandbox not found, `410` if session exists but history is no longer retained
 
 **Example:**
 
@@ -264,7 +264,7 @@ Cancel a running exec session. Kills the process group with SIGKILL.
 
 **Response:** `204 No Content`
 
-**Errors:** `404` session not found
+**Errors:** `400` invalid id, `404` sandbox or session not found
 
 **Example:**
 

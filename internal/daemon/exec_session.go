@@ -55,6 +55,7 @@ func (sess *ExecSession) append(resp Response) {
 
 	for sess.size > sess.maxEventBytes && len(sess.events) > 1 {
 		sess.size -= int64(len(sess.events[0].data))
+		sess.events[0] = storedEvent{} // nil out to allow GC of the data byte slice
 		sess.events = sess.events[1:]
 		sess.minSeq = sess.events[0].seq
 	}

@@ -266,7 +266,7 @@ func TestSessionResumePartial(t *testing.T) {
 	}
 }
 
-func TestSessionExpiredHistoryReturns410(t *testing.T) {
+func TestSessionNonexistentReturns404(t *testing.T) {
 	handler := NewHandler(t.TempDir())
 	t.Cleanup(handler.Close)
 
