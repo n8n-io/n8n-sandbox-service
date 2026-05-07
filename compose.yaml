@@ -5,6 +5,8 @@ services:
     ports:
       - "5050:5000"
     restart: unless-stopped
+    environment:
+      REGISTRY_LOG_LEVEL: warn
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:5000/v2/"]
       interval: 2s
