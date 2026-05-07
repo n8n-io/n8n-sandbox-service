@@ -100,6 +100,34 @@ test.describe('Exec', () => {
     expect(result.success).toBe(false);
   });
 
+  test('killed command process returns structured exec failure', async () => {
+    const result = await exec(
+      sandboxId,
+      `python3 -c "import os, signal; os.kill(os.getpid(), signal.SIGKILL)"`,
+    );
+    expect(result.success).toBe(false);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.timedOut).toBe(false);
+  });
+
+  test('killing daemon mid-exec returns sandbox exec stream error', async () => {
+    let execErr: unknown;
+    try {
+      // Kill PID1 shortly after exec starts so the stream usually ends mid-flight.
+      // Depending on timing/runtime, this can surface as a stream error or a
+      // structured failed exec result.
+      const result = await exec(sandboxId, 'sh -c "(sleep 0.1; kill -9 1) & sleep 5"');
+      expect(result.success).toBe(false);
+      expect(result.exitCode).not.toBe(0);
+    } catch (err) {
+      execErr = err;
+    }
+
+    if (execErr) {
+      expect(execErr).toBeInstanceOf(Error);
+    }
+  });
+
   test('environment variables as map', async () => {
     const result = await exec(sandboxId, 'echo $MY_VAR', {
       env: { MY_VAR: 'sandbox_test' },

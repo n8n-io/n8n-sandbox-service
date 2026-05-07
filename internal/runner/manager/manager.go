@@ -22,6 +22,10 @@ import (
 // ErrSandboxNotFound is returned when a sandbox ID is not found or not running.
 var ErrSandboxNotFound = errors.New("sandbox not found")
 
+// ErrSandboxNetworkUnavailable is returned when a container exists but has no
+// network attachment/IP yet.
+var ErrSandboxNetworkUnavailable = errors.New("sandbox network unavailable")
+
 const (
 	StatusRunning            = "running"
 	StatusTerminated         = "terminated"
@@ -121,11 +125,7 @@ func (m *Manager) CreateContainer(ctx context.Context, sandboxID string, opts *C
 	}
 
 	cleanupOnError := func(containerIP string) {
-		if containerIP != "" {
-			if err := netrules.Teardown(containerID, containerIP); err != nil {
-				slog.Warn("teardown network rules", "container_id", containerID, "err", err)
-			}
-		} else if err := netrules.Teardown(containerID, ""); err != nil {
+		if err := netrules.Teardown(containerID); err != nil {
 			slog.Warn("teardown network rules", "container_id", containerID, "err", err)
 		}
 		if err := m.removeContainer(ctx, containerID); err != nil {
@@ -177,7 +177,7 @@ func (m *Manager) GetContainerInfo(ctx context.Context, containerID string) (*Co
 
 	network, ok := inspect.NetworkSettings.Networks[runnerBridgeNetwork]
 	if !ok || network.IPAddress == "" {
-		return nil, fmt.Errorf("container %s has no IP on %s", containerID, runnerBridgeNetwork)
+		return nil, fmt.Errorf("%w: container %s has no IP on %s", ErrSandboxNetworkUnavailable, containerID, runnerBridgeNetwork)
 	}
 
 	return &ContainerInfo{
@@ -235,8 +235,8 @@ func (m *Manager) DaemonURL(ctx context.Context, sandboxID string) (string, erro
 }
 
 // DeleteContainer stops and removes a container.
-func (m *Manager) DeleteContainer(ctx context.Context, containerID, containerIP string) error {
-	if err := netrules.Teardown(containerID, containerIP); err != nil {
+func (m *Manager) DeleteContainer(ctx context.Context, containerID string) error {
+	if err := netrules.Teardown(containerID); err != nil {
 		slog.Warn("teardown network rules", "container_id", containerID, "err", err)
 	}
 
@@ -270,7 +270,7 @@ func (m *Manager) defaultLimits() *ResourceLimits {
 }
 
 func waitForDaemon(ctx context.Context, baseURL string) error {
-	httpClient := &http.Client{Timeout: time.Second}
+	httpClient := &http.Client{Timeout: 3 * time.Second}
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
 	deadline := time.After(30 * time.Second)
@@ -292,7 +292,33 @@ func waitForDaemon(ctx context.Context, baseURL string) error {
 			}
 			io.Copy(io.Discard, resp.Body)
 			resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
+			if resp.StatusCode != http.StatusOK {
+				continue
+			}
+
+			// /healthz can become ready slightly before command execution is fully
+			// usable under load; require a tiny exec round-trip before returning.
+			execReq, err := http.NewRequestWithContext(
+				ctx,
+				http.MethodPost,
+				baseURL+"/exec",
+				bytes.NewBufferString(`{"command":"true","timeout_ms":2000}`),
+			)
+			if err != nil {
+				return err
+			}
+			execReq.Header.Set("Content-Type", "application/json")
+			execResp, err := httpClient.Do(execReq)
+			if err != nil {
+				continue
+			}
+			body, _ := io.ReadAll(execResp.Body)
+			execResp.Body.Close()
+			if execResp.StatusCode != http.StatusOK {
+				continue
+			}
+			// Daemon /exec streams NDJSON events; require a successful exit event.
+			if bytes.Contains(body, []byte(`"type":"exit"`)) && bytes.Contains(body, []byte(`"exit_code":0`)) {
 				return nil
 			}
 		}
@@ -305,12 +331,12 @@ func (m *Manager) reconcileContainers(ctx context.Context) error {
 		return err
 	}
 	for _, id := range ids {
-		inspect, inspectErr := m.inspectContainer(ctx, id)
+		_, inspectErr := m.inspectContainer(ctx, id)
 		if inspectErr == nil {
-			if err := netrules.Teardown(id, inspect.NetworkSettings.Networks[runnerBridgeNetwork].IPAddress); err != nil {
+			if err := netrules.Teardown(id); err != nil {
 				slog.Warn("teardown rules during reconcile", "container_id", id, "err", err)
 			}
-		} else if err := netrules.Teardown(id, ""); err != nil {
+		} else if err := netrules.Teardown(id); err != nil {
 			slog.Warn("teardown rules during reconcile", "container_id", id, "err", err)
 		}
 		if err := m.removeContainer(ctx, id); err != nil {

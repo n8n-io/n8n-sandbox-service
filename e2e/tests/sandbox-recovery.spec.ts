@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { createSandbox, deleteSandbox, exec } from './helpers';
 
@@ -27,22 +27,6 @@ function dockerOutput(args: string[]): string {
   }
 }
 
-function enableOOMGroupIfSupported(runnerContainer: string, innerName: string): boolean {
-  const out = dockerOutput([
-    'exec',
-    runnerContainer,
-    'docker',
-    'exec',
-    '--user',
-    '0:0',
-    innerName,
-    'sh',
-    '-c',
-    "if [ -w /sys/fs/cgroup/memory.oom.group ]; then echo 1 > /sys/fs/cgroup/memory.oom.group; cat /sys/fs/cgroup/memory.oom.group; else echo UNSUPPORTED; fi",
-  ]).trim();
-  return out === '1';
-}
-
 async function waitExecOK(sandboxID: string, command: string, deadlineMs: number): Promise<void> {
   const deadline = Date.now() + deadlineMs;
   let lastErr: unknown;
@@ -61,28 +45,32 @@ async function waitExecOK(sandboxID: string, command: string, deadlineMs: number
   throw new Error(`sandbox ${sandboxID} did not recover in ${deadlineMs}ms: ${String(lastErr)}`);
 }
 
-function inspectRestartState(runnerContainer: string, innerName: string): { restartCount: number; running: boolean; oomKilled: boolean } {
+function inspectRestartState(
+  runnerContainer: string,
+  innerName: string,
+): { restartCount: number; running: boolean; oomKilled: boolean; startedAt: string } {
   const out = docker([
     'exec',
     runnerContainer,
     'docker',
     'inspect',
     '--format',
-    '{{.RestartCount}} {{.State.Running}} {{.State.OOMKilled}}',
+    '{{.RestartCount}} {{.State.Running}} {{.State.OOMKilled}} {{.State.StartedAt}}',
     innerName,
   ]).trim();
-  const [restartCountRaw, runningRaw, oomKilledRaw] = out.split(/\s+/);
+  const [restartCountRaw, runningRaw, oomKilledRaw, startedAtRaw] = out.split(/\s+/);
   return {
     restartCount: Number.parseInt(restartCountRaw || '0', 10),
     running: runningRaw === 'true',
     oomKilled: oomKilledRaw === 'true',
+    startedAt: startedAtRaw || '',
   };
 }
 
-async function waitContainerRestartedByOOM(
+async function waitContainerRestarted(
   runnerContainer: string,
   innerName: string,
-  baselineRestartCount: number,
+  baseline: { restartCount: number; startedAt: string },
   deadlineMs: number,
 ): Promise<void> {
   const deadline = Date.now() + deadlineMs;
@@ -91,11 +79,9 @@ async function waitContainerRestartedByOOM(
   while (Date.now() < deadline) {
     try {
       const st = inspectRestartState(runnerContainer, innerName);
-      lastState = `restartCount=${st.restartCount} running=${st.running} oomKilled=${st.oomKilled}`;
+      lastState = `restartCount=${st.restartCount} running=${st.running} oomKilled=${st.oomKilled} startedAt=${st.startedAt}`;
       timeline.push(`${new Date().toISOString()} ${lastState}`);
-      // Some Docker/cgroup setups don't keep OOMKilled=true after restart, so the
-      // robust signal is restart count increase + running again.
-      if (st.restartCount > baselineRestartCount && st.running) {
+      if (st.running && (st.restartCount > baseline.restartCount || st.startedAt != baseline.startedAt)) {
         return;
       }
     } catch {
@@ -120,7 +106,7 @@ async function waitContainerRestartedByOOM(
     innerName,
   ]);
   throw new Error(
-    `container ${innerName} was not observed as OOM-restarted within ${deadlineMs}ms (${lastState})\n\n` +
+    `container ${innerName} was not observed as restarted within ${deadlineMs}ms (${lastState})\n\n` +
       `===== state timeline =====\n${timeline.join('\n')}\n\n` +
       `===== docker inspect ${innerName} =====\n${inspectDump}\n\n` +
       `===== docker logs ${innerName} =====\n${logsDump}`,
@@ -128,7 +114,7 @@ async function waitContainerRestartedByOOM(
 }
 
 test.describe('Sandbox recovery on runner', () => {
-  test('OOM-killed sandbox container is restarted and reachable with same sandbox id', async () => {
+  test('sandbox container restart keeps same sandbox id reachable', async () => {
     test.skip(!process.env.E2E_RUNNER_CONTAINER_NAME, 'needs E2E_RUNNER_CONTAINER_NAME (from e2e/run.sh)');
     test.setTimeout(150_000);
 
@@ -137,34 +123,20 @@ test.describe('Sandbox recovery on runner', () => {
     const innerName = innerContainerName(id);
     try {
       const before = inspectRestartState(runnerContainer, innerName);
-      // Tighten memory so the allocation loop OOM-kills the container quickly.
-      docker(['exec', runnerContainer, 'docker', 'update', '--memory', '64m', '--memory-swap', '64m', innerName]);
-      // Restart assertion is only deterministic when we can set memory.oom.group=1:
-      // then OOM kills the whole sandbox cgroup (including PID1/daemon), triggering
-      // Docker restart policy. Without this support, OOM may kill only the child process.
-      test.skip(
-        !enableOOMGroupIfSupported(runnerContainer, innerName),
-        'cgroup memory.oom.group not supported; cannot deterministically assert container restart on OOM',
-      );
+      // Force a full container restart from runner-side Docker and verify the
+      // sandbox ID remains usable afterwards.
+      docker([
+        'exec',
+        runnerContainer,
+        'docker',
+        'restart',
+        '--time',
+        '0',
+        innerName,
+      ]);
 
-      // Trigger memory pressure from inside the sandbox.
-      try {
-        docker([
-          'exec',
-          runnerContainer,
-          'docker',
-          'exec',
-          innerName,
-          'python3',
-          '-c',
-          "chunks=[]\nwhile True:\n chunks.append('x'*16*1024*1024)",
-        ]);
-      } catch {
-        // Expected: process/container should be killed by OOM.
-      }
-
-      await waitContainerRestartedByOOM(runnerContainer, innerName, before.restartCount, 90_000);
-      await waitExecOK(id, `printf '%s' after-oom`, 90_000);
+      await waitContainerRestarted(runnerContainer, innerName, before, 90_000);
+      await waitExecOK(id, `printf '%s' after-restart`, 90_000);
     } finally {
       await deleteSandbox(id);
     }

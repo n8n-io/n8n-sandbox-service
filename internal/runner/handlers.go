@@ -129,18 +129,7 @@ func DeleteSandbox(mgr ContainerManager) http.HandlerFunc {
 			return
 		}
 
-		// Get container info to get IP
-		containerInfo, err := mgr.GetContainerInfo(r.Context(), containerID)
-		if err != nil {
-			if errors.Is(err, manager.ErrSandboxNotFound) {
-				writeError(w, http.StatusNotFound, err.Error())
-			} else {
-				writeError(w, http.StatusInternalServerError, err.Error())
-			}
-			return
-		}
-
-		if err := mgr.DeleteContainer(r.Context(), containerID, containerInfo.IP); err != nil {
+		if err := mgr.DeleteContainer(r.Context(), containerID); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
