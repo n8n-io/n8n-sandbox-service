@@ -8,6 +8,8 @@ export interface RequestOptions {
   params?: Record<string, string>;
   headers?: Record<string, string>;
   signal?: AbortSignal;
+  /** Allow retry on non-idempotent methods (e.g. POST). Default false. */
+  retryUnsafe?: boolean;
 }
 
 interface NormalizedRetryOptions {
@@ -52,7 +54,7 @@ export class HttpClient {
         signal: options.signal,
       });
       return response.data;
-    }, options.signal);
+    }, method, options.signal, options.retryUnsafe === true);
   }
 
   async requestStream(
@@ -78,7 +80,7 @@ export class HttpClient {
       }
 
       return { stream: response.data, status: response.status };
-    }, options.signal);
+    }, method, options.signal, options.retryUnsafe === true);
   }
 
   async requestBuffer(method: Method, path: string, options: Omit<RequestOptions, "data"> = {}): Promise<Buffer> {
@@ -99,7 +101,7 @@ export class HttpClient {
       }
 
       return body;
-    }, options.signal);
+    }, method, options.signal, options.retryUnsafe === true);
   }
 
   async requestVoid(method: Method, path: string, options: RequestOptions = {}): Promise<void> {
@@ -112,7 +114,7 @@ export class HttpClient {
         headers: options.headers,
         signal: options.signal,
       });
-    }, options.signal);
+    }, method, options.signal, options.retryUnsafe === true);
   }
 
   private toServiceError(error: unknown): SandboxServiceError {
@@ -128,7 +130,9 @@ export class HttpClient {
 
   private async withRetry<T>(
     operation: () => Promise<T>,
+    method: Method,
     signal?: AbortSignal,
+    retryUnsafe: boolean = false,
   ): Promise<T> {
     let attempt = 0;
     while (true) {
@@ -136,7 +140,7 @@ export class HttpClient {
         return await operation();
       } catch (error) {
         const serviceError = this.toServiceError(error);
-        if (!this.shouldRetry(serviceError, attempt, signal)) {
+        if (!this.shouldRetry(serviceError, attempt, method, signal, retryUnsafe)) {
           throw serviceError;
         }
 
@@ -147,11 +151,23 @@ export class HttpClient {
     }
   }
 
-  private shouldRetry(error: SandboxServiceError, attempt: number, signal?: AbortSignal): boolean {
+  private shouldRetry(
+    error: SandboxServiceError,
+    attempt: number,
+    method: Method,
+    signal?: AbortSignal,
+    retryUnsafe: boolean = false,
+  ): boolean {
     if (signal?.aborted) return false;
     if (attempt >= this.retry.attempts) return false;
+    if (!retryUnsafe && !this.isMethodIdempotent(method)) return false;
     if (error.status === 0) return true;
     return this.retry.retryOnStatuses.has(error.status);
+  }
+
+  private isMethodIdempotent(method: Method): boolean {
+    const m = String(method).toUpperCase();
+    return m === "GET" || m === "HEAD" || m === "OPTIONS" || m === "PUT" || m === "DELETE";
   }
 
   private retryDelayMs(attempt: number): number {

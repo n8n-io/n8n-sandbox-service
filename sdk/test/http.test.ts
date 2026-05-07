@@ -163,4 +163,93 @@ describe("HttpClient", () => {
       });
     }
   });
+
+  it("does not retry non-idempotent POST by default", async () => {
+    let hits = 0;
+    const postServer = createServer((req, res) => {
+      if (req.url !== "/post-503") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      hits += 1;
+      res.writeHead(503, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "sandbox unavailable" }));
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      postServer.listen(0, "127.0.0.1", () => resolve());
+      postServer.once("error", reject);
+    });
+    const addr = postServer.address();
+    if (addr === null || typeof addr === "string") {
+      throw new Error("Expected post server TCP address");
+    }
+    const postBaseUrl = `http://127.0.0.1:${addr.port}`;
+
+    try {
+      const client = new HttpClient(postBaseUrl, undefined, {
+        attempts: 3,
+        baseDelayMs: 1,
+        maxDelayMs: 2,
+        jitter: false,
+      });
+      await expect(client.requestJson("POST", "/post-503", { data: { x: 1 } })).rejects.toMatchObject({
+        status: 503,
+      });
+      expect(hits).toBe(1);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        postServer.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it("retries non-idempotent POST only when explicitly opted in", async () => {
+    let hits = 0;
+    const postServer = createServer((req, res) => {
+      if (req.url !== "/post-retry") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      hits += 1;
+      if (hits < 3) {
+        res.writeHead(503, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "sandbox unavailable" }));
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      postServer.listen(0, "127.0.0.1", () => resolve());
+      postServer.once("error", reject);
+    });
+    const addr = postServer.address();
+    if (addr === null || typeof addr === "string") {
+      throw new Error("Expected post retry server TCP address");
+    }
+    const postBaseUrl = `http://127.0.0.1:${addr.port}`;
+
+    try {
+      const client = new HttpClient(postBaseUrl, undefined, {
+        attempts: 3,
+        baseDelayMs: 1,
+        maxDelayMs: 2,
+        jitter: false,
+      });
+      const out = await client.requestJson<{ ok: boolean }>("POST", "/post-retry", {
+        data: { x: 1 },
+        retryUnsafe: true,
+      });
+      expect(out).toEqual({ ok: true });
+      expect(hits).toBe(3);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        postServer.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
 });
