@@ -167,6 +167,11 @@ func NewHandler(baseDir string) *Handler {
 			return
 		}
 
+		// Best-effort preflight before committing the 200/NDJSON response. There is
+		// still a narrow race where history can be trimmed between this check and the
+		// subsequent Snapshot/Follow call, in which case the client may observe a 200
+		// with an incomplete stream instead of a 410. We consider that window very
+		// low probability in practice and accept it for now.
 		writeNdjsonHeader(w)
 		write := ndjsonWriter(w)
 

@@ -1,7 +1,7 @@
 import { Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { SandboxServiceError } from "../src/errors.js";
-import { exec } from "../src/exec.js";
+import { exec, resumeExecSession } from "../src/exec.js";
 import type { HttpClient } from "../src/http.js";
 
 function createMockHttp(ndjsonLines: string[]): HttpClient {
@@ -79,9 +79,7 @@ describe("exec", () => {
       '{"seq":1,"type":"error","error":"command not found"}',
     ]);
 
-    const err = await exec(http, "sandbox-1", { command: "bad" }).catch(
-      (e) => e,
-    );
+    const err = await exec(http, "sandbox-1", { command: "bad" }).catch((e) => e);
     expect(err).toBeInstanceOf(SandboxServiceError);
     expect(err.message).toBe("command not found");
   });
@@ -98,13 +96,9 @@ describe("exec", () => {
       status: 200,
     });
 
-    const err = await exec(http, "sandbox-1", { command: "incomplete" }).catch(
-      (e) => e,
-    );
+    const err = await exec(http, "sandbox-1", { command: "incomplete" }).catch((e) => e);
     expect(err).toBeInstanceOf(SandboxServiceError);
-    expect(err.message).toBe(
-      "Sandbox exec stream ended without an exit event",
-    );
+    expect(err.message).toBe("Sandbox exec stream ended without an exit event");
   });
 
   it("passes exec_id in request body", async () => {
@@ -120,20 +114,16 @@ describe("exec", () => {
       timeoutMs: 5000,
     });
 
-    expect(http.requestStream).toHaveBeenCalledWith(
-      "POST",
-      "/sandboxes/sandbox-1/exec",
-      {
-        data: {
-          command: "ls",
-          env: { FOO: "bar" },
-          workdir: "/tmp",
-          timeout_ms: 5000,
-          exec_id: expect.any(String),
-        },
-        signal: undefined,
+    expect(http.requestStream).toHaveBeenCalledWith("POST", "/sandboxes/sandbox-1/exec", {
+      data: {
+        command: "ls",
+        env: { FOO: "bar" },
+        workdir: "/tmp",
+        timeout_ms: 5000,
+        exec_id: expect.any(String),
       },
-    );
+      signal: undefined,
+    });
   });
 
   it("resumes after stream ends without exit event", async () => {
@@ -167,8 +157,7 @@ describe("exec", () => {
     expect(result.exitCode).toBe(0);
     expect(mockHttp.requestStream).toHaveBeenCalledTimes(2);
     // Second call is GET resume with after=1
-    const lastCall = (mockHttp.requestStream as ReturnType<typeof vi.fn>).mock
-      .calls[1];
+    const lastCall = (mockHttp.requestStream as ReturnType<typeof vi.fn>).mock.calls[1];
     expect(lastCall[0]).toBe("GET");
     expect(lastCall[2]).toEqual(
       expect.objectContaining({
@@ -200,10 +189,8 @@ describe("exec", () => {
     expect(mockHttp.requestStream).toHaveBeenCalledTimes(2);
 
     // Both POST calls should use the same exec_id
-    const firstCall = (mockHttp.requestStream as ReturnType<typeof vi.fn>).mock
-      .calls[0];
-    const secondCall = (mockHttp.requestStream as ReturnType<typeof vi.fn>).mock
-      .calls[1];
+    const firstCall = (mockHttp.requestStream as ReturnType<typeof vi.fn>).mock.calls[0];
+    const secondCall = (mockHttp.requestStream as ReturnType<typeof vi.fn>).mock.calls[1];
     expect(firstCall[2].data.exec_id).toBe(secondCall[2].data.exec_id);
   });
 
@@ -212,9 +199,7 @@ describe("exec", () => {
 
     const stream = new Readable({
       read() {
-        this.push(
-          Buffer.from('{"seq":0,"type":"session","exec_id":"sess-abort"}\n'),
-        );
+        this.push(Buffer.from('{"seq":0,"type":"session","exec_id":"sess-abort"}\n'));
         this.push(null);
       },
     });
@@ -237,5 +222,22 @@ describe("exec", () => {
       "DELETE",
       expect.stringMatching(/^\/sandboxes\/sandbox-1\/exec\/.+$/),
     );
+  });
+});
+
+describe("resumeExecSession", () => {
+  it("requests follow mode so running sessions can complete", async () => {
+    const http = createMockHttp([
+      '{"seq":2,"type":"stdout","data":"part2"}',
+      '{"seq":3,"type":"exit","exit_code":0,"success":true,"execution_time_ms":100,"timed_out":false,"killed":false}',
+    ]);
+
+    const result = await resumeExecSession(http, "sandbox-1", "exec-1", 1);
+
+    expect(result.stdout).toBe("part2");
+    expect(result.exitCode).toBe(0);
+    expect(http.requestStream).toHaveBeenCalledWith("GET", "/sandboxes/sandbox-1/exec/exec-1", {
+      params: { after: "1", follow: "true" },
+    });
   });
 });

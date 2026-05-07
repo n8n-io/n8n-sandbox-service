@@ -181,10 +181,13 @@ describe("parseExecEvent", () => {
 
   it("returns error for exit event with wrong field types", () => {
     expect(
-      parseExecEvent('{"seq":1,"type":"exit","exit_code":"zero","success":true,"execution_time_ms":42,"timed_out":false,"killed":false}'),
+      parseExecEvent(
+        '{"seq":1,"type":"exit","exit_code":"zero","success":true,"execution_time_ms":42,"timed_out":false,"killed":false}',
+      ),
     ).toEqual({
       type: "error",
-      error: 'Invalid exec event payload: {"seq":1,"type":"exit","exit_code":"zero","success":true,"execution_time_ms":42,"timed_out":false,"killed":false}',
+      error:
+        'Invalid exec event payload: {"seq":1,"type":"exit","exit_code":"zero","success":true,"execution_time_ms":42,"timed_out":false,"killed":false}',
     });
   });
 });

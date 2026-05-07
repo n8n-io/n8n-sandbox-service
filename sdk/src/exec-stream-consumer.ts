@@ -78,10 +78,7 @@ export class ExecStreamConsumer {
       throw new SandboxServiceError(this.execError, 0);
     }
     if (!this.exitMeta) {
-      throw new SandboxServiceError(
-        "Sandbox exec stream ended without an exit event",
-        0,
-      );
+      throw new SandboxServiceError("Sandbox exec stream ended without an exit event", 0);
     }
     return {
       exitCode: this.exitMeta.exitCode,

@@ -12,7 +12,9 @@ import type {
 type JsonObject = Record<string, unknown>;
 
 function isSessionEvent(json: JsonObject): json is ExecSessionEvent {
-  return json.type === "session" && typeof json.exec_id === "string" && typeof json.seq === "number";
+  return (
+    json.type === "session" && typeof json.exec_id === "string" && typeof json.seq === "number"
+  );
 }
 
 function isStdoutEvent(json: JsonObject): json is ExecStdoutEvent {
@@ -80,6 +82,9 @@ export function parseExecEvent(line: string): ExecEvent {
 
     return { type: "error", error: `Invalid exec event payload: ${line}` };
   } catch (error) {
-    return { type: "error", error: `Invalid exec event payload: ${error instanceof Error ? error.message : String(error)}` };
+    return {
+      type: "error",
+      error: `Invalid exec event payload: ${error instanceof Error ? error.message : String(error)}`,
+    };
   }
 }

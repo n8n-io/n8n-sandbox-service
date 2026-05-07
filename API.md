@@ -559,4 +559,3 @@ Get file or directory metadata.
 curl "http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/stat?path=/home/user/file.txt" \
   -H "X-Api-Key: YOUR_API_KEY"
 ```
-

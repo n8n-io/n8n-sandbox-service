@@ -38,20 +38,16 @@ export async function exec(
   // Phase 1: Start command via POST (idempotent via exec_id)
   while (!consumer.isDone) {
     try {
-      const { stream } = await http.requestStream(
-        "POST",
-        `/sandboxes/${id}/exec`,
-        {
-          data: {
-            command: request.command,
-            env: request.env,
-            workdir: request.workdir,
-            timeout_ms: request.timeoutMs,
-            exec_id: execId,
-          },
-          signal: request.abortSignal,
+      const { stream } = await http.requestStream("POST", `/sandboxes/${id}/exec`, {
+        data: {
+          command: request.command,
+          env: request.env,
+          workdir: request.workdir,
+          timeout_ms: request.timeoutMs,
+          exec_id: execId,
         },
-      );
+        signal: request.abortSignal,
+      });
       await consumer.consume(stream);
       break;
     } catch (error) {
@@ -65,11 +61,10 @@ export async function exec(
     try {
       const params: Record<string, string> = { follow: "true" };
       if (consumer.lastSeq >= 0) params.after = String(consumer.lastSeq);
-      const { stream } = await http.requestStream(
-        "GET",
-        `/sandboxes/${id}/exec/${execId}`,
-        { params, signal: request.abortSignal },
-      );
+      const { stream } = await http.requestStream("GET", `/sandboxes/${id}/exec/${execId}`, {
+        params,
+        signal: request.abortSignal,
+      });
       await consumer.consume(stream);
       break;
     } catch (error) {
@@ -86,16 +81,14 @@ export async function resumeExecSession(
   execId: string,
   afterSeq?: number,
 ): Promise<ExecResult> {
-  const params: Record<string, string> = {};
+  const params: Record<string, string> = { follow: "true" };
   if (afterSeq !== undefined) {
     params.after = String(afterSeq);
   }
 
-  const { stream } = await http.requestStream(
-    "GET",
-    `/sandboxes/${sandboxId}/exec/${execId}`,
-    { params },
-  );
+  const { stream } = await http.requestStream("GET", `/sandboxes/${sandboxId}/exec/${execId}`, {
+    params,
+  });
 
   const consumer = new ExecStreamConsumer();
   await consumer.consume(stream);
@@ -107,10 +100,7 @@ export async function cancelExecSession(
   sandboxId: string,
   execId: string,
 ): Promise<void> {
-  await http.requestVoid(
-    "DELETE",
-    `/sandboxes/${sandboxId}/exec/${execId}`,
-  );
+  await http.requestVoid("DELETE", `/sandboxes/${sandboxId}/exec/${execId}`);
 }
 
 function isTransientError(error: unknown): boolean {

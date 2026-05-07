@@ -69,7 +69,11 @@ export class HttpClient {
     }
   }
 
-  async requestBuffer(method: Method, path: string, options: Omit<RequestOptions, "data"> = {}): Promise<Buffer> {
+  async requestBuffer(
+    method: Method,
+    path: string,
+    options: Omit<RequestOptions, "data"> = {},
+  ): Promise<Buffer> {
     try {
       const response = await this.instance.request<ArrayBuffer>({
         method,
