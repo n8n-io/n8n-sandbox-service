@@ -72,6 +72,8 @@ func proxyHandler(mgr ContainerManager, cfg *config.Config, limitBody bool) http
 		if err != nil {
 			if errors.Is(err, manager.ErrSandboxNotFound) {
 				writeError(w, http.StatusNotFound, err.Error())
+			} else if errors.Is(err, manager.ErrSandboxNotRunning) || errors.Is(err, manager.ErrSandboxNetworkUnavailable) {
+				writeError(w, http.StatusServiceUnavailable, "sandbox unavailable")
 			} else {
 				writeError(w, http.StatusInternalServerError, err.Error())
 			}

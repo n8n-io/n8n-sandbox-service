@@ -19,12 +19,15 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/runner/netrules"
 )
 
-// ErrSandboxNotFound is returned when a sandbox ID is not found or not running.
+// ErrSandboxNotFound is returned when a sandbox ID is not found.
 var ErrSandboxNotFound = errors.New("sandbox not found")
 
 // ErrSandboxNetworkUnavailable is returned when a container exists but has no
 // network attachment/IP yet.
 var ErrSandboxNetworkUnavailable = errors.New("sandbox network unavailable")
+
+// ErrSandboxNotRunning is returned when a sandbox container exists but is not running.
+var ErrSandboxNotRunning = errors.New("sandbox not running")
 
 const (
 	StatusRunning            = "running"
@@ -202,7 +205,7 @@ func (m *Manager) DaemonURL(ctx context.Context, sandboxID string) (string, erro
 		return "", err
 	}
 	if !inspect.State.Running {
-		return "", ErrSandboxNotFound
+		return "", ErrSandboxNotRunning
 	}
 
 	network, ok := inspect.NetworkSettings.Networks[runnerBridgeNetwork]
