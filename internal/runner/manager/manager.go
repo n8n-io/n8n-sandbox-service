@@ -201,22 +201,8 @@ func (m *Manager) DaemonURL(ctx context.Context, sandboxID string) (string, erro
 		}
 		return "", err
 	}
-	wasStarted := false
 	if !inspect.State.Running {
-		if err := m.startContainer(ctx, containerID); err != nil {
-			if isDockerNotFound(err) {
-				return "", ErrSandboxNotFound
-			}
-			return "", err
-		}
-		wasStarted = true
-		inspect, err = m.inspectContainer(ctx, containerID)
-		if err != nil {
-			if isDockerNotFound(err) {
-				return "", ErrSandboxNotFound
-			}
-			return "", err
-		}
+		return "", ErrSandboxNotFound
 	}
 
 	network, ok := inspect.NetworkSettings.Networks[runnerBridgeNetwork]
@@ -225,12 +211,6 @@ func (m *Manager) DaemonURL(ctx context.Context, sandboxID string) (string, erro
 	}
 
 	baseURL := fmt.Sprintf("http://%s:%d", network.IPAddress, daemonPort)
-	if wasStarted {
-		// When recovering a stopped container, wait for daemon readiness before proxying.
-		if err := waitForDaemon(ctx, baseURL); err != nil {
-			return "", err
-		}
-	}
 	return baseURL, nil
 }
 
