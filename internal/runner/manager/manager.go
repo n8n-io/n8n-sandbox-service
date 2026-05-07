@@ -49,8 +49,11 @@ type Manager struct {
 }
 
 type containerInspect struct {
-	ID     string `json:"Id"`
-	Name   string `json:"Name"`
+	ID    string `json:"Id"`
+	Name  string `json:"Name"`
+	State struct {
+		Running bool `json:"Running"`
+	} `json:"State"`
 	Config struct {
 		Labels map[string]string `json:"Labels"`
 	} `json:"Config"`
@@ -190,11 +193,45 @@ func (m *Manager) DaemonURL(ctx context.Context, sandboxID string) (string, erro
 	if err != nil {
 		return "", err
 	}
-	info, err := m.GetContainerInfo(ctx, containerID)
+
+	inspect, err := m.inspectContainer(ctx, containerID)
 	if err != nil {
+		if isDockerNotFound(err) {
+			return "", ErrSandboxNotFound
+		}
 		return "", err
 	}
-	return fmt.Sprintf("http://%s:%d", info.IP, daemonPort), nil
+	wasStarted := false
+	if !inspect.State.Running {
+		if err := m.startContainer(ctx, containerID); err != nil {
+			if isDockerNotFound(err) {
+				return "", ErrSandboxNotFound
+			}
+			return "", err
+		}
+		wasStarted = true
+		inspect, err = m.inspectContainer(ctx, containerID)
+		if err != nil {
+			if isDockerNotFound(err) {
+				return "", ErrSandboxNotFound
+			}
+			return "", err
+		}
+	}
+
+	network, ok := inspect.NetworkSettings.Networks[runnerBridgeNetwork]
+	if !ok || network.IPAddress == "" {
+		return "", fmt.Errorf("container %s has no IP on %s", containerID, runnerBridgeNetwork)
+	}
+
+	baseURL := fmt.Sprintf("http://%s:%d", network.IPAddress, daemonPort)
+	if wasStarted {
+		// When recovering a stopped container, wait for daemon readiness before proxying.
+		if err := waitForDaemon(ctx, baseURL); err != nil {
+			return "", err
+		}
+	}
+	return baseURL, nil
 }
 
 // DeleteContainer stops and removes a container.
@@ -343,6 +380,7 @@ func (m *Manager) createContainer(ctx context.Context, sandboxID, containerName,
 		"container", "create",
 		"--name", containerName,
 		"--hostname", "sandbox",
+		"--restart", "unless-stopped",
 		"--network", runnerBridgeNetwork,
 		"--label", containerLabelManaged + "=" + containerLabelManagedVal,
 		"--label", containerLabelSandboxID + "=" + sandboxID,

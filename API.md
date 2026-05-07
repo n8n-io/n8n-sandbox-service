@@ -6,6 +6,7 @@ Runtime topology:
 - Public clients call the API container over HTTP (authenticated with `X-Api-Key`).
 - Each runner opens a **private gRPC** bidirectional stream to the API (`RunnerRegistry.Connect`), authenticated with `Authorization: Bearer <SANDBOX_RUNNER_REGISTRATION_TOKEN>`. Heartbeats carry `runner_id`, `http_base_url`, required `control_grpc_addr`, health, and capacity. Each heartbeat must include an absolute `http` or `https` `http_base_url` and a non-empty `control_grpc_addr` (or omit either after the first to reuse the stream’s last value); otherwise the RPC fails with `InvalidArgument`.
 - The API keeps an in-memory registry of runners and selects one using **round-robin** when it needs a runner (sandbox creation, image proxy pick). Creating a sandbox persists which runner owns it. Sandbox **create/delete** use gRPC (`SandboxControl` on the runner). Sandbox-scoped **proxy** requests (exec, files, mkdir, stat, …) always go to **that** runner’s HTTP base URL.
+- If a sandbox container exits on its assigned runner (for example crash/OOM), Docker restart policy restarts it and the same sandbox ID remains bound to that runner.
 - If no runner is registered (or none are healthy / within capacity), operations that need a runner return **503** with a JSON error whose message explains that no runners are available.
 - Sandbox-scoped requests are proxied to the **stored** runner HTTP URL for that sandbox. If that runner is down or unreachable, the API returns **503** with JSON `error` **`runner unavailable`** (same shape as other API errors).
 
