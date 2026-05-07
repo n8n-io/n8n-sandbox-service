@@ -48,6 +48,7 @@ services:
       SANDBOX_API_KEYS: test
       SANDBOX_API_RUNNER_REGISTRATION_TOKEN: ${REG_TOKEN:-local-reg-token}
       SANDBOX_API_RUNNER_API_KEY: ${RUNNER_API_KEY:-runner-local-key}
+      SANDBOX_API_ENABLE_CORS: "true"
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/healthz"]
       interval: 2s
