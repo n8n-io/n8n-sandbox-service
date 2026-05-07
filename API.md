@@ -10,7 +10,7 @@ Runtime topology:
 - If no runner is registered (or none are healthy / within capacity), operations that need a runner return **503** with a JSON error whose message explains that no runners are available.
 - Sandbox-scoped requests are proxied to the **stored** runner HTTP URL for that sandbox. If that runner is down or unreachable, the API returns **503** with JSON `error` **`runner unavailable`** (same shape as other API errors).
 
-Environment (API): `SANDBOX_API_RUNNER_REGISTRATION_TOKEN` (required), `SANDBOX_API_GRPC_LISTEN_ADDR` (default `:9090`), `SANDBOX_API_RUNNER_HEARTBEAT_GRACE` (default `45s` — max age of last gRPC heartbeat for a runner to be eligible for placement), plus existing HTTP settings. mTLS for registration is required: `SANDBOX_API_GRPC_TLS_CERT_FILE`, `SANDBOX_API_GRPC_TLS_KEY_FILE`, `SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE`. mTLS for dialing runner SandboxControl is required: `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE`, `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE`, `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE`; `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_SERVER_NAME` remains optional.
+Environment (API): `SANDBOX_API_RUNNER_REGISTRATION_TOKEN` (required), `SANDBOX_API_GRPC_LISTEN_ADDR` (default `:9090`), `SANDBOX_API_RUNNER_HEARTBEAT_GRACE` (default `45s` — max age of last gRPC heartbeat for a runner to be eligible for placement), `SANDBOX_API_ENABLE_CORS` (default `false`, enables CORS middleware allowing all origins), plus existing HTTP settings. mTLS for registration is required: `SANDBOX_API_GRPC_TLS_CERT_FILE`, `SANDBOX_API_GRPC_TLS_KEY_FILE`, `SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE`. mTLS for dialing runner SandboxControl is required: `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE`, `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE`, `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE`; `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_SERVER_NAME` remains optional.
 
 Environment (runner): `SANDBOX_RUNNER_API_KEYS`, `SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE`, `SANDBOX_RUNNER_API_GRPC_ADDR`, `SANDBOX_RUNNER_REGISTRATION_TOKEN`, and `SANDBOX_RUNNER_HTTP_BASE_URL` are required (`SANDBOX_RUNNER_ID`, `SANDBOX_RUNNER_CAPACITY_TOTAL` remain optional). mTLS for registration is required: `SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE`, `SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE`, `SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE`; `SANDBOX_RUNNER_REGISTRATION_GRPC_SERVER_NAME` remains optional. SandboxControl listener defaults to `SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR=:9091`; `SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR` remains optional (derived from `SANDBOX_RUNNER_HTTP_BASE_URL` when unset). mTLS for SandboxControl is required: `SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE`, `SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE`, `SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE`.
 
@@ -502,8 +502,9 @@ curl "http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/stat?
 Applied to all routes in order:
 
 1. **RecoveryMiddleware** — catches panics, returns `500`
-2. **LoggingMiddleware** — logs method, path, status, duration
-3. **AuthMiddleware** — validates `X-Api-Key` header (skipped for `/healthz`)
+2. **CORSMiddleware** — allows all origins; only active when `SANDBOX_API_ENABLE_CORS=true`
+3. **LoggingMiddleware** — logs method, path, status, duration
+4. **AuthMiddleware** — validates `X-Api-Key` header (skipped for `/healthz`)
 
 ## Abort Mechanism
 
