@@ -74,7 +74,9 @@ export async function exec(
     }
   }
 
-  return consumer.result();
+  const result = consumer.result();
+  cancelExecSession(http, id, execId).catch(() => {});
+  return result;
 }
 
 export async function resumeExecSession(
