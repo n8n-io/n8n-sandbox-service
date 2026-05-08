@@ -203,12 +203,10 @@ stops the event stream. To cancel a running command, use
 `DELETE /sandboxes/{id}/exec/{exec_id}`. The SDK calls the cancel endpoint
 automatically when `abortSignal` fires.
 
-The execution stores events in a bounded buffer (default 16 MiB, configurable via
-`SANDBOX_EXEC_MAX_EVENT_BYTES`). Clients can reconnect via
-`GET /sandboxes/{id}/exec/{exec_id}?after=<seq>&follow=true`. Completed executions are
-retained for 10 minutes by default (configurable via `SANDBOX_EXEC_RETAIN`, Go
-`time.Duration` syntax e.g. `10m`, `1h`). If the buffer is exhausted, old events are
-discarded and stale resume requests return `410 Gone`.
+The execution stores events in a bounded buffer (up to 16 MiB). Clients can reconnect
+via `GET /sandboxes/{id}/exec/{exec_id}?after=<seq>&follow=true`. Completed executions
+are retained for 10 minutes. If the buffer is exhausted, old events are discarded and
+stale resume requests return `410 Gone`.
 
 **Errors:** `400` invalid id or missing command, `404` sandbox not found, `410` if execution exists but history is no longer retained
 
