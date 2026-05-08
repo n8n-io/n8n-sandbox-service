@@ -35,6 +35,42 @@ export async function exec(
   });
 }
 
+function isTransientExecError(err: unknown): boolean {
+  const status = (err as { status?: number })?.status;
+  if (status === 502 || status === 503) {
+    return true;
+  }
+  const msg = String((err as Error)?.message || '').toLowerCase();
+  return (
+    msg.includes('internal server error') ||
+    msg.includes('daemon unreachable') ||
+    msg.includes('runner unavailable') ||
+    msg.includes('sandbox exec stream ended without an exit event')
+  );
+}
+
+export async function execWithTransientRetry(
+  id: string,
+  command: string,
+  opts?: { env?: Record<string, string>; workdir?: string; timeoutMs?: number; retryWindowMs?: number },
+): Promise<ExecResult> {
+  const deadlineMs = opts?.retryWindowMs ?? 12_000;
+  const deadline = Date.now() + deadlineMs;
+  let lastErr: unknown;
+  while (Date.now() < deadline) {
+    try {
+      return await exec(id, command, opts);
+    } catch (err) {
+      lastErr = err;
+      if (!isTransientExecError(err)) {
+        throw err;
+      }
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }
+  throw new Error(`exec did not recover within ${deadlineMs}ms: ${String(lastErr)}`);
+}
+
 export async function uploadFile(
   id: string,
   path: string,

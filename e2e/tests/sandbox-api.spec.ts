@@ -4,6 +4,7 @@ import {
   createSandbox,
   deleteSandbox,
   exec,
+  execWithTransientRetry,
   uploadFile,
   downloadFile,
   apiRequest,
@@ -71,6 +72,7 @@ test.describe('Exec', () => {
 
   test.beforeEach(async () => {
     sandboxId = await createSandbox();
+    await execWithTransientRetry(sandboxId, 'true', { timeoutMs: 5_000, retryWindowMs: 12_000 });
   });
 
   test.afterEach(async () => {
