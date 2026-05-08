@@ -6,10 +6,12 @@ import type { HttpClient } from "../src/http.js";
 
 function createMockHttp(ndjsonLines: string[]): HttpClient {
   return {
-    requestStream: vi.fn().mockResolvedValue({
-      stream: Readable.from([Buffer.from(ndjsonLines.join("\n") + "\n")]),
-      status: 200,
-    }),
+    requestStream: vi.fn().mockImplementation(() =>
+      Promise.resolve({
+        stream: Readable.from([Buffer.from(ndjsonLines.join("\n") + "\n")]),
+        status: 200,
+      }),
+    ),
     requestVoid: vi.fn().mockResolvedValue(undefined),
   } as unknown as HttpClient;
 }
@@ -85,16 +87,15 @@ describe("exec", () => {
   });
 
   it("throws SandboxServiceError if stream ends without exit event", async () => {
-    const http = createMockHttp([
-      '{"seq":0,"type":"session","exec_id":"sess-1"}',
-      '{"seq":1,"type":"stdout","data":"partial"}',
-    ]);
-
-    // Stream ends without exit -> enters resume loop -> GET also ends without exit
-    (http.requestStream as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-      stream: Readable.from([Buffer.from("")]),
-      status: 200,
-    });
+    const http = {
+      requestStream: vi.fn().mockImplementation(() =>
+        Promise.resolve({
+          stream: Readable.from([Buffer.from("")]),
+          status: 200,
+        }),
+      ),
+      requestVoid: vi.fn().mockResolvedValue(undefined),
+    } as unknown as HttpClient;
 
     const err = await exec(http, "sandbox-1", { command: "incomplete" }).catch((e) => e);
     expect(err).toBeInstanceOf(SandboxServiceError);
