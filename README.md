@@ -40,7 +40,7 @@ curl -s -X POST http://localhost:8080/sandboxes \
 ### Run a command
 
 ```bash
-curl -s -X POST http://localhost:8080/sandboxes/<id>/exec \
+curl -s -X POST http://localhost:8080/sandboxes/<id>/executions \
   -H "X-Api-Key: test" \
   -H "Content-Type: application/json" \
   -d '{"command": "echo hello world"}'

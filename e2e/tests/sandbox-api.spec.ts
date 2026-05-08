@@ -108,7 +108,7 @@ test.describe('Exec', () => {
   });
 
   test('environment variables as array returns 400', async ({ request }) => {
-    const resp = await apiRequest(request, 'POST', `/sandboxes/${sandboxId}/exec`, {
+    const resp = await apiRequest(request, 'POST', `/sandboxes/${sandboxId}/executions`, {
       data: { command: 'echo $FOO', env: ['FOO=bar'] },
     });
     expect(resp.status).toBe(400);
@@ -131,7 +131,7 @@ test.describe('Exec', () => {
   });
 
   test('missing command returns 400', async ({ request }) => {
-    const resp = await apiRequest(request, 'POST', `/sandboxes/${sandboxId}/exec`, {
+    const resp = await apiRequest(request, 'POST', `/sandboxes/${sandboxId}/executions`, {
       data: {},
     });
     expect(resp.status).toBe(400);
@@ -167,7 +167,7 @@ test.describe('Exec', () => {
   test('exec on deleted sandbox returns 404', async ({ request }) => {
     const tempId = await createSandbox();
     await deleteSandbox(tempId);
-    const resp = await apiRequest(request, 'POST', `/sandboxes/${tempId}/exec`, {
+    const resp = await apiRequest(request, 'POST', `/sandboxes/${tempId}/executions`, {
       data: { command: 'echo hi' },
     });
     expect(resp.status).toBe(404);

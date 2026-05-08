@@ -138,7 +138,7 @@ curl -X DELETE http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440
 
 ---
 
-### POST /sandboxes/{id}/exec
+### POST /sandboxes/{id}/executions
 
 Execute a command in a sandbox. The command runs in a **daemon-side execution** whose
 lifetime is independent of the HTTP stream — disconnecting does not kill the process.
@@ -200,11 +200,11 @@ The `exit` event includes:
 The command runs in a daemon-side execution whose lifetime is independent of the HTTP
 stream. Closing the HTTP connection does **not** kill the running command — it only
 stops the event stream. To cancel a running command, use
-`DELETE /sandboxes/{id}/exec/{exec_id}`. The SDK calls the delete endpoint
+`DELETE /sandboxes/{id}/executions/{exec_id}`. The SDK calls the delete endpoint
 automatically when `abortSignal` fires.
 
 The execution stores events in a bounded buffer (up to 16 MiB). Clients can reconnect
-via `GET /sandboxes/{id}/exec/{exec_id}?after=<seq>&follow=true`. Completed executions
+via `GET /sandboxes/{id}/executions/{exec_id}?after=<seq>&follow=true`. Completed executions
 are retained for 10 minutes. If the buffer is exhausted, old events are discarded and
 stale resume requests return `410 Gone`.
 
@@ -213,7 +213,7 @@ stale resume requests return `410 Gone`.
 **Example:**
 
 ```bash
-curl -X POST http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/exec \
+curl -X POST http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/executions \
   -H "X-Api-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"command": "echo hello", "timeout_ms": 10000}'
@@ -221,7 +221,7 @@ curl -X POST http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-44665544000
 
 ---
 
-### GET /sandboxes/{id}/exec/{exec_id}
+### GET /sandboxes/{id}/executions/{exec_id}
 
 Resume or replay an execution stream. Use this to reconnect after a transient
 stream disconnect without re-executing the command.
@@ -240,7 +240,7 @@ or the client disconnects.
 
 **Response:** `200 OK` — `Content-Type: application/x-ndjson`
 
-Same NDJSON event format as `POST /exec`.
+Same NDJSON event format as `POST /executions`.
 
 **Errors:** `400` invalid parameters, `404` execution not found, `410` requested history is no longer retained
 
@@ -248,13 +248,13 @@ Same NDJSON event format as `POST /exec`.
 
 ```bash
 # Resume from sequence 5
-curl "http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/exec/a1b2c3d4-...?after=5&follow=true" \
+curl "http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/executions/a1b2c3d4-...?after=5&follow=true" \
   -H "X-Api-Key: YOUR_API_KEY"
 ```
 
 ---
 
-### DELETE /sandboxes/{id}/exec/{exec_id}
+### DELETE /sandboxes/{id}/executions/{exec_id}
 
 Delete an execution. Kills the running process (if still active) and immediately
 removes the execution state from memory. After deletion, the execution can no
@@ -272,7 +272,7 @@ nonexistent execution returns `204`.
 **Example:**
 
 ```bash
-curl -X DELETE http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/exec/a1b2c3d4-... \
+curl -X DELETE http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/executions/a1b2c3d4-... \
   -H "X-Api-Key: YOUR_API_KEY"
 ```
 

@@ -61,7 +61,7 @@ export async function downloadFile(
  */
 export function startAndDisconnect(sandboxId: string, command: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const url = new URL(`${BASE_URL}/sandboxes/${sandboxId}/exec`);
+    const url = new URL(`${BASE_URL}/sandboxes/${sandboxId}/executions`);
     const reqFn = url.protocol === 'https:' ? https.request : http.request;
     const body = JSON.stringify({ command });
     let resolved = false;
