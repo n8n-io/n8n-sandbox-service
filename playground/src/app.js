@@ -15,6 +15,7 @@ let selectedSandboxId = null;
 let commandHistory = [];
 let historyIndex = -1;
 let currentAbortController = null;
+let currentExecId = null;
 let client = null;
 
 // --- SDK client ---
@@ -247,19 +248,58 @@ async function execInSandbox(sandboxId, command, timeoutMs = 300000, signal) {
   return exitCode;
 }
 
+async function abortExecution() {
+  if (!currentAbortController) return;
+
+  const execId = currentExecId;
+  const sandboxId = selectedSandboxId;
+
+  currentAbortController.abort();
+  appendOutput('^C', 'error');
+
+  if (execId && sandboxId) {
+    const baseUrl = baseUrlInput.value.trim().replace(/\/+$/, '');
+    try {
+      await fetch(`${baseUrl}/sandboxes/${sandboxId}/executions/${execId}`, {
+        method: 'DELETE',
+        headers: { 'X-Api-Key': apiKeyInput.value.trim() },
+      });
+    } catch {}
+  }
+}
+
+function setRunning(running) {
+  if (running) {
+    cmdInput.disabled = true;
+    runBtn.textContent = 'Abort';
+    runBtn.classList.add('danger');
+    runBtn.disabled = false;
+  } else {
+    cmdInput.disabled = false;
+    runBtn.textContent = 'Run';
+    runBtn.classList.remove('danger');
+    runBtn.disabled = false;
+  }
+}
+
 async function executeCommand() {
+  if (currentAbortController) {
+    abortExecution();
+    return;
+  }
+
   const cmd = cmdInput.value.trim();
   if (!cmd || !selectedSandboxId) return;
 
   commandHistory.push(cmd);
   historyIndex = commandHistory.length;
   cmdInput.value = '';
-  cmdInput.disabled = true;
-  runBtn.disabled = true;
 
   appendOutput(`$ ${cmd}`, 'cmd');
 
   currentAbortController = new AbortController();
+  currentExecId = null;
+  setRunning(true);
 
   try {
     await execInSandbox(selectedSandboxId, cmd, 300000, currentAbortController.signal);
@@ -269,14 +309,17 @@ async function executeCommand() {
     }
   } finally {
     currentAbortController = null;
-    cmdInput.disabled = false;
-    runBtn.disabled = false;
+    currentExecId = null;
+    setRunning(false);
     cmdInput.focus();
   }
 }
 
 function handleExecEvent(event) {
   switch (event.type) {
+    case 'started':
+      currentExecId = event.exec_id;
+      break;
     case 'stdout':
       if (event.data) appendOutput(event.data.replace(/\n$/, ''), 'stdout');
       break;
@@ -318,10 +361,7 @@ cmdInput.addEventListener('keydown', (e) => {
       cmdInput.value = '';
     }
   } else if (e.key === 'c' && e.ctrlKey) {
-    if (currentAbortController) {
-      currentAbortController.abort();
-      appendOutput('^C', 'error');
-    }
+    abortExecution();
   }
 });
 
