@@ -45,6 +45,7 @@ export class ExecStreamConsumer {
       if ("seq" in event && typeof event.seq === "number") {
         this.lastSeq = event.seq;
       }
+
       switch (event.type) {
         case "started":
           break;

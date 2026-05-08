@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { SandboxServiceError } from "./errors";
+import { SandboxServiceError, InvalidStreamEventError } from "./errors";
 import { ExecStreamConsumer } from "./exec-stream-consumer";
 import type { HttpClient } from "./http";
 import type { ExecRequest, ExecResult } from "./types";
@@ -79,9 +79,8 @@ export async function exec(
     }
   }
 
-  const result = consumer.result();
   cancelExecution(http, id, execId).catch(() => {});
-  return result;
+  return consumer.result();
 }
 
 export async function resumeExecution(
@@ -113,6 +112,9 @@ export async function cancelExecution(
 }
 
 function isTransientError(error: unknown): boolean {
+  if (error instanceof InvalidStreamEventError) {
+    return true;
+  }
   if (error instanceof SandboxServiceError) {
     return error.status === 0 || error.status === 503;
   }

@@ -167,6 +167,88 @@ describe("exec", () => {
     );
   });
 
+  it("resumes after stream ends with a truncated event", async () => {
+    const mockHttp = {
+      requestStream: vi
+        .fn()
+        .mockResolvedValueOnce({
+          stream: Readable.from([
+            Buffer.from(
+              '{"seq":0,"type":"started","exec_id":"sess-resume"}\n' +
+                '{"seq":1,"type":"stdout","data":"part1"}\n' +
+                '{"seq":2,"type":"stdout","data":"truncated',
+            ),
+          ]),
+          status: 200,
+        })
+        .mockResolvedValueOnce({
+          stream: Readable.from([
+            Buffer.from(
+              '{"seq":2,"type":"stdout","data":"part2"}\n' +
+                '{"seq":3,"type":"exit","exit_code":0,"success":true,"execution_time_ms":100,"timed_out":false,"killed":false}\n',
+            ),
+          ]),
+          status: 200,
+        }),
+      requestVoid: vi.fn().mockResolvedValue(undefined),
+    } as unknown as HttpClient;
+
+    const result = await exec(mockHttp, "sandbox-1", { command: "test" });
+
+    expect(result).toEqual({
+      exitCode: 0,
+      stdout: "part1part2",
+      stderr: "",
+      executionTimeMs: 100,
+      timedOut: false,
+      killed: false,
+      success: true,
+    });
+    expect(mockHttp.requestStream).toHaveBeenCalledTimes(2);
+    const resumeCall = (mockHttp.requestStream as ReturnType<typeof vi.fn>).mock.calls[1];
+    expect(resumeCall[0]).toBe("GET");
+    expect(resumeCall[1]).toEqual(expect.stringMatching(/^\/sandboxes\/sandbox-1\/exec\/.+$/));
+    expect(resumeCall[2]).toEqual(
+      expect.objectContaining({
+        params: { after: "1", follow: "true" },
+      }),
+    );
+  });
+
+  it("retries POST with same exec_id when stream truncates before any valid event", async () => {
+    const mockHttp = {
+      requestStream: vi
+        .fn()
+        .mockResolvedValueOnce({
+          stream: Readable.from([
+            Buffer.from('{"seq":0,"type":"started","exec_id":"sess-truncated'),
+          ]),
+          status: 200,
+        })
+        .mockResolvedValueOnce({
+          stream: Readable.from([
+            Buffer.from(
+              '{"seq":0,"type":"started","exec_id":"sess-retry"}\n' +
+                '{"seq":1,"type":"exit","exit_code":0,"success":true,"execution_time_ms":50,"timed_out":false,"killed":false}\n',
+            ),
+          ]),
+          status: 200,
+        }),
+      requestVoid: vi.fn().mockResolvedValue(undefined),
+    } as unknown as HttpClient;
+
+    const result = await exec(mockHttp, "sandbox-1", { command: "test" });
+
+    expect(result.exitCode).toBe(0);
+    expect(mockHttp.requestStream).toHaveBeenCalledTimes(2);
+
+    const firstCall = (mockHttp.requestStream as ReturnType<typeof vi.fn>).mock.calls[0];
+    const secondCall = (mockHttp.requestStream as ReturnType<typeof vi.fn>).mock.calls[1];
+    expect(firstCall[0]).toBe("POST");
+    expect(secondCall[0]).toBe("POST");
+    expect(firstCall[2].data.exec_id).toBe(secondCall[2].data.exec_id);
+  });
+
   it("retries POST with same exec_id on transient error", async () => {
     const mockHttp = {
       requestStream: vi

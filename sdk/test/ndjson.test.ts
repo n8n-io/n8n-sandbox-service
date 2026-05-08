@@ -1,5 +1,6 @@
 import { Readable } from "node:stream";
 import { describe, expect, it } from "vitest";
+import { InvalidStreamEventError } from "../src/errors.js";
 import { parseExecEvent, readNdjsonStream } from "../src/ndjson.js";
 
 function streamFrom(lines: string[]): Readable {
@@ -91,17 +92,26 @@ describe("readNdjsonStream", () => {
     expect(events).toEqual([{ seq: 1, type: "stdout", data: "café" }]);
   });
 
-  it("returns error event for invalid JSON", async () => {
+  it("throws error for invalid JSON", async () => {
     const stream = streamFrom(["not-json"]);
 
-    const events = [];
-    for await (const event of readNdjsonStream(stream)) {
-      events.push(event);
-    }
+    expect(async () => {
+      const events = [];
+      for await (const event of readNdjsonStream(stream)) {
+        events.push(event);
+      }
+    }).rejects.toThrow(InvalidStreamEventError);
+  });
 
-    expect(events).toEqual([
-      { type: "error", error: expect.stringContaining("Invalid exec event payload") },
-    ]);
+  it("throws error for malformed newline-terminated JSON object", async () => {
+    const stream = streamFrom(['{"seq":1,"type":"stdout","data":"ok",}']);
+
+    expect(async () => {
+      const events = [];
+      for await (const event of readNdjsonStream(stream)) {
+        events.push(event);
+      }
+    }).rejects.toThrow(InvalidStreamEventError);
   });
 
   it("returns error event for unknown event type", async () => {
@@ -165,11 +175,10 @@ describe("parseExecEvent", () => {
     });
   });
 
-  it("returns error for malformed JSON", () => {
-    expect(parseExecEvent("{")).toEqual({
-      type: "error",
-      error: expect.stringContaining("Invalid exec event payload"),
-    });
+  it("throws error for malformed JSON", () => {
+    expect(() => {
+      parseExecEvent("{");
+    }).toThrow(InvalidStreamEventError);
   });
 
   it("treats object with error property but no type as error event", () => {

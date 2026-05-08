@@ -1,5 +1,6 @@
 import type { Readable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
+import { InvalidStreamEventError } from "./errors";
 import type {
   ExecEvent,
   ExecStartedEvent,
@@ -82,9 +83,6 @@ export function parseExecEvent(line: string): ExecEvent {
 
     return { type: "error", error: `Invalid exec event payload: ${line}` };
   } catch (error) {
-    return {
-      type: "error",
-      error: `Invalid exec event payload: ${error instanceof Error ? error.message : String(error)}`,
-    };
+    throw new InvalidStreamEventError(line, error instanceof Error ? error : undefined);
   }
 }
