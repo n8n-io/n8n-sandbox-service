@@ -126,12 +126,18 @@ test.describe('File API and Exec API path consistency', () => {
     await uploadFile(sandboxId, path, content);
 
     // Use wc -l via exec to confirm line count
-    const result = await exec(sandboxId, `wc -l < ${path}`);
+    const result = await execWithTransientRetry(sandboxId, `wc -l < ${path}`, {
+      timeoutMs: 10_000,
+      retryWindowMs: 12_000,
+    });
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe('2');
 
     // Confirm full content via exec
-    const catResult = await exec(sandboxId, `cat ${path}`);
+    const catResult = await execWithTransientRetry(sandboxId, `cat ${path}`, {
+      timeoutMs: 10_000,
+      retryWindowMs: 12_000,
+    });
     expect(catResult.stdout.trim()).toBe(content);
   });
 });

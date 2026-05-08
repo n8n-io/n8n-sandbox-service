@@ -660,7 +660,10 @@ test.describe('File operations', () => {
 
   test('file uploaded via API is visible to exec', async () => {
     await uploadFile(sandboxId, '/tmp/exec-visible.txt', 'from api');
-    const result = await exec(sandboxId, 'cat /tmp/exec-visible.txt');
+    const result = await execWithTransientRetry(sandboxId, 'cat /tmp/exec-visible.txt', {
+      timeoutMs: 10_000,
+      retryWindowMs: 12_000,
+    });
     expect(result.stdout).toBe('from api\n');
     expect(result.success).toBe(true);
   });
@@ -675,7 +678,10 @@ test.describe('File operations', () => {
     await uploadFile(sandboxId, '/tmp/space dir/space file.txt', 'spaced content');
     const downloaded = await downloadFile(sandboxId, '/tmp/space dir/space file.txt');
     expect(downloaded).toBe('spaced content');
-    const result = await exec(sandboxId, "cat '/tmp/space dir/space file.txt'");
+    const result = await execWithTransientRetry(sandboxId, "cat '/tmp/space dir/space file.txt'", {
+      timeoutMs: 10_000,
+      retryWindowMs: 12_000,
+    });
     expect(result.stdout).toBe('spaced content\n');
     expect(result.success).toBe(true);
   });
