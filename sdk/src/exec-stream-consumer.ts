@@ -46,6 +46,10 @@ export class ExecStreamConsumer {
         this.lastSeq = event.seq;
       }
 
+      if (this.exitMeta) {
+        continue;
+      }
+
       switch (event.type) {
         case "started":
           break;

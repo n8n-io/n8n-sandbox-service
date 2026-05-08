@@ -54,6 +54,27 @@ describe("exec", () => {
     expect(result.success).toBe(false);
   });
 
+  it("keeps exit result when a proxy error arrives after exit", async () => {
+    const http = createMockHttp([
+      '{"seq":0,"type":"started","exec_id":"sess-1"}',
+      '{"seq":1,"type":"stdout","data":"ok"}',
+      '{"seq":2,"type":"exit","exit_code":0,"success":true,"execution_time_ms":25,"timed_out":false,"killed":false}',
+      '{"error":"internal server error"}',
+    ]);
+
+    const result = await exec(http, "sandbox-1", { command: "cat /tmp/file" });
+
+    expect(result).toEqual({
+      exitCode: 0,
+      stdout: "ok",
+      stderr: "",
+      executionTimeMs: 25,
+      timedOut: false,
+      killed: false,
+      success: true,
+    });
+  });
+
   it("invokes onStdout and onStderr callbacks", async () => {
     const http = createMockHttp([
       '{"seq":0,"type":"started","exec_id":"sess-1"}',

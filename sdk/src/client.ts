@@ -75,11 +75,7 @@ export class SandboxClient {
   /**
    * Resumes or replays an execution, returning the aggregated result.
    */
-  async resumeExecution(
-    sandboxId: string,
-    execId: string,
-    afterSeq?: number,
-  ): Promise<ExecResult> {
+  async resumeExecution(sandboxId: string, execId: string, afterSeq?: number): Promise<ExecResult> {
     return resumeExecution(this.http, sandboxId, execId, afterSeq);
   }
 
