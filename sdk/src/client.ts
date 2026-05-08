@@ -1,4 +1,4 @@
-import { exec, resumeExecution, cancelExecution } from "./exec";
+import { exec, resumeExecution, deleteExecution } from "./exec";
 import {
   readFile,
   writeFile,
@@ -84,10 +84,10 @@ export class SandboxClient {
   }
 
   /**
-   * Cancels a running execution.
+   * Cancels and deletes an execution.
    */
-  async cancelExecution(sandboxId: string, execId: string): Promise<void> {
-    return cancelExecution(this.http, sandboxId, execId);
+  async deleteExecution(sandboxId: string, execId: string): Promise<void> {
+    return deleteExecution(this.http, sandboxId, execId);
   }
 
   // #endregion

@@ -140,13 +140,16 @@ func (em *ExecManager) Get(execID string) *Execution {
 	return em.executions[execID]
 }
 
-// Cancel cancels the running command for the given execution. Returns false if
-// the execution does not exist.
-func (em *ExecManager) Cancel(execID string) bool {
-	ex := em.Get(execID)
-	if ex == nil {
+// Delete cancels the running command and removes the execution from memory.
+// Returns false if the execution does not exist.
+func (em *ExecManager) Delete(execID string) bool {
+	em.mu.Lock()
+	defer em.mu.Unlock()
+	ex, ok := em.executions[execID]
+	if !ok {
 		return false
 	}
 	ex.cancel()
+	delete(em.executions, execID)
 	return true
 }

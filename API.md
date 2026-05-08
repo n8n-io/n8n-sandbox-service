@@ -200,7 +200,7 @@ The `exit` event includes:
 The command runs in a daemon-side execution whose lifetime is independent of the HTTP
 stream. Closing the HTTP connection does **not** kill the running command — it only
 stops the event stream. To cancel a running command, use
-`DELETE /sandboxes/{id}/exec/{exec_id}`. The SDK calls the cancel endpoint
+`DELETE /sandboxes/{id}/exec/{exec_id}`. The SDK calls the delete endpoint
 automatically when `abortSignal` fires.
 
 The execution stores events in a bounded buffer (up to 16 MiB). Clients can reconnect
@@ -256,7 +256,9 @@ curl "http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/exec/
 
 ### DELETE /sandboxes/{id}/exec/{exec_id}
 
-Cancel a running execution. Kills the process group with SIGKILL.
+Delete an execution. Kills the running process (if still active) and immediately
+removes the execution state from memory. After deletion, the execution can no
+longer be resumed or queried.
 
 **Path Parameters:**
 - `id` — Sandbox UUID

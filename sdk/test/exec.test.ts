@@ -277,7 +277,7 @@ describe("exec", () => {
     expect(firstCall[2].data.exec_id).toBe(secondCall[2].data.exec_id);
   });
 
-  it("cancels execution on abort signal", async () => {
+  it("deletes execution on abort signal", async () => {
     const controller = new AbortController();
 
     const stream = new Readable({

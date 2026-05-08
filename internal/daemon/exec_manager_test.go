@@ -109,7 +109,7 @@ func TestExecutionEmptyExecIDGeneratesUnique(t *testing.T) {
 	}
 }
 
-func TestExecutionCancel(t *testing.T) {
+func TestExecutionDelete(t *testing.T) {
 	em := NewExecManager()
 	defer em.Close()
 
@@ -117,39 +117,21 @@ func TestExecutionCancel(t *testing.T) {
 
 	time.Sleep(200 * time.Millisecond)
 
-	if !em.Cancel(ex.ID) {
-		t.Fatal("expected Cancel to return true")
+	if !em.Delete(ex.ID) {
+		t.Fatal("expected Delete to return true")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	ex.Follow(ctx, nil, func([]byte) {})
-
-	raw, ok := ex.Snapshot(nil)
-	if !ok {
-		t.Fatal("expected snapshot to succeed")
-	}
-	events := parseEvents(raw)
-	var sawExit bool
-	for _, e := range events {
-		if e.Type == ResponseTypeExit {
-			sawExit = true
-			if e.Killed == nil || !*e.Killed {
-				t.Fatal("expected killed=true after cancel")
-			}
-		}
-	}
-	if !sawExit {
-		t.Fatal("expected exit event after cancel")
+	if em.Get(ex.ID) != nil {
+		t.Fatal("expected execution to be removed from memory after Delete")
 	}
 }
 
-func TestExecutionCancelNotFound(t *testing.T) {
+func TestExecutionDeleteNotFound(t *testing.T) {
 	em := NewExecManager()
 	defer em.Close()
 
-	if em.Cancel("nonexistent") {
-		t.Fatal("expected Cancel to return false for nonexistent execution")
+	if em.Delete("nonexistent") {
+		t.Fatal("expected Delete to return false for nonexistent execution")
 	}
 }
 
@@ -317,6 +299,13 @@ func TestDeleteExecEndpoint(t *testing.T) {
 
 	if delRR.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d", delRR.Code)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/exec/"+execID, nil)
+	getRR := httptest.NewRecorder()
+	handler.ServeHTTP(getRR, getReq)
+	if getRR.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 on GET after DELETE, got %d", getRR.Code)
 	}
 
 	delReq2 := httptest.NewRequest(http.MethodDelete, "/exec/nonexistent", nil)
