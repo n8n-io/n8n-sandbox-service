@@ -95,7 +95,7 @@ describe("readNdjsonStream", () => {
   it("throws error for invalid JSON", async () => {
     const stream = streamFrom(["not-json"]);
 
-    expect(async () => {
+    await expect(async () => {
       const events = [];
       for await (const event of readNdjsonStream(stream)) {
         events.push(event);
@@ -106,7 +106,7 @@ describe("readNdjsonStream", () => {
   it("throws error for malformed newline-terminated JSON object", async () => {
     const stream = streamFrom(['{"seq":1,"type":"stdout","data":"ok",}']);
 
-    expect(async () => {
+    await expect(async () => {
       const events = [];
       for await (const event of readNdjsonStream(stream)) {
         events.push(event);
