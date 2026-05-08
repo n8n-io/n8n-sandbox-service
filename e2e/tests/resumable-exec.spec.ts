@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { SandboxServiceError } from '@n8n/sandbox-client';
 import { client, createSandbox, deleteSandbox, startAndDisconnect } from './helpers';
 
 function sleep(ms: number): Promise<void> {
@@ -35,16 +36,19 @@ test.describe('Resumable Exec', () => {
     expect(result.killed).toBe(false);
   });
 
-  test('cancel kills running command', async () => {
+  test('delete kills running command and removes execution state', async () => {
     test.setTimeout(15_000);
 
     const execId = await startAndDisconnect(sandboxId, 'sleep 30');
     expect(execId).toBeTruthy();
 
-    await client.cancelExecution(sandboxId, execId);
+    await client.deleteExecution(sandboxId, execId);
 
-    const result = await client.resumeExecution(sandboxId, execId, 0);
-
-    expect(result.killed).toBe(true);
+    const err = await client.resumeExecution(sandboxId, execId, 0).catch((e) => e);
+    expect(err).toBeInstanceOf(SandboxServiceError);
+    expect(err).toMatchObject({
+      status: 404,
+      message: 'execution not found',
+    });
   });
 });
