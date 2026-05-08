@@ -31,14 +31,16 @@ type ExecManager struct {
 // NewExecManager creates an ExecManager and starts its cleanup goroutine.
 // Configuration is read from environment variables:
 //   - SANDBOX_EXEC_MAX_EVENT_BYTES: max bytes of event history per execution (default 16 MiB)
-//   - SANDBOX_EXEC_RETAIN: duration to retain completed executions (default 10m)
+//   - SANDBOX_EXEC_RETAIN: duration to retain completed executions (default 10m).
+//     Falls back to SANDBOX_EXEC_SESSION_RETAIN for backward compatibility.
 func NewExecManager() *ExecManager {
 	em := &ExecManager{
-		executions:       make(map[string]*Execution),
-		maxEventBytes:    envInt64("SANDBOX_EXEC_MAX_EVENT_BYTES", int64(defaultMaxEventBytes)),
-		execRetainPeriod: envDuration("SANDBOX_EXEC_RETAIN", defaultExecRetainPeriod),
-		stop:             make(chan struct{}),
-		stopped:          make(chan struct{}),
+		executions:    make(map[string]*Execution),
+		maxEventBytes: envInt64("SANDBOX_EXEC_MAX_EVENT_BYTES", int64(defaultMaxEventBytes)),
+		execRetainPeriod: envDuration("SANDBOX_EXEC_RETAIN",
+			envDuration("SANDBOX_EXEC_SESSION_RETAIN", defaultExecRetainPeriod)),
+		stop:    make(chan struct{}),
+		stopped: make(chan struct{}),
 	}
 	go em.cleanupLoop()
 	return em
