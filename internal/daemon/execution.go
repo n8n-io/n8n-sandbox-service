@@ -76,7 +76,12 @@ func (ex *Execution) append(resp Response) {
 func (ex *Execution) eventsAfter(after *uint64) [][]byte {
 	start := 0
 	if after != nil {
-		start = int(*after + 1 - ex.minSeq)
+		if *after == ^uint64(0) {
+			return nil
+		}
+		if *after >= ex.minSeq {
+			start = int(*after - ex.minSeq + 1)
+		}
 	}
 	if start >= len(ex.events) {
 		return nil
@@ -95,6 +100,9 @@ func (ex *Execution) eventsAfter(after *uint64) [][]byte {
 func (ex *Execution) hasHistoryAfter(after *uint64) bool {
 	if after == nil {
 		return ex.minSeq == 0
+	}
+	if *after == ^uint64(0) {
+		return true
 	}
 	return *after+1 >= ex.minSeq
 }
