@@ -74,11 +74,17 @@ func (ex *Execution) append(resp Response) {
 // eventsAfter returns pre-marshaled data for retained events with seq > after.
 // If after is nil, all retained events are returned. Caller must hold ex.mu.
 func (ex *Execution) eventsAfter(after *uint64) [][]byte {
-	var result [][]byte
-	for _, e := range ex.events {
-		if after == nil || e.seq > *after {
-			result = append(result, e.data)
-		}
+	start := 0
+	if after != nil {
+		start = int(*after + 1 - ex.minSeq)
+	}
+	if start >= len(ex.events) {
+		return nil
+	}
+	tail := ex.events[start:]
+	result := make([][]byte, len(tail))
+	for i, e := range tail {
+		result[i] = e.data
 	}
 	return result
 }
