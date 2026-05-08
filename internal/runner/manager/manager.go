@@ -301,11 +301,15 @@ func waitForDaemon(ctx context.Context, baseURL string) error {
 				continue
 			}
 			// Daemon /exec streams NDJSON events; require a successful exit event.
-			if bytes.Contains(body, []byte(`"type":"exit"`)) && bytes.Contains(body, []byte(`"exit_code":0`)) {
+			if isSuccessfulExit(body) {
 				return nil
 			}
 		}
 	}
+}
+
+func isSuccessfulExit(body []byte) bool {
+	return bytes.Contains(body, []byte(`"type":"exit"`)) && bytes.Contains(body, []byte(`"exit_code":0`))
 }
 
 func (m *Manager) reconcileContainers(ctx context.Context) error {

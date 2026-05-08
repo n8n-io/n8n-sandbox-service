@@ -1,31 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { execFileSync } from 'node:child_process';
-import { createSandbox, deleteSandbox, exec } from './helpers';
-
-function docker(args: string[]): string {
-  return execFileSync('docker', args, {
-    stdio: ['pipe', 'pipe', 'pipe'],
-    encoding: 'utf8',
-  });
-}
-
-function innerContainerName(sandboxID: string): string {
-  return `sandbox-${sandboxID.slice(0, 12)}`;
-}
-
-function dockerOutput(args: string[]): string {
-  try {
-    return execFileSync('docker', args, {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      encoding: 'utf8',
-    });
-  } catch (err: unknown) {
-    const e = err as { stdout?: unknown; stderr?: unknown };
-    const stdout = e.stdout ? String(e.stdout) : '';
-    const stderr = e.stderr ? String(e.stderr) : '';
-    return `${stdout}\n${stderr}`.trim();
-  }
-}
+import { createSandbox, deleteSandbox, docker, dockerOutput, exec, innerContainerName } from './helpers';
 
 async function waitExecOK(sandboxID: string, command: string, deadlineMs: number): Promise<void> {
   const deadline = Date.now() + deadlineMs;
@@ -187,7 +161,6 @@ test.describe('Sandbox recovery on runner', () => {
     const id = await createSandbox();
     const innerName = innerContainerName(id);
     try {
-      docker(['exec', runnerContainer, 'docker', 'update', '--restart', 'no', innerName]);
       docker(['exec', runnerContainer, 'docker', 'stop', '--time', '0', innerName]);
 
       for (let i = 0; i < 2; i++) {

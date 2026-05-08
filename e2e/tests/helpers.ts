@@ -1,5 +1,6 @@
 import { APIRequestContext } from '@playwright/test';
 import { SandboxClient, type ExecResult } from '@n8n/sandbox-client';
+import { execFileSync } from 'node:child_process';
 
 const API_KEY = process.env.SANDBOX_API_KEY || 'test';
 const BASE_URL = process.env.BASE_URL || 'http://localhost:8080';
@@ -70,4 +71,29 @@ export async function apiRequest(
     body,
     json: () => Promise.resolve(JSON.parse(body)),
   };
+}
+
+export function docker(args: string[]): string {
+  return execFileSync('docker', args, {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    encoding: 'utf8',
+  });
+}
+
+export function dockerOutput(args: string[]): string {
+  try {
+    return execFileSync('docker', args, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      encoding: 'utf8',
+    });
+  } catch (err: unknown) {
+    const e = err as { stdout?: unknown; stderr?: unknown };
+    const stdout = e.stdout ? String(e.stdout) : '';
+    const stderr = e.stderr ? String(e.stderr) : '';
+    return `${stdout}\n${stderr}`.trim();
+  }
+}
+
+export function innerContainerName(sandboxID: string): string {
+  return `sandbox-${sandboxID.slice(0, 12)}`;
 }
