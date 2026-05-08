@@ -133,10 +133,12 @@ export type FileStatWireResponse = {
   modified_at: string;
 };
 
+/** Initial event emitted at the start of every exec stream. */
+export type ExecStartedEvent = { type: "started"; seq: number; exec_id: string };
 /** Streamed stdout chunk from exec. */
-export type ExecStdoutEvent = { type: "stdout"; data: string };
+export type ExecStdoutEvent = { type: "stdout"; data: string; seq: number };
 /** Streamed stderr chunk from exec. */
-export type ExecStderrEvent = { type: "stderr"; data: string };
+export type ExecStderrEvent = { type: "stderr"; data: string; seq: number };
 /** Final exit event from exec with process metadata. */
 export type ExecExitEvent = {
   type: "exit";
@@ -145,8 +147,14 @@ export type ExecExitEvent = {
   execution_time_ms: number;
   timed_out: boolean;
   killed: boolean;
+  seq: number;
 };
-/** Error event from exec indicating a stream-level failure. */
-export type ExecErrorEvent = { type: "error"; error: string };
+/** Error event — may originate from the server (with seq) or from client-side parsing (without). */
+export type ExecErrorEvent = { type: "error"; error: string; seq?: number };
 /** Discriminated union of all NDJSON exec stream events. */
-export type ExecEvent = ExecStdoutEvent | ExecStderrEvent | ExecExitEvent | ExecErrorEvent;
+export type ExecEvent =
+  | ExecStartedEvent
+  | ExecStdoutEvent
+  | ExecStderrEvent
+  | ExecExitEvent
+  | ExecErrorEvent;

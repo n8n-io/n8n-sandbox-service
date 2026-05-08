@@ -1,24 +1,28 @@
 import { Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { SandboxServiceError } from "../src/errors.js";
-import { exec } from "../src/exec.js";
+import { exec, resumeExecution } from "../src/exec.js";
 import type { HttpClient } from "../src/http.js";
 
 function createMockHttp(ndjsonLines: string[]): HttpClient {
   return {
-    requestStream: vi.fn().mockResolvedValue({
-      stream: Readable.from([Buffer.from(ndjsonLines.join("\n") + "\n")]),
-      status: 200,
-    }),
+    requestStream: vi.fn().mockImplementation(() =>
+      Promise.resolve({
+        stream: Readable.from([Buffer.from(ndjsonLines.join("\n") + "\n")]),
+        status: 200,
+      }),
+    ),
+    requestVoid: vi.fn().mockResolvedValue(undefined),
   } as unknown as HttpClient;
 }
 
 describe("exec", () => {
   it("aggregates stdout and returns exit result", async () => {
     const http = createMockHttp([
-      '{"type":"stdout","data":"hello\\n"}',
-      '{"type":"stdout","data":"world\\n"}',
-      '{"type":"exit","exit_code":0,"success":true,"execution_time_ms":100,"timed_out":false,"killed":false}',
+      '{"seq":0,"type":"started","exec_id":"sess-1"}',
+      '{"seq":1,"type":"stdout","data":"hello\\n"}',
+      '{"seq":2,"type":"stdout","data":"world\\n"}',
+      '{"seq":3,"type":"exit","exit_code":0,"success":true,"execution_time_ms":100,"timed_out":false,"killed":false}',
     ]);
 
     const result = await exec(http, "sandbox-1", { command: "echo hello" });
@@ -36,9 +40,10 @@ describe("exec", () => {
 
   it("aggregates stderr separately", async () => {
     const http = createMockHttp([
-      '{"type":"stdout","data":"out"}',
-      '{"type":"stderr","data":"err"}',
-      '{"type":"exit","exit_code":1,"success":false,"execution_time_ms":50,"timed_out":false,"killed":false}',
+      '{"seq":0,"type":"started","exec_id":"sess-1"}',
+      '{"seq":1,"type":"stdout","data":"out"}',
+      '{"seq":2,"type":"stderr","data":"err"}',
+      '{"seq":3,"type":"exit","exit_code":1,"success":false,"execution_time_ms":50,"timed_out":false,"killed":false}',
     ]);
 
     const result = await exec(http, "sandbox-1", { command: "failing" });
@@ -49,11 +54,33 @@ describe("exec", () => {
     expect(result.success).toBe(false);
   });
 
+  it("keeps exit result when a proxy error arrives after exit", async () => {
+    const http = createMockHttp([
+      '{"seq":0,"type":"started","exec_id":"sess-1"}',
+      '{"seq":1,"type":"stdout","data":"ok"}',
+      '{"seq":2,"type":"exit","exit_code":0,"success":true,"execution_time_ms":25,"timed_out":false,"killed":false}',
+      '{"error":"internal server error"}',
+    ]);
+
+    const result = await exec(http, "sandbox-1", { command: "cat /tmp/file" });
+
+    expect(result).toEqual({
+      exitCode: 0,
+      stdout: "ok",
+      stderr: "",
+      executionTimeMs: 25,
+      timedOut: false,
+      killed: false,
+      success: true,
+    });
+  });
+
   it("invokes onStdout and onStderr callbacks", async () => {
     const http = createMockHttp([
-      '{"type":"stdout","data":"a"}',
-      '{"type":"stderr","data":"b"}',
-      '{"type":"exit","exit_code":0,"success":true,"execution_time_ms":10,"timed_out":false,"killed":false}',
+      '{"seq":0,"type":"started","exec_id":"sess-1"}',
+      '{"seq":1,"type":"stdout","data":"a"}',
+      '{"seq":2,"type":"stderr","data":"b"}',
+      '{"seq":3,"type":"exit","exit_code":0,"success":true,"execution_time_ms":10,"timed_out":false,"killed":false}',
     ]);
 
     const stdoutChunks: string[] = [];
@@ -70,7 +97,10 @@ describe("exec", () => {
   });
 
   it("throws SandboxServiceError on error event", async () => {
-    const http = createMockHttp(['{"type":"error","error":"command not found"}']);
+    const http = createMockHttp([
+      '{"seq":0,"type":"started","exec_id":"sess-1"}',
+      '{"seq":1,"type":"error","error":"command not found"}',
+    ]);
 
     const err = await exec(http, "sandbox-1", { command: "bad" }).catch((e) => e);
     expect(err).toBeInstanceOf(SandboxServiceError);
@@ -78,16 +108,25 @@ describe("exec", () => {
   });
 
   it("throws SandboxServiceError if stream ends without exit event", async () => {
-    const http = createMockHttp(['{"type":"stdout","data":"partial"}']);
+    const http = {
+      requestStream: vi.fn().mockImplementation(() =>
+        Promise.resolve({
+          stream: Readable.from([Buffer.from("")]),
+          status: 200,
+        }),
+      ),
+      requestVoid: vi.fn().mockResolvedValue(undefined),
+    } as unknown as HttpClient;
 
     const err = await exec(http, "sandbox-1", { command: "incomplete" }).catch((e) => e);
     expect(err).toBeInstanceOf(SandboxServiceError);
     expect(err.message).toBe("Sandbox exec stream ended without an exit event");
   });
 
-  it("passes correct request body to http layer", async () => {
+  it("passes exec_id in request body", async () => {
     const http = createMockHttp([
-      '{"type":"exit","exit_code":0,"success":true,"execution_time_ms":1,"timed_out":false,"killed":false}',
+      '{"seq":0,"type":"started","exec_id":"sess-1"}',
+      '{"seq":1,"type":"exit","exit_code":0,"success":true,"execution_time_ms":1,"timed_out":false,"killed":false}',
     ]);
 
     await exec(http, "sandbox-1", {
@@ -103,8 +142,206 @@ describe("exec", () => {
         env: { FOO: "bar" },
         workdir: "/tmp",
         timeout_ms: 5000,
+        exec_id: expect.any(String),
       },
       signal: undefined,
+    });
+  });
+
+  it("resumes after stream ends without exit event", async () => {
+    const mockHttp = {
+      requestStream: vi
+        .fn()
+        .mockResolvedValueOnce({
+          stream: Readable.from([
+            Buffer.from(
+              '{"seq":0,"type":"started","exec_id":"sess-resume"}\n' +
+                '{"seq":1,"type":"stdout","data":"part1"}\n',
+            ),
+          ]),
+          status: 200,
+        })
+        .mockResolvedValueOnce({
+          stream: Readable.from([
+            Buffer.from(
+              '{"seq":2,"type":"stdout","data":"part2"}\n' +
+                '{"seq":3,"type":"exit","exit_code":0,"success":true,"execution_time_ms":100,"timed_out":false,"killed":false}\n',
+            ),
+          ]),
+          status: 200,
+        }),
+      requestVoid: vi.fn().mockResolvedValue(undefined),
+    } as unknown as HttpClient;
+
+    const result = await exec(mockHttp, "sandbox-1", { command: "test" });
+
+    expect(result.stdout).toBe("part1part2");
+    expect(result.exitCode).toBe(0);
+    expect(mockHttp.requestStream).toHaveBeenCalledTimes(2);
+    // Second call is GET resume with after=1
+    const lastCall = (mockHttp.requestStream as ReturnType<typeof vi.fn>).mock.calls[1];
+    expect(lastCall[0]).toBe("GET");
+    expect(lastCall[2]).toEqual(
+      expect.objectContaining({
+        params: { after: "1", follow: "true" },
+      }),
+    );
+  });
+
+  it("resumes after stream ends with a truncated event", async () => {
+    const mockHttp = {
+      requestStream: vi
+        .fn()
+        .mockResolvedValueOnce({
+          stream: Readable.from([
+            Buffer.from(
+              '{"seq":0,"type":"started","exec_id":"sess-resume"}\n' +
+                '{"seq":1,"type":"stdout","data":"part1"}\n' +
+                '{"seq":2,"type":"stdout","data":"truncated',
+            ),
+          ]),
+          status: 200,
+        })
+        .mockResolvedValueOnce({
+          stream: Readable.from([
+            Buffer.from(
+              '{"seq":2,"type":"stdout","data":"part2"}\n' +
+                '{"seq":3,"type":"exit","exit_code":0,"success":true,"execution_time_ms":100,"timed_out":false,"killed":false}\n',
+            ),
+          ]),
+          status: 200,
+        }),
+      requestVoid: vi.fn().mockResolvedValue(undefined),
+    } as unknown as HttpClient;
+
+    const result = await exec(mockHttp, "sandbox-1", { command: "test" });
+
+    expect(result).toEqual({
+      exitCode: 0,
+      stdout: "part1part2",
+      stderr: "",
+      executionTimeMs: 100,
+      timedOut: false,
+      killed: false,
+      success: true,
+    });
+    expect(mockHttp.requestStream).toHaveBeenCalledTimes(2);
+    const resumeCall = (mockHttp.requestStream as ReturnType<typeof vi.fn>).mock.calls[1];
+    expect(resumeCall[0]).toBe("GET");
+    expect(resumeCall[1]).toEqual(expect.stringMatching(/^\/sandboxes\/sandbox-1\/exec\/.+$/));
+    expect(resumeCall[2]).toEqual(
+      expect.objectContaining({
+        params: { after: "1", follow: "true" },
+      }),
+    );
+  });
+
+  it("retries POST with same exec_id when stream truncates before any valid event", async () => {
+    const mockHttp = {
+      requestStream: vi
+        .fn()
+        .mockResolvedValueOnce({
+          stream: Readable.from([
+            Buffer.from('{"seq":0,"type":"started","exec_id":"sess-truncated'),
+          ]),
+          status: 200,
+        })
+        .mockResolvedValueOnce({
+          stream: Readable.from([
+            Buffer.from(
+              '{"seq":0,"type":"started","exec_id":"sess-retry"}\n' +
+                '{"seq":1,"type":"exit","exit_code":0,"success":true,"execution_time_ms":50,"timed_out":false,"killed":false}\n',
+            ),
+          ]),
+          status: 200,
+        }),
+      requestVoid: vi.fn().mockResolvedValue(undefined),
+    } as unknown as HttpClient;
+
+    const result = await exec(mockHttp, "sandbox-1", { command: "test" });
+
+    expect(result.exitCode).toBe(0);
+    expect(mockHttp.requestStream).toHaveBeenCalledTimes(2);
+
+    const firstCall = (mockHttp.requestStream as ReturnType<typeof vi.fn>).mock.calls[0];
+    const secondCall = (mockHttp.requestStream as ReturnType<typeof vi.fn>).mock.calls[1];
+    expect(firstCall[0]).toBe("POST");
+    expect(secondCall[0]).toBe("POST");
+    expect(firstCall[2].data.exec_id).toBe(secondCall[2].data.exec_id);
+  });
+
+  it("retries POST with same exec_id on transient error", async () => {
+    const mockHttp = {
+      requestStream: vi
+        .fn()
+        .mockRejectedValueOnce(new SandboxServiceError("network error", 0))
+        .mockResolvedValueOnce({
+          stream: Readable.from([
+            Buffer.from(
+              '{"seq":0,"type":"started","exec_id":"sess-retry"}\n' +
+                '{"seq":1,"type":"exit","exit_code":0,"success":true,"execution_time_ms":50,"timed_out":false,"killed":false}\n',
+            ),
+          ]),
+          status: 200,
+        }),
+      requestVoid: vi.fn().mockResolvedValue(undefined),
+    } as unknown as HttpClient;
+
+    const result = await exec(mockHttp, "sandbox-1", { command: "test" });
+
+    expect(result.exitCode).toBe(0);
+    expect(mockHttp.requestStream).toHaveBeenCalledTimes(2);
+
+    // Both POST calls should use the same exec_id
+    const firstCall = (mockHttp.requestStream as ReturnType<typeof vi.fn>).mock.calls[0];
+    const secondCall = (mockHttp.requestStream as ReturnType<typeof vi.fn>).mock.calls[1];
+    expect(firstCall[2].data.exec_id).toBe(secondCall[2].data.exec_id);
+  });
+
+  it("deletes execution on abort signal", async () => {
+    const controller = new AbortController();
+
+    const stream = new Readable({
+      read() {
+        this.push(Buffer.from('{"seq":0,"type":"started","exec_id":"sess-abort"}\n'));
+        this.push(null);
+      },
+    });
+
+    const mockHttp = {
+      requestStream: vi.fn().mockResolvedValueOnce({ stream, status: 200 }),
+      requestVoid: vi.fn().mockResolvedValue(undefined),
+    } as unknown as HttpClient;
+
+    // Pre-abort the signal so the resume GET will fail immediately
+    controller.abort();
+
+    await exec(mockHttp, "sandbox-1", {
+      command: "sleep 100",
+      abortSignal: controller.signal,
+    }).catch(() => {});
+
+    // Should cancel using the client-defined exec_id, not the one from the started event
+    expect(mockHttp.requestVoid).toHaveBeenCalledWith(
+      "DELETE",
+      expect.stringMatching(/^\/sandboxes\/sandbox-1\/exec\/.+$/),
+    );
+  });
+});
+
+describe("resumeExecution", () => {
+  it("requests follow mode so running executions can complete", async () => {
+    const http = createMockHttp([
+      '{"seq":2,"type":"stdout","data":"part2"}',
+      '{"seq":3,"type":"exit","exit_code":0,"success":true,"execution_time_ms":100,"timed_out":false,"killed":false}',
+    ]);
+
+    const result = await resumeExecution(http, "sandbox-1", "exec-1", 1);
+
+    expect(result.stdout).toBe("part2");
+    expect(result.exitCode).toBe(0);
+    expect(http.requestStream).toHaveBeenCalledWith("GET", "/sandboxes/sandbox-1/exec/exec-1", {
+      params: { after: "1", follow: "true" },
     });
   });
 });

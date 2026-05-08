@@ -26,6 +26,8 @@ func NewGatewayRouter(s *store.Store, cfg *config.APIConfig, reg *registry.Regis
 	mux.HandleFunc("DELETE /sandboxes/{id}", handleDeleteSandbox(s, cfg))
 
 	mux.HandleFunc("POST /sandboxes/{id}/exec", sandboxProxy(false))
+	mux.HandleFunc("GET /sandboxes/{id}/exec/{exec_id}", sandboxProxy(false))
+	mux.HandleFunc("DELETE /sandboxes/{id}/exec/{exec_id}", sandboxProxy(false))
 	mux.HandleFunc("POST /sandboxes/{id}/files/copy", sandboxProxy(false))
 	mux.HandleFunc("POST /sandboxes/{id}/files/move", sandboxProxy(false))
 	mux.HandleFunc("GET /sandboxes/{id}/files", sandboxProxy(false))

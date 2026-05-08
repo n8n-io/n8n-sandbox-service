@@ -22,11 +22,12 @@ const (
 type ResponseType string
 
 const (
-	ResponseTypeStdout ResponseType = "stdout"
-	ResponseTypeStderr ResponseType = "stderr"
-	ResponseTypeExit   ResponseType = "exit"
-	ResponseTypeResult ResponseType = "result"
-	ResponseTypeError  ResponseType = "error"
+	ResponseTypeStarted ResponseType = "started"
+	ResponseTypeStdout  ResponseType = "stdout"
+	ResponseTypeStderr  ResponseType = "stderr"
+	ResponseTypeExit    ResponseType = "exit"
+	ResponseTypeResult  ResponseType = "result"
+	ResponseTypeError   ResponseType = "error"
 )
 
 // Request is the JSON envelope sent from client to daemon.
@@ -57,8 +58,14 @@ type Request struct {
 // For exec, multiple Response messages are streamed (stdout/stderr/exit).
 // For file ops, a single Response is sent (result or error).
 type Response struct {
+	// Seq is a monotonically increasing sequence number for exec session events.
+	Seq *uint64 `json:"seq,omitempty"`
+
 	// Type indicates the kind of response.
 	Type ResponseType `json:"type"`
+
+	// ExecID identifies the exec session (set when Type == "session").
+	ExecID string `json:"exec_id,omitempty"`
 
 	// Data carries string output for stdout/stderr/result responses.
 	Data string `json:"data,omitempty"`
@@ -80,6 +87,19 @@ type Response struct {
 
 	// Error holds a human-readable error message when Type == "error".
 	Error string `json:"error,omitempty"`
+}
+
+func newStartedResponse(execID string) Response {
+	seq := uint64(0)
+	return Response{Seq: &seq, Type: ResponseTypeStarted, ExecID: execID}
+}
+
+func newErrorResponse(msg string) Response {
+	return Response{Type: ResponseTypeError, Error: msg}
+}
+
+func (r Response) isTerminal() bool {
+	return r.Type == ResponseTypeExit || r.Type == ResponseTypeError
 }
 
 // FileInfo describes a single directory entry returned by file_list.

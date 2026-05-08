@@ -12,7 +12,6 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 )
@@ -28,6 +27,7 @@ type execRequest struct {
 	Env       map[string]string `json:"env,omitempty"`
 	WorkDir   string            `json:"workdir,omitempty"`
 	TimeoutMs int64             `json:"timeout_ms,omitempty"`
+	ExecID    string            `json:"exec_id,omitempty"`
 }
 
 type copyRequest struct {
@@ -48,6 +48,21 @@ type errorResponse struct {
 	Code  int    `json:"code"`
 }
 
+// Handler wraps the daemon HTTP mux and owns the execution manager.
+type Handler struct {
+	mux *http.ServeMux
+	em  *ExecManager
+}
+
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.mux.ServeHTTP(w, r)
+}
+
+// Close stops background goroutines owned by the handler.
+func (h *Handler) Close() {
+	h.em.Close()
+}
+
 // Run serves the daemon HTTP API until SIGTERM/SIGINT is received.
 func Run(listenAddr string, baseDir string) error {
 	if baseDir == "" {
@@ -57,9 +72,12 @@ func Run(listenAddr string, baseDir string) error {
 		baseDir = "/"
 	}
 
+	h := NewHandler(baseDir)
+	defer h.Close()
+
 	srv := &http.Server{
 		Addr:              listenAddr,
-		Handler:           NewHandler(baseDir),
+		Handler:           h,
 		ReadTimeout:       30 * time.Second,
 		ReadHeaderTimeout: 10 * time.Second,
 		WriteTimeout:      0,
@@ -87,7 +105,8 @@ func Run(listenAddr string, baseDir string) error {
 }
 
 // NewHandler exposes the in-sandbox HTTP API used by the service.
-func NewHandler(baseDir string) http.Handler {
+func NewHandler(baseDir string) *Handler {
+	em := NewExecManager()
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -115,36 +134,66 @@ func NewHandler(baseDir string) http.Handler {
 			timeout = time.Duration(req.TimeoutMs) * time.Millisecond
 		}
 
-		ctx, cancel := context.WithTimeout(r.Context(), timeout)
-		defer cancel()
+		ex := em.GetOrCreate(req.ExecID, req.Command, env, req.WorkDir, timeout)
 
-		w.Header().Set("Content-Type", "application/x-ndjson")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.WriteHeader(http.StatusOK)
-
-		flusher, _ := w.(http.Flusher)
-		if flusher != nil {
-			flusher.Flush()
+		if !ex.HasHistory(nil) {
+			writeError(w, http.StatusGone, "execution history is no longer retained")
+			return
 		}
-		enc := json.NewEncoder(w)
-		var encodeMu sync.Mutex
-		callback := func(resp Response) {
-			encodeMu.Lock()
-			defer encodeMu.Unlock()
 
-			if err := enc.Encode(resp); err != nil {
-				slog.Warn("encode exec response", "err", err)
+		writeNdjsonHeader(w)
+		write := ndjsonWriter(w)
+		ex.Follow(r.Context(), nil, write)
+	})
+
+	mux.HandleFunc("GET /exec/{exec_id}", func(w http.ResponseWriter, r *http.Request) {
+		after, err := parseAfterParam(r.URL.Query().Get("after"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid after parameter")
+			return
+		}
+
+		execID := r.PathValue("exec_id")
+		ex := em.Get(execID)
+		if ex == nil {
+			writeError(w, http.StatusNotFound, "execution not found")
+			return
+		}
+
+		follow := r.URL.Query().Get("follow") == "true"
+
+		if !ex.HasHistory(after) {
+			writeError(w, http.StatusGone, "requested event history is no longer retained")
+			return
+		}
+
+		// Best-effort preflight before committing the 200/NDJSON response. There is
+		// still a narrow race where history can be trimmed between this check and the
+		// subsequent Snapshot/Follow call, in which case the client may observe a 200
+		// with an incomplete stream instead of a 410. We consider that window very
+		// low probability in practice and accept it for now.
+		writeNdjsonHeader(w)
+		write := ndjsonWriter(w)
+
+		if follow {
+			ex.Follow(r.Context(), after, write)
+		} else {
+			events, ok := ex.Snapshot(after)
+			if !ok {
+				errData, _ := json.Marshal(newErrorResponse("requested event history is no longer retained"))
+				write(errData)
 				return
 			}
-			if flusher != nil {
-				flusher.Flush()
+			for _, data := range events {
+				write(data)
 			}
 		}
+	})
 
-		if err := HandleExec(ctx, req.Command, env, req.WorkDir, callback); err != nil {
-			callback(Response{Type: ResponseTypeError, Error: err.Error()})
-		}
+	mux.HandleFunc("DELETE /exec/{exec_id}", func(w http.ResponseWriter, r *http.Request) {
+		execID := r.PathValue("exec_id")
+		em.Delete(execID)
+		w.WriteHeader(http.StatusNoContent)
 	})
 
 	mux.HandleFunc("GET /files", func(w http.ResponseWriter, r *http.Request) {
@@ -299,7 +348,7 @@ func NewHandler(baseDir string) http.Handler {
 		writeJSON(w, http.StatusOK, stat)
 	})
 
-	return mux
+	return &Handler{mux: mux, em: em}
 }
 
 func writeError(w http.ResponseWriter, code int, msg string) {
@@ -353,6 +402,46 @@ func fileOpStatusCode(err error) int {
 	default:
 		return http.StatusInternalServerError
 	}
+}
+
+func writeNdjsonHeader(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func ndjsonWriter(w http.ResponseWriter) func([]byte) {
+	flusher, _ := w.(http.Flusher)
+	return func(data []byte) {
+		if _, err := w.Write(data); err != nil {
+			slog.Warn("write exec event", "err", err)
+			return
+		}
+		if _, err := w.Write([]byte{'\n'}); err != nil {
+			slog.Warn("write exec event newline", "err", err)
+			return
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+}
+
+// parseAfterParam parses the "after" query parameter. Returns nil when the
+// parameter is absent (meaning "all events"), or a pointer to the parsed value.
+func parseAfterParam(v string) (*uint64, error) {
+	if v == "" {
+		return nil, nil
+	}
+	after, err := strconv.ParseUint(v, 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	return &after, nil
 }
 
 func parseTimeoutMs(v string) (int64, error) {
