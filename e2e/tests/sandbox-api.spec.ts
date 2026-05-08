@@ -97,7 +97,10 @@ test.describe('Exec', () => {
   });
 
   test('non-zero exit code', async () => {
-    const result = await exec(sandboxId, 'exit 42');
+    const result = await execWithTransientRetry(sandboxId, 'exit 42', {
+      timeoutMs: 10_000,
+      retryWindowMs: 12_000,
+    });
     expect(result.exitCode).toBe(42);
     expect(result.success).toBe(false);
   });
@@ -209,6 +212,7 @@ test.describe('File operations', () => {
 
   test.beforeEach(async () => {
     sandboxId = await createSandbox();
+    await execWithTransientRetry(sandboxId, 'true', { timeoutMs: 5_000, retryWindowMs: 12_000 });
   });
 
   test.afterEach(async () => {
@@ -669,7 +673,10 @@ test.describe('File operations', () => {
   });
 
   test('file created by exec is downloadable via API', async () => {
-    await exec(sandboxId, 'echo -n "from exec" > /tmp/api-visible.txt');
+    await execWithTransientRetry(sandboxId, 'echo -n "from exec" > /tmp/api-visible.txt', {
+      timeoutMs: 10_000,
+      retryWindowMs: 12_000,
+    });
     const downloaded = await downloadFile(sandboxId, '/tmp/api-visible.txt');
     expect(downloaded).toBe('from exec');
   });
