@@ -55,9 +55,9 @@ export async function downloadFile(
 }
 
 /**
- * Starts an exec via a streaming HTTP request, reads until the session event
+ * Starts an exec via a streaming HTTP request, reads until the started event
  * arrives, then destroys the response (simulating a client disconnect).
- * Returns the exec_id from the session event.
+ * Returns the exec_id from the started event.
  */
 export function startAndDisconnect(sandboxId: string, command: string): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -86,7 +86,7 @@ export function startAndDisconnect(sandboxId: string, command: string): Promise<
             buffer = buffer.slice(idx + 1);
             if (line.length > 0) {
               const event = JSON.parse(line);
-              if (event.type === 'session' && event.exec_id) {
+              if (event.type === 'started' && event.exec_id) {
                 resolved = true;
                 res.removeListener('data', onData);
                 res.destroy();
@@ -99,7 +99,7 @@ export function startAndDisconnect(sandboxId: string, command: string): Promise<
         };
         res.on('data', onData);
         res.on('end', () => {
-          if (!resolved) reject(new Error('stream ended without session event'));
+          if (!resolved) reject(new Error('stream ended without started event'));
         });
         res.on('error', (err) => {
           if (!resolved) {

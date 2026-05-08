@@ -133,8 +133,8 @@ export type FileStatWireResponse = {
   modified_at: string;
 };
 
-/** Initial session event emitted at the start of every exec stream. */
-export type ExecSessionEvent = { type: "session"; seq: number; exec_id: string };
+/** Initial event emitted at the start of every exec stream. */
+export type ExecStartedEvent = { type: "started"; seq: number; exec_id: string };
 /** Streamed stdout chunk from exec. */
 export type ExecStdoutEvent = { type: "stdout"; data: string; seq: number };
 /** Streamed stderr chunk from exec. */
@@ -153,7 +153,7 @@ export type ExecExitEvent = {
 export type ExecErrorEvent = { type: "error"; error: string; seq?: number };
 /** Discriminated union of all NDJSON exec stream events. */
 export type ExecEvent =
-  | ExecSessionEvent
+  | ExecStartedEvent
   | ExecStdoutEvent
   | ExecStderrEvent
   | ExecExitEvent

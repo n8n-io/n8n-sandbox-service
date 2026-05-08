@@ -48,10 +48,10 @@ type errorResponse struct {
 	Code  int    `json:"code"`
 }
 
-// Handler wraps the daemon HTTP mux and owns the exec session manager.
+// Handler wraps the daemon HTTP mux and owns the execution manager.
 type Handler struct {
 	mux *http.ServeMux
-	sm  *SessionManager
+	em  *ExecManager
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -60,7 +60,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // Close stops background goroutines owned by the handler.
 func (h *Handler) Close() {
-	h.sm.Close()
+	h.em.Close()
 }
 
 // Run serves the daemon HTTP API until SIGTERM/SIGINT is received.
@@ -106,7 +106,7 @@ func Run(listenAddr string, baseDir string) error {
 
 // NewHandler exposes the in-sandbox HTTP API used by the service.
 func NewHandler(baseDir string) *Handler {
-	sm := NewSessionManager()
+	em := NewExecManager()
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -134,16 +134,16 @@ func NewHandler(baseDir string) *Handler {
 			timeout = time.Duration(req.TimeoutMs) * time.Millisecond
 		}
 
-		sess := sm.GetOrCreate(req.ExecID, req.Command, env, req.WorkDir, timeout)
+		ex := em.GetOrCreate(req.ExecID, req.Command, env, req.WorkDir, timeout)
 
-		if !sess.HasHistory(nil) {
-			writeError(w, http.StatusGone, "exec session history is no longer retained")
+		if !ex.HasHistory(nil) {
+			writeError(w, http.StatusGone, "execution history is no longer retained")
 			return
 		}
 
 		writeNdjsonHeader(w)
 		write := ndjsonWriter(w)
-		sess.Follow(r.Context(), nil, write)
+		ex.Follow(r.Context(), nil, write)
 	})
 
 	mux.HandleFunc("GET /exec/{exec_id}", func(w http.ResponseWriter, r *http.Request) {
@@ -154,31 +154,26 @@ func NewHandler(baseDir string) *Handler {
 		}
 
 		execID := r.PathValue("exec_id")
-		sess := sm.Get(execID)
-		if sess == nil {
-			writeError(w, http.StatusNotFound, "exec session not found")
+		ex := em.Get(execID)
+		if ex == nil {
+			writeError(w, http.StatusNotFound, "execution not found")
 			return
 		}
 
 		follow := r.URL.Query().Get("follow") == "true"
 
-		if !sess.HasHistory(after) {
+		if !ex.HasHistory(after) {
 			writeError(w, http.StatusGone, "requested event history is no longer retained")
 			return
 		}
 
-		// Best-effort preflight before committing the 200/NDJSON response. There is
-		// still a narrow race where history can be trimmed between this check and the
-		// subsequent Snapshot/Follow call, in which case the client may observe a 200
-		// with an incomplete stream instead of a 410. We consider that window very
-		// low probability in practice and accept it for now.
 		writeNdjsonHeader(w)
 		write := ndjsonWriter(w)
 
 		if follow {
-			sess.Follow(r.Context(), after, write)
+			ex.Follow(r.Context(), after, write)
 		} else {
-			events, ok := sess.Snapshot(after)
+			events, ok := ex.Snapshot(after)
 			if !ok {
 				errData, _ := json.Marshal(newErrorResponse("requested event history is no longer retained"))
 				write(errData)
@@ -192,8 +187,8 @@ func NewHandler(baseDir string) *Handler {
 
 	mux.HandleFunc("DELETE /exec/{exec_id}", func(w http.ResponseWriter, r *http.Request) {
 		execID := r.PathValue("exec_id")
-		if !sm.Cancel(execID) {
-			writeError(w, http.StatusNotFound, "exec session not found")
+		if !em.Cancel(execID) {
+			writeError(w, http.StatusNotFound, "execution not found")
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -351,7 +346,7 @@ func NewHandler(baseDir string) *Handler {
 		writeJSON(w, http.StatusOK, stat)
 	})
 
-	return &Handler{mux: mux, sm: sm}
+	return &Handler{mux: mux, em: em}
 }
 
 func writeError(w http.ResponseWriter, code int, msg string) {

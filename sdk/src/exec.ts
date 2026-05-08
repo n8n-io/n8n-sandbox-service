@@ -26,7 +26,7 @@ export async function exec(
 
   const onError = async (error: unknown) => {
     if (request.abortSignal?.aborted) {
-      await cancelExecSession(http, id, execId).catch(() => {});
+      await cancelExecution(http, id, execId).catch(() => {});
       throw error;
     }
     if (consumer.isDone) return;
@@ -80,11 +80,11 @@ export async function exec(
   }
 
   const result = consumer.result();
-  cancelExecSession(http, id, execId).catch(() => {});
+  cancelExecution(http, id, execId).catch(() => {});
   return result;
 }
 
-export async function resumeExecSession(
+export async function resumeExecution(
   http: HttpClient,
   sandboxId: string,
   execId: string,
@@ -104,7 +104,7 @@ export async function resumeExecSession(
   return consumer.result();
 }
 
-export async function cancelExecSession(
+export async function cancelExecution(
   http: HttpClient,
   sandboxId: string,
   execId: string,

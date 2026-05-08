@@ -12,9 +12,9 @@ type storedEvent struct {
 	data []byte // pre-marshaled JSON line (no trailing newline)
 }
 
-// ExecSession represents a running or completed exec command whose lifetime
+// Execution represents a running or completed command execution whose lifetime
 // is independent of any particular HTTP connection.
-type ExecSession struct {
+type Execution struct {
 	ID string
 
 	mu            sync.Mutex
@@ -37,45 +37,45 @@ type ExecSession struct {
 	notify chan struct{}
 }
 
-func (sess *ExecSession) getNextSeq() uint64 {
-	seq := sess.nextSeq
-	sess.nextSeq++
+func (ex *Execution) getNextSeq() uint64 {
+	seq := ex.nextSeq
+	ex.nextSeq++
 	return seq
 }
 
-func (sess *ExecSession) append(resp Response) {
-	sess.mu.Lock()
+func (ex *Execution) append(resp Response) {
+	ex.mu.Lock()
 
-	seq := sess.getNextSeq()
+	seq := ex.getNextSeq()
 	resp.Seq = &seq
 
 	data, _ := json.Marshal(resp)
-	sess.events = append(sess.events, storedEvent{seq: seq, data: data})
-	sess.size += int64(len(data))
+	ex.events = append(ex.events, storedEvent{seq: seq, data: data})
+	ex.size += int64(len(data))
 
-	for sess.size > sess.maxEventBytes && len(sess.events) > 1 {
-		sess.size -= int64(len(sess.events[0].data))
-		sess.events[0] = storedEvent{} // nil out to allow GC of the data byte slice
-		sess.events = sess.events[1:]
-		sess.minSeq = sess.events[0].seq
+	for ex.size > ex.maxEventBytes && len(ex.events) > 1 {
+		ex.size -= int64(len(ex.events[0].data))
+		ex.events[0] = storedEvent{} // nil out to allow GC of the data byte slice
+		ex.events = ex.events[1:]
+		ex.minSeq = ex.events[0].seq
 	}
 
 	if resp.isTerminal() {
-		sess.completed = true
-		sess.completedAt = time.Now()
+		ex.completed = true
+		ex.completedAt = time.Now()
 	}
 
-	old := sess.notify
-	sess.notify = make(chan struct{})
-	sess.mu.Unlock()
+	old := ex.notify
+	ex.notify = make(chan struct{})
+	ex.mu.Unlock()
 	close(old)
 }
 
 // eventsAfter returns pre-marshaled data for retained events with seq > after.
-// If after is nil, all retained events are returned. Caller must hold sess.mu.
-func (sess *ExecSession) eventsAfter(after *uint64) [][]byte {
+// If after is nil, all retained events are returned. Caller must hold ex.mu.
+func (ex *Execution) eventsAfter(after *uint64) [][]byte {
 	var result [][]byte
-	for _, e := range sess.events {
+	for _, e := range ex.events {
 		if after == nil || e.seq > *after {
 			result = append(result, e.data)
 		}
@@ -85,44 +85,44 @@ func (sess *ExecSession) eventsAfter(after *uint64) [][]byte {
 
 // hasHistoryAfter reports whether all events after the given seq are retained.
 // If after is nil (requesting all events), checks that the earliest event is
-// still available. Caller must hold sess.mu.
-func (sess *ExecSession) hasHistoryAfter(after *uint64) bool {
+// still available. Caller must hold ex.mu.
+func (ex *Execution) hasHistoryAfter(after *uint64) bool {
 	if after == nil {
-		return sess.minSeq == 0
+		return ex.minSeq == 0
 	}
-	return *after+1 >= sess.minSeq
+	return *after+1 >= ex.minSeq
 }
 
 // HasHistory reports whether events after the given seq are still retained.
 // If after is nil, checks whether all events from the start are available.
-func (sess *ExecSession) HasHistory(after *uint64) bool {
-	sess.mu.Lock()
-	defer sess.mu.Unlock()
-	return sess.hasHistoryAfter(after)
+func (ex *Execution) HasHistory(after *uint64) bool {
+	ex.mu.Lock()
+	defer ex.mu.Unlock()
+	return ex.hasHistoryAfter(after)
 }
 
 // Follow streams pre-marshaled JSON events to callback for events with seq > after
 // (or all events if after is nil). Blocks until a terminal event is sent or ctx
 // is cancelled. Returns false if requested history has been trimmed (410).
-func (sess *ExecSession) Follow(ctx context.Context, after *uint64, callback func([]byte)) bool {
+func (ex *Execution) Follow(ctx context.Context, after *uint64, callback func([]byte)) bool {
 	for {
-		sess.mu.Lock()
+		ex.mu.Lock()
 
-		if !sess.hasHistoryAfter(after) {
-			sess.mu.Unlock()
+		if !ex.hasHistoryAfter(after) {
+			ex.mu.Unlock()
 			return false
 		}
 
-		batch := sess.eventsAfter(after)
-		completed := sess.completed
-		notify := sess.notify
+		batch := ex.eventsAfter(after)
+		completed := ex.completed
+		notify := ex.notify
 
 		if len(batch) > 0 {
-			lastSeq := sess.events[len(sess.events)-1].seq
+			lastSeq := ex.events[len(ex.events)-1].seq
 			after = &lastSeq
 		}
 
-		sess.mu.Unlock()
+		ex.mu.Unlock()
 
 		for _, data := range batch {
 			callback(data)
@@ -142,13 +142,13 @@ func (sess *ExecSession) Follow(ctx context.Context, after *uint64, callback fun
 
 // Snapshot returns pre-marshaled JSON events with seq > after (or all if after
 // is nil) without blocking. Returns false if requested history has been trimmed.
-func (sess *ExecSession) Snapshot(after *uint64) ([][]byte, bool) {
-	sess.mu.Lock()
-	defer sess.mu.Unlock()
+func (ex *Execution) Snapshot(after *uint64) ([][]byte, bool) {
+	ex.mu.Lock()
+	defer ex.mu.Unlock()
 
-	if !sess.hasHistoryAfter(after) {
+	if !ex.hasHistoryAfter(after) {
 		return nil, false
 	}
 
-	return sess.eventsAfter(after), true
+	return ex.eventsAfter(after), true
 }

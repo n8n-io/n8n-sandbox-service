@@ -22,7 +22,7 @@ const (
 type ResponseType string
 
 const (
-	ResponseTypeSession ResponseType = "session"
+	ResponseTypeStarted ResponseType = "started"
 	ResponseTypeStdout  ResponseType = "stdout"
 	ResponseTypeStderr  ResponseType = "stderr"
 	ResponseTypeExit    ResponseType = "exit"
@@ -89,9 +89,9 @@ type Response struct {
 	Error string `json:"error,omitempty"`
 }
 
-func newSessionResponse(execID string) Response {
+func newStartedResponse(execID string) Response {
 	seq := uint64(0)
-	return Response{Seq: &seq, Type: ResponseTypeSession, ExecID: execID}
+	return Response{Seq: &seq, Type: ResponseTypeStarted, ExecID: execID}
 }
 
 func newErrorResponse(msg string) Response {

@@ -2,7 +2,7 @@ import type { Readable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import type {
   ExecEvent,
-  ExecSessionEvent,
+  ExecStartedEvent,
   ExecStdoutEvent,
   ExecStderrEvent,
   ExecExitEvent,
@@ -11,9 +11,9 @@ import type {
 
 type JsonObject = Record<string, unknown>;
 
-function isSessionEvent(json: JsonObject): json is ExecSessionEvent {
+function isStartedEvent(json: JsonObject): json is ExecStartedEvent {
   return (
-    json.type === "session" && typeof json.exec_id === "string" && typeof json.seq === "number"
+    json.type === "started" && typeof json.exec_id === "string" && typeof json.seq === "number"
   );
 }
 
@@ -74,7 +74,7 @@ export function parseExecEvent(line: string): ExecEvent {
   try {
     const json = JSON.parse(line) as JsonObject;
 
-    if (isSessionEvent(json)) return json;
+    if (isStartedEvent(json)) return json;
     if (isStdoutEvent(json)) return json;
     if (isStderrEvent(json)) return json;
     if (isExitEvent(json)) return json;

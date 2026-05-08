@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 )
@@ -23,7 +22,7 @@ func parseEvents(raw [][]byte) []Response {
 
 func afterSeq(n uint64) *uint64 { return &n }
 
-func TestSessionFirstEventIsSession(t *testing.T) {
+func TestExecutionFirstEventIsStarted(t *testing.T) {
 	handler := NewHandler(t.TempDir())
 	t.Cleanup(handler.Close)
 
@@ -43,18 +42,18 @@ func TestSessionFirstEventIsSession(t *testing.T) {
 	if err := dec.Decode(&first); err != nil {
 		t.Fatalf("decode first event: %v", err)
 	}
-	if first.Type != ResponseTypeSession {
-		t.Fatalf("expected first event type session, got %s", first.Type)
+	if first.Type != ResponseTypeStarted {
+		t.Fatalf("expected first event type started, got %s", first.Type)
 	}
 	if first.ExecID == "" {
-		t.Fatal("session event missing exec_id")
+		t.Fatal("started event missing exec_id")
 	}
 	if first.Seq == nil || *first.Seq != 0 {
-		t.Fatalf("expected seq 0 on session event, got %v", first.Seq)
+		t.Fatalf("expected seq 0 on started event, got %v", first.Seq)
 	}
 }
 
-func TestSessionAllEventsHaveSeq(t *testing.T) {
+func TestExecutionAllEventsHaveSeq(t *testing.T) {
 	handler := NewHandler(t.TempDir())
 	t.Cleanup(handler.Close)
 
@@ -82,53 +81,51 @@ func TestSessionAllEventsHaveSeq(t *testing.T) {
 		prevSeq = seq
 	}
 	if prevSeq < 2 {
-		t.Fatalf("expected at least 3 events (session+stdout+exit), got %d", prevSeq+1)
+		t.Fatalf("expected at least 3 events (started+stdout+exit), got %d", prevSeq+1)
 	}
 }
 
-func TestSessionSameExecIDReturnsSameSession(t *testing.T) {
-	sm := NewSessionManager()
-	defer sm.Close()
+func TestExecutionSameExecIDReturnsSameExecution(t *testing.T) {
+	em := NewExecManager()
+	defer em.Close()
 
-	sess1 := sm.GetOrCreate("exec-1", "echo hello", nil, "", 5*time.Second)
-	sess2 := sm.GetOrCreate("exec-1", "echo world", nil, "", 5*time.Second)
+	ex1 := em.GetOrCreate("exec-1", "echo hello", nil, "", 5*time.Second)
+	ex2 := em.GetOrCreate("exec-1", "echo world", nil, "", 5*time.Second)
 
-	if sess1.ID != sess2.ID {
-		t.Fatalf("expected same session ID, got %s and %s", sess1.ID, sess2.ID)
+	if ex1.ID != ex2.ID {
+		t.Fatalf("expected same execution ID, got %s and %s", ex1.ID, ex2.ID)
 	}
 }
 
-func TestSessionEmptyExecIDGeneratesUnique(t *testing.T) {
-	sm := NewSessionManager()
-	defer sm.Close()
+func TestExecutionEmptyExecIDGeneratesUnique(t *testing.T) {
+	em := NewExecManager()
+	defer em.Close()
 
-	sess1 := sm.GetOrCreate("", "echo hello", nil, "", 5*time.Second)
-	sess2 := sm.GetOrCreate("", "echo hello", nil, "", 5*time.Second)
+	ex1 := em.GetOrCreate("", "echo hello", nil, "", 5*time.Second)
+	ex2 := em.GetOrCreate("", "echo hello", nil, "", 5*time.Second)
 
-	if sess1.ID == sess2.ID {
-		t.Fatal("empty exec_id should generate separate sessions")
+	if ex1.ID == ex2.ID {
+		t.Fatal("empty exec_id should generate separate executions")
 	}
 }
 
-func TestSessionCancel(t *testing.T) {
-	sm := NewSessionManager()
-	defer sm.Close()
+func TestExecutionCancel(t *testing.T) {
+	em := NewExecManager()
+	defer em.Close()
 
-	sess := sm.GetOrCreate("", "sleep 30", nil, "", 30*time.Second)
+	ex := em.GetOrCreate("", "sleep 30", nil, "", 30*time.Second)
 
-	// Let the command start before cancelling
 	time.Sleep(200 * time.Millisecond)
 
-	if !sm.Cancel(sess.ID) {
+	if !em.Cancel(ex.ID) {
 		t.Fatal("expected Cancel to return true")
 	}
 
-	// Follow with a long context to wait for the exit event after kill
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	sess.Follow(ctx, nil, func([]byte) {})
+	ex.Follow(ctx, nil, func([]byte) {})
 
-	raw, ok := sess.Snapshot(nil)
+	raw, ok := ex.Snapshot(nil)
 	if !ok {
 		t.Fatal("expected snapshot to succeed")
 	}
@@ -147,16 +144,16 @@ func TestSessionCancel(t *testing.T) {
 	}
 }
 
-func TestSessionCancelNotFound(t *testing.T) {
-	sm := NewSessionManager()
-	defer sm.Close()
+func TestExecutionCancelNotFound(t *testing.T) {
+	em := NewExecManager()
+	defer em.Close()
 
-	if sm.Cancel("nonexistent") {
-		t.Fatal("expected Cancel to return false for nonexistent session")
+	if em.Cancel("nonexistent") {
+		t.Fatal("expected Cancel to return false for nonexistent execution")
 	}
 }
 
-func TestSessionResumeReturnsNoduplicates(t *testing.T) {
+func TestExecutionResumeReturnsNoDuplicates(t *testing.T) {
 	handler := NewHandler(t.TempDir())
 	t.Cleanup(handler.Close)
 
@@ -170,7 +167,6 @@ func TestSessionResumeReturnsNoduplicates(t *testing.T) {
 		t.Fatalf("POST expected 200, got %d", rr.Code)
 	}
 
-	// Parse all events from POST to get the exec_id and last seq
 	dec := json.NewDecoder(bytes.NewReader(rr.Body.Bytes()))
 	var execID string
 	var lastSeq uint64
@@ -179,7 +175,7 @@ func TestSessionResumeReturnsNoduplicates(t *testing.T) {
 		if err := dec.Decode(&resp); err != nil {
 			break
 		}
-		if resp.Type == ResponseTypeSession {
+		if resp.Type == ResponseTypeStarted {
 			execID = resp.ExecID
 		}
 		if resp.Seq != nil {
@@ -187,17 +183,8 @@ func TestSessionResumeReturnsNoduplicates(t *testing.T) {
 		}
 	}
 	if execID == "" {
-		t.Fatal("missing exec_id from session event")
+		t.Fatal("missing exec_id from started event")
 	}
-
-	// Resume from after the last seq we got
-	resumeURL := "/exec/" + execID + "?after=" + strings.Replace(
-		strings.TrimRight(strings.TrimRight(
-			strings.Replace(
-				string(rune(lastSeq+'0')), "", "", 0,
-			), ""), ""), "", "", 0,
-	)
-	_ = resumeURL // unused, using formatted URL below
 
 	resumeReq := httptest.NewRequest(http.MethodGet,
 		"/exec/"+execID+"?after="+func() string {
@@ -213,7 +200,6 @@ func TestSessionResumeReturnsNoduplicates(t *testing.T) {
 		t.Fatalf("GET resume expected 200, got %d: %s", resumeRR.Code, resumeRR.Body.String())
 	}
 
-	// Resume should return no events since we already got everything
 	resumeDec := json.NewDecoder(bytes.NewReader(resumeRR.Body.Bytes()))
 	var resumeEvents int
 	for {
@@ -228,19 +214,17 @@ func TestSessionResumeReturnsNoduplicates(t *testing.T) {
 	}
 }
 
-func TestSessionResumePartial(t *testing.T) {
-	sm := NewSessionManager()
-	defer sm.Close()
+func TestExecutionResumePartial(t *testing.T) {
+	em := NewExecManager()
+	defer em.Close()
 
-	sess := sm.GetOrCreate("", "echo hello", nil, "", 5*time.Second)
+	ex := em.GetOrCreate("", "echo hello", nil, "", 5*time.Second)
 
-	// Wait for the session to complete
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	sess.Follow(ctx, nil, func([]byte) {})
+	ex.Follow(ctx, nil, func([]byte) {})
 
-	// Get all events
-	allRaw, ok := sess.Snapshot(nil)
+	allRaw, ok := ex.Snapshot(nil)
 	if !ok {
 		t.Fatal("snapshot failed")
 	}
@@ -248,8 +232,7 @@ func TestSessionResumePartial(t *testing.T) {
 		t.Fatalf("expected at least 3 events, got %d", len(allRaw))
 	}
 
-	// Resume from after seq 1 (skip session + stdout)
-	partialRaw, ok := sess.Snapshot(afterSeq(1))
+	partialRaw, ok := ex.Snapshot(afterSeq(1))
 	if !ok {
 		t.Fatal("partial snapshot failed")
 	}
@@ -266,7 +249,7 @@ func TestSessionResumePartial(t *testing.T) {
 	}
 }
 
-func TestSessionNonexistentReturns404(t *testing.T) {
+func TestExecutionNonexistentReturns404(t *testing.T) {
 	handler := NewHandler(t.TempDir())
 	t.Cleanup(handler.Close)
 
@@ -276,7 +259,6 @@ func TestSessionNonexistentReturns404(t *testing.T) {
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 
-	// Parse exec_id
 	dec := json.NewDecoder(bytes.NewReader(rr.Body.Bytes()))
 	var execID string
 	for {
@@ -284,7 +266,7 @@ func TestSessionNonexistentReturns404(t *testing.T) {
 		if err := dec.Decode(&resp); err != nil {
 			break
 		}
-		if resp.Type == ResponseTypeSession {
+		if resp.Type == ResponseTypeStarted {
 			execID = resp.ExecID
 		}
 	}
@@ -292,12 +274,11 @@ func TestSessionNonexistentReturns404(t *testing.T) {
 		t.Fatal("missing exec_id")
 	}
 
-	// Requesting a nonexistent session returns 404
 	resumeReq := httptest.NewRequest(http.MethodGet, "/exec/nonexistent?after=0", nil)
 	resumeRR := httptest.NewRecorder()
 	handler.ServeHTTP(resumeRR, resumeReq)
 	if resumeRR.Code != http.StatusNotFound {
-		t.Fatalf("expected 404 for nonexistent session, got %d", resumeRR.Code)
+		t.Fatalf("expected 404 for nonexistent execution, got %d", resumeRR.Code)
 	}
 }
 
@@ -305,19 +286,16 @@ func TestDeleteExecEndpoint(t *testing.T) {
 	handler := NewHandler(t.TempDir())
 	t.Cleanup(handler.Close)
 
-	// Start a long-running command
 	body := `{"command":"sleep 30"}`
 	req := httptest.NewRequest(http.MethodPost, "/exec", bytes.NewReader([]byte(body)))
 	req.Header.Set("Content-Type", "application/json")
 
-	// Use a cancellable context so the POST handler returns quickly
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	req = req.WithContext(ctx)
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 
-	// Parse exec_id from the session event
 	dec := json.NewDecoder(bytes.NewReader(rr.Body.Bytes()))
 	var execID string
 	for {
@@ -325,15 +303,14 @@ func TestDeleteExecEndpoint(t *testing.T) {
 		if err := dec.Decode(&resp); err != nil {
 			break
 		}
-		if resp.Type == ResponseTypeSession {
+		if resp.Type == ResponseTypeStarted {
 			execID = resp.ExecID
 		}
 	}
 	if execID == "" {
-		t.Fatal("missing exec_id from session event")
+		t.Fatal("missing exec_id from started event")
 	}
 
-	// DELETE the session
 	delReq := httptest.NewRequest(http.MethodDelete, "/exec/"+execID, nil)
 	delRR := httptest.NewRecorder()
 	handler.ServeHTTP(delRR, delReq)
@@ -342,31 +319,27 @@ func TestDeleteExecEndpoint(t *testing.T) {
 		t.Fatalf("expected 204, got %d", delRR.Code)
 	}
 
-	// DELETE nonexistent session returns 404
 	delReq2 := httptest.NewRequest(http.MethodDelete, "/exec/nonexistent", nil)
 	delRR2 := httptest.NewRecorder()
 	handler.ServeHTTP(delRR2, delReq2)
 	if delRR2.Code != http.StatusNotFound {
-		t.Fatalf("expected 404 for nonexistent session, got %d", delRR2.Code)
+		t.Fatalf("expected 404 for nonexistent execution, got %d", delRR2.Code)
 	}
 }
 
 func TestDisconnectDoesNotKillCommand(t *testing.T) {
-	sm := NewSessionManager()
-	defer sm.Close()
+	em := NewExecManager()
+	defer em.Close()
 
-	sess := sm.GetOrCreate("", "echo alive", nil, "", 5*time.Second)
+	ex := em.GetOrCreate("", "echo alive", nil, "", 5*time.Second)
 
-	// Follow with a short-lived context (simulates client disconnect)
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	sess.Follow(ctx, nil, func([]byte) {})
+	ex.Follow(ctx, nil, func([]byte) {})
 
-	// The command should still complete even after we disconnected.
-	// Wait and check that the exit event was eventually produced.
 	time.Sleep(500 * time.Millisecond)
 
-	raw, ok := sess.Snapshot(nil)
+	raw, ok := ex.Snapshot(nil)
 	if !ok {
 		t.Fatal("snapshot failed after disconnect")
 	}

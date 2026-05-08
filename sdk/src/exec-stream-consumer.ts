@@ -46,7 +46,7 @@ export class ExecStreamConsumer {
         this.lastSeq = event.seq;
       }
       switch (event.type) {
-        case "session":
+        case "started":
           break;
         case "stdout":
           this.stdout += event.data;

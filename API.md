@@ -140,7 +140,7 @@ curl -X DELETE http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440
 
 ### POST /sandboxes/{id}/exec
 
-Execute a command in a sandbox. The command runs in a **daemon-side session** whose
+Execute a command in a sandbox. The command runs in a **daemon-side execution** whose
 lifetime is independent of the HTTP stream — disconnecting does not kill the process.
 Response is streamed as newline-delimited JSON.
 
@@ -172,23 +172,23 @@ pipes, redirects, etc.) work consistently.
 
 `env` accepts an object of key-value pairs: `{"KEY": "VALUE"}`.
 
-`exec_id`, when provided, sets the session identifier. If a session with that ID already
-exists, the response follows it instead of starting a new command. This lets the client
-define the ID upfront and resume even if the initial connection drops before any events
-are received. If omitted, the server generates a UUID.
+`exec_id`, when provided, sets the execution identifier. If an execution with that ID
+already exists, the response follows it instead of starting a new command. This lets the
+client define the ID upfront and resume even if the initial connection drops before any
+events are received. If omitted, the server generates a UUID.
 
 **Response:** `200 OK` — `Content-Type: application/x-ndjson`
 
-Stream of JSON objects, one per line. The first event is always a `session` event:
+Stream of JSON objects, one per line. The first event is always a `started` event:
 
 ```jsonl
-{"seq": 0, "type": "session", "exec_id": "a1b2c3d4-..."}
+{"seq": 0, "type": "started", "exec_id": "a1b2c3d4-..."}
 {"seq": 1, "type": "stdout", "data": "hello\n"}
 {"seq": 2, "type": "stderr", "data": "warning: ..."}
 {"seq": 3, "type": "exit", "exit_code": 0, "success": true, "execution_time_ms": 42, "timed_out": false, "killed": false}
 ```
 
-All events include a monotonically increasing `seq` number. The `session` event provides
+All events include a monotonically increasing `seq` number. The `started` event provides
 the `exec_id` needed for the resume and cancel endpoints.
 
 The `exit` event includes:
@@ -197,18 +197,18 @@ The `exit` event includes:
 - `timed_out` — `true` if the process was killed due to timeout
 - `killed` — `true` if the process was terminated by a signal
 
-The command runs in a daemon-side session whose lifetime is independent of the HTTP
+The command runs in a daemon-side execution whose lifetime is independent of the HTTP
 stream. Closing the HTTP connection does **not** kill the running command — it only
 stops the event stream. To cancel a running command, use
 `DELETE /sandboxes/{id}/exec/{exec_id}`. The SDK calls the cancel endpoint
 automatically when `abortSignal` fires.
 
-The session stores events in a bounded buffer (up to 16 MiB). Clients can reconnect
-via `GET /sandboxes/{id}/exec/{exec_id}?after=<seq>&follow=true`. Completed sessions
+The execution stores events in a bounded buffer (up to 16 MiB). Clients can reconnect
+via `GET /sandboxes/{id}/exec/{exec_id}?after=<seq>&follow=true`. Completed executions
 are retained for 10 minutes. If the buffer is exhausted, old events are discarded and
 stale resume requests return `410 Gone`.
 
-**Errors:** `400` invalid id or missing command, `404` sandbox not found, `410` if session exists but history is no longer retained
+**Errors:** `400` invalid id or missing command, `404` sandbox not found, `410` if execution exists but history is no longer retained
 
 **Example:**
 
@@ -223,12 +223,12 @@ curl -X POST http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-44665544000
 
 ### GET /sandboxes/{id}/exec/{exec_id}
 
-Resume or replay an exec session stream. Use this to reconnect after a transient
+Resume or replay an execution stream. Use this to reconnect after a transient
 stream disconnect without re-executing the command.
 
 **Path Parameters:**
 - `id` — Sandbox UUID
-- `exec_id` — Exec session ID (from the `session` event)
+- `exec_id` — Execution ID (from the `started` event)
 
 **Query Parameters:**
 - `after` — Sequence number; only events with `seq > after` are returned (default: all events)
@@ -242,7 +242,7 @@ or the client disconnects.
 
 Same NDJSON event format as `POST /exec`.
 
-**Errors:** `400` invalid parameters, `404` session not found, `410` requested history is no longer retained
+**Errors:** `400` invalid parameters, `404` execution not found, `410` requested history is no longer retained
 
 **Example:**
 
@@ -256,15 +256,15 @@ curl "http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/exec/
 
 ### DELETE /sandboxes/{id}/exec/{exec_id}
 
-Cancel a running exec session. Kills the process group with SIGKILL.
+Cancel a running execution. Kills the process group with SIGKILL.
 
 **Path Parameters:**
 - `id` — Sandbox UUID
-- `exec_id` — Exec session ID (from the `session` event)
+- `exec_id` — Execution ID (from the `started` event)
 
 **Response:** `204 No Content`
 
-**Errors:** `400` invalid id, `404` sandbox or session not found
+**Errors:** `400` invalid id, `404` sandbox or execution not found
 
 **Example:**
 

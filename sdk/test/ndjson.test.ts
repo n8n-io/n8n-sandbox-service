@@ -141,10 +141,10 @@ describe("readNdjsonStream", () => {
 });
 
 describe("parseExecEvent", () => {
-  it("parses session event", () => {
-    expect(parseExecEvent('{"seq":0,"type":"session","exec_id":"abc-123"}')).toEqual({
+  it("parses started event", () => {
+    expect(parseExecEvent('{"seq":0,"type":"started","exec_id":"abc-123"}')).toEqual({
       seq: 0,
-      type: "session",
+      type: "started",
       exec_id: "abc-123",
     });
   });

@@ -27,7 +27,7 @@ test.describe('Resumable Exec', () => {
 
     await sleep(2500);
 
-    const result = await client.resumeExecSession(sandboxId, execId, 0);
+    const result = await client.resumeExecution(sandboxId, execId, 0);
 
     expect(result.stdout).toContain('before');
     expect(result.stdout).toContain('after');
@@ -41,9 +41,9 @@ test.describe('Resumable Exec', () => {
     const execId = await startAndDisconnect(sandboxId, 'sleep 30');
     expect(execId).toBeTruthy();
 
-    await client.cancelExecSession(sandboxId, execId);
+    await client.cancelExecution(sandboxId, execId);
 
-    const result = await client.resumeExecSession(sandboxId, execId, 0);
+    const result = await client.resumeExecution(sandboxId, execId, 0);
 
     expect(result.killed).toBe(true);
   });
