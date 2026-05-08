@@ -12,22 +12,29 @@ import type {
 
 type JsonObject = Record<string, unknown>;
 
-function isStartedEvent(json: JsonObject): json is ExecStartedEvent {
+function isExecEvent(json: JsonObject): json is ExecEvent {
   return (
-    json.type === "started" && typeof json.exec_id === "string" && typeof json.seq === "number"
+    typeof json.seq === "number" &&
+    typeof json.type === "string" &&
+    ["started", "stdout", "stderr", "exit", "error"].includes(json.type)
   );
 }
 
+function isStartedEvent(json: JsonObject): json is ExecStartedEvent {
+  return isExecEvent(json) && json.type === "started" && typeof json.exec_id === "string";
+}
+
 function isStdoutEvent(json: JsonObject): json is ExecStdoutEvent {
-  return json.type === "stdout" && typeof json.data === "string" && typeof json.seq === "number";
+  return isExecEvent(json) && json.type === "stdout" && typeof json.data === "string";
 }
 
 function isStderrEvent(json: JsonObject): json is ExecStderrEvent {
-  return json.type === "stderr" && typeof json.data === "string" && typeof json.seq === "number";
+  return isExecEvent(json) && json.type === "stderr" && typeof json.data === "string";
 }
 
 function isExitEvent(json: JsonObject): json is ExecExitEvent {
   return (
+    isExecEvent(json) &&
     json.type === "exit" &&
     typeof json.exit_code === "number" &&
     typeof json.success === "boolean" &&
@@ -39,8 +46,7 @@ function isExitEvent(json: JsonObject): json is ExecExitEvent {
 }
 
 function isErrorEvent(json: JsonObject): json is ExecErrorEvent {
-  if (typeof json.error !== "string") return false;
-  return json.type === "error" || json.type === undefined;
+  return isExecEvent(json) && json.type === "error" && typeof json.error === "string";
 }
 
 /** Yields parsed exec events from an NDJSON stream, one per line. */
