@@ -311,8 +311,8 @@ func TestDeleteExecEndpoint(t *testing.T) {
 	delReq2 := httptest.NewRequest(http.MethodDelete, "/exec/nonexistent", nil)
 	delRR2 := httptest.NewRecorder()
 	handler.ServeHTTP(delRR2, delReq2)
-	if delRR2.Code != http.StatusNotFound {
-		t.Fatalf("expected 404 for nonexistent execution, got %d", delRR2.Code)
+	if delRR2.Code != http.StatusNoContent {
+		t.Fatalf("expected 204 for nonexistent execution, got %d", delRR2.Code)
 	}
 }
 

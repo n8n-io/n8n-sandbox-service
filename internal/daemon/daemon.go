@@ -192,10 +192,7 @@ func NewHandler(baseDir string) *Handler {
 
 	mux.HandleFunc("DELETE /exec/{exec_id}", func(w http.ResponseWriter, r *http.Request) {
 		execID := r.PathValue("exec_id")
-		if !em.Delete(execID) {
-			writeError(w, http.StatusNotFound, "execution not found")
-			return
-		}
+		em.Delete(execID)
 		w.WriteHeader(http.StatusNoContent)
 	})
 

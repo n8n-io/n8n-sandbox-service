@@ -258,7 +258,8 @@ curl "http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/exec/
 
 Delete an execution. Kills the running process (if still active) and immediately
 removes the execution state from memory. After deletion, the execution can no
-longer be resumed or queried.
+longer be resumed or queried. The operation is idempotent — deleting a
+nonexistent execution returns `204`.
 
 **Path Parameters:**
 - `id` — Sandbox UUID
@@ -266,7 +267,7 @@ longer be resumed or queried.
 
 **Response:** `204 No Content`
 
-**Errors:** `400` invalid id, `404` sandbox or execution not found
+**Errors:** `400` invalid id, `404` sandbox not found
 
 **Example:**
 
