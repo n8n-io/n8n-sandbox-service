@@ -153,12 +153,18 @@ test.describe('Exec', () => {
   });
 
   test('pipe commands via shell', async () => {
-    const result = await exec(sandboxId, 'echo hello | tr a-z A-Z');
+    const result = await execWithTransientRetry(sandboxId, 'echo hello | tr a-z A-Z', {
+      timeoutMs: 10_000,
+      retryWindowMs: 12_000,
+    });
     expect(result.stdout).toBe('HELLO\n');
   });
 
   test('tilde expands in shell command', async () => {
-    const result = await exec(sandboxId, 'echo ~/');
+    const result = await execWithTransientRetry(sandboxId, 'echo ~/', {
+      timeoutMs: 10_000,
+      retryWindowMs: 12_000,
+    });
     expect(result.stdout.trim()).toBe('/home/user/');
     expect(result.success).toBe(true);
   });

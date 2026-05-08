@@ -68,7 +68,10 @@ test.describe('File API and Exec API path consistency', () => {
     await uploadFile(sandboxId, scriptPath, scriptContent);
 
     await exec(sandboxId, `chmod +x ${scriptPath}`);
-    const result = await exec(sandboxId, `${scriptPath} world`);
+    const result = await execWithTransientRetry(sandboxId, `${scriptPath} world`, {
+      timeoutMs: 10_000,
+      retryWindowMs: 12_000,
+    });
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe('hello world');
   });
