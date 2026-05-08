@@ -73,6 +73,10 @@ func (sw *statusWriter) WriteHeader(code int) {
 	sw.ResponseWriter.WriteHeader(code)
 }
 
+func (sw *statusWriter) Unwrap() http.ResponseWriter {
+	return sw.ResponseWriter
+}
+
 // Implement http.Flusher for streaming support
 func (sw *statusWriter) Flush() {
 	if f, ok := sw.ResponseWriter.(http.Flusher); ok {
@@ -99,12 +103,52 @@ func CORSMiddleware(next http.Handler) http.Handler {
 // RecoveryMiddleware catches panics and returns 500.
 func RecoveryMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rw := &recoveryResponseWriter{ResponseWriter: w}
 		defer func() {
 			if err := recover(); err != nil {
+				if err == http.ErrAbortHandler {
+					panic(err)
+				}
 				slog.Error("panic recovered", "err", err, "path", r.URL.Path)
-				writeError(w, http.StatusInternalServerError, "internal server error")
+				if rw.wroteHeader {
+					panic(http.ErrAbortHandler)
+				}
+				writeError(rw, http.StatusInternalServerError, "internal server error")
 			}
 		}()
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(rw, r)
 	})
+}
+
+type recoveryResponseWriter struct {
+	http.ResponseWriter
+	wroteHeader bool
+}
+
+func (rw *recoveryResponseWriter) WriteHeader(code int) {
+	if rw.wroteHeader {
+		return
+	}
+	rw.wroteHeader = true
+	rw.ResponseWriter.WriteHeader(code)
+}
+
+func (rw *recoveryResponseWriter) Write(data []byte) (int, error) {
+	if !rw.wroteHeader {
+		rw.wroteHeader = true
+	}
+	return rw.ResponseWriter.Write(data)
+}
+
+func (rw *recoveryResponseWriter) Flush() {
+	if !rw.wroteHeader {
+		rw.wroteHeader = true
+	}
+	if f, ok := rw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (rw *recoveryResponseWriter) Unwrap() http.ResponseWriter {
+	return rw.ResponseWriter
 }
