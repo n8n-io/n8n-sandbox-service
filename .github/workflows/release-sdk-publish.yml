@@ -1,0 +1,63 @@
+name: SDK Publish
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  publish:
+    if: >-
+      github.event.pull_request.merged == true &&
+      startsWith(github.event.pull_request.head.ref, 'sdk/release/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - uses: pnpm/action-setup@a0ea98b2dc7d387a59324835f7421c1d5f8357b4 # v6
+        with:
+          version: 10
+
+      - name: Read version
+        id: version
+        working-directory: sdk
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        working-directory: sdk
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        working-directory: sdk
+        run: pnpm build
+
+      - name: Publish to npm
+        working-directory: sdk
+        run: pnpm publish --provenance --access public --no-git-checks
+
+      - name: Create git tag
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git tag "sdk/v${VERSION}"
+          git push origin "sdk/v${VERSION}"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "sdk/v${VERSION}" \
+            --title "@n8n/sandbox-client v${VERSION}" \
+            --generate-notes
