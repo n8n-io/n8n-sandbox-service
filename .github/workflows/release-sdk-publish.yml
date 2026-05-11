@@ -27,6 +27,9 @@ jobs:
         with:
           version: 10
 
+      - name: Update npm
+        run: npm install -g npm@11
+
       - name: Read version
         id: version
         working-directory: sdk
@@ -44,7 +47,7 @@ jobs:
 
       - name: Publish to npm
         working-directory: sdk
-        run: pnpm publish --provenance --access public --no-git-checks
+        run: npm publish --provenance --access public
 
       - name: Create git tag
         env:
