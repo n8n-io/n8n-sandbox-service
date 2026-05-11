@@ -240,7 +240,7 @@ or the client disconnects.
 
 **Response:** `200 OK` — `Content-Type: application/x-ndjson`
 
-Same NDJSON event format as `POST /executions`.
+Same NDJSON event format as `POST /sandboxes/{id}/executions`.
 
 **Errors:** `400` invalid parameters, `404` execution not found, `410` requested history is no longer retained
 
