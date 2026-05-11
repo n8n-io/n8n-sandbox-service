@@ -39,14 +39,15 @@ export async function exec(
 
 function isTransientExecError(err: unknown): boolean {
   const status = (err as { status?: number })?.status;
-  if (status === 502 || status === 503) {
+  if (status === 503) {
     return true;
   }
   const msg = String((err as Error)?.message || '').toLowerCase();
   return (
     msg.includes('internal server error') ||
-    msg.includes('daemon unreachable') ||
+    msg.includes('daemon temporarily unavailable') ||
     msg.includes('runner unavailable') ||
+    msg.includes('sandbox temporarily unavailable') ||
     msg.includes('sandbox exec stream ended without an exit event')
   );
 }

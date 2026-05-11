@@ -63,6 +63,31 @@ describe("HttpClient", () => {
     }
   });
 
+  it("does not retry 502 responses with default retry options", async () => {
+    let hits = 0;
+    const failServer = await startTestServer((req, res) => {
+      if (req.url !== "/always-502") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      hits += 1;
+      res.writeHead(502, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "sandbox not running" }));
+    });
+
+    try {
+      const client = new HttpClient(failServer.baseUrl);
+      await expect(client.requestJson("GET", "/always-502")).rejects.toMatchObject({
+        status: 502,
+        message: "sandbox not running",
+      });
+      expect(hits).toBe(1);
+    } finally {
+      await failServer.close();
+    }
+  });
+
   it("retries transient 503 responses and eventually succeeds", async () => {
     let hits = 0;
     const retryServer = await startTestServer((req, res) => {
@@ -91,6 +116,38 @@ describe("HttpClient", () => {
       const out = await client.requestJson<{ ok: boolean }>("GET", "/retry-503");
       expect(out).toEqual({ ok: true });
       expect(hits).toBe(3);
+    } finally {
+      await retryServer.close();
+    }
+  });
+
+  it("retries 503 with default retry options when none passed", async () => {
+    let hits = 0;
+    const retryServer = await startTestServer((req, res) => {
+      if (req.url !== "/default-retry") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      hits += 1;
+      if (hits < 4) {
+        res.writeHead(503, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "runner unavailable" }));
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+
+    try {
+      const client = new HttpClient(retryServer.baseUrl, undefined, {
+        baseDelayMs: 1,
+        maxDelayMs: 2,
+        jitter: false,
+      });
+      const out = await client.requestJson<{ ok: boolean }>("GET", "/default-retry");
+      expect(out).toEqual({ ok: true });
+      expect(hits).toBe(4);
     } finally {
       await retryServer.close();
     }
@@ -147,7 +204,9 @@ describe("HttpClient", () => {
         maxDelayMs: 2,
         jitter: false,
       });
-      await expect(client.requestJson("POST", "/post-503", { data: { x: 1 } })).rejects.toMatchObject({
+      await expect(
+        client.requestJson("POST", "/post-503", { data: { x: 1 } }),
+      ).rejects.toMatchObject({
         status: 503,
       });
       expect(hits).toBe(1);

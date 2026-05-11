@@ -19,7 +19,8 @@ async function waitExecOK(sandboxID: string, command: string, deadlineMs: number
   throw new Error(`sandbox ${sandboxID} did not recover in ${deadlineMs}ms: ${String(lastErr)}`);
 }
 
-async function waitExec503(sandboxID: string, command: string, deadlineMs: number): Promise<void> {
+/** Wait until exec fails with 502 (inner container stopped — not retryable per API contract). */
+async function waitExec502(sandboxID: string, command: string, deadlineMs: number): Promise<void> {
   const deadline = Date.now() + deadlineMs;
   let lastErr: unknown;
   while (Date.now() < deadline) {
@@ -27,13 +28,13 @@ async function waitExec503(sandboxID: string, command: string, deadlineMs: numbe
       await exec(sandboxID, command);
     } catch (err) {
       lastErr = err;
-      if ((err as { status?: number })?.status === 503) {
+      if ((err as { status?: number })?.status === 502) {
         return;
       }
     }
     await new Promise((r) => setTimeout(r, 150));
   }
-  throw new Error(`sandbox ${sandboxID} did not return 503 within ${deadlineMs}ms: ${String(lastErr)}`);
+  throw new Error(`sandbox ${sandboxID} did not return 502 within ${deadlineMs}ms: ${String(lastErr)}`);
 }
 
 function inspectRestartState(
@@ -133,7 +134,7 @@ test.describe('Sandbox recovery on runner', () => {
     }
   });
 
-  test('client sees 503 while sandbox is restarting, then recovers', async () => {
+  test('client sees 502 while inner container is stopped, then recovers', async () => {
     test.skip(!process.env.E2E_RUNNER_CONTAINER_NAME, 'needs E2E_RUNNER_CONTAINER_NAME (from e2e/run.sh)');
     test.setTimeout(60_000);
 
@@ -141,9 +142,9 @@ test.describe('Sandbox recovery on runner', () => {
     const id = await createSandbox();
     const innerName = innerContainerName(id);
     try {
-      // Restart sequence, phase 1: stop -> expect 503.
+      // Restart sequence, phase 1: stop -> expect 502 (sandbox not running).
       docker(['exec', runnerContainer, 'docker', 'stop', '--time', '0', innerName]);
-      await waitExec503(id, 'true', 5_000);
+      await waitExec502(id, 'true', 5_000);
 
       // Restart sequence, phase 2: start -> expect recovery.
       docker(['exec', runnerContainer, 'docker', 'start', innerName]);
@@ -153,7 +154,7 @@ test.describe('Sandbox recovery on runner', () => {
     }
   });
 
-  test('client sees 503 when sandbox is permanently stopped', async () => {
+  test('client sees 502 when sandbox is permanently stopped', async () => {
     test.skip(!process.env.E2E_RUNNER_CONTAINER_NAME, 'needs E2E_RUNNER_CONTAINER_NAME (from e2e/run.sh)');
     test.setTimeout(60_000);
 
@@ -166,9 +167,9 @@ test.describe('Sandbox recovery on runner', () => {
       for (let i = 0; i < 2; i++) {
         try {
           await exec(id, 'true');
-          throw new Error('expected 503 while sandbox is stopped');
+          throw new Error('expected 502 while sandbox is stopped');
         } catch (err) {
-          expect((err as { status?: number })?.status).toBe(503);
+          expect((err as { status?: number })?.status).toBe(502);
         }
       }
     } finally {

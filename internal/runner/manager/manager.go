@@ -210,7 +210,7 @@ func (m *Manager) DaemonURL(ctx context.Context, sandboxID string) (string, erro
 
 	network, ok := inspect.NetworkSettings.Networks[runnerBridgeNetwork]
 	if !ok || network.IPAddress == "" {
-		return "", fmt.Errorf("container %s has no IP on %s", containerID, runnerBridgeNetwork)
+		return "", fmt.Errorf("%w: container %s has no IP on %s", ErrSandboxNetworkUnavailable, containerID, runnerBridgeNetwork)
 	}
 
 	baseURL := fmt.Sprintf("http://%s:%d", network.IPAddress, daemonPort)

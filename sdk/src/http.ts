@@ -35,26 +35,31 @@ export class HttpClient {
       headers: apiKey ? { "X-Api-Key": apiKey } : {},
     });
     this.retry = {
-      attempts: Math.max(0, retry?.attempts ?? 0),
+      attempts: Math.max(0, retry?.attempts ?? 3),
       baseDelayMs: Math.max(0, retry?.baseDelayMs ?? 200),
       maxDelayMs: Math.max(0, retry?.maxDelayMs ?? 10000),
-      retryOnStatuses: new Set(retry?.retryOnStatuses ?? [429, 502, 503]),
+      retryOnStatuses: new Set(retry?.retryOnStatuses ?? [429, 503]),
       jitter: retry?.jitter ?? true,
     };
   }
 
   async requestJson<T>(method: Method, path: string, options: RequestOptions = {}): Promise<T> {
-    return this.withRetry(async () => {
-      const response = await this.instance.request<T>({
-        method,
-        url: path,
-        data: options.data,
-        params: options.params,
-        headers: options.headers,
-        signal: options.signal,
-      });
-      return response.data;
-    }, method, options.signal, options.isSafeToRetry === true);
+    return this.withRetry(
+      async () => {
+        const response = await this.instance.request<T>({
+          method,
+          url: path,
+          data: options.data,
+          params: options.params,
+          headers: options.headers,
+          signal: options.signal,
+        });
+        return response.data;
+      },
+      method,
+      options.signal,
+      options.isSafeToRetry === true,
+    );
   }
 
   async requestStream(
@@ -62,63 +67,78 @@ export class HttpClient {
     path: string,
     options: RequestOptions = {},
   ): Promise<{ stream: Readable; status: number }> {
-    return this.withRetry(async () => {
-      const response = await this.instance.request<Readable>({
-        method,
-        url: path,
-        data: options.data,
-        params: options.params,
-        headers: options.headers,
-        signal: options.signal,
-        responseType: "stream",
-        validateStatus: () => true,
-      });
+    return this.withRetry(
+      async () => {
+        const response = await this.instance.request<Readable>({
+          method,
+          url: path,
+          data: options.data,
+          params: options.params,
+          headers: options.headers,
+          signal: options.signal,
+          responseType: "stream",
+          validateStatus: () => true,
+        });
 
-      if (response.status >= 400) {
-        const body = await this.drainStream(response.data);
-        throw createErrorFromResponse(response.status, this.tryParseJson(body));
-      }
+        if (response.status >= 400) {
+          const body = await this.drainStream(response.data);
+          throw createErrorFromResponse(response.status, this.tryParseJson(body));
+        }
 
-      return { stream: response.data, status: response.status };
-    }, method, options.signal, options.isSafeToRetry === true);
+        return { stream: response.data, status: response.status };
+      },
+      method,
+      options.signal,
+      options.isSafeToRetry === true,
+    );
   }
 
   async requestBuffer(
     method: Method,
     path: string,
-    options: Omit<RequestOptions, "data"> = {}
+    options: Omit<RequestOptions, "data"> = {},
   ): Promise<Buffer> {
-    return this.withRetry(async () => {
-      const response = await this.instance.request<ArrayBuffer>({
-        method,
-        url: path,
-        params: options.params,
-        headers: options.headers,
-        signal: options.signal,
-        responseType: "arraybuffer",
-        validateStatus: () => true,
-      });
+    return this.withRetry(
+      async () => {
+        const response = await this.instance.request<ArrayBuffer>({
+          method,
+          url: path,
+          params: options.params,
+          headers: options.headers,
+          signal: options.signal,
+          responseType: "arraybuffer",
+          validateStatus: () => true,
+        });
 
-      const body = Buffer.from(response.data);
-      if (response.status >= 400) {
-        throw createErrorFromResponse(response.status, this.tryParseJson(body.toString("utf-8")));
-      }
+        const body = Buffer.from(response.data);
+        if (response.status >= 400) {
+          throw createErrorFromResponse(response.status, this.tryParseJson(body.toString("utf-8")));
+        }
 
-      return body;
-    }, method, options.signal, options.isSafeToRetry === true);
+        return body;
+      },
+      method,
+      options.signal,
+      options.isSafeToRetry === true,
+    );
   }
 
   async requestVoid(method: Method, path: string, options: RequestOptions = {}): Promise<void> {
-    return this.withRetry(async () => {
-      await this.instance.request({
-        method,
-        url: path,
-        data: options.data,
-        params: options.params,
-        headers: options.headers,
-        signal: options.signal,
-      });
-    }, method, options.signal, options.isSafeToRetry === true);
+    return this.withRetry(
+      async () => {
+        await this.instance.request({
+          method,
+          url: path,
+          data: options.data,
+          params: options.params,
+          headers: options.headers,
+          signal: options.signal,
+        });
+      },
+      method,
+      options.signal,
+      options.isSafeToRetry === true,
+    );
   }
 
   private toServiceError(error: unknown): SandboxServiceError {
@@ -175,7 +195,7 @@ export class HttpClient {
   }
 
   private retryDelayMs(attempt: number): number {
-    const base = this.retry.baseDelayMs * (2 ** attempt);
+    const base = this.retry.baseDelayMs * 2 ** attempt;
     const capped = Math.min(base, this.retry.maxDelayMs);
     if (!this.retry.jitter) return capped;
     const factor = 0.5 + Math.random(); // [0.5, 1.5)
