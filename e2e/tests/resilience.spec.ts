@@ -164,7 +164,7 @@ test.describe('Runner failure resilience', () => {
       stoppedRunner = deadRunner;
       docker(['stop', '-t', '30', stoppedRunner]);
 
-      const bad = await request.post(`/sandboxes/${id1}/exec`, {
+      const bad = await request.post(`/sandboxes/${id1}/executions`, {
         headers: { 'X-Api-Key': API_KEY, 'Content-Type': 'application/json' },
         data: { command: 'true' },
       });

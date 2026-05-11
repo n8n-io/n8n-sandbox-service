@@ -113,7 +113,7 @@ func NewHandler(baseDir string) *Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
-	mux.HandleFunc("POST /exec", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /executions", func(w http.ResponseWriter, r *http.Request) {
 		var req execRequest
 		if err := decodeJSONBody(r.Body, &req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
@@ -146,7 +146,7 @@ func NewHandler(baseDir string) *Handler {
 		ex.Follow(r.Context(), nil, write)
 	})
 
-	mux.HandleFunc("GET /exec/{exec_id}", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /executions/{exec_id}", func(w http.ResponseWriter, r *http.Request) {
 		after, err := parseAfterParam(r.URL.Query().Get("after"))
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "invalid after parameter")
@@ -190,7 +190,7 @@ func NewHandler(baseDir string) *Handler {
 		}
 	})
 
-	mux.HandleFunc("DELETE /exec/{exec_id}", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("DELETE /executions/{exec_id}", func(w http.ResponseWriter, r *http.Request) {
 		execID := r.PathValue("exec_id")
 		em.Delete(execID)
 		w.WriteHeader(http.StatusNoContent)
