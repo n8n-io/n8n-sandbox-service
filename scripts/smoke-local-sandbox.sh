@@ -32,10 +32,10 @@ if [ -z "${sid}" ] || [ "${sid}" = "null" ]; then
 	exit 1
 fi
 
-echo "==> POST ${BASE}/sandboxes/${sid}/exec"
+echo "==> POST ${BASE}/sandboxes/${sid}/executions"
 tmp_exec_out="$(mktemp)"
 trap 'rm -f "${tmp_exec_out}"' EXIT HUP INT TERM
-curl -fsSN -X POST "${BASE}/sandboxes/${sid}/exec" \
+curl -fsSN -X POST "${BASE}/sandboxes/${sid}/executions" \
 	-H "X-Api-Key: ${KEY}" \
 	-H "Content-Type: application/json" \
 	-d '{"command":"echo hello world","timeout_ms":60000}' >"${tmp_exec_out}"
