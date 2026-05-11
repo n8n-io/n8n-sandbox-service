@@ -1,0 +1,40 @@
+# Pushes API, runner, and sandbox images to Azure Container Registry on every
+# push to main. Each repository gets tags :alpha (rolling) and :$GITHUB_SHA (immutable).
+#
+# Required repository secrets (OIDC federated credential configured in Azure):
+#   AZURE_CLIENT_ID
+#   AZURE_TENANT_ID
+#   AZURE_SUBSCRIPTION_ID
+#
+# Optional repository variable:
+#   ACR_NAME   (defaults to n8nadminpanel if unset)
+#
+# Image repositories (under <acr>.azurecr.io/):
+#   n8n-sandbox-api, n8n-sandbox-runner, n8n-sandbox
+
+name: Publish ACR (alpha)
+
+on:
+  push:
+    branches: [chore/push-images]
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: publish-acr-alpha-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: ./.github/actions/sandbox-acr-publish
+        with:
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          acr-name: ${{ vars.ACR_NAME != '' && vars.ACR_NAME || 'n8nadminpanel' }}
