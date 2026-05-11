@@ -10,6 +10,12 @@ The n8n Sandbox Service provides isolated execution environments via a REST API.
 - Sandboxes are started from a separate Debian sandbox image referenced by `SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE`.
 - The API forwards sandbox and image requests to the runner; the runner talks to sandbox daemons over the inner Docker bridge on port `8081`.
 
+## Failure Behavior
+
+- API restarts: sandbox IDs remain valid. Once API is back, existing sandboxes continue working.
+- Runner stops/dies: sandboxes on that runner become unavailable. When a runner returns, previously assigned sandboxes are not guaranteed to be recoverable and should be treated as lost.
+- Sandbox container exits (for example OOM): Docker restart policy restarts it; the same sandbox ID remains on the same runner.
+
 ## Quick Start
 
 Build all images:

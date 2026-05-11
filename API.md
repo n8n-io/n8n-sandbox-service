@@ -11,6 +11,15 @@ All endpoints except `/healthz` require the `X-Api-Key` header for authenticatio
 }
 ```
 
+### HTTP 503 (transient) vs 502 (not retryable)
+
+The API and runner use two buckets so clients (including the SDK) can decide **when to retry the same request** vs **when to change strategy** (e.g. create a new sandbox, fix routing, surface an error to the user).
+
+- **503 Service Unavailable** — **Transient / retry**: overload, no capacity yet, network or upstream not ready, or the sandbox daemon is not reachable *for the moment* while the container is otherwise expected to be usable. Safe to back off and retry the same operation.
+- **502 Bad Gateway** — **Not retryable as “wait and retry”**: the request does not make sense to repeat unchanged; fix state first (new sandbox, repair registry/routing, or handle the reported error). Examples: inner container **exists but is not running**, stored sandbox has **no runner HTTP base URL**, or **delete** failed on the runner control plane.
+
+**404** `sandbox not found` is unchanged (unknown id). Exec and file routes may return **503** or **502** from the runner after the API successfully reaches the runner; the API may return **503** `runner unavailable` before the runner is contacted.
+
 ---
 
 ## Endpoints
@@ -208,7 +217,7 @@ via `GET /sandboxes/{id}/exec/{exec_id}?after=<seq>&follow=true`. Completed exec
 are retained for 10 minutes. If the buffer is exhausted, old events are discarded and
 stale resume requests return `410 Gone`.
 
-**Errors:** `400` invalid id or missing command, `404` sandbox not found, `410` if execution exists but history is no longer retained
+**Errors:** `400` invalid id or missing command, `404` sandbox not found, `410` if execution exists but history is no longer retained. Transient failures use **503**; **502** means the sandbox is not usable without a client-side change — see [HTTP 503 (transient) vs 502 (not retryable)](#http-503-transient-vs-502-not-retryable).
 
 **Example:**
 

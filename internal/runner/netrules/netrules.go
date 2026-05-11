@@ -46,7 +46,7 @@ func ApplyPolicy(containerID, sourceIP, gatewayIP string, daemonPort int) error 
 	if err := ensureDockerUserChain(); err != nil {
 		return err
 	}
-	if err := Teardown(containerID, sourceIP); err != nil {
+	if err := Teardown(containerID); err != nil {
 		return err
 	}
 
@@ -90,7 +90,7 @@ func ApplyPolicy(containerID, sourceIP, gatewayIP string, daemonPort int) error 
 }
 
 // Teardown removes per-sandbox iptables rules and chains.
-func Teardown(containerID, sourceIP string) error {
+func Teardown(containerID string) error {
 	if containerID == "" {
 		return nil
 	}

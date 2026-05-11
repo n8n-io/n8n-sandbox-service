@@ -13,7 +13,7 @@ import (
 type ContainerManager interface {
 	CreateContainer(ctx context.Context, sandboxID string, opts *manager.CreateOptions) (*manager.ContainerInfo, error)
 	GetContainerInfo(ctx context.Context, containerID string) (*manager.ContainerInfo, error)
-	DeleteContainer(ctx context.Context, containerID, containerIP string) error
+	DeleteContainer(ctx context.Context, containerID string) error
 	DaemonURL(ctx context.Context, containerID string) (string, error)
 	FindContainerIDByLabel(ctx context.Context, sandboxID string) (string, error)
 }

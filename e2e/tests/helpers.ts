@@ -2,6 +2,7 @@ import { APIRequestContext } from '@playwright/test';
 import * as http from 'node:http';
 import * as https from 'node:https';
 import { SandboxClient, type ExecResult } from '@n8n/sandbox-client';
+import { execFileSync } from 'node:child_process';
 
 const API_KEY = process.env.SANDBOX_API_KEY || 'test';
 const BASE_URL = process.env.BASE_URL || 'http://localhost:8080';
@@ -34,6 +35,43 @@ export async function exec(
     workdir: opts?.workdir,
     timeoutMs: opts?.timeoutMs,
   });
+}
+
+function isTransientExecError(err: unknown): boolean {
+  const status = (err as { status?: number })?.status;
+  if (status === 503) {
+    return true;
+  }
+  const msg = String((err as Error)?.message || '').toLowerCase();
+  return (
+    msg.includes('internal server error') ||
+    msg.includes('daemon temporarily unavailable') ||
+    msg.includes('runner unavailable') ||
+    msg.includes('sandbox temporarily unavailable') ||
+    msg.includes('sandbox exec stream ended without an exit event')
+  );
+}
+
+export async function execWithTransientRetry(
+  id: string,
+  command: string,
+  opts?: { env?: Record<string, string>; workdir?: string; timeoutMs?: number; retryWindowMs?: number },
+): Promise<ExecResult> {
+  const deadlineMs = opts?.retryWindowMs ?? 12_000;
+  const deadline = Date.now() + deadlineMs;
+  let lastErr: unknown;
+  while (Date.now() < deadline) {
+    try {
+      return await exec(id, command, opts);
+    } catch (err) {
+      lastErr = err;
+      if (!isTransientExecError(err)) {
+        throw err;
+      }
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }
+  throw new Error(`exec did not recover within ${deadlineMs}ms: ${String(lastErr)}`);
 }
 
 export async function uploadFile(
@@ -134,4 +172,29 @@ export async function apiRequest(
     body,
     json: () => Promise.resolve(JSON.parse(body)),
   };
+}
+
+export function docker(args: string[]): string {
+  return execFileSync('docker', args, {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    encoding: 'utf8',
+  });
+}
+
+export function dockerOutput(args: string[]): string {
+  try {
+    return execFileSync('docker', args, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      encoding: 'utf8',
+    });
+  } catch (err: unknown) {
+    const e = err as { stdout?: unknown; stderr?: unknown };
+    const stdout = e.stdout ? String(e.stdout) : '';
+    const stderr = e.stderr ? String(e.stderr) : '';
+    return `${stdout}\n${stderr}`.trim();
+  }
+}
+
+export function innerContainerName(sandboxID: string): string {
+  return `sandbox-${sandboxID.slice(0, 12)}`;
 }
