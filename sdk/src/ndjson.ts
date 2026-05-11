@@ -1,7 +1,9 @@
 import type { Readable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
+import { InvalidStreamEventError } from "./errors";
 import type {
   ExecEvent,
+  ExecStartedEvent,
   ExecStdoutEvent,
   ExecStderrEvent,
   ExecExitEvent,
@@ -10,28 +12,41 @@ import type {
 
 type JsonObject = Record<string, unknown>;
 
+function isExecEvent(json: JsonObject): json is ExecEvent {
+  return (
+    typeof json.seq === "number" &&
+    typeof json.type === "string" &&
+    ["started", "stdout", "stderr", "exit", "error"].includes(json.type)
+  );
+}
+
+function isStartedEvent(json: JsonObject): json is ExecStartedEvent {
+  return isExecEvent(json) && json.type === "started" && typeof json.exec_id === "string";
+}
+
 function isStdoutEvent(json: JsonObject): json is ExecStdoutEvent {
-  return json.type === "stdout" && typeof json.data === "string";
+  return isExecEvent(json) && json.type === "stdout" && typeof json.data === "string";
 }
 
 function isStderrEvent(json: JsonObject): json is ExecStderrEvent {
-  return json.type === "stderr" && typeof json.data === "string";
+  return isExecEvent(json) && json.type === "stderr" && typeof json.data === "string";
 }
 
 function isExitEvent(json: JsonObject): json is ExecExitEvent {
   return (
+    isExecEvent(json) &&
     json.type === "exit" &&
     typeof json.exit_code === "number" &&
     typeof json.success === "boolean" &&
     typeof json.execution_time_ms === "number" &&
     typeof json.timed_out === "boolean" &&
-    typeof json.killed === "boolean"
+    typeof json.killed === "boolean" &&
+    typeof json.seq === "number"
   );
 }
 
 function isErrorEvent(json: JsonObject): json is ExecErrorEvent {
-  if (typeof json.error !== "string") return false;
-  return json.type === "error" || json.type === undefined;
+  return isExecEvent(json) && json.type === "error" && typeof json.error === "string";
 }
 
 /** Yields parsed exec events from an NDJSON stream, one per line. */
@@ -66,13 +81,14 @@ export function parseExecEvent(line: string): ExecEvent {
   try {
     const json = JSON.parse(line) as JsonObject;
 
+    if (isStartedEvent(json)) return json;
     if (isStdoutEvent(json)) return json;
     if (isStderrEvent(json)) return json;
     if (isExitEvent(json)) return json;
-    if (isErrorEvent(json)) return { type: "error", error: json.error };
+    if (isErrorEvent(json)) return { ...json, type: "error" as const };
 
     return { type: "error", error: `Invalid exec event payload: ${line}` };
   } catch (error) {
-    return { type: "error", error: `Invalid exec event payload: ${error instanceof Error ? error.message : String(error)}` };
+    throw new InvalidStreamEventError(line, error instanceof Error ? error : undefined);
   }
 }

@@ -1,4 +1,4 @@
-import { exec } from "./exec";
+import { exec, resumeExecution, deleteExecution } from "./exec";
 import {
   readFile,
   writeFile,
@@ -70,6 +70,20 @@ export class SandboxClient {
    */
   async exec(id: string, request: ExecRequest): Promise<ExecResult> {
     return exec(this.http, id, request);
+  }
+
+  /**
+   * Resumes or replays an execution, returning the aggregated result.
+   */
+  async resumeExecution(sandboxId: string, execId: string, afterSeq?: number): Promise<ExecResult> {
+    return resumeExecution(this.http, sandboxId, execId, afterSeq);
+  }
+
+  /**
+   * Cancels and deletes an execution.
+   */
+  async deleteExecution(sandboxId: string, execId: string): Promise<void> {
+    return deleteExecution(this.http, sandboxId, execId);
   }
 
   // #endregion

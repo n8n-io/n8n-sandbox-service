@@ -16,6 +16,24 @@ export class SandboxServiceError extends Error {
 }
 
 /**
+ * Error thrown when an invalid stream event is encountered, such as when a truncated
+ * JSON record is encountered. This might indicate a transient connectivity issue with
+ * the stream.
+ */
+export class InvalidStreamEventError extends Error {
+  readonly line: string;
+
+  constructor(line: string, cause?: unknown) {
+    super(`Invalid stream event encountered`, {
+      cause,
+    });
+
+    this.name = "InvalidStreamEventError";
+    this.line = line;
+  }
+}
+
+/**
  * Normalizes a sandbox service error response into a typed error instance.
  */
 export function createErrorFromResponse(status: number, data: unknown): SandboxServiceError {

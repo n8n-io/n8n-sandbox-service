@@ -143,6 +143,13 @@ Runners register over gRPC and report health, capacity, and a **control gRPC add
 | `SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE` | *(required)* | Server private key (PEM) |
 | `SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE` | *(required)* | CA (PEM) that signed API client certificates for SandboxControl |
 
+### Sandbox daemon (in-container)
+
+| Variable | Default | Description |
+|---|---|---|
+| `SANDBOX_EXEC_MAX_EVENT_BYTES` | `16777216` | Max bytes of event history retained per execution (16 MiB) |
+| `SANDBOX_EXEC_RETAIN` | `10m` | Duration to retain completed executions (Go [`time.ParseDuration`](https://pkg.go.dev/time#ParseDuration) syntax, e.g. `10m`, `1h`) |
+
 ## Runner registration gRPC (mTLS)
 
 **Local Docker Compose:** `make up` runs `scripts/bootstrap-local-mtls.sh`, which writes a private CA plus leaf certs into `.tls/` at the repo root. If those files already exist, bootstrap does nothing unless you set `SANDBOX_TLS_REGEN=1`. Compose always mounts `.tls` via `compose.tls.yaml` and sets required `SANDBOX_*_GRPC_TLS_*` variables.

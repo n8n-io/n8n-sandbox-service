@@ -6,6 +6,7 @@ export type {
   SandboxRecord,
   FileEntry,
   FileStat,
+  ExecEvent,
   ExecRequest,
   ExecResult,
   FileContent,
