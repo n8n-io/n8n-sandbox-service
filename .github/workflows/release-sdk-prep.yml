@@ -58,7 +58,7 @@ jobs:
           token: ${{ steps.generate-token.outputs.token }}
           commit-message: 'sdk: release v${{ steps.bump.outputs.version }}'
           labels: 'release/sdk'
-          title: 'chore: Update node popularity data'
+          title: 'sdk: release v${{ steps.bump.outputs.version }}'
           body: |
             Automated release PR for `@n8n/sandbox-client@${{ steps.bump.outputs.version }}`.
 
