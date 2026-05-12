@@ -184,7 +184,7 @@ Run unit tests:
 make test
 ```
 
-Run the full e2e suite (all topologies sequentially: no runner → two runners → single runner + full Playwright):
+Run the full e2e suite (all topologies sequentially: no runner → two runners → single runner + full Playwright → idle TTL stack):
 
 ```bash
 ./e2e/run-all.sh
@@ -193,7 +193,8 @@ Run the full e2e suite (all topologies sequentially: no runner → two runners �
 Run only one topology or the default single-runner suite:
 
 ```bash
-./e2e/run.sh              # single runner + full Playwright suite
+./e2e/run.sh              # single runner + full Playwright suite (no API idle TTL)
+./e2e/run-idle-ttl.sh     # same topology, short idle TTL, only sandbox-idle-ttl.spec.ts
 ./e2e/run-no-runner.sh    # API only — expects POST /sandboxes to return 503
 ./e2e/run-two-runners.sh # two runners — placement routing per sandbox
 ```
