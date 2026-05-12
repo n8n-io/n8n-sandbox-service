@@ -49,6 +49,18 @@ type APIConfig struct {
 	GRPCServerKeyFile  string
 	GRPCClientCAFile   string
 
+	// IdleStopAfter is how long after last activity the API asks the runner to stop
+	// the container (0 = disabled).
+	IdleStopAfter time.Duration
+	// IdleDeleteAfter is how long after last activity the API deletes the sandbox
+	// (0 = disabled). Wakes are refused after this window until the row is removed.
+	IdleDeleteAfter time.Duration
+	// IdleDeleteSafetyBuffer is added to IdleDeleteAfter before deletion (race guard).
+	// When IdleDeleteAfter > 0 and this is unset, it defaults to 1m.
+	IdleDeleteSafetyBuffer time.Duration
+	// IdleSweepInterval is how often the idle stop/delete sweeper runs (default 1m).
+	IdleSweepInterval time.Duration
+
 	// API as mTLS client dialing runner SandboxControl (required). All three must be set.
 	RunnerControlGRPCClientCAFile     string
 	RunnerControlGRPCClientCertFile   string
@@ -159,6 +171,40 @@ func LoadAPI() (*APIConfig, error) {
 	}
 	if ctlN != 3 {
 		return nil, fmt.Errorf("SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE, SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE, and SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE are required for control-plane mTLS")
+	}
+
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_IDLE_STOP_AFTER")); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d <= 0 {
+			return nil, fmt.Errorf("SANDBOX_API_IDLE_STOP_AFTER must be a positive duration, got %q", v)
+		}
+		cfg.IdleStopAfter = d
+	}
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_IDLE_DELETE_AFTER")); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d <= 0 {
+			return nil, fmt.Errorf("SANDBOX_API_IDLE_DELETE_AFTER must be a positive duration, got %q", v)
+		}
+		cfg.IdleDeleteAfter = d
+	}
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_IDLE_DELETE_SAFETY_BUFFER")); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d < 0 {
+			return nil, fmt.Errorf("SANDBOX_API_IDLE_DELETE_SAFETY_BUFFER must be a non-negative duration, got %q", v)
+		}
+		cfg.IdleDeleteSafetyBuffer = d
+	}
+	if cfg.IdleDeleteAfter > 0 && cfg.IdleDeleteSafetyBuffer <= 0 {
+		cfg.IdleDeleteSafetyBuffer = time.Minute
+	}
+
+	cfg.IdleSweepInterval = time.Minute
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_IDLE_SWEEP_INTERVAL")); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d <= 0 {
+			return nil, fmt.Errorf("SANDBOX_API_IDLE_SWEEP_INTERVAL must be a positive duration, got %q", v)
+		}
+		cfg.IdleSweepInterval = d
 	}
 
 	return cfg, nil

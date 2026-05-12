@@ -185,7 +185,7 @@ wait_runner() {
 wait_runner "$RUNNER1_NAME"
 wait_runner "$RUNNER2_NAME"
 
-sleep 3
+sleep 6
 
 e2e_build_sdk_unless_skip "$PROJECT_DIR"
 e2e_install_playwright_deps_if_needed "$SCRIPT_DIR"

@@ -14,6 +14,7 @@ type ContainerManager interface {
 	CreateContainer(ctx context.Context, sandboxID string, opts *manager.CreateOptions) (*manager.ContainerInfo, error)
 	GetContainerInfo(ctx context.Context, containerID string) (*manager.ContainerInfo, error)
 	DeleteContainer(ctx context.Context, containerID string) error
+	EnsureSandboxRunning(ctx context.Context, sandboxID string) error
 	DaemonURL(ctx context.Context, containerID string) (string, error)
 	FindContainerIDByLabel(ctx context.Context, sandboxID string) (string, error)
 }

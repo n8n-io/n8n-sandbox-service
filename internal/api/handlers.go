@@ -2,11 +2,13 @@ package api
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,6 +17,38 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/runnerctl"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
 )
+
+// notifyOnCloseReadCloser runs fn once when the body is closed (after full streaming).
+type notifyOnCloseReadCloser struct {
+	io.ReadCloser
+	once sync.Once
+	fn   func()
+}
+
+func (n *notifyOnCloseReadCloser) Close() error {
+	err := n.ReadCloser.Close()
+	n.once.Do(n.fn)
+	return err
+}
+
+type activityNotifyTransport struct {
+	base   http.RoundTripper
+	onDone func()
+}
+
+func (t *activityNotifyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.base == nil {
+		t.base = http.DefaultTransport
+	}
+	resp, err := t.base.RoundTrip(req)
+	if err != nil || resp == nil || resp.Body == nil {
+		return resp, err
+	}
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 && t.onDone != nil {
+		resp.Body = &notifyOnCloseReadCloser{ReadCloser: resp.Body, fn: t.onDone}
+	}
+	return resp, err
+}
 
 func runnerProxyForPick(w http.ResponseWriter, r *http.Request, limitBody bool, cfg *config.APIConfig, pick func() (*registry.Runner, error)) bool {
 	run, err := pick()
@@ -27,7 +61,7 @@ func runnerProxyForPick(w http.ResponseWriter, r *http.Request, limitBody bool, 
 		return false
 	}
 	u, _ := url.Parse(strings.TrimRight(run.HTTPBaseURL, "/"))
-	proxy := newRunnerReverseProxy(u, cfg.RunnerAPIKey, cfg)
+	proxy := newRunnerReverseProxy(u, cfg.RunnerAPIKey, nil)
 	if limitBody {
 		r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxFileBytes)
 	}
@@ -59,8 +93,20 @@ func sandboxProxyHandler(s *store.Store, cfg *config.APIConfig) func(bool) http.
 				return
 			}
 
+			if cfg.IdleDeleteAfter > 0 {
+				now := time.Now().Unix()
+				if now > rec.LastActiveAt+int64(cfg.IdleDeleteAfter.Seconds()) {
+					writeError(w, http.StatusNotFound, "sandbox not found")
+					return
+				}
+			}
+
 			u, _ := url.Parse(strings.TrimRight(rec.RunnerHTTPBase, "/"))
-			proxy := newRunnerReverseProxy(u, cfg.RunnerAPIKey, cfg)
+			workDone := func() {
+				_ = s.UpdateLastActive(id)
+				_ = s.UpdateStatus(id, "running")
+			}
+			proxy := newRunnerReverseProxy(u, cfg.RunnerAPIKey, workDone)
 			if limitBody {
 				r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxFileBytes)
 			}
@@ -98,7 +144,7 @@ func handleListSandboxes(s *store.Store) http.HandlerFunc {
 	}
 }
 
-func handleGetSandbox(s *store.Store) http.HandlerFunc {
+func handleGetSandbox(s *store.Store, cfg *config.APIConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if !isValidUUID(id) {
@@ -113,6 +159,13 @@ func handleGetSandbox(s *store.Store) http.HandlerFunc {
 		if rec == nil {
 			writeError(w, http.StatusNotFound, "sandbox not found")
 			return
+		}
+		if cfg.IdleDeleteAfter > 0 {
+			now := time.Now().Unix()
+			if now > rec.LastActiveAt+int64(cfg.IdleDeleteAfter.Seconds()) {
+				writeError(w, http.StatusNotFound, "sandbox not found")
+				return
+			}
 		}
 		if err := s.UpdateLastActive(id); err != nil {
 			// non-fatal
@@ -234,9 +287,9 @@ func isValidUUID(id string) bool {
 	return id != "" && uuidRegex.MatchString(id)
 }
 
-func newRunnerReverseProxy(runnerURL *url.URL, runnerAPIKey string, cfg *config.APIConfig) *httputil.ReverseProxy {
+func newRunnerReverseProxy(runnerURL *url.URL, runnerAPIKey string, onWorkDone func()) *httputil.ReverseProxy {
 	target := *runnerURL
-	return &httputil.ReverseProxy{
+	p := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(&target)
 			pr.Out.URL.Path = pr.In.URL.Path
@@ -262,4 +315,8 @@ func newRunnerReverseProxy(runnerURL *url.URL, runnerAPIKey string, cfg *config.
 			writeError(w, http.StatusServiceUnavailable, "runner unavailable")
 		},
 	}
+	if onWorkDone != nil {
+		p.Transport = &activityNotifyTransport{onDone: onWorkDone}
+	}
+	return p
 }

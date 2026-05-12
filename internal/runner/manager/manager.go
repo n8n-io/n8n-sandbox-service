@@ -17,6 +17,7 @@ import (
 
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 	"github.com/n8n-io/sandbox-service/internal/runner/netrules"
+	"golang.org/x/sync/singleflight"
 )
 
 // ErrSandboxNotFound is returned when a sandbox ID is not found.
@@ -31,7 +32,6 @@ var ErrSandboxNotRunning = errors.New("sandbox not running")
 
 const (
 	StatusRunning            = "running"
-	StatusTerminated         = "terminated"
 	runnerBridgeNetwork      = "runner-bridge"
 	daemonPort               = 8081
 	containerLabelManaged    = "sandbox-service.managed"
@@ -53,6 +53,7 @@ type ContainerInfo struct {
 type Manager struct {
 	config    *config.Config
 	gatewayIP string
+	wakeGroup singleflight.Group
 }
 
 type containerInspect struct {
@@ -190,6 +191,67 @@ func (m *Manager) GetContainerInfo(ctx context.Context, containerID string) (*Co
 	}, nil
 }
 
+// EnsureSandboxRunning starts a stopped container if needed, reapplies network
+// policy for its current IP, and waits until the daemon accepts traffic.
+func (m *Manager) EnsureSandboxRunning(ctx context.Context, sandboxID string) error {
+	_, err, _ := m.wakeGroup.Do(sandboxID, func() (interface{}, error) {
+		return nil, m.ensureSandboxRunningOnce(ctx, sandboxID)
+	})
+	return err
+}
+
+func (m *Manager) ensureSandboxRunningOnce(ctx context.Context, sandboxID string) error {
+	containerID, err := m.FindContainerIDByLabel(ctx, sandboxID)
+	if err != nil {
+		return err
+	}
+	inspect, err := m.inspectContainer(ctx, containerID)
+	if err != nil {
+		if isDockerNotFound(err) {
+			return ErrSandboxNotFound
+		}
+		return err
+	}
+	if inspect.State.Running {
+		return nil
+	}
+	if err := m.startContainer(ctx, containerID); err != nil {
+		return fmt.Errorf("start container: %w", err)
+	}
+	containerIP, err := m.containerIP(ctx, containerID)
+	if err != nil {
+		return err
+	}
+	if err := netrules.ApplyPolicy(containerID, containerIP, m.gatewayIP, daemonPort); err != nil {
+		return fmt.Errorf("apply network rules: %w", err)
+	}
+	baseURL := fmt.Sprintf("http://%s:%d", containerIP, daemonPort)
+	if err := waitForDaemon(ctx, baseURL); err != nil {
+		return err
+	}
+	return nil
+}
+
+// StopSandboxContainer stops a running sandbox container without removing it.
+func (m *Manager) StopSandboxContainer(ctx context.Context, sandboxID string) error {
+	containerID, err := m.FindContainerIDByLabel(ctx, sandboxID)
+	if err != nil {
+		return err
+	}
+	inspect, err := m.inspectContainer(ctx, containerID)
+	if err != nil {
+		if isDockerNotFound(err) {
+			return ErrSandboxNotFound
+		}
+		return err
+	}
+	if !inspect.State.Running {
+		return nil
+	}
+	_, err = m.runDocker(ctx, "container", "stop", "-t", "10", containerID)
+	return err
+}
+
 // DaemonURL returns the daemon URL for a container by sandbox ID.
 func (m *Manager) DaemonURL(ctx context.Context, sandboxID string) (string, error) {
 	containerID, err := m.FindContainerIDByLabel(ctx, sandboxID)
@@ -256,7 +318,7 @@ func waitForDaemon(ctx context.Context, baseURL string) error {
 	httpClient := &http.Client{Timeout: 3 * time.Second}
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
-	deadline := time.After(30 * time.Second)
+	deadline := time.After(60 * time.Second)
 
 	for {
 		select {
@@ -305,6 +367,7 @@ func waitForDaemon(ctx context.Context, baseURL string) error {
 				return nil
 			}
 		}
+
 	}
 }
 

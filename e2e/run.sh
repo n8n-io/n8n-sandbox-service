@@ -113,6 +113,10 @@ docker run -d \
 	-e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE=/grpc-tls/ca.crt" \
 	-e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE=/grpc-tls/control-grpc-api-client.crt" \
 	-e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE=/grpc-tls/control-grpc-api-client.key" \
+	-e "SANDBOX_API_IDLE_STOP_AFTER=3s" \
+	-e "SANDBOX_API_IDLE_DELETE_AFTER=10s" \
+	-e "SANDBOX_API_IDLE_DELETE_SAFETY_BUFFER=2s" \
+	-e "SANDBOX_API_IDLE_SWEEP_INTERVAL=1s" \
 	--name "$API_CONTAINER_NAME" \
 	"$API_IMAGE"
 
