@@ -346,7 +346,7 @@ func waitForDaemon(ctx context.Context, baseURL string) error {
 			execReq, err := http.NewRequestWithContext(
 				ctx,
 				http.MethodPost,
-				baseURL+"/exec",
+				baseURL+"/executions",
 				bytes.NewBufferString(`{"command":"true","timeout_ms":2000}`),
 			)
 			if err != nil {
@@ -362,7 +362,7 @@ func waitForDaemon(ctx context.Context, baseURL string) error {
 			if execResp.StatusCode != http.StatusOK {
 				continue
 			}
-			// Daemon /exec streams NDJSON events; require a successful exit event.
+			// Daemon /executions streams NDJSON events; require a successful exit event.
 			if isSuccessfulExit(body) {
 				return nil
 			}
