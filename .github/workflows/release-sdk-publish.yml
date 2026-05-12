@@ -49,27 +49,20 @@ jobs:
         run: npm publish --provenance
 
       - name: Create git tag
+        working-directory: .
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           TAG="sdk/v${VERSION}"
-          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
-            echo "Tag ${TAG} already exists; skipping"
-          else
-            git tag "${TAG}"
-            git push origin "${TAG}"
-          fi
+          git tag --force "${TAG}"
+          git push --force origin "${TAG}"
 
       - name: Create GitHub Release
+        working-directory: .
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          TAG="sdk/v${VERSION}"
-          if gh release view "${TAG}" >/dev/null 2>&1; then
-            echo "Release ${TAG} already exists; skipping"
-          else
-            gh release create "${TAG}" \
-              --title "@n8n/sandbox-client v${VERSION}" \
-              --generate-notes
-          fi
+          gh release create "sdk/v${VERSION}" \
+            --title "@n8n/sandbox-client v${VERSION}" \
+            --generate-notes
