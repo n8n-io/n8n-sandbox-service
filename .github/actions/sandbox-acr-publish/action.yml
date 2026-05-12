@@ -11,9 +11,8 @@ inputs:
     required: true
     description: Azure subscription ID
   acr-name:
-    required: false
+    required: true
     description: Short ACR name (for az acr login and registry host)
-    default: n8nadminpanel
 
 runs:
   using: composite
@@ -24,10 +23,12 @@ runs:
         AZURE_CLIENT_ID: ${{ inputs.azure-client-id }}
         AZURE_TENANT_ID: ${{ inputs.azure-tenant-id }}
         AZURE_SUBSCRIPTION_ID: ${{ inputs.azure-subscription-id }}
+        ACR_NAME: ${{ inputs.acr-name }}
       run: |
         [[ "$AZURE_CLIENT_ID" ]] || { echo 'azure-client-id is empty'; exit 1; }
         [[ "$AZURE_TENANT_ID" ]] || { echo 'azure-tenant-id is empty'; exit 1; }
         [[ "$AZURE_SUBSCRIPTION_ID" ]] || { echo 'azure-subscription-id is empty'; exit 1; }
+        [[ "$ACR_NAME" ]] || { echo 'acr-name is empty'; exit 1; }
 
     - name: Run tests
       uses: ./.github/actions/sandbox-service-test
