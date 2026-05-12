@@ -32,6 +32,13 @@ jobs:
         with:
           version: 10
 
+      - name: Generate GitHub App Token
+        id: generate-token
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
+        with:
+          app-id: ${{ secrets.N8N_ASSISTANT_APP_ID }}
+          private-key: ${{ secrets.N8N_ASSISTANT_PRIVATE_KEY }}
+
       - name: Bump version
         id: bump
         working-directory: sdk
@@ -44,22 +51,20 @@ jobs:
         working-directory: sdk
         run: pnpm install --lockfile-only
 
-      - name: Create release branch and PR
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ steps.bump.outputs.version }}
-        run: |
-          BRANCH="sdk/release/${VERSION}"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b "$BRANCH"
-          git add sdk/package.json sdk/pnpm-lock.yaml
-          git commit -m "sdk: bump version to v${VERSION}"
-          git push origin "$BRANCH"
-          gh pr create \
-            --base main \
-            --head "$BRANCH" \
-            --title "sdk: release v${VERSION}" \
-            --body "Automated release PR for \`@n8n/sandbox-client@${VERSION}\`.
+      - name: Create Pull Request
+        id: create-pr
+        uses: peter-evans/create-pull-request@c0f553fe549906ede9cf27b5156039d195d2ece0 # v8.1.0
+        with:
+          token: ${{ steps.generate-token.outputs.token }}
+          commit-message: 'sdk: release v${{ steps.bump.outputs.version }}'
+          labels: 'release/sdk'
+          title: 'sdk: release v${{ steps.bump.outputs.version }}'
+          body: |
+            Automated release PR for `@n8n/sandbox-client@${{ steps.bump.outputs.version }}`.
 
-          Merging this PR will trigger the SDK publish workflow."
+            Merging this PR will trigger the SDK publish workflow.
+          branch: sdk/release/${{ steps.bump.outputs.version }}
+          base: main
+          delete-branch: true
+          author: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
+          committer: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
