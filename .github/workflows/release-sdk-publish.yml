@@ -15,6 +15,9 @@ jobs:
       github.event.pull_request.merged == true &&
       startsWith(github.event.pull_request.head.ref, 'sdk/release/')
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
@@ -32,35 +35,41 @@ jobs:
 
       - name: Read version
         id: version
-        working-directory: sdk
         run: |
           VERSION=$(node -p "require('./package.json').version")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
-        working-directory: sdk
         run: pnpm install --frozen-lockfile
 
       - name: Build
-        working-directory: sdk
         run: pnpm build
 
       - name: Publish to npm
-        working-directory: sdk
-        run: npm publish --provenance --access public
+        run: npm publish --provenance
 
       - name: Create git tag
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          git tag "sdk/v${VERSION}"
-          git push origin "sdk/v${VERSION}"
+          TAG="sdk/v${VERSION}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists; skipping"
+          else
+            git tag "${TAG}"
+            git push origin "${TAG}"
+          fi
 
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          gh release create "sdk/v${VERSION}" \
-            --title "@n8n/sandbox-client v${VERSION}" \
-            --generate-notes
+          TAG="sdk/v${VERSION}"
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "Release ${TAG} already exists; skipping"
+          else
+            gh release create "${TAG}" \
+              --title "@n8n/sandbox-client v${VERSION}" \
+              --generate-notes
+          fi
