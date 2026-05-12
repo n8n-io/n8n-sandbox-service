@@ -38,7 +38,7 @@ export async function exec(
   // Phase 1: Start command via POST (idempotent via exec_id)
   while (!consumer.isDone) {
     try {
-      const { stream } = await http.requestStream("POST", `/sandboxes/${id}/exec`, {
+      const { stream } = await http.requestStream("POST", `/sandboxes/${id}/executions`, {
         data: {
           command: request.command,
           env: request.env,
@@ -66,7 +66,7 @@ export async function exec(
     try {
       const params: Record<string, string> = { follow: "true" };
       if (consumer.lastSeq >= 0) params.after = String(consumer.lastSeq);
-      const { stream } = await http.requestStream("GET", `/sandboxes/${id}/exec/${execId}`, {
+      const { stream } = await http.requestStream("GET", `/sandboxes/${id}/executions/${execId}`, {
         params,
         signal: request.abortSignal,
       });
@@ -94,7 +94,7 @@ export async function resumeExecution(
     params.after = String(afterSeq);
   }
 
-  const { stream } = await http.requestStream("GET", `/sandboxes/${sandboxId}/exec/${execId}`, {
+  const { stream } = await http.requestStream("GET", `/sandboxes/${sandboxId}/executions/${execId}`, {
     params,
   });
 
@@ -108,7 +108,7 @@ export async function deleteExecution(
   sandboxId: string,
   execId: string,
 ): Promise<void> {
-  await http.requestVoid("DELETE", `/sandboxes/${sandboxId}/exec/${execId}`);
+  await http.requestVoid("DELETE", `/sandboxes/${sandboxId}/executions/${execId}`);
 }
 
 function isTransientError(error: unknown): boolean {

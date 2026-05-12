@@ -13,7 +13,7 @@ func TestRecoveryMiddlewareRethrowsAbortHandler(t *testing.T) {
 	}))
 
 	recovered := recoverPanic(func() {
-		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/exec", nil))
+		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/executions", nil))
 	})
 
 	if recovered != http.ErrAbortHandler {
@@ -27,7 +27,7 @@ func TestRecoveryMiddlewareWritesErrorBeforeResponseStarts(t *testing.T) {
 	}))
 
 	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/exec", nil))
+	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/executions", nil))
 
 	if rr.Code != http.StatusInternalServerError {
 		t.Fatalf("expected status %d, got %d", http.StatusInternalServerError, rr.Code)
@@ -47,7 +47,7 @@ func TestRecoveryMiddlewareAbortsAfterResponseStarts(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	recovered := recoverPanic(func() {
-		handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/exec", nil))
+		handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/executions", nil))
 	})
 
 	if recovered != http.ErrAbortHandler {

@@ -98,7 +98,7 @@ function runnerHostListsSandbox(runnerContainer: string, sandboxUUID: string): b
 }
 
 test.describe('API restart resilience', () => {
-  test('sandboxes keep working after API container restart', async ({ request }) => {
+  test('sandboxes keep working after API container restart', { tag: '@e2e-api-restart' }, async ({ request }) => {
     test.skip(!process.env.E2E_API_CONTAINER_NAME, 'needs E2E_API_CONTAINER_NAME (from e2e/run.sh)');
     test.setTimeout(100_000);
 
@@ -122,7 +122,10 @@ test.describe('API restart resilience', () => {
 });
 
 test.describe('Runner failure resilience', () => {
-  test('stopped runner: 503 on sandboxes there; other runner and new sandboxes still work', async ({ request }) => {
+  test(
+    'stopped runner: 503 on sandboxes there; other runner and new sandboxes still work',
+    { tag: '@e2e-stopped-runner' },
+    async ({ request }) => {
     test.skip(
       !process.env.E2E_RUNNER1_CONTAINER_NAME || !process.env.E2E_RUNNER2_CONTAINER_NAME,
       'needs E2E_RUNNER1_CONTAINER_NAME and E2E_RUNNER2_CONTAINER_NAME (from e2e/run-two-runners.sh)',
@@ -161,7 +164,7 @@ test.describe('Runner failure resilience', () => {
       stoppedRunner = deadRunner;
       docker(['stop', '-t', '30', stoppedRunner]);
 
-      const bad = await request.post(`/sandboxes/${id1}/exec`, {
+      const bad = await request.post(`/sandboxes/${id1}/executions`, {
         headers: { 'X-Api-Key': API_KEY, 'Content-Type': 'application/json' },
         data: { command: 'true' },
       });

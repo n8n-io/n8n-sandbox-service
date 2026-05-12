@@ -19,6 +19,18 @@ const client = new SandboxClient({
 });
 ```
 
+### Retries (`retry` option)
+
+By default the client retries transient failures: 3 extra attempts (four tries total), backoff with jitter, and HTTP statuses `429` and `503` (plus transport errors, represented as status `0`). `502` is not in the default retry set — the service uses it when repeating the same request is unlikely to help.
+
+- Turn off retries: `retry: { attempts: 0 }`.
+- Tune backoff: `retry: { attempts: 5, baseDelayMs: 100, maxDelayMs: 30_000, jitter: false }`.
+- Also retry other statuses (only if you accept the risk): `retry: { retryOnStatuses: [429, 502, 503] }`.
+- Idempotent methods (`GET`, `HEAD`, `OPTIONS`, `PUT`, `DELETE`) use this policy automatically.
+- `POST` is not retried unless you set `isSafeToRetry: true` on that specific request (for example when the server makes the operation idempotent, as with `exec_id` on exec).
+
+`exec` still has its own stream resume loop (`exec_id`, `POST` then `GET` follow). Constructor `retry` applies to each underlying HTTP call (so `GET` resume lines benefit from the default policy). It does not replace the exec event/state machine.
+
 ### Sandbox lifecycle
 
 ```ts

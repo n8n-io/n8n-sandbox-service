@@ -189,7 +189,7 @@ async function deleteSandbox(id) {
 
 async function execInSandbox(sandboxId, command, timeoutMs = 300000, signal) {
   const baseUrl = baseUrlInput.value.trim().replace(/\/+$/, '');
-  const res = await fetch(`${baseUrl}/sandboxes/${sandboxId}/exec`, {
+  const res = await fetch(`${baseUrl}/sandboxes/${sandboxId}/executions`, {
     method: 'POST',
     headers: {
       'X-Api-Key': apiKeyInput.value.trim(),

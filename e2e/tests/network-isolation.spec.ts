@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { createSandbox, deleteSandbox, exec } from './helpers';
+import { createSandbox, deleteSandbox, exec, execWithTransientRetry } from './helpers';
 
 // Helper: use python3 for HTTP requests since curl is not in the sandbox rootfs
 const pyGet = (url: string, timeout: number = 5) =>
@@ -36,9 +36,7 @@ test.describe('Network isolation', () => {
       ];
 
       for (const ip of privateIPs) {
-        const result = await exec(id, pyConnect(ip, 80, 3), {
-          timeoutMs: 10_000,
-        });
+        const result = await execWithTransientRetry(id, pyConnect(ip, 80, 3), { timeoutMs: 10_000 });
         expect(result.exitCode, `expected private IP ${ip} to be unreachable`).not.toBe(0);
       }
     } finally {
@@ -51,7 +49,7 @@ test.describe('Network isolation', () => {
     const id2 = await createSandbox();
     try {
       // Get sandbox 2's IP
-      const ipResult = await exec(id2, 'hostname -I', { timeoutMs: 5_000 });
+      const ipResult = await execWithTransientRetry(id2, 'hostname -I', { timeoutMs: 5_000 });
       expect(ipResult.exitCode).toBe(0);
       const sandbox2IP = ipResult.stdout.trim();
       expect(sandbox2IP).toBeTruthy();
@@ -67,9 +65,7 @@ import time; time.sleep(30)
 " &`, { timeoutMs: 5_000 });
 
       // Sandbox 1 should not be able to reach sandbox 2
-      const result = await exec(id1, pyConnect(sandbox2IP, 9999, 3), {
-        timeoutMs: 10_000,
-      });
+      const result = await execWithTransientRetry(id1, pyConnect(sandbox2IP, 9999, 3), { timeoutMs: 10_000 });
       expect(result.exitCode, `expected sandbox 1 to not reach sandbox 2 at ${sandbox2IP}`).not.toBe(0);
     } finally {
       await deleteSandbox(id1);
@@ -80,7 +76,7 @@ import time; time.sleep(30)
   test('DNS resolution works', async () => {
     const id = await createSandbox();
     try {
-      const result = await exec(id, pyResolve('example.com'), { timeoutMs: 10_000 });
+      const result = await execWithTransientRetry(id, pyResolve('example.com'), { timeoutMs: 10_000 });
       expect(result.exitCode).toBe(0);
       // Should resolve to an IP address
       expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+\.\d+$/);

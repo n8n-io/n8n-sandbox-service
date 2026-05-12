@@ -27,7 +27,7 @@ func TestExecutionFirstEventIsStarted(t *testing.T) {
 	t.Cleanup(handler.Close)
 
 	body := `{"command":"echo hello"}`
-	req := httptest.NewRequest(http.MethodPost, "/exec", bytes.NewReader([]byte(body)))
+	req := httptest.NewRequest(http.MethodPost, "/executions", bytes.NewReader([]byte(body)))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
@@ -58,7 +58,7 @@ func TestExecutionAllEventsHaveSeq(t *testing.T) {
 	t.Cleanup(handler.Close)
 
 	body := `{"command":"echo hello"}`
-	req := httptest.NewRequest(http.MethodPost, "/exec", bytes.NewReader([]byte(body)))
+	req := httptest.NewRequest(http.MethodPost, "/executions", bytes.NewReader([]byte(body)))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
@@ -140,7 +140,7 @@ func TestExecutionResumeReturnsNoDuplicates(t *testing.T) {
 	t.Cleanup(handler.Close)
 
 	body := `{"command":"echo hello","exec_id":"test-exec-id"}`
-	req := httptest.NewRequest(http.MethodPost, "/exec", bytes.NewReader([]byte(body)))
+	req := httptest.NewRequest(http.MethodPost, "/executions", bytes.NewReader([]byte(body)))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
@@ -169,7 +169,7 @@ func TestExecutionResumeReturnsNoDuplicates(t *testing.T) {
 	}
 
 	resumeReq := httptest.NewRequest(http.MethodGet,
-		"/exec/"+execID+"?after="+func() string {
+		"/executions/"+execID+"?after="+func() string {
 			b, _ := json.Marshal(lastSeq)
 			return string(b)
 		}(),
@@ -236,7 +236,7 @@ func TestExecutionNonexistentReturns404(t *testing.T) {
 	t.Cleanup(handler.Close)
 
 	body := `{"command":"echo hello"}`
-	req := httptest.NewRequest(http.MethodPost, "/exec", bytes.NewReader([]byte(body)))
+	req := httptest.NewRequest(http.MethodPost, "/executions", bytes.NewReader([]byte(body)))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
@@ -256,7 +256,7 @@ func TestExecutionNonexistentReturns404(t *testing.T) {
 		t.Fatal("missing exec_id")
 	}
 
-	resumeReq := httptest.NewRequest(http.MethodGet, "/exec/nonexistent?after=0", nil)
+	resumeReq := httptest.NewRequest(http.MethodGet, "/executions/nonexistent?after=0", nil)
 	resumeRR := httptest.NewRecorder()
 	handler.ServeHTTP(resumeRR, resumeReq)
 	if resumeRR.Code != http.StatusNotFound {
@@ -269,7 +269,7 @@ func TestDeleteExecEndpoint(t *testing.T) {
 	t.Cleanup(handler.Close)
 
 	body := `{"command":"sleep 30"}`
-	req := httptest.NewRequest(http.MethodPost, "/exec", bytes.NewReader([]byte(body)))
+	req := httptest.NewRequest(http.MethodPost, "/executions", bytes.NewReader([]byte(body)))
 	req.Header.Set("Content-Type", "application/json")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -293,7 +293,7 @@ func TestDeleteExecEndpoint(t *testing.T) {
 		t.Fatal("missing exec_id from started event")
 	}
 
-	delReq := httptest.NewRequest(http.MethodDelete, "/exec/"+execID, nil)
+	delReq := httptest.NewRequest(http.MethodDelete, "/executions/"+execID, nil)
 	delRR := httptest.NewRecorder()
 	handler.ServeHTTP(delRR, delReq)
 
@@ -301,14 +301,14 @@ func TestDeleteExecEndpoint(t *testing.T) {
 		t.Fatalf("expected 204, got %d", delRR.Code)
 	}
 
-	getReq := httptest.NewRequest(http.MethodGet, "/exec/"+execID, nil)
+	getReq := httptest.NewRequest(http.MethodGet, "/executions/"+execID, nil)
 	getRR := httptest.NewRecorder()
 	handler.ServeHTTP(getRR, getReq)
 	if getRR.Code != http.StatusNotFound {
 		t.Fatalf("expected 404 on GET after DELETE, got %d", getRR.Code)
 	}
 
-	delReq2 := httptest.NewRequest(http.MethodDelete, "/exec/nonexistent", nil)
+	delReq2 := httptest.NewRequest(http.MethodDelete, "/executions/nonexistent", nil)
 	delRR2 := httptest.NewRecorder()
 	handler.ServeHTTP(delRR2, delReq2)
 	if delRR2.Code != http.StatusNoContent {

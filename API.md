@@ -11,6 +11,15 @@ All endpoints except `/healthz` require the `X-Api-Key` header for authenticatio
 }
 ```
 
+### HTTP 503 (transient) vs 502 (not retryable)
+
+The API and runner use two buckets so clients (including the SDK) can decide **when to retry the same request** vs **when to change strategy** (e.g. create a new sandbox, fix routing, surface an error to the user).
+
+- **503 Service Unavailable** — **Transient / retry**: overload, no capacity yet, network or upstream not ready, or the sandbox daemon is not reachable *for the moment* while the container is otherwise expected to be usable. Safe to back off and retry the same operation.
+- **502 Bad Gateway** — **Not retryable as “wait and retry”**: the request does not make sense to repeat unchanged; fix state first (new sandbox, repair registry/routing, or handle the reported error). Examples: inner container **exists but is not running**, stored sandbox has **no runner HTTP base URL**, or **delete** failed on the runner control plane.
+
+**404** `sandbox not found` is unchanged (unknown id). Exec and file routes may return **503** or **502** from the runner after the API successfully reaches the runner; the API may return **503** `runner unavailable` before the runner is contacted.
+
 ---
 
 ## Endpoints
@@ -138,7 +147,7 @@ curl -X DELETE http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440
 
 ---
 
-### POST /sandboxes/{id}/exec
+### POST /sandboxes/{id}/executions
 
 Execute a command in a sandbox. The command runs in a **daemon-side execution** whose
 lifetime is independent of the HTTP stream — disconnecting does not kill the process.
@@ -200,20 +209,20 @@ The `exit` event includes:
 The command runs in a daemon-side execution whose lifetime is independent of the HTTP
 stream. Closing the HTTP connection does **not** kill the running command — it only
 stops the event stream. To cancel a running command, use
-`DELETE /sandboxes/{id}/exec/{exec_id}`. The SDK calls the delete endpoint
+`DELETE /sandboxes/{id}/executions/{exec_id}`. The SDK calls the delete endpoint
 automatically when `abortSignal` fires.
 
 The execution stores events in a bounded buffer (up to 16 MiB). Clients can reconnect
-via `GET /sandboxes/{id}/exec/{exec_id}?after=<seq>&follow=true`. Completed executions
+via `GET /sandboxes/{id}/executions/{exec_id}?after=<seq>&follow=true`. Completed executions
 are retained for 10 minutes. If the buffer is exhausted, old events are discarded and
 stale resume requests return `410 Gone`.
 
-**Errors:** `400` invalid id or missing command, `404` sandbox not found, `410` if execution exists but history is no longer retained
+**Errors:** `400` invalid id or missing command, `404` sandbox not found, `410` if execution exists but history is no longer retained. Transient failures use **503**; **502** means the sandbox is not usable without a client-side change — see [HTTP 503 (transient) vs 502 (not retryable)](#http-503-transient-vs-502-not-retryable).
 
 **Example:**
 
 ```bash
-curl -X POST http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/exec \
+curl -X POST http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/executions \
   -H "X-Api-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"command": "echo hello", "timeout_ms": 10000}'
@@ -221,7 +230,7 @@ curl -X POST http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-44665544000
 
 ---
 
-### GET /sandboxes/{id}/exec/{exec_id}
+### GET /sandboxes/{id}/executions/{exec_id}
 
 Resume or replay an execution stream. Use this to reconnect after a transient
 stream disconnect without re-executing the command.
@@ -240,7 +249,7 @@ or the client disconnects.
 
 **Response:** `200 OK` — `Content-Type: application/x-ndjson`
 
-Same NDJSON event format as `POST /exec`.
+Same NDJSON event format as `POST /sandboxes/{id}/executions`.
 
 **Errors:** `400` invalid parameters, `404` execution not found, `410` requested history is no longer retained
 
@@ -248,13 +257,13 @@ Same NDJSON event format as `POST /exec`.
 
 ```bash
 # Resume from sequence 5
-curl "http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/exec/a1b2c3d4-...?after=5&follow=true" \
+curl "http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/executions/a1b2c3d4-...?after=5&follow=true" \
   -H "X-Api-Key: YOUR_API_KEY"
 ```
 
 ---
 
-### DELETE /sandboxes/{id}/exec/{exec_id}
+### DELETE /sandboxes/{id}/executions/{exec_id}
 
 Delete an execution. Kills the running process (if still active) and immediately
 removes the execution state from memory. After deletion, the execution can no
@@ -272,7 +281,7 @@ nonexistent execution returns `204`.
 **Example:**
 
 ```bash
-curl -X DELETE http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/exec/a1b2c3d4-... \
+curl -X DELETE http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/executions/a1b2c3d4-... \
   -H "X-Api-Key: YOUR_API_KEY"
 ```
 
