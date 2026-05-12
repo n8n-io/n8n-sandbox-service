@@ -63,21 +63,26 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// statusWriter wraps http.ResponseWriter to capture the status code for logging.
+// It defaults to 200 so that handlers that call Write without WriteHeader are recorded correctly.
 type statusWriter struct {
 	http.ResponseWriter
 	status int
 }
 
+// WriteHeader captures the status code before delegating to the wrapped ResponseWriter.
 func (sw *statusWriter) WriteHeader(code int) {
 	sw.status = code
 	sw.ResponseWriter.WriteHeader(code)
 }
 
+// Unwrap returns the underlying ResponseWriter so that middleware-aware helpers
+// (e.g. http.ResponseController) can reach the original writer.
 func (sw *statusWriter) Unwrap() http.ResponseWriter {
 	return sw.ResponseWriter
 }
 
-// Implement http.Flusher for streaming support
+// Flush implements http.Flusher by delegating to the wrapped ResponseWriter if it supports flushing.
 func (sw *statusWriter) Flush() {
 	if f, ok := sw.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
@@ -100,7 +105,11 @@ func CORSMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// RecoveryMiddleware catches panics and returns 500.
+// RecoveryMiddleware catches panics from downstream handlers and returns a 500 error.
+// It re-panics with http.ErrAbortHandler in two cases: when the original panic is
+// ErrAbortHandler (preserving the stdlib's "silently abort" semantics), or when the
+// response has already started writing (since the status line is already on the wire
+// and a clean error response is no longer possible).
 func RecoveryMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rw := &recoveryResponseWriter{ResponseWriter: w}
@@ -120,11 +129,16 @@ func RecoveryMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// recoveryResponseWriter wraps http.ResponseWriter to track whether headers have
+// already been sent. RecoveryMiddleware uses this to decide whether it can still
+// write a clean 500 error response after a panic.
 type recoveryResponseWriter struct {
 	http.ResponseWriter
 	wroteHeader bool
 }
 
+// WriteHeader records that headers have been sent and delegates to the wrapped writer.
+// Subsequent calls are no-ops to prevent the superfluous WriteHeader log from net/http.
 func (rw *recoveryResponseWriter) WriteHeader(code int) {
 	if rw.wroteHeader {
 		return
@@ -133,6 +147,7 @@ func (rw *recoveryResponseWriter) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
+// Write marks headers as sent (Go implicitly sends a 200 on first Write) and delegates.
 func (rw *recoveryResponseWriter) Write(data []byte) (int, error) {
 	if !rw.wroteHeader {
 		rw.wroteHeader = true
@@ -140,6 +155,8 @@ func (rw *recoveryResponseWriter) Write(data []byte) (int, error) {
 	return rw.ResponseWriter.Write(data)
 }
 
+// Flush marks headers as sent (flushing implicitly commits the response header)
+// and delegates to the wrapped writer if it implements http.Flusher.
 func (rw *recoveryResponseWriter) Flush() {
 	if !rw.wroteHeader {
 		rw.wroteHeader = true
@@ -149,6 +166,7 @@ func (rw *recoveryResponseWriter) Flush() {
 	}
 }
 
+// Unwrap returns the underlying ResponseWriter for middleware-aware helpers.
 func (rw *recoveryResponseWriter) Unwrap() http.ResponseWriter {
 	return rw.ResponseWriter
 }
