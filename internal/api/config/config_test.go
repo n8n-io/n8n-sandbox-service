@@ -130,3 +130,33 @@ func TestLoadAPIRequiresRegistrationToken(t *testing.T) {
 		t.Error("expected LoadAPI() to fail without SANDBOX_API_RUNNER_REGISTRATION_TOKEN")
 	}
 }
+
+func TestLoadAPIIdleDeleteAfterZeroDisablesDelete(t *testing.T) {
+	t.Setenv("SANDBOX_API_KEYS", "test-key")
+	t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	t.Setenv("SANDBOX_API_IDLE_STOP_AFTER", "1h")
+	t.Setenv("SANDBOX_API_IDLE_DELETE_AFTER", "0")
+	setRequiredGRPCMTLS(t)
+
+	cfg, err := LoadAPI()
+	if err != nil {
+		t.Fatalf("LoadAPI() failed: %v", err)
+	}
+	if cfg.IdleStopAfter != time.Hour {
+		t.Fatalf("IdleStopAfter: want 1h, got %s", cfg.IdleStopAfter)
+	}
+	if cfg.IdleDeleteAfter != 0 {
+		t.Fatalf("IdleDeleteAfter: want 0, got %s", cfg.IdleDeleteAfter)
+	}
+}
+
+func TestLoadAPIRejectsNegativeIdleDeleteAfter(t *testing.T) {
+	t.Setenv("SANDBOX_API_KEYS", "test-key")
+	t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	t.Setenv("SANDBOX_API_IDLE_DELETE_AFTER", "-1s")
+	setRequiredGRPCMTLS(t)
+
+	if _, err := LoadAPI(); err == nil {
+		t.Fatal("expected LoadAPI to reject negative SANDBOX_API_IDLE_DELETE_AFTER")
+	}
+}

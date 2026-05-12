@@ -48,7 +48,9 @@ func StartIdleSweeper(ctx context.Context, s *store.Store, cfg *config.APIConfig
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				sweepIdleSandboxes(context.Background(), s, cfg, tlsCfg)
+				// Use the same ctx as the ticker loop so stop/delete RPCs honor
+				// sweepCancel() from shutdown instead of blocking on Background.
+				sweepIdleSandboxes(ctx, s, cfg, tlsCfg)
 			}
 		}
 	}()
@@ -78,6 +80,9 @@ func sweepIdleSandboxes(ctx context.Context, s *store.Store, cfg *config.APIConf
 					continue
 				}
 				if err := runnerctl.DeleteSandbox(ctx, rec.RunnerControlGRPCAddr, cfg.RunnerAPIKey, tlsCfg, rec.ID); err != nil {
+					if ctx.Err() != nil {
+						return
+					}
 					slog.Info("idle delete failed", "sandbox_id", rec.ID, "err", err)
 					continue
 				}
@@ -86,6 +91,10 @@ func sweepIdleSandboxes(ctx context.Context, s *store.Store, cfg *config.APIConf
 				}
 			}
 		}
+	}
+
+	if ctx.Err() != nil {
+		return
 	}
 
 	if cfg.IdleStopAfter > 0 {
@@ -98,6 +107,9 @@ func sweepIdleSandboxes(ctx context.Context, s *store.Store, cfg *config.APIConf
 					continue
 				}
 				if err := runnerctl.StopSandbox(ctx, rec.RunnerControlGRPCAddr, cfg.RunnerAPIKey, tlsCfg, rec.ID); err != nil {
+					if ctx.Err() != nil {
+						return
+					}
 					slog.Info("idle stop failed", "sandbox_id", rec.ID, "err", err)
 					continue
 				}

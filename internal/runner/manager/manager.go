@@ -194,8 +194,16 @@ func (m *Manager) GetContainerInfo(ctx context.Context, containerID string) (*Co
 // EnsureSandboxRunning starts a stopped container if needed, reapplies network
 // policy for its current IP, and waits until the daemon accepts traffic.
 func (m *Manager) EnsureSandboxRunning(ctx context.Context, sandboxID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	_, err, _ := m.wakeGroup.Do(sandboxID, func() (interface{}, error) {
-		return nil, m.ensureSandboxRunningOnce(ctx, sandboxID)
+		// singleflight runs this once for all waiters; do not use the caller's ctx
+		// here or one canceled/short-lived request fails everyone else waiting on
+		// the same key.
+		wakeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		return nil, m.ensureSandboxRunningOnce(wakeCtx, sandboxID)
 	})
 	return err
 }

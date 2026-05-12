@@ -109,23 +109,29 @@ if [[ "${E2E_IDLE_TTL_SUITE:-}" == "1" ]]; then
 fi
 
 echo "Starting API service on port $PORT..."
-docker run -d \
-	"${API_DOCKER_USER[@]}" \
-	--network "$NETWORK_NAME" \
-	-p "$PORT:8080" \
-	-v "$TLS_DIR:/grpc-tls:ro" \
-	-e "SANDBOX_API_KEYS=$API_KEY" \
-	-e "SANDBOX_API_RUNNER_REGISTRATION_TOKEN=$REG_TOKEN" \
-	-e "SANDBOX_API_RUNNER_API_KEY=$RUNNER_INTERNAL_API_KEY" \
-	-e "SANDBOX_API_GRPC_TLS_CERT_FILE=/grpc-tls/grpc-server.crt" \
-	-e "SANDBOX_API_GRPC_TLS_KEY_FILE=/grpc-tls/grpc-server.key" \
-	-e "SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE=/grpc-tls/ca.crt" \
-	-e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE=/grpc-tls/ca.crt" \
-	-e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE=/grpc-tls/control-grpc-api-client.crt" \
-	-e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE=/grpc-tls/control-grpc-api-client.key" \
-	"${API_IDLE_ENV[@]}" \
-	--name "$API_CONTAINER_NAME" \
-	"$API_IMAGE"
+API_DOCKER_RUN=(-d)
+if ((${#API_DOCKER_USER[@]})); then
+	API_DOCKER_RUN+=("${API_DOCKER_USER[@]}")
+fi
+API_DOCKER_RUN+=(
+	--network "$NETWORK_NAME"
+	-p "$PORT:8080"
+	-v "$TLS_DIR:/grpc-tls:ro"
+	-e "SANDBOX_API_KEYS=$API_KEY"
+	-e "SANDBOX_API_RUNNER_REGISTRATION_TOKEN=$REG_TOKEN"
+	-e "SANDBOX_API_RUNNER_API_KEY=$RUNNER_INTERNAL_API_KEY"
+	-e "SANDBOX_API_GRPC_TLS_CERT_FILE=/grpc-tls/grpc-server.crt"
+	-e "SANDBOX_API_GRPC_TLS_KEY_FILE=/grpc-tls/grpc-server.key"
+	-e "SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE=/grpc-tls/ca.crt"
+	-e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE=/grpc-tls/ca.crt"
+	-e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE=/grpc-tls/control-grpc-api-client.crt"
+	-e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE=/grpc-tls/control-grpc-api-client.key"
+)
+if ((${#API_IDLE_ENV[@]})); then
+	API_DOCKER_RUN+=("${API_IDLE_ENV[@]}")
+fi
+API_DOCKER_RUN+=(--name "$API_CONTAINER_NAME" "$API_IMAGE")
+docker run "${API_DOCKER_RUN[@]}"
 
 e2e_wait_for_api_http "$PORT" "$API_CONTAINER_NAME"
 

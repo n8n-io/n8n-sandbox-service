@@ -110,8 +110,8 @@ curl -s -X DELETE http://localhost:8080/sandboxes/<id> \
 | `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE` | *(required)* | API client certificate (PEM) for SandboxControl |
 | `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE` | *(required)* | API client key (PEM) |
 | `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_SERVER_NAME` | *(empty)* | TLS verify name when it must differ from the dial host (defaults to the runner host) |
-| `SANDBOX_API_IDLE_STOP_AFTER` | *(unset / off)* | After this duration since `last_active_at`, the API calls runner **StopSandbox** (container kept). Go [`time.ParseDuration`](https://pkg.go.dev/time#ParseDuration) (e.g. `30m`, `2h`). |
-| `SANDBOX_API_IDLE_DELETE_AFTER` | *(unset / off)* | After this duration since `last_active_at`, proxied routes and `GET /sandboxes/{id}` return **404** (same as missing sandbox) until the sweeper removes the runner container and DB row after the safety buffer. |
+| `SANDBOX_API_IDLE_STOP_AFTER` | *(unset / off)* | After this duration since `last_active_at`, the API calls runner **StopSandbox** (container kept). Go [`time.ParseDuration`](https://pkg.go.dev/time#ParseDuration) (e.g. `30m`, `2h`). `0` means the same as unset (idle stop disabled). |
+| `SANDBOX_API_IDLE_DELETE_AFTER` | *(unset / off)* | After this duration since `last_active_at`, proxied routes and `GET /sandboxes/{id}` return **404** (same as missing sandbox) until the sweeper removes the runner container and DB row after the safety buffer. `0` means the same as unset (idle delete disabled). |
 | `SANDBOX_API_IDLE_DELETE_SAFETY_BUFFER` | `1m` when delete-after is set | Extra delay after the delete-after threshold before runner delete and DB row removal. Ignored when delete-after is unset. |
 | `SANDBOX_API_IDLE_SWEEP_INTERVAL` | `1m` | How often the API scans for idle stop/delete candidates (positive duration). |
 

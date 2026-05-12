@@ -175,15 +175,15 @@ func LoadAPI() (*APIConfig, error) {
 
 	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_IDLE_STOP_AFTER")); v != "" {
 		d, err := time.ParseDuration(v)
-		if err != nil || d <= 0 {
-			return nil, fmt.Errorf("SANDBOX_API_IDLE_STOP_AFTER must be a positive duration, got %q", v)
+		if err != nil || d < 0 {
+			return nil, fmt.Errorf("SANDBOX_API_IDLE_STOP_AFTER must be unset, 0, or a positive duration, got %q", v)
 		}
 		cfg.IdleStopAfter = d
 	}
 	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_IDLE_DELETE_AFTER")); v != "" {
 		d, err := time.ParseDuration(v)
-		if err != nil || d <= 0 {
-			return nil, fmt.Errorf("SANDBOX_API_IDLE_DELETE_AFTER must be a positive duration, got %q", v)
+		if err != nil || d < 0 {
+			return nil, fmt.Errorf("SANDBOX_API_IDLE_DELETE_AFTER must be unset, 0, or a positive duration, got %q", v)
 		}
 		cfg.IdleDeleteAfter = d
 	}
