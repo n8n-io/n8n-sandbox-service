@@ -29,7 +29,20 @@ describe("SandboxClient", () => {
   });
 
   it("constructs HttpClient with options", () => {
-    expect(HttpClient).toHaveBeenCalledWith("http://localhost:8080", "test-key");
+    expect(HttpClient).toHaveBeenCalledWith("http://localhost:8080", "test-key", undefined);
+  });
+
+  it("passes retry options to HttpClient", () => {
+    new SandboxClient({
+      baseUrl: "http://localhost:8080",
+      apiKey: "test-key",
+      retry: { attempts: 3, baseDelayMs: 50, jitter: false },
+    });
+    expect(HttpClient).toHaveBeenLastCalledWith(
+      "http://localhost:8080",
+      "test-key",
+      expect.objectContaining({ attempts: 3, baseDelayMs: 50, jitter: false }),
+    );
   });
 
   it("createSandbox sends POST /sandboxes", async () => {

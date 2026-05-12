@@ -184,4 +184,4 @@ BASE_URL="http://localhost:$PORT" SANDBOX_API_KEY="$API_KEY" npx playwright test
 
 echo "Running API resilience e2e..."
 BASE_URL="http://localhost:$PORT" SANDBOX_API_KEY="$API_KEY" \
-	npx playwright test tests/resilience.spec.ts -g "API container restart" "$@"
+	npx playwright test tests/resilience.spec.ts --grep '@e2e-api-restart' "$@"

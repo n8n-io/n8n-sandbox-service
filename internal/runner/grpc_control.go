@@ -89,14 +89,7 @@ func (s *SandboxControlGRPC) DeleteSandbox(ctx context.Context, req *pb.DeleteSa
 		}
 		return nil, toGRPCError(err)
 	}
-	cinfo, err := s.Mgr.GetContainerInfo(ctx, containerID)
-	if err != nil {
-		if errors.Is(err, manager.ErrSandboxNotFound) {
-			return &pb.DeleteSandboxResponse{}, nil
-		}
-		return nil, toGRPCError(err)
-	}
-	if err := s.Mgr.DeleteContainer(ctx, containerID, cinfo.IP); err != nil {
+	if err := s.Mgr.DeleteContainer(ctx, containerID); err != nil {
 		return nil, toGRPCError(err)
 	}
 	return &pb.DeleteSandboxResponse{}, nil

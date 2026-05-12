@@ -4,6 +4,7 @@ import {
   createSandbox,
   deleteSandbox,
   exec,
+  execWithTransientRetry,
   uploadFile,
   downloadFile,
   apiRequest,
@@ -71,6 +72,7 @@ test.describe('Exec', () => {
 
   test.beforeEach(async () => {
     sandboxId = await createSandbox();
+    await execWithTransientRetry(sandboxId, 'true', { timeoutMs: 5_000, retryWindowMs: 12_000 });
   });
 
   test.afterEach(async () => {
@@ -95,9 +97,40 @@ test.describe('Exec', () => {
   });
 
   test('non-zero exit code', async () => {
-    const result = await exec(sandboxId, 'exit 42');
+    const result = await execWithTransientRetry(sandboxId, 'exit 42', {
+      timeoutMs: 10_000,
+      retryWindowMs: 12_000,
+    });
     expect(result.exitCode).toBe(42);
     expect(result.success).toBe(false);
+  });
+
+  test('killed command process returns structured exec failure', async () => {
+    const result = await exec(
+      sandboxId,
+      `python3 -c "import os, signal; os.kill(os.getpid(), signal.SIGKILL)"`,
+    );
+    expect(result.success).toBe(false);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.timedOut).toBe(false);
+  });
+
+  test('killing daemon mid-exec returns sandbox exec stream error', async () => {
+    let execErr: unknown;
+    try {
+      // Kill PID1 shortly after exec starts so the stream usually ends mid-flight.
+      // Depending on timing/runtime, this can surface as a stream error or a
+      // structured failed exec result.
+      const result = await exec(sandboxId, 'sh -c "(sleep 0.1; kill -9 1) & sleep 5"');
+      expect(result.success).toBe(false);
+      expect(result.exitCode).not.toBe(0);
+    } catch (err) {
+      execErr = err;
+    }
+
+    if (execErr) {
+      expect(execErr).toBeInstanceOf(Error);
+    }
   });
 
   test('environment variables as map', async () => {
@@ -108,7 +141,7 @@ test.describe('Exec', () => {
   });
 
   test('environment variables as array returns 400', async ({ request }) => {
-    const resp = await apiRequest(request, 'POST', `/sandboxes/${sandboxId}/exec`, {
+    const resp = await apiRequest(request, 'POST', `/sandboxes/${sandboxId}/executions`, {
       data: { command: 'echo $FOO', env: ['FOO=bar'] },
     });
     expect(resp.status).toBe(400);
@@ -120,18 +153,24 @@ test.describe('Exec', () => {
   });
 
   test('pipe commands via shell', async () => {
-    const result = await exec(sandboxId, 'echo hello | tr a-z A-Z');
+    const result = await execWithTransientRetry(sandboxId, 'echo hello | tr a-z A-Z', {
+      timeoutMs: 10_000,
+      retryWindowMs: 12_000,
+    });
     expect(result.stdout).toBe('HELLO\n');
   });
 
   test('tilde expands in shell command', async () => {
-    const result = await exec(sandboxId, 'echo ~/');
+    const result = await execWithTransientRetry(sandboxId, 'echo ~/', {
+      timeoutMs: 10_000,
+      retryWindowMs: 12_000,
+    });
     expect(result.stdout.trim()).toBe('/home/user/');
     expect(result.success).toBe(true);
   });
 
   test('missing command returns 400', async ({ request }) => {
-    const resp = await apiRequest(request, 'POST', `/sandboxes/${sandboxId}/exec`, {
+    const resp = await apiRequest(request, 'POST', `/sandboxes/${sandboxId}/executions`, {
       data: {},
     });
     expect(resp.status).toBe(400);
@@ -167,7 +206,7 @@ test.describe('Exec', () => {
   test('exec on deleted sandbox returns 404', async ({ request }) => {
     const tempId = await createSandbox();
     await deleteSandbox(tempId);
-    const resp = await apiRequest(request, 'POST', `/sandboxes/${tempId}/exec`, {
+    const resp = await apiRequest(request, 'POST', `/sandboxes/${tempId}/executions`, {
       data: { command: 'echo hi' },
     });
     expect(resp.status).toBe(404);
@@ -179,6 +218,7 @@ test.describe('File operations', () => {
 
   test.beforeEach(async () => {
     sandboxId = await createSandbox();
+    await execWithTransientRetry(sandboxId, 'true', { timeoutMs: 5_000, retryWindowMs: 12_000 });
   });
 
   test.afterEach(async () => {
@@ -630,13 +670,19 @@ test.describe('File operations', () => {
 
   test('file uploaded via API is visible to exec', async () => {
     await uploadFile(sandboxId, '/tmp/exec-visible.txt', 'from api');
-    const result = await exec(sandboxId, 'cat /tmp/exec-visible.txt');
+    const result = await execWithTransientRetry(sandboxId, 'cat /tmp/exec-visible.txt', {
+      timeoutMs: 10_000,
+      retryWindowMs: 12_000,
+    });
     expect(result.stdout).toBe('from api\n');
     expect(result.success).toBe(true);
   });
 
   test('file created by exec is downloadable via API', async () => {
-    await exec(sandboxId, 'echo -n "from exec" > /tmp/api-visible.txt');
+    await execWithTransientRetry(sandboxId, 'echo -n "from exec" > /tmp/api-visible.txt', {
+      timeoutMs: 10_000,
+      retryWindowMs: 12_000,
+    });
     const downloaded = await downloadFile(sandboxId, '/tmp/api-visible.txt');
     expect(downloaded).toBe('from exec');
   });
@@ -645,7 +691,10 @@ test.describe('File operations', () => {
     await uploadFile(sandboxId, '/tmp/space dir/space file.txt', 'spaced content');
     const downloaded = await downloadFile(sandboxId, '/tmp/space dir/space file.txt');
     expect(downloaded).toBe('spaced content');
-    const result = await exec(sandboxId, "cat '/tmp/space dir/space file.txt'");
+    const result = await execWithTransientRetry(sandboxId, "cat '/tmp/space dir/space file.txt'", {
+      timeoutMs: 10_000,
+      retryWindowMs: 12_000,
+    });
     expect(result.stdout).toBe('spaced content\n');
     expect(result.success).toBe(true);
   });

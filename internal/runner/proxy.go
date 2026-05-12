@@ -57,7 +57,7 @@ func proxyHandler(mgr ContainerManager, cfg *config.Config, limitBody bool) http
 				writeError(w, http.StatusBadRequest, "failed to read request body: http: request body too large")
 				return
 			}
-			writeError(w, http.StatusBadGateway, "daemon unreachable")
+			writeError(w, http.StatusServiceUnavailable, "daemon temporarily unavailable")
 		},
 	}
 
@@ -72,6 +72,10 @@ func proxyHandler(mgr ContainerManager, cfg *config.Config, limitBody bool) http
 		if err != nil {
 			if errors.Is(err, manager.ErrSandboxNotFound) {
 				writeError(w, http.StatusNotFound, err.Error())
+			} else if errors.Is(err, manager.ErrSandboxNotRunning) {
+				writeError(w, http.StatusBadGateway, manager.ErrSandboxNotRunning.Error())
+			} else if errors.Is(err, manager.ErrSandboxNetworkUnavailable) {
+				writeError(w, http.StatusServiceUnavailable, "sandbox temporarily unavailable")
 			} else {
 				writeError(w, http.StatusInternalServerError, err.Error())
 			}

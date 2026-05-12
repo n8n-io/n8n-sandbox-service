@@ -13,7 +13,7 @@ import (
 type ContainerManager interface {
 	CreateContainer(ctx context.Context, sandboxID string, opts *manager.CreateOptions) (*manager.ContainerInfo, error)
 	GetContainerInfo(ctx context.Context, containerID string) (*manager.ContainerInfo, error)
-	DeleteContainer(ctx context.Context, containerID, containerIP string) error
+	DeleteContainer(ctx context.Context, containerID string) error
 	DaemonURL(ctx context.Context, containerID string) (string, error)
 	FindContainerIDByLabel(ctx context.Context, sandboxID string) (string, error)
 }
@@ -39,9 +39,9 @@ func NewRouter(mgr ContainerManager, cfg *config.Config) http.Handler {
 	proxy := ProxyHandler(mgr, cfg)
 	uploadProxy := UploadProxyHandler(mgr, cfg)
 
-	mux.HandleFunc("POST /sandboxes/{id}/exec", proxy)
-	mux.HandleFunc("GET /sandboxes/{id}/exec/{exec_id}", proxy)
-	mux.HandleFunc("DELETE /sandboxes/{id}/exec/{exec_id}", proxy)
+	mux.HandleFunc("POST /sandboxes/{id}/executions", proxy)
+	mux.HandleFunc("GET /sandboxes/{id}/executions/{exec_id}", proxy)
+	mux.HandleFunc("DELETE /sandboxes/{id}/executions/{exec_id}", proxy)
 	mux.HandleFunc("POST /sandboxes/{id}/files/copy", proxy)
 	mux.HandleFunc("POST /sandboxes/{id}/files/move", proxy)
 	mux.HandleFunc("GET /sandboxes/{id}/files", proxy)

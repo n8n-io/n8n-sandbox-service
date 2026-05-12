@@ -136,7 +136,7 @@ describe("exec", () => {
       timeoutMs: 5000,
     });
 
-    expect(http.requestStream).toHaveBeenCalledWith("POST", "/sandboxes/sandbox-1/exec", {
+    expect(http.requestStream).toHaveBeenCalledWith("POST", "/sandboxes/sandbox-1/executions", {
       data: {
         command: "ls",
         env: { FOO: "bar" },
@@ -228,7 +228,7 @@ describe("exec", () => {
     expect(mockHttp.requestStream).toHaveBeenCalledTimes(2);
     const resumeCall = (mockHttp.requestStream as ReturnType<typeof vi.fn>).mock.calls[1];
     expect(resumeCall[0]).toBe("GET");
-    expect(resumeCall[1]).toEqual(expect.stringMatching(/^\/sandboxes\/sandbox-1\/exec\/.+$/));
+    expect(resumeCall[1]).toEqual(expect.stringMatching(/^\/sandboxes\/sandbox-1\/executions\/.+$/));
     expect(resumeCall[2]).toEqual(
       expect.objectContaining({
         params: { after: "1", follow: "true" },
@@ -324,7 +324,7 @@ describe("exec", () => {
     // Should cancel using the client-defined exec_id, not the one from the started event
     expect(mockHttp.requestVoid).toHaveBeenCalledWith(
       "DELETE",
-      expect.stringMatching(/^\/sandboxes\/sandbox-1\/exec\/.+$/),
+      expect.stringMatching(/^\/sandboxes\/sandbox-1\/executions\/.+$/),
     );
   });
 });
@@ -340,7 +340,7 @@ describe("resumeExecution", () => {
 
     expect(result.stdout).toBe("part2");
     expect(result.exitCode).toBe(0);
-    expect(http.requestStream).toHaveBeenCalledWith("GET", "/sandboxes/sandbox-1/exec/exec-1", {
+    expect(http.requestStream).toHaveBeenCalledWith("GET", "/sandboxes/sandbox-1/executions/exec-1", {
       params: { after: "1", follow: "true" },
     });
   });
