@@ -6,11 +6,13 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
+  # Required to mint an OIDC token for npm provenance attestation.
   id-token: write
+  contents: write
 
 jobs:
   publish:
+    environment: npm
     if: >-
       github.event.pull_request.merged == true &&
       startsWith(github.event.pull_request.head.ref, 'sdk/release/')
@@ -30,9 +32,6 @@ jobs:
         with:
           version: 10
 
-      - name: Update npm
-        run: npm install -g npm@11
-
       - name: Read version
         id: version
         run: |
@@ -45,8 +44,11 @@ jobs:
       - name: Build
         run: pnpm build
 
+      - name: Dry-run publishing
+        run: pnpm publish --dry-run
+
       - name: Publish to npm
-        run: npm publish --provenance
+        run: pnpm publish
 
       - name: Create git tag
         working-directory: .
