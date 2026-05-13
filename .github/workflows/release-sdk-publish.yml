@@ -3,25 +3,28 @@ name: SDK Publish
 on:
   pull_request:
     types: [closed]
-    branches: [main]
+    branches:
+      - 'sdk/release/**'
 
 permissions:
   # Required to mint an OIDC token for npm Trusted Publishing and provenance.
   id-token: write
   contents: write
+  pull-requests: write
 
 jobs:
   publish:
     environment: npm
-    if: >-
-      github.event.pull_request.merged == true &&
-      startsWith(github.event.pull_request.head.ref, 'sdk/release/')
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: sdk
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          fetch-depth: 100
 
       # Node 24 ships with npm >=11.5.1, which is required for npm Trusted
       # Publishing to exchange the OIDC token for a registry auth token. The
@@ -49,10 +52,14 @@ jobs:
         run: pnpm build
 
       - name: Dry-run publishing
-        run: pnpm publish --dry-run
+        env:
+          RELEASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+        run: pnpm publish --dry-run --publish-branch "$RELEASE_BRANCH"
 
       - name: Publish to npm
-        run: pnpm publish
+        env:
+          RELEASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+        run: pnpm publish --publish-branch "$RELEASE_BRANCH"
 
       - name: Create git tag
         working-directory: .
@@ -72,3 +79,42 @@ jobs:
           gh release create "sdk/v${VERSION}" \
             --title "@n8n/sandbox-client v${VERSION}" \
             --generate-notes
+
+      - name: Generate GitHub App Token
+        id: generate-token
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
+        with:
+          app-id: ${{ secrets.N8N_ASSISTANT_APP_ID }}
+          private-key: ${{ secrets.N8N_ASSISTANT_PRIVATE_KEY }}
+
+      - name: Open version-bump PR against main
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          BRANCH="sdk/post-release/${VERSION}"
+
+          git fetch origin main
+          git checkout -b "${BRANCH}" origin/main
+
+          cd sdk
+          npm version "${VERSION}" --no-git-tag-version --allow-same-version
+          pnpm install --lockfile-only
+          cd ..
+
+          git add sdk/package.json sdk/pnpm-lock.yaml
+          git commit -m "sdk: bump version to v${VERSION}"
+
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          git push origin "${BRANCH}"
+
+          gh pr create \
+            --base main \
+            --head "${BRANCH}" \
+            --title "sdk: bump version to v${VERSION}" \
+            --body "Automated post-release PR to update version on main after publishing @n8n/sandbox-client@${VERSION}." \
+            --label "release/sdk"
