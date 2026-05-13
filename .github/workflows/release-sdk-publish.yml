@@ -78,7 +78,7 @@ jobs:
         run: |
           gh release create "sdk/v${VERSION}" \
             --title "@n8n/sandbox-client v${VERSION}" \
-            --generate-notes
+            --notes ""
 
       - name: Generate GitHub App Token
         id: generate-token
