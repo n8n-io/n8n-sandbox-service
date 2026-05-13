@@ -2,7 +2,7 @@
 
 Portions of this software are licensed as follows:
 
-- Content of branches other than the main branch (i.e. "master") are not licensed.
+- Content of branches other than the main branch (i.e. "main") are not licensed.
 - Source code files that contain ".ee." in their filename or ".ee" in their dirname are NOT licensed under
   the Sustainable Use License.
   To use source code files that contain ".ee." in their filename or ".ee" in their dirname you must hold a
