@@ -6,7 +6,7 @@ on:
     branches: [main]
 
 permissions:
-  # Required to mint an OIDC token for npm provenance attestation.
+  # Required to mint an OIDC token for npm Trusted Publishing and provenance.
   id-token: write
   contents: write
 
@@ -23,9 +23,13 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
+      # Node 24 ships with npm >=11.5.1, which is required for npm Trusted
+      # Publishing to exchange the OIDC token for a registry auth token. The
+      # SDK's minimum supported runtime is set by `engines` and the tsup build
+      # target; the Node version used to pack and publish doesn't affect that.
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
-          node-version: "22"
+          node-version: "24.14.1"
           registry-url: "https://registry.npmjs.org"
 
       - uses: pnpm/action-setup@a0ea98b2dc7d387a59324835f7421c1d5f8357b4 # v6
