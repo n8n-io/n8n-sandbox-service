@@ -159,9 +159,9 @@ stop_docker_containers() {
 	fi
 
 	echo "==> Stopping all containers..."
-	docker ps -q | xargs docker stop
+	docker ps -q | xargs --no-run-if-empty docker stop
 	echo "==> Removing all containers..."
-	docker ps -aq | xargs docker rm 2>/dev/null || true
+	docker ps -aq | xargs --no-run-if-empty docker rm 2>/dev/null || true
 }
 
 install_sysbox() {
