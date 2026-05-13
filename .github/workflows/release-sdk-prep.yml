@@ -51,6 +51,9 @@ jobs:
         working-directory: sdk
         run: pnpm install --lockfile-only
 
+      - name: Create release branch
+        run: git push origin HEAD:refs/heads/sdk/release/${{ steps.bump.outputs.version }}
+
       - name: Create Pull Request
         id: create-pr
         uses: peter-evans/create-pull-request@c0f553fe549906ede9cf27b5156039d195d2ece0 # v8.1.0
@@ -63,8 +66,8 @@ jobs:
             Automated release PR for `@n8n/sandbox-client@${{ steps.bump.outputs.version }}`.
 
             Merging this PR will trigger the SDK publish workflow.
-          branch: sdk/release/${{ steps.bump.outputs.version }}
-          base: main
+          branch: sdk/release-pr/${{ steps.bump.outputs.version }}
+          base: sdk/release/${{ steps.bump.outputs.version }}
           delete-branch: true
           author: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
           committer: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
