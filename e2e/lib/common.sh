@@ -65,6 +65,19 @@ e2e_docker_network_create() {
 	return 1
 }
 
+e2e_wait_for_registry() {
+	local port=$1
+	local i
+	for i in $(seq 1 30); do
+		if curl -sf "http://localhost:${port}/v2/" >/dev/null 2>&1; then
+			return 0
+		fi
+		sleep 0.5
+	done
+	echo "Registry on port $port failed to start within 15s" >&2
+	return 1
+}
+
 e2e_wait_for_api_http() {
 	local port=$1 container=$2
 	local i
