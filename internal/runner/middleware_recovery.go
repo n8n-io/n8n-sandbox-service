@@ -4,43 +4,7 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
-	"time"
 )
-
-// AuthMiddleware checks for valid API keys.
-func AuthMiddleware(apiKeys map[string]struct{}) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			apiKey := r.Header.Get("X-Api-Key")
-			if apiKey == "" {
-				writeError(w, http.StatusUnauthorized, "missing API key")
-				return
-			}
-			if _, ok := apiKeys[apiKey]; !ok {
-				writeError(w, http.StatusUnauthorized, "invalid API key")
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
-	}
-}
-
-// LoggingMiddleware logs HTTP requests.
-func LoggingMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/healthz" {
-			next.ServeHTTP(w, r)
-			return
-		}
-		start := time.Now()
-		next.ServeHTTP(w, r)
-		slog.Info("request",
-			"method", r.Method,
-			"path", r.URL.Path,
-			"duration", time.Since(start),
-		)
-	})
-}
 
 // RecoveryMiddleware recovers from panics.
 func RecoveryMiddleware(next http.Handler) http.Handler {
