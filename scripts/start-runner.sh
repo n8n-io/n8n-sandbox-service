@@ -10,8 +10,53 @@ if [ -n "${SANDBOX_RUNNER_DOCKER_INSECURE_REGISTRIES:-}" ]; then
   done
 fi
 
+# Disk-quota storage pool: a loopback xfs+prjquota image used as the inner
+# dockerd's data root. When the host kernel supports xfs quotas, dockerd can
+# then honor `--storage-opt size=` per sandbox. On hosts without quota support
+# (e.g. Docker Desktop's linuxkit kernel) the mount fails and we fall back to
+# dockerd's default storage with no per-sandbox enforcement.
+POOL_PATH=${SANDBOX_RUNNER_STORAGE_POOL_PATH:-/var/lib/docker.img}
+POOL_SIZE_GB=${SANDBOX_RUNNER_STORAGE_POOL_SIZE_GB:-100}
+DOCKER_DATA_ROOT=/var/lib/docker
+
+setup_quota_pool() {
+  if mount | grep -q " on ${DOCKER_DATA_ROOT} type xfs"; then
+    echo "[start-runner] storage pool already mounted at ${DOCKER_DATA_ROOT}"
+    return 0
+  fi
+  if [ ! -f "$POOL_PATH" ]; then
+    echo "[start-runner] allocating ${POOL_SIZE_GB}G storage pool at ${POOL_PATH}"
+    if ! truncate -s "${POOL_SIZE_GB}G" "$POOL_PATH"; then
+      echo "[start-runner] truncate failed for ${POOL_PATH}" >&2
+      return 1
+    fi
+    if ! mkfs.xfs -m crc=1,reflink=1 -L sandboxes -q "$POOL_PATH"; then
+      echo "[start-runner] mkfs.xfs failed for ${POOL_PATH}" >&2
+      rm -f "$POOL_PATH"
+      return 1
+    fi
+  fi
+  mkdir -p "$DOCKER_DATA_ROOT"
+  if ! mount -o loop,prjquota "$POOL_PATH" "$DOCKER_DATA_ROOT" 2>/tmp/mount-pool.log; then
+    echo "[start-runner] mount with prjquota failed:" >&2
+    cat /tmp/mount-pool.log >&2
+    return 1
+  fi
+  echo "[start-runner] storage pool mounted: ${POOL_PATH} on ${DOCKER_DATA_ROOT} (xfs+prjquota)"
+  return 0
+}
+
+STORAGE_ARGS=""
+if setup_quota_pool; then
+  STORAGE_ARGS="--storage-driver=overlay2 --data-root=${DOCKER_DATA_ROOT}"
+  export SANDBOX_RUNNER_DISK_QUOTA_ACTIVE=true
+  echo "[start-runner] disk quota enforcement: ENABLED"
+else
+  echo "[start-runner] disk quota enforcement: DISABLED (kernel lacks xfs quota support or mount failed); sandboxes will use dockerd default storage" >&2
+fi
+
 # shellcheck disable=SC2086
-dockerd-entrypoint.sh $INSECURE_ARGS >"$DOCKERD_LOG" 2>&1 &
+dockerd-entrypoint.sh $INSECURE_ARGS $STORAGE_ARGS >"$DOCKERD_LOG" 2>&1 &
 DOCKERD_PID=$!
 RUNNER_PID=""
 

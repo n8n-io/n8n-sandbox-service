@@ -8,4 +8,8 @@ type ResourceLimits struct {
 	CPUPercent int `json:"cpu_percent,omitempty"`
 	// PidsMax is the maximum number of processes. 0 means use default.
 	PidsMax int `json:"pids_max,omitempty"`
+	// DiskMB is the writable-layer disk quota in megabytes, enforced via
+	// `--storage-opt size=`. 0 means no quota (only meaningful when the
+	// inner dockerd's data-root is on xfs+prjquota; see start-runner.sh).
+	DiskMB int64 `json:"disk_mb,omitempty"`
 }

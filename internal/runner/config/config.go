@@ -66,6 +66,17 @@ type Config struct {
 	// Parsed from SANDBOX_RUNNER_DEFAULT_PIDS_MAX (default 256).
 	DefaultPidsMax int
 
+	// DefaultDiskMB is the default writable-layer disk quota in megabytes.
+	// Parsed from SANDBOX_RUNNER_DEFAULT_DISK_MB (default 0, meaning no quota).
+	// Only applied when DiskQuotaActive is true.
+	DefaultDiskMB int64
+
+	// DiskQuotaActive indicates that the runner's inner dockerd is configured
+	// against an xfs+prjquota data root and can honor `--storage-opt size=`.
+	// Set by scripts/start-runner.sh after a successful storage-pool mount.
+	// Parsed from SANDBOX_RUNNER_DISK_QUOTA_ACTIVE (default false).
+	DiskQuotaActive bool
+
 	// EnableCgroups controls whether cgroup setup is enforced for sandbox creation.
 	// Parsed from SANDBOX_RUNNER_ENABLE_CGROUPS (default true).
 	EnableCgroups bool
@@ -258,6 +269,24 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("SANDBOX_RUNNER_DEFAULT_PIDS_MAX must be a positive integer, got %q", v)
 		}
 		cfg.DefaultPidsMax = n
+	}
+
+	// SANDBOX_RUNNER_DEFAULT_DISK_MB (optional)
+	if v := os.Getenv("SANDBOX_RUNNER_DEFAULT_DISK_MB"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("SANDBOX_RUNNER_DEFAULT_DISK_MB must be a positive integer, got %q", v)
+		}
+		cfg.DefaultDiskMB = n
+	}
+
+	// SANDBOX_RUNNER_DISK_QUOTA_ACTIVE (optional; set by scripts/start-runner.sh)
+	if v := os.Getenv("SANDBOX_RUNNER_DISK_QUOTA_ACTIVE"); v != "" {
+		active, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("SANDBOX_RUNNER_DISK_QUOTA_ACTIVE must be a boolean, got %q", v)
+		}
+		cfg.DiskQuotaActive = active
 	}
 
 	// SANDBOX_RUNNER_ENABLE_CGROUPS (optional)

@@ -72,6 +72,14 @@ func TestLoadParsesDefaults(t *testing.T) {
 		t.Errorf("expected DefaultPidsMax 256, got %d", cfg.DefaultPidsMax)
 	}
 
+	if cfg.DefaultDiskMB != 0 {
+		t.Errorf("expected DefaultDiskMB 0 (no quota by default), got %d", cfg.DefaultDiskMB)
+	}
+
+	if cfg.DiskQuotaActive {
+		t.Error("expected DiskQuotaActive false by default")
+	}
+
 	if !cfg.EnableCgroups {
 		t.Error("expected EnableCgroups true")
 	}
@@ -89,6 +97,53 @@ func TestLoadParsesDefaults(t *testing.T) {
 
 	if _, exists := cfg.APIKeys["test-key"]; !exists {
 		t.Error("expected test-key in APIKeys")
+	}
+}
+
+func TestLoadParsesDiskQuotaEnv(t *testing.T) {
+	t.Setenv("SANDBOX_RUNNER_API_KEYS", "test-key")
+	t.Setenv("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE", "test-image")
+	t.Setenv("SANDBOX_RUNNER_API_GRPC_ADDR", "api:9090")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	t.Setenv("SANDBOX_RUNNER_HTTP_BASE_URL", "http://runner:8080")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE", "/tmp/reg-ca.crt")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE", "/tmp/reg.crt")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE", "/tmp/reg.key")
+	t.Setenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE", "/tmp/control.crt")
+	t.Setenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE", "/tmp/control.key")
+	t.Setenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE", "/tmp/control-ca.crt")
+	t.Setenv("SANDBOX_RUNNER_DEFAULT_DISK_MB", "2048")
+	t.Setenv("SANDBOX_RUNNER_DISK_QUOTA_ACTIVE", "true")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	if cfg.DefaultDiskMB != 2048 {
+		t.Errorf("expected DefaultDiskMB 2048, got %d", cfg.DefaultDiskMB)
+	}
+	if !cfg.DiskQuotaActive {
+		t.Error("expected DiskQuotaActive true")
+	}
+}
+
+func TestLoadRejectsInvalidDefaultDiskMB(t *testing.T) {
+	t.Setenv("SANDBOX_RUNNER_API_KEYS", "test-key")
+	t.Setenv("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE", "test-image")
+	t.Setenv("SANDBOX_RUNNER_API_GRPC_ADDR", "api:9090")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	t.Setenv("SANDBOX_RUNNER_HTTP_BASE_URL", "http://runner:8080")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE", "/tmp/reg-ca.crt")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE", "/tmp/reg.crt")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE", "/tmp/reg.key")
+	t.Setenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE", "/tmp/control.crt")
+	t.Setenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE", "/tmp/control.key")
+	t.Setenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE", "/tmp/control-ca.crt")
+	t.Setenv("SANDBOX_RUNNER_DEFAULT_DISK_MB", "not-a-number")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("expected Load to reject non-numeric SANDBOX_RUNNER_DEFAULT_DISK_MB")
 	}
 }
 

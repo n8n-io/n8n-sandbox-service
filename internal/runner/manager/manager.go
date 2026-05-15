@@ -245,10 +245,15 @@ func (m *Manager) Shutdown() {
 }
 
 func (m *Manager) defaultLimits() *ResourceLimits {
+	var diskMB int64
+	if m.config.DiskQuotaActive {
+		diskMB = m.config.DefaultDiskMB
+	}
 	return &ResourceLimits{
 		MemoryMB:   m.config.DefaultMemoryMB,
 		CPUPercent: m.config.DefaultCPUPercent,
 		PidsMax:    m.config.DefaultPidsMax,
+		DiskMB:     diskMB,
 	}
 }
 
@@ -418,7 +423,7 @@ func dockerLimitArgs(limits *ResourceLimits) []string {
 		return nil
 	}
 
-	args := make([]string, 0, 6)
+	args := make([]string, 0, 8)
 	if limits.MemoryMB > 0 {
 		args = append(args, "--memory", fmt.Sprintf("%dm", limits.MemoryMB))
 	}
@@ -427,6 +432,9 @@ func dockerLimitArgs(limits *ResourceLimits) []string {
 	}
 	if limits.PidsMax > 0 {
 		args = append(args, "--pids-limit", strconv.Itoa(limits.PidsMax))
+	}
+	if limits.DiskMB > 0 {
+		args = append(args, "--storage-opt", fmt.Sprintf("size=%dm", limits.DiskMB))
 	}
 	return args
 }

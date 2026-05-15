@@ -24,6 +24,42 @@ func TestDockerLimitArgs(t *testing.T) {
 	}
 }
 
+func TestDockerLimitArgsIncludesDiskWhenSet(t *testing.T) {
+	limits := &ResourceLimits{
+		MemoryMB:   512,
+		CPUPercent: 100,
+		PidsMax:    128,
+		DiskMB:     1024,
+	}
+
+	got := dockerLimitArgs(limits)
+	want := []string{"--memory", "512m", "--cpus", "1.00", "--pids-limit", "128", "--storage-opt", "size=1024m"}
+	if len(got) != len(want) {
+		t.Fatalf("dockerLimitArgs() = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("dockerLimitArgs()[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestDockerLimitArgsOmitsDiskWhenZero(t *testing.T) {
+	limits := &ResourceLimits{
+		MemoryMB:   512,
+		CPUPercent: 100,
+		PidsMax:    128,
+		DiskMB:     0,
+	}
+
+	got := dockerLimitArgs(limits)
+	for _, arg := range got {
+		if arg == "--storage-opt" {
+			t.Fatalf("dockerLimitArgs() unexpectedly included --storage-opt: %#v", got)
+		}
+	}
+}
+
 func TestIsDockerNotFound(t *testing.T) {
 	tests := []struct {
 		name string
