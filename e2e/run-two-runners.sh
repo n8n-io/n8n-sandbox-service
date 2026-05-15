@@ -83,6 +83,10 @@ else
 	docker network connect "$NETWORK_NAME" "$REGISTRY_NAME" >/dev/null 2>&1 || true
 fi
 
+if [[ "${STARTED_REGISTRY:-}" == "true" ]]; then
+	e2e_wait_for_registry "$REGISTRY_PORT"
+fi
+
 echo "Pushing sandbox image to local registry..."
 docker tag "$SANDBOX_IMAGE" "$PUSH_SANDBOX_IMAGE"
 docker push "$PUSH_SANDBOX_IMAGE"
