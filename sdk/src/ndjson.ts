@@ -76,7 +76,7 @@ export async function* readNdjsonStream(stream: Readable): AsyncGenerator<ExecEv
 }
 
 function decodeChunk(decoder: TextDecoder, chunk: unknown, options?: TextDecodeOptions): string {
-  if (typeof chunk === "string") return chunk;
+  if (typeof chunk === "string") return decoder.decode(Buffer.from(chunk, "utf-8"), options);
   if (chunk instanceof ArrayBuffer) return decoder.decode(chunk, options);
   if (ArrayBuffer.isView(chunk)) return decoder.decode(chunk as ArrayBufferView, options);
 

@@ -120,6 +120,21 @@ describe("readNdjsonStream", () => {
     expect(events).toEqual([{ seq: 1, type: "stdout", data: "café" }]);
   });
 
+  it("keeps TextDecoder state consistent when string chunks follow binary chunks", async () => {
+    const stream = Readable.from([
+      Buffer.from('{"seq":1,"type":"stdout","data":"'),
+      Buffer.from([0xc3]),
+      'x"}\n',
+    ]);
+
+    const events = [];
+    for await (const event of readNdjsonStream(stream)) {
+      events.push(event);
+    }
+
+    expect(events).toEqual([{ seq: 1, type: "stdout", data: "\uFFFDx" }]);
+  });
+
   it("throws error for invalid JSON", async () => {
     const stream = streamFrom(["not-json"]);
 
