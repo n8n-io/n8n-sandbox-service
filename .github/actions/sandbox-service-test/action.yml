@@ -1,0 +1,34 @@
+name: Sandbox service test
+description: Go checks, build, tests, and SDK checks (same bar as CI, without e2e)
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+      with:
+        go-version: "1.25.0"
+
+    - name: Go fmt, vet, build, test
+      shell: bash
+      run: |
+        make fmt-check
+        make vet
+        make all
+        make test
+
+    - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+      with:
+        node-version: "22"
+
+    - uses: pnpm/action-setup@a0ea98b2dc7d387a59324835f7421c1d5f8357b4 # v6
+      with:
+        version: 10
+
+    - name: SDK install, typecheck, build, test
+      shell: bash
+      working-directory: sdk
+      run: |
+        pnpm install --frozen-lockfile
+        pnpm typecheck
+        pnpm build
+        pnpm test
