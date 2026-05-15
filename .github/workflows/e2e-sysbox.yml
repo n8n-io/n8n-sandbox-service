@@ -1,0 +1,81 @@
+name: E2E Tests (Sysbox / Azure VM)
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_script:
+        description: "E2E script to run"
+        default: "e2e/run-all.sh"
+        type: choice
+        options:
+          - e2e/run-all.sh
+          - e2e/run.sh
+  pull_request:
+    types: [labeled]
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: e2e-sysbox-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ARM_USE_OIDC: "true"
+  ARM_CLIENT_ID: ${{ secrets.AZURE_E2E_CLIENT_ID }}
+  ARM_TENANT_ID: ${{ secrets.AZURE_E2E_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_E2E_SUBSCRIPTION_ID }}
+
+jobs:
+  e2e-sysbox:
+    runs-on: ubuntu-latest
+    environment: ALL
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && github.event.label.name == 'e2e-sysbox')
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+
+      - name: Provision Azure VM
+        id: vm
+        env:
+          RESOURCE_GROUP: ${{ secrets.AZURE_E2E_RESOURCE_GROUP }}
+        run: bash e2e/infra/scripts/provision-e2e-vm.sh
+
+      - name: Run e2e tests
+        run: |
+          SSH_OPTS="-o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=6"
+          ssh $SSH_OPTS -i "${{ steps.vm.outputs.ssh_key_path }}" \
+            "azureuser@${{ steps.vm.outputs.vm_ip }}" bash -s << EOF
+          set -euxo pipefail
+          export PATH=/usr/local/go/bin:\$HOME/go/bin:\$PATH
+
+          cd ~/project
+          bash ${{ inputs.run_script || 'e2e/run-all.sh' }}
+          EOF
+
+      - name: Collect logs on failure
+        if: failure()
+        continue-on-error: true
+        env:
+          VM_IP: ${{ steps.vm.outputs.vm_ip }}
+          SSH_KEY_PATH: ${{ steps.vm.outputs.ssh_key_path }}
+        run: bash e2e/infra/scripts/collect-e2e-vm-logs.sh
+
+      - name: Upload artifacts
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: e2e-sysbox-logs
+          path: /tmp/e2e-artifacts/
+          retention-days: 7
+
+      - name: Cleanup Azure VM
+        if: always()
+        continue-on-error: true
+        run: bash e2e/infra/scripts/cleanup-e2e-vm.sh
