@@ -10,8 +10,7 @@ cd "$(dirname "$0")/../../.."
 : "${RESOURCE_GROUP:?RESOURCE_GROUP is required}"
 
 TF_DIR="e2e/infra"
-VM_NAME="e2e-sysbox-1778838174"
-# VM_NAME="e2e-sysbox-$(date +%s)"
+VM_NAME="e2e-sysbox-${GITHUB_RUN_ID:-$(date +%s)}"
 SSH_KEY_PATH="$HOME/.ssh/e2e-vm-key"
 VM_ADMIN="azureuser"
 SSH_OPTS="-o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=6"
@@ -31,12 +30,17 @@ else
 	echo "==> Using existing SSH keypair at ${SSH_KEY_PATH}"
 fi
 
+cat > "${TF_DIR}/e2e-vm.auto.tfvars.json" <<EOF
+{
+  "resource_group_name": "$RESOURCE_GROUP",
+  "vm_name": "$VM_NAME",
+  "ssh_public_key_path": "${SSH_KEY_PATH}.pub"
+}
+EOF
+
 echo "==> Provisioning Azure VM via Terraform..."
 terraform -chdir="$TF_DIR" init -input=false
-terraform -chdir="$TF_DIR" apply -auto-approve -input=false \
-	-var "resource_group_name=$RESOURCE_GROUP" \
-	-var "vm_name=$VM_NAME" \
-	-var "ssh_public_key_path=${SSH_KEY_PATH}.pub"
+terraform -chdir="$TF_DIR" apply -auto-approve -input=false
 
 VM_IP=$(terraform -chdir="$TF_DIR" output -raw vm_public_ip)
 

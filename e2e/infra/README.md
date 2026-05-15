@@ -30,7 +30,10 @@ VM_IP=$(terraform output -raw vm_public_ip)
 ssh -i /tmp/e2e-key azureuser@$VM_IP
 
 # When done, tear everything down
-terraform destroy
+terraform destroy \
+  -var "resource_group_name=my-resource-group" \
+  -var "vm_name=e2e-test-vm" \
+  -var "ssh_public_key_path=/tmp/e2e-key.pub"
 ```
 
 ## Variables
