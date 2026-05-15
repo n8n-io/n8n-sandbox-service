@@ -76,6 +76,34 @@ describe("readNdjsonStream", () => {
     ]);
   });
 
+  it("decodes Uint8Array chunks from browser ReadableStreams", async () => {
+    const encoder = new TextEncoder();
+    const stream = Readable.from([
+      encoder.encode('{"seq":1,"type":"stdout","data":"browser"}\n'),
+      encoder.encode(
+        '{"seq":2,"type":"exit","exit_code":0,"success":true,"execution_time_ms":1,"timed_out":false,"killed":false}\n',
+      ),
+    ]);
+
+    const events = [];
+    for await (const event of readNdjsonStream(stream)) {
+      events.push(event);
+    }
+
+    expect(events).toEqual([
+      { seq: 1, type: "stdout", data: "browser" },
+      {
+        seq: 2,
+        type: "exit",
+        exit_code: 0,
+        success: true,
+        execution_time_ms: 1,
+        timed_out: false,
+        killed: false,
+      },
+    ]);
+  });
+
   it("preserves UTF-8 characters split across chunk boundaries", async () => {
     const stream = Readable.from([
       Buffer.from('{"seq":1,"type":"stdout","data":"caf'),
