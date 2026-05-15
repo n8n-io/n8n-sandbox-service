@@ -7,6 +7,27 @@ set -euo pipefail
 : "${RESOURCE_GROUP:?RESOURCE_GROUP is required}"
 
 TAG="purpose=sandbox-service-e2e"
+CUTOFF_EPOCH=$(python3 - <<'PY'
+import time
+
+print(int(time.time()) - 3600)
+PY
+)
+
+iso_to_epoch() {
+	python3 - "$1" <<'PY'
+import datetime
+import sys
+
+value = sys.argv[1]
+if value.endswith("Z"):
+    value = f"{value[:-1]}+00:00"
+dt = datetime.datetime.fromisoformat(value)
+if dt.tzinfo is None:
+    dt = dt.replace(tzinfo=datetime.timezone.utc)
+print(int(dt.timestamp()))
+PY
+}
 
 echo "==> Finding VMs tagged ${TAG} in ${RESOURCE_GROUP}..."
 VM_IDS=$(az vm list \
@@ -20,10 +41,24 @@ if [[ -z "$VM_IDS" ]]; then
 fi
 
 VM_COUNT=$(echo "$VM_IDS" | wc -l | tr -d ' ')
-echo "==> Found ${VM_COUNT} VM(s) to delete"
+echo "==> Found ${VM_COUNT} tagged VM(s); deleting only VMs older than 1 hour"
 
 for VM_ID in $VM_IDS; do
 	VM_NAME=$(az vm show --ids "$VM_ID" --query "name" -o tsv)
+	VM_CREATED_AT=$(az vm show --ids "$VM_ID" --query "timeCreated" -o tsv 2>/dev/null) || true
+	if [[ -z "$VM_CREATED_AT" || "$VM_CREATED_AT" == "null" ]]; then
+		echo "==> Skipping ${VM_NAME}; VM creation time is unavailable"
+		continue
+	fi
+	VM_CREATED_EPOCH=$(iso_to_epoch "$VM_CREATED_AT" 2>/dev/null) || {
+		echo "==> Skipping ${VM_NAME}; could not parse creation time: ${VM_CREATED_AT}"
+		continue
+	}
+	if [[ "$VM_CREATED_EPOCH" -gt "$CUTOFF_EPOCH" ]]; then
+		echo "==> Skipping ${VM_NAME}; VM is less than 1 hour old"
+		continue
+	fi
+
 	echo "==> Deleting VM ${VM_NAME} and associated resources..."
 
 	NIC_ID=$(az vm show --ids "$VM_ID" --query 'networkProfile.networkInterfaces[0].id' -o tsv 2>/dev/null) || true
@@ -38,7 +73,7 @@ for VM_ID in $VM_IDS; do
 		NSG_ID=$(az network nic show --ids "$NIC_ID" --query 'networkSecurityGroup.id' -o tsv 2>/dev/null) || true
 		SUBNET_ID=$(az network nic show --ids "$NIC_ID" --query 'ipConfigurations[0].subnet.id' -o tsv 2>/dev/null) || true
 		if [[ -n "$SUBNET_ID" ]]; then
-			VNET_ID=$(echo "$SUBNET_ID" | sed 's|/subnets/.*||')
+			VNET_ID="${SUBNET_ID%/subnets/*}"
 		fi
 	fi
 
