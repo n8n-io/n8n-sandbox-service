@@ -1,3 +1,4 @@
+import './sdk-browser-setup.js';
 import { SandboxClient } from '@n8n/sandbox-client';
 
 const $ = (sel) => document.querySelector(sel);
@@ -219,7 +220,7 @@ async function executeCommand() {
       );
     }
   } catch (e) {
-    if (e.name !== 'AbortError') {
+    if (!currentAbortController.signal.aborted && e.name !== 'AbortError') {
       appendOutput(`Error: ${e.message}`, 'error');
     }
   } finally {
