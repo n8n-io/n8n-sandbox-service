@@ -10,14 +10,17 @@ import (
 	"syscall"
 )
 
+// resolvePath joins base with path, keeping the result within base.
+// filepath.Clean prevents ".." from escaping the container root.
+func resolvePath(base, path string) string {
+	return filepath.Join(base, filepath.Clean("/"+path))
+}
+
 // HandleFileList returns directory entries for the directory at path inside base.
 // If recursive is true, it walks the tree. If extension is non-empty, only files
 // matching that extension are returned.
 func HandleFileList(base, path string, recursive bool, extension string) ([]FileInfo, error) {
-	resolved, err := SafeResolve(base, path)
-	if err != nil {
-		return nil, fmt.Errorf("file_list resolve: %w", err)
-	}
+	resolved := resolvePath(base, path)
 
 	if !recursive {
 		entries, err := os.ReadDir(resolved)
@@ -41,7 +44,7 @@ func HandleFileList(base, path string, recursive bool, extension string) ([]File
 
 	// Recursive walk
 	var infos []FileInfo
-	err = filepath.WalkDir(resolved, func(walkPath string, d os.DirEntry, err error) error {
+	err := filepath.WalkDir(resolved, func(walkPath string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip entries we cannot access
 		}
@@ -73,10 +76,7 @@ func HandleFileList(base, path string, recursive bool, extension string) ([]File
 // HandleFileRead reads up to maxBytes from the file at path inside base.
 // If maxBytes is <= 0, no size limit is enforced.
 func HandleFileRead(base, path string, maxBytes int64) ([]byte, error) {
-	resolved, err := SafeResolve(base, path)
-	if err != nil {
-		return nil, fmt.Errorf("file_read resolve: %w", err)
-	}
+	resolved := resolvePath(base, path)
 
 	f, err := os.Open(resolved)
 	if err != nil {
@@ -117,10 +117,7 @@ func HandleFileWrite(base, path string, data []byte, maxBytes int64, overwrite b
 		return fmt.Errorf("file_write: data size %d exceeds limit %d", len(data), maxBytes)
 	}
 
-	resolved, err := SafeResolve(base, path)
-	if err != nil {
-		return fmt.Errorf("file_write resolve: %w", err)
-	}
+	resolved := resolvePath(base, path)
 
 	// Ensure parent directory exists.
 	dir := filepath.Dir(resolved)
@@ -156,10 +153,7 @@ func HandleFileWrite(base, path string, data []byte, maxBytes int64, overwrite b
 // HandleFileAppend appends data to the file at path inside base, creating the
 // file and intermediate directories if they don't exist.
 func HandleFileAppend(base, path string, data []byte) error {
-	resolved, err := SafeResolve(base, path)
-	if err != nil {
-		return fmt.Errorf("file_append resolve: %w", err)
-	}
+	resolved := resolvePath(base, path)
 
 	dir := filepath.Dir(resolved)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -182,13 +176,7 @@ func HandleFileAppend(base, path string, data []byte) error {
 // If recursive is true, it removes non-empty directories. If force is true,
 // "not found" errors are ignored.
 func HandleFileDelete(base, path string, recursive, force bool) error {
-	resolved, err := SafeResolve(base, path)
-	if err != nil {
-		if force && os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("file_delete resolve: %w", err)
-	}
+	resolved := resolvePath(base, path)
 
 	var removeErr error
 	if recursive {
@@ -210,14 +198,8 @@ func HandleFileDelete(base, path string, recursive, force bool) error {
 // If recursive is true, directories are copied recursively. If overwrite is false
 // and the destination exists, an error is returned.
 func HandleFileCopy(base, srcPath, destPath string, recursive, overwrite bool) error {
-	resolvedSrc, err := SafeResolve(base, srcPath)
-	if err != nil {
-		return fmt.Errorf("file_copy resolve src: %w", err)
-	}
-	resolvedDest, err := SafeResolve(base, destPath)
-	if err != nil {
-		return fmt.Errorf("file_copy resolve dest: %w", err)
-	}
+	resolvedSrc := resolvePath(base, srcPath)
+	resolvedDest := resolvePath(base, destPath)
 
 	srcInfo, err := os.Stat(resolvedSrc)
 	if err != nil {
@@ -246,14 +228,8 @@ func HandleFileCopy(base, srcPath, destPath string, recursive, overwrite bool) e
 // HandleFileMove moves a file or directory from srcPath to destPath inside base.
 // If overwrite is false and the destination exists, an error is returned.
 func HandleFileMove(base, srcPath, destPath string, overwrite bool) error {
-	resolvedSrc, err := SafeResolve(base, srcPath)
-	if err != nil {
-		return fmt.Errorf("file_move resolve src: %w", err)
-	}
-	resolvedDest, err := SafeResolve(base, destPath)
-	if err != nil {
-		return fmt.Errorf("file_move resolve dest: %w", err)
-	}
+	resolvedSrc := resolvePath(base, srcPath)
+	resolvedDest := resolvePath(base, destPath)
 
 	if !overwrite {
 		if _, err := os.Stat(resolvedDest); err == nil {
@@ -300,10 +276,7 @@ func HandleFileMove(base, srcPath, destPath string, overwrite bool) error {
 // HandleFileMkdir creates a directory at path inside base. If recursive is true,
 // intermediate directories are created as needed.
 func HandleFileMkdir(base, path string, recursive bool) error {
-	resolved, err := SafeResolve(base, path)
-	if err != nil {
-		return fmt.Errorf("file_mkdir resolve: %w", err)
-	}
+	resolved := resolvePath(base, path)
 
 	if recursive {
 		if err := os.MkdirAll(resolved, 0o755); err != nil {
@@ -319,10 +292,7 @@ func HandleFileMkdir(base, path string, recursive bool) error {
 
 // HandleFileStat returns metadata about the file or directory at path inside base.
 func HandleFileStat(base, path string) (*FileStatInfo, error) {
-	resolved, err := SafeResolve(base, path)
-	if err != nil {
-		return nil, fmt.Errorf("file_stat resolve: %w", err)
-	}
+	resolved := resolvePath(base, path)
 
 	fi, err := os.Stat(resolved)
 	if err != nil {

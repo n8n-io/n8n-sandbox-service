@@ -61,7 +61,7 @@ func tempBaseDir(t *testing.T) string {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(base) })
 
-	// Resolve symlinks so SafeResolve's final prefix check is stable on macOS (/var vs /private/var).
+	// Resolve symlinks so the base path is stable on macOS (/var vs /private/var).
 	resolvedBase, err := filepath.EvalSymlinks(base)
 	if err != nil {
 		t.Fatalf("eval symlinks: %v", err)
