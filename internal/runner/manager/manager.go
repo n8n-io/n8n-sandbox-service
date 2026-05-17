@@ -345,18 +345,6 @@ func (m *Manager) ensureRunnerBridge(ctx context.Context) (string, error) {
 		return m.createRunnerBridge(ctx)
 	}
 
-	wantICC := strconv.FormatBool(m.config.InterSandboxNetworkEnabled)
-	gotICC, ok := inspect.Options["com.docker.network.bridge.enable_icc"]
-	if !ok {
-		gotICC = "true"
-	}
-	if gotICC != wantICC {
-		if _, err := m.runDocker(ctx, "network", "rm", runnerBridgeNetwork); err != nil {
-			return "", err
-		}
-		return m.createRunnerBridge(ctx)
-	}
-
 	return firstGateway(inspect), nil
 }
 
@@ -368,8 +356,7 @@ func firstGateway(inspect *networkInspect) string {
 }
 
 func (m *Manager) createRunnerBridge(ctx context.Context) (string, error) {
-	icc := strconv.FormatBool(m.config.InterSandboxNetworkEnabled)
-	if _, err := m.runDocker(ctx, "network", "create", "--driver", "bridge", "--opt", "com.docker.network.bridge.enable_icc="+icc, runnerBridgeNetwork); err != nil {
+	if _, err := m.runDocker(ctx, "network", "create", "--driver", "bridge", "--opt", "com.docker.network.bridge.enable_icc=false", runnerBridgeNetwork); err != nil {
 		return "", err
 	}
 	inspect, err := m.inspectRunnerBridge(ctx)
