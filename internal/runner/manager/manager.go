@@ -245,16 +245,16 @@ func (m *Manager) Shutdown() {
 }
 
 func (m *Manager) defaultLimits() *ResourceLimits {
-	limits := &ResourceLimits{}
-	if m.config.EnableCgroups {
-		limits.MemoryMB = m.config.DefaultMemoryMB
-		limits.CPUPercent = m.config.DefaultCPUPercent
-		limits.PidsMax = m.config.DefaultPidsMax
-	}
+	var diskMB int64
 	if m.config.DiskQuotaActive {
-		limits.DiskMB = m.config.DefaultDiskQuotaMB
+		diskMB = m.config.DefaultDiskQuotaMB
 	}
-	return limits
+	return &ResourceLimits{
+		MemoryMB:   m.config.DefaultMemoryMB,
+		CPUPercent: m.config.DefaultCPUPercent,
+		PidsMax:    m.config.DefaultPidsMax,
+		DiskMB:     diskMB,
+	}
 }
 
 func waitForDaemon(ctx context.Context, baseURL string) error {
@@ -406,7 +406,10 @@ func (m *Manager) createContainer(ctx context.Context, sandboxID, containerName,
 		"--env", "HOME=/home/user",
 		"--env", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 	}
-	args = append(args, dockerLimitArgs(limits)...)
+	if m.config.EnableCgroups {
+		args = append(args, dockerLimitArgs(limits)...)
+	}
+	args = append(args, dockerDiskQuotaArgs(limits)...)
 	args = append(args, image)
 
 	out, err := m.runDocker(ctx, args...)
@@ -421,7 +424,7 @@ func dockerLimitArgs(limits *ResourceLimits) []string {
 		return nil
 	}
 
-	args := make([]string, 0, 8)
+	args := make([]string, 0, 6)
 	if limits.MemoryMB > 0 {
 		args = append(args, "--memory", fmt.Sprintf("%dm", limits.MemoryMB))
 	}
@@ -431,10 +434,14 @@ func dockerLimitArgs(limits *ResourceLimits) []string {
 	if limits.PidsMax > 0 {
 		args = append(args, "--pids-limit", strconv.Itoa(limits.PidsMax))
 	}
-	if limits.DiskMB > 0 {
-		args = append(args, "--storage-opt", fmt.Sprintf("size=%dm", limits.DiskMB))
-	}
 	return args
+}
+
+func dockerDiskQuotaArgs(limits *ResourceLimits) []string {
+	if limits == nil || limits.DiskMB <= 0 {
+		return nil
+	}
+	return []string{"--storage-opt", fmt.Sprintf("size=%dm", limits.DiskMB)}
 }
 
 func (m *Manager) startContainer(ctx context.Context, containerID string) error {
