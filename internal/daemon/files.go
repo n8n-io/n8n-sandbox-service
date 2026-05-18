@@ -10,17 +10,16 @@ import (
 	"syscall"
 )
 
-// resolvePath joins base with path, keeping the result within base.
-// filepath.Clean prevents ".." from escaping the container root.
-func resolvePath(base, path string) string {
-	return filepath.Join(base, filepath.Clean("/"+path))
+// resolvePath resolves path from the container root.
+func resolvePath(path string) string {
+	return filepath.Join("/", filepath.Clean("/"+path))
 }
 
-// HandleFileList returns directory entries for the directory at path inside base.
+// HandleFileList returns directory entries for the directory at path.
 // If recursive is true, it walks the tree. If extension is non-empty, only files
 // matching that extension are returned.
-func HandleFileList(base, path string, recursive bool, extension string) ([]FileInfo, error) {
-	resolved := resolvePath(base, path)
+func HandleFileList(path string, recursive bool, extension string) ([]FileInfo, error) {
+	resolved := resolvePath(path)
 
 	if !recursive {
 		entries, err := os.ReadDir(resolved)
@@ -73,10 +72,10 @@ func HandleFileList(base, path string, recursive bool, extension string) ([]File
 	return infos, nil
 }
 
-// HandleFileRead reads up to maxBytes from the file at path inside base.
+// HandleFileRead reads up to maxBytes from the file at path.
 // If maxBytes is <= 0, no size limit is enforced.
-func HandleFileRead(base, path string, maxBytes int64) ([]byte, error) {
-	resolved := resolvePath(base, path)
+func HandleFileRead(path string, maxBytes int64) ([]byte, error) {
+	resolved := resolvePath(path)
 
 	f, err := os.Open(resolved)
 	if err != nil {
@@ -108,16 +107,16 @@ func HandleFileRead(base, path string, maxBytes int64) ([]byte, error) {
 	return data, nil
 }
 
-// HandleFileWrite writes data to path inside base, creating intermediate
+// HandleFileWrite writes data to path, creating intermediate
 // directories as needed. If maxBytes is > 0, the write is rejected when
 // len(data) exceeds maxBytes. If overwrite is false and the file already exists,
 // an error is returned.
-func HandleFileWrite(base, path string, data []byte, maxBytes int64, overwrite bool) error {
+func HandleFileWrite(path string, data []byte, maxBytes int64, overwrite bool) error {
 	if maxBytes > 0 && int64(len(data)) > maxBytes {
 		return fmt.Errorf("file_write: data size %d exceeds limit %d", len(data), maxBytes)
 	}
 
-	resolved := resolvePath(base, path)
+	resolved := resolvePath(path)
 
 	// Ensure parent directory exists.
 	dir := filepath.Dir(resolved)
@@ -150,10 +149,10 @@ func HandleFileWrite(base, path string, data []byte, maxBytes int64, overwrite b
 	return nil
 }
 
-// HandleFileAppend appends data to the file at path inside base, creating the
+// HandleFileAppend appends data to the file at path, creating the
 // file and intermediate directories if they don't exist.
-func HandleFileAppend(base, path string, data []byte) error {
-	resolved := resolvePath(base, path)
+func HandleFileAppend(path string, data []byte) error {
+	resolved := resolvePath(path)
 
 	dir := filepath.Dir(resolved)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -172,11 +171,11 @@ func HandleFileAppend(base, path string, data []byte) error {
 	return nil
 }
 
-// HandleFileDelete removes the file or directory at path inside base.
+// HandleFileDelete removes the file or directory at path.
 // If recursive is true, it removes non-empty directories. If force is true,
 // "not found" errors are ignored.
-func HandleFileDelete(base, path string, recursive, force bool) error {
-	resolved := resolvePath(base, path)
+func HandleFileDelete(path string, recursive, force bool) error {
+	resolved := resolvePath(path)
 
 	var removeErr error
 	if recursive {
@@ -194,12 +193,12 @@ func HandleFileDelete(base, path string, recursive, force bool) error {
 	return nil
 }
 
-// HandleFileCopy copies a file or directory from srcPath to destPath inside base.
+// HandleFileCopy copies a file or directory from srcPath to destPath.
 // If recursive is true, directories are copied recursively. If overwrite is false
 // and the destination exists, an error is returned.
-func HandleFileCopy(base, srcPath, destPath string, recursive, overwrite bool) error {
-	resolvedSrc := resolvePath(base, srcPath)
-	resolvedDest := resolvePath(base, destPath)
+func HandleFileCopy(srcPath, destPath string, recursive, overwrite bool) error {
+	resolvedSrc := resolvePath(srcPath)
+	resolvedDest := resolvePath(destPath)
 
 	srcInfo, err := os.Stat(resolvedSrc)
 	if err != nil {
@@ -225,11 +224,11 @@ func HandleFileCopy(base, srcPath, destPath string, recursive, overwrite bool) e
 	return copyFile(resolvedSrc, resolvedDest)
 }
 
-// HandleFileMove moves a file or directory from srcPath to destPath inside base.
+// HandleFileMove moves a file or directory from srcPath to destPath.
 // If overwrite is false and the destination exists, an error is returned.
-func HandleFileMove(base, srcPath, destPath string, overwrite bool) error {
-	resolvedSrc := resolvePath(base, srcPath)
-	resolvedDest := resolvePath(base, destPath)
+func HandleFileMove(srcPath, destPath string, overwrite bool) error {
+	resolvedSrc := resolvePath(srcPath)
+	resolvedDest := resolvePath(destPath)
 
 	if !overwrite {
 		if _, err := os.Stat(resolvedDest); err == nil {
@@ -273,10 +272,10 @@ func HandleFileMove(base, srcPath, destPath string, overwrite bool) error {
 	return nil
 }
 
-// HandleFileMkdir creates a directory at path inside base. If recursive is true,
+// HandleFileMkdir creates a directory at path. If recursive is true,
 // intermediate directories are created as needed.
-func HandleFileMkdir(base, path string, recursive bool) error {
-	resolved := resolvePath(base, path)
+func HandleFileMkdir(path string, recursive bool) error {
+	resolved := resolvePath(path)
 
 	if recursive {
 		if err := os.MkdirAll(resolved, 0o755); err != nil {
@@ -290,9 +289,9 @@ func HandleFileMkdir(base, path string, recursive bool) error {
 	return nil
 }
 
-// HandleFileStat returns metadata about the file or directory at path inside base.
-func HandleFileStat(base, path string) (*FileStatInfo, error) {
-	resolved := resolvePath(base, path)
+// HandleFileStat returns metadata about the file or directory at path.
+func HandleFileStat(path string) (*FileStatInfo, error) {
+	resolved := resolvePath(path)
 
 	fi, err := os.Stat(resolved)
 	if err != nil {

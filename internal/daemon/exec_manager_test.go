@@ -23,7 +23,7 @@ func parseEvents(raw [][]byte) []Response {
 func afterSeq(n uint64) *uint64 { return &n }
 
 func TestExecutionFirstEventIsStarted(t *testing.T) {
-	handler := NewHandler(t.TempDir())
+	handler := NewHandler()
 	t.Cleanup(handler.Close)
 
 	body := `{"command":"echo hello"}`
@@ -54,7 +54,7 @@ func TestExecutionFirstEventIsStarted(t *testing.T) {
 }
 
 func TestExecutionAllEventsHaveSeq(t *testing.T) {
-	handler := NewHandler(t.TempDir())
+	handler := NewHandler()
 	t.Cleanup(handler.Close)
 
 	body := `{"command":"echo hello"}`
@@ -136,7 +136,7 @@ func TestExecutionDeleteNotFound(t *testing.T) {
 }
 
 func TestExecutionResumeReturnsNoDuplicates(t *testing.T) {
-	handler := NewHandler(t.TempDir())
+	handler := NewHandler()
 	t.Cleanup(handler.Close)
 
 	body := `{"command":"echo hello","exec_id":"test-exec-id"}`
@@ -232,7 +232,7 @@ func TestExecutionResumePartial(t *testing.T) {
 }
 
 func TestExecutionNonexistentReturns404(t *testing.T) {
-	handler := NewHandler(t.TempDir())
+	handler := NewHandler()
 	t.Cleanup(handler.Close)
 
 	body := `{"command":"echo hello"}`
@@ -265,7 +265,7 @@ func TestExecutionNonexistentReturns404(t *testing.T) {
 }
 
 func TestDeleteExecEndpoint(t *testing.T) {
-	handler := NewHandler(t.TempDir())
+	handler := NewHandler()
 	t.Cleanup(handler.Close)
 
 	body := `{"command":"sleep 30"}`

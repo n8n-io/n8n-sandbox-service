@@ -17,7 +17,7 @@ func TestHandleFileCopyRejectsNestedDestination(t *testing.T) {
 		t.Fatalf("write src file: %v", err)
 	}
 
-	err := HandleFileCopy(base, "/src", "/src/child", true, false)
+	err := HandleFileCopy(srcDir, filepath.Join(srcDir, "child"), true, false)
 	if err == nil {
 		t.Fatal("expected error when copying directory into its own subtree")
 	}
@@ -40,7 +40,7 @@ func TestHandleFileMoveRejectsNestedDestination(t *testing.T) {
 		t.Fatalf("write src file: %v", err)
 	}
 
-	err := HandleFileMove(base, "/src", "/src/child", false)
+	err := HandleFileMove(srcDir, filepath.Join(srcDir, "child"), false)
 	if err == nil {
 		t.Fatal("expected error when moving directory into its own subtree")
 	}
@@ -61,7 +61,7 @@ func tempBaseDir(t *testing.T) string {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(base) })
 
-	// Resolve symlinks so the base path is stable on macOS (/var vs /private/var).
+	// Resolve symlinks so the test path is stable on macOS (/var vs /private/var).
 	resolvedBase, err := filepath.EvalSymlinks(base)
 	if err != nil {
 		t.Fatalf("eval symlinks: %v", err)
