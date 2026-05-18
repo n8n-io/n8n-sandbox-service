@@ -3,7 +3,58 @@ package manager
 import (
 	"errors"
 	"testing"
+
+	"github.com/n8n-io/sandbox-service/internal/runner/config"
 )
+
+func TestDefaultLimitsEmitsDiskQuotaIndependentlyOfCgroups(t *testing.T) {
+	// cgroup-based limits (memory/cpu/pids) and the disk quota are enforced
+	// via different mechanisms; disabling cgroups must not also drop the
+	// disk quota flag.
+	m := &Manager{config: &config.Config{
+		EnableCgroups:      false,
+		DefaultMemoryMB:    512,
+		DefaultCPUPercent:  100,
+		DefaultPidsMax:     128,
+		DiskQuotaActive:    true,
+		DefaultDiskQuotaMB: 1024,
+	}}
+
+	limits := m.defaultLimits()
+
+	if limits.MemoryMB != 0 {
+		t.Errorf("expected MemoryMB 0 when EnableCgroups=false, got %d", limits.MemoryMB)
+	}
+	if limits.CPUPercent != 0 {
+		t.Errorf("expected CPUPercent 0 when EnableCgroups=false, got %d", limits.CPUPercent)
+	}
+	if limits.PidsMax != 0 {
+		t.Errorf("expected PidsMax 0 when EnableCgroups=false, got %d", limits.PidsMax)
+	}
+	if limits.DiskMB != 1024 {
+		t.Errorf("expected DiskMB 1024 when DiskQuotaActive=true regardless of cgroups, got %d", limits.DiskMB)
+	}
+}
+
+func TestDefaultLimitsOmitsDiskWhenQuotaInactive(t *testing.T) {
+	m := &Manager{config: &config.Config{
+		EnableCgroups:      true,
+		DefaultMemoryMB:    512,
+		DefaultCPUPercent:  100,
+		DefaultPidsMax:     128,
+		DiskQuotaActive:    false,
+		DefaultDiskQuotaMB: 1024,
+	}}
+
+	limits := m.defaultLimits()
+
+	if limits.DiskMB != 0 {
+		t.Errorf("expected DiskMB 0 when DiskQuotaActive=false, got %d", limits.DiskMB)
+	}
+	if limits.MemoryMB != 512 {
+		t.Errorf("expected MemoryMB 512 when EnableCgroups=true, got %d", limits.MemoryMB)
+	}
+}
 
 func TestDockerLimitArgs(t *testing.T) {
 	limits := &ResourceLimits{

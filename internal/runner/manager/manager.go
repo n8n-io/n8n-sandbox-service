@@ -245,16 +245,16 @@ func (m *Manager) Shutdown() {
 }
 
 func (m *Manager) defaultLimits() *ResourceLimits {
-	var diskMB int64
+	limits := &ResourceLimits{}
+	if m.config.EnableCgroups {
+		limits.MemoryMB = m.config.DefaultMemoryMB
+		limits.CPUPercent = m.config.DefaultCPUPercent
+		limits.PidsMax = m.config.DefaultPidsMax
+	}
 	if m.config.DiskQuotaActive {
-		diskMB = m.config.DefaultDiskMB
+		limits.DiskMB = m.config.DefaultDiskQuotaMB
 	}
-	return &ResourceLimits{
-		MemoryMB:   m.config.DefaultMemoryMB,
-		CPUPercent: m.config.DefaultCPUPercent,
-		PidsMax:    m.config.DefaultPidsMax,
-		DiskMB:     diskMB,
-	}
+	return limits
 }
 
 func waitForDaemon(ctx context.Context, baseURL string) error {
@@ -406,9 +406,7 @@ func (m *Manager) createContainer(ctx context.Context, sandboxID, containerName,
 		"--env", "HOME=/home/user",
 		"--env", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 	}
-	if m.config.EnableCgroups {
-		args = append(args, dockerLimitArgs(limits)...)
-	}
+	args = append(args, dockerLimitArgs(limits)...)
 	args = append(args, image)
 
 	out, err := m.runDocker(ctx, args...)

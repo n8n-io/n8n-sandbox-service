@@ -66,10 +66,10 @@ type Config struct {
 	// Parsed from SANDBOX_RUNNER_DEFAULT_PIDS_MAX (default 256).
 	DefaultPidsMax int
 
-	// DefaultDiskMB is the default writable-layer disk quota in megabytes.
-	// Parsed from SANDBOX_RUNNER_DEFAULT_DISK_MB (default 0, meaning no quota).
+	// DefaultDiskQuotaMB is the default writable-layer disk quota in megabytes.
+	// Parsed from SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB (default 0, meaning no quota).
 	// Only applied when DiskQuotaActive is true.
-	DefaultDiskMB int64
+	DefaultDiskQuotaMB int64
 
 	// DiskQuotaActive indicates that the runner's inner dockerd is configured
 	// against an xfs+prjquota data root and can honor `--storage-opt size=`.
@@ -271,13 +271,14 @@ func Load() (*Config, error) {
 		cfg.DefaultPidsMax = n
 	}
 
-	// SANDBOX_RUNNER_DEFAULT_DISK_MB (optional)
-	if v := os.Getenv("SANDBOX_RUNNER_DEFAULT_DISK_MB"); v != "" {
+	// SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB (optional; 0 means no quota,
+	// matching how scripts/start-runner.sh treats an unset value)
+	if v := os.Getenv("SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB"); v != "" {
 		n, err := strconv.ParseInt(v, 10, 64)
-		if err != nil || n <= 0 {
-			return nil, fmt.Errorf("SANDBOX_RUNNER_DEFAULT_DISK_MB must be a positive integer, got %q", v)
+		if err != nil || n < 0 {
+			return nil, fmt.Errorf("SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB must be a non-negative integer, got %q", v)
 		}
-		cfg.DefaultDiskMB = n
+		cfg.DefaultDiskQuotaMB = n
 	}
 
 	// SANDBOX_RUNNER_DISK_QUOTA_ACTIVE (optional; set by scripts/start-runner.sh)
