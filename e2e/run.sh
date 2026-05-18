@@ -144,6 +144,8 @@ docker run -d \
 	-e "SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE=/grpc-tls/control-grpc-server.key" \
 	-e "SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE=/grpc-tls/ca.crt" \
 	-e "SANDBOX_RUNNER_ID=e2e-runner-$$" \
+	-e "SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB=50" \
+	-e "SANDBOX_RUNNER_DISK_QUOTA_POOL_SIZE_GB=2" \
 	--name "$RUNNER_CONTAINER_NAME" \
 	"$RUNNER_IMAGE"
 

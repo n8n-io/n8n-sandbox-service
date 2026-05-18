@@ -83,6 +83,7 @@ jobs:
           version: 10
 
       - name: Run e2e tests
+        # TODO: set E2E_VERIFY_DISK_QUOTA=true when the runner supports it.
         run: PRIVILEGED=1 e2e/run.sh
 
   # This job is required by GitHub branch protection rules.
