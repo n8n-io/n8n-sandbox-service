@@ -2,7 +2,7 @@ name: Sweep stale E2E VMs
 
 on:
   schedule:
-    - cron: "25 4 * * *"
+    - cron: "25 */6 * * *"
   workflow_dispatch:
 
 permissions:
@@ -12,7 +12,7 @@ permissions:
 jobs:
   sweep:
     runs-on: ubuntu-latest
-    environment: ALL
+    environment: e2e
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
