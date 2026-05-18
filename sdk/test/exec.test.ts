@@ -228,7 +228,9 @@ describe("exec", () => {
     expect(mockHttp.requestStream).toHaveBeenCalledTimes(2);
     const resumeCall = (mockHttp.requestStream as ReturnType<typeof vi.fn>).mock.calls[1];
     expect(resumeCall[0]).toBe("GET");
-    expect(resumeCall[1]).toEqual(expect.stringMatching(/^\/sandboxes\/sandbox-1\/executions\/.+$/));
+    expect(resumeCall[1]).toEqual(
+      expect.stringMatching(/^\/sandboxes\/sandbox-1\/executions\/.+$/),
+    );
     expect(resumeCall[2]).toEqual(
       expect.objectContaining({
         params: { after: "1", follow: "true" },
@@ -340,8 +342,12 @@ describe("resumeExecution", () => {
 
     expect(result.stdout).toBe("part2");
     expect(result.exitCode).toBe(0);
-    expect(http.requestStream).toHaveBeenCalledWith("GET", "/sandboxes/sandbox-1/executions/exec-1", {
-      params: { after: "1", follow: "true" },
-    });
+    expect(http.requestStream).toHaveBeenCalledWith(
+      "GET",
+      "/sandboxes/sandbox-1/executions/exec-1",
+      {
+        params: { after: "1", follow: "true" },
+      },
+    );
   });
 });
