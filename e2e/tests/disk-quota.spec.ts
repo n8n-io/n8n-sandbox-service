@@ -7,7 +7,7 @@ import { createSandbox, deleteSandbox, exec } from './helpers';
 // startup and sandboxes still run, just unbounded.
 //
 // Set E2E_VERIFY_DISK_QUOTA=true to assert that quotas actually enforce on
-// this host. CI sets it on the Linux runner; local dev typically doesn't.
+// this host.
 test.describe('Disk quota enforcement', () => {
   test.skip(
     process.env.E2E_VERIFY_DISK_QUOTA !== 'true',
