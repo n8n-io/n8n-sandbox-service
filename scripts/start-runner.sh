@@ -11,20 +11,28 @@ if [ -n "${SANDBOX_RUNNER_DOCKER_INSECURE_REGISTRIES:-}" ]; then
 fi
 
 # Disk-quota storage pool: a loopback xfs+prjquota image used as the inner
-# dockerd's data root. When the host kernel supports xfs quotas, dockerd can
-# then honor `--storage-opt size=` per sandbox. On hosts without quota support
-# (e.g. Docker Desktop's linuxkit kernel) the mount fails and we fall back to
-# dockerd's default storage with no per-sandbox enforcement.
+# dockerd's data root, so `--storage-opt size=` can cap each sandbox. Only set
+# up when the operator has asked for quotas (SANDBOX_RUNNER_DEFAULT_DISK_MB>0).
+# If the kernel lacks xfs quota support (e.g. Docker Desktop linuxkit), the
+# mount fails and dockerd starts with default storage (no enforcement).
 POOL_PATH=${SANDBOX_RUNNER_STORAGE_POOL_PATH:-/var/lib/docker.img}
-POOL_SIZE_GB=${SANDBOX_RUNNER_STORAGE_POOL_SIZE_GB:-100}
 DOCKER_DATA_ROOT=/var/lib/docker
+DEFAULT_DISK_MB=${SANDBOX_RUNNER_DEFAULT_DISK_MB:-0}
+CAPACITY_TOTAL=${SANDBOX_RUNNER_CAPACITY_TOTAL:-1000}
+
+# Default pool size = per-sandbox quota × runner capacity × 1.2 (20% headroom
+# for sandbox image layers shared across sandboxes), rounded up to whole GB.
+# Operators can override with SANDBOX_RUNNER_STORAGE_POOL_SIZE_GB.
+if [ -n "${SANDBOX_RUNNER_STORAGE_POOL_SIZE_GB:-}" ]; then
+  POOL_SIZE_GB=$SANDBOX_RUNNER_STORAGE_POOL_SIZE_GB
+else
+  POOL_SIZE_GB=$(( (DEFAULT_DISK_MB * CAPACITY_TOTAL * 12 / 10 + 1023) / 1024 ))
+fi
 
 setup_quota_pool() {
+  # If there's an existing mount, make sure it uses prjquota.
   existing_mount=$(mount | grep " on ${DOCKER_DATA_ROOT} type xfs " || true)
   if [ -n "$existing_mount" ]; then
-    # prjquota is a mount option, not a filesystem property: a plain xfs mount
-    # at this path would let us falsely claim quota enforcement is active while
-    # dockerd silently or loudly fails on --storage-opt size=.
     if echo "$existing_mount" | grep -q '[(,]prjquota[,)]'; then
       echo "[start-runner] storage pool already mounted at ${DOCKER_DATA_ROOT} (xfs+prjquota)"
       return 0
@@ -56,10 +64,12 @@ setup_quota_pool() {
 }
 
 STORAGE_ARGS=""
-if setup_quota_pool; then
+if [ "$DEFAULT_DISK_MB" -le 0 ]; then
+  echo "[start-runner] disk quota enforcement: not requested (SANDBOX_RUNNER_DEFAULT_DISK_MB unset)"
+elif setup_quota_pool; then
   STORAGE_ARGS="--storage-driver=overlay2 --data-root=${DOCKER_DATA_ROOT}"
   export SANDBOX_RUNNER_DISK_QUOTA_ACTIVE=true
-  echo "[start-runner] disk quota enforcement: ENABLED"
+  echo "[start-runner] disk quota enforcement: ENABLED (pool ${POOL_SIZE_GB}G, per-sandbox ${DEFAULT_DISK_MB}M)"
 else
   echo "[start-runner] disk quota enforcement: DISABLED (kernel lacks xfs quota support or mount failed); sandboxes will use dockerd default storage" >&2
 fi
