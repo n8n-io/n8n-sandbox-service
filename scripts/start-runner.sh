@@ -20,9 +20,18 @@ POOL_SIZE_GB=${SANDBOX_RUNNER_STORAGE_POOL_SIZE_GB:-100}
 DOCKER_DATA_ROOT=/var/lib/docker
 
 setup_quota_pool() {
-  if mount | grep -q " on ${DOCKER_DATA_ROOT} type xfs"; then
-    echo "[start-runner] storage pool already mounted at ${DOCKER_DATA_ROOT}"
-    return 0
+  existing_mount=$(mount | grep " on ${DOCKER_DATA_ROOT} type xfs " || true)
+  if [ -n "$existing_mount" ]; then
+    # prjquota is a mount option, not a filesystem property: a plain xfs mount
+    # at this path would let us falsely claim quota enforcement is active while
+    # dockerd silently or loudly fails on --storage-opt size=.
+    if echo "$existing_mount" | grep -q '[(,]prjquota[,)]'; then
+      echo "[start-runner] storage pool already mounted at ${DOCKER_DATA_ROOT} (xfs+prjquota)"
+      return 0
+    fi
+    echo "[start-runner] existing xfs mount at ${DOCKER_DATA_ROOT} lacks prjquota; refusing to claim quota enforcement" >&2
+    echo "  mount line: ${existing_mount}" >&2
+    return 1
   fi
   if [ ! -f "$POOL_PATH" ]; then
     echo "[start-runner] allocating ${POOL_SIZE_GB}G storage pool at ${POOL_PATH}"
