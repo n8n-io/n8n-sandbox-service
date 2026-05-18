@@ -1,22 +1,18 @@
 import { test, expect } from '@playwright/test';
-import { createSandbox, deleteSandbox, exec, dockerOutput } from './helpers';
+import { createSandbox, deleteSandbox, exec } from './helpers';
 
-// Real enforcement depends on the host kernel having CONFIG_XFS_QUOTA, which
-// is absent on Docker Desktop's linuxkit kernel. The runner logs whether the
-// quota pool mounted; we read that line once and skip if it says DISABLED so
-// macOS dev keeps a clean run rather than asserting fallback behavior here.
+// The runner is always configured with per-sandbox disk quotas (see
+// e2e/run.sh). On hosts whose kernel lacks CONFIG_XFS_QUOTA — notably Docker
+// Desktop's linuxkit on macOS — the runner falls back to no enforcement at
+// startup and sandboxes still run, just unbounded.
+//
+// Set E2E_VERIFY_DISK_QUOTA=true to assert that quotas actually enforce on
+// this host. CI sets it on the Linux runner; local dev typically doesn't.
 test.describe('Disk quota enforcement', () => {
-  test.beforeAll(() => {
-    test.skip(
-      !process.env.E2E_RUNNER_CONTAINER_NAME,
-      'needs E2E_RUNNER_CONTAINER_NAME (from e2e/run.sh)',
-    );
-    const logs = dockerOutput(['logs', process.env.E2E_RUNNER_CONTAINER_NAME!]);
-    test.skip(
-      !logs.includes('disk quota enforcement: ENABLED'),
-      'host kernel lacks CONFIG_XFS_QUOTA — quota enforcement unavailable',
-    );
-  });
+  test.skip(
+    process.env.E2E_VERIFY_DISK_QUOTA !== 'true',
+    'set E2E_VERIFY_DISK_QUOTA=true to run (requires host kernel with CONFIG_XFS_QUOTA)',
+  );
 
   test('writing past per-sandbox quota fails with ENOSPC', async () => {
     // e2e/run.sh sets SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB=50, so a 100 MB
