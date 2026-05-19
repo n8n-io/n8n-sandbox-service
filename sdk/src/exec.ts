@@ -94,9 +94,13 @@ export async function resumeExecution(
     params.after = String(afterSeq);
   }
 
-  const { stream } = await http.requestStream("GET", `/sandboxes/${sandboxId}/executions/${execId}`, {
-    params,
-  });
+  const { stream } = await http.requestStream(
+    "GET",
+    `/sandboxes/${sandboxId}/executions/${execId}`,
+    {
+      params,
+    },
+  );
 
   const consumer = new ExecStreamConsumer();
   await consumer.consume(stream);
