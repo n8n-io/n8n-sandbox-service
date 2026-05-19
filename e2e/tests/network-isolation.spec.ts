@@ -73,6 +73,21 @@ import time; time.sleep(30)
     }
   });
 
+  test('sandbox has IPv6 disabled', async () => {
+    const id = await createSandbox();
+    try {
+      const result = await exec(
+        id,
+        'cat /proc/sys/net/ipv6/conf/all/disable_ipv6',
+        { timeoutMs: 5_000 },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.trim()).toBe('1');
+    } finally {
+      await deleteSandbox(id);
+    }
+  });
+
   test('DNS resolution works', async () => {
     const id = await createSandbox();
     try {
