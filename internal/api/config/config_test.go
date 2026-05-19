@@ -53,6 +53,18 @@ func TestLoadAPIParsesDefaults(t *testing.T) {
 	if cfg.HeartbeatGrace != 45*time.Second {
 		t.Errorf("expected HeartbeatGrace 45s, got %s", cfg.HeartbeatGrace)
 	}
+
+	if cfg.IdleStopAfter != time.Hour {
+		t.Errorf("expected IdleStopAfter 1h, got %s", cfg.IdleStopAfter)
+	}
+
+	if cfg.IdleDeleteAfter != 24*time.Hour {
+		t.Errorf("expected IdleDeleteAfter 24h, got %s", cfg.IdleDeleteAfter)
+	}
+
+	if cfg.IdleDeleteSafetyBuffer != time.Minute {
+		t.Errorf("expected IdleDeleteSafetyBuffer 1m, got %s", cfg.IdleDeleteSafetyBuffer)
+	}
 }
 
 func TestLoadAPIHeartbeatGraceFromEnv(t *testing.T) {
@@ -128,5 +140,57 @@ func TestLoadAPIRequiresRegistrationToken(t *testing.T) {
 
 	if _, err := LoadAPI(); err == nil {
 		t.Error("expected LoadAPI() to fail without SANDBOX_API_RUNNER_REGISTRATION_TOKEN")
+	}
+}
+
+func TestLoadAPIIdleDeleteAfterZeroDisablesDelete(t *testing.T) {
+	t.Setenv("SANDBOX_API_KEYS", "test-key")
+	t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	t.Setenv("SANDBOX_API_IDLE_STOP_AFTER", "1h")
+	t.Setenv("SANDBOX_API_IDLE_DELETE_AFTER", "0")
+	setRequiredGRPCMTLS(t)
+
+	cfg, err := LoadAPI()
+	if err != nil {
+		t.Fatalf("LoadAPI() failed: %v", err)
+	}
+	if cfg.IdleStopAfter != time.Hour {
+		t.Fatalf("IdleStopAfter: want 1h, got %s", cfg.IdleStopAfter)
+	}
+	if cfg.IdleDeleteAfter != 0 {
+		t.Fatalf("IdleDeleteAfter: want 0, got %s", cfg.IdleDeleteAfter)
+	}
+}
+
+func TestLoadAPIIdleTTLZeroDisablesDefaults(t *testing.T) {
+	t.Setenv("SANDBOX_API_KEYS", "test-key")
+	t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	t.Setenv("SANDBOX_API_IDLE_STOP_AFTER", "0")
+	t.Setenv("SANDBOX_API_IDLE_DELETE_AFTER", "0")
+	setRequiredGRPCMTLS(t)
+
+	cfg, err := LoadAPI()
+	if err != nil {
+		t.Fatalf("LoadAPI() failed: %v", err)
+	}
+	if cfg.IdleStopAfter != 0 {
+		t.Fatalf("IdleStopAfter: want 0, got %s", cfg.IdleStopAfter)
+	}
+	if cfg.IdleDeleteAfter != 0 {
+		t.Fatalf("IdleDeleteAfter: want 0, got %s", cfg.IdleDeleteAfter)
+	}
+	if cfg.IdleDeleteSafetyBuffer != 0 {
+		t.Fatalf("IdleDeleteSafetyBuffer: want 0, got %s", cfg.IdleDeleteSafetyBuffer)
+	}
+}
+
+func TestLoadAPIRejectsNegativeIdleDeleteAfter(t *testing.T) {
+	t.Setenv("SANDBOX_API_KEYS", "test-key")
+	t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	t.Setenv("SANDBOX_API_IDLE_DELETE_AFTER", "-1s")
+	setRequiredGRPCMTLS(t)
+
+	if _, err := LoadAPI(); err == nil {
+		t.Fatal("expected LoadAPI to reject negative SANDBOX_API_IDLE_DELETE_AFTER")
 	}
 }

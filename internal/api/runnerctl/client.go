@@ -66,6 +66,23 @@ func CreateSandbox(ctx context.Context, target, apiKey string, tlsCfg *TLS, sand
 	})
 }
 
+// StopSandbox calls SandboxControl.StopSandbox and closes the connection.
+func StopSandbox(ctx context.Context, target, apiKey string, tlsCfg *TLS, sandboxID string) error {
+	opts, err := dialOpts(target, tlsCfg)
+	if err != nil {
+		return err
+	}
+	conn, err := grpc.NewClient(target, opts...)
+	if err != nil {
+		return fmt.Errorf("runnerctl dial: %w", err)
+	}
+	defer conn.Close()
+
+	cli := pb.NewSandboxControlClient(conn)
+	_, err = cli.StopSandbox(withAPIKey(ctx, apiKey), &pb.StopSandboxRequest{SandboxId: sandboxID})
+	return err
+}
+
 // DeleteSandbox calls SandboxControl.DeleteSandbox and closes the connection.
 func DeleteSandbox(ctx context.Context, target, apiKey string, tlsCfg *TLS, sandboxID string) error {
 	opts, err := dialOpts(target, tlsCfg)

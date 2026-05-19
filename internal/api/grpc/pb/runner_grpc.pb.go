@@ -116,6 +116,7 @@ var RunnerRegistry_ServiceDesc = grpc.ServiceDesc{
 
 const (
 	SandboxControl_CreateSandbox_FullMethodName = "/runner.v1.SandboxControl/CreateSandbox"
+	SandboxControl_StopSandbox_FullMethodName   = "/runner.v1.SandboxControl/StopSandbox"
 	SandboxControl_DeleteSandbox_FullMethodName = "/runner.v1.SandboxControl/DeleteSandbox"
 )
 
@@ -126,6 +127,7 @@ const (
 // SandboxControl: API → runner for sandbox create/delete (HTTP remains for exec/files proxy).
 type SandboxControlClient interface {
 	CreateSandbox(ctx context.Context, in *CreateSandboxRequest, opts ...grpc.CallOption) (*CreateSandboxResponse, error)
+	StopSandbox(ctx context.Context, in *StopSandboxRequest, opts ...grpc.CallOption) (*StopSandboxResponse, error)
 	DeleteSandbox(ctx context.Context, in *DeleteSandboxRequest, opts ...grpc.CallOption) (*DeleteSandboxResponse, error)
 }
 
@@ -141,6 +143,16 @@ func (c *sandboxControlClient) CreateSandbox(ctx context.Context, in *CreateSand
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CreateSandboxResponse)
 	err := c.cc.Invoke(ctx, SandboxControl_CreateSandbox_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *sandboxControlClient) StopSandbox(ctx context.Context, in *StopSandboxRequest, opts ...grpc.CallOption) (*StopSandboxResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(StopSandboxResponse)
+	err := c.cc.Invoke(ctx, SandboxControl_StopSandbox_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -164,6 +176,7 @@ func (c *sandboxControlClient) DeleteSandbox(ctx context.Context, in *DeleteSand
 // SandboxControl: API → runner for sandbox create/delete (HTTP remains for exec/files proxy).
 type SandboxControlServer interface {
 	CreateSandbox(context.Context, *CreateSandboxRequest) (*CreateSandboxResponse, error)
+	StopSandbox(context.Context, *StopSandboxRequest) (*StopSandboxResponse, error)
 	DeleteSandbox(context.Context, *DeleteSandboxRequest) (*DeleteSandboxResponse, error)
 	mustEmbedUnimplementedSandboxControlServer()
 }
@@ -177,6 +190,9 @@ type UnimplementedSandboxControlServer struct{}
 
 func (UnimplementedSandboxControlServer) CreateSandbox(context.Context, *CreateSandboxRequest) (*CreateSandboxResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CreateSandbox not implemented")
+}
+func (UnimplementedSandboxControlServer) StopSandbox(context.Context, *StopSandboxRequest) (*StopSandboxResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method StopSandbox not implemented")
 }
 func (UnimplementedSandboxControlServer) DeleteSandbox(context.Context, *DeleteSandboxRequest) (*DeleteSandboxResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteSandbox not implemented")
@@ -220,6 +236,24 @@ func _SandboxControl_CreateSandbox_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SandboxControl_StopSandbox_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StopSandboxRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SandboxControlServer).StopSandbox(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SandboxControl_StopSandbox_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SandboxControlServer).StopSandbox(ctx, req.(*StopSandboxRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _SandboxControl_DeleteSandbox_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(DeleteSandboxRequest)
 	if err := dec(in); err != nil {
@@ -248,6 +282,10 @@ var SandboxControl_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CreateSandbox",
 			Handler:    _SandboxControl_CreateSandbox_Handler,
+		},
+		{
+			MethodName: "StopSandbox",
+			Handler:    _SandboxControl_StopSandbox_Handler,
 		},
 		{
 			MethodName: "DeleteSandbox",
