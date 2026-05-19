@@ -81,10 +81,6 @@ type Config struct {
 	// Parsed from SANDBOX_RUNNER_ENABLE_CGROUPS (default true).
 	EnableCgroups bool
 
-	// InterSandboxNetworkEnabled enables sandbox-to-sandbox traffic on runner-bridge.
-	// Parsed from SANDBOX_RUNNER_INTER_SANDBOX_NETWORK_ENABLED (default false).
-	InterSandboxNetworkEnabled bool
-
 	// APIGRPCAddr is the host:port of the API's runner registration gRPC listener.
 	// Parsed from SANDBOX_RUNNER_API_GRPC_ADDR.
 	APIGRPCAddr string
@@ -297,15 +293,6 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("SANDBOX_RUNNER_ENABLE_CGROUPS must be a boolean, got %q", v)
 		}
 		cfg.EnableCgroups = enabled
-	}
-
-	// SANDBOX_RUNNER_INTER_SANDBOX_NETWORK_ENABLED (optional)
-	if v := os.Getenv("SANDBOX_RUNNER_INTER_SANDBOX_NETWORK_ENABLED"); v != "" {
-		enabled, err := strconv.ParseBool(v)
-		if err != nil {
-			return nil, fmt.Errorf("SANDBOX_RUNNER_INTER_SANDBOX_NETWORK_ENABLED must be a boolean, got %q", v)
-		}
-		cfg.InterSandboxNetworkEnabled = enabled
 	}
 
 	cfg.APIGRPCAddr = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_API_GRPC_ADDR"))
