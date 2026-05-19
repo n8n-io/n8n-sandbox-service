@@ -1,11 +1,76 @@
 package manager
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 )
+
+type fakeDockerBackend struct {
+	events         *[]string
+	containerID    string
+	ip             string
+	containerIPErr error
+}
+
+func (f *fakeDockerBackend) createContainer(context.Context, string, string, string, *ResourceLimits, bool) (string, error) {
+	return "", errors.New("unexpected createContainer")
+}
+
+func (f *fakeDockerBackend) startContainer(context.Context, string) error {
+	*f.events = append(*f.events, "start")
+	return nil
+}
+
+func (f *fakeDockerBackend) stopContainer(context.Context, string) error {
+	*f.events = append(*f.events, "stop")
+	return nil
+}
+
+func (f *fakeDockerBackend) removeContainer(context.Context, string) error {
+	return errors.New("unexpected removeContainer")
+}
+
+func (f *fakeDockerBackend) containerIP(context.Context, string) (string, error) {
+	*f.events = append(*f.events, "containerIP")
+	if f.containerIPErr != nil {
+		return "", f.containerIPErr
+	}
+	return f.ip, nil
+}
+
+func (f *fakeDockerBackend) inspectContainer(context.Context, string) (*containerInspect, error) {
+	*f.events = append(*f.events, "inspect")
+	return &containerInspect{
+		ID:    f.containerID,
+		State: containerState{Status: containerStatusExited},
+	}, nil
+}
+
+func (f *fakeDockerBackend) inspectNetwork(context.Context, string) (*networkInspect, error) {
+	return nil, errors.New("unexpected inspectNetwork")
+}
+
+func (f *fakeDockerBackend) listContainersByLabel(context.Context, string, string) ([]string, error) {
+	return nil, errors.New("unexpected listContainersByLabel")
+}
+
+func (f *fakeDockerBackend) findContainerByLabels(context.Context, ...string) ([]string, error) {
+	*f.events = append(*f.events, "find")
+	return []string{f.containerID}, nil
+}
+
+func (f *fakeDockerBackend) pullImage(context.Context, string) error {
+	return errors.New("unexpected pullImage")
+}
+
+func (f *fakeDockerBackend) run(context.Context, ...string) (string, error) {
+	return "", errors.New("unexpected run")
+}
 
 func TestDockerLimitArgs(t *testing.T) {
 	limits := &ResourceLimits{
@@ -75,6 +140,159 @@ func TestDefaultLimitsAppliesDiskQuotaOnlyWhenActive(t *testing.T) {
 				t.Errorf("defaultLimits().DiskMB = %d, want %d", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestContainerStatePredicates(t *testing.T) {
+	tests := []struct {
+		name      string
+		state     containerState
+		wantReady bool
+		wantStart bool
+	}{
+		{
+			name:      "running",
+			state:     containerState{Status: containerStatusRunning, Running: true},
+			wantReady: true,
+		},
+		{
+			name:      "created",
+			state:     containerState{Status: containerStatusCreated},
+			wantStart: true,
+		},
+		{
+			name:      "exited",
+			state:     containerState{Status: containerStatusExited},
+			wantStart: true,
+		},
+		{
+			name:  "paused",
+			state: containerState{Status: containerStatusPaused, Running: true, Paused: true},
+		},
+		{
+			name:  "restarting",
+			state: containerState{Status: containerStatusRestarting, Restarting: true},
+		},
+		{
+			name:  "dead",
+			state: containerState{Status: containerStatusDead, Dead: true},
+		},
+		{
+			name:  "removing",
+			state: containerState{Status: containerStatusRemoving},
+		},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isContainerReady(tc.state); got != tc.wantReady {
+				t.Fatalf("isContainerReady() = %v, want %v", got, tc.wantReady)
+			}
+			if got := canStartContainer(tc.state); got != tc.wantStart {
+				t.Fatalf("canStartContainer() = %v, want %v", got, tc.wantStart)
+			}
+		})
+	}
+}
+
+func TestEnsureSandboxRunningCleansUpStartedContainerOnWakeFailures(t *testing.T) {
+	tests := []struct {
+		name        string
+		containerIP string
+		ipErr       error
+		policyErr   error
+		waitErr     error
+		wantEvents  []string
+	}{
+		{
+			name:       "container ip fails",
+			ipErr:      errors.New("no container ip"),
+			wantEvents: []string{"find", "inspect", "start", "containerIP", "stop", "teardown"},
+		},
+		{
+			name:        "apply policy fails",
+			containerIP: "172.18.0.2",
+			policyErr:   errors.New("iptables failed"),
+			wantEvents:  []string{"find", "inspect", "start", "containerIP", "applyPolicy", "stop", "teardown"},
+		},
+		{
+			name:        "wait for daemon fails",
+			containerIP: "172.18.0.2",
+			waitErr:     errors.New("daemon never ready"),
+			wantEvents:  []string{"find", "inspect", "start", "containerIP", "applyPolicy", "waitForDaemon", "stop", "teardown"},
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			events := []string{}
+			const containerID = "container-1"
+			m := newManager(&config.Config{}, &fakeDockerBackend{
+				events:         &events,
+				containerID:    containerID,
+				ip:             tc.containerIP,
+				containerIPErr: tc.ipErr,
+			})
+			m.applyPolicy = func(gotID, sourceIP, gatewayIP string, port int) error {
+				events = append(events, "applyPolicy")
+				if gotID != containerID {
+					t.Fatalf("applyPolicy containerID = %q, want %q", gotID, containerID)
+				}
+				return tc.policyErr
+			}
+			m.teardownRules = func(gotID string) error {
+				events = append(events, "teardown")
+				if gotID != containerID {
+					t.Fatalf("teardownRules containerID = %q, want %q", gotID, containerID)
+				}
+				return nil
+			}
+			m.waitForDaemon = func(context.Context, string) error {
+				events = append(events, "waitForDaemon")
+				if tc.waitErr != nil {
+					return tc.waitErr
+				}
+				return nil
+			}
+
+			err := m.ensureSandboxRunningOnce(context.Background(), "sandbox-id")
+			if err == nil {
+				t.Fatal("expected wake to fail")
+			}
+			if !reflect.DeepEqual(events, tc.wantEvents) {
+				t.Fatalf("events = %v, want %v", events, tc.wantEvents)
+			}
+		})
+	}
+}
+
+func TestEnsureSandboxRunningDoesNotCleanUpAfterSuccessfulWake(t *testing.T) {
+	events := []string{}
+	const containerID = "container-1"
+	m := newManager(&config.Config{}, &fakeDockerBackend{
+		events:      &events,
+		containerID: containerID,
+		ip:          "172.18.0.2",
+	})
+	m.applyPolicy = func(string, string, string, int) error {
+		events = append(events, "applyPolicy")
+		return nil
+	}
+	m.teardownRules = func(string) error {
+		return fmt.Errorf("unexpected teardown")
+	}
+	m.waitForDaemon = func(context.Context, string) error {
+		events = append(events, "waitForDaemon")
+		return nil
+	}
+
+	if err := m.ensureSandboxRunningOnce(context.Background(), "sandbox-id"); err != nil {
+		t.Fatalf("ensureSandboxRunningOnce() failed: %v", err)
+	}
+	wantEvents := []string{"find", "inspect", "start", "containerIP", "applyPolicy", "waitForDaemon"}
+	if !reflect.DeepEqual(events, wantEvents) {
+		t.Fatalf("events = %v, want %v", events, wantEvents)
 	}
 }
 
