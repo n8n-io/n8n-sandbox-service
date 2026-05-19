@@ -235,6 +235,7 @@ func (m *Manager) stopAndCleanContainer(ctx context.Context, containerID string)
 		return err
 	}
 	if err := netrules.Teardown(containerID); err != nil {
+		// TODO: consider adding metrics to track this in the future.
 		slog.Warn("teardown network rules", "container_id", containerID, "err", err)
 	}
 	return nil
