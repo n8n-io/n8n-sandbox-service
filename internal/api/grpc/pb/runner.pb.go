@@ -253,6 +253,86 @@ func (x *CreateSandboxResponse) GetContainerIp() string {
 	return ""
 }
 
+type StopSandboxRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SandboxId     string                 `protobuf:"bytes,1,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StopSandboxRequest) Reset() {
+	*x = StopSandboxRequest{}
+	mi := &file_runner_v1_runner_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StopSandboxRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StopSandboxRequest) ProtoMessage() {}
+
+func (x *StopSandboxRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_runner_v1_runner_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StopSandboxRequest.ProtoReflect.Descriptor instead.
+func (*StopSandboxRequest) Descriptor() ([]byte, []int) {
+	return file_runner_v1_runner_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *StopSandboxRequest) GetSandboxId() string {
+	if x != nil {
+		return x.SandboxId
+	}
+	return ""
+}
+
+type StopSandboxResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StopSandboxResponse) Reset() {
+	*x = StopSandboxResponse{}
+	mi := &file_runner_v1_runner_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StopSandboxResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StopSandboxResponse) ProtoMessage() {}
+
+func (x *StopSandboxResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_runner_v1_runner_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StopSandboxResponse.ProtoReflect.Descriptor instead.
+func (*StopSandboxResponse) Descriptor() ([]byte, []int) {
+	return file_runner_v1_runner_proto_rawDescGZIP(), []int{5}
+}
+
 type DeleteSandboxRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SandboxId     string                 `protobuf:"bytes,1,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
@@ -262,7 +342,7 @@ type DeleteSandboxRequest struct {
 
 func (x *DeleteSandboxRequest) Reset() {
 	*x = DeleteSandboxRequest{}
-	mi := &file_runner_v1_runner_proto_msgTypes[4]
+	mi := &file_runner_v1_runner_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -274,7 +354,7 @@ func (x *DeleteSandboxRequest) String() string {
 func (*DeleteSandboxRequest) ProtoMessage() {}
 
 func (x *DeleteSandboxRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_runner_v1_runner_proto_msgTypes[4]
+	mi := &file_runner_v1_runner_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -287,7 +367,7 @@ func (x *DeleteSandboxRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteSandboxRequest.ProtoReflect.Descriptor instead.
 func (*DeleteSandboxRequest) Descriptor() ([]byte, []int) {
-	return file_runner_v1_runner_proto_rawDescGZIP(), []int{4}
+	return file_runner_v1_runner_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *DeleteSandboxRequest) GetSandboxId() string {
@@ -305,7 +385,7 @@ type DeleteSandboxResponse struct {
 
 func (x *DeleteSandboxResponse) Reset() {
 	*x = DeleteSandboxResponse{}
-	mi := &file_runner_v1_runner_proto_msgTypes[5]
+	mi := &file_runner_v1_runner_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -317,7 +397,7 @@ func (x *DeleteSandboxResponse) String() string {
 func (*DeleteSandboxResponse) ProtoMessage() {}
 
 func (x *DeleteSandboxResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_runner_v1_runner_proto_msgTypes[5]
+	mi := &file_runner_v1_runner_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -330,7 +410,7 @@ func (x *DeleteSandboxResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteSandboxResponse.ProtoReflect.Descriptor instead.
 func (*DeleteSandboxResponse) Descriptor() ([]byte, []int) {
-	return file_runner_v1_runner_proto_rawDescGZIP(), []int{5}
+	return file_runner_v1_runner_proto_rawDescGZIP(), []int{7}
 }
 
 var File_runner_v1_runner_proto protoreflect.FileDescriptor
@@ -355,15 +435,20 @@ const file_runner_v1_runner_proto_rawDesc = "" +
 	"\x15CreateSandboxResponse\x12\x1d\n" +
 	"\n" +
 	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\x12!\n" +
-	"\fcontainer_ip\x18\x02 \x01(\tR\vcontainerIp\"5\n" +
+	"\fcontainer_ip\x18\x02 \x01(\tR\vcontainerIp\"3\n" +
+	"\x12StopSandboxRequest\x12\x1d\n" +
+	"\n" +
+	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\"\x15\n" +
+	"\x13StopSandboxResponse\"5\n" +
 	"\x14DeleteSandboxRequest\x12\x1d\n" +
 	"\n" +
 	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\"\x17\n" +
 	"\x15DeleteSandboxResponse2V\n" +
 	"\x0eRunnerRegistry\x12D\n" +
-	"\aConnect\x12\x1a.runner.v1.RunnerHeartbeat\x1a\x19.runner.v1.ControlMessage(\x010\x012\xb8\x01\n" +
+	"\aConnect\x12\x1a.runner.v1.RunnerHeartbeat\x1a\x19.runner.v1.ControlMessage(\x010\x012\x86\x02\n" +
 	"\x0eSandboxControl\x12R\n" +
-	"\rCreateSandbox\x12\x1f.runner.v1.CreateSandboxRequest\x1a .runner.v1.CreateSandboxResponse\x12R\n" +
+	"\rCreateSandbox\x12\x1f.runner.v1.CreateSandboxRequest\x1a .runner.v1.CreateSandboxResponse\x12L\n" +
+	"\vStopSandbox\x12\x1d.runner.v1.StopSandboxRequest\x1a\x1e.runner.v1.StopSandboxResponse\x12R\n" +
 	"\rDeleteSandbox\x12\x1f.runner.v1.DeleteSandboxRequest\x1a .runner.v1.DeleteSandboxResponseB;Z9github.com/n8n-io/sandbox-service/internal/api/grpc/pb;pbb\x06proto3"
 
 var (
@@ -378,24 +463,28 @@ func file_runner_v1_runner_proto_rawDescGZIP() []byte {
 	return file_runner_v1_runner_proto_rawDescData
 }
 
-var file_runner_v1_runner_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_runner_v1_runner_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_runner_v1_runner_proto_goTypes = []any{
 	(*RunnerHeartbeat)(nil),       // 0: runner.v1.RunnerHeartbeat
 	(*ControlMessage)(nil),        // 1: runner.v1.ControlMessage
 	(*CreateSandboxRequest)(nil),  // 2: runner.v1.CreateSandboxRequest
 	(*CreateSandboxResponse)(nil), // 3: runner.v1.CreateSandboxResponse
-	(*DeleteSandboxRequest)(nil),  // 4: runner.v1.DeleteSandboxRequest
-	(*DeleteSandboxResponse)(nil), // 5: runner.v1.DeleteSandboxResponse
+	(*StopSandboxRequest)(nil),    // 4: runner.v1.StopSandboxRequest
+	(*StopSandboxResponse)(nil),   // 5: runner.v1.StopSandboxResponse
+	(*DeleteSandboxRequest)(nil),  // 6: runner.v1.DeleteSandboxRequest
+	(*DeleteSandboxResponse)(nil), // 7: runner.v1.DeleteSandboxResponse
 }
 var file_runner_v1_runner_proto_depIdxs = []int32{
 	0, // 0: runner.v1.RunnerRegistry.Connect:input_type -> runner.v1.RunnerHeartbeat
 	2, // 1: runner.v1.SandboxControl.CreateSandbox:input_type -> runner.v1.CreateSandboxRequest
-	4, // 2: runner.v1.SandboxControl.DeleteSandbox:input_type -> runner.v1.DeleteSandboxRequest
-	1, // 3: runner.v1.RunnerRegistry.Connect:output_type -> runner.v1.ControlMessage
-	3, // 4: runner.v1.SandboxControl.CreateSandbox:output_type -> runner.v1.CreateSandboxResponse
-	5, // 5: runner.v1.SandboxControl.DeleteSandbox:output_type -> runner.v1.DeleteSandboxResponse
-	3, // [3:6] is the sub-list for method output_type
-	0, // [0:3] is the sub-list for method input_type
+	4, // 2: runner.v1.SandboxControl.StopSandbox:input_type -> runner.v1.StopSandboxRequest
+	6, // 3: runner.v1.SandboxControl.DeleteSandbox:input_type -> runner.v1.DeleteSandboxRequest
+	1, // 4: runner.v1.RunnerRegistry.Connect:output_type -> runner.v1.ControlMessage
+	3, // 5: runner.v1.SandboxControl.CreateSandbox:output_type -> runner.v1.CreateSandboxResponse
+	5, // 6: runner.v1.SandboxControl.StopSandbox:output_type -> runner.v1.StopSandboxResponse
+	7, // 7: runner.v1.SandboxControl.DeleteSandbox:output_type -> runner.v1.DeleteSandboxResponse
+	4, // [4:8] is the sub-list for method output_type
+	0, // [0:4] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
 	0, // [0:0] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
@@ -412,7 +501,7 @@ func file_runner_v1_runner_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_runner_v1_runner_proto_rawDesc), len(file_runner_v1_runner_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

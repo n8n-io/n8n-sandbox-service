@@ -110,6 +110,12 @@ curl -s -X DELETE http://localhost:8080/sandboxes/<id> \
 | `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE` | *(required)* | API client certificate (PEM) for SandboxControl |
 | `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE` | *(required)* | API client key (PEM) |
 | `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_SERVER_NAME` | *(empty)* | TLS verify name when it must differ from the dial host (defaults to the runner host) |
+| `SANDBOX_API_IDLE_STOP_AFTER` | `1h` | After this duration since `last_active_at`, the API calls runner **StopSandbox** (container kept). Go [`time.ParseDuration`](https://pkg.go.dev/time#ParseDuration) (e.g. `30m`, `2h`). `0` disables idle stop. |
+| `SANDBOX_API_IDLE_DELETE_AFTER` | `24h` | After this duration since `last_active_at`, proxied routes and `GET /sandboxes/{id}` return **404** (same as missing sandbox) until the sweeper removes the runner container and DB row after the safety buffer. `0` disables idle delete. |
+| `SANDBOX_API_IDLE_DELETE_SAFETY_BUFFER` | `1m` when delete-after is set | Extra delay after the delete-after threshold before runner delete and DB row removal. Ignored when delete-after is unset. |
+| `SANDBOX_API_IDLE_SWEEP_INTERVAL` | `1m` | How often the API scans for idle stop/delete candidates (positive duration). |
+
+**Idle TTL:** A background sweeper runs by default. `last_active_at` advances when a valid proxied sandbox request is received and on `GET /sandboxes/{id}` (only while the sandbox is still within the delete window). Status in the DB is **`running`** after create or proxied request receipt, or **`stopped`** after idle stop. Set both idle TTL variables to `0` to disable the sweeper.
 
 Runners register over gRPC and report health, capacity, and a **control gRPC address**. Sandbox create/delete are gRPC-only (`SandboxControl` on the runner). Exec/files and other proxy routes always use HTTP.
 
@@ -185,7 +191,7 @@ Run unit tests:
 make test
 ```
 
-Run the full e2e suite (all topologies sequentially: no runner → two runners → single runner + full Playwright):
+Run the full e2e suite (all topologies sequentially: no runner → two runners → single runner + full Playwright → idle TTL stack):
 
 ```bash
 ./e2e/run-all.sh
@@ -194,7 +200,8 @@ Run the full e2e suite (all topologies sequentially: no runner → two runners �
 Run only one topology or the default single-runner suite:
 
 ```bash
-./e2e/run.sh              # single runner + full Playwright suite
+./e2e/run.sh              # single runner + full Playwright suite (no API idle TTL)
+./e2e/run-idle-ttl.sh     # same topology, short idle TTL, only sandbox-idle-ttl.spec.ts
 ./e2e/run-no-runner.sh    # API only — expects POST /sandboxes to return 503
 ./e2e/run-two-runners.sh # two runners — placement routing per sandbox
 ```

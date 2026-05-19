@@ -48,6 +48,12 @@ func main() {
 
 	reg := registry.New(cfg.HeartbeatGrace)
 
+	api.LogIdleSweepConfig(cfg)
+
+	sweepCtx, sweepCancel := context.WithCancel(context.Background())
+	defer sweepCancel()
+	api.StartIdleSweeper(sweepCtx, s, cfg)
+
 	// Create API gateway with state management
 	handler, err := api.NewGatewayRouter(s, cfg, reg)
 	if err != nil {
@@ -107,7 +113,9 @@ func main() {
 	select {
 	case sig := <-quit:
 		slog.Info("received signal, shutting down api", "signal", sig)
+		sweepCancel()
 	case err := <-serverErr:
+		sweepCancel()
 		slog.Error("server error", "error", err)
 		os.Exit(1)
 	}

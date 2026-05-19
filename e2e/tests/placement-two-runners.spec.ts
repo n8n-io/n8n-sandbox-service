@@ -1,11 +1,11 @@
 import { test, expect } from '@playwright/test';
-import { createSandbox, deleteSandbox, exec } from './helpers';
+import { createSandboxWithRetry, deleteSandbox, exec } from './helpers';
 
 // Run only from e2e/run-two-runners.sh (two registered runners).
 
 test('sandboxes stay on the correct runner', async () => {
-  const id1 = await createSandbox();
-  const id2 = await createSandbox();
+  const id1 = await createSandboxWithRetry();
+  const id2 = await createSandboxWithRetry();
 
   try {
     await exec(id1, "printf '%s' 'A' > /tmp/placement-marker");

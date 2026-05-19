@@ -69,6 +69,17 @@ func proxyHandler(mgr ContainerManager, cfg *config.Config, limitBody bool) http
 		}
 
 		daemonBaseURL, err := mgr.DaemonURL(r.Context(), id)
+		if err != nil && errors.Is(err, manager.ErrSandboxNotRunning) {
+			if wakeErr := mgr.EnsureSandboxRunning(r.Context(), id); wakeErr != nil {
+				if errors.Is(wakeErr, manager.ErrSandboxNotFound) {
+					writeError(w, http.StatusNotFound, wakeErr.Error())
+				} else {
+					writeError(w, http.StatusServiceUnavailable, "sandbox start: "+wakeErr.Error())
+				}
+				return
+			}
+			daemonBaseURL, err = mgr.DaemonURL(r.Context(), id)
+		}
 		if err != nil {
 			if errors.Is(err, manager.ErrSandboxNotFound) {
 				writeError(w, http.StatusNotFound, err.Error())

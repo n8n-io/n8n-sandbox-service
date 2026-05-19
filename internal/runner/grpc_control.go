@@ -73,6 +73,24 @@ func (s *SandboxControlGRPC) CreateSandbox(ctx context.Context, req *pb.CreateSa
 	return &pb.CreateSandboxResponse{SandboxId: sandboxID, ContainerIp: info.IP}, nil
 }
 
+// StopSandbox stops the sandbox container without removing it.
+func (s *SandboxControlGRPC) StopSandbox(ctx context.Context, req *pb.StopSandboxRequest) (*pb.StopSandboxResponse, error) {
+	if err := s.checkAPIKey(ctx); err != nil {
+		return nil, err
+	}
+	sandboxID := strings.TrimSpace(req.GetSandboxId())
+	if !isValidID(sandboxID) {
+		return nil, status.Error(codes.InvalidArgument, "invalid sandbox id")
+	}
+	if err := s.Mgr.StopSandboxContainer(ctx, sandboxID); err != nil {
+		if errors.Is(err, manager.ErrSandboxNotFound) {
+			return &pb.StopSandboxResponse{}, nil
+		}
+		return nil, toGRPCError(err)
+	}
+	return &pb.StopSandboxResponse{}, nil
+}
+
 // DeleteSandbox removes the sandbox container if it exists.
 func (s *SandboxControlGRPC) DeleteSandbox(ctx context.Context, req *pb.DeleteSandboxRequest) (*pb.DeleteSandboxResponse, error) {
 	if err := s.checkAPIKey(ctx); err != nil {
