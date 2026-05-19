@@ -128,9 +128,7 @@ func (m *Manager) CreateContainer(ctx context.Context, sandboxID string, opts *C
 	}
 
 	cleanupOnError := func() {
-		if err := m.stopAndCleanContainer(ctx, containerID); err != nil {
-			slog.Warn("remove container after create failure", "container_id", containerID, "err", err)
-		}
+		_ = m.stopAndCleanContainer(ctx, containerID)
 	}
 
 	if err := m.startContainer(ctx, containerID); err != nil {
@@ -217,7 +215,6 @@ func (m *Manager) DaemonURL(ctx context.Context, sandboxID string) (string, erro
 // DeleteContainer stops and removes a container.
 func (m *Manager) DeleteContainer(ctx context.Context, containerID string) error {
 	if err := m.stopAndCleanContainer(ctx, containerID); err != nil {
-		slog.Warn("remove container", "container_id", containerID, "err", err)
 		return err
 	}
 
@@ -227,13 +224,14 @@ func (m *Manager) DeleteContainer(ctx context.Context, containerID string) error
 
 // stopAndCleanContainer removes the container, then tears down its network
 // rules. Order matters: rules must outlive the container so it cannot run
-// unconfined during teardown. The Teardown error is logged and swallowed;
-// the removeContainer error is returned so callers decide whether to bail.
+// unconfined during teardown. Both failure paths are logged; the
+// removeContainer error is also returned so callers decide whether to bail.
 func (m *Manager) stopAndCleanContainer(ctx context.Context, containerID string) error {
 	if containerID == "" {
 		return nil
 	}
 	if err := m.removeContainer(ctx, containerID); err != nil {
+		slog.Warn("remove sandbox container", "container_id", containerID, "err", err)
 		return err
 	}
 	if err := netrules.Teardown(containerID); err != nil {
@@ -330,13 +328,10 @@ func (m *Manager) reconcileContainers(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// Best effort: startup should continue even if one stale managed
+	// container can't be removed immediately. stopAndCleanContainer logs.
 	for _, id := range ids {
-		if err := m.stopAndCleanContainer(ctx, id); err != nil {
-			// Best effort: startup should continue even if one stale managed
-			// container can't be removed immediately.
-			slog.Warn("remove container during reconcile", "container_id", id, "err", err)
-			continue
-		}
+		_ = m.stopAndCleanContainer(ctx, id)
 	}
 	return nil
 }
