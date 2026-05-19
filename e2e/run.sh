@@ -102,23 +102,40 @@ else
 	RUNTIME_ARGS+=(--runtime=sysbox-runc)
 fi
 
+API_IDLE_ENV=()
+if [[ "${E2E_IDLE_TTL_SUITE:-}" == "1" ]]; then
+	API_IDLE_ENV=(
+		-e "SANDBOX_API_IDLE_STOP_AFTER=3s"
+		-e "SANDBOX_API_IDLE_DELETE_AFTER=10s"
+		-e "SANDBOX_API_IDLE_DELETE_SAFETY_BUFFER=2s"
+		-e "SANDBOX_API_IDLE_SWEEP_INTERVAL=1s"
+	)
+fi
+
 echo "Starting API service on port $PORT..."
-docker run -d \
-	"${API_DOCKER_USER[@]}" \
-	--network "$NETWORK_NAME" \
-	-p "$PORT:8080" \
-	-v "$TLS_DIR:/grpc-tls:ro" \
-	-e "SANDBOX_API_KEYS=$API_KEY" \
-	-e "SANDBOX_API_RUNNER_REGISTRATION_TOKEN=$REG_TOKEN" \
-	-e "SANDBOX_API_RUNNER_API_KEY=$RUNNER_INTERNAL_API_KEY" \
-	-e "SANDBOX_API_GRPC_TLS_CERT_FILE=/grpc-tls/grpc-server.crt" \
-	-e "SANDBOX_API_GRPC_TLS_KEY_FILE=/grpc-tls/grpc-server.key" \
-	-e "SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE=/grpc-tls/ca.crt" \
-	-e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE=/grpc-tls/ca.crt" \
-	-e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE=/grpc-tls/control-grpc-api-client.crt" \
-	-e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE=/grpc-tls/control-grpc-api-client.key" \
-	--name "$API_CONTAINER_NAME" \
-	"$API_IMAGE"
+API_DOCKER_RUN=(-d)
+if ((${#API_DOCKER_USER[@]})); then
+	API_DOCKER_RUN+=("${API_DOCKER_USER[@]}")
+fi
+API_DOCKER_RUN+=(
+	--network "$NETWORK_NAME"
+	-p "$PORT:8080"
+	-v "$TLS_DIR:/grpc-tls:ro"
+	-e "SANDBOX_API_KEYS=$API_KEY"
+	-e "SANDBOX_API_RUNNER_REGISTRATION_TOKEN=$REG_TOKEN"
+	-e "SANDBOX_API_RUNNER_API_KEY=$RUNNER_INTERNAL_API_KEY"
+	-e "SANDBOX_API_GRPC_TLS_CERT_FILE=/grpc-tls/grpc-server.crt"
+	-e "SANDBOX_API_GRPC_TLS_KEY_FILE=/grpc-tls/grpc-server.key"
+	-e "SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE=/grpc-tls/ca.crt"
+	-e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE=/grpc-tls/ca.crt"
+	-e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE=/grpc-tls/control-grpc-api-client.crt"
+	-e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE=/grpc-tls/control-grpc-api-client.key"
+)
+if ((${#API_IDLE_ENV[@]})); then
+	API_DOCKER_RUN+=("${API_IDLE_ENV[@]}")
+fi
+API_DOCKER_RUN+=(--name "$API_CONTAINER_NAME" "$API_IMAGE")
+docker run "${API_DOCKER_RUN[@]}"
 
 e2e_wait_for_api_http "$PORT" "$API_CONTAINER_NAME"
 
@@ -173,21 +190,28 @@ export E2E_RUNNER_CONTAINER_NAME="$RUNNER_CONTAINER_NAME"
 
 echo "Running e2e tests (excluding topology-only + resilience; API restart runs last)..."
 MAIN_SPECS=()
-shopt -s nullglob
-for f in tests/*.spec.ts; do
-	bn=$(basename "$f")
-	[[ "$bn" == resilience.spec.ts ]] && continue
-	[[ "$bn" == placement-no-runners.spec.ts ]] && continue
-	[[ "$bn" == placement-two-runners.spec.ts ]] && continue
-	MAIN_SPECS+=("$f")
-done
-shopt -u nullglob
+if [[ "${E2E_IDLE_TTL_SUITE:-}" == "1" ]]; then
+	MAIN_SPECS=("tests/sandbox-idle-ttl.spec.ts")
+else
+	shopt -s nullglob
+	for f in tests/*.spec.ts; do
+		bn=$(basename "$f")
+		[[ "$bn" == resilience.spec.ts ]] && continue
+		[[ "$bn" == placement-no-runners.spec.ts ]] && continue
+		[[ "$bn" == placement-two-runners.spec.ts ]] && continue
+		[[ "$bn" == sandbox-idle-ttl.spec.ts ]] && continue
+		MAIN_SPECS+=("$f")
+	done
+	shopt -u nullglob
+fi
 if [[ ${#MAIN_SPECS[@]} -eq 0 ]]; then
 	echo "No Playwright specs found under tests/ (after excluding placement + resilience specs)" >&2
 	exit 1
 fi
 BASE_URL="http://localhost:$PORT" SANDBOX_API_KEY="$API_KEY" npx playwright test "${MAIN_SPECS[@]}" "$@"
 
-echo "Running API resilience e2e..."
-BASE_URL="http://localhost:$PORT" SANDBOX_API_KEY="$API_KEY" \
-	npx playwright test tests/resilience.spec.ts --grep '@e2e-api-restart' "$@"
+if [[ "${E2E_IDLE_TTL_SUITE:-}" != "1" ]]; then
+	echo "Running API resilience e2e..."
+	BASE_URL="http://localhost:$PORT" SANDBOX_API_KEY="$API_KEY" \
+		npx playwright test tests/resilience.spec.ts --grep '@e2e-api-restart' "$@"
+fi

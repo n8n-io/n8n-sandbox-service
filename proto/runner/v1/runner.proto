@@ -11,6 +11,7 @@ service RunnerRegistry {
 // SandboxControl: API → runner for sandbox create/delete (HTTP remains for exec/files proxy).
 service SandboxControl {
   rpc CreateSandbox(CreateSandboxRequest) returns (CreateSandboxResponse);
+  rpc StopSandbox(StopSandboxRequest) returns (StopSandboxResponse);
   rpc DeleteSandbox(DeleteSandboxRequest) returns (DeleteSandboxResponse);
 }
 
@@ -36,6 +37,12 @@ message CreateSandboxResponse {
   string sandbox_id = 1;
   string container_ip = 2;
 }
+
+message StopSandboxRequest {
+  string sandbox_id = 1;
+}
+
+message StopSandboxResponse {}
 
 message DeleteSandboxRequest {
   string sandbox_id = 1;

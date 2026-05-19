@@ -161,6 +161,48 @@ func (s *Store) Delete(id string) error {
 	return nil
 }
 
+// ListForIdleReapDelete returns sandboxes whose last_active_at is at or before
+// cutoff (Unix seconds).
+func (s *Store) ListForIdleReapDelete(cutoff int64) ([]*SandboxRecord, error) {
+	const q = `
+		SELECT id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr
+		FROM sandboxes
+		WHERE last_active_at <= ?`
+	return s.querySandboxRecords(q, cutoff)
+}
+
+// ListForIdleReapStop returns running sandboxes whose last_active_at is at or
+// before cutoff (Unix seconds).
+func (s *Store) ListForIdleReapStop(cutoff int64) ([]*SandboxRecord, error) {
+	const q = `
+		SELECT id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr
+		FROM sandboxes
+		WHERE status = 'running'
+		  AND last_active_at <= ?`
+	return s.querySandboxRecords(q, cutoff)
+}
+
+func (s *Store) querySandboxRecords(q string, args ...any) ([]*SandboxRecord, error) {
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: query sandboxes: %w", err)
+	}
+	defer rows.Close()
+
+	var records []*SandboxRecord
+	for rows.Next() {
+		rec, err := scanRecord(rows)
+		if err != nil {
+			return nil, fmt.Errorf("store: query sandboxes scan: %w", err)
+		}
+		records = append(records, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: query sandboxes rows: %w", err)
+	}
+	return records, nil
+}
+
 // List returns all sandbox records, ordered by creation time descending.
 func (s *Store) List() ([]*SandboxRecord, error) {
 	const q = `
@@ -184,52 +226,6 @@ func (s *Store) List() ([]*SandboxRecord, error) {
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("store: list sandboxes rows: %w", err)
-	}
-	return records, nil
-}
-
-// MarkAllTerminated sets status = "terminated" for every sandbox whose status
-// is not already "terminated". This is called on startup to reconcile any
-// sandboxes that were running when the process previously exited.
-func (s *Store) MarkAllTerminated() error {
-	const q = `UPDATE sandboxes SET status = 'terminated' WHERE status != 'terminated'`
-	res, err := s.db.Exec(q)
-	if err != nil {
-		return fmt.Errorf("store: mark all terminated: %w", err)
-	}
-	n, _ := res.RowsAffected()
-	if n > 0 {
-		slog.Info("store: marked stale sandboxes as terminated", "count", n)
-	}
-	return nil
-}
-
-// ListStale returns all sandboxes whose last_active_at is older than
-// (now - maxAge) seconds and whose status is not "terminated".
-func (s *Store) ListStale(maxAge int64) ([]*SandboxRecord, error) {
-	const q = `
-		SELECT id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr
-		FROM sandboxes
-		WHERE last_active_at < ?
-		  AND status != 'terminated'`
-
-	cutoff := time.Now().Unix() - maxAge
-	rows, err := s.db.Query(q, cutoff)
-	if err != nil {
-		return nil, fmt.Errorf("store: list stale: %w", err)
-	}
-	defer rows.Close()
-
-	var records []*SandboxRecord
-	for rows.Next() {
-		rec, err := scanRecord(rows)
-		if err != nil {
-			return nil, fmt.Errorf("store: list stale scan: %w", err)
-		}
-		records = append(records, rec)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: list stale rows: %w", err)
 	}
 	return records, nil
 }

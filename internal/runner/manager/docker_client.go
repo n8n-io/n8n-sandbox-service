@@ -108,6 +108,11 @@ func (dc *dockerClient) startContainer(ctx context.Context, containerID string) 
 	return err
 }
 
+func (dc *dockerClient) stopContainer(ctx context.Context, containerID string) error {
+	_, err := dc.run(ctx, "container", "stop", "-t", "10", containerID)
+	return err
+}
+
 func (dc *dockerClient) removeContainer(ctx context.Context, containerID string) error {
 	if containerID == "" {
 		return nil
