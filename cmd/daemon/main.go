@@ -10,15 +10,14 @@ import (
 
 func main() {
 	listenAddr := flag.String("listen-addr", ":8081", "TCP address to listen on")
-	baseDir := flag.String("base-dir", "/", "Base directory for file operations")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	slog.SetDefault(logger)
 
-	slog.Info("daemon starting", "listen_addr", *listenAddr, "base_dir", *baseDir)
+	slog.Info("daemon starting", "listen_addr", *listenAddr)
 
-	if err := daemon.Run(*listenAddr, *baseDir); err != nil {
+	if err := daemon.Run(*listenAddr); err != nil {
 		slog.Error("daemon exited with error", "error", err)
 		os.Exit(1)
 	}

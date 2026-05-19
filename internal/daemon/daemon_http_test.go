@@ -12,7 +12,7 @@ import (
 )
 
 func TestExecEndpointStreamsResponses(t *testing.T) {
-	handler := NewHandler(t.TempDir())
+	handler := NewHandler()
 
 	req := httptest.NewRequest(http.MethodPost, "/executions", bytes.NewReader([]byte(`{"command":"echo hello","env":{"FOO":"bar"}}`)))
 	req.Header.Set("Content-Type", "application/json")
@@ -51,7 +51,7 @@ func TestExecEndpointStreamsResponses(t *testing.T) {
 }
 
 func TestExecEndpointRejectsArrayEnv(t *testing.T) {
-	handler := NewHandler(t.TempDir())
+	handler := NewHandler()
 
 	req := httptest.NewRequest(http.MethodPost, "/executions", bytes.NewReader([]byte(`{"command":"echo hello","env":["FOO=bar"]}`)))
 	req.Header.Set("Content-Type", "application/json")
@@ -74,7 +74,7 @@ func TestExecEndpointAppliesDefaultTimeout(t *testing.T) {
 		defaultExecTimeout = oldTimeout
 	})
 
-	handler := NewHandler(t.TempDir())
+	handler := NewHandler()
 	req := httptest.NewRequest(http.MethodPost, "/executions", bytes.NewReader([]byte(`{"command":"sleep 1"}`)))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()

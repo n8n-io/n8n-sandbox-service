@@ -1,5 +1,4 @@
 import type { Readable } from "node:stream";
-import { StringDecoder } from "node:string_decoder";
 import { InvalidStreamEventError } from "./errors";
 import type {
   ExecEvent,
@@ -52,10 +51,10 @@ function isErrorEvent(json: JsonObject): json is ExecErrorEvent {
 /** Yields parsed exec events from an NDJSON stream, one per line. */
 export async function* readNdjsonStream(stream: Readable): AsyncGenerator<ExecEvent> {
   let pending = "";
-  const decoder = new StringDecoder("utf-8");
+  const decoder = new TextDecoder("utf-8");
 
   for await (const chunk of stream) {
-    pending += decoder.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf-8"));
+    pending += decodeChunk(decoder, chunk, { stream: true });
 
     let newlineIndex = pending.indexOf("\n");
     while (newlineIndex !== -1) {
@@ -68,12 +67,20 @@ export async function* readNdjsonStream(stream: Readable): AsyncGenerator<ExecEv
     }
   }
 
-  pending += decoder.end();
+  pending += decoder.decode();
 
   const last = pending.trim();
   if (last.length > 0) {
     yield parseExecEvent(last);
   }
+}
+
+function decodeChunk(decoder: TextDecoder, chunk: unknown, options?: TextDecodeOptions): string {
+  if (typeof chunk === "string") return decoder.decode(Buffer.from(chunk, "utf-8"), options);
+  if (chunk instanceof ArrayBuffer) return decoder.decode(chunk, options);
+  if (ArrayBuffer.isView(chunk)) return decoder.decode(chunk as ArrayBufferView, options);
+
+  return decoder.decode(Buffer.from(String(chunk), "utf-8"), options);
 }
 
 /** Parses a single NDJSON line into a typed exec event. Returns an error event on invalid input. */

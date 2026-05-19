@@ -93,6 +93,7 @@ func (dc *dockerClient) createContainer(ctx context.Context, sandboxID, containe
 	if enableCgroups {
 		args = append(args, dockerLimitArgs(limits)...)
 	}
+	args = append(args, dockerDiskQuotaArgs(limits)...)
 	args = append(args, image)
 
 	out, err := dc.run(ctx, args...)
@@ -202,6 +203,13 @@ func firstGateway(inspect *networkInspect) string {
 		return inspect.IPAM.Config[0].Gateway
 	}
 	return ""
+}
+
+func dockerDiskQuotaArgs(limits *ResourceLimits) []string {
+	if limits == nil || limits.DiskMB <= 0 {
+		return nil
+	}
+	return []string{"--storage-opt", fmt.Sprintf("size=%dm", limits.DiskMB)}
 }
 
 func dockerLimitArgs(limits *ResourceLimits) []string {

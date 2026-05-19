@@ -213,10 +213,15 @@ func (m *Manager) Shutdown() {
 }
 
 func (m *Manager) defaultLimits() *ResourceLimits {
+	var diskMB int64
+	if m.config.DiskQuotaActive {
+		diskMB = m.config.DefaultDiskQuotaMB
+	}
 	return &ResourceLimits{
 		MemoryMB:   m.config.DefaultMemoryMB,
 		CPUPercent: m.config.DefaultCPUPercent,
 		PidsMax:    m.config.DefaultPidsMax,
+		DiskMB:     diskMB,
 	}
 }
 
