@@ -2,13 +2,11 @@ package api
 
 import (
 	"errors"
-	"io"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,38 +15,6 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/runnerctl"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
 )
-
-// notifyOnCloseReadCloser runs fn once when the body is closed (after full streaming).
-type notifyOnCloseReadCloser struct {
-	io.ReadCloser
-	once sync.Once
-	fn   func()
-}
-
-func (n *notifyOnCloseReadCloser) Close() error {
-	err := n.ReadCloser.Close()
-	n.once.Do(n.fn)
-	return err
-}
-
-type activityNotifyTransport struct {
-	base   http.RoundTripper
-	onDone func()
-}
-
-func (t *activityNotifyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if t.base == nil {
-		t.base = http.DefaultTransport
-	}
-	resp, err := t.base.RoundTrip(req)
-	if err != nil || resp == nil || resp.Body == nil {
-		return resp, err
-	}
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 && t.onDone != nil {
-		resp.Body = &notifyOnCloseReadCloser{ReadCloser: resp.Body, fn: t.onDone}
-	}
-	return resp, err
-}
 
 func runnerProxyForPick(w http.ResponseWriter, r *http.Request, limitBody bool, cfg *config.APIConfig, pick func() (*registry.Runner, error)) bool {
 	run, err := pick()
@@ -61,7 +27,7 @@ func runnerProxyForPick(w http.ResponseWriter, r *http.Request, limitBody bool, 
 		return false
 	}
 	u, _ := url.Parse(strings.TrimRight(run.HTTPBaseURL, "/"))
-	proxy := newRunnerReverseProxy(u, cfg.RunnerAPIKey, nil)
+	proxy := newRunnerReverseProxy(u, cfg.RunnerAPIKey)
 	if limitBody {
 		r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxFileBytes)
 	}
@@ -93,20 +59,16 @@ func sandboxProxyHandler(s *store.Store, cfg *config.APIConfig) func(bool) http.
 				return
 			}
 
-			if cfg.IdleDeleteAfter > 0 {
-				now := time.Now().Unix()
-				if now > rec.LastActiveAt+int64(cfg.IdleDeleteAfter.Seconds()) {
-					writeError(w, http.StatusNotFound, "sandbox not found")
-					return
-				}
+			if isPastIdleDeleteWindow(rec, cfg, time.Now().Unix()) {
+				writeError(w, http.StatusNotFound, "sandbox not found")
+				return
 			}
 
+			_ = s.UpdateLastActive(id)
+			_ = s.UpdateStatus(id, "running")
+
 			u, _ := url.Parse(strings.TrimRight(rec.RunnerHTTPBase, "/"))
-			workDone := func() {
-				_ = s.UpdateLastActive(id)
-				_ = s.UpdateStatus(id, "running")
-			}
-			proxy := newRunnerReverseProxy(u, cfg.RunnerAPIKey, workDone)
+			proxy := newRunnerReverseProxy(u, cfg.RunnerAPIKey)
 			if limitBody {
 				r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxFileBytes)
 			}
@@ -160,12 +122,9 @@ func handleGetSandbox(s *store.Store, cfg *config.APIConfig) http.HandlerFunc {
 			writeError(w, http.StatusNotFound, "sandbox not found")
 			return
 		}
-		if cfg.IdleDeleteAfter > 0 {
-			now := time.Now().Unix()
-			if now > rec.LastActiveAt+int64(cfg.IdleDeleteAfter.Seconds()) {
-				writeError(w, http.StatusNotFound, "sandbox not found")
-				return
-			}
+		if isPastIdleDeleteWindow(rec, cfg, time.Now().Unix()) {
+			writeError(w, http.StatusNotFound, "sandbox not found")
+			return
 		}
 		if err := s.UpdateLastActive(id); err != nil {
 			// non-fatal
@@ -178,6 +137,13 @@ func handleGetSandbox(s *store.Store, cfg *config.APIConfig) http.HandlerFunc {
 		}
 		writeJSON(w, http.StatusOK, resp)
 	}
+}
+
+func isPastIdleDeleteWindow(rec *store.SandboxRecord, cfg *config.APIConfig, now int64) bool {
+	if rec == nil || cfg.IdleDeleteAfter <= 0 {
+		return false
+	}
+	return now > rec.LastActiveAt+int64(cfg.IdleDeleteAfter.Seconds())
 }
 
 func runnerControlTLS(cfg *config.APIConfig) *runnerctl.TLS {
@@ -287,9 +253,9 @@ func isValidUUID(id string) bool {
 	return id != "" && uuidRegex.MatchString(id)
 }
 
-func newRunnerReverseProxy(runnerURL *url.URL, runnerAPIKey string, onWorkDone func()) *httputil.ReverseProxy {
+func newRunnerReverseProxy(runnerURL *url.URL, runnerAPIKey string) *httputil.ReverseProxy {
 	target := *runnerURL
-	p := &httputil.ReverseProxy{
+	return &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(&target)
 			pr.Out.URL.Path = pr.In.URL.Path
@@ -315,8 +281,4 @@ func newRunnerReverseProxy(runnerURL *url.URL, runnerAPIKey string, onWorkDone f
 			writeError(w, http.StatusServiceUnavailable, "runner unavailable")
 		},
 	}
-	if onWorkDone != nil {
-		p.Transport = &activityNotifyTransport{onDone: onWorkDone}
-	}
-	return p
 }

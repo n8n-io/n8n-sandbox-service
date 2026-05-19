@@ -9,10 +9,12 @@ import (
 )
 
 const (
-	defaultListenAddr     = ":8080"
-	defaultGRPCListenAddr = ":9090"
-	defaultMaxFileBytes   = 10 * 1024 * 1024 // 10 MB
-	defaultHeartbeatGrace = 45 * time.Second
+	defaultListenAddr      = ":8080"
+	defaultGRPCListenAddr  = ":9090"
+	defaultMaxFileBytes    = 10 * 1024 * 1024 // 10 MB
+	defaultHeartbeatGrace  = 45 * time.Second
+	defaultIdleStopAfter   = time.Hour
+	defaultIdleDeleteAfter = 24 * time.Hour
 )
 
 // APIConfig contains configuration for the public API gateway.
@@ -71,11 +73,13 @@ type APIConfig struct {
 // LoadAPI reads API gateway configuration from environment variables.
 func LoadAPI() (*APIConfig, error) {
 	cfg := &APIConfig{
-		ListenAddr:     defaultListenAddr,
-		GRPCListenAddr: defaultGRPCListenAddr,
-		MaxFileBytes:   defaultMaxFileBytes,
-		DataDir:        "/tmp/sandbox-api",
-		HeartbeatGrace: defaultHeartbeatGrace,
+		ListenAddr:      defaultListenAddr,
+		GRPCListenAddr:  defaultGRPCListenAddr,
+		MaxFileBytes:    defaultMaxFileBytes,
+		DataDir:         "/tmp/sandbox-api",
+		HeartbeatGrace:  defaultHeartbeatGrace,
+		IdleStopAfter:   defaultIdleStopAfter,
+		IdleDeleteAfter: defaultIdleDeleteAfter,
 	}
 
 	rawKeys := os.Getenv("SANDBOX_API_KEYS")

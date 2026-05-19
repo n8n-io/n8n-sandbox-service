@@ -13,7 +13,7 @@ import (
 // LogIdleSweepConfig logs whether the idle sweeper runs and with which settings.
 func LogIdleSweepConfig(cfg *config.APIConfig) {
 	if cfg.IdleStopAfter <= 0 && cfg.IdleDeleteAfter <= 0 {
-		slog.Info("idle sandbox sweeper disabled (set SANDBOX_API_IDLE_STOP_AFTER and/or SANDBOX_API_IDLE_DELETE_AFTER to enable)")
+		slog.Info("idle sandbox sweeper disabled")
 		return
 	}
 	slog.Info("idle sandbox sweeper enabled",
@@ -50,73 +50,72 @@ func StartIdleSweeper(ctx context.Context, s *store.Store, cfg *config.APIConfig
 			case <-t.C:
 				// Use the same ctx as the ticker loop so stop/delete RPCs honor
 				// sweepCancel() from shutdown instead of blocking on Background.
-				sweepIdleSandboxes(ctx, s, cfg, tlsCfg)
+				now := time.Now().Unix()
+				if cfg.IdleDeleteAfter > 0 {
+					sweepIdleDeleteSandboxes(ctx, s, cfg, tlsCfg, now)
+				}
+				if ctx.Err() != nil {
+					return
+				}
+				if cfg.IdleStopAfter > 0 {
+					sweepIdleStopSandboxes(ctx, s, cfg, tlsCfg, now)
+				}
 			}
 		}
 	}()
 }
 
-func sweepIdleSandboxes(ctx context.Context, s *store.Store, cfg *config.APIConfig, tlsCfg *runnerctl.TLS) {
-	now := time.Now().Unix()
-	var deleteCutoff, stopCutoff int64
-	var deleteSec, stopSec, bufferSec int64
-	if cfg.IdleDeleteAfter > 0 {
-		deleteSec = int64(cfg.IdleDeleteAfter.Seconds())
-		bufferSec = int64(cfg.IdleDeleteSafetyBuffer.Seconds())
-		deleteCutoff = now - deleteSec - bufferSec
-	}
-	if cfg.IdleStopAfter > 0 {
-		stopSec = int64(cfg.IdleStopAfter.Seconds())
-		stopCutoff = now - stopSec
-	}
+func sweepIdleDeleteSandboxes(ctx context.Context, s *store.Store, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now int64) {
+	deleteSec := int64(cfg.IdleDeleteAfter.Seconds())
+	bufferSec := int64(cfg.IdleDeleteSafetyBuffer.Seconds())
+	deleteCutoff := now - deleteSec - bufferSec
 
-	if cfg.IdleDeleteAfter > 0 {
-		records, err := s.ListForIdleReapDelete(deleteCutoff)
-		if err != nil {
-			slog.Info("idle sweep list delete candidates failed", "err", err)
-		} else {
-			for _, rec := range records {
-				if rec == nil {
-					continue
-				}
-				if err := runnerctl.DeleteSandbox(ctx, rec.RunnerControlGRPCAddr, cfg.RunnerAPIKey, tlsCfg, rec.ID); err != nil {
-					if ctx.Err() != nil {
-						return
-					}
-					slog.Info("idle delete failed", "sandbox_id", rec.ID, "err", err)
-					continue
-				}
-				if err := s.Delete(rec.ID); err != nil {
-					slog.Info("idle delete store failed", "sandbox_id", rec.ID, "err", err)
-				}
-			}
-		}
-	}
-
-	if ctx.Err() != nil {
+	records, err := s.ListForIdleReapDelete(deleteCutoff)
+	if err != nil {
+		slog.Error("idle sweep list delete candidates failed", "err", err)
 		return
 	}
 
-	if cfg.IdleStopAfter > 0 {
-		records, err := s.ListForIdleReapStop(stopCutoff)
-		if err != nil {
-			slog.Info("idle sweep list stop candidates failed", "err", err)
-		} else {
-			for _, rec := range records {
-				if rec == nil {
-					continue
-				}
-				if err := runnerctl.StopSandbox(ctx, rec.RunnerControlGRPCAddr, cfg.RunnerAPIKey, tlsCfg, rec.ID); err != nil {
-					if ctx.Err() != nil {
-						return
-					}
-					slog.Info("idle stop failed", "sandbox_id", rec.ID, "err", err)
-					continue
-				}
-				if err := s.UpdateStatus(rec.ID, "stopped"); err != nil {
-					slog.Info("idle stop status update failed", "sandbox_id", rec.ID, "err", err)
-				}
+	for _, rec := range records {
+		if rec == nil {
+			continue
+		}
+		if err := runnerctl.DeleteSandbox(ctx, rec.RunnerControlGRPCAddr, cfg.RunnerAPIKey, tlsCfg, rec.ID); err != nil {
+			if ctx.Err() != nil {
+				return
 			}
+			slog.Error("idle delete failed", "sandbox_id", rec.ID, "err", err)
+			continue
+		}
+		if err := s.Delete(rec.ID); err != nil {
+			slog.Error("idle delete store failed", "sandbox_id", rec.ID, "err", err)
+		}
+	}
+}
+
+func sweepIdleStopSandboxes(ctx context.Context, s *store.Store, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now int64) {
+	stopSec := int64(cfg.IdleStopAfter.Seconds())
+	stopCutoff := now - stopSec
+
+	records, err := s.ListForIdleReapStop(stopCutoff)
+	if err != nil {
+		slog.Error("idle sweep list stop candidates failed", "err", err)
+		return
+	}
+
+	for _, rec := range records {
+		if rec == nil {
+			continue
+		}
+		if err := runnerctl.StopSandbox(ctx, rec.RunnerControlGRPCAddr, cfg.RunnerAPIKey, tlsCfg, rec.ID); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			slog.Error("idle stop failed", "sandbox_id", rec.ID, "err", err)
+			continue
+		}
+		if err := s.UpdateStatus(rec.ID, "stopped"); err != nil {
+			slog.Error("idle stop status update failed", "sandbox_id", rec.ID, "err", err)
 		}
 	}
 }
