@@ -29,11 +29,7 @@ func NewRouter(mgr ContainerManager, cfg *config.Config) http.Handler {
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 
-	// Sandbox CRUD (stateless - no database persistence)
-	mux.HandleFunc("GET /sandboxes", ListSandboxes(mgr))
-	mux.HandleFunc("POST /sandboxes", CreateSandbox(mgr))
 	mux.HandleFunc("GET /sandboxes/{id}", GetSandbox(mgr))
-	mux.HandleFunc("DELETE /sandboxes/{id}", DeleteSandbox(mgr))
 
 	// Proxy exec, files, mkdir, stat to daemon
 	proxy := ProxyHandler(mgr, cfg)
