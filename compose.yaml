@@ -77,7 +77,6 @@ services:
       SANDBOX_RUNNER_API_KEYS: ${RUNNER_API_KEY:-runner-local-key}
       SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE: registry:5000/n8n-sandbox:latest-${ARCH}
       SANDBOX_RUNNER_DOCKER_INSECURE_REGISTRIES: registry:5000
-      SANDBOX_RUNNER_INTER_SANDBOX_NETWORK_ENABLED: "false"
       SANDBOX_RUNNER_API_GRPC_ADDR: n8n-sandbox-api-local:9090
       SANDBOX_RUNNER_REGISTRATION_TOKEN: ${REG_TOKEN:-local-reg-token}
       SANDBOX_RUNNER_HTTP_BASE_URL: http://n8n-sandbox-runner-local-1:8080
@@ -105,7 +104,6 @@ services:
       SANDBOX_RUNNER_API_KEYS: ${RUNNER_API_KEY:-runner-local-key}
       SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE: registry:5000/n8n-sandbox:latest-${ARCH}
       SANDBOX_RUNNER_DOCKER_INSECURE_REGISTRIES: registry:5000
-      SANDBOX_RUNNER_INTER_SANDBOX_NETWORK_ENABLED: "false"
       SANDBOX_RUNNER_API_GRPC_ADDR: n8n-sandbox-api-local:9090
       SANDBOX_RUNNER_REGISTRATION_TOKEN: ${REG_TOKEN:-local-reg-token}
       SANDBOX_RUNNER_HTTP_BASE_URL: http://n8n-sandbox-runner-local-2:8080

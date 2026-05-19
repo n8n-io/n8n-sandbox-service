@@ -84,10 +84,6 @@ func TestLoadParsesDefaults(t *testing.T) {
 		t.Error("expected EnableCgroups true")
 	}
 
-	if cfg.InterSandboxNetworkEnabled {
-		t.Error("expected InterSandboxNetworkEnabled false")
-	}
-
 	if cfg.CapacityTotal != defaultRunnerCapacityTotal {
 		t.Errorf("expected CapacityTotal %d, got %d", defaultRunnerCapacityTotal, cfg.CapacityTotal)
 	}
