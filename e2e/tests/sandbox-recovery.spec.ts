@@ -41,6 +41,61 @@ function inspectRestartState(
   };
 }
 
+function innerContainerID(runnerContainer: string, innerName: string): string {
+  return docker([
+    'exec',
+    runnerContainer,
+    'docker',
+    'inspect',
+    '--format',
+    '{{.Id}}',
+    innerName,
+  ]).trim();
+}
+
+function netrulesChainName(containerID: string): string {
+  return `N8N-SB-${containerID.slice(0, 12)}`;
+}
+
+async function waitContainerStopped(
+  runnerContainer: string,
+  innerName: string,
+  deadlineMs: number,
+): Promise<void> {
+  const deadline = Date.now() + deadlineMs;
+  while (Date.now() < deadline) {
+    try {
+      const st = inspectRestartState(runnerContainer, innerName);
+      if (!st.running) {
+        return;
+      }
+    } catch {
+      // transient inspect failures while cleanup is in progress
+    }
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  throw new Error(`container ${innerName} was not stopped within ${deadlineMs}ms`);
+}
+
+async function waitNetworkRulesRemoved(
+  runnerContainer: string,
+  chainName: string,
+  deadlineMs: number,
+): Promise<void> {
+  const deadline = Date.now() + deadlineMs;
+  let lastDump = '';
+  while (Date.now() < deadline) {
+    const dockerUser = dockerOutput(['exec', runnerContainer, 'iptables', '-S', 'DOCKER-USER']);
+    const chainDump = dockerOutput(['exec', runnerContainer, 'iptables', '-S', chainName]);
+    lastDump = `DOCKER-USER:\n${dockerUser}\n\n${chainName}:\n${chainDump}`;
+    if (!dockerUser.includes(chainName) && chainDump.toLowerCase().includes('no chain')) {
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  throw new Error(`network rules for ${chainName} were not removed within ${deadlineMs}ms\n${lastDump}`);
+}
+
 async function waitContainerRestarted(
   runnerContainer: string,
   innerName: string,
@@ -147,6 +202,27 @@ test.describe('Sandbox recovery on runner', () => {
       const out = await exec(id, 'echo second');
       expect(out.exitCode).toBe(0);
       expect(out.stdout.trim()).toBe('second');
+    } finally {
+      await deleteSandbox(id);
+    }
+  });
+
+  test('failed wake after network detach stops container and removes rules', async () => {
+    test.skip(!process.env.E2E_RUNNER_CONTAINER_NAME, 'needs E2E_RUNNER_CONTAINER_NAME (from e2e/run.sh)');
+    test.setTimeout(90_000);
+
+    const runnerContainer = process.env.E2E_RUNNER_CONTAINER_NAME!;
+    const id = await createSandbox();
+    const innerName = innerContainerName(id);
+    const chainName = netrulesChainName(innerContainerID(runnerContainer, innerName));
+    try {
+      docker(['exec', runnerContainer, 'docker', 'network', 'disconnect', 'runner-bridge', innerName]);
+      docker(['exec', runnerContainer, 'docker', 'stop', '--time', '0', innerName]);
+
+      await expect(exec(id, 'echo should-not-run')).rejects.toThrow();
+
+      await waitContainerStopped(runnerContainer, innerName, 15_000);
+      await waitNetworkRulesRemoved(runnerContainer, chainName, 15_000);
     } finally {
       await deleteSandbox(id);
     }
