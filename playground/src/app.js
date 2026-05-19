@@ -1,3 +1,4 @@
+import './sdk-browser-setup.js';
 import { SandboxClient } from '@n8n/sandbox-client';
 
 const $ = (sel) => document.querySelector(sel);
@@ -185,67 +186,7 @@ async function deleteSandbox(id) {
   }
 }
 
-// --- Execute command (streaming NDJSON via native fetch for real-time output) ---
-
-async function execInSandbox(sandboxId, command, timeoutMs = 300000, signal) {
-  const baseUrl = baseUrlInput.value.trim().replace(/\/+$/, '');
-  const res = await fetch(`${baseUrl}/sandboxes/${sandboxId}/executions`, {
-    method: 'POST',
-    headers: {
-      'X-Api-Key': apiKeyInput.value.trim(),
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ command, timeout_ms: timeoutMs }),
-    signal,
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    let msg = `${res.status}`;
-    try {
-      const err = JSON.parse(text);
-      if (err.error) msg = err.error;
-    } catch { msg = text; }
-    throw new Error(msg);
-  }
-
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let exitCode = null;
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop();
-
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try {
-        const event = JSON.parse(line);
-        handleExecEvent(event);
-        if (event.type === 'exit') exitCode = event.exit_code;
-      } catch {
-        appendOutput(line, 'stdout');
-      }
-    }
-  }
-
-  if (buffer.trim()) {
-    try {
-      const event = JSON.parse(buffer);
-      handleExecEvent(event);
-      if (event.type === 'exit') exitCode = event.exit_code;
-    } catch {
-      appendOutput(buffer, 'stdout');
-    }
-  }
-
-  return exitCode;
-}
+// --- Execute command ---
 
 async function executeCommand() {
   const cmd = cmdInput.value.trim();
@@ -262,9 +203,24 @@ async function executeCommand() {
   currentAbortController = new AbortController();
 
   try {
-    await execInSandbox(selectedSandboxId, cmd, 300000, currentAbortController.signal);
+    const result = await getClient().exec(selectedSandboxId, {
+      command: cmd,
+      timeoutMs: 300000,
+      abortSignal: currentAbortController.signal,
+      onStdout: (data) => appendOutput(data.replace(/\n$/, ''), 'stdout'),
+      onStderr: (data) => appendOutput(data.replace(/\n$/, ''), 'stderr'),
+    });
+
+    if (result.exitCode === 0) {
+      appendOutput(`[exit ${result.exitCode} in ${result.executionTimeMs}ms]`, 'exit-ok');
+    } else {
+      appendOutput(
+        `[exit ${result.exitCode}${result.timedOut ? ' (timed out)' : ''}${result.killed ? ' (killed)' : ''} in ${result.executionTimeMs}ms]`,
+        'exit-fail',
+      );
+    }
   } catch (e) {
-    if (e.name !== 'AbortError') {
+    if (!currentAbortController.signal.aborted && e.name !== 'AbortError') {
       appendOutput(`Error: ${e.message}`, 'error');
     }
   } finally {
@@ -272,27 +228,6 @@ async function executeCommand() {
     cmdInput.disabled = false;
     runBtn.disabled = false;
     cmdInput.focus();
-  }
-}
-
-function handleExecEvent(event) {
-  switch (event.type) {
-    case 'stdout':
-      if (event.data) appendOutput(event.data.replace(/\n$/, ''), 'stdout');
-      break;
-    case 'stderr':
-      if (event.data) appendOutput(event.data.replace(/\n$/, ''), 'stderr');
-      break;
-    case 'exit':
-      if (event.exit_code === 0) {
-        appendOutput(`[exit ${event.exit_code} in ${event.execution_time_ms}ms]`, 'exit-ok');
-      } else {
-        appendOutput(`[exit ${event.exit_code}${event.timed_out ? ' (timed out)' : ''}${event.killed ? ' (killed)' : ''} in ${event.execution_time_ms}ms]`, 'exit-fail');
-      }
-      break;
-    case 'error':
-      appendOutput(`Error: ${event.error}`, 'error');
-      break;
   }
 }
 

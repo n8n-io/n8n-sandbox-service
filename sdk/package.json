@@ -1,6 +1,6 @@
 {
   "name": "@n8n/sandbox-client",
-  "version": "0.0.2",
+  "version": "0.0.4",
   "description": "Client for the n8n sandbox service API",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",

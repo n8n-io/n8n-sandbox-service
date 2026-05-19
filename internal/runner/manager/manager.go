@@ -315,10 +315,15 @@ func (m *Manager) Shutdown() {
 }
 
 func (m *Manager) defaultLimits() *ResourceLimits {
+	var diskMB int64
+	if m.config.DiskQuotaActive {
+		diskMB = m.config.DefaultDiskQuotaMB
+	}
 	return &ResourceLimits{
 		MemoryMB:   m.config.DefaultMemoryMB,
 		CPUPercent: m.config.DefaultCPUPercent,
 		PidsMax:    m.config.DefaultPidsMax,
+		DiskMB:     diskMB,
 	}
 }
 
@@ -475,6 +480,7 @@ func (m *Manager) createContainer(ctx context.Context, sandboxID, containerName,
 	if m.config.EnableCgroups {
 		args = append(args, dockerLimitArgs(limits)...)
 	}
+	args = append(args, dockerDiskQuotaArgs(limits)...)
 	args = append(args, image)
 
 	out, err := m.runDocker(ctx, args...)
@@ -500,6 +506,13 @@ func dockerLimitArgs(limits *ResourceLimits) []string {
 		args = append(args, "--pids-limit", strconv.Itoa(limits.PidsMax))
 	}
 	return args
+}
+
+func dockerDiskQuotaArgs(limits *ResourceLimits) []string {
+	if limits == nil || limits.DiskMB <= 0 {
+		return nil
+	}
+	return []string{"--storage-opt", fmt.Sprintf("size=%dm", limits.DiskMB)}
 }
 
 func (m *Manager) startContainer(ctx context.Context, containerID string) error {

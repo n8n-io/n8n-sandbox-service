@@ -64,15 +64,8 @@ func (h *Handler) Close() {
 }
 
 // Run serves the daemon HTTP API until SIGTERM/SIGINT is received.
-func Run(listenAddr string, baseDir string) error {
-	if baseDir == "" {
-		baseDir = os.Getenv("SANDBOX_DATA_DIR")
-	}
-	if baseDir == "" {
-		baseDir = "/"
-	}
-
-	h := NewHandler(baseDir)
+func Run(listenAddr string) error {
+	h := NewHandler()
 	defer h.Close()
 
 	srv := &http.Server{
@@ -96,7 +89,7 @@ func Run(listenAddr string, baseDir string) error {
 		}
 	}()
 
-	slog.Info("daemon listening", "addr", listenAddr, "base_dir", baseDir)
+	slog.Info("daemon listening", "addr", listenAddr)
 	err := srv.ListenAndServe()
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("listen %s: %w", listenAddr, err)
@@ -105,7 +98,7 @@ func Run(listenAddr string, baseDir string) error {
 }
 
 // NewHandler exposes the in-sandbox HTTP API used by the service.
-func NewHandler(baseDir string) *Handler {
+func NewHandler() *Handler {
 	em := NewExecManager()
 	mux := http.NewServeMux()
 
@@ -202,7 +195,7 @@ func NewHandler(baseDir string) *Handler {
 			path = "/"
 		}
 
-		files, err := HandleFileList(baseDir, path, r.URL.Query().Get("recursive") == "true", r.URL.Query().Get("extension"))
+		files, err := HandleFileList(path, r.URL.Query().Get("recursive") == "true", r.URL.Query().Get("extension"))
 		if err != nil {
 			writeError(w, fileOpStatusCode(err), err.Error())
 			return
@@ -217,7 +210,7 @@ func NewHandler(baseDir string) *Handler {
 			return
 		}
 
-		data, err := HandleFileRead(baseDir, path, 0)
+		data, err := HandleFileRead(path, 0)
 		if err != nil {
 			writeError(w, fileOpStatusCode(err), err.Error())
 			return
@@ -242,7 +235,7 @@ func NewHandler(baseDir string) *Handler {
 		}
 
 		overwrite := r.URL.Query().Get("overwrite") != "false"
-		if err := HandleFileWrite(baseDir, path, data, 0, overwrite); err != nil {
+		if err := HandleFileWrite(path, data, 0, overwrite); err != nil {
 			writeError(w, fileOpStatusCode(err), err.Error())
 			return
 		}
@@ -262,7 +255,7 @@ func NewHandler(baseDir string) *Handler {
 			return
 		}
 
-		if err := HandleFileAppend(baseDir, path, data); err != nil {
+		if err := HandleFileAppend(path, data); err != nil {
 			writeError(w, fileOpStatusCode(err), err.Error())
 			return
 		}
@@ -276,7 +269,7 @@ func NewHandler(baseDir string) *Handler {
 			return
 		}
 
-		if err := HandleFileDelete(baseDir, path, r.URL.Query().Get("recursive") == "true", r.URL.Query().Get("force") == "true"); err != nil {
+		if err := HandleFileDelete(path, r.URL.Query().Get("recursive") == "true", r.URL.Query().Get("force") == "true"); err != nil {
 			writeError(w, fileOpStatusCode(err), err.Error())
 			return
 		}
@@ -294,7 +287,7 @@ func NewHandler(baseDir string) *Handler {
 			return
 		}
 
-		if err := HandleFileCopy(baseDir, req.Src, req.Dest, req.Recursive, req.Overwrite); err != nil {
+		if err := HandleFileCopy(req.Src, req.Dest, req.Recursive, req.Overwrite); err != nil {
 			writeError(w, fileOpStatusCode(err), err.Error())
 			return
 		}
@@ -312,7 +305,7 @@ func NewHandler(baseDir string) *Handler {
 			return
 		}
 
-		if err := HandleFileMove(baseDir, req.Src, req.Dest, req.Overwrite); err != nil {
+		if err := HandleFileMove(req.Src, req.Dest, req.Overwrite); err != nil {
 			writeError(w, fileOpStatusCode(err), err.Error())
 			return
 		}
@@ -326,7 +319,7 @@ func NewHandler(baseDir string) *Handler {
 			return
 		}
 
-		if err := HandleFileMkdir(baseDir, path, r.URL.Query().Get("recursive") == "true"); err != nil {
+		if err := HandleFileMkdir(path, r.URL.Query().Get("recursive") == "true"); err != nil {
 			writeError(w, fileOpStatusCode(err), err.Error())
 			return
 		}
@@ -340,7 +333,7 @@ func NewHandler(baseDir string) *Handler {
 			return
 		}
 
-		stat, err := HandleFileStat(baseDir, path)
+		stat, err := HandleFileStat(path)
 		if err != nil {
 			writeError(w, fileOpStatusCode(err), err.Error())
 			return
@@ -393,8 +386,7 @@ func fileOpStatusCode(err error) int {
 		return http.StatusConflict
 	case strings.Contains(msg, "not found"), strings.Contains(msg, "no such file or directory"):
 		return http.StatusNotFound
-	case strings.Contains(msg, "path escapes base directory"),
-		strings.Contains(msg, "source is a directory"),
+	case strings.Contains(msg, "source is a directory"),
 		strings.Contains(msg, "destination must not be inside source directory"),
 		strings.Contains(msg, "invalid argument"),
 		strings.Contains(msg, "directory not empty"):

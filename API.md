@@ -80,7 +80,6 @@ Resource limits (memory, CPU, process count) are configured on the runner via en
 {
   "id": "uuid",
   "status": "string",
-  "provider": "delhi",
   "created_at": 1700000000,
   "last_active_at": 1700000000
 }
@@ -110,7 +109,6 @@ Get sandbox details.
 {
   "id": "uuid",
   "status": "string",
-  "provider": "delhi",
   "created_at": 1700000000,
   "last_active_at": 1700000000
 }

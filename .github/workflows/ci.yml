@@ -58,7 +58,7 @@ jobs:
         working-directory: sdk
 
   docker:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_PROVIDER == 'github' && 'ubuntu-latest' || 'blacksmith-4vcpu-ubuntu-2204' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
@@ -66,7 +66,7 @@ jobs:
         run: make docker-amd64
 
   e2e:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_PROVIDER == 'github' && 'ubuntu-latest' || 'blacksmith-4vcpu-ubuntu-2204' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
@@ -83,6 +83,7 @@ jobs:
           version: 10
 
       - name: Run e2e tests
+        # TODO: set E2E_VERIFY_DISK_QUOTA=true when the runner supports it.
         run: PRIVILEGED=1 e2e/run.sh
 
   # This job is required by GitHub branch protection rules.
