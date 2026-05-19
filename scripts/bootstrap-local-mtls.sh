@@ -9,7 +9,7 @@
 # Environment:
 #   REPO_ROOT  — repository root (default: parent of scripts/)
 #   OUT_DIR    — output directory (default: $REPO_ROOT/.tls)
-#   API_DNS    — DNS SAN on the API gRPC server cert (default: n8n-sandbox-api-local)
+#   API_DNS    — DNS SAN on the API gRPC server cert (default: n8n-sandbox-service-api-local)
 #   CLIENT_DNS — DNS SAN on the runner registration client cert (default: sandbox-runner-mtls-client)
 #   CONTROL_SANS — comma-separated DNS names on the runner control server cert (default: both local compose runner hostnames + localhost)
 set -euo pipefail
@@ -17,10 +17,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 OUT_DIR="${OUT_DIR:-$REPO_ROOT/.tls}"
-API_DNS="${API_DNS:-n8n-sandbox-api-local}"
+API_DNS="${API_DNS:-n8n-sandbox-service-api-local}"
 CLIENT_DNS="${CLIENT_DNS:-sandbox-runner-mtls-client}"
 CONTROL_API_CLIENT_DNS="${CONTROL_API_CLIENT_DNS:-sandbox-api-control-mtls-client}"
-DEFAULT_CONTROL_SANS="n8n-sandbox-runner-local-1,n8n-sandbox-runner-local-2,localhost"
+DEFAULT_CONTROL_SANS="n8n-sandbox-service-runner-dind-local-1,n8n-sandbox-service-runner-dind-local-2,localhost"
 CONTROL_SANS="${CONTROL_SANS:-$DEFAULT_CONTROL_SANS}"
 
 mkdir -p "$OUT_DIR"

@@ -67,19 +67,19 @@ docker-amd64: docker-api-amd64 docker-runner-amd64 docker-sandbox-amd64
 
 ## docker-api-arm64: Build the API image for linux/arm64.
 docker-api-arm64:
-	docker buildx build -f Dockerfile.api --platform linux/arm64 -t n8n-sandbox-api:latest-arm64 --load .
+	docker buildx build -f Dockerfile.api --platform linux/arm64 -t n8n-sandbox-service-api:latest-arm64 --load .
 
 ## docker-api-amd64: Build the API image for linux/amd64.
 docker-api-amd64:
-	docker buildx build -f Dockerfile.api --platform linux/amd64 -t n8n-sandbox-api:latest-amd64 --load .
+	docker buildx build -f Dockerfile.api --platform linux/amd64 -t n8n-sandbox-service-api:latest-amd64 --load .
 
 ## docker-runner-arm64: Build the runner image for linux/arm64.
 docker-runner-arm64:
-	docker buildx build -f Dockerfile.runner --platform linux/arm64 -t n8n-sandbox-runner:latest-arm64 --load .
+	docker buildx build -f Dockerfile.runner --platform linux/arm64 -t n8n-sandbox-service-runner-dind:latest-arm64 --load .
 
 ## docker-runner-amd64: Build the runner image for linux/amd64.
 docker-runner-amd64:
-	docker buildx build -f Dockerfile.runner --platform linux/amd64 -t n8n-sandbox-runner:latest-amd64 --load .
+	docker buildx build -f Dockerfile.runner --platform linux/amd64 -t n8n-sandbox-service-runner-dind:latest-amd64 --load .
 
 ## docker-sandbox-arm64: Build the sandbox image for linux/arm64.
 docker-sandbox-arm64:
