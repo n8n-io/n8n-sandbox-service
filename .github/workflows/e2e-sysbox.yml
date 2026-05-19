@@ -11,8 +11,7 @@ on:
           - e2e/run-all.sh
           - e2e/run.sh
   pull_request:
-    # TODO: Enable after testing is OK
-    # types: [labeled]
+    types: [labeled]
 
 permissions:
   id-token: write
@@ -32,10 +31,9 @@ jobs:
   e2e-sysbox:
     runs-on: ubuntu-latest
     environment: e2e
-    # TODO: THIS AS WELL
-    # if: >-
-    #   github.event_name == 'workflow_dispatch' ||
-    #   (github.event_name == 'pull_request' && github.event.label.name == 'e2e-sysbox')
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && github.event.label.name == 'e2e-sysbox')
     timeout-minutes: 45
 
     steps:
