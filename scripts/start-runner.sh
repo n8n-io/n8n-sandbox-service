@@ -119,7 +119,7 @@ fi
 if ! docker network inspect runner-bridge >/dev/null 2>&1; then
   docker network create \
     --driver bridge \
-    --opt "com.docker.network.bridge.enable_icc=${SANDBOX_RUNNER_INTER_SANDBOX_NETWORK_ENABLED:-false}" \
+    --opt "com.docker.network.bridge.enable_icc=false" \
     runner-bridge >/dev/null
 fi
 
