@@ -113,34 +113,29 @@ func (m *Manager) CreateContainer(ctx context.Context, sandboxID string, opts *C
 		return nil, fmt.Errorf("create container: %w", err)
 	}
 
-	cleanupOnError := func(containerIP string) {
-		if err := m.teardownRules(containerID); err != nil {
-			slog.Warn("teardown network rules", "container_id", containerID, "err", err)
-		}
-		if err := m.docker.removeContainer(ctx, containerID); err != nil {
-			slog.Warn("remove container after create failure", "container_id", containerID, "err", err)
-		}
+	cleanupOnError := func() {
+		_ = m.stopAndCleanContainer(ctx, containerID)
 	}
 
 	if err := m.docker.startContainer(ctx, containerID); err != nil {
-		cleanupOnError("")
+		cleanupOnError()
 		return nil, fmt.Errorf("start container: %w", err)
 	}
 
 	containerIP, err := m.docker.containerIP(ctx, containerID)
 	if err != nil {
-		cleanupOnError("")
+		cleanupOnError()
 		return nil, fmt.Errorf("inspect container ip: %w", err)
 	}
 
 	if err := m.applyPolicy(containerID, containerIP, m.gatewayIP, daemonPort); err != nil {
-		cleanupOnError(containerIP)
+		cleanupOnError()
 		return nil, fmt.Errorf("apply network rules: %w", err)
 	}
 
 	baseURL := fmt.Sprintf("http://%s:%d", containerIP, daemonPort)
 	if err := m.waitForDaemon(ctx, baseURL); err != nil {
-		cleanupOnError(containerIP)
+		cleanupOnError()
 		return nil, fmt.Errorf("connect to daemon: %w", err)
 	}
 
@@ -290,18 +285,30 @@ func (m *Manager) DaemonURL(ctx context.Context, sandboxID string) (string, erro
 
 // DeleteContainer stops and removes a container.
 func (m *Manager) DeleteContainer(ctx context.Context, containerID string) error {
-	if err := m.teardownRules(containerID); err != nil {
-		slog.Warn("teardown network rules", "container_id", containerID, "err", err)
-	}
-
-	if containerID != "" {
-		if err := m.docker.removeContainer(ctx, containerID); err != nil {
-			slog.Warn("remove container", "container_id", containerID, "err", err)
-			return err
-		}
+	if err := m.stopAndCleanContainer(ctx, containerID); err != nil {
+		return err
 	}
 
 	slog.Info("container deleted", "container_id", containerID)
+	return nil
+}
+
+// stopAndCleanContainer removes the container, then tears down its network
+// rules. Order matters: rules must outlive the container so it cannot run
+// unconfined during teardown. Both failure paths are logged; the
+// removeContainer error is also returned so callers decide whether to bail.
+func (m *Manager) stopAndCleanContainer(ctx context.Context, containerID string) error {
+	if containerID == "" {
+		return nil
+	}
+	if err := m.docker.removeContainer(ctx, containerID); err != nil {
+		slog.Warn("remove sandbox container", "container_id", containerID, "err", err)
+		return err
+	}
+	if err := netrules.Teardown(containerID); err != nil {
+		// TODO: consider adding metrics to track this in the future.
+		slog.Warn("teardown network rules", "container_id", containerID, "err", err)
+	}
 	return nil
 }
 
@@ -414,21 +421,10 @@ func (m *Manager) reconcileContainers(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// Best effort: startup should continue even if one stale managed
+	// container can't be removed immediately. stopAndCleanContainer logs.
 	for _, id := range ids {
-		_, inspectErr := m.docker.inspectContainer(ctx, id)
-		if inspectErr == nil {
-			if err := m.teardownRules(id); err != nil {
-				slog.Warn("teardown rules during reconcile", "container_id", id, "err", err)
-			}
-		} else if err := m.teardownRules(id); err != nil {
-			slog.Warn("teardown rules during reconcile", "container_id", id, "err", err)
-		}
-		if err := m.docker.removeContainer(ctx, id); err != nil {
-			// Best effort: startup should continue even if one stale managed
-			// container can't be removed immediately.
-			slog.Warn("remove container during reconcile", "container_id", id, "err", err)
-			continue
-		}
+		_ = m.stopAndCleanContainer(ctx, id)
 	}
 	return nil
 }

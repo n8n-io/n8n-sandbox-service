@@ -109,6 +109,11 @@ func (dc *dockerClient) createContainer(ctx context.Context, sandboxID, containe
 		"--user", "1000:1000",
 		"--env", "HOME=/home/user",
 		"--env", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		// netrules only filter IPv4; disable v6 in the container so sandboxes
+		// can't bypass the policy via link-local/ULA or v6 metadata addresses.
+		"--sysctl", "net.ipv6.conf.all.disable_ipv6=1",
+		"--sysctl", "net.ipv6.conf.default.disable_ipv6=1",
+		"--sysctl", "net.ipv6.conf.lo.disable_ipv6=1",
 	}
 	if enableCgroups {
 		args = append(args, dockerLimitArgs(limits)...)
