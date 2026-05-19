@@ -1,0 +1,79 @@
+# Docker Compose for macOS (local development)
+#
+# macOS does not support sysbox-runc, so runners use --privileged mode.
+# This is suitable for local development only — for production, use Linux
+# with sysbox (see docs/quickstart-linux.md).
+#
+# Prerequisites:
+#   - mTLS certificates in .tls/ (run bootstrap-local-mtls.sh)
+#   - .env file with secrets (copy .env.example)
+#
+# Usage:
+#   cp .env.example .env   # then edit values
+#   docker compose up -d
+
+services:
+  api:
+    image: n8nio/n8n-sandbox-api:latest
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./.tls:/tls:ro
+    env_file: .env
+    environment:
+      SANDBOX_API_GRPC_TLS_CERT_FILE: /tls/grpc-server.crt
+      SANDBOX_API_GRPC_TLS_KEY_FILE: /tls/grpc-server.key
+      SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE: /tls/ca.crt
+      SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE: /tls/ca.crt
+      SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE: /tls/control-grpc-api-client.crt
+      SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE: /tls/control-grpc-api-client.key
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    networks:
+      sandbox-service:
+        aliases:
+          - n8n-sandbox-api-local
+
+  runner:
+    image: n8nio/n8n-sandbox-runner:latest
+    privileged: true
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./.tls:/tls:ro
+    env_file: .env
+    environment:
+      SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE: n8nio/n8n-sandbox:latest
+      SANDBOX_RUNNER_API_GRPC_ADDR: n8n-sandbox-api-local:9090
+      SANDBOX_RUNNER_HTTP_BASE_URL: http://n8n-sandbox-runner-local-1:8080
+      SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR: ":9091"
+      SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR: n8n-sandbox-runner-local-1:9091
+      SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE: /tls/ca.crt
+      SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE: /tls/grpc-client.crt
+      SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE: /tls/grpc-client.key
+      SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE: /tls/control-grpc-server.crt
+      SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE: /tls/control-grpc-server.key
+      SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE: /tls/ca.crt
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "--header=X-Api-Key: ${SANDBOX_RUNNER_API_KEYS}", "http://localhost:8080/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 20s
+    networks:
+      sandbox-service:
+        aliases:
+          - n8n-sandbox-runner-local-1
+
+networks:
+  sandbox-service:
+    driver: bridge
