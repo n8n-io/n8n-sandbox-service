@@ -1,0 +1,70 @@
+name: Sandbox Release Prep
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump type"
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  prep-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: main
+
+      - name: Generate GitHub App Token
+        id: generate-token
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
+        with:
+          app-id: ${{ secrets.N8N_ASSISTANT_APP_ID }}
+          private-key: ${{ secrets.N8N_ASSISTANT_PRIVATE_KEY }}
+
+      - name: Bump version
+        id: bump
+        run: |
+          CURRENT=$(cat SANDBOX_VERSION)
+          IFS='.' read -r major minor patch <<< "$CURRENT"
+          case "${{ inputs.bump }}" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+          esac
+          VERSION="${major}.${minor}.${patch}"
+          printf '%s' "$VERSION" > SANDBOX_VERSION
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Bumped $CURRENT -> $VERSION"
+
+      - name: Create release branch
+        run: git push origin HEAD:refs/heads/sandbox/release/${{ steps.bump.outputs.version }}
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@c0f553fe549906ede9cf27b5156039d195d2ece0 # v8.1.0
+        with:
+          token: ${{ steps.generate-token.outputs.token }}
+          commit-message: 'sandbox: release v${{ steps.bump.outputs.version }}'
+          labels: 'release/sandbox'
+          title: 'sandbox: release v${{ steps.bump.outputs.version }}'
+          body: |
+            Automated release PR for sandbox image v${{ steps.bump.outputs.version }}.
+
+            **Image that will be published:**
+            - `n8nio/n8n-sandbox-service-sandbox:${{ steps.bump.outputs.version }}`
+
+            Merging this PR will trigger the sandbox image publish workflow.
+          branch: sandbox/release-pr/${{ steps.bump.outputs.version }}
+          base: sandbox/release/${{ steps.bump.outputs.version }}
+          delete-branch: true
+          author: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
+          committer: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
