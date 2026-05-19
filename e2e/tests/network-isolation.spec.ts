@@ -8,6 +8,9 @@ const pyGet = (url: string, timeout: number = 5) =>
 const pyConnect = (ip: string, port: number = 80, timeout: number = 3) =>
   `python3 -c "import socket; s=socket.socket(); s.settimeout(${timeout}); s.connect(('${ip}', ${port})); s.close(); print('connected')"`;
 
+const pyConnectV6 = (ip: string, port: number = 443, timeout: number = 3) =>
+  `python3 -c "import socket; s=socket.socket(socket.AF_INET6); s.settimeout(${timeout}); s.connect(('${ip}', ${port})); s.close(); print('connected')"`;
+
 const pyResolve = (host: string) =>
   `python3 -c "import socket; print(socket.gethostbyname('${host}'))"`;
 
@@ -70,6 +73,25 @@ import time; time.sleep(30)
     } finally {
       await deleteSandbox(id1);
       await deleteSandbox(id2);
+    }
+  });
+
+  test('sandbox cannot reach IPv6 destinations', async () => {
+    const id = await createSandbox();
+    try {
+      // Cloudflare and Google public DNS, IPv6 addresses. With IPv6 disabled
+      // in the container netns, the AF_INET6 connect must fail.
+      const v6Targets = [
+        '2606:4700:4700::1111',
+        '2001:4860:4860::8888',
+      ];
+
+      for (const ip of v6Targets) {
+        const result = await execWithTransientRetry(id, pyConnectV6(ip, 443, 3), { timeoutMs: 10_000 });
+        expect(result.exitCode, `expected IPv6 ${ip} to be unreachable`).not.toBe(0);
+      }
+    } finally {
+      await deleteSandbox(id);
     }
   });
 
