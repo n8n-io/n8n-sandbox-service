@@ -31,7 +31,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Verify the data directory exists.
+	// Ensure data directory exists
 	if info, err := os.Stat(cfg.DataDir); err != nil {
 		slog.Error("data dir not accessible", "path", cfg.DataDir, "error", err)
 		os.Exit(1)
