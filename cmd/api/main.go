@@ -31,8 +31,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Verify the data directory exists and is a directory; we expect the
-	// image (or operator) to have pre-created it with the right ownership.
+	// Verify the data directory exists.
 	if info, err := os.Stat(cfg.DataDir); err != nil {
 		slog.Error("data dir not accessible", "path", cfg.DataDir, "error", err)
 		os.Exit(1)
