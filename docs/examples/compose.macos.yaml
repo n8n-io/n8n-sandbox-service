@@ -20,7 +20,7 @@ services:
       - "8080:8080"
     volumes:
       - ./.tls:/tls:ro
-      - api-data:/tmp
+      - api-data:/var/lib/n8n-sandbox-api
     env_file: .env
     environment:
       SANDBOX_API_GRPC_TLS_CERT_FILE: /tls/grpc-server.crt

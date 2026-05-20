@@ -42,8 +42,8 @@ func TestLoadAPIParsesDefaults(t *testing.T) {
 		t.Errorf("expected RegistrationToken reg-token, got %q", cfg.RegistrationToken)
 	}
 
-	if cfg.DataDir != "/tmp/sandbox-api" {
-		t.Errorf("expected DataDir /tmp/sandbox-api, got %s", cfg.DataDir)
+	if cfg.DataDir != "/var/lib/n8n-sandbox-api" {
+		t.Errorf("expected DataDir /var/lib/n8n-sandbox-api, got %s", cfg.DataDir)
 	}
 
 	if _, exists := cfg.APIKeys["test-key"]; !exists {
