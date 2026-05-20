@@ -2,6 +2,33 @@
 
 This repository has three independent release pipelines: **service** (API + runner), **sandbox** (sandbox image), and **SDK**.
 
+```mermaid
+flowchart TD
+    subgraph alpha ["Alpha (every push to main)"]
+        A[Push to main] --> B[release-alpha]
+        B --> C[Build multi-arch images]
+        C --> D[Push to GHCR\napi / runner-dind / sandbox\n:alpha + :sha]
+    end
+
+    subgraph versioned ["Versioned Release (service or sandbox)"]
+        E[Manual: Run Release Prep] --> F[Bump version file\nCreate release branch + PR]
+        F --> G[Release Validate CI]
+        G --> H{Merge PR}
+        H --> I[Run tests]
+        I --> J[Build + push multi-arch\nimages to Docker Hub]
+        J --> K[Create git tag +\nGitHub Release]
+        K --> L[Open post-release\nversion-bump PR to main]
+    end
+
+    subgraph sdk ["SDK Release"]
+        M[Manual: Run SDK Release Prep] --> N[Bump sdk/package.json\nCreate release branch + PR]
+        N --> O{Merge PR}
+        O --> P[Build + publish\nto npm]
+        P --> Q[Create git tag +\nGitHub Release]
+        Q --> R[Open post-release\nversion-bump PR to main]
+    end
+```
+
 ## Alpha Releases (GHCR)
 
 On every push to `main`, the `release-alpha` workflow builds and pushes all three multi-arch images (`linux/amd64`, `linux/arm64`) to GHCR:
