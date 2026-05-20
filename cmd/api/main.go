@@ -31,10 +31,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Verify the data directory exists, is a directory, and is writable; we
-	// expect the image (or operator) to have pre-created it with the right
-	// ownership. The write probe surfaces "data dir not writable" instead of
-	// SQLite's cryptic "unable to open database file" later.
+	// Verify the data directory exists and is a directory; we expect the
+	// image (or operator) to have pre-created it with the right ownership.
 	if info, err := os.Stat(cfg.DataDir); err != nil {
 		slog.Error("data dir not accessible", "path", cfg.DataDir, "error", err)
 		os.Exit(1)
@@ -42,14 +40,6 @@ func main() {
 		slog.Error("data dir is not a directory", "path", cfg.DataDir)
 		os.Exit(1)
 	}
-	probePath := filepath.Join(cfg.DataDir, ".write-probe")
-	probe, err := os.OpenFile(probePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-	if err != nil {
-		slog.Error("data dir not writable", "path", cfg.DataDir, "error", err)
-		os.Exit(1)
-	}
-	_ = probe.Close()
-	_ = os.Remove(probePath)
 
 	// Open SQLite store for state management
 	dbPath := filepath.Join(cfg.DataDir, "api.db")
