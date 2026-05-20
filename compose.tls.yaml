@@ -20,7 +20,7 @@ services:
       SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE: /grpc-tls/ca.crt
       SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE: /grpc-tls/grpc-client.crt
       SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE: /grpc-tls/grpc-client.key
-      SANDBOX_RUNNER_REGISTRATION_GRPC_SERVER_NAME: n8n-sandbox-api-local
+      SANDBOX_RUNNER_REGISTRATION_GRPC_SERVER_NAME: n8n-sandbox-service-api-local
       SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE: /grpc-tls/control-grpc-server.crt
       SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE: /grpc-tls/control-grpc-server.key
       SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE: /grpc-tls/ca.crt
@@ -32,7 +32,7 @@ services:
       SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE: /grpc-tls/ca.crt
       SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE: /grpc-tls/grpc-client.crt
       SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE: /grpc-tls/grpc-client.key
-      SANDBOX_RUNNER_REGISTRATION_GRPC_SERVER_NAME: n8n-sandbox-api-local
+      SANDBOX_RUNNER_REGISTRATION_GRPC_SERVER_NAME: n8n-sandbox-service-api-local
       SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE: /grpc-tls/control-grpc-server.crt
       SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE: /grpc-tls/control-grpc-server.key
       SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE: /grpc-tls/ca.crt

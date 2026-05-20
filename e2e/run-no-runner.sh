@@ -8,7 +8,7 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/lib/common.sh"
 
 ARCH="$(e2e_docker_arch)"
-API_IMAGE="n8n-sandbox-api:latest-${ARCH}"
+API_IMAGE="n8n-sandbox-service-api:latest-${ARCH}"
 API_CONTAINER_NAME="sandbox-api-e2e-norunner-$$"
 NETWORK_NAME="sandbox-e2e-net-norunner-$$"
 PORT="${PORT:-18080}"
