@@ -64,15 +64,6 @@ Publishes `@n8n/sandbox-client` to npm. Version tracked in `sdk/package.json`.
 2. Merge the release PR. This triggers the `SDK Publish` workflow, which publishes to npm, creates a git tag (`sdk/v{version}`) and GitHub Release, and opens a post-release PR.
 3. Merge the post-release PR.
 
-## Secrets and Environments
-
-| Pipeline | Environment | Secrets |
-|----------|-------------|---------|
-| Alpha (GHCR) | — | `GITHUB_TOKEN` (automatic) |
-| Service / Sandbox (Docker Hub) | `docker-release` | `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` |
-| SDK (npm) | `npm` | OIDC trusted publishing (no token needed) |
-| All prep workflows | — | `N8N_ASSISTANT_APP_ID`, `N8N_ASSISTANT_PRIVATE_KEY` |
-
 ## Git Tag Namespaces
 
 - Service: `service/v{version}` (e.g. `service/v1.0.0`)
