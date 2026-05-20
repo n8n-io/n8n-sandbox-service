@@ -76,7 +76,7 @@ func LoadAPI() (*APIConfig, error) {
 		ListenAddr:      defaultListenAddr,
 		GRPCListenAddr:  defaultGRPCListenAddr,
 		MaxFileBytes:    defaultMaxFileBytes,
-		DataDir:         "/tmp/sandbox-api",
+		DataDir:         "/var/lib/n8n-sandbox-api",
 		HeartbeatGrace:  defaultHeartbeatGrace,
 		IdleStopAfter:   defaultIdleStopAfter,
 		IdleDeleteAfter: defaultIdleDeleteAfter,
