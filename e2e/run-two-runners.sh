@@ -66,7 +66,7 @@ e2e_bootstrap_mtls_maybe "$PROJECT_DIR" "$TLS_DIR_OWNED" "$TLS_DIR" "$API_TLS_DN
 e2e_normalize_tls_permissions "$TLS_DIR"
 API_DOCKER_USER=()
 API_DATA_VOLUME_ARGS=()
-e2e_setup_api_tls_for_container "$TLS_DIR" "$API_IMAGE"
+e2e_setup_api_container "$TLS_DIR" "$API_IMAGE"
 
 e2e_docker_network_create "$NETWORK_NAME"
 
