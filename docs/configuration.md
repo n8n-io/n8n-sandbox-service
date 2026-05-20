@@ -18,7 +18,7 @@ All services are configured via environment variables.
 | `SANDBOX_API_RUNNER_API_KEY` | *(empty)* | Optional API key injected by the API when calling runner HTTP |
 | `SANDBOX_API_LISTEN_ADDR` | `:8080` | Public HTTP listen address |
 | `SANDBOX_API_GRPC_LISTEN_ADDR` | `:9090` | Private gRPC listen address for runner registration streams |
-| `SANDBOX_API_DATA_DIR` | `/tmp/sandbox-api` | SQLite store directory |
+| `SANDBOX_API_DATA_DIR` | `/var/lib/n8n-sandbox-api` | SQLite store directory; must already exist and be writable by the API user. Mount a persistent volume here to retain sandbox state across container restarts. |
 | `SANDBOX_API_MAX_FILE_BYTES` | `10485760` | Maximum file upload size (10 MB) |
 | `SANDBOX_API_ENABLE_CORS` | `false` | Enable CORS headers (allow all origins); needed for the browser playground |
 | `SANDBOX_API_RUNNER_HEARTBEAT_GRACE` | `45s` | How long after the last gRPC heartbeat a runner remains eligible for placement (Go [`time.ParseDuration`](https://pkg.go.dev/time#ParseDuration) syntax, e.g. `45s`, `2m`) |

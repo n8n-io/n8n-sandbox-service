@@ -31,9 +31,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Ensure data directory exists
-	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
-		slog.Error("create data dir", "error", err)
+	// Verify the data directory exists and is a directory; we expect the
+	// image (or operator) to have pre-created it with the right ownership.
+	if info, err := os.Stat(cfg.DataDir); err != nil {
+		slog.Error("data dir not accessible", "path", cfg.DataDir, "error", err)
+		os.Exit(1)
+	} else if !info.IsDir() {
+		slog.Error("data dir is not a directory", "path", cfg.DataDir)
 		os.Exit(1)
 	}
 
