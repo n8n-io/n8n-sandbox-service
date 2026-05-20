@@ -1,0 +1,72 @@
+name: Publish sandbox images to ACR (alpha)
+description: Run tests, then build and push API, runner, and sandbox images; move alpha tags
+inputs:
+  azure-client-id:
+    required: true
+    description: Azure AD application (client) ID for OIDC login
+  azure-tenant-id:
+    required: true
+    description: Azure AD tenant ID
+  azure-subscription-id:
+    required: true
+    description: Azure subscription ID
+  acr-name:
+    required: true
+    description: Short ACR name (for az acr login and registry host)
+
+runs:
+  using: composite
+  steps:
+    - name: Validate Azure inputs
+      shell: bash
+      env:
+        AZURE_CLIENT_ID: ${{ inputs.azure-client-id }}
+        AZURE_TENANT_ID: ${{ inputs.azure-tenant-id }}
+        AZURE_SUBSCRIPTION_ID: ${{ inputs.azure-subscription-id }}
+        ACR_NAME: ${{ inputs.acr-name }}
+      run: |
+        [[ "$AZURE_CLIENT_ID" ]] || { echo 'azure-client-id is empty'; exit 1; }
+        [[ "$AZURE_TENANT_ID" ]] || { echo 'azure-tenant-id is empty'; exit 1; }
+        [[ "$AZURE_SUBSCRIPTION_ID" ]] || { echo 'azure-subscription-id is empty'; exit 1; }
+        [[ "$ACR_NAME" ]] || { echo 'acr-name is empty'; exit 1; }
+
+    - name: Run tests
+      uses: ./.github/actions/sandbox-service-test
+
+    - name: Azure Service Principal login (OIDC)
+      uses: azure/login@cb79c773a3cfa27f31f25eb3f677781210c9ce3d # v1
+      with:
+        client-id: ${{ inputs.azure-client-id }}
+        tenant-id: ${{ inputs.azure-tenant-id }}
+        subscription-id: ${{ inputs.azure-subscription-id }}
+
+    - name: Docker login to ACR
+      shell: bash
+      env:
+        ACR_NAME: ${{ inputs.acr-name }}
+      run: az acr login -n "$ACR_NAME"
+
+    - name: Build and push images (alpha + SHA)
+      shell: bash
+      env:
+        ACR_NAME: ${{ inputs.acr-name }}
+        GITHUB_SHA: ${{ github.sha }}
+      run: |
+        set -euo pipefail
+        REGISTRY="${ACR_NAME}.azurecr.io"
+        SHA="${GITHUB_SHA}"
+
+        build_push() {
+          local file=$1
+          local image=$2
+          docker build -f "$file" \
+            -t "${REGISTRY}/${image}:${SHA}" \
+            -t "${REGISTRY}/${image}:alpha" \
+            .
+          docker push "${REGISTRY}/${image}:${SHA}"
+          docker push "${REGISTRY}/${image}:alpha"
+        }
+
+        build_push Dockerfile.api n8n-sandbox-service-api
+        build_push Dockerfile.runner n8n-sandbox-service-runner-dind
+        build_push Dockerfile.sandbox n8n-sandbox-service-sandbox
