@@ -22,17 +22,25 @@ e2e_normalize_tls_permissions() {
 	done
 }
 
-# Sets global API_DOCKER_USER: empty = use image default user, or (--user hostuid:hostgid) if chown fails.
+# Sets globals API_DOCKER_USER and API_DATA_VOLUME_ARGS.
+# When chown succeeds, the API runs as the image's default user and writes to
+# the image-baked /var/lib/n8n-sandbox-api dir (which is owned by that user).
+# When chown fails, the API runs as the host UID; we bind-mount a host-side
+# dir at /var/lib/n8n-sandbox-api so that UID can write the SQLite file there.
 e2e_setup_api_tls_for_container() {
 	local tls_dir=$1 api_image=$2
 	local uid gid
 	read -r uid gid <<< "$(docker run --rm --entrypoint sh "$api_image" -c 'echo $(id -u) $(id -g)')"
 	if chown -R "$uid:$gid" "$tls_dir" 2>/dev/null; then
 		API_DOCKER_USER=()
+		API_DATA_VOLUME_ARGS=()
 		return 0
 	fi
 	echo "chown TLS dir to API image user $uid:$gid not permitted; using host UID for API container" >&2
 	API_DOCKER_USER=(--user "$(id -u):$(id -g)")
+	local data_dir="$tls_dir/api-data"
+	mkdir -p "$data_dir"
+	API_DATA_VOLUME_ARGS=(-v "$data_dir:/var/lib/n8n-sandbox-api")
 }
 
 e2e_bootstrap_mtls_maybe() {

@@ -40,6 +40,7 @@ fi
 e2e_bootstrap_mtls_maybe "$PROJECT_DIR" "$TLS_DIR_OWNED" "$TLS_DIR" "$API_TLS_DNS" "runner-control"
 e2e_normalize_tls_permissions "$TLS_DIR"
 API_DOCKER_USER=()
+API_DATA_VOLUME_ARGS=()
 e2e_setup_api_tls_for_container "$TLS_DIR" "$API_IMAGE"
 
 e2e_docker_network_create "$NETWORK_NAME"
@@ -48,6 +49,9 @@ echo "Starting API only on port $PORT..."
 API_DOCKER_RUN=(-d)
 if ((${#API_DOCKER_USER[@]})); then
 	API_DOCKER_RUN+=("${API_DOCKER_USER[@]}")
+fi
+if ((${#API_DATA_VOLUME_ARGS[@]})); then
+	API_DOCKER_RUN+=("${API_DATA_VOLUME_ARGS[@]}")
 fi
 API_DOCKER_RUN+=(
 	--network "$NETWORK_NAME"
