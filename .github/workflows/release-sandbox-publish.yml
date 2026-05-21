@@ -38,17 +38,26 @@ jobs:
           dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
           dockerhub-token: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      - name: Generate GitHub App Token
+        id: generate-token
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
+        with:
+          app-id: ${{ secrets.N8N_ASSISTANT_APP_ID }}
+          private-key: ${{ secrets.N8N_ASSISTANT_PRIVATE_KEY }}
+
       - name: Create git tag
         env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           TAG="sandbox/v${VERSION}"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
           git tag --force "${TAG}"
           git push --force origin "${TAG}"
 
       - name: Create GitHub Release
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           gh release create "sandbox/v${VERSION}" \
@@ -58,13 +67,6 @@ jobs:
           - \`n8nio/n8n-sandbox-service-sandbox:${VERSION}\`
 
           Platforms: \`linux/amd64\`, \`linux/arm64\`"
-
-      - name: Generate GitHub App Token
-        id: generate-token
-        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
-        with:
-          app-id: ${{ secrets.N8N_ASSISTANT_APP_ID }}
-          private-key: ${{ secrets.N8N_ASSISTANT_PRIVATE_KEY }}
 
       - name: Open version-bump PR against main
         env:
