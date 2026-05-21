@@ -24,6 +24,7 @@ See [docs/](docs/README.md) for the full documentation, including:
 - [macOS quickstart](docs/quickstart-macos.md) — local development with privileged containers
 - [Configuration reference](docs/configuration.md) — all environment variables
 - [Development guide](docs/development.md) — building, testing, SDK, playground
+- [REST API reference](docs/API.md) — endpoint reference
 
 ## API Usage
 
