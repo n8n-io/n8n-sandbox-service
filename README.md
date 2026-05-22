@@ -2,6 +2,16 @@
 
 The n8n Sandbox Service provides isolated execution environments via a REST API. Each sandbox is a Debian-based Docker container managed by an in-container Docker daemon, with a per-sandbox HTTP daemon that handles exec and file operations.
 
+## Documentation
+
+See [docs/](docs/README.md) for the full documentation, including:
+
+- [Linux quickstart](docs/quickstart-linux.md) — production deployment with sysbox-runc
+- [macOS quickstart](docs/quickstart-macos.md) — local development with privileged containers
+- [Configuration reference](docs/configuration.md) — all environment variables
+- [Development guide](docs/development.md) — building, testing, SDK, playground
+- [REST API reference](docs/API.md) — endpoint reference
+
 ## Runtime Model
 
 - The public API runs in a dedicated `n8n-sandbox-service-api` container.
@@ -15,76 +25,6 @@ The n8n Sandbox Service provides isolated execution environments via a REST API.
 - API restarts: sandbox IDs remain valid. Once API is back, existing sandboxes continue working.
 - Runner stops/dies: sandboxes on that runner become unavailable. When a runner returns, previously assigned sandboxes are not guaranteed to be recoverable and should be treated as lost.
 - Sandbox container exits (for example OOM): Docker restart policy restarts it; the same sandbox ID remains on the same runner.
-
-## Documentation
-
-See [docs/](docs/README.md) for the full documentation, including:
-
-- [Linux quickstart](docs/quickstart-linux.md) — production deployment with sysbox-runc
-- [macOS quickstart](docs/quickstart-macos.md) — local development with privileged containers
-- [Configuration reference](docs/configuration.md) — all environment variables
-- [Development guide](docs/development.md) — building, testing, SDK, playground
-- [REST API reference](docs/API.md) — endpoint reference
-
-## API Usage
-
-All endpoints except `/healthz` require `X-Api-Key`.
-
-### Create a sandbox
-
-```bash
-curl -s -X POST http://localhost:8080/sandboxes \
-  -H "X-Api-Key: test" | jq
-```
-
-### Run a command
-
-```bash
-curl -s -X POST http://localhost:8080/sandboxes/<id>/executions \
-  -H "X-Api-Key: test" \
-  -H "Content-Type: application/json" \
-  -d '{"command": "echo hello world"}'
-```
-
-### Write a file
-
-```bash
-curl -s -X PUT "http://localhost:8080/sandboxes/<id>/files?path=/tmp/hello.txt" \
-  -H "X-Api-Key: test" \
-  --data-binary "file contents here"
-```
-
-### Read a file
-
-```bash
-curl -s "http://localhost:8080/sandboxes/<id>/files/content?path=/tmp/hello.txt" \
-  -H "X-Api-Key: test"
-```
-
-### List a directory
-
-```bash
-curl -s "http://localhost:8080/sandboxes/<id>/files?path=/tmp" \
-  -H "X-Api-Key: test" | jq
-```
-
-### Delete a file
-
-```bash
-curl -s -X DELETE "http://localhost:8080/sandboxes/<id>/files?path=/tmp/hello.txt" \
-  -H "X-Api-Key: test"
-```
-
-### Delete a sandbox
-
-```bash
-curl -s -X DELETE http://localhost:8080/sandboxes/<id> \
-  -H "X-Api-Key: test"
-```
-
-## Configuration
-
-See [docs/configuration.md](docs/configuration.md) for environment variables for the API, Runner, and Sandbox daemon.
 
 ## Disk quotas
 
@@ -111,7 +51,3 @@ When `SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB > 0`, the runner emits `--storage-opt
 **Why this matters for trust:** mTLS ties the registration gRPC stream to a client certificate issued by your CA. A random host on the network cannot complete TLS to the API’s registry listener, so it cannot open a stream and inject a fake `runner_id` / `http_base_url` into placement. Legitimate runners still prove possession of the registration `Bearer` token in metadata. Together, only workloads you issued credentials to can show up in the runner registry. Optional mTLS on **SandboxControl** ensures only your API (presenting the control client cert) can ask a runner to create or delete sandboxes over gRPC; runners still accept the same `X-Api-Key` on that RPC as on HTTP. HTTP proxy traffic continues to use `X-Api-Key` and stored routing.
 
 **Rotation:** The API and runner reload leaf cert/key PEMs from disk when the files change (next TLS handshake), so in Kubernetes `cert-manager` (or any process that writes renewed files into the mounted paths) can rotate leaves without restarting pods. Local bootstrap issues long‑lived dev certs; they do not auto‑renew on a timer. When they eventually expire—or whenever you want fresh material—delete `.tls/` or set `SANDBOX_TLS_REGEN=1` and run `scripts/bootstrap-local-mtls.sh` again (then restart containers or wait for the next TLS handshake so reloaded leaf material is used). Rotating the CA both sides trust means updating the mounted CA PEMs and typically rolling workloads.
-
-## Development
-
-See [docs/development.md](docs/development.md) for building from source, running tests, the playground, SDK development, and code formatting.
