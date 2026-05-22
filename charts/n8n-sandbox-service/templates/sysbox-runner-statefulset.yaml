@@ -1,0 +1,186 @@
+{{- if and .Values.sysboxRunner.enabled (eq .Values.dataPlane.mode "sysbox") }}
+{{- $runnerRegistration := .Values.tls.certificates.runnerRegistrationClient -}}
+{{- $runnerControl := .Values.tls.certificates.runnerControlServer -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "n8n-sandbox-service.sysboxRunnerName" . }}
+  labels:
+    {{- include "n8n-sandbox-service.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sysbox-runner
+spec:
+  serviceName: {{ include "n8n-sandbox-service.sysboxRunnerName" . }}
+  replicas: {{ .Values.sysboxRunner.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "n8n-sandbox-service.selectorLabels" (dict "Release" .Release "Chart" .Chart "Values" .Values "component" "sysbox-runner") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "n8n-sandbox-service.selectorLabels" (dict "Release" .Release "Chart" .Chart "Values" .Values "component" "sysbox-runner") | nindent 8 }}
+      {{- if or .Values.podAnnotations .Values.sysboxRunner.podAnnotations }}
+      annotations:
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with .Values.sysboxRunner.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.sysboxRunner.runtime.runtimeClassName }}
+      runtimeClassName: {{ .Values.sysboxRunner.runtime.runtimeClassName | quote }}
+      {{- end }}
+      {{- if kindIs "bool" .Values.sysboxRunner.runtime.hostUsers }}
+      hostUsers: {{ .Values.sysboxRunner.runtime.hostUsers }}
+      {{- end }}
+      containers:
+        - name: runner
+          image: "{{ .Values.sysboxRunner.image.repository }}:{{ .Values.sysboxRunner.image.tag }}"
+          imagePullPolicy: {{ .Values.sysboxRunner.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: control-grpc
+              containerPort: 9091
+          envFrom:
+            - configMapRef:
+                name: {{ include "n8n-sandbox-service.sysboxRunnerName" . }}-config
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: SANDBOX_RUNNER_ID
+              value: "$(POD_NAME)"
+            - name: SANDBOX_RUNNER_API_GRPC_ADDR
+              value: "{{ include "n8n-sandbox-service.apiName" . }}:{{ .Values.api.service.grpcPort }}"
+            - name: SANDBOX_RUNNER_HTTP_BASE_URL
+              value: "http://$(POD_NAME).{{ include "n8n-sandbox-service.sysboxRunnerName" . }}.$(POD_NAMESPACE).svc.cluster.local:{{ .Values.sysboxRunner.service.httpPort }}"
+            - name: SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR
+              value: "$(POD_NAME).{{ include "n8n-sandbox-service.sysboxRunnerName" . }}.$(POD_NAMESPACE).svc.cluster.local:{{ .Values.sysboxRunner.service.controlGrpcPort }}"
+            - name: SANDBOX_RUNNER_API_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "n8n-sandbox-service.authSecretName" . }}
+                  key: {{ .Values.auth.secretKeys.runnerApiKeys }}
+            - name: SANDBOX_RUNNER_REGISTRATION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "n8n-sandbox-service.authSecretName" . }}
+                  key: {{ .Values.auth.secretKeys.runnerRegistrationToken }}
+            - name: SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE
+              value: {{ printf "%s/%s" $runnerRegistration.mountPath $runnerRegistration.caFileKey | quote }}
+            - name: SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE
+              value: {{ printf "%s/%s" $runnerRegistration.mountPath $runnerRegistration.certFileKey | quote }}
+            - name: SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE
+              value: {{ printf "%s/%s" $runnerRegistration.mountPath $runnerRegistration.keyFileKey | quote }}
+            {{- if $runnerRegistration.serverName }}
+            - name: SANDBOX_RUNNER_REGISTRATION_GRPC_SERVER_NAME
+              value: {{ $runnerRegistration.serverName | quote }}
+            {{- end }}
+            - name: SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE
+              value: {{ printf "%s/%s" $runnerControl.mountPath $runnerControl.certFileKey | quote }}
+            - name: SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE
+              value: {{ printf "%s/%s" $runnerControl.mountPath $runnerControl.keyFileKey | quote }}
+            - name: SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE
+              value: {{ printf "%s/%s" $runnerControl.mountPath $runnerControl.caFileKey | quote }}
+            {{- with .Values.sysboxRunner.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - 'wget -q -O /dev/null --header="X-Api-Key: ${SANDBOX_RUNNER_API_KEYS%%,*}" http://127.0.0.1:8080/healthz'
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - 'wget -q -O /dev/null --header="X-Api-Key: ${SANDBOX_RUNNER_API_KEYS%%,*}" http://127.0.0.1:8080/healthz'
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          volumeMounts:
+            - name: runner-registration-tls
+              mountPath: {{ $runnerRegistration.mountPath | quote }}
+              readOnly: true
+            - name: runner-control-tls
+              mountPath: {{ $runnerControl.mountPath | quote }}
+              readOnly: true
+            {{- if .Values.sysboxRunner.dockerConfig.existingSecret }}
+            - name: docker-config
+              mountPath: {{ printf "%s/config.json" .Values.sysboxRunner.dockerConfig.mountPath | quote }}
+              subPath: config.json
+              readOnly: true
+            {{- end }}
+            {{- with .Values.sysboxRunner.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.sysboxRunner.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: runner-registration-tls
+          secret:
+            secretName: {{ $runnerRegistration.secretName }}
+        - name: runner-control-tls
+          secret:
+            secretName: {{ $runnerControl.secretName }}
+        {{- if .Values.sysboxRunner.dockerConfig.existingSecret }}
+        - name: docker-config
+          secret:
+            secretName: {{ .Values.sysboxRunner.dockerConfig.existingSecret }}
+            items:
+              - key: {{ .Values.sysboxRunner.dockerConfig.configKey }}
+                path: config.json
+        {{- end }}
+        {{- with .Values.sysboxRunner.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.sysboxRunner.scheduling.nodeSelector }}
+      nodeSelector:
+        {{- range $key, $value := . }}
+        {{- if ne $value nil }}
+        {{ $key }}: {{ $value | quote }}
+        {{- end }}
+        {{- end }}
+      {{- end }}
+      {{- with .Values.sysboxRunner.scheduling.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- $topologySpreadConstraints := list (dict "maxSkew" 1 "topologyKey" "kubernetes.io/hostname" "whenUnsatisfiable" "ScheduleAnyway") }}
+      {{- if hasKey .Values.sysboxRunner.scheduling "topologySpreadConstraints" }}
+      {{- $topologySpreadConstraints = .Values.sysboxRunner.scheduling.topologySpreadConstraints }}
+      {{- end }}
+      {{- with $topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- range . }}
+        - {{- omit . "labelSelector" | toYaml | nindent 10 }}
+          labelSelector:
+            {{- if .labelSelector }}
+            {{- toYaml .labelSelector | nindent 12 }}
+            {{- else }}
+            matchLabels:
+              {{- include "n8n-sandbox-service.selectorLabels" (dict "Release" $.Release "Chart" $.Chart "Values" $.Values "component" "sysbox-runner") | nindent 14 }}
+            {{- end }}
+        {{- end }}
+      {{- end }}
+      {{- with .Values.sysboxRunner.scheduling.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

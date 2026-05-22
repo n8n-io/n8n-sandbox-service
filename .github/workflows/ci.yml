@@ -65,6 +65,39 @@ jobs:
       - name: Build Docker image (amd64)
         run: make docker-amd64
 
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Check Helm
+        run: helm version
+
+      - name: Lint chart
+        run: helm lint charts/n8n-sandbox-service --set auth.existingSecret=n8n-sandbox-auth
+
+      - name: Render chart variants
+        run: |
+          helm template n8n-sandbox-service charts/n8n-sandbox-service \
+            --set auth.existingSecret=n8n-sandbox-auth
+          helm template n8n-sandbox-service charts/n8n-sandbox-service \
+            --set auth.existingSecret=n8n-sandbox-auth \
+            --set dataPlane.mode=external
+          helm template n8n-sandbox-service charts/n8n-sandbox-service \
+            --set auth.existingSecret=n8n-sandbox-auth \
+            --set tls.mode=certManager \
+            --set tls.certManager.issuerRef.name=sandbox-ca \
+            --set tls.certManager.issuerRef.kind=ClusterIssuer
+          helm template n8n-sandbox-service charts/n8n-sandbox-service \
+            --set auth.existingSecret=n8n-sandbox-auth \
+            --set api.ingress.enabled=true \
+            --set 'api.ingress.hosts[0].host=sandbox.example.com' \
+            --set 'api.ingress.tls[0].secretName=sandbox-api-public-tls' \
+            --set 'api.ingress.tls[0].hosts[0]=sandbox.example.com'
+          helm template n8n-sandbox-service charts/n8n-sandbox-service \
+            --set auth.existingSecret=n8n-sandbox-auth \
+            --set networkPolicy.enabled=true
+
   e2e:
     runs-on: ${{ vars.RUNNER_PROVIDER == 'github' && 'ubuntu-latest' || 'blacksmith-4vcpu-ubuntu-2204' }}
     steps:
@@ -90,7 +123,7 @@ jobs:
   # PRs cannot be merged unless this job passes.
   required-checks:
     name: Required Checks
-    needs: [check, sdk, docker, e2e]
+    needs: [check, sdk, docker, helm, e2e]
     if: always()
     runs-on: ubuntu-latest
     steps:

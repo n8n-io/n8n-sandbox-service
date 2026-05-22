@@ -5,3 +5,5 @@ node_modules
 *.tsbuildinfo
 .tls/
 .gomodcache/
+charts/n8n-cloud-sandbox-service/
+scripts/smoke-dev-sandbox.env

@@ -1,0 +1,24 @@
+{{- if and .Values.sysboxRunner.enabled (eq .Values.dataPlane.mode "sysbox") }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "n8n-sandbox-service.sysboxRunnerName" . }}
+  labels:
+    {{- include "n8n-sandbox-service.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sysbox-runner
+  {{- with .Values.sysboxRunner.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "n8n-sandbox-service.selectorLabels" (dict "Release" .Release "Chart" .Chart "Values" .Values "component" "sysbox-runner") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.sysboxRunner.service.httpPort }}
+      targetPort: http
+    - name: control-grpc
+      port: {{ .Values.sysboxRunner.service.controlGrpcPort }}
+      targetPort: control-grpc
+{{- end }}

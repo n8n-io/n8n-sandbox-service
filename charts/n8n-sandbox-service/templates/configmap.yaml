@@ -1,0 +1,54 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "n8n-sandbox-service.apiName" . }}-config
+  labels:
+    {{- include "n8n-sandbox-service.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+data:
+  SANDBOX_API_LISTEN_ADDR: {{ .Values.api.config.listenAddr | quote }}
+  SANDBOX_API_GRPC_LISTEN_ADDR: {{ .Values.api.config.grpcListenAddr | quote }}
+  SANDBOX_API_DATA_DIR: {{ .Values.api.config.dataDir | quote }}
+  SANDBOX_API_MAX_FILE_BYTES: {{ .Values.api.config.maxFileBytes | quote }}
+  SANDBOX_API_ENABLE_CORS: {{ .Values.api.config.enableCors | quote }}
+  SANDBOX_API_RUNNER_HEARTBEAT_GRACE: {{ .Values.api.config.runnerHeartbeatGrace | quote }}
+  SANDBOX_API_IDLE_STOP_AFTER: {{ .Values.api.config.idleStopAfter | quote }}
+  SANDBOX_API_IDLE_DELETE_AFTER: {{ .Values.api.config.idleDeleteAfter | quote }}
+  SANDBOX_API_IDLE_DELETE_SAFETY_BUFFER: {{ .Values.api.config.idleDeleteSafetyBuffer | quote }}
+  SANDBOX_API_IDLE_SWEEP_INTERVAL: {{ .Values.api.config.idleSweepInterval | quote }}
+{{- if and .Values.sysboxRunner.enabled (eq .Values.dataPlane.mode "sysbox") }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "n8n-sandbox-service.sysboxRunnerName" . }}-config
+  labels:
+    {{- include "n8n-sandbox-service.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sysbox-runner
+data:
+  SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE: {{ include "n8n-sandbox-service.sandboxImage" . | quote }}
+  SANDBOX_RUNNER_DOCKER_HOST: {{ .Values.sysboxRunner.config.dockerHost | quote }}
+  SANDBOX_RUNNER_LISTEN_ADDR: {{ .Values.sysboxRunner.config.listenAddr | quote }}
+  SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR: {{ .Values.sysboxRunner.config.controlGrpcListenAddr | quote }}
+  SANDBOX_RUNNER_DATA_DIR: {{ .Values.sysboxRunner.config.dataDir | quote }}
+  SANDBOX_RUNNER_IDLE_TTL_SECONDS: {{ .Values.sysboxRunner.config.idleTtlSeconds | quote }}
+  SANDBOX_RUNNER_CAPACITY_TOTAL: {{ .Values.sysboxRunner.config.capacityTotal | quote }}
+  SANDBOX_RUNNER_MAX_FILE_BYTES: {{ .Values.sysboxRunner.config.maxFileBytes | quote }}
+  SANDBOX_RUNNER_DEFAULT_MEMORY_MB: {{ .Values.sysboxRunner.config.defaultMemoryMb | quote }}
+  SANDBOX_RUNNER_DEFAULT_CPU_PERCENT: {{ .Values.sysboxRunner.config.defaultCpuPercent | quote }}
+  SANDBOX_RUNNER_DEFAULT_PIDS_MAX: {{ .Values.sysboxRunner.config.defaultPidsMax | quote }}
+  SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB: {{ .Values.sysboxRunner.config.defaultDiskQuotaMb | quote }}
+  SANDBOX_RUNNER_ENABLE_CGROUPS: {{ .Values.sysboxRunner.config.enableCgroups | quote }}
+  {{- if .Values.sysboxRunner.config.dockerStorageDriver }}
+  SANDBOX_RUNNER_DOCKER_STORAGE_DRIVER: {{ .Values.sysboxRunner.config.dockerStorageDriver | quote }}
+  {{- end }}
+  {{- if .Values.sysboxRunner.config.diskQuotaPoolSizeGb }}
+  SANDBOX_RUNNER_DISK_QUOTA_POOL_SIZE_GB: {{ .Values.sysboxRunner.config.diskQuotaPoolSizeGb | quote }}
+  {{- end }}
+  {{- if .Values.sysboxRunner.config.diskQuotaPoolPath }}
+  SANDBOX_RUNNER_DISK_QUOTA_POOL_PATH: {{ .Values.sysboxRunner.config.diskQuotaPoolPath | quote }}
+  {{- end }}
+  {{- if .Values.sysboxRunner.config.dockerInsecureRegistries }}
+  SANDBOX_RUNNER_DOCKER_INSECURE_REGISTRIES: {{ .Values.sysboxRunner.config.dockerInsecureRegistries | quote }}
+  {{- end }}
+{{- end }}

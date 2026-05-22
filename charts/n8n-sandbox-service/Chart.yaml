@@ -1,0 +1,6 @@
+apiVersion: v2
+name: n8n-sandbox-service
+description: n8n Sandbox Service control plane with optional sysbox/DinD runner
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
