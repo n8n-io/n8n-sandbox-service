@@ -23,8 +23,6 @@ jobs:
           fi
           echo "Version: $VERSION"
 
-      - name: Run tests
-        uses: ./.github/actions/sandbox-service-test
+  e2e:
+    uses: ./.github/workflows/e2e.yml
 
-      - name: Build sandbox image (amd64, no push)
-        run: make docker-sandbox-amd64

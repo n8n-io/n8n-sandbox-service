@@ -26,9 +26,6 @@ jobs:
           VERSION=$(cat SANDBOX_VERSION)
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Run tests
-        uses: ./.github/actions/sandbox-service-test
-
       - name: Publish sandbox image
         uses: ./.github/actions/docker-publish
         with:
