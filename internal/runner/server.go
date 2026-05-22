@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 	"github.com/n8n-io/sandbox-service/internal/runner/manager"
 )
@@ -19,8 +20,9 @@ type ContainerManager interface {
 	FindContainerIDByLabel(ctx context.Context, sandboxID string) (string, error)
 }
 
-// NewRouter creates the HTTP handler for container operations.
-func NewRouter(mgr ContainerManager, cfg *config.Config) http.Handler {
+// NewRouter creates the HTTP handler for container operations. If rec is
+// enabled, its /metrics handler is mounted and HTTPMiddleware wraps the chain.
+func NewRouter(mgr ContainerManager, cfg *config.Config, rec *metrics.RunnerRecorder) http.Handler {
 	mux := http.NewServeMux()
 
 	// Health check
@@ -30,11 +32,15 @@ func NewRouter(mgr ContainerManager, cfg *config.Config) http.Handler {
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 
+	if rec.Enabled() {
+		mux.Handle("GET /metrics", metrics.Handler(rec.Registry()))
+	}
+
 	mux.HandleFunc("GET /sandboxes/{id}", GetSandbox(mgr))
 
 	// Proxy exec, files, mkdir, stat to daemon
-	proxy := ProxyHandler(mgr, cfg)
-	uploadProxy := UploadProxyHandler(mgr, cfg)
+	proxy := ProxyHandler(mgr, cfg, rec)
+	uploadProxy := UploadProxyHandler(mgr, cfg, rec)
 
 	mux.HandleFunc("POST /sandboxes/{id}/executions", proxy)
 	mux.HandleFunc("GET /sandboxes/{id}/executions/{exec_id}", proxy)
@@ -51,6 +57,9 @@ func NewRouter(mgr ContainerManager, cfg *config.Config) http.Handler {
 
 	// Apply middleware (outermost first)
 	var handler http.Handler = mux
+	if rec.Enabled() {
+		handler = metrics.HTTPMiddleware(rec)(handler)
+	}
 	handler = AuthMiddleware(cfg.APIKeys)(handler)
 	handler = LoggingMiddleware(handler)
 	handler = RecoveryMiddleware(handler)

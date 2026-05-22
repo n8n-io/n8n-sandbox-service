@@ -1,6 +1,6 @@
 # Sandbox Service API
 
-All endpoints except `/healthz` require the `X-Api-Key` header for authentication.
+All endpoints except `/healthz` and `/metrics` require the `X-Api-Key` header for authentication. `/metrics` is only exposed when `SANDBOX_API_METRICS_ENABLED=true` and is intended to be scraped over a private network.
 
 ## Error Response Format
 
@@ -38,6 +38,29 @@ Health check. No authentication required.
 
 ```bash
 curl http://localhost:8080/healthz
+```
+
+---
+
+### GET /metrics
+
+Prometheus exposition of the API's metrics. Only mounted when `SANDBOX_API_METRICS_ENABLED=true`; bypasses `X-Api-Key` so a scraper can reach it. Firewall the listener or front it with a private LB.
+
+Metric families include:
+
+- `sandbox_http_requests_total{role,route,method,status}` — request counter; `route` is the matched route pattern (e.g. `/sandboxes/{id}`), not the raw path.
+- `sandbox_http_request_duration_seconds{role,route,method}` — request latency histogram.
+- `sandbox_sandbox_operations_total{role="api",operation,result}` — sandbox lifecycle ops (`create`, `delete`).
+- `sandbox_sandboxes_active{role="api"}` — current sandbox count from the store.
+- `sandbox_runners_registered{role="api"}` — runners registered with the API.
+- `go_*` and `process_*` — Go runtime and process collectors.
+
+**Response:** `200 OK` with `Content-Type: text/plain; version=0.0.4`.
+
+**Example:**
+
+```bash
+curl http://localhost:8080/metrics
 ```
 
 ---

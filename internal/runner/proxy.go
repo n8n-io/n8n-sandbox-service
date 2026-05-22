@@ -8,7 +8,9 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"time"
 
+	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 	"github.com/n8n-io/sandbox-service/internal/runner/manager"
 )
@@ -21,16 +23,16 @@ type proxyTarget struct {
 }
 
 // ProxyHandler returns a handler that reverse-proxies requests to the sandbox daemon.
-func ProxyHandler(mgr ContainerManager, cfg *config.Config) http.HandlerFunc {
-	return proxyHandler(mgr, cfg, false)
+func ProxyHandler(mgr ContainerManager, cfg *config.Config, rec *metrics.RunnerRecorder) http.HandlerFunc {
+	return proxyHandler(mgr, cfg, rec, false)
 }
 
 // UploadProxyHandler is like ProxyHandler but enforces cfg.MaxFileBytes on the request body.
-func UploadProxyHandler(mgr ContainerManager, cfg *config.Config) http.HandlerFunc {
-	return proxyHandler(mgr, cfg, true)
+func UploadProxyHandler(mgr ContainerManager, cfg *config.Config, rec *metrics.RunnerRecorder) http.HandlerFunc {
+	return proxyHandler(mgr, cfg, rec, true)
 }
 
-func proxyHandler(mgr ContainerManager, cfg *config.Config, limitBody bool) http.HandlerFunc {
+func proxyHandler(mgr ContainerManager, cfg *config.Config, rec *metrics.RunnerRecorder, limitBody bool) http.HandlerFunc {
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			// Comma-ok assertion: the context key is missing when
@@ -70,7 +72,10 @@ func proxyHandler(mgr ContainerManager, cfg *config.Config, limitBody bool) http
 
 		daemonBaseURL, err := mgr.DaemonURL(r.Context(), id)
 		if err != nil && errors.Is(err, manager.ErrSandboxNotRunning) {
-			if wakeErr := mgr.EnsureSandboxRunning(r.Context(), id); wakeErr != nil {
+			wakeStart := time.Now()
+			wakeErr := mgr.EnsureSandboxRunning(r.Context(), id)
+			rec.ObserveContainerOp(metrics.OpEnsureRunning, wakeErr == nil, time.Since(wakeStart))
+			if wakeErr != nil {
 				if errors.Is(wakeErr, manager.ErrSandboxNotFound) {
 					writeError(w, http.StatusNotFound, wakeErr.Error())
 				} else {
