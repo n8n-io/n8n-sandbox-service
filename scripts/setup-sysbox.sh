@@ -8,6 +8,7 @@ MANUAL_INSTALL_URL="https://github.com/nestybox/sysbox/blob/master/docs/user-gui
 SHA256_AMD64="eeff273671467b8fa351ab3d40709759462dc03d9f7b50a1b207b37982ce40a9"
 SHA256_ARM64="eae9c0e91ddd39bd1826d6a7a313a73d42a8449ef5113e9d6d118b559cb809ba"
 
+DRY_RUN="${DRY_RUN:-}"
 DL_DIR=""
 
 cleanup() {
@@ -89,8 +90,12 @@ check_sudo() {
 
 check_sysbox_installed() {
 	if command -v sysbox-runc >/dev/null 2>&1 && systemctl is-active --quiet sysbox 2>/dev/null; then
-		echo "==> Sysbox is already installed and running. Nothing to do."
-		exit 0
+		if [[ "$DRY_RUN" == "1" ]]; then
+			echo "==> Sysbox is already installed and running."
+		else
+			echo "==> Sysbox is already installed and running. Nothing to do."
+			exit 0
+		fi
 	fi
 }
 
@@ -189,6 +194,17 @@ verify_sysbox() {
 }
 
 main() {
+	for arg in "$@"; do
+		case "$arg" in
+			--dry-run) DRY_RUN=1 ;;
+			*) err "Unknown argument: $arg" ;;
+		esac
+	done
+
+	if [[ "$DRY_RUN" == "1" ]]; then
+		echo "==> [DRY RUN] Checking prerequisites only — no changes will be made"
+	fi
+
 	echo "==> Setting up sysbox v${SYSBOX_VERSION}"
 
 	check_sysbox_installed
@@ -201,20 +217,50 @@ main() {
 	check_docker
 	check_sudo
 
-	echo "==> Installing dependencies..."
-	install_jq
-	ensure_br_netfilter
+	if [[ "$DRY_RUN" == "1" ]]; then
+		echo "==> [DRY RUN] Would install dependencies (jq, br_netfilter kernel module)"
+		if command -v jq >/dev/null 2>&1; then
+			echo "    jq: already installed"
+		else
+			echo "    jq: not installed — would install via apt-get"
+		fi
+		if lsmod | grep -q br_netfilter; then
+			echo "    br_netfilter: already loaded"
+		else
+			echo "    br_netfilter: not loaded — would modprobe and persist"
+		fi
 
-	echo "==> Downloading sysbox..."
-	download_sysbox "$arch"
+		local filename="sysbox-ce_${SYSBOX_VERSION}-0.linux_${arch}.deb"
+		echo "==> [DRY RUN] Would download ${filename} from ${SYSBOX_BASE_URL}/${filename}"
+		echo "==> [DRY RUN] Would stop/remove running Docker containers (if any)"
 
-	stop_docker_containers
-	install_sysbox
+		local running
+		running=$(docker ps -q) || true
+		if [[ -z "$running" ]]; then
+			echo "    No running containers"
+		else
+			echo "    $(echo "$running" | wc -l | tr -d ' ') running container(s) would be stopped and removed"
+		fi
 
-	echo "==> Verifying sysbox installation..."
-	verify_sysbox
+		echo "==> [DRY RUN] Would install sysbox via apt-get"
+		echo "==> [DRY RUN] Would verify sysbox installation (skipped — sysbox not installed)"
+		echo "==> [DRY RUN] Prerequisite checks passed. Machine appears ready for sysbox installation."
+	else
+		echo "==> Installing dependencies..."
+		install_jq
+		ensure_br_netfilter
 
-	echo "==> Sysbox v${SYSBOX_VERSION} installed successfully!"
+		echo "==> Downloading sysbox..."
+		download_sysbox "$arch"
+
+		stop_docker_containers
+		install_sysbox
+
+		echo "==> Verifying sysbox installation..."
+		verify_sysbox
+
+		echo "==> Sysbox v${SYSBOX_VERSION} installed successfully!"
+	fi
 }
 
 main "$@"

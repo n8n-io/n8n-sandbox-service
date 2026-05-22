@@ -8,7 +8,7 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/lib/common.sh"
 
 ARCH="$(e2e_docker_arch)"
-API_IMAGE="n8n-sandbox-api:latest-${ARCH}"
+API_IMAGE="n8n-sandbox-service-api:latest-${ARCH}"
 API_CONTAINER_NAME="sandbox-api-e2e-norunner-$$"
 NETWORK_NAME="sandbox-e2e-net-norunner-$$"
 PORT="${PORT:-18080}"
@@ -40,26 +40,35 @@ fi
 e2e_bootstrap_mtls_maybe "$PROJECT_DIR" "$TLS_DIR_OWNED" "$TLS_DIR" "$API_TLS_DNS" "runner-control"
 e2e_normalize_tls_permissions "$TLS_DIR"
 API_DOCKER_USER=()
-e2e_setup_api_tls_for_container "$TLS_DIR" "$API_IMAGE"
+API_DATA_VOLUME_ARGS=()
+e2e_setup_api_container "$TLS_DIR" "$API_IMAGE"
 
 e2e_docker_network_create "$NETWORK_NAME"
 
 echo "Starting API only on port $PORT..."
-docker run -d \
-	"${API_DOCKER_USER[@]}" \
-	--network "$NETWORK_NAME" \
-	-p "$PORT:8080" \
-	-v "$TLS_DIR:/grpc-tls:ro" \
-	-e "SANDBOX_API_KEYS=$API_KEY" \
-	-e "SANDBOX_API_RUNNER_REGISTRATION_TOKEN=$REG_TOKEN" \
-	-e "SANDBOX_API_GRPC_TLS_CERT_FILE=/grpc-tls/grpc-server.crt" \
-	-e "SANDBOX_API_GRPC_TLS_KEY_FILE=/grpc-tls/grpc-server.key" \
-	-e "SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE=/grpc-tls/ca.crt" \
-	-e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE=/grpc-tls/ca.crt" \
-	-e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE=/grpc-tls/control-grpc-api-client.crt" \
-	-e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE=/grpc-tls/control-grpc-api-client.key" \
-	--name "$API_CONTAINER_NAME" \
+API_DOCKER_RUN=(-d)
+if ((${#API_DOCKER_USER[@]})); then
+	API_DOCKER_RUN+=("${API_DOCKER_USER[@]}")
+fi
+if ((${#API_DATA_VOLUME_ARGS[@]})); then
+	API_DOCKER_RUN+=("${API_DATA_VOLUME_ARGS[@]}")
+fi
+API_DOCKER_RUN+=(
+	--network "$NETWORK_NAME"
+	-p "$PORT:8080"
+	-v "$TLS_DIR:/grpc-tls:ro"
+	-e "SANDBOX_API_KEYS=$API_KEY"
+	-e "SANDBOX_API_RUNNER_REGISTRATION_TOKEN=$REG_TOKEN"
+	-e "SANDBOX_API_GRPC_TLS_CERT_FILE=/grpc-tls/grpc-server.crt"
+	-e "SANDBOX_API_GRPC_TLS_KEY_FILE=/grpc-tls/grpc-server.key"
+	-e "SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE=/grpc-tls/ca.crt"
+	-e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE=/grpc-tls/ca.crt"
+	-e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE=/grpc-tls/control-grpc-api-client.crt"
+	-e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE=/grpc-tls/control-grpc-api-client.key"
+	--name "$API_CONTAINER_NAME"
 	"$API_IMAGE"
+)
+docker run "${API_DOCKER_RUN[@]}"
 
 e2e_wait_for_api_http "$PORT" "$API_CONTAINER_NAME"
 

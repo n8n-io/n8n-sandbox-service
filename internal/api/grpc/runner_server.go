@@ -1,6 +1,7 @@
 package grpcapi
 
 import (
+	"crypto/subtle"
 	"io"
 	"strings"
 
@@ -31,7 +32,7 @@ func validateBearer(md metadata.MD, token string) bool {
 		const prefix = "Bearer "
 		if strings.HasPrefix(strings.ToLower(v), strings.ToLower(prefix)) {
 			got := strings.TrimSpace(v[len(prefix):])
-			return got == token
+			return subtle.ConstantTimeCompare([]byte(got), []byte(token)) == 1
 		}
 	}
 	return false

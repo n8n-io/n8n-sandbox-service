@@ -20,6 +20,38 @@ export async function createSandbox(): Promise<string> {
   return record.id;
 }
 
+function isTransientCreateError(err: unknown): boolean {
+  const status = (err as { status?: number })?.status;
+  if (status === 503 || status === 500) {
+    return true;
+  }
+  const msg = String((err as Error)?.message || '').toLowerCase();
+  return (
+    msg.includes('timeout waiting for daemon') ||
+    msg.includes('connect to daemon') ||
+    msg.includes('daemon temporarily unavailable') ||
+    msg.includes('runner unavailable') ||
+    msg.includes('internal server error')
+  );
+}
+
+export async function createSandboxWithRetry(maxAttempts = 5): Promise<string> {
+  let lastErr: unknown;
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      return await createSandbox();
+    } catch (err) {
+      lastErr = err;
+      const retry = isTransientCreateError(err) && i < maxAttempts - 1;
+      if (!retry) {
+        throw err;
+      }
+      await new Promise((r) => setTimeout(r, 2500));
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
+
 export async function deleteSandbox(id: string): Promise<void> {
   await client.deleteSandbox(id);
 }

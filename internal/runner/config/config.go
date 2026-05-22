@@ -66,13 +66,20 @@ type Config struct {
 	// Parsed from SANDBOX_RUNNER_DEFAULT_PIDS_MAX (default 256).
 	DefaultPidsMax int
 
+	// DefaultDiskQuotaMB is the default writable-layer disk quota in megabytes.
+	// Parsed from SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB (default 0, meaning no quota).
+	// Only applied when DiskQuotaActive is true.
+	DefaultDiskQuotaMB int64
+
+	// DiskQuotaActive indicates that the runner's inner dockerd is configured
+	// against an xfs+prjquota data root and can honor `--storage-opt size=`.
+	// Set by scripts/start-runner.sh after a successful storage-pool mount.
+	// Parsed from SANDBOX_RUNNER_DISK_QUOTA_ACTIVE (default false).
+	DiskQuotaActive bool
+
 	// EnableCgroups controls whether cgroup setup is enforced for sandbox creation.
 	// Parsed from SANDBOX_RUNNER_ENABLE_CGROUPS (default true).
 	EnableCgroups bool
-
-	// InterSandboxNetworkEnabled enables sandbox-to-sandbox traffic on runner-bridge.
-	// Parsed from SANDBOX_RUNNER_INTER_SANDBOX_NETWORK_ENABLED (default false).
-	InterSandboxNetworkEnabled bool
 
 	// APIGRPCAddr is the host:port of the API's runner registration gRPC listener.
 	// Parsed from SANDBOX_RUNNER_API_GRPC_ADDR.
@@ -260,6 +267,25 @@ func Load() (*Config, error) {
 		cfg.DefaultPidsMax = n
 	}
 
+	// SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB (optional; 0 means no quota,
+	// matching how scripts/start-runner.sh treats an unset value)
+	if v := os.Getenv("SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || n < 0 {
+			return nil, fmt.Errorf("SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB must be a non-negative integer, got %q", v)
+		}
+		cfg.DefaultDiskQuotaMB = n
+	}
+
+	// SANDBOX_RUNNER_DISK_QUOTA_ACTIVE (optional; set by scripts/start-runner.sh)
+	if v := os.Getenv("SANDBOX_RUNNER_DISK_QUOTA_ACTIVE"); v != "" {
+		active, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("SANDBOX_RUNNER_DISK_QUOTA_ACTIVE must be a boolean, got %q", v)
+		}
+		cfg.DiskQuotaActive = active
+	}
+
 	// SANDBOX_RUNNER_ENABLE_CGROUPS (optional)
 	if v := os.Getenv("SANDBOX_RUNNER_ENABLE_CGROUPS"); v != "" {
 		enabled, err := strconv.ParseBool(v)
@@ -267,15 +293,6 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("SANDBOX_RUNNER_ENABLE_CGROUPS must be a boolean, got %q", v)
 		}
 		cfg.EnableCgroups = enabled
-	}
-
-	// SANDBOX_RUNNER_INTER_SANDBOX_NETWORK_ENABLED (optional)
-	if v := os.Getenv("SANDBOX_RUNNER_INTER_SANDBOX_NETWORK_ENABLED"); v != "" {
-		enabled, err := strconv.ParseBool(v)
-		if err != nil {
-			return nil, fmt.Errorf("SANDBOX_RUNNER_INTER_SANDBOX_NETWORK_ENABLED must be a boolean, got %q", v)
-		}
-		cfg.InterSandboxNetworkEnabled = enabled
 	}
 
 	cfg.APIGRPCAddr = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_API_GRPC_ADDR"))

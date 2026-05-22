@@ -41,4 +41,4 @@ RUN cd workspace && npm install --ignore-scripts
 
 EXPOSE 8081
 
-CMD ["/usr/local/bin/sandbox-daemon", "--listen-addr", ":8081", "--base-dir", "/"]
+CMD ["/usr/local/bin/sandbox-daemon", "--listen-addr", ":8081"]

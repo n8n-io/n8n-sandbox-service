@@ -27,7 +27,7 @@ func runnerProxyForPick(w http.ResponseWriter, r *http.Request, limitBody bool, 
 		return false
 	}
 	u, _ := url.Parse(strings.TrimRight(run.HTTPBaseURL, "/"))
-	proxy := newRunnerReverseProxy(u, cfg.RunnerAPIKey, cfg)
+	proxy := newRunnerReverseProxy(u, cfg.RunnerAPIKey)
 	if limitBody {
 		r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxFileBytes)
 	}
@@ -59,8 +59,16 @@ func sandboxProxyHandler(s *store.Store, cfg *config.APIConfig) func(bool) http.
 				return
 			}
 
+			if isPastIdleDeleteWindow(rec, cfg, time.Now().Unix()) {
+				writeError(w, http.StatusNotFound, "sandbox not found")
+				return
+			}
+
+			_ = s.UpdateLastActive(id)
+			_ = s.UpdateStatus(id, "running")
+
 			u, _ := url.Parse(strings.TrimRight(rec.RunnerHTTPBase, "/"))
-			proxy := newRunnerReverseProxy(u, cfg.RunnerAPIKey, cfg)
+			proxy := newRunnerReverseProxy(u, cfg.RunnerAPIKey)
 			if limitBody {
 				r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxFileBytes)
 			}
@@ -98,7 +106,7 @@ func handleListSandboxes(s *store.Store) http.HandlerFunc {
 	}
 }
 
-func handleGetSandbox(s *store.Store) http.HandlerFunc {
+func handleGetSandbox(s *store.Store, cfg *config.APIConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if !isValidUUID(id) {
@@ -114,6 +122,10 @@ func handleGetSandbox(s *store.Store) http.HandlerFunc {
 			writeError(w, http.StatusNotFound, "sandbox not found")
 			return
 		}
+		if isPastIdleDeleteWindow(rec, cfg, time.Now().Unix()) {
+			writeError(w, http.StatusNotFound, "sandbox not found")
+			return
+		}
 		if err := s.UpdateLastActive(id); err != nil {
 			// non-fatal
 		}
@@ -125,6 +137,13 @@ func handleGetSandbox(s *store.Store) http.HandlerFunc {
 		}
 		writeJSON(w, http.StatusOK, resp)
 	}
+}
+
+func isPastIdleDeleteWindow(rec *store.SandboxRecord, cfg *config.APIConfig, now int64) bool {
+	if rec == nil || cfg.IdleDeleteAfter <= 0 {
+		return false
+	}
+	return now > rec.LastActiveAt+int64(cfg.IdleDeleteAfter.Seconds())
 }
 
 func runnerControlTLS(cfg *config.APIConfig) *runnerctl.TLS {
@@ -234,7 +253,7 @@ func isValidUUID(id string) bool {
 	return id != "" && uuidRegex.MatchString(id)
 }
 
-func newRunnerReverseProxy(runnerURL *url.URL, runnerAPIKey string, cfg *config.APIConfig) *httputil.ReverseProxy {
+func newRunnerReverseProxy(runnerURL *url.URL, runnerAPIKey string) *httputil.ReverseProxy {
 	target := *runnerURL
 	return &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {

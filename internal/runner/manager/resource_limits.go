@@ -8,4 +8,6 @@ type ResourceLimits struct {
 	CPUPercent int `json:"cpu_percent,omitempty"`
 	// PidsMax is the maximum number of processes. 0 means use default.
 	PidsMax int `json:"pids_max,omitempty"`
+	// DiskMB is the writable-layer disk quota in megabytes. 0 means no quota.
+	DiskMB int64 `json:"disk_mb,omitempty"`
 }

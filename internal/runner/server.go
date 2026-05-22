@@ -14,6 +14,7 @@ type ContainerManager interface {
 	CreateContainer(ctx context.Context, sandboxID string, opts *manager.CreateOptions) (*manager.ContainerInfo, error)
 	GetContainerInfo(ctx context.Context, containerID string) (*manager.ContainerInfo, error)
 	DeleteContainer(ctx context.Context, containerID string) error
+	EnsureSandboxRunning(ctx context.Context, sandboxID string) error
 	DaemonURL(ctx context.Context, containerID string) (string, error)
 	FindContainerIDByLabel(ctx context.Context, sandboxID string) (string, error)
 }
@@ -29,11 +30,7 @@ func NewRouter(mgr ContainerManager, cfg *config.Config) http.Handler {
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 
-	// Sandbox CRUD (stateless - no database persistence)
-	mux.HandleFunc("GET /sandboxes", ListSandboxes(mgr))
-	mux.HandleFunc("POST /sandboxes", CreateSandbox(mgr))
 	mux.HandleFunc("GET /sandboxes/{id}", GetSandbox(mgr))
-	mux.HandleFunc("DELETE /sandboxes/{id}", DeleteSandbox(mgr))
 
 	// Proxy exec, files, mkdir, stat to daemon
 	proxy := ProxyHandler(mgr, cfg)

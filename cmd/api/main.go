@@ -32,8 +32,11 @@ func main() {
 	}
 
 	// Ensure data directory exists
-	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
-		slog.Error("create data dir", "error", err)
+	if info, err := os.Stat(cfg.DataDir); err != nil {
+		slog.Error("data dir not accessible", "path", cfg.DataDir, "error", err)
+		os.Exit(1)
+	} else if !info.IsDir() {
+		slog.Error("data dir is not a directory", "path", cfg.DataDir)
 		os.Exit(1)
 	}
 
@@ -47,6 +50,12 @@ func main() {
 	defer s.Close()
 
 	reg := registry.New(cfg.HeartbeatGrace)
+
+	api.LogIdleSweepConfig(cfg)
+
+	sweepCtx, sweepCancel := context.WithCancel(context.Background())
+	defer sweepCancel()
+	api.StartIdleSweeper(sweepCtx, s, cfg)
 
 	// Create API gateway with state management
 	handler, err := api.NewGatewayRouter(s, cfg, reg)
@@ -107,7 +116,9 @@ func main() {
 	select {
 	case sig := <-quit:
 		slog.Info("received signal, shutting down api", "signal", sig)
+		sweepCancel()
 	case err := <-serverErr:
+		sweepCancel()
 		slog.Error("server error", "error", err)
 		os.Exit(1)
 	}

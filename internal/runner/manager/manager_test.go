@@ -3,6 +3,8 @@ package manager
 import (
 	"errors"
 	"testing"
+
+	"github.com/n8n-io/sandbox-service/internal/runner/config"
 )
 
 func TestDockerLimitArgs(t *testing.T) {
@@ -21,6 +23,58 @@ func TestDockerLimitArgs(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("dockerLimitArgs()[%d] = %q, want %q", i, got[i], want[i])
 		}
+	}
+}
+
+func TestDockerDiskQuotaArgs(t *testing.T) {
+	tests := []struct {
+		name   string
+		limits *ResourceLimits
+		want   []string
+	}{
+		{name: "set", limits: &ResourceLimits{DiskMB: 1024}, want: []string{"--storage-opt", "size=1024m"}},
+		{name: "zero", limits: &ResourceLimits{DiskMB: 0}, want: nil},
+		{name: "nil", limits: nil, want: nil},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got := dockerDiskQuotaArgs(tc.limits)
+			if len(got) != len(tc.want) {
+				t.Fatalf("dockerDiskQuotaArgs() = %#v, want %#v", got, tc.want)
+			}
+			for i := range tc.want {
+				if got[i] != tc.want[i] {
+					t.Fatalf("dockerDiskQuotaArgs()[%d] = %q, want %q", i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestDefaultLimitsAppliesDiskQuotaOnlyWhenActive(t *testing.T) {
+	// xfs project quotas only enforce when the runner's storage pool was set
+	// up successfully (signaled by DiskQuotaActive). Otherwise we must not
+	// emit `--storage-opt size=`, regardless of the configured default.
+	tests := []struct {
+		name   string
+		active bool
+		want   int64
+	}{
+		{name: "active", active: true, want: 1024},
+		{name: "inactive", active: false, want: 0},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			m := &Manager{config: &config.Config{
+				DiskQuotaActive:    tc.active,
+				DefaultDiskQuotaMB: 1024,
+			}}
+			if got := m.defaultLimits().DiskMB; got != tc.want {
+				t.Errorf("defaultLimits().DiskMB = %d, want %d", got, tc.want)
+			}
+		})
 	}
 }
 
