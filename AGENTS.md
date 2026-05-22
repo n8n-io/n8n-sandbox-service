@@ -13,4 +13,4 @@ Fix any issues before committing.
 
 ## When making changes to the API
 
-Always document them into API.md
+Always document them into docs/API.md
