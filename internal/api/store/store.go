@@ -203,6 +203,15 @@ func (s *Store) querySandboxRecords(q string, args ...any) ([]*SandboxRecord, er
 	return records, nil
 }
 
+// Count returns the number of sandbox records currently in the store.
+func (s *Store) Count() (int64, error) {
+	var n int64
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sandboxes`).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: count sandboxes: %w", err)
+	}
+	return n, nil
+}
+
 // List returns all sandbox records, ordered by creation time descending.
 func (s *Store) List() ([]*SandboxRecord, error) {
 	const q = `

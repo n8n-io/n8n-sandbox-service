@@ -14,6 +14,7 @@ import (
 
 	"github.com/n8n-io/sandbox-service/internal/api/grpc/pb"
 	"github.com/n8n-io/sandbox-service/internal/grpctls"
+	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/runner"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 	"github.com/n8n-io/sandbox-service/internal/runner/manager"
@@ -37,8 +38,23 @@ func main() {
 		os.Exit(1)
 	}
 
+	mrec := metrics.NewRunnerRecorder(cfg.MetricsEnabled)
+	if mrec.Enabled() {
+		mrec.SetActiveContainers(func() float64 {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			n, err := mgr.ManagedContainerCount(ctx)
+			if err != nil {
+				slog.Warn("metrics: count managed containers", "error", err)
+				return 0
+			}
+			return float64(n)
+		})
+		slog.Info("metrics endpoint enabled", "path", "/metrics")
+	}
+
 	// Build HTTP handler.
-	handler := runner.NewRouter(mgr, cfg)
+	handler := runner.NewRouter(mgr, cfg, mrec)
 
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
@@ -70,7 +86,7 @@ func main() {
 	}
 	slog.Info("sandbox control grpc mTLS enabled", "addr", cfg.ControlGRPCListenAddr)
 	controlGRPC := grpc.NewServer(grpc.Creds(creds))
-	pb.RegisterSandboxControlServer(controlGRPC, &runner.SandboxControlGRPC{Mgr: mgr, Cfg: cfg})
+	pb.RegisterSandboxControlServer(controlGRPC, &runner.SandboxControlGRPC{Mgr: mgr, Cfg: cfg, Rec: mrec})
 	go func() {
 		if err := controlGRPC.Serve(lis); err != nil {
 			slog.Error("control grpc serve", "error", err)

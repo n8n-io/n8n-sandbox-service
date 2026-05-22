@@ -86,6 +86,10 @@ curl -s -X DELETE http://localhost:8080/sandboxes/<id> \
 
 See [docs/configuration.md](docs/configuration.md) for environment variables for the API, Runner, and Sandbox daemon.
 
+## Metrics
+
+Both the API and runner can expose a Prometheus `/metrics` endpoint on their public HTTP port. It is **off by default** — set `SANDBOX_API_METRICS_ENABLED=true` and/or `SANDBOX_RUNNER_METRICS_ENABLED=true` to enable. The endpoint bypasses `X-Api-Key` so a scraper can reach it; firewall the port or front it with a private LB. See [Metrics](docs/configuration.md#metrics) for the exposed series.
+
 ## Disk quotas
 
 When `SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB > 0`, the runner emits `--storage-opt size=Nm` on each sandbox so the inner dockerd caps that sandbox's writable layer. To make the flag enforce anything, `scripts/start-runner.sh` allocates a loopback xfs image (sized from `SANDBOX_RUNNER_DISK_QUOTA_POOL_SIZE_GB` — see the table above for how the default is derived), formats it, mounts it with `prjquota` at `/var/lib/docker`, and starts the inner dockerd with `--storage-driver=overlay2` against that mount. When `SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB` is unset/`0`, the pool is not created and dockerd uses its default storage with no per-sandbox enforcement.

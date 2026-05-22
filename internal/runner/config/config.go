@@ -113,6 +113,12 @@ type Config struct {
 	ControlGRPCServerCertFile string
 	ControlGRPCServerKeyFile  string
 	ControlGRPCClientCAFile   string
+
+	// MetricsEnabled controls whether the Prometheus /metrics endpoint is served.
+	// Parsed from SANDBOX_RUNNER_METRICS_ENABLED (default false). When true,
+	// /metrics is exposed on the public HTTP listener and bypasses X-Api-Key
+	// authentication; operators are expected to firewall the port.
+	MetricsEnabled bool
 }
 
 func validateHostPort(v string) error {
@@ -293,6 +299,14 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("SANDBOX_RUNNER_ENABLE_CGROUPS must be a boolean, got %q", v)
 		}
 		cfg.EnableCgroups = enabled
+	}
+
+	if v := os.Getenv("SANDBOX_RUNNER_METRICS_ENABLED"); v != "" {
+		enabled, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("SANDBOX_RUNNER_METRICS_ENABLED must be a boolean, got %q", v)
+		}
+		cfg.MetricsEnabled = enabled
 	}
 
 	cfg.APIGRPCAddr = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_API_GRPC_ADDR"))

@@ -14,6 +14,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
 	"github.com/n8n-io/sandbox-service/internal/api/runnerctl"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
+	"github.com/n8n-io/sandbox-service/internal/metrics"
 )
 
 func runnerProxyForPick(w http.ResponseWriter, r *http.Request, limitBody bool, cfg *config.APIConfig, pick func() (*registry.Runner, error)) bool {
@@ -158,8 +159,11 @@ func runnerControlTLS(cfg *config.APIConfig) *runnerctl.TLS {
 	}
 }
 
-func handleCreateSandbox(s *store.Store, reg *registry.Registry, cfg *config.APIConfig) http.HandlerFunc {
+func handleCreateSandbox(s *store.Store, reg *registry.Registry, cfg *config.APIConfig, rec *metrics.APIRecorder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		success := false
+		defer func() { rec.ObserveSandboxOp(metrics.OpCreate, success) }()
+
 		run, err := reg.PickRoundRobin()
 		if err != nil {
 			if errors.Is(err, registry.ErrNoRunners) {
@@ -206,11 +210,15 @@ func handleCreateSandbox(s *store.Store, reg *registry.Registry, cfg *config.API
 			LastActiveAt: now,
 		}
 		writeJSON(w, http.StatusCreated, resp)
+		success = true
 	}
 }
 
-func handleDeleteSandbox(s *store.Store, cfg *config.APIConfig) http.HandlerFunc {
+func handleDeleteSandbox(s *store.Store, cfg *config.APIConfig, mrec *metrics.APIRecorder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		success := false
+		defer func() { mrec.ObserveSandboxOp(metrics.OpDelete, success) }()
+
 		id := r.PathValue("id")
 		if !isValidUUID(id) {
 			writeError(w, http.StatusBadRequest, "invalid sandbox id")
@@ -224,6 +232,7 @@ func handleDeleteSandbox(s *store.Store, cfg *config.APIConfig) http.HandlerFunc
 		}
 		if rec == nil {
 			w.WriteHeader(http.StatusNoContent)
+			success = true
 			return
 		}
 
@@ -240,6 +249,7 @@ func handleDeleteSandbox(s *store.Store, cfg *config.APIConfig) http.HandlerFunc
 		}
 
 		w.WriteHeader(http.StatusNoContent)
+		success = true
 	}
 }
 

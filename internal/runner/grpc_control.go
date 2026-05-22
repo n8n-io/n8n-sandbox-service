@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	"github.com/n8n-io/sandbox-service/internal/api/grpc/pb"
+	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 	"github.com/n8n-io/sandbox-service/internal/runner/manager"
 )
@@ -19,6 +21,7 @@ type SandboxControlGRPC struct {
 	pb.UnimplementedSandboxControlServer
 	Mgr *manager.Manager
 	Cfg *config.Config
+	Rec *metrics.RunnerRecorder
 }
 
 var _ pb.SandboxControlServer = (*SandboxControlGRPC)(nil)
@@ -63,7 +66,9 @@ func (s *SandboxControlGRPC) CreateSandbox(ctx context.Context, req *pb.CreateSa
 	if !isValidID(sandboxID) {
 		return nil, status.Error(codes.InvalidArgument, "invalid sandbox id")
 	}
+	start := time.Now()
 	info, err := s.Mgr.CreateContainer(ctx, sandboxID, &manager.CreateOptions{})
+	s.Rec.ObserveContainerOp(metrics.OpCreate, err == nil && info != nil, time.Since(start))
 	if err != nil {
 		return nil, toGRPCError(err)
 	}
@@ -107,7 +112,10 @@ func (s *SandboxControlGRPC) DeleteSandbox(ctx context.Context, req *pb.DeleteSa
 		}
 		return nil, toGRPCError(err)
 	}
-	if err := s.Mgr.DeleteContainer(ctx, containerID); err != nil {
+	start := time.Now()
+	err = s.Mgr.DeleteContainer(ctx, containerID)
+	s.Rec.ObserveContainerOp(metrics.OpDelete, err == nil, time.Since(start))
+	if err != nil {
 		return nil, toGRPCError(err)
 	}
 	return &pb.DeleteSandboxResponse{}, nil
