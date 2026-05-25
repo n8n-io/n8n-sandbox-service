@@ -21,7 +21,9 @@ import (
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	var logLevel slog.LevelVar
+	logLevel.Set(slog.LevelInfo)
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: &logLevel}))
 	slog.SetDefault(logger)
 
 	cfg, err := config.Load()
@@ -29,6 +31,7 @@ func main() {
 		slog.Error("failed to load config", "error", err)
 		os.Exit(1)
 	}
+	logLevel.Set(cfg.LogLevel)
 
 	// Create stateless container manager.
 	mgr, err := manager.New(cfg)
