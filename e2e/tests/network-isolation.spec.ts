@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import './matchers';
 import { createSandbox, deleteSandbox, exec, execWithTransientRetry } from './helpers';
 
 // Helper: use python3 for HTTP requests since curl is not in the sandbox rootfs
@@ -21,7 +22,7 @@ test.describe('Network isolation', () => {
       const result = await exec(id, pyGet('http://httpbin.org/ip', 15), {
         timeoutMs: 30_000,
       });
-      expect(result.exitCode).toBe(0);
+      expect(result).toHaveSucceeded();
       expect(result.stdout.trim()).toBe('200');
     } finally {
       await deleteSandbox(id);
@@ -53,7 +54,7 @@ test.describe('Network isolation', () => {
     try {
       // Get sandbox 2's IP
       const ipResult = await execWithTransientRetry(id2, 'hostname -I', { timeoutMs: 5_000 });
-      expect(ipResult.exitCode).toBe(0);
+      expect(ipResult).toHaveSucceeded();
       const sandbox2IP = ipResult.stdout.trim();
       expect(sandbox2IP).toBeTruthy();
 
@@ -99,7 +100,7 @@ import time; time.sleep(30)
     const id = await createSandbox();
     try {
       const result = await execWithTransientRetry(id, pyResolve('example.com'), { timeoutMs: 10_000 });
-      expect(result.exitCode).toBe(0);
+      expect(result).toHaveSucceeded();
       // Should resolve to an IP address
       expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
     } finally {

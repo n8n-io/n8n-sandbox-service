@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import './matchers';
 import {
   client,
   createSandbox,
@@ -38,8 +39,7 @@ test.describe('Sandbox lifecycle', () => {
 
     const result = await exec(id, 'echo hello world');
     expect(result.stdout).toBe('hello world\n');
-    expect(result.success).toBe(true);
-    expect(result.exitCode).toBe(0);
+    expect(result).toHaveSucceeded();
 
     await deleteSandbox(id);
 
@@ -82,18 +82,18 @@ test.describe('Exec', () => {
   test('simple echo', async () => {
     const result = await exec(sandboxId, 'echo hello');
     expect(result.stdout).toBe('hello\n');
-    expect(result.success).toBe(true);
+    expect(result).toHaveSucceeded();
   });
 
   test('command with args', async () => {
     const result = await exec(sandboxId, 'ls /tmp');
-    expect(result.success).toBe(true);
+    expect(result).toHaveSucceeded();
   });
 
   test('stderr output', async () => {
     const result = await exec(sandboxId, 'echo error >&2');
     expect(result.stderr).toContain('error');
-    expect(result.success).toBe(true);
+    expect(result).toHaveSucceeded();
   });
 
   test('non-zero exit code', async () => {
@@ -166,7 +166,7 @@ test.describe('Exec', () => {
       retryWindowMs: 12_000,
     });
     expect(result.stdout.trim()).toBe('/home/user/');
-    expect(result.success).toBe(true);
+    expect(result).toHaveSucceeded();
   });
 
   test('missing command returns 400', async ({ request }) => {
@@ -195,7 +195,7 @@ test.describe('Exec', () => {
   test('exitCode is present even when 0', async () => {
     const result = await exec(sandboxId, 'true');
     expect(result).toHaveProperty('exitCode');
-    expect(result.exitCode).toBe(0);
+    expect(result).toHaveSucceeded();
   });
 
   test('sandbox runs as non-root user', async () => {
@@ -675,7 +675,7 @@ test.describe('File operations', () => {
       retryWindowMs: 12_000,
     });
     expect(result.stdout).toBe('from api\n');
-    expect(result.success).toBe(true);
+    expect(result).toHaveSucceeded();
   });
 
   test('file created by exec is downloadable via API', async () => {
@@ -696,7 +696,7 @@ test.describe('File operations', () => {
       retryWindowMs: 12_000,
     });
     expect(result.stdout).toBe('spaced content\n');
-    expect(result.success).toBe(true);
+    expect(result).toHaveSucceeded();
   });
 });
 
