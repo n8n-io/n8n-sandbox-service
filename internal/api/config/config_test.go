@@ -1,6 +1,7 @@
 package config
 
 import (
+	"log/slog"
 	"os"
 	"testing"
 	"time"
@@ -65,6 +66,10 @@ func TestLoadAPIParsesDefaults(t *testing.T) {
 	if cfg.IdleDeleteSafetyBuffer != time.Minute {
 		t.Errorf("expected IdleDeleteSafetyBuffer 1m, got %s", cfg.IdleDeleteSafetyBuffer)
 	}
+
+	if cfg.LogLevel != slog.LevelInfo {
+		t.Errorf("expected LogLevel info, got %v", cfg.LogLevel)
+	}
 }
 
 func TestLoadAPIHeartbeatGraceFromEnv(t *testing.T) {
@@ -90,6 +95,32 @@ func TestLoadAPIRejectsInvalidHeartbeatGrace(t *testing.T) {
 
 	if _, err := LoadAPI(); err == nil {
 		t.Fatal("expected LoadAPI to reject SANDBOX_API_RUNNER_HEARTBEAT_GRACE=0s")
+	}
+}
+
+func TestLoadAPIParsesLogLevel(t *testing.T) {
+	t.Setenv("SANDBOX_API_KEYS", "test-key")
+	t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	t.Setenv("SANDBOX_API_LOG_LEVEL", "debug")
+	setRequiredGRPCMTLS(t)
+
+	cfg, err := LoadAPI()
+	if err != nil {
+		t.Fatalf("LoadAPI() failed: %v", err)
+	}
+	if cfg.LogLevel != slog.LevelDebug {
+		t.Errorf("expected LogLevel debug, got %v", cfg.LogLevel)
+	}
+}
+
+func TestLoadAPIRejectsInvalidLogLevel(t *testing.T) {
+	t.Setenv("SANDBOX_API_KEYS", "test-key")
+	t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	t.Setenv("SANDBOX_API_LOG_LEVEL", "trace")
+	setRequiredGRPCMTLS(t)
+
+	if _, err := LoadAPI(); err == nil {
+		t.Fatal("expected LoadAPI to reject invalid SANDBOX_API_LOG_LEVEL")
 	}
 }
 
