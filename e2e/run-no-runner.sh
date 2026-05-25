@@ -38,7 +38,6 @@ if [[ "${E2E_SKIP_BUILD:-}" != "1" ]]; then
 fi
 
 e2e_bootstrap_mtls_maybe "$PROJECT_DIR" "$TLS_DIR_OWNED" "$TLS_DIR" "$API_TLS_DNS" "runner-control"
-e2e_normalize_tls_permissions "$TLS_DIR"
 API_DOCKER_USER=()
 API_DATA_VOLUME_ARGS=()
 e2e_setup_api_container "$TLS_DIR" "$API_IMAGE"
@@ -56,7 +55,7 @@ fi
 API_DOCKER_RUN+=(
 	--network "$NETWORK_NAME"
 	-p "$PORT:8080"
-	-v "$TLS_DIR:/grpc-tls:ro"
+	-v "$TLS_DIR/api:/grpc-tls:ro"
 	-e "SANDBOX_API_KEYS=$API_KEY"
 	-e "SANDBOX_API_RUNNER_REGISTRATION_TOKEN=$REG_TOKEN"
 	-e "SANDBOX_API_GRPC_TLS_CERT_FILE=/grpc-tls/grpc-server.crt"
