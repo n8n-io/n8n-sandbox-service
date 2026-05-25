@@ -37,19 +37,19 @@ echo "======== E2E 1/3: no-runner (API only) ========"
 "$SCRIPT_DIR/run-no-runner.sh" "$@"
 
 echo "Cooling down between e2e phases (host Docker / DinD)..."
-sleep 15
+sleep 2
 
 echo "======== E2E 2/3: two runners =================="
 "$SCRIPT_DIR/run-two-runners.sh" "$@"
 
 echo "Cooling down between e2e phases (host Docker / DinD)..."
-sleep 15
+sleep 2
 
 echo "======== E2E 3/4: single runner (full suite) =="
 "$SCRIPT_DIR/run.sh" "$@"
 
 echo "Cooling down between e2e phases (host Docker / DinD)..."
-sleep 15
+sleep 2
 
 echo "======== E2E 4/4: idle TTL (dedicated stack) ===="
 "$SCRIPT_DIR/run-idle-ttl.sh" "$@"
