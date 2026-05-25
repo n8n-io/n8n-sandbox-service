@@ -30,17 +30,20 @@ usage() {
 	                                   PREFIX-1,...,PREFIX-N,localhost
 	                                   (default: 2, env: NUM_RUNNERS)
 	      --api-san NAME             DNS SAN for API server cert
-	                                   (default: sandbox-api, env: API_DNS)
+	                                   (default: n8n-sandbox-service-api-local,
+	                                   env: API_DNS)
 	      --client-san NAME          DNS SAN for runner client cert
-	                                   (default: sandbox-runner-client, env: CLIENT_DNS)
+	                                   (default: sandbox-runner-mtls-client,
+	                                   env: CLIENT_DNS)
 	      --control-san-prefix PFX   Prefix for auto-generated runner control SANs;
 	                                   generates PFX-1,...,PFX-N,localhost
-	                                   (default: runner, env: CONTROL_SAN_PREFIX)
+	                                   (default: n8n-sandbox-service-runner-dind-local,
+	                                   env: CONTROL_SAN_PREFIX)
 	      --control-sans NAMES       Comma-separated DNS SANs for runner control server
 	                                   cert; overrides --runners and --control-san-prefix
 	                                   (env: CONTROL_SANS)
 	      --control-client-san NAME  DNS SAN for API control client cert
-	                                   (default: sandbox-api-control-client,
+	                                   (default: sandbox-api-control-mtls-client,
 	                                   env: CONTROL_API_CLIENT_DNS)
 	      --world-readable           Set key file permissions to 644 instead of 600
 	      --force                    Force regeneration even if certs exist
@@ -89,10 +92,10 @@ done
 
 OUT_DIR="${OUT_DIR:-./.tls}"
 NUM_RUNNERS="${NUM_RUNNERS:-2}"
-API_DNS="${API_DNS:-sandbox-api}"
-CLIENT_DNS="${CLIENT_DNS:-sandbox-runner-client}"
-CONTROL_SAN_PREFIX="${CONTROL_SAN_PREFIX:-runner}"
-CONTROL_API_CLIENT_DNS="${CONTROL_API_CLIENT_DNS:-sandbox-api-control-client}"
+API_DNS="${API_DNS:-n8n-sandbox-service-api-local}"
+CLIENT_DNS="${CLIENT_DNS:-sandbox-runner-mtls-client}"
+CONTROL_SAN_PREFIX="${CONTROL_SAN_PREFIX:-n8n-sandbox-service-runner-dind-local}"
+CONTROL_API_CLIENT_DNS="${CONTROL_API_CLIENT_DNS:-sandbox-api-control-mtls-client}"
 WORLD_READABLE="${WORLD_READABLE:-0}"
 FORCE="${FORCE:-${SANDBOX_TLS_REGEN:-0}}"
 
