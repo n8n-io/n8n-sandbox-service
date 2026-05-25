@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import './matchers';
 import { SandboxServiceError } from '@n8n/sandbox-client';
 import { client, createSandbox, deleteSandbox, startAndDisconnect } from './helpers';
 
@@ -32,7 +33,7 @@ test.describe('Resumable Exec', () => {
 
     expect(result.stdout).toContain('before');
     expect(result.stdout).toContain('after');
-    expect(result.exitCode).toBe(0);
+    expect(result).toHaveSucceeded();
     expect(result.killed).toBe(false);
   });
 

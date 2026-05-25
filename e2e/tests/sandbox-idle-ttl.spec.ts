@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import './matchers';
 import { apiRequest, createSandbox, execWithTransientRetry } from './helpers';
 
 test.describe.configure({ timeout: 75_000 });
@@ -16,7 +17,7 @@ test.describe('idle stop / wake / delete', () => {
     expect(j1.status).toBe('stopped');
 
     const execRes = await execWithTransientRetry(id, 'echo wake');
-    expect(execRes.success).toBe(true);
+    expect(execRes).toHaveSucceeded();
 
     // delete_after=10s, buffer=2s, sweep=1s from last activity (wake)
     await new Promise((r) => setTimeout(r, 16_000));
