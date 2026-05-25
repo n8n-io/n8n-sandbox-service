@@ -77,6 +77,11 @@ func (dc *dockerClient) runWithStdin(ctx context.Context, stdin io.Reader, args 
 	return stdout.String(), nil
 }
 
+func (dc *dockerClient) ping(ctx context.Context) error {
+	_, err := dc.run(ctx, "version", "--format", "{{.Server.Version}}")
+	return err
+}
+
 func (dc *dockerClient) createContainer(ctx context.Context, sandboxID, containerName, image string, limits *ResourceLimits, enableCgroups bool) (string, error) {
 	args := []string{
 		"container", "create",

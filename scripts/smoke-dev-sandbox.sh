@@ -41,6 +41,9 @@ if [ -z "${SANDBOX_API_KEY:-}" ] && ! command -v kubectl >/dev/null 2>&1; then
 fi
 
 cleanup() {
+	if [ -n "${sid:-}" ]; then
+		curl -fsS --tlsv1.2 --http1.1 -o /dev/null -X DELETE "${BASE}/sandboxes/${sid}" -H "X-Api-Key: ${KEY:-}" >/dev/null 2>&1 || true
+	fi
 	if [ -n "${tmp_exec_out:-}" ]; then
 		rm -f "${tmp_exec_out}"
 	fi
@@ -95,4 +98,5 @@ tmp_exec_out=""
 
 echo "==> DELETE ${BASE}/sandboxes/${sid}"
 http_code="$(curl -fsS --tlsv1.2 --http1.1 -o /dev/null -w "%{http_code}" -X DELETE "${BASE}/sandboxes/${sid}" -H "X-Api-Key: ${KEY}")"
+sid=""
 jq -n --arg code "${http_code}" '{http_status: $code}'

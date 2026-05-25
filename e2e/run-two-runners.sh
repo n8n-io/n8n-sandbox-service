@@ -178,7 +178,7 @@ wait_runner() {
 	local i
 	echo "Waiting for $name..."
 	for i in $(seq 1 60); do
-		if docker exec "$name" wget -q -O - --header="X-Api-Key: $RUNNER_INTERNAL_API_KEY" http://localhost:8080/healthz >/dev/null 2>&1; then
+		if docker exec "$name" wget -q -O - http://localhost:8080/readyz >/dev/null 2>&1; then
 			echo "$name is ready."
 			return 0
 		fi

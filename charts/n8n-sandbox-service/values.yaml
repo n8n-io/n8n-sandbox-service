@@ -82,7 +82,7 @@ api:
   replicaCount: 1
 
   image:
-    repository: n8nio/n8n-sandbox-api
+    repository: n8nio/n8n-sandbox-service-api
     tag: latest
     pullPolicy: IfNotPresent
 
@@ -138,12 +138,12 @@ sysboxRunner:
   replicaCount: 1
 
   image:
-    repository: n8nio/n8n-sandbox-runner
+    repository: n8nio/n8n-sandbox-service-runner-dind
     tag: latest
     pullPolicy: IfNotPresent
 
   sandboxImage:
-    repository: n8nio/n8n-sandbox
+    repository: n8nio/n8n-sandbox-service-sandbox
     tag: latest
     pullPolicy: IfNotPresent
 

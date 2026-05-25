@@ -84,7 +84,7 @@ services:
       SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR: n8n-sandbox-runner-local-1:9091
       SANDBOX_RUNNER_ID: local-runner-1
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "--header=X-Api-Key: ${RUNNER_API_KEY:-runner-local-key}", "http://localhost:8080/healthz"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/readyz"]
       interval: 5s
       timeout: 5s
       retries: 24
@@ -111,7 +111,7 @@ services:
       SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR: n8n-sandbox-runner-local-2:9091
       SANDBOX_RUNNER_ID: local-runner-2
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "--header=X-Api-Key: ${RUNNER_API_KEY:-runner-local-key}", "http://localhost:8080/healthz"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/readyz"]
       interval: 5s
       timeout: 5s
       retries: 24

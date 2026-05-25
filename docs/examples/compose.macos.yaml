@@ -67,7 +67,7 @@ services:
       SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE: /tls/control-grpc-server.key
       SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE: /tls/ca.crt
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "--header=X-Api-Key: ${SANDBOX_RUNNER_API_KEYS}", "http://localhost:8080/healthz"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/readyz"]
       interval: 5s
       timeout: 5s
       retries: 24

@@ -44,9 +44,9 @@ spec:
           imagePullPolicy: {{ .Values.sysboxRunner.image.pullPolicy }}
           ports:
             - name: http
-              containerPort: 8080
+              containerPort: {{ .Values.sysboxRunner.service.httpPort }}
             - name: control-grpc
-              containerPort: 9091
+              containerPort: {{ .Values.sysboxRunner.service.controlGrpcPort }}
           envFrom:
             - configMapRef:
                 name: {{ include "n8n-sandbox-service.sysboxRunnerName" . }}-config
@@ -97,19 +97,15 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           livenessProbe:
-            exec:
-              command:
-                - /bin/sh
-                - -ec
-                - 'wget -q -O /dev/null --header="X-Api-Key: ${SANDBOX_RUNNER_API_KEYS%%,*}" http://127.0.0.1:8080/healthz'
+            httpGet:
+              path: /livez
+              port: http
             initialDelaySeconds: 20
             periodSeconds: 10
           readinessProbe:
-            exec:
-              command:
-                - /bin/sh
-                - -ec
-                - 'wget -q -O /dev/null --header="X-Api-Key: ${SANDBOX_RUNNER_API_KEYS%%,*}" http://127.0.0.1:8080/healthz'
+            httpGet:
+              path: /readyz
+              port: http
             initialDelaySeconds: 10
             periodSeconds: 5
           volumeMounts:

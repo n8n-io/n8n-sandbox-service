@@ -168,7 +168,7 @@ docker run -d \
 
 echo "Waiting for runner service..."
 for i in $(seq 1 60); do
-	if docker exec "$RUNNER_CONTAINER_NAME" wget -q -O - --header="X-Api-Key: $RUNNER_INTERNAL_API_KEY" http://localhost:8080/healthz >/dev/null 2>&1; then
+	if docker exec "$RUNNER_CONTAINER_NAME" wget -q -O - http://localhost:8080/readyz >/dev/null 2>&1; then
 		echo "Runner is ready."
 		break
 	fi

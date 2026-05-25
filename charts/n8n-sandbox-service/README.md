@@ -175,7 +175,7 @@ The Ingress exposes only the public HTTP API port. The private runner registrati
 When enabled, the chart renders Kubernetes `NetworkPolicy` resources for the API and in-cluster sysbox runner:
 
 - API HTTP remains reachable from all sources by default so an existing ingress controller continues to work. Set `networkPolicy.api.httpIngressFrom` to restrict it to your ingress controller.
-- API registration gRPC is reachable from the in-chart sysbox runner by default. Add peers through `networkPolicy.api.grpcIngressFrom` for external runners or custom layouts.
+- API registration gRPC is reachable from the in-chart sysbox runner by default. In external data-plane mode it is denied unless peers are added through `networkPolicy.api.grpcIngressFrom`.
 - Runner HTTP/control ports are reachable from the in-chart API by default. Add peers through `networkPolicy.sysboxRunner.ingressFrom` only if another component needs direct runner access.
 
 Example restricting public API traffic to an ingress controller namespace:

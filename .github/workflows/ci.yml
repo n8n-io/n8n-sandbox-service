@@ -97,6 +97,10 @@ jobs:
           helm template n8n-sandbox-service charts/n8n-sandbox-service \
             --set auth.existingSecret=n8n-sandbox-auth \
             --set networkPolicy.enabled=true
+          helm template n8n-sandbox-service charts/n8n-sandbox-service \
+            --set auth.existingSecret=n8n-sandbox-auth \
+            --set dataPlane.mode=external \
+            --set networkPolicy.enabled=true
 
   e2e:
     runs-on: ${{ vars.RUNNER_PROVIDER == 'github' && 'ubuntu-latest' || 'blacksmith-4vcpu-ubuntu-2204' }}
