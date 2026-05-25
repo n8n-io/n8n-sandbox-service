@@ -9,9 +9,10 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /out/api ./cmd/api
 
 FROM alpine:3.23
 
-RUN apk add --no-cache tini ca-certificates
+RUN apk add --no-cache tini ca-certificates bash openssl
 
 COPY --from=builder /out/api /usr/local/bin/sandbox-api
+COPY scripts/bootstrap-mtls.sh /usr/local/bin/bootstrap-mtls.sh
 
 RUN addgroup -S sandbox-api && adduser -S -G sandbox-api sandbox-api
 

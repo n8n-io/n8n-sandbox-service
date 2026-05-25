@@ -25,9 +25,11 @@ echo "Building SDK once for all phases..."
 make -C "$PROJECT_DIR" sdk-install sdk-build
 
 echo "Bootstrapping e2e mTLS material once for all phases..."
-OUT_DIR="$TLS_DIR" API_DNS="$API_TLS_DNS" CONTROL_SANS="$CONTROL_SANS" \
-	bash "$PROJECT_DIR/scripts/bootstrap-local-mtls.sh"
-e2e_normalize_tls_permissions "$TLS_DIR"
+bash "$PROJECT_DIR/scripts/bootstrap-mtls.sh" \
+	--out-dir "$TLS_DIR" \
+	--api-san "$API_TLS_DNS" \
+	--control-sans "$CONTROL_SANS" \
+	--force
 
 export E2E_SKIP_BUILD=1
 export E2E_TLS_DIR="$TLS_DIR"
