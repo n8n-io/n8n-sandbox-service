@@ -22,7 +22,9 @@ import (
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	var logLevel slog.LevelVar
+	logLevel.Set(slog.LevelInfo)
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: &logLevel}))
 	slog.SetDefault(logger)
 
 	cfg, err := config.LoadAPI()
@@ -30,6 +32,7 @@ func main() {
 		slog.Error("failed to load api config", "error", err)
 		os.Exit(1)
 	}
+	logLevel.Set(cfg.LogLevel)
 
 	// Ensure data directory exists
 	if info, err := os.Stat(cfg.DataDir); err != nil {
