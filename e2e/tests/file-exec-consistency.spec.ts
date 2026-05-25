@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import './matchers';
 import {
   createSandbox,
   deleteSandbox,
@@ -34,7 +35,7 @@ test.describe('File API and Exec API path consistency', () => {
     await uploadFile(sandboxId, path, content);
 
     const result = await exec(sandboxId, `cat ${path}`);
-    expect(result.exitCode).toBe(0);
+    expect(result).toHaveSucceeded();
     expect(result.stdout.trim()).toBe(content);
   });
 
@@ -43,7 +44,7 @@ test.describe('File API and Exec API path consistency', () => {
     const content = 'hello from exec';
 
     const writeResult = await exec(sandboxId, `echo -n '${content}' > ${path}`);
-    expect(writeResult.exitCode).toBe(0);
+    expect(writeResult).toHaveSucceeded();
 
     const downloaded = await downloadFile(sandboxId, path);
     expect(downloaded).toBe(content);
@@ -53,7 +54,7 @@ test.describe('File API and Exec API path consistency', () => {
     const dir = '/tmp/exec-created-dir';
 
     const mkdirResult = await exec(sandboxId, `mkdir -p ${dir}/sub && touch ${dir}/sub/a.txt ${dir}/sub/b.txt`);
-    expect(mkdirResult.exitCode).toBe(0);
+    expect(mkdirResult).toHaveSucceeded();
 
     // Download one of the files via file API to confirm visibility
     const content = await downloadFile(sandboxId, `${dir}/sub/a.txt`);
@@ -72,7 +73,7 @@ test.describe('File API and Exec API path consistency', () => {
       timeoutMs: 10_000,
       retryWindowMs: 12_000,
     });
-    expect(result.exitCode).toBe(0);
+    expect(result).toHaveSucceeded();
     expect(result.stdout.trim()).toBe('hello world');
   });
 
@@ -97,7 +98,7 @@ test.describe('File API and Exec API path consistency', () => {
     expect(content).toBe('to be deleted');
 
     const rmResult = await exec(sandboxId, `rm -f ${path}`);
-    expect(rmResult.exitCode).toBe(0);
+    expect(rmResult).toHaveSucceeded();
 
     // After unlink, some setups (busy CI / overlay) can briefly still serve the file;
     // poll until the file API observes the delete.
@@ -133,7 +134,7 @@ test.describe('File API and Exec API path consistency', () => {
       timeoutMs: 10_000,
       retryWindowMs: 12_000,
     });
-    expect(result.exitCode).toBe(0);
+    expect(result).toHaveSucceeded();
     expect(result.stdout.trim()).toBe('2');
 
     // Confirm full content via exec
