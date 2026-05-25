@@ -1,0 +1,108 @@
+{{- if eq .Values.tls.mode "certManager" }}
+{{- $certManager := .Values.tls.certManager -}}
+{{- $issuerRef := $certManager.issuerRef -}}
+{{- $apiRegistration := .Values.tls.certificates.apiRegistrationServer -}}
+{{- $apiControlClient := .Values.tls.certificates.apiControlClient -}}
+{{- $runnerRegistration := .Values.tls.certificates.runnerRegistrationClient -}}
+{{- $runnerControl := .Values.tls.certificates.runnerControlServer -}}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "n8n-sandbox-service.apiName" . }}-registration
+  labels:
+    {{- include "n8n-sandbox-service.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  secretName: {{ $apiRegistration.secretName }}
+  duration: {{ $certManager.duration }}
+  renewBefore: {{ $certManager.renewBefore }}
+  privateKey:
+    rotationPolicy: {{ $certManager.privateKey.rotationPolicy | quote }}
+  usages:
+    - server auth
+  dnsNames:
+    - {{ include "n8n-sandbox-service.apiName" . }}
+    - {{ printf "%s.%s" (include "n8n-sandbox-service.apiName" .) .Release.Namespace }}
+    - {{ printf "%s.%s.svc" (include "n8n-sandbox-service.apiName" .) .Release.Namespace }}
+    - {{ printf "%s.%s.svc.cluster.local" (include "n8n-sandbox-service.apiName" .) .Release.Namespace }}
+    {{- with $apiRegistration.dnsNames }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  issuerRef:
+    name: {{ required "tls.certManager.issuerRef.name is required when tls.mode=certManager" $issuerRef.name | quote }}
+    kind: {{ $issuerRef.kind | quote }}
+    group: {{ $issuerRef.group | quote }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "n8n-sandbox-service.apiName" . }}-control-client
+  labels:
+    {{- include "n8n-sandbox-service.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  secretName: {{ $apiControlClient.secretName }}
+  duration: {{ $certManager.duration }}
+  renewBefore: {{ $certManager.renewBefore }}
+  commonName: {{ include "n8n-sandbox-service.apiName" . }}-control-client
+  privateKey:
+    rotationPolicy: {{ $certManager.privateKey.rotationPolicy | quote }}
+  usages:
+    - client auth
+  issuerRef:
+    name: {{ required "tls.certManager.issuerRef.name is required when tls.mode=certManager" $issuerRef.name | quote }}
+    kind: {{ $issuerRef.kind | quote }}
+    group: {{ $issuerRef.group | quote }}
+{{- if and .Values.sysboxRunner.enabled (eq .Values.dataPlane.mode "sysbox") }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "n8n-sandbox-service.sysboxRunnerName" . }}-registration-client
+  labels:
+    {{- include "n8n-sandbox-service.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sysbox-runner
+spec:
+  secretName: {{ $runnerRegistration.secretName }}
+  duration: {{ $certManager.duration }}
+  renewBefore: {{ $certManager.renewBefore }}
+  commonName: {{ include "n8n-sandbox-service.sysboxRunnerName" . }}-registration-client
+  privateKey:
+    rotationPolicy: {{ $certManager.privateKey.rotationPolicy | quote }}
+  usages:
+    - client auth
+  issuerRef:
+    name: {{ required "tls.certManager.issuerRef.name is required when tls.mode=certManager" $issuerRef.name | quote }}
+    kind: {{ $issuerRef.kind | quote }}
+    group: {{ $issuerRef.group | quote }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "n8n-sandbox-service.sysboxRunnerName" . }}-control-server
+  labels:
+    {{- include "n8n-sandbox-service.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sysbox-runner
+spec:
+  secretName: {{ $runnerControl.secretName }}
+  duration: {{ $certManager.duration }}
+  renewBefore: {{ $certManager.renewBefore }}
+  privateKey:
+    rotationPolicy: {{ $certManager.privateKey.rotationPolicy | quote }}
+  usages:
+    - server auth
+  dnsNames:
+    - {{ include "n8n-sandbox-service.sysboxRunnerName" . }}
+    - {{ printf "%s.%s" (include "n8n-sandbox-service.sysboxRunnerName" .) .Release.Namespace }}
+    - {{ printf "%s.%s.svc" (include "n8n-sandbox-service.sysboxRunnerName" .) .Release.Namespace }}
+    - {{ printf "%s.%s.svc.cluster.local" (include "n8n-sandbox-service.sysboxRunnerName" .) .Release.Namespace }}
+    - {{ printf "*.%s.%s.svc.cluster.local" (include "n8n-sandbox-service.sysboxRunnerName" .) .Release.Namespace | quote }}
+    {{- with $runnerControl.dnsNames }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  issuerRef:
+    name: {{ required "tls.certManager.issuerRef.name is required when tls.mode=certManager" $issuerRef.name | quote }}
+    kind: {{ $issuerRef.kind | quote }}
+    group: {{ $issuerRef.group | quote }}
+{{- end }}
+{{- end }}

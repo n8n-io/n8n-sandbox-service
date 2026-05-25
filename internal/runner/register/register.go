@@ -58,6 +58,14 @@ func connectOnce(ctx context.Context, cfg *config.Config, mgr *manager.Manager) 
 		}
 		serverName = host
 	}
+	slog.Info(
+		"runner registration connecting",
+		"runner_id", cfg.RunnerID,
+		"api_grpc_addr", cfg.APIGRPCAddr,
+		"server_name", serverName,
+		"http_base_url", cfg.RunnerHTTPBaseURL,
+		"control_grpc_addr", cfg.ResolvedControlGRPCAdvertiseAddr(),
+	)
 	creds, err := grpctls.NewClientTransportCredentials(
 		cfg.GRPCServerCAFile,
 		cfg.GRPCClientCertFile,
@@ -81,6 +89,7 @@ func connectOnce(ctx context.Context, cfg *config.Config, mgr *manager.Manager) 
 	if err != nil {
 		return err
 	}
+	slog.Info("runner registration stream established", "runner_id", cfg.RunnerID, "api_grpc_addr", cfg.APIGRPCAddr)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -117,6 +126,13 @@ func connectOnce(ctx context.Context, cfg *config.Config, mgr *manager.Manager) 
 	if err := send(); err != nil {
 		return err
 	}
+	slog.Info(
+		"runner registration heartbeat sent",
+		"runner_id", cfg.RunnerID,
+		"http_base_url", cfg.RunnerHTTPBaseURL,
+		"control_grpc_addr", cfg.ResolvedControlGRPCAdvertiseAddr(),
+		"capacity_total", cfg.CapacityTotal,
+	)
 
 	tick := time.NewTicker(10 * time.Second)
 	defer tick.Stop()
