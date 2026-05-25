@@ -1,0 +1,22 @@
+{{- if not (has .Values.dataPlane.mode (list "sysbox" "external")) -}}
+{{- fail "dataPlane.mode must be one of: sysbox, external" -}}
+{{- end -}}
+{{- if not (has .Values.tls.mode (list "existingSecret" "certManager")) -}}
+{{- fail "tls.mode must be one of: existingSecret, certManager" -}}
+{{- end -}}
+{{- if and .Values.sysboxRunner.enabled (eq .Values.dataPlane.mode "sysbox") -}}
+{{- if not (hasSuffix (printf ":%v" .Values.sysboxRunner.service.httpPort) .Values.sysboxRunner.config.listenAddr) -}}
+{{- fail "sysboxRunner.config.listenAddr port must match sysboxRunner.service.httpPort" -}}
+{{- end -}}
+{{- if not (hasSuffix (printf ":%v" .Values.sysboxRunner.service.controlGrpcPort) .Values.sysboxRunner.config.controlGrpcListenAddr) -}}
+{{- fail "sysboxRunner.config.controlGrpcListenAddr port must match sysboxRunner.service.controlGrpcPort" -}}
+{{- end -}}
+{{- end -}}
+{{- if not .Values.auth.existingSecret -}}
+{{- range $key := list "apiKeys" "runnerRegistrationToken" "runnerApiKey" "runnerApiKeys" -}}
+{{- $stringValue := default "" (index $.Values.auth.generated $key) | toString | trim -}}
+{{- if or (eq $stringValue "") (eq (lower $stringValue) "changeme") -}}
+{{- fail (printf "auth.generated.%s must be set to a non-placeholder value when auth.existingSecret is empty" $key) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

@@ -1,0 +1,192 @@
+imagePullSecrets: []
+
+commonLabels: {}
+podAnnotations: {}
+
+auth:
+  # Set this to use a Secret created outside this chart.
+  # When set, auth.generated is ignored.
+  existingSecret: ""
+  secretKeys:
+    apiKeys: api-keys
+    runnerRegistrationToken: runner-registration-token
+    runnerApiKey: runner-api-key
+    runnerApiKeys: runner-api-keys
+  # Used only when existingSecret is empty.
+  generated:
+    apiKeys: changeme
+    runnerRegistrationToken: changeme
+    runnerApiKey: changeme
+    runnerApiKeys: changeme
+
+dataPlane:
+  mode: sysbox
+
+networkPolicy:
+  enabled: false
+  api:
+    # Controls who can reach the public HTTP API port.
+    # When empty, all sources are allowed so an existing ingress controller keeps working.
+    httpIngressFrom: []
+    # Additional peers allowed to reach the runner registration gRPC port.
+    # The in-chart sysbox runner is allowed automatically when enabled.
+    grpcIngressFrom: []
+  sysboxRunner:
+    # Additional peers allowed to reach runner HTTP/control ports.
+    # The in-chart API is allowed automatically.
+    ingressFrom: []
+
+tls:
+  # Choose how the mTLS Secrets are provided: existingSecret or certManager.
+  mode: existingSecret
+  certManager:
+    issuerRef:
+      name: ""
+      kind: Issuer
+      group: cert-manager.io
+    duration: 2160h
+    renewBefore: 360h
+    privateKey:
+      rotationPolicy: Always
+  certificates:
+    apiRegistrationServer:
+      secretName: n8n-sandbox-api-registration-tls
+      mountPath: /tls/api-registration
+      certFileKey: tls.crt
+      keyFileKey: tls.key
+      caFileKey: ca.crt
+      dnsNames: []
+    apiControlClient:
+      secretName: n8n-sandbox-api-control-client-tls
+      mountPath: /tls/api-control-client
+      certFileKey: tls.crt
+      keyFileKey: tls.key
+      caFileKey: ca.crt
+      serverName: ""
+    runnerRegistrationClient:
+      secretName: n8n-sandbox-runner-registration-tls
+      mountPath: /tls/runner-registration
+      certFileKey: tls.crt
+      keyFileKey: tls.key
+      caFileKey: ca.crt
+      serverName: ""
+    runnerControlServer:
+      secretName: n8n-sandbox-runner-control-tls
+      mountPath: /tls/runner-control
+      certFileKey: tls.crt
+      keyFileKey: tls.key
+      caFileKey: ca.crt
+      dnsNames: []
+
+api:
+  replicaCount: 1
+
+  image:
+    repository: n8nio/n8n-sandbox-service-api
+    tag: latest
+    pullPolicy: IfNotPresent
+
+  service:
+    type: ClusterIP
+    httpPort: 8080
+    grpcPort: 9090
+    annotations: {}
+
+  ingress:
+    enabled: false
+    className: traefik
+    annotations: {}
+    hosts:
+      - host: sandbox.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []
+
+  config:
+    listenAddr: ":8080"
+    grpcListenAddr: ":9090"
+    dataDir: /tmp/sandbox-api
+    maxFileBytes: "10485760"
+    enableCors: "false"
+    runnerHeartbeatGrace: 45s
+    idleStopAfter: 1h
+    idleDeleteAfter: 24h
+    idleDeleteSafetyBuffer: 1m
+    idleSweepInterval: 1m
+
+  persistence:
+    enabled: true
+    size: 1Gi
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+
+  resources: {}
+  podSecurityContext:
+    fsGroup: 100
+    fsGroupChangePolicy: OnRootMismatch
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  extraEnv: []
+  extraVolumes: []
+  extraVolumeMounts: []
+
+sysboxRunner:
+  enabled: true
+  replicaCount: 1
+
+  image:
+    repository: n8nio/n8n-sandbox-service-runner-dind
+    tag: latest
+    pullPolicy: IfNotPresent
+
+  sandboxImage:
+    repository: n8nio/n8n-sandbox-service-sandbox
+    tag: latest
+    pullPolicy: IfNotPresent
+
+  dockerConfig:
+    existingSecret: ""
+    configKey: .dockerconfigjson
+    mountPath: /root/.docker
+
+  service:
+    annotations: {}
+    httpPort: 8080
+    controlGrpcPort: 9091
+
+  runtime:
+    runtimeClassName: sysbox-runc
+    hostUsers: false
+
+  scheduling:
+    nodeSelector:
+      sysbox-runtime: running
+    tolerations: []
+    affinity: {}
+
+  config:
+    listenAddr: ":8080"
+    controlGrpcListenAddr: ":9091"
+    dockerHost: unix:///var/run/docker.sock
+    dataDir: /var/sandboxes
+    idleTtlSeconds: "3600"
+    capacityTotal: "1000"
+    maxFileBytes: "10485760"
+    defaultMemoryMb: "512"
+    defaultCpuPercent: "100"
+    defaultPidsMax: "256"
+    defaultDiskQuotaMb: "0"
+    diskQuotaPoolSizeGb: ""
+    diskQuotaPoolPath: ""
+    enableCgroups: "true"
+    dockerStorageDriver: ""
+    dockerInsecureRegistries: ""
+
+  resources: {}
+  podAnnotations: {}
+  extraEnv: []
+  extraVolumes: []
+  extraVolumeMounts: []

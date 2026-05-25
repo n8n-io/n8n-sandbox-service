@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 	"github.com/n8n-io/sandbox-service/internal/runner/manager"
@@ -17,14 +18,30 @@ type ContainerManager interface {
 	EnsureSandboxRunning(ctx context.Context, sandboxID string) error
 	DaemonURL(ctx context.Context, containerID string) (string, error)
 	FindContainerIDByLabel(ctx context.Context, sandboxID string) (string, error)
+	DockerHealthy(ctx context.Context) error
 }
 
 // NewRouter creates the HTTP handler for container operations.
 func NewRouter(mgr ContainerManager, cfg *config.Config) http.Handler {
 	mux := http.NewServeMux()
 
-	// Health check
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+	livenessHandler := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}
+
+	mux.HandleFunc("GET /healthz", livenessHandler)
+	mux.HandleFunc("GET /livez", livenessHandler)
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+
+		if err := mgr.DockerHealthy(ctx); err != nil {
+			writeError(w, http.StatusServiceUnavailable, "docker unavailable")
+			return
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"status":"ok"}`))

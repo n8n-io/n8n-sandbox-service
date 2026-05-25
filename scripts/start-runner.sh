@@ -2,8 +2,11 @@
 set -eu
 
 DOCKERD_LOG=${DOCKERD_LOG:-/tmp/dockerd.log}
+DOCKERD_CONFIG_DIR=${DOCKERD_CONFIG_DIR:-/etc/docker}
+DOCKERD_CONFIG_FILE=${DOCKERD_CONFIG_FILE:-${DOCKERD_CONFIG_DIR}/daemon.json}
 
 INSECURE_ARGS=""
+DOCKERD_ARGS=""
 if [ -n "${SANDBOX_RUNNER_DOCKER_INSECURE_REGISTRIES:-}" ]; then
   for reg in $(echo "$SANDBOX_RUNNER_DOCKER_INSECURE_REGISTRIES" | tr ',' ' '); do
     INSECURE_ARGS="$INSECURE_ARGS --insecure-registry $reg"
@@ -65,7 +68,22 @@ setup_quota_pool() {
 
 STORAGE_ARGS=""
 if [ "$DEFAULT_DISK_QUOTA_MB" -le 0 ]; then
-  echo "[start-runner] disk quota enforcement: not requested (SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB unset)"
+  echo "[start-runner] disk quota enforcement: not requested (SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB unset or 0)"
+  if [ -n "${SANDBOX_RUNNER_DOCKER_STORAGE_DRIVER:-}" ]; then
+    mkdir -p "$DOCKERD_CONFIG_DIR"
+    cat >"$DOCKERD_CONFIG_FILE" <<EOF
+{
+  "features": {
+    "containerd-snapshotter": false
+  },
+  "storage-driver": "${SANDBOX_RUNNER_DOCKER_STORAGE_DRIVER}"
+}
+EOF
+    echo "[start-runner] dockerd storage driver: ${SANDBOX_RUNNER_DOCKER_STORAGE_DRIVER}"
+    echo "[start-runner] dockerd containerd snapshotter: disabled"
+    echo "[start-runner] dockerd config file: ${DOCKERD_CONFIG_FILE}"
+    DOCKERD_ARGS="$DOCKERD_ARGS --config-file=${DOCKERD_CONFIG_FILE}"
+  fi
 elif setup_quota_pool; then
   STORAGE_ARGS="--storage-driver=overlay2 --data-root=${DOCKER_DATA_ROOT}"
   export SANDBOX_RUNNER_DISK_QUOTA_ACTIVE=true
@@ -75,7 +93,7 @@ else
 fi
 
 # shellcheck disable=SC2086
-dockerd-entrypoint.sh $INSECURE_ARGS $STORAGE_ARGS >"$DOCKERD_LOG" 2>&1 &
+dockerd-entrypoint.sh $INSECURE_ARGS $STORAGE_ARGS $DOCKERD_ARGS >"$DOCKERD_LOG" 2>&1 &
 DOCKERD_PID=$!
 RUNNER_PID=""
 
@@ -124,7 +142,7 @@ if ! docker network inspect runner-bridge >/dev/null 2>&1; then
 fi
 
 # After `docker stop`/`docker start`, the inner graph usually still has this image; skipping pull
-# lets sandbox-runner start immediately so probes (e2e, orchestrators) see /healthz without waiting on the registry.
+# lets sandbox-runner become ready without waiting on the registry.
 if ! docker image inspect "${SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE}" >/dev/null 2>&1; then
   docker pull "${SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE}"
 fi

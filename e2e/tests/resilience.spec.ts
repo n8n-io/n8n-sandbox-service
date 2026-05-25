@@ -39,13 +39,13 @@ async function waitForAPI(request: APIRequestContext, deadlineMs: number, pollMs
   throw new Error(`API did not become healthy within ${deadlineMs}ms`);
 }
 
-async function waitRunnerHTTPReady(name: string, apiKey: string, deadlineMs: number, pollMs: number): Promise<void> {
+async function waitRunnerHTTPReady(name: string, deadlineMs: number, pollMs: number): Promise<void> {
   const deadline = Date.now() + deadlineMs;
   while (Date.now() < deadline) {
     try {
       execFileSync(
         'docker',
-        ['exec', name, 'wget', '-q', '-O', '-', '--header', `X-Api-Key: ${apiKey}`, 'http://localhost:8080/healthz'],
+        ['exec', name, 'wget', '-q', '-O', '-', 'http://localhost:8080/readyz'],
         { stdio: 'pipe' },
       );
       return;
@@ -135,7 +135,6 @@ test.describe('Runner failure resilience', () => {
 
     const runner1 = process.env.E2E_RUNNER1_CONTAINER_NAME!;
     const runner2 = process.env.E2E_RUNNER2_CONTAINER_NAME!;
-    const runnerKey = process.env.E2E_RUNNER_INTERNAL_API_KEY || 'runner-test';
 
     const id1 = await createSandbox();
     const id2 = await createSandbox();
@@ -187,7 +186,7 @@ test.describe('Runner failure resilience', () => {
         docker(['start', stoppedRunner]);
         try {
           // start-runner.sh waits for inner dockerd (up to 60s) before sandbox-runner starts listening.
-          await waitRunnerHTTPReady(stoppedRunner, runnerKey, 75_000, 250);
+          await waitRunnerHTTPReady(stoppedRunner, 75_000, 250);
           await waitInnerDockerReady(stoppedRunner, 45_000, 250);
         } catch (err) {
           const logs = dockerOutput(['logs', stoppedRunner]);

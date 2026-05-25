@@ -131,6 +131,11 @@ func (m *Manager) CreateContainer(ctx context.Context, sandboxID string, opts *C
 	return containerInfo, nil
 }
 
+// DockerHealthy checks whether the inner Docker daemon is reachable.
+func (m *Manager) DockerHealthy(ctx context.Context) error {
+	return m.docker.ping(ctx)
+}
+
 // GetContainerInfo returns information about a container by its ID.
 func (m *Manager) GetContainerInfo(ctx context.Context, containerID string) (*ContainerInfo, error) {
 	inspect, err := m.docker.inspectContainer(ctx, containerID)

@@ -1,0 +1,135 @@
+{{- $apiRegistration := .Values.tls.certificates.apiRegistrationServer -}}
+{{- $apiControlClient := .Values.tls.certificates.apiControlClient -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "n8n-sandbox-service.apiName" . }}
+  labels:
+    {{- include "n8n-sandbox-service.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  replicas: {{ .Values.api.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "n8n-sandbox-service.selectorLabels" (dict "Release" .Release "Chart" .Chart "Values" .Values "component" "api") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "n8n-sandbox-service.selectorLabels" (dict "Release" .Release "Chart" .Chart "Values" .Values "component" "api") | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.api.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: api
+          image: "{{ .Values.api.image.repository }}:{{ .Values.api.image.tag }}"
+          imagePullPolicy: {{ .Values.api.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: grpc
+              containerPort: 9090
+          envFrom:
+            - configMapRef:
+                name: {{ include "n8n-sandbox-service.apiName" . }}-config
+          env:
+            - name: SANDBOX_API_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "n8n-sandbox-service.authSecretName" . }}
+                  key: {{ .Values.auth.secretKeys.apiKeys }}
+            - name: SANDBOX_API_RUNNER_REGISTRATION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "n8n-sandbox-service.authSecretName" . }}
+                  key: {{ .Values.auth.secretKeys.runnerRegistrationToken }}
+            - name: SANDBOX_API_RUNNER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "n8n-sandbox-service.authSecretName" . }}
+                  key: {{ .Values.auth.secretKeys.runnerApiKey }}
+            - name: SANDBOX_API_GRPC_TLS_CERT_FILE
+              value: {{ printf "%s/%s" $apiRegistration.mountPath $apiRegistration.certFileKey | quote }}
+            - name: SANDBOX_API_GRPC_TLS_KEY_FILE
+              value: {{ printf "%s/%s" $apiRegistration.mountPath $apiRegistration.keyFileKey | quote }}
+            - name: SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE
+              value: {{ printf "%s/%s" $apiRegistration.mountPath $apiRegistration.caFileKey | quote }}
+            - name: SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE
+              value: {{ printf "%s/%s" $apiControlClient.mountPath $apiControlClient.caFileKey | quote }}
+            - name: SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE
+              value: {{ printf "%s/%s" $apiControlClient.mountPath $apiControlClient.certFileKey | quote }}
+            - name: SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE
+              value: {{ printf "%s/%s" $apiControlClient.mountPath $apiControlClient.keyFileKey | quote }}
+            {{- if $apiControlClient.serverName }}
+            - name: SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_SERVER_NAME
+              value: {{ $apiControlClient.serverName | quote }}
+            {{- end }}
+            {{- with .Values.api.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          volumeMounts:
+            - name: api-registration-tls
+              mountPath: {{ $apiRegistration.mountPath | quote }}
+              readOnly: true
+            - name: api-control-client-tls
+              mountPath: {{ $apiControlClient.mountPath | quote }}
+              readOnly: true
+            - name: api-data
+              mountPath: {{ .Values.api.config.dataDir | quote }}
+            {{- with .Values.api.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.api.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: api-registration-tls
+          secret:
+            secretName: {{ $apiRegistration.secretName }}
+        - name: api-control-client-tls
+          secret:
+            secretName: {{ $apiControlClient.secretName }}
+        - name: api-data
+          {{- if .Values.api.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "n8n-sandbox-service.apiName" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- with .Values.api.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.api.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.api.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.api.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
