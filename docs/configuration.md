@@ -16,9 +16,10 @@ All services are configured via environment variables.
 | `SANDBOX_API_KEYS` | *(required)* | Comma-separated list of valid external API keys |
 | `SANDBOX_API_RUNNER_REGISTRATION_TOKEN` | *(required)* | Shared secret; runners authenticate to the private gRPC registration service with `Authorization: Bearer …` |
 | `SANDBOX_API_RUNNER_API_KEY` | *(empty)* | Optional API key injected by the API when calling runner HTTP |
+| `SANDBOX_API_LOG_LEVEL` | `info` | Minimum log severity (`debug`, `info`, `warn`, `error`; case-insensitive) |
 | `SANDBOX_API_LISTEN_ADDR` | `:8080` | Public HTTP listen address |
 | `SANDBOX_API_GRPC_LISTEN_ADDR` | `:9090` | Private gRPC listen address for runner registration streams |
-| `SANDBOX_API_DATA_DIR` | `/tmp/sandbox-api` | SQLite store directory |
+| `SANDBOX_API_DATA_DIR` | `/var/lib/n8n-sandbox-api` | SQLite store directory; must already exist and be writable by the API user. Mount a persistent volume here to retain sandbox state across container restarts. |
 | `SANDBOX_API_MAX_FILE_BYTES` | `10485760` | Maximum file upload size (10 MB) |
 | `SANDBOX_API_ENABLE_CORS` | `false` | Enable CORS headers (allow all origins); needed for the browser playground |
 | `SANDBOX_API_RUNNER_HEARTBEAT_GRACE` | `45s` | How long after the last gRPC heartbeat a runner remains eligible for placement (Go [`time.ParseDuration`](https://pkg.go.dev/time#ParseDuration) syntax, e.g. `45s`, `2m`) |
@@ -39,6 +40,7 @@ All services are configured via environment variables.
 | `SANDBOX_RUNNER_API_KEYS` | *(required)* | Comma-separated list of valid internal API keys accepted from the API container |
 | `SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE` | *(required)* | Docker image used for sandbox containers |
 | `SANDBOX_RUNNER_DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker daemon endpoint used by the runner |
+| `SANDBOX_RUNNER_LOG_LEVEL` | `info` | Minimum log severity (`debug`, `info`, `warn`, `error`; case-insensitive) |
 | `SANDBOX_RUNNER_LISTEN_ADDR` | `:8080` | HTTP listen address |
 | `SANDBOX_RUNNER_API_GRPC_ADDR` | *(required)* | API `host:port` for gRPC registration |
 | `SANDBOX_RUNNER_REGISTRATION_TOKEN` | *(required)* | Must match `SANDBOX_API_RUNNER_REGISTRATION_TOKEN` on the API |
@@ -68,6 +70,7 @@ These variables are set inside each sandbox container and are typically baked in
 
 | Variable | Default | Description |
 |---|---|---|
+| `SANDBOX_DAEMON_LOG_LEVEL` | `info` | Minimum log severity (`debug`, `info`, `warn`, `error`; case-insensitive) |
 | `SANDBOX_EXEC_MAX_EVENT_BYTES` | `16777216` | Max bytes of event history retained per execution (16 MiB) |
 | `SANDBOX_EXEC_RETAIN` | `10m` | Duration to retain completed executions (Go [`time.ParseDuration`](https://pkg.go.dev/time#ParseDuration) syntax, e.g. `10m`, `1h`) |
 

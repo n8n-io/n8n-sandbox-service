@@ -103,25 +103,7 @@ jobs:
             --set networkPolicy.enabled=true
 
   e2e:
-    runs-on: ${{ vars.RUNNER_PROVIDER == 'github' && 'ubuntu-latest' || 'blacksmith-4vcpu-ubuntu-2204' }}
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-
-      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
-        with:
-          go-version: "1.25.0"
-
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
-        with:
-          node-version: "22"
-
-      - uses: pnpm/action-setup@a0ea98b2dc7d387a59324835f7421c1d5f8357b4 # v6
-        with:
-          version: 10
-
-      - name: Run e2e tests
-        # TODO: set E2E_VERIFY_DISK_QUOTA=true when the runner supports it.
-        run: PRIVILEGED=1 e2e/run.sh
+    uses: ./.github/workflows/e2e.yml
 
   # This job is required by GitHub branch protection rules.
   # PRs cannot be merged unless this job passes.

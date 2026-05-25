@@ -7,7 +7,6 @@ This guide covers running the n8n Sandbox Service on macOS for local development
 ## Contents
 
 - [Prerequisites](#prerequisites)
-- [Set up mTLS certificates](#set-up-mtls-certificates)
 - [Start the services](#start-the-services)
 - [Verify](#verify)
 - [Limitations](#limitations)
@@ -18,20 +17,6 @@ This guide covers running the n8n Sandbox Service on macOS for local development
 See [prerequisites.md](prerequisites.md) for shared requirements.
 
 On macOS, Docker Desktop runs a Linux VM under the hood, which is how Docker-in-Docker works in privileged mode. No additional runtime installation is needed.
-
-## Set up mTLS certificates
-
-The API and runners communicate over gRPC with mutual TLS (mTLS). A bootstrap script is available that generates a private CA and all leaf certificates:
-
-```bash
-curl -fsSL -o bootstrap-local-mtls.sh https://raw.githubusercontent.com/n8n-io/n8n-sandbox-service/refs/heads/main/scripts/bootstrap-local-mtls.sh
-chmod +x bootstrap-local-mtls.sh
-./bootstrap-local-mtls.sh
-```
-
-This writes PEM files to `.tls/` in the repository root. Set `SANDBOX_TLS_REGEN=1` to regenerate existing certificates.
-
-See the [Linux quickstart](quickstart-linux.md#set-up-mtls-certificates) for details on the certificate roles.
 
 ## Start the services
 
@@ -55,7 +40,9 @@ Start the API and runner:
 docker compose up -d
 ```
 
-See [configuration.md](configuration.md) for the full list of environment variables.
+On first run, a `tls-init` container automatically generates mTLS certificates into `.tls/`. Subsequent runs skip generation if certificates already exist. Delete `.tls/` and restart to regenerate.
+
+See [configuration.md](configuration.md) for the full list of environment variables. See the [Linux quickstart](quickstart-linux.md#mtls-certificate-details) for details on the certificate roles.
 
 ## Verify
 

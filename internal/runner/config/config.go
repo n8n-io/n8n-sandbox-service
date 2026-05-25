@@ -2,11 +2,14 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/n8n-io/sandbox-service/internal/logging"
 )
 
 const (
@@ -22,6 +25,7 @@ const (
 	defaultEnableCgroups         = true
 	defaultDockerHost            = "unix:///var/run/docker.sock"
 	defaultControlGRPCListenAddr = ":9091"
+	defaultLogLevel              = slog.LevelInfo
 )
 
 // Config holds all runtime configuration parsed from environment variables.
@@ -107,6 +111,10 @@ type Config struct {
 	GRPCClientKeyFile  string
 	GRPCServerName     string
 
+	// LogLevel controls the minimum log severity.
+	// Parsed from SANDBOX_RUNNER_LOG_LEVEL (default info).
+	LogLevel slog.Level
+
 	// SandboxControl gRPC (API → runner). Always enabled; listen addr defaults to :9091.
 	ControlGRPCListenAddr     string
 	ControlGRPCAdvertiseAddr  string
@@ -179,10 +187,20 @@ func Load() (*Config, error) {
 		EnableCgroups:         defaultEnableCgroups,
 		CapacityTotal:         defaultRunnerCapacityTotal,
 		ControlGRPCListenAddr: defaultControlGRPCListenAddr,
+		LogLevel:              defaultLogLevel,
 	}
 
 	if h, err := os.Hostname(); err == nil && h != "" {
 		cfg.RunnerID = h
+	}
+
+	// SANDBOX_RUNNER_LOG_LEVEL (optional)
+	if v := os.Getenv("SANDBOX_RUNNER_LOG_LEVEL"); v != "" {
+		lvl, err := logging.ParseLevel(v)
+		if err != nil {
+			return nil, fmt.Errorf("SANDBOX_RUNNER_LOG_LEVEL: %w", err)
+		}
+		cfg.LogLevel = lvl
 	}
 
 	// SANDBOX_RUNNER_API_KEYS (required)

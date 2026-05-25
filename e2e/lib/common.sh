@@ -7,40 +7,35 @@ e2e_docker_arch() {
 	uname -m | sed 's/aarch64/arm64/' | sed 's/x86_64/amd64/'
 }
 
-# After bootstrap: certs readable by containers, keys owner-only.
-e2e_normalize_tls_permissions() {
-	local tls_dir=$1
-	chmod 755 "$tls_dir"
-	local f
-	for f in "$tls_dir"/*.crt; do
-		[[ -e "$f" ]] || continue
-		chmod 644 "$f"
-	done
-	for f in "$tls_dir"/*.key; do
-		[[ -e "$f" ]] || continue
-		chmod 600 "$f"
-	done
-}
-
-# Sets global API_DOCKER_USER: empty = use image default user, or (--user hostuid:hostgid) if chown fails.
-e2e_setup_api_tls_for_container() {
+# Prepares the API container's runtime user and the host-side resources that
+# user needs. Chowns the TLS dir to the image's default user when possible;
+# otherwise falls back to --user host:host plus a bind-mounted data dir at
+# /var/lib/n8n-sandbox-api so that UID can write the SQLite file.
+# Sets globals API_DOCKER_USER and API_DATA_VOLUME_ARGS.
+e2e_setup_api_container() {
 	local tls_dir=$1 api_image=$2
 	local uid gid
 	read -r uid gid <<< "$(docker run --rm --entrypoint sh "$api_image" -c 'echo $(id -u) $(id -g)')"
 	if chown -R "$uid:$gid" "$tls_dir" 2>/dev/null; then
 		API_DOCKER_USER=()
+		API_DATA_VOLUME_ARGS=()
 		return 0
 	fi
 	echo "chown TLS dir to API image user $uid:$gid not permitted; using host UID for API container" >&2
 	API_DOCKER_USER=(--user "$(id -u):$(id -g)")
+	local data_dir="$tls_dir/api-data"
+	mkdir -p "$data_dir"
+	API_DATA_VOLUME_ARGS=(-v "$data_dir:/var/lib/n8n-sandbox-api")
 }
 
 e2e_bootstrap_mtls_maybe() {
 	local project_dir=$1 tls_owned=$2 tls_dir=$3 api_dns=$4 control_sans=$5
 	if [[ "$tls_owned" == "1" ]]; then
 		echo "Bootstrapping e2e mTLS material..."
-		OUT_DIR="$tls_dir" API_DNS="$api_dns" CONTROL_SANS="$control_sans" \
-			bash "$project_dir/scripts/bootstrap-local-mtls.sh"
+		bash "$project_dir/scripts/bootstrap-mtls.sh" \
+			--out-dir "$tls_dir" \
+			--api-san "$api_dns" \
+			--control-sans "$control_sans"
 	else
 		echo "Using shared e2e mTLS material from E2E_TLS_DIR..."
 	fi

@@ -2,22 +2,45 @@
 #
 # Prerequisites:
 #   - sysbox installed on the host (see docs/quickstart-linux.md)
-#   - mTLS certificates in .tls/ (run bootstrap-local-mtls.sh or provide your own)
 #   - .env file with secrets (copy .env.example)
+#
+# mTLS certificates are generated automatically on first run by the tls-init
+# container. Set NUM_RUNNERS to match the number of runner instances you need.
 #
 # Usage:
 #   cp .env.example .env   # then edit values
 #   docker compose up -d
 
 services:
+  tls-init:
+    image: n8nio/n8n-sandbox-api:latest
+    user: "0:0"
+    entrypoint: ["sh", "-c"]
+    command:
+      - >-
+        bootstrap-mtls.sh
+        --out-dir /tls
+        --api-san n8n-sandbox-api-local
+        --control-san-prefix n8n-sandbox-runner-local
+        && chown -R sandbox-api:sandbox-api /tls/api
+    environment:
+      NUM_RUNNERS: ${NUM_RUNNERS:-1}
+    volumes:
+      - ./.tls:/tls
+    networks:
+      - sandbox-service
+
   api:
     image: n8nio/n8n-sandbox-api:latest
     restart: unless-stopped
+    depends_on:
+      tls-init:
+        condition: service_completed_successfully
     ports:
       - "8080:8080"
     volumes:
-      - ./.tls:/tls:ro
-      - api-data:/tmp
+      - ./.tls/api:/tls:ro
+      - api-data:/var/lib/n8n-sandbox-api
     env_file: .env
     environment:
       SANDBOX_API_GRPC_TLS_CERT_FILE: /tls/grpc-server.crt
@@ -43,10 +66,12 @@ services:
     runtime: sysbox-runc
     restart: unless-stopped
     depends_on:
+      tls-init:
+        condition: service_completed_successfully
       api:
         condition: service_healthy
     volumes:
-      - ./.tls:/tls:ro
+      - ./.tls/runner:/tls:ro
     env_file: .env
     environment:
       SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE: n8nio/n8n-sandbox:latest

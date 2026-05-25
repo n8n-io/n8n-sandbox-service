@@ -42,8 +42,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.api
-    image: n8n-sandbox-api:latest-${ARCH}
-    container_name: n8n-sandbox-api-local
+    image: n8n-sandbox-service-api:latest-${ARCH}
+    container_name: n8n-sandbox-service-api-local
     ports:
       - "8080:8080"
     environment:
@@ -64,8 +64,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.runner
-    image: n8n-sandbox-runner:latest-${ARCH}
-    container_name: n8n-sandbox-runner-local-1
+    image: n8n-sandbox-service-runner-dind:latest-${ARCH}
+    container_name: n8n-sandbox-service-runner-dind-local-1
     depends_on:
       api:
         condition: service_healthy
@@ -77,11 +77,11 @@ services:
       SANDBOX_RUNNER_API_KEYS: ${RUNNER_API_KEY:-runner-local-key}
       SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE: registry:5000/n8n-sandbox:latest-${ARCH}
       SANDBOX_RUNNER_DOCKER_INSECURE_REGISTRIES: registry:5000
-      SANDBOX_RUNNER_API_GRPC_ADDR: n8n-sandbox-api-local:9090
+      SANDBOX_RUNNER_API_GRPC_ADDR: n8n-sandbox-service-api-local:9090
       SANDBOX_RUNNER_REGISTRATION_TOKEN: ${REG_TOKEN:-local-reg-token}
-      SANDBOX_RUNNER_HTTP_BASE_URL: http://n8n-sandbox-runner-local-1:8080
+      SANDBOX_RUNNER_HTTP_BASE_URL: http://n8n-sandbox-service-runner-dind-local-1:8080
       SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR: ":9091"
-      SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR: n8n-sandbox-runner-local-1:9091
+      SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR: n8n-sandbox-service-runner-dind-local-1:9091
       SANDBOX_RUNNER_ID: local-runner-1
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/readyz"]
@@ -93,8 +93,8 @@ services:
       - sandbox
 
   runner-2:
-    image: n8n-sandbox-runner:latest-${ARCH}
-    container_name: n8n-sandbox-runner-local-2
+    image: n8n-sandbox-service-runner-dind:latest-${ARCH}
+    container_name: n8n-sandbox-service-runner-dind-local-2
     depends_on:
       runner-1:
         condition: service_healthy
@@ -104,11 +104,11 @@ services:
       SANDBOX_RUNNER_API_KEYS: ${RUNNER_API_KEY:-runner-local-key}
       SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE: registry:5000/n8n-sandbox:latest-${ARCH}
       SANDBOX_RUNNER_DOCKER_INSECURE_REGISTRIES: registry:5000
-      SANDBOX_RUNNER_API_GRPC_ADDR: n8n-sandbox-api-local:9090
+      SANDBOX_RUNNER_API_GRPC_ADDR: n8n-sandbox-service-api-local:9090
       SANDBOX_RUNNER_REGISTRATION_TOKEN: ${REG_TOKEN:-local-reg-token}
-      SANDBOX_RUNNER_HTTP_BASE_URL: http://n8n-sandbox-runner-local-2:8080
+      SANDBOX_RUNNER_HTTP_BASE_URL: http://n8n-sandbox-service-runner-dind-local-2:8080
       SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR: ":9091"
-      SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR: n8n-sandbox-runner-local-2:9091
+      SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR: n8n-sandbox-service-runner-dind-local-2:9091
       SANDBOX_RUNNER_ID: local-runner-2
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/readyz"]

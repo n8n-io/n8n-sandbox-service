@@ -2,10 +2,13 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/n8n-io/sandbox-service/internal/logging"
 )
 
 const (
@@ -15,6 +18,7 @@ const (
 	defaultHeartbeatGrace  = 45 * time.Second
 	defaultIdleStopAfter   = time.Hour
 	defaultIdleDeleteAfter = 24 * time.Hour
+	defaultLogLevel        = slog.LevelInfo
 )
 
 // APIConfig contains configuration for the public API gateway.
@@ -63,6 +67,10 @@ type APIConfig struct {
 	// IdleSweepInterval is how often the idle stop/delete sweeper runs (default 1m).
 	IdleSweepInterval time.Duration
 
+	// LogLevel controls the minimum log severity.
+	// Parsed from SANDBOX_API_LOG_LEVEL (default info).
+	LogLevel slog.Level
+
 	// API as mTLS client dialing runner SandboxControl (required). All three must be set.
 	RunnerControlGRPCClientCAFile     string
 	RunnerControlGRPCClientCertFile   string
@@ -76,10 +84,20 @@ func LoadAPI() (*APIConfig, error) {
 		ListenAddr:      defaultListenAddr,
 		GRPCListenAddr:  defaultGRPCListenAddr,
 		MaxFileBytes:    defaultMaxFileBytes,
-		DataDir:         "/tmp/sandbox-api",
+		DataDir:         "/var/lib/n8n-sandbox-api",
 		HeartbeatGrace:  defaultHeartbeatGrace,
 		IdleStopAfter:   defaultIdleStopAfter,
 		IdleDeleteAfter: defaultIdleDeleteAfter,
+		LogLevel:        defaultLogLevel,
+	}
+
+	// SANDBOX_API_LOG_LEVEL (optional)
+	if v := os.Getenv("SANDBOX_API_LOG_LEVEL"); v != "" {
+		lvl, err := logging.ParseLevel(v)
+		if err != nil {
+			return nil, fmt.Errorf("SANDBOX_API_LOG_LEVEL: %w", err)
+		}
+		cfg.LogLevel = lvl
 	}
 
 	rawKeys := os.Getenv("SANDBOX_API_KEYS")

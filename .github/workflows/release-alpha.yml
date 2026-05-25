@@ -1,4 +1,4 @@
-name: Publish ACR (alpha)
+name: Release Alpha
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: publish-acr-alpha-${{ github.ref }}
+  group: release-alpha-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

@@ -1,0 +1,80 @@
+name: Publish Docker image
+description: Build and push a multi-arch Docker image to Docker Hub
+
+inputs:
+  image:
+    required: true
+    description: Full image name (e.g. n8nio/n8n-sandbox-service-api)
+  dockerfile:
+    required: true
+    description: Path to Dockerfile
+  version:
+    required: true
+    description: Semver version tag (e.g. 1.0.0)
+  push-latest:
+    required: false
+    default: "true"
+    description: Whether to also tag as latest
+  extra-tags:
+    required: false
+    default: ""
+    description: Additional tags to apply, newline-separated
+  dockerhub-username:
+    required: true
+    description: Docker Hub username
+  dockerhub-token:
+    required: true
+    description: Docker Hub access token
+
+runs:
+  using: composite
+  steps:
+    - name: Log in to Docker Hub
+      uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+      with:
+        username: ${{ inputs.dockerhub-username }}
+        password: ${{ inputs.dockerhub-token }}
+
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4
+      with:
+        platforms: arm64
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
+
+    - name: Compute tags
+      id: tags
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        VERSION: ${{ inputs.version }}
+        PUSH_LATEST: ${{ inputs.push-latest }}
+        EXTRA_TAGS: ${{ inputs.extra-tags }}
+      run: |
+        TAGS="${IMAGE}:${VERSION}"
+        if [[ "$PUSH_LATEST" == "true" ]]; then
+          TAGS="${TAGS}
+        ${IMAGE}:latest"
+        fi
+        while IFS= read -r tag; do
+          tag=$(echo "$tag" | xargs)
+          if [[ -n "$tag" ]]; then
+            TAGS="${TAGS}
+        ${IMAGE}:${tag}"
+          fi
+        done <<< "$EXTRA_TAGS"
+        {
+          echo "tags<<EOF"
+          echo "$TAGS"
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Build and push
+      uses: useblacksmith/build-push-action@30c71162f16ea2c27c3e21523255d209b8b538c1 # v2
+      with:
+        context: .
+        file: ${{ inputs.dockerfile }}
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ${{ steps.tags.outputs.tags }}
