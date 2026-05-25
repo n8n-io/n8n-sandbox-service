@@ -1,10 +1,10 @@
 # Overlay: mTLS for runner → API registration gRPC and API → runner SandboxControl gRPC.
-# Material is generated under ./.tls by scripts/bootstrap-local-mtls.sh (idempotent).
+# Material is generated under ./.tls by scripts/bootstrap-mtls.sh (idempotent).
 
 services:
   api:
     volumes:
-      - ./.tls:/grpc-tls:ro
+      - ./.tls/api:/grpc-tls:ro
     environment:
       SANDBOX_API_GRPC_TLS_CERT_FILE: /grpc-tls/grpc-server.crt
       SANDBOX_API_GRPC_TLS_KEY_FILE: /grpc-tls/grpc-server.key
@@ -15,7 +15,7 @@ services:
 
   runner-1:
     volumes:
-      - ./.tls:/grpc-tls:ro
+      - ./.tls/runner:/grpc-tls:ro
     environment:
       SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE: /grpc-tls/ca.crt
       SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE: /grpc-tls/grpc-client.crt
@@ -27,7 +27,7 @@ services:
 
   runner-2:
     volumes:
-      - ./.tls:/grpc-tls:ro
+      - ./.tls/runner:/grpc-tls:ro
     environment:
       SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE: /grpc-tls/ca.crt
       SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE: /grpc-tls/grpc-client.crt

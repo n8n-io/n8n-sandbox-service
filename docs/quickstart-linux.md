@@ -6,9 +6,9 @@ This guide covers deploying the n8n Sandbox Service on a Linux machine using [sy
 
 - [Prerequisites](#prerequisites)
 - [Install sysbox](#install-sysbox)
-- [Set up mTLS certificates](#set-up-mtls-certificates)
 - [Start the services](#start-the-services)
 - [Verify](#verify)
+- [mTLS certificate details](#mtls-certificate-details)
 - [Next steps](#next-steps)
 
 ## Prerequisites
@@ -46,27 +46,6 @@ chmod +x setup-sysbox.sh
 docker info --format '{{json .Runtimes}}' | jq '.["sysbox-runc"]'
 ```
 
-## Set up mTLS certificates
-
-The API and runners communicate over gRPC with mutual TLS (mTLS). You need to generate or provide the following certificates signed by a shared CA:
-
-| Certificate | Type | Used by |
-|---|---|---|
-| Registration gRPC server | `server auth` | API (listens on :9090) |
-| Registration gRPC client | `client auth` | Runner (dials API :9090) |
-| SandboxControl gRPC server | `server auth` | Runner (listens on :9091) |
-| SandboxControl gRPC client | `client auth` | API (dials runner :9091) |
-
-For a quick local setup, a bootstrap script is available that generates a private CA and all leaf certificates:
-
-```bash
-curl -fsSL -o bootstrap-local-mtls.sh https://raw.githubusercontent.com/n8n-io/n8n-sandbox-service/refs/heads/main/scripts/bootstrap-local-mtls.sh
-chmod +x bootstrap-local-mtls.sh
-./bootstrap-local-mtls.sh
-```
-
-This writes PEM files to `.tls/` in the repository root. Set `SANDBOX_TLS_REGEN=1` to regenerate existing certificates.
-
 ## Start the services
 
 Download the production compose file and environment template:
@@ -89,6 +68,8 @@ Start the API and runner:
 docker compose up -d
 ```
 
+On first run, a `tls-init` container automatically generates mTLS certificates into `.tls/`. Subsequent runs skip generation if certificates already exist. Delete `.tls/` and restart to regenerate.
+
 See [configuration.md](configuration.md) for the full list of environment variables.
 
 ## Verify
@@ -98,6 +79,19 @@ Check the API health endpoint:
 ```bash
 curl http://localhost:8080/healthz
 ```
+
+## mTLS certificate details
+
+The API and runners communicate over gRPC with mutual TLS (mTLS). The `tls-init` init container generates a private CA and the following leaf certificates on first startup:
+
+| Certificate | Type | Used by |
+|---|---|---|
+| Registration gRPC server | `server auth` | API (listens on :9090) |
+| Registration gRPC client | `client auth` | Runner (dials API :9090) |
+| SandboxControl gRPC server | `server auth` | Runner (listens on :9091) |
+| SandboxControl gRPC client | `client auth` | API (dials runner :9091) |
+
+Certificates are organized into per-service directories (`.tls/api/` and `.tls/runner/`) so each service only has access to its own material.
 
 ## Next steps
 

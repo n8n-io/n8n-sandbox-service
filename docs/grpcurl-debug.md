@@ -19,12 +19,12 @@ PROTO_FILE=proto/runner/v1/runner.proto
 The runner listens on `SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR` (compose default advertise addresses: `n8n-sandbox-service-runner-dind-local-1:9091` and `n8n-sandbox-service-runner-dind-local-2:9091` on the Docker `sandbox` network).
 
 ```bash
-TLS_DIR=.tls
+TLS_API_DIR=.tls/api
 grpcurl \
   -import-path "$PROTO_IMPORT" -proto "$PROTO_FILE" \
-  -cacert "$TLS_DIR/ca.crt" \
-  -cert "$TLS_DIR/control-grpc-api-client.crt" \
-  -key "$TLS_DIR/control-grpc-api-client.key" \
+  -cacert "$TLS_API_DIR/ca.crt" \
+  -cert "$TLS_API_DIR/control-grpc-api-client.crt" \
+  -key "$TLS_API_DIR/control-grpc-api-client.key" \
   -H "x-api-key: ${RUNNER_API_KEY:-runner-local-key}" \
   -d "{\"sandbox_id\":\"$(uuidgen | tr '[:upper:]' '[:lower:]')\",\"create_json\":\"{}\"}" \
   n8n-sandbox-service-runner-dind-local-1:9091 \
