@@ -8,7 +8,7 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/lib/common.sh"
 
 ARCH="$(e2e_docker_arch)"
-API_IMAGE="n8n-sandbox-api:latest-${ARCH}"
+API_IMAGE="n8n-sandbox-service-api:latest-${ARCH}"
 API_CONTAINER_NAME="sandbox-api-e2e-norunner-$$"
 NETWORK_NAME="sandbox-e2e-net-norunner-$$"
 PORT="${PORT:-18080}"
@@ -38,9 +38,9 @@ if [[ "${E2E_SKIP_BUILD:-}" != "1" ]]; then
 fi
 
 e2e_bootstrap_mtls_maybe "$PROJECT_DIR" "$TLS_DIR_OWNED" "$TLS_DIR" "$API_TLS_DNS" "runner-control"
-e2e_normalize_tls_permissions "$TLS_DIR"
 API_DOCKER_USER=()
-e2e_setup_api_tls_for_container "$TLS_DIR" "$API_IMAGE"
+API_DATA_VOLUME_ARGS=()
+e2e_setup_api_container "$TLS_DIR" "$API_IMAGE"
 
 e2e_docker_network_create "$NETWORK_NAME"
 
@@ -49,10 +49,13 @@ API_DOCKER_RUN=(-d)
 if ((${#API_DOCKER_USER[@]})); then
 	API_DOCKER_RUN+=("${API_DOCKER_USER[@]}")
 fi
+if ((${#API_DATA_VOLUME_ARGS[@]})); then
+	API_DOCKER_RUN+=("${API_DATA_VOLUME_ARGS[@]}")
+fi
 API_DOCKER_RUN+=(
 	--network "$NETWORK_NAME"
 	-p "$PORT:8080"
-	-v "$TLS_DIR:/grpc-tls:ro"
+	-v "$TLS_DIR/api:/grpc-tls:ro"
 	-e "SANDBOX_API_KEYS=$API_KEY"
 	-e "SANDBOX_API_RUNNER_REGISTRATION_TOKEN=$REG_TOKEN"
 	-e "SANDBOX_API_GRPC_TLS_CERT_FILE=/grpc-tls/grpc-server.crt"

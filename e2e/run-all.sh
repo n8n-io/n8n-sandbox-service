@@ -25,9 +25,11 @@ echo "Building SDK once for all phases..."
 make -C "$PROJECT_DIR" sdk-install sdk-build
 
 echo "Bootstrapping e2e mTLS material once for all phases..."
-OUT_DIR="$TLS_DIR" API_DNS="$API_TLS_DNS" CONTROL_SANS="$CONTROL_SANS" \
-	bash "$PROJECT_DIR/scripts/bootstrap-local-mtls.sh"
-e2e_normalize_tls_permissions "$TLS_DIR"
+bash "$PROJECT_DIR/scripts/bootstrap-mtls.sh" \
+	--out-dir "$TLS_DIR" \
+	--api-san "$API_TLS_DNS" \
+	--control-sans "$CONTROL_SANS" \
+	--force
 
 export E2E_SKIP_BUILD=1
 export E2E_TLS_DIR="$TLS_DIR"
@@ -37,19 +39,19 @@ echo "======== E2E 1/3: no-runner (API only) ========"
 "$SCRIPT_DIR/run-no-runner.sh" "$@"
 
 echo "Cooling down between e2e phases (host Docker / DinD)..."
-sleep 15
+sleep 2
 
 echo "======== E2E 2/3: two runners =================="
 "$SCRIPT_DIR/run-two-runners.sh" "$@"
 
 echo "Cooling down between e2e phases (host Docker / DinD)..."
-sleep 15
+sleep 2
 
 echo "======== E2E 3/4: single runner (full suite) =="
 "$SCRIPT_DIR/run.sh" "$@"
 
 echo "Cooling down between e2e phases (host Docker / DinD)..."
-sleep 15
+sleep 2
 
 echo "======== E2E 4/4: idle TTL (dedicated stack) ===="
 "$SCRIPT_DIR/run-idle-ttl.sh" "$@"

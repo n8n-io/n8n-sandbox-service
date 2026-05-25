@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import './matchers';
 import { createSandbox, deleteSandbox, docker, dockerOutput, exec, innerContainerName } from './helpers';
 
 async function waitExecOK(sandboxID: string, command: string, deadlineMs: number): Promise<void> {
@@ -200,7 +201,7 @@ test.describe('Sandbox recovery on runner', () => {
       docker(['exec', runnerContainer, 'docker', 'stop', '--time', '0', innerName]);
       await waitExecOK(id, 'echo first', 45_000);
       const out = await exec(id, 'echo second');
-      expect(out.exitCode).toBe(0);
+      expect(out).toHaveSucceeded();
       expect(out.stdout.trim()).toBe('second');
     } finally {
       await deleteSandbox(id);

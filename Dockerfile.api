@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1
-
 FROM golang:1.25-bookworm AS builder
 
 WORKDIR /src
@@ -11,11 +9,14 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /out/api ./cmd/api
 
 FROM alpine:3.23
 
-RUN apk add --no-cache tini ca-certificates
+RUN apk add --no-cache tini ca-certificates bash openssl
 
 COPY --from=builder /out/api /usr/local/bin/sandbox-api
+COPY scripts/bootstrap-mtls.sh /usr/local/bin/bootstrap-mtls.sh
 
 RUN addgroup -S sandbox-api && adduser -S -G sandbox-api sandbox-api
+
+RUN mkdir -p /var/lib/n8n-sandbox-api && chown sandbox-api:sandbox-api /var/lib/n8n-sandbox-api
 
 ENV SANDBOX_API_LISTEN_ADDR=:8080
 ENV SANDBOX_API_GRPC_LISTEN_ADDR=:9090

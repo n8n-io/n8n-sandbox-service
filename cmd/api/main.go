@@ -22,7 +22,9 @@ import (
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	var logLevel slog.LevelVar
+	logLevel.Set(slog.LevelInfo)
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: &logLevel}))
 	slog.SetDefault(logger)
 
 	cfg, err := config.LoadAPI()
@@ -30,10 +32,14 @@ func main() {
 		slog.Error("failed to load api config", "error", err)
 		os.Exit(1)
 	}
+	logLevel.Set(cfg.LogLevel)
 
 	// Ensure data directory exists
-	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
-		slog.Error("create data dir", "error", err)
+	if info, err := os.Stat(cfg.DataDir); err != nil {
+		slog.Error("data dir not accessible", "path", cfg.DataDir, "error", err)
+		os.Exit(1)
+	} else if !info.IsDir() {
+		slog.Error("data dir is not a directory", "path", cfg.DataDir)
 		os.Exit(1)
 	}
 
