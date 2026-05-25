@@ -18,15 +18,14 @@ services:
   tls-init:
     image: n8nio/n8n-sandbox-api:latest
     user: "0:0"
-    entrypoint: ["bootstrap-mtls.sh"]
+    entrypoint: ["sh", "-c"]
     command:
-      - --out-dir
-      - /tls
-      - --api-san
-      - n8n-sandbox-api-local
-      - --control-san-prefix
-      - n8n-sandbox-runner-local
-      - --world-readable
+      - >-
+        bootstrap-mtls.sh
+        --out-dir /tls
+        --api-san n8n-sandbox-api-local
+        --control-san-prefix n8n-sandbox-runner-local
+        && chown -R sandbox-api:sandbox-api /tls/api
     environment:
       NUM_RUNNERS: ${NUM_RUNNERS:-1}
     volumes:

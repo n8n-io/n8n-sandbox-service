@@ -59,7 +59,7 @@ usage() {
 
 	  # Docker Compose init container with prefix-based SANs
 	  bootstrap-mtls.sh --out-dir /tls --api-san my-api \
-	      --control-san-prefix my-runner --runners 2 --world-readable
+	      --control-san-prefix my-runner --runners 2
 	USAGE
 }
 
