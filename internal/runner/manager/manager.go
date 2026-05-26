@@ -43,19 +43,21 @@ type ContainerInfo struct {
 
 // Manager orchestrates container lifecycle without persistent state.
 type Manager struct {
-	config     *config.Config
-	gatewayIP  string
-	wakeGroup  singleflight.Group
-	docker     *dockerClient
-	imageReady atomic.Bool
+	config       *config.Config
+	gatewayIP    string
+	wakeGroup    singleflight.Group
+	docker       *dockerClient
+	imageReady   atomic.Bool
+	imageReadyCh chan struct{}
 }
 
 // New creates a new Manager. It reconciles any previous containers and ensures
 // the runner bridge exists.
 func New(cfg *config.Config) (*Manager, error) {
 	m := &Manager{
-		config: cfg,
-		docker: &dockerClient{host: cfg.DockerHost},
+		config:       cfg,
+		docker:       &dockerClient{host: cfg.DockerHost},
+		imageReadyCh: make(chan struct{}),
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -98,6 +100,7 @@ func (m *Manager) EnsureSandboxImage(ctx context.Context) {
 		}
 
 		m.imageReady.Store(true)
+		close(m.imageReadyCh)
 		slog.Info("sandbox image ready", "image", image)
 		return
 	}
@@ -106,6 +109,11 @@ func (m *Manager) EnsureSandboxImage(ctx context.Context) {
 // ImageReady reports whether the sandbox image has been pulled successfully.
 func (m *Manager) ImageReady() bool {
 	return m.imageReady.Load()
+}
+
+// ImageReadyCh returns a channel that is closed when the sandbox image becomes available.
+func (m *Manager) ImageReadyCh() <-chan struct{} {
+	return m.imageReadyCh
 }
 
 // CreateContainer creates and starts a new container.

@@ -137,12 +137,19 @@ func connectOnce(ctx context.Context, cfg *config.Config, mgr *manager.Manager) 
 	tick := time.NewTicker(10 * time.Second)
 	defer tick.Stop()
 
+	imageReadyCh := mgr.ImageReadyCh()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case err := <-errCh:
 			return err
+		case <-imageReadyCh:
+			imageReadyCh = nil
+			if err := send(); err != nil {
+				return err
+			}
 		case <-tick.C:
 			if err := send(); err != nil {
 				return err
