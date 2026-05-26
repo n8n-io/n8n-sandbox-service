@@ -5,9 +5,9 @@ The n8n Sandbox Service provides isolated, on-demand execution environments via 
 ## System Overview
 
 ```
-                         ┌─────────────────────────────────────────────────────┐
-                         │                    API Gateway                      │
-                         │                                                     │
+                         ┌────────────────────────────────────────────────────┐
+                         │         API Gateway (Go app in a container         │
+                         │                                                    │
   Client ──── REST ────▶ │  HTTP Server (:8080)     gRPC Server (:9090)       │
   (SDK)    (X-Api-Key)   │  ┌──────────┐            ┌─────────────────┐       │
                          │  │ Handlers │            │ RunnerRegistry  │       │
@@ -22,10 +22,10 @@ The n8n Sandbox Service provides isolated, on-demand execution environments via 
                   HTTP reverse  │  gRPC mTLS          │      │  gRPC mTLS
                   proxy         │  (Registration)     │      │  (SandboxControl)
                                 │                     │      │
-               ┌────────────────▼─────────────────────┼──────▼────────────────┐
-               │                     Runner (DinD container)                  │
-               │                                                              │
-               │  ┌───────────────────────────────────────────────────────┐   │
+               ┌────────────────▼─────────────────────┼──────▼───────────────┐
+               │                     Runner (DinD container)                 │
+               │                                                             │
+               │  ┌──────────────────────────────────────────────────────┐   │
                │  │  Runner (Go app)                                     │   │
                │  │  HTTP :8080 │ Registration Client │ gRPC Ctrl :9091  │   │
                │  └──────┬──────────────┼────────────────────────┬───────┘   │
@@ -33,14 +33,14 @@ The n8n Sandbox Service provides isolated, on-demand execution environments via 
                │  ┌──────▼──────────────┼────────────────────────▼───────┐   │
                │  │             Container Manager                        │   │
                │  │        (Docker-in-Docker daemon)                     │   │
-               │  └───────┬──────────────┬──────────────┬─────────────────┘   │
-               │          │              │              │                      │
+               │  └───────┬──────────────┬──────────────┬────────────────┘   │
+               │          │              │              │                    │
                │    ┌─────▼────┐   ┌─────▼────┐   ┌────▼─────┐               │
                │    │ Sandbox  │   │ Sandbox  │   │ Sandbox  │               │
                │    │  Daemon  │   │  Daemon  │   │  Daemon  │               │
                │    │ (:8081)  │   │ (:8081)  │   │ (:8081)  │               │
                │    └──────────┘   └──────────┘   └──────────┘               │
-               └──────────────────────────────────────────────────────────────┘
+               └─────────────────────────────────────────────────────────────┘
 ```
 
 The system has three tiers:
