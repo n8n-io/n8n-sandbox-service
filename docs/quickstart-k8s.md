@@ -13,6 +13,8 @@ This guide covers running the n8n Sandbox Service on kubernetes.
 * Create a new nodepool and label it, so you can identify the nodes that are supposed to run the sysbox sandbox workloads.
 * Build a helm chart based on sysbox' [own manifests](https://raw.githubusercontent.com/nestybox/sysbox/master/sysbox-k8s-manifests/sysbox-install.yaml). Update the node selectors to match the labels you gave to your nodepool.
 
+Sysbox also has their own [instructions](https://github.com/nestybox/sysbox/blob/master/docs/user-guide/install-k8s.md) on how to install it on k8s.
+
 ## Use the sandbox service chart
 
 Write a wrapper helm chart that includes the n8n-sandbox-service helm chart as a dependency. Then add additional resources you might need, depending on your setup, like: an external secret for the Docker credentials/API keys, an ingressroute or a CA certificate. For more configuration options, refer to the chart's [README](../charts/n8n-sandbox-service/README.md).
