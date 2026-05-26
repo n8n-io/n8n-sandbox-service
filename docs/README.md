@@ -14,6 +14,7 @@ The n8n Sandbox Service provides isolated execution environments via a REST API.
 
 ## Reference
 
+- [Architecture](architecture.md) — system design, component overview, communication patterns, and deployment
 - [Configuration](configuration.md) — environment variables for API, Runner, and Daemon
 - [gRPC mTLS](../README.md#runner-registration-grpc-mtls) — certificate bootstrap, rotation, and trust model
 - [REST API](API.md) — endpoint reference
