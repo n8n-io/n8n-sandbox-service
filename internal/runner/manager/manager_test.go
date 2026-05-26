@@ -15,6 +15,7 @@ type fakeDockerBackend struct {
 	containerID    string
 	ip             string
 	containerIPErr error
+	stopErr        error
 }
 
 func (f *fakeDockerBackend) createContainer(context.Context, string, string, string, *ResourceLimits, bool) (string, error) {
@@ -28,7 +29,7 @@ func (f *fakeDockerBackend) startContainer(context.Context, string) error {
 
 func (f *fakeDockerBackend) stopContainer(context.Context, string) error {
 	*f.events = append(*f.events, "stop")
-	return nil
+	return f.stopErr
 }
 
 func (f *fakeDockerBackend) removeContainer(context.Context, string) error {
@@ -264,6 +265,67 @@ func TestEnsureSandboxRunningCleansUpStartedContainerOnWakeFailures(t *testing.T
 				t.Fatalf("events = %v, want %v", events, tc.wantEvents)
 			}
 		})
+	}
+}
+
+func TestEnsureSandboxRunningFailedWakeAfterNetworkDetachStopsContainerAndRemovesRules(t *testing.T) {
+	events := []string{}
+	const containerID = "container-1"
+	m := newManager(&config.Config{}, &fakeDockerBackend{
+		events:      &events,
+		containerID: containerID,
+		containerIPErr: fmt.Errorf(
+			"%w: container %s has no IP on %s",
+			ErrSandboxNetworkUnavailable,
+			containerID,
+			runnerBridgeNetwork,
+		),
+	})
+	m.applyPolicy = func(string, string, string, int) error {
+		return fmt.Errorf("unexpected applyPolicy")
+	}
+	m.teardownRules = func(gotID string) error {
+		events = append(events, "teardown")
+		if gotID != containerID {
+			t.Fatalf("teardownRules containerID = %q, want %q", gotID, containerID)
+		}
+		return nil
+	}
+	m.waitForDaemon = func(context.Context, string) error {
+		return fmt.Errorf("unexpected waitForDaemon")
+	}
+
+	err := m.ensureSandboxRunningOnce(context.Background(), "sandbox-id")
+	if !errors.Is(err, ErrSandboxNetworkUnavailable) {
+		t.Fatalf("ensureSandboxRunningOnce() error = %v, want %v", err, ErrSandboxNetworkUnavailable)
+	}
+	wantEvents := []string{"find", "inspect", "start", "containerIP", "stop", "teardown"}
+	if !reflect.DeepEqual(events, wantEvents) {
+		t.Fatalf("events = %v, want %v", events, wantEvents)
+	}
+}
+
+func TestEnsureSandboxRunningLeavesRulesWhenWakeCleanupCannotStopContainer(t *testing.T) {
+	events := []string{}
+	const containerID = "container-1"
+	m := newManager(&config.Config{}, &fakeDockerBackend{
+		events:         &events,
+		containerID:    containerID,
+		containerIPErr: errors.New("no container ip"),
+		stopErr:        errors.New("stop failed"),
+	})
+	m.teardownRules = func(string) error {
+		events = append(events, "teardown")
+		return nil
+	}
+
+	err := m.ensureSandboxRunningOnce(context.Background(), "sandbox-id")
+	if err == nil {
+		t.Fatal("expected wake to fail")
+	}
+	wantEvents := []string{"find", "inspect", "start", "containerIP", "stop"}
+	if !reflect.DeepEqual(events, wantEvents) {
+		t.Fatalf("events = %v, want %v", events, wantEvents)
 	}
 }
 

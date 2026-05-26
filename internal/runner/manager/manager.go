@@ -114,7 +114,7 @@ func (m *Manager) CreateContainer(ctx context.Context, sandboxID string, opts *C
 	}
 
 	cleanupOnError := func() {
-		_ = m.stopAndCleanContainer(ctx, containerID)
+		_ = m.removeContainerAndTeardownRules(ctx, containerID)
 	}
 
 	if err := m.docker.startContainer(ctx, containerID); err != nil {
@@ -231,7 +231,10 @@ func (m *Manager) cleanupWakeFailure(containerID string) {
 	defer cancel()
 	if err := m.docker.stopContainer(cleanupCtx, containerID); err != nil {
 		slog.Warn("stop container after wake failure", "container_id", containerID, "err", err)
+		return
 	}
+	// Rules only come down after the container is stopped; otherwise a still-running
+	// sandbox could continue without network policy.
 	if err := m.teardownRules(containerID); err != nil {
 		slog.Warn("teardown network rules after wake failure", "container_id", containerID, "err", err)
 	}
@@ -285,7 +288,7 @@ func (m *Manager) DaemonURL(ctx context.Context, sandboxID string) (string, erro
 
 // DeleteContainer stops and removes a container.
 func (m *Manager) DeleteContainer(ctx context.Context, containerID string) error {
-	if err := m.stopAndCleanContainer(ctx, containerID); err != nil {
+	if err := m.removeContainerAndTeardownRules(ctx, containerID); err != nil {
 		return err
 	}
 
@@ -293,11 +296,11 @@ func (m *Manager) DeleteContainer(ctx context.Context, containerID string) error
 	return nil
 }
 
-// stopAndCleanContainer removes the container, then tears down its network
+// removeContainerAndTeardownRules removes the container, then tears down its network
 // rules. Order matters: rules must outlive the container so it cannot run
 // unconfined during teardown. Both failure paths are logged; the
 // removeContainer error is also returned so callers decide whether to bail.
-func (m *Manager) stopAndCleanContainer(ctx context.Context, containerID string) error {
+func (m *Manager) removeContainerAndTeardownRules(ctx context.Context, containerID string) error {
 	if containerID == "" {
 		return nil
 	}
@@ -422,9 +425,9 @@ func (m *Manager) reconcileContainers(ctx context.Context) error {
 		return err
 	}
 	// Best effort: startup should continue even if one stale managed
-	// container can't be removed immediately. stopAndCleanContainer logs.
+	// container can't be removed immediately. removeContainerAndTeardownRules logs.
 	for _, id := range ids {
-		_ = m.stopAndCleanContainer(ctx, id)
+		_ = m.removeContainerAndTeardownRules(ctx, id)
 	}
 	return nil
 }
