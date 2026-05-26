@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -163,8 +164,10 @@ func handleCreateSandbox(s *store.Store, reg *registry.Registry, cfg *config.API
 		run, err := reg.PickRoundRobin()
 		if err != nil {
 			if errors.Is(err, registry.ErrNoRunners) {
+				slog.Warn("create sandbox failed: no eligible runners")
 				writeError(w, http.StatusServiceUnavailable, err.Error())
 			} else {
+				slog.Error("create sandbox failed: pick runner", "error", err)
 				writeError(w, http.StatusInternalServerError, err.Error())
 			}
 			return
@@ -175,8 +178,25 @@ func handleCreateSandbox(s *store.Store, reg *registry.Registry, cfg *config.API
 
 		sandboxID := generateUUID()
 		now := time.Now().Unix()
+		slog.Info(
+			"create sandbox: runner selected",
+			"sandbox_id", sandboxID,
+			"runner_id", run.ID,
+			"runner_http_base_url", run.HTTPBaseURL,
+			"runner_control_grpc_addr", controlAddr,
+			"runner_healthy", run.Healthy,
+			"runner_capacity_total", run.CapacityTotal,
+			"runner_capacity_used", run.CapacityUsed,
+		)
 		gresp, err := runnerctl.CreateSandbox(r.Context(), controlAddr, cfg.RunnerAPIKey, tlsCfg, sandboxID, "{}")
 		if err != nil {
+			slog.Error(
+				"create sandbox failed: runner control create",
+				"sandbox_id", sandboxID,
+				"runner_id", run.ID,
+				"runner_control_grpc_addr", controlAddr,
+				"error", err,
+			)
 			writeError(w, http.StatusInternalServerError, "failed to create container: "+err.Error())
 			return
 		}
@@ -195,9 +215,22 @@ func handleCreateSandbox(s *store.Store, reg *registry.Registry, cfg *config.API
 		}
 		if err := s.Create(record); err != nil {
 			_ = runnerctl.DeleteSandbox(r.Context(), controlAddr, cfg.RunnerAPIKey, tlsCfg, sandboxID)
+			slog.Error(
+				"create sandbox failed: store record",
+				"sandbox_id", sandboxID,
+				"runner_id", run.ID,
+				"container_ip", containerIP,
+				"error", err,
+			)
 			writeError(w, http.StatusInternalServerError, "failed to store sandbox: "+err.Error())
 			return
 		}
+		slog.Info(
+			"create sandbox succeeded",
+			"sandbox_id", sandboxID,
+			"runner_id", run.ID,
+			"container_ip", containerIP,
+		)
 
 		resp := &SandboxResponse{
 			ID:           sandboxID,
