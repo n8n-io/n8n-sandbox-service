@@ -141,12 +141,6 @@ if ! docker network inspect runner-bridge >/dev/null 2>&1; then
     runner-bridge >/dev/null
 fi
 
-# After `docker stop`/`docker start`, the inner graph usually still has this image; skipping pull
-# lets sandbox-runner become ready without waiting on the registry.
-if ! docker image inspect "${SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE}" >/dev/null 2>&1; then
-  docker pull "${SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE}"
-fi
-
 /usr/local/bin/sandbox-runner &
 RUNNER_PID=$!
 wait "$RUNNER_PID"

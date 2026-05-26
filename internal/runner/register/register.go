@@ -115,7 +115,7 @@ func connectOnce(ctx context.Context, cfg *config.Config, mgr *manager.Manager) 
 		hb := &pb.RunnerHeartbeat{
 			RunnerId:        cfg.RunnerID,
 			HttpBaseUrl:     cfg.RunnerHTTPBaseURL,
-			Healthy:         true,
+			Healthy:         mgr.ImageReady(),
 			CapacityTotal:   cfg.CapacityTotal,
 			CapacityUsed:    int32(n),
 			ControlGrpcAddr: cfg.ResolvedControlGRPCAdvertiseAddr(),

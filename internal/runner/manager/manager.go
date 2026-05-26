@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
@@ -42,10 +43,11 @@ type ContainerInfo struct {
 
 // Manager orchestrates container lifecycle without persistent state.
 type Manager struct {
-	config    *config.Config
-	gatewayIP string
-	wakeGroup singleflight.Group
-	docker    *dockerClient
+	config     *config.Config
+	gatewayIP  string
+	wakeGroup  singleflight.Group
+	docker     *dockerClient
+	imageReady atomic.Bool
 }
 
 // New creates a new Manager. It reconciles any previous containers and ensures
@@ -69,15 +71,49 @@ func New(cfg *config.Config) (*Manager, error) {
 	}
 	m.gatewayIP = gatewayIP
 
-	if err := m.docker.pullImage(ctx, m.config.DockerSandboxImage); err != nil {
-		return nil, fmt.Errorf("pull sandbox image: %w", err)
-	}
-
 	return m, nil
+}
+
+// EnsureSandboxImage pulls the sandbox image with retries. It is intended to
+// run in a goroutine after the HTTP server is listening.
+func (m *Manager) EnsureSandboxImage(ctx context.Context) {
+	image := m.config.DockerSandboxImage
+
+	for attempt := 1; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			slog.Error("image pull canceled", "image", image, "error", err)
+			return
+		}
+
+		if err := m.docker.pullImage(ctx, image); err != nil {
+			backoff := min(time.Duration(attempt)*5*time.Second, 60*time.Second)
+			slog.Warn("sandbox image pull failed, retrying",
+				"image", image, "attempt", attempt, "retry_in", backoff, "error", err)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+				continue
+			}
+		}
+
+		m.imageReady.Store(true)
+		slog.Info("sandbox image ready", "image", image)
+		return
+	}
+}
+
+// ImageReady reports whether the sandbox image has been pulled successfully.
+func (m *Manager) ImageReady() bool {
+	return m.imageReady.Load()
 }
 
 // CreateContainer creates and starts a new container.
 func (m *Manager) CreateContainer(ctx context.Context, sandboxID string, opts *CreateOptions) (*ContainerInfo, error) {
+	if !m.imageReady.Load() {
+		return nil, fmt.Errorf("sandbox image not yet available")
+	}
+
 	if opts == nil {
 		opts = &CreateOptions{}
 	}
