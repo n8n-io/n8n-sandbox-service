@@ -15,7 +15,7 @@ This guide covers running the n8n Sandbox Service on kubernetes.
 
 ## Use the sandbox service chart
 
-Write a wrapper helm chart that includes the n8n-sandbox-service helm chart as a dependency. Then add additional resources you might need, depending on your setup, like: an external secret for the Docker credentials/API keys, an ingressroute or a CA certificate. For more configuration options, refer to the chart's [README](file://../charts/n8n-sandbox-service/README.md).
+Write a wrapper helm chart that includes the n8n-sandbox-service helm chart as a dependency. Then add additional resources you might need, depending on your setup, like: an external secret for the Docker credentials/API keys, an ingressroute or a CA certificate. For more configuration options, refer to the chart's [README](../charts/n8n-sandbox-service/README.md).
 
 ## Verify
 
