@@ -18,6 +18,10 @@ type fakeDockerBackend struct {
 	stopErr        error
 }
 
+func (f *fakeDockerBackend) ping(context.Context) error {
+	return errors.New("unexpected ping")
+}
+
 func (f *fakeDockerBackend) createContainer(context.Context, string, string, string, *ResourceLimits, bool) (string, error) {
 	return "", errors.New("unexpected createContainer")
 }

@@ -53,6 +53,7 @@ type networkInspect struct {
 }
 
 type dockerBackend interface {
+	ping(ctx context.Context) error
 	createContainer(ctx context.Context, sandboxID, containerName, image string, limits *ResourceLimits, enableCgroups bool) (string, error)
 	startContainer(ctx context.Context, containerID string) error
 	stopContainer(ctx context.Context, containerID string) error
