@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import './matchers';
-import { createSandbox, deleteSandbox, docker, dockerOutput, exec, innerContainerName } from './helpers';
+import { createSandbox, deleteSandbox, docker, exec, innerContainerName } from './helpers';
 
 async function waitExecOK(sandboxID: string, command: string, deadlineMs: number): Promise<void> {
   const deadline = Date.now() + deadlineMs;
