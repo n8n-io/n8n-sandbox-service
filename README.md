@@ -8,6 +8,7 @@ See [docs/](docs/README.md) for the full documentation, including:
 
 - [Linux quickstart](docs/quickstart-linux.md) — production deployment with sysbox-runc
 - [macOS quickstart](docs/quickstart-macos.md) — local development with privileged containers
+- [k8s quickstart](docs/quickstart-k8s.md) - production k8s deployment with sysbox-runc
 - [Configuration reference](docs/configuration.md) — all environment variables
 - [Development guide](docs/development.md) — building, testing, SDK, playground
 - [REST API reference](docs/API.md) — endpoint reference

@@ -39,6 +39,22 @@ sysboxRunner:
 
 If inner Docker cannot use `overlay2` in that environment, set `sysboxRunner.config.dockerStorageDriver` to another dockerd storage driver such as `vfs`. This is slower than `overlay2`, but avoids nested overlayfs mounts.
 
+For `overlay2`, prefer mounting a dedicated per-runner volume at the inner Docker data root so dockerd does not place its graph on the runner container filesystem:
+
+```yaml
+sysboxRunner:
+  config:
+    dockerStorageDriver: overlay2
+  dockerDataRoot:
+    persistence:
+      enabled: true
+      size: 64Gi
+      accessModes:
+        - ReadWriteOnce
+```
+
+The chart renders this as a StatefulSet `volumeClaimTemplates` entry mounted at `/var/lib/docker`, so each runner replica gets its own Docker data root. Do not share one `/var/lib/docker` volume across runner pods; the inner Docker daemon requires exclusive access to its graph.
+
 If your cluster uses a dedicated node pool with custom labels and taints, override them through values:
 
 ```yaml
