@@ -2,7 +2,7 @@ name: Helm Chart Release Validate
 
 on:
   pull_request:
-    branches: [chore/publish-chart]
+    branches: [main]
     paths:
       - 'charts/n8n-sandbox-service/**'
 

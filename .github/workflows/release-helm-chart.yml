@@ -2,7 +2,7 @@ name: Helm Chart Publish
 
 on:
   push:
-    branches: [chore/publish-chart]
+    branches: [main]
     paths:
       - 'charts/n8n-sandbox-service/**'
       - '.github/workflows/release-helm-chart.yml'
