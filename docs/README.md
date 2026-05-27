@@ -8,12 +8,13 @@ The n8n Sandbox Service provides isolated execution environments via a REST API.
 |----------|----------|-------|
 | **Linux** | Production (sysbox-runc isolation) | [quickstart-linux.md](quickstart-linux.md) |
 | **macOS** | Local development (privileged containers) | [quickstart-macos.md](quickstart-macos.md) |
-| **Kubernetes** | Production cluster deployment | _Coming soon_ |
+| **Kubernetes** | Production cluster deployment | [quickstart-k8s.md](quickstart-k8s.md) |
 
 > Both platform guides share common [prerequisites](prerequisites.md).
 
 ## Reference
 
+- [Architecture](architecture.md) — system design, component overview, communication patterns, and deployment
 - [Configuration](configuration.md) — environment variables for API, Runner, and Daemon
 - [gRPC mTLS](../README.md#runner-registration-grpc-mtls) — certificate bootstrap, rotation, and trust model
 - [REST API](API.md) — endpoint reference

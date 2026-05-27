@@ -96,17 +96,23 @@ spec:
             {{- with .Values.sysboxRunner.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+          startupProbe:
+            httpGet:
+              path: /livez
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 24
           livenessProbe:
             httpGet:
               path: /livez
               port: http
-            initialDelaySeconds: 20
             periodSeconds: 10
           readinessProbe:
             httpGet:
               path: /readyz
               port: http
-            initialDelaySeconds: 10
+            initialDelaySeconds: 5
             periodSeconds: 5
           volumeMounts:
             - name: runner-registration-tls
@@ -120,6 +126,10 @@ spec:
               mountPath: {{ printf "%s/config.json" .Values.sysboxRunner.dockerConfig.mountPath | quote }}
               subPath: config.json
               readOnly: true
+            {{- end }}
+            {{- if .Values.sysboxRunner.dockerDataRoot.persistence.enabled }}
+            - name: docker-data
+              mountPath: /var/lib/docker
             {{- end }}
             {{- with .Values.sysboxRunner.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
@@ -179,4 +189,18 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+  {{- if .Values.sysboxRunner.dockerDataRoot.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: docker-data
+      spec:
+        accessModes:
+          {{- toYaml .Values.sysboxRunner.dockerDataRoot.persistence.accessModes | nindent 10 }}
+        {{- if .Values.sysboxRunner.dockerDataRoot.persistence.storageClass }}
+        storageClassName: {{ .Values.sysboxRunner.dockerDataRoot.persistence.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.sysboxRunner.dockerDataRoot.persistence.size | quote }}
+  {{- end }}
 {{- end }}

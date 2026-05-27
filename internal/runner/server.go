@@ -19,6 +19,7 @@ type ContainerManager interface {
 	DaemonURL(ctx context.Context, containerID string) (string, error)
 	FindContainerIDByLabel(ctx context.Context, sandboxID string) (string, error)
 	DockerHealthy(ctx context.Context) error
+	ImageReady() bool
 }
 
 // NewRouter creates the HTTP handler for container operations.
@@ -34,6 +35,11 @@ func NewRouter(mgr ContainerManager, cfg *config.Config) http.Handler {
 	mux.HandleFunc("GET /healthz", livenessHandler)
 	mux.HandleFunc("GET /livez", livenessHandler)
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+		if !mgr.ImageReady() {
+			writeError(w, http.StatusServiceUnavailable, "sandbox image not ready")
+			return
+		}
+
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
 
