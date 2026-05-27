@@ -26,8 +26,14 @@ var ErrSandboxNetworkUnavailable = errors.New("sandbox network unavailable")
 var ErrSandboxNotRunning = errors.New("sandbox not running")
 
 const (
-	StatusRunning = "running"
-	daemonPort    = 8081
+	containerStatusRunning    = "running"
+	containerStatusCreated    = "created"
+	containerStatusExited     = "exited"
+	containerStatusPaused     = "paused"
+	containerStatusRestarting = "restarting"
+	containerStatusRemoving   = "removing"
+	containerStatusDead       = "dead"
+	daemonPort                = 8081
 )
 
 // CreateOptions holds optional parameters for sandbox creation.
@@ -42,19 +48,19 @@ type ContainerInfo struct {
 
 // Manager orchestrates container lifecycle without persistent state.
 type Manager struct {
-	config    *config.Config
-	gatewayIP string
-	wakeGroup singleflight.Group
-	docker    *dockerClient
+	config        *config.Config
+	gatewayIP     string
+	wakeGroup     singleflight.Group
+	docker        dockerBackend
+	applyPolicy   func(containerID, sourceIP, gatewayIP string, daemonPort int) error
+	teardownRules func(containerID string) error
+	waitForDaemon func(ctx context.Context, baseURL string) error
 }
 
 // New creates a new Manager. It reconciles any previous containers and ensures
 // the runner bridge exists.
 func New(cfg *config.Config) (*Manager, error) {
-	m := &Manager{
-		config: cfg,
-		docker: &dockerClient{host: cfg.DockerHost},
-	}
+	m := newManager(cfg, &dockerClient{host: cfg.DockerHost})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -74,6 +80,18 @@ func New(cfg *config.Config) (*Manager, error) {
 	}
 
 	return m, nil
+}
+
+// newManager centralizes Manager dependency wiring so tests can override Docker,
+// network policy, or daemon readiness behavior without nil defaults.
+func newManager(cfg *config.Config, docker dockerBackend) *Manager {
+	return &Manager{
+		config:        cfg,
+		docker:        docker,
+		applyPolicy:   netrules.ApplyPolicy,
+		teardownRules: netrules.Teardown,
+		waitForDaemon: waitForDaemon,
+	}
 }
 
 // CreateContainer creates and starts a new container.
@@ -96,7 +114,7 @@ func (m *Manager) CreateContainer(ctx context.Context, sandboxID string, opts *C
 	}
 
 	cleanupOnError := func() {
-		_ = m.stopAndCleanContainer(ctx, containerID)
+		_ = m.removeContainerAndTeardownRules(ctx, containerID)
 	}
 
 	if err := m.docker.startContainer(ctx, containerID); err != nil {
@@ -110,13 +128,13 @@ func (m *Manager) CreateContainer(ctx context.Context, sandboxID string, opts *C
 		return nil, fmt.Errorf("inspect container ip: %w", err)
 	}
 
-	if err := netrules.ApplyPolicy(containerID, containerIP, m.gatewayIP, daemonPort); err != nil {
+	if err := m.applyPolicy(containerID, containerIP, m.gatewayIP, daemonPort); err != nil {
 		cleanupOnError()
 		return nil, fmt.Errorf("apply network rules: %w", err)
 	}
 
 	baseURL := fmt.Sprintf("http://%s:%d", containerIP, daemonPort)
-	if err := waitForDaemon(ctx, baseURL); err != nil {
+	if err := m.waitForDaemon(ctx, baseURL); err != nil {
 		cleanupOnError()
 		return nil, fmt.Errorf("connect to daemon: %w", err)
 	}
@@ -187,24 +205,44 @@ func (m *Manager) ensureSandboxRunningOnce(ctx context.Context, sandboxID string
 		}
 		return err
 	}
-	if inspect.State.Running {
+	if isContainerReady(inspect.State) {
 		return nil
+	}
+	if !canStartContainer(inspect.State) {
+		return fmt.Errorf("sandbox container is not startable from docker state %q", inspect.State.Status)
 	}
 	if err := m.docker.startContainer(ctx, containerID); err != nil {
 		return fmt.Errorf("start container: %w", err)
 	}
 	containerIP, err := m.docker.containerIP(ctx, containerID)
 	if err != nil {
+		m.cleanupWakeFailure(containerID)
 		return err
 	}
-	if err := netrules.ApplyPolicy(containerID, containerIP, m.gatewayIP, daemonPort); err != nil {
+	if err := m.applyPolicy(containerID, containerIP, m.gatewayIP, daemonPort); err != nil {
+		m.cleanupWakeFailure(containerID)
 		return fmt.Errorf("apply network rules: %w", err)
 	}
 	baseURL := fmt.Sprintf("http://%s:%d", containerIP, daemonPort)
-	if err := waitForDaemon(ctx, baseURL); err != nil {
+	if err := m.waitForDaemon(ctx, baseURL); err != nil {
+		m.cleanupWakeFailure(containerID)
 		return err
 	}
 	return nil
+}
+
+func (m *Manager) cleanupWakeFailure(containerID string) {
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := m.docker.stopContainer(cleanupCtx, containerID); err != nil {
+		slog.Warn("stop container after wake failure", "container_id", containerID, "err", err)
+		return
+	}
+	// Rules only come down after the container is stopped; otherwise a still-running
+	// sandbox could continue without network policy.
+	if err := m.teardownRules(containerID); err != nil {
+		slog.Warn("teardown network rules after wake failure", "container_id", containerID, "err", err)
+	}
 }
 
 // StopSandboxContainer stops a running sandbox container without removing it.
@@ -240,7 +278,7 @@ func (m *Manager) DaemonURL(ctx context.Context, sandboxID string) (string, erro
 		}
 		return "", err
 	}
-	if !inspect.State.Running {
+	if !isContainerReady(inspect.State) {
 		return "", ErrSandboxNotRunning
 	}
 
@@ -255,7 +293,7 @@ func (m *Manager) DaemonURL(ctx context.Context, sandboxID string) (string, erro
 
 // DeleteContainer stops and removes a container.
 func (m *Manager) DeleteContainer(ctx context.Context, containerID string) error {
-	if err := m.stopAndCleanContainer(ctx, containerID); err != nil {
+	if err := m.removeContainerAndTeardownRules(ctx, containerID); err != nil {
 		return err
 	}
 
@@ -263,11 +301,11 @@ func (m *Manager) DeleteContainer(ctx context.Context, containerID string) error
 	return nil
 }
 
-// stopAndCleanContainer removes the container, then tears down its network
+// removeContainerAndTeardownRules removes the container, then tears down its network
 // rules. Order matters: rules must outlive the container so it cannot run
 // unconfined during teardown. Both failure paths are logged; the
 // removeContainer error is also returned so callers decide whether to bail.
-func (m *Manager) stopAndCleanContainer(ctx context.Context, containerID string) error {
+func (m *Manager) removeContainerAndTeardownRules(ctx context.Context, containerID string) error {
 	if containerID == "" {
 		return nil
 	}
@@ -302,6 +340,26 @@ func (m *Manager) defaultLimits() *ResourceLimits {
 		CPUPercent: m.config.DefaultCPUPercent,
 		PidsMax:    m.config.DefaultPidsMax,
 		DiskMB:     diskMB,
+	}
+}
+
+func isContainerReady(state containerState) bool {
+	return state.Status == containerStatusRunning &&
+		state.Running &&
+		!state.Paused &&
+		!state.Restarting &&
+		!state.Dead
+}
+
+func canStartContainer(state containerState) bool {
+	if state.Running || state.Paused || state.Restarting || state.Dead {
+		return false
+	}
+	switch state.Status {
+	case containerStatusCreated, containerStatusExited:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -372,9 +430,9 @@ func (m *Manager) reconcileContainers(ctx context.Context) error {
 		return err
 	}
 	// Best effort: startup should continue even if one stale managed
-	// container can't be removed immediately. stopAndCleanContainer logs.
+	// container can't be removed immediately. removeContainerAndTeardownRules logs.
 	for _, id := range ids {
-		_ = m.stopAndCleanContainer(ctx, id)
+		_ = m.removeContainerAndTeardownRules(ctx, id)
 	}
 	return nil
 }

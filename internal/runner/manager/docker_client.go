@@ -21,11 +21,9 @@ const (
 )
 
 type containerInspect struct {
-	ID    string `json:"Id"`
-	Name  string `json:"Name"`
-	State struct {
-		Running bool `json:"Running"`
-	} `json:"State"`
+	ID     string         `json:"Id"`
+	Name   string         `json:"Name"`
+	State  containerState `json:"State"`
 	Config struct {
 		Labels map[string]string `json:"Labels"`
 	} `json:"Config"`
@@ -36,6 +34,14 @@ type containerInspect struct {
 	} `json:"NetworkSettings"`
 }
 
+type containerState struct {
+	Status     string `json:"Status"`
+	Running    bool   `json:"Running"`
+	Paused     bool   `json:"Paused"`
+	Restarting bool   `json:"Restarting"`
+	Dead       bool   `json:"Dead"`
+}
+
 type networkInspect struct {
 	Name    string            `json:"Name"`
 	Options map[string]string `json:"Options"`
@@ -44,6 +50,21 @@ type networkInspect struct {
 			Gateway string `json:"Gateway"`
 		} `json:"Config"`
 	} `json:"IPAM"`
+}
+
+type dockerBackend interface {
+	ping(ctx context.Context) error
+	createContainer(ctx context.Context, sandboxID, containerName, image string, limits *ResourceLimits, enableCgroups bool) (string, error)
+	startContainer(ctx context.Context, containerID string) error
+	stopContainer(ctx context.Context, containerID string) error
+	removeContainer(ctx context.Context, containerID string) error
+	containerIP(ctx context.Context, containerID string) (string, error)
+	inspectContainer(ctx context.Context, containerID string) (*containerInspect, error)
+	inspectNetwork(ctx context.Context, name string) (*networkInspect, error)
+	listContainersByLabel(ctx context.Context, label, value string) ([]string, error)
+	findContainerByLabels(ctx context.Context, filterArgs ...string) ([]string, error)
+	pullImage(ctx context.Context, image string) error
+	run(ctx context.Context, args ...string) (string, error)
 }
 
 // dockerClient is a thin wrapper around the docker CLI. It is the only place
