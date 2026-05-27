@@ -1,0 +1,40 @@
+name: Helm Chart Publish
+
+on:
+  push:
+    branches: [chore/publish-chart]
+    paths:
+      - 'charts/n8n-sandbox-service/**'
+      - '.github/workflows/release-helm-chart.yml'
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: release-helm-chart
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: '3.17.0'
+
+      - name: Lint chart
+        run: helm lint charts/n8n-sandbox-service --set auth.existingSecret=n8n-sandbox-auth
+
+      - name: Log in to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | \
+            helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Package and push chart
+        run: |
+          helm package charts/n8n-sandbox-service --destination /tmp/chart-pkg/
+          chart_packages=(/tmp/chart-pkg/n8n-sandbox-service-*.tgz)
+          helm push "${chart_packages[0]}" "oci://ghcr.io/${{ github.repository }}"

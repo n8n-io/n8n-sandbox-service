@@ -1,0 +1,54 @@
+name: Helm Chart Release Validate
+
+on:
+  pull_request:
+    branches: [chore/publish-chart]
+    paths:
+      - 'charts/n8n-sandbox-service/**'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Validate chart version bump
+        run: |
+          git fetch origin "${{ github.base_ref }}" --depth=1
+
+          base_version=$(git show "origin/${{ github.base_ref }}:charts/n8n-sandbox-service/Chart.yaml" | python3 -c '
+          import re
+          import sys
+
+          match = re.search(r"^version:\s*['\"]?([^'\"\s]+)['\"]?\s*$", sys.stdin.read(), re.MULTILINE)
+          if not match:
+              raise SystemExit("Unable to read base chart version")
+          print(match.group(1))
+          ')
+
+          head_version=$(python3 -c '
+          import re
+          from pathlib import Path
+
+          chart = Path("charts/n8n-sandbox-service/Chart.yaml").read_text()
+          match = re.search(r"^version:\s*['\"]?([^'\"\s]+)['\"]?\s*$", chart, re.MULTILINE)
+          if not match:
+              raise SystemExit("Unable to read chart version")
+          print(match.group(1))
+          ')
+
+          if ! [[ "$head_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Chart version must be valid semver: '$head_version'"
+            exit 1
+          fi
+
+          if [ "$base_version" = "$head_version" ]; then
+            echo "Chart changes must bump charts/n8n-sandbox-service/Chart.yaml version."
+            echo "Current version: $head_version"
+            exit 1
+          fi
+
+          echo "Chart version bumped: $base_version -> $head_version"
