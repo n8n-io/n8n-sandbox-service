@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
@@ -55,6 +56,8 @@ type Manager struct {
 	applyPolicy   func(containerID, sourceIP, gatewayIP string, daemonPort int) error
 	teardownRules func(containerID string) error
 	waitForDaemon func(ctx context.Context, baseURL string) error
+	imageReady    atomic.Bool
+	imageReadyCh  chan struct{}
 }
 
 // New creates a new Manager. It reconciles any previous containers and ensures
@@ -75,10 +78,6 @@ func New(cfg *config.Config) (*Manager, error) {
 	}
 	m.gatewayIP = gatewayIP
 
-	if err := m.docker.pullImage(ctx, m.config.DockerSandboxImage); err != nil {
-		return nil, fmt.Errorf("pull sandbox image: %w", err)
-	}
-
 	return m, nil
 }
 
@@ -91,11 +90,56 @@ func newManager(cfg *config.Config, docker dockerBackend) *Manager {
 		applyPolicy:   netrules.ApplyPolicy,
 		teardownRules: netrules.Teardown,
 		waitForDaemon: waitForDaemon,
+		imageReadyCh:  make(chan struct{}),
 	}
+}
+
+// EnsureSandboxImage pulls the sandbox image with retries. It is intended to
+// run in a goroutine after the HTTP server is listening.
+func (m *Manager) EnsureSandboxImage(ctx context.Context) {
+	image := m.config.DockerSandboxImage
+
+	for attempt := 1; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			slog.Error("image pull canceled", "image", image, "error", err)
+			return
+		}
+
+		if err := m.docker.pullImage(ctx, image); err != nil {
+			backoff := min(time.Duration(attempt)*5*time.Second, 60*time.Second)
+			slog.Warn("sandbox image pull failed, retrying",
+				"image", image, "attempt", attempt, "retry_in", backoff, "error", err)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+				continue
+			}
+		}
+
+		m.imageReady.Store(true)
+		close(m.imageReadyCh)
+		slog.Info("sandbox image ready", "image", image)
+		return
+	}
+}
+
+// ImageReady reports whether the sandbox image has been pulled successfully.
+func (m *Manager) ImageReady() bool {
+	return m.imageReady.Load()
+}
+
+// ImageReadyCh returns a channel that is closed when the sandbox image becomes available.
+func (m *Manager) ImageReadyCh() <-chan struct{} {
+	return m.imageReadyCh
 }
 
 // CreateContainer creates and starts a new container.
 func (m *Manager) CreateContainer(ctx context.Context, sandboxID string, opts *CreateOptions) (*ContainerInfo, error) {
+	if !m.imageReady.Load() {
+		return nil, fmt.Errorf("sandbox image not yet available")
+	}
+
 	if opts == nil {
 		opts = &CreateOptions{}
 	}
