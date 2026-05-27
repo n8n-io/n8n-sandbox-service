@@ -152,6 +152,14 @@ sysboxRunner:
     configKey: .dockerconfigjson
     mountPath: /root/.docker
 
+  dockerDataRoot:
+    persistence:
+      enabled: false
+      size: 64Gi
+      storageClass: ""
+      accessModes:
+        - ReadWriteOnce
+
   service:
     annotations: {}
     httpPort: 8080
