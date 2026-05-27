@@ -59,6 +59,9 @@ func (s *SandboxControlGRPC) CreateSandbox(ctx context.Context, req *pb.CreateSa
 	if err := s.checkAPIKey(ctx); err != nil {
 		return nil, err
 	}
+	if !s.Mgr.ImageReady() {
+		return nil, status.Error(codes.Unavailable, "sandbox image not yet available")
+	}
 	sandboxID := strings.TrimSpace(req.GetSandboxId())
 	if !isValidID(sandboxID) {
 		return nil, status.Error(codes.InvalidArgument, "invalid sandbox id")
