@@ -1,0 +1,60 @@
+name: Helm Chart Release Validate
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'charts/n8n-sandbox-service/**'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Validate chart version bump
+        run: |
+          git fetch origin "${{ github.base_ref }}" --depth=1
+
+          extract_chart_version() {
+            awk '
+              /^version:[[:space:]]*/ {
+                version = $0
+                sub(/^version:[[:space:]]*/, "", version)
+                gsub(/^["'\''"]|["'\''"]$/, "", version)
+                print version
+                exit
+              }
+            '
+          }
+
+          base_chart=$(git show "origin/${{ github.base_ref }}:charts/n8n-sandbox-service/Chart.yaml")
+          base_version=$(printf '%s\n' "$base_chart" | extract_chart_version)
+          head_version=$(extract_chart_version < charts/n8n-sandbox-service/Chart.yaml)
+
+          if [ -z "$base_version" ]; then
+            echo "Unable to read base chart version"
+            exit 1
+          fi
+
+          if [ -z "$head_version" ]; then
+            echo "Unable to read chart version"
+            exit 1
+          fi
+
+          semver_regex='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
+          if ! [[ "$head_version" =~ $semver_regex ]]; then
+            echo "Chart version must be valid semver: '$head_version'"
+            exit 1
+          fi
+
+          if [ "$base_version" = "$head_version" ]; then
+            echo "Chart changes must bump charts/n8n-sandbox-service/Chart.yaml version."
+            echo "Current version: $head_version"
+            exit 1
+          fi
+
+          echo "Chart version bumped: $base_version -> $head_version"
