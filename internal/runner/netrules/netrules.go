@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
 )
 
 const chainPrefix = "N8N-SB-"
+
+var mu sync.Mutex
 
 var privateRangesV4 = []string{
 	"10.0.0.0/8",
@@ -43,10 +46,13 @@ func ApplyPolicy(containerID, sourceIP, gatewayIP string, daemonPort int) error 
 		return fmt.Errorf("source ip is required")
 	}
 
+	mu.Lock()
+	defer mu.Unlock()
+
 	if err := ensureDockerUserChain(); err != nil {
 		return err
 	}
-	if err := Teardown(containerID); err != nil {
+	if err := teardownLocked(containerID); err != nil {
 		return err
 	}
 
@@ -91,6 +97,12 @@ func ApplyPolicy(containerID, sourceIP, gatewayIP string, daemonPort int) error 
 
 // Teardown removes per-sandbox iptables rules and chains.
 func Teardown(containerID string) error {
+	mu.Lock()
+	defer mu.Unlock()
+	return teardownLocked(containerID)
+}
+
+func teardownLocked(containerID string) error {
 	if containerID == "" {
 		return nil
 	}
@@ -149,6 +161,9 @@ func run(name string, args ...string) error {
 }
 
 func output(name string, args ...string) (string, error) {
+	if name == "iptables" {
+		args = append([]string{"-w", "5", "-W", "100000"}, args...)
+	}
 	cmd := exec.Command(name, args...)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
