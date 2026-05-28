@@ -46,6 +46,8 @@ func ApplyPolicy(containerID, sourceIP, gatewayIP string, daemonPort int) error 
 		return fmt.Errorf("source ip is required")
 	}
 
+	// Serialize all iptables mutations so concurrent sandbox lifecycles
+	// cannot observe the shared DOCKER-USER chain in an intermediate state.
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -161,6 +163,8 @@ func run(name string, args ...string) error {
 }
 
 func output(name string, args ...string) (string, error) {
+	// -w 5: wait up to 5s for the kernel xtables lock instead of failing immediately.
+	// -W 10000: poll the lock every 10ms (legacy iptables only; ignored by iptables-nft).
 	if name == "iptables" {
 		args = append([]string{"-w", "5", "-W", "10000"}, args...)
 	}
