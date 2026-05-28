@@ -12,7 +12,8 @@ import (
 )
 
 type fakeContainerManager struct {
-	dockerErr error
+	dockerErr  error
+	imageReady bool
 }
 
 func (f *fakeContainerManager) CreateContainer(context.Context, string, *manager.CreateOptions) (*manager.ContainerInfo, error) {
@@ -43,6 +44,10 @@ func (f *fakeContainerManager) DockerHealthy(context.Context) error {
 	return f.dockerErr
 }
 
+func (f *fakeContainerManager) ImageReady() bool {
+	return f.imageReady
+}
+
 func TestRunnerLivenessEndpointsDoNotCheckDocker(t *testing.T) {
 	router := NewRouter(&fakeContainerManager{dockerErr: errors.New("docker down")}, &config.Config{})
 
@@ -61,7 +66,7 @@ func TestRunnerLivenessEndpointsDoNotCheckDocker(t *testing.T) {
 }
 
 func TestRunnerReadyzChecksDocker(t *testing.T) {
-	router := NewRouter(&fakeContainerManager{}, &config.Config{})
+	router := NewRouter(&fakeContainerManager{imageReady: true}, &config.Config{})
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	rec := httptest.NewRecorder()
 
@@ -73,7 +78,7 @@ func TestRunnerReadyzChecksDocker(t *testing.T) {
 }
 
 func TestRunnerReadyzFailsWhenDockerUnavailable(t *testing.T) {
-	router := NewRouter(&fakeContainerManager{dockerErr: errors.New("docker down")}, &config.Config{})
+	router := NewRouter(&fakeContainerManager{dockerErr: errors.New("docker down"), imageReady: true}, &config.Config{})
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	rec := httptest.NewRecorder()
 
@@ -81,5 +86,17 @@ func TestRunnerReadyzFailsWhenDockerUnavailable(t *testing.T) {
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected readyz to return 503, got %d", rec.Code)
+	}
+}
+
+func TestRunnerReadyzFailsWhenImageNotReady(t *testing.T) {
+	router := NewRouter(&fakeContainerManager{imageReady: false}, &config.Config{})
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected readyz to return 503 when image not ready, got %d", rec.Code)
 	}
 }

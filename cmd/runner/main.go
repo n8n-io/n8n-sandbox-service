@@ -89,6 +89,8 @@ func main() {
 		}
 	}()
 
+	go mgr.EnsureSandboxImage(ctx)
+
 	select {
 	case <-ctx.Done():
 		slog.Info("received signal, shutting down")
