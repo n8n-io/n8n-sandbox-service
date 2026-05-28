@@ -82,6 +82,13 @@ func (r *Registry) Remove(id string) {
 	r.order = out
 }
 
+// Len returns the number of runners currently registered (irrespective of health or staleness).
+func (r *Registry) Len() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.runners)
+}
+
 // eligibleLocked returns healthy runners with spare capacity and a recent heartbeat; caller holds r.mu.
 func (r *Registry) eligibleLocked(now time.Time) []*Runner {
 	var eligible []*Runner

@@ -7,6 +7,7 @@ All services are configured via environment variables.
 - [API](#api)
 - [Runner](#runner)
 - [Sandbox daemon](#sandbox-daemon)
+- [Metrics](#metrics)
 - [Disk quotas](#disk-quotas)
 
 ## API
@@ -22,6 +23,7 @@ All services are configured via environment variables.
 | `SANDBOX_API_DATA_DIR` | `/var/lib/n8n-sandbox-api` | SQLite store directory; must already exist and be writable by the API user. Mount a persistent volume here to retain sandbox state across container restarts. |
 | `SANDBOX_API_MAX_FILE_BYTES` | `10485760` | Maximum file upload size (10 MB) |
 | `SANDBOX_API_ENABLE_CORS` | `false` | Enable CORS headers (allow all origins); needed for the browser playground |
+| `SANDBOX_API_METRICS_ENABLED` | `false` | When true, expose Prometheus `/metrics` on the public listener (no `X-Api-Key`; firewall the port). See [Metrics](#metrics). |
 | `SANDBOX_API_RUNNER_HEARTBEAT_GRACE` | `45s` | How long after the last gRPC heartbeat a runner remains eligible for placement (Go [`time.ParseDuration`](https://pkg.go.dev/time#ParseDuration) syntax, e.g. `45s`, `2m`) |
 | `SANDBOX_API_GRPC_TLS_CERT_FILE` | *(required)* | Server certificate (PEM) for the registration gRPC listener |
 | `SANDBOX_API_GRPC_TLS_KEY_FILE` | *(required)* | Server private key (PEM) |
@@ -73,6 +75,22 @@ These variables are set inside each sandbox container and are typically baked in
 | `SANDBOX_DAEMON_LOG_LEVEL` | `info` | Minimum log severity (`debug`, `info`, `warn`, `error`; case-insensitive) |
 | `SANDBOX_EXEC_MAX_EVENT_BYTES` | `16777216` | Max bytes of event history retained per execution (16 MiB) |
 | `SANDBOX_EXEC_RETAIN` | `10m` | Duration to retain completed executions (Go [`time.ParseDuration`](https://pkg.go.dev/time#ParseDuration) syntax, e.g. `10m`, `1h`) |
+
+## Metrics
+
+The API can expose a Prometheus `/metrics` endpoint on the same HTTP port that serves the public API. Set `SANDBOX_API_METRICS_ENABLED=true` to enable. The endpoint:
+
+- Bypasses `X-Api-Key`, matching the n8n core operator model. Operators are expected to firewall the HTTP port or front it with a private LB; otherwise anyone reaching the listener can read the metrics.
+- Uses the `sandbox_` namespace, with a `role` label (`api`) on every metric so series from this binary can coexist with future runner metrics in one Prometheus.
+- Bounds cardinality by labeling HTTP series with the route pattern (e.g. `/sandboxes/{id}/executions`), not the raw path.
+
+Series exposed today:
+
+- `sandbox_http_requests_total{role="api",route,method,status}` and `sandbox_http_request_duration_seconds{role="api",route,method}`.
+- `sandbox_sandbox_operations_total{role="api",operation,result}` — sandbox lifecycle ops (`create`, `delete`).
+- `sandbox_sandboxes_active{role="api"}` — current sandbox count.
+- `sandbox_runners_registered{role="api"}` — runners registered with the API.
+- Plus the standard `go_*` and `process_*` collectors.
 
 ## Disk quotas
 
