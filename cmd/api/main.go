@@ -18,6 +18,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
 	"github.com/n8n-io/sandbox-service/internal/grpctls"
+	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"google.golang.org/grpc"
 )
 
@@ -54,6 +55,20 @@ func main() {
 
 	reg := registry.New(cfg.HeartbeatGrace)
 
+	mrec := metrics.NewAPIRecorder(cfg.MetricsEnabled)
+	if mrec.Enabled() {
+		mrec.SetActiveSandboxes(func() float64 {
+			n, err := s.Count()
+			if err != nil {
+				slog.Warn("metrics: count sandboxes", "error", err)
+				return 0
+			}
+			return float64(n)
+		})
+		mrec.SetRunnersRegistered(func() float64 { return float64(reg.Len()) })
+		slog.Info("metrics endpoint enabled", "path", "/metrics")
+	}
+
 	api.LogIdleSweepConfig(cfg)
 
 	sweepCtx, sweepCancel := context.WithCancel(context.Background())
@@ -61,7 +76,7 @@ func main() {
 	api.StartIdleSweeper(sweepCtx, s, cfg)
 
 	// Create API gateway with state management
-	handler, err := api.NewGatewayRouter(s, cfg, reg)
+	handler, err := api.NewGatewayRouter(s, cfg, reg, mrec)
 	if err != nil {
 		slog.Error("failed to create api router", "error", err)
 		os.Exit(1)

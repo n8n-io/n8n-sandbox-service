@@ -50,6 +50,12 @@ type APIConfig struct {
 	// EnableCORS enables CORS headers (allow all origins). Default false.
 	EnableCORS bool
 
+	// MetricsEnabled controls whether the Prometheus /metrics endpoint is served.
+	// Parsed from SANDBOX_API_METRICS_ENABLED (default false). When true, /metrics
+	// is exposed on the public listener and bypasses X-Api-Key authentication;
+	// operators are expected to firewall the port or front it with a private LB.
+	MetricsEnabled bool
+
 	// Runner registration gRPC mTLS (required). All three must be set.
 	GRPCServerCertFile string
 	GRPCServerKeyFile  string
@@ -140,6 +146,14 @@ func LoadAPI() (*APIConfig, error) {
 
 	if v := os.Getenv("SANDBOX_API_DATA_DIR"); v != "" {
 		cfg.DataDir = v
+	}
+
+	if v := os.Getenv("SANDBOX_API_METRICS_ENABLED"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("SANDBOX_API_METRICS_ENABLED must be a boolean, got %q", v)
+		}
+		cfg.MetricsEnabled = b
 	}
 
 	if v := os.Getenv("SANDBOX_API_ENABLE_CORS"); v != "" {
