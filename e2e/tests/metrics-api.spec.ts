@@ -12,7 +12,7 @@ test.describe('API metrics endpoint', () => {
     expect(resp.status()).toBe(200);
 
     const body = await resp.text();
-    for (const want of [
+    const expected = [
       'sandbox_http_requests_total',
       'sandbox_http_request_duration_seconds',
       'sandbox_sandbox_operations_total',
@@ -21,8 +21,9 @@ test.describe('API metrics endpoint', () => {
       'go_goroutines',
       'process_start_time_seconds',
       'role="api"',
-    ]) {
-      expect(body, `missing ${want} in /metrics body`).toContain(want);
+    ];
+    for (const name of expected) {
+      expect(body).toContain(name);
     }
   });
 
@@ -36,27 +37,23 @@ test.describe('API metrics endpoint', () => {
     const id = await createSandbox();
     await deleteSandbox(id);
 
-    // Poll briefly — observation runs inside the handler's defer; the increment
-    // is committed by the time the response returns, but scrape gathering is
-    // independent so we allow a couple of retries for clock/cache jitter.
-    let after = before;
-    for (let i = 0; i < 5; i++) {
-      after = parseCounter(
-        await scrape(request),
-        'sandbox_sandbox_operations_total',
-        { role: 'api', operation: 'create', result: 'success' },
-      );
-      if (after > before) break;
-      await new Promise((r) => setTimeout(r, 200));
-    }
-    expect(after).toBeGreaterThan(before);
-
-    const deletes = parseCounter(
-      await scrape(request),
-      'sandbox_sandbox_operations_total',
-      { role: 'api', operation: 'delete', result: 'success' },
-    );
-    expect(deletes).toBeGreaterThan(0);
+    // The recorder's Inc() runs inside the handler's defer, which fires
+    // before the response is sent. By the time createSandbox/deleteSandbox
+    // resolve on the SDK, the counters have been incremented and the next
+    // scrape will reflect them.
+    const body = await scrape(request);
+    const createsAfter = parseCounter(body, 'sandbox_sandbox_operations_total', {
+      role: 'api',
+      operation: 'create',
+      result: 'success',
+    });
+    const deletesAfter = parseCounter(body, 'sandbox_sandbox_operations_total', {
+      role: 'api',
+      operation: 'delete',
+      result: 'success',
+    });
+    expect(createsAfter).toBeGreaterThan(before);
+    expect(deletesAfter).toBeGreaterThan(0);
   });
 });
 
