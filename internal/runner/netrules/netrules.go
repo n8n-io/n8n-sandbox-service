@@ -162,7 +162,7 @@ func run(name string, args ...string) error {
 
 func output(name string, args ...string) (string, error) {
 	if name == "iptables" {
-		args = append([]string{"-w", "5", "-W", "100000"}, args...)
+		args = append([]string{"-w", "5", "-W", "10000"}, args...)
 	}
 	cmd := exec.Command(name, args...)
 	var stdout bytes.Buffer
