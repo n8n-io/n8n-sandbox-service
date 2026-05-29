@@ -59,7 +59,7 @@ func NewRouter(mgr ContainerManager, cfg *config.Config) http.Handler {
 	proxy := ProxyHandler(mgr, cfg)
 	uploadProxy := UploadProxyHandler(mgr, cfg)
 
-	mux.HandleFunc("POST /sandboxes/{id}/executions", proxy)
+	mux.HandleFunc("POST /sandboxes/{id}/executions", ExecProxyHandler(mgr, cfg))
 	mux.HandleFunc("GET /sandboxes/{id}/executions/{exec_id}", proxy)
 	mux.HandleFunc("DELETE /sandboxes/{id}/executions/{exec_id}", proxy)
 	mux.HandleFunc("POST /sandboxes/{id}/files/copy", proxy)

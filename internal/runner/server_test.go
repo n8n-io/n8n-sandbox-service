@@ -14,6 +14,8 @@ import (
 type fakeContainerManager struct {
 	dockerErr  error
 	imageReady bool
+	daemonURL  string
+	daemonErr  error
 }
 
 func (f *fakeContainerManager) CreateContainer(context.Context, string, *manager.CreateOptions) (*manager.ContainerInfo, error) {
@@ -32,8 +34,11 @@ func (f *fakeContainerManager) EnsureSandboxRunning(context.Context, string) err
 	return nil
 }
 
-func (f *fakeContainerManager) DaemonURL(context.Context, string) (string, error) {
-	return "", nil
+func (f *fakeContainerManager) DaemonURL(_ context.Context, _ string) (string, error) {
+	if f.daemonErr != nil {
+		return "", f.daemonErr
+	}
+	return f.daemonURL, nil
 }
 
 func (f *fakeContainerManager) FindContainerIDByLabel(context.Context, string) (string, error) {

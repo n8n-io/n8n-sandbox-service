@@ -62,34 +62,8 @@ func proxyHandler(mgr ContainerManager, cfg *config.Config, limitBody bool) http
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		if !isValidID(id) {
-			writeError(w, http.StatusBadRequest, "invalid sandbox id")
-			return
-		}
-
-		daemonBaseURL, err := mgr.DaemonURL(r.Context(), id)
-		if err != nil && errors.Is(err, manager.ErrSandboxNotRunning) {
-			if wakeErr := mgr.EnsureSandboxRunning(r.Context(), id); wakeErr != nil {
-				if errors.Is(wakeErr, manager.ErrSandboxNotFound) {
-					writeError(w, http.StatusNotFound, wakeErr.Error())
-				} else {
-					writeError(w, http.StatusServiceUnavailable, "sandbox start: "+wakeErr.Error())
-				}
-				return
-			}
-			daemonBaseURL, err = mgr.DaemonURL(r.Context(), id)
-		}
-		if err != nil {
-			if errors.Is(err, manager.ErrSandboxNotFound) {
-				writeError(w, http.StatusNotFound, err.Error())
-			} else if errors.Is(err, manager.ErrSandboxNotRunning) {
-				writeError(w, http.StatusBadGateway, manager.ErrSandboxNotRunning.Error())
-			} else if errors.Is(err, manager.ErrSandboxNetworkUnavailable) {
-				writeError(w, http.StatusServiceUnavailable, "sandbox temporarily unavailable")
-			} else {
-				writeError(w, http.StatusInternalServerError, err.Error())
-			}
+		daemonBaseURL, ok := resolveDaemonURL(w, r, mgr)
+		if !ok {
 			return
 		}
 
@@ -103,6 +77,7 @@ func proxyHandler(mgr ContainerManager, cfg *config.Config, limitBody bool) http
 			r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxFileBytes)
 		}
 
+		id := r.PathValue("id")
 		// Strip /sandboxes/{id} prefix to get the daemon path.
 		prefix := "/sandboxes/" + id
 		daemonPath := strings.TrimPrefix(r.URL.Path, prefix)
@@ -116,4 +91,42 @@ func proxyHandler(mgr ContainerManager, cfg *config.Config, limitBody bool) http
 		})
 		proxy.ServeHTTP(w, r.WithContext(ctx))
 	}
+}
+
+// resolveDaemonURL validates the sandbox ID, looks up the daemon URL, and
+// wakes the sandbox if necessary. On error it writes an HTTP response and
+// returns ("", false).
+func resolveDaemonURL(w http.ResponseWriter, r *http.Request, mgr ContainerManager) (string, bool) {
+	id := r.PathValue("id")
+	if !isValidID(id) {
+		writeError(w, http.StatusBadRequest, "invalid sandbox id")
+		return "", false
+	}
+
+	daemonBaseURL, err := mgr.DaemonURL(r.Context(), id)
+	if err != nil && errors.Is(err, manager.ErrSandboxNotRunning) {
+		if wakeErr := mgr.EnsureSandboxRunning(r.Context(), id); wakeErr != nil {
+			if errors.Is(wakeErr, manager.ErrSandboxNotFound) {
+				writeError(w, http.StatusNotFound, wakeErr.Error())
+			} else {
+				writeError(w, http.StatusServiceUnavailable, "sandbox start: "+wakeErr.Error())
+			}
+			return "", false
+		}
+		daemonBaseURL, err = mgr.DaemonURL(r.Context(), id)
+	}
+	if err != nil {
+		if errors.Is(err, manager.ErrSandboxNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+		} else if errors.Is(err, manager.ErrSandboxNotRunning) {
+			writeError(w, http.StatusBadGateway, manager.ErrSandboxNotRunning.Error())
+		} else if errors.Is(err, manager.ErrSandboxNetworkUnavailable) {
+			writeError(w, http.StatusServiceUnavailable, "sandbox temporarily unavailable")
+		} else {
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return "", false
+	}
+
+	return daemonBaseURL, true
 }
