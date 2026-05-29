@@ -16,6 +16,10 @@ import (
 	"time"
 )
 
+const (
+	maxJSONBodyBytes = 1 << 20
+)
+
 var defaultExecTimeout = 5 * time.Minute
 
 type execRequest struct {
@@ -360,8 +364,7 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 }
 
 func decodeJSONBody(body io.Reader, dst any) error {
-	// The runner enforces request body size limits before proxying to the daemon.
-	dec := json.NewDecoder(body)
+	dec := json.NewDecoder(io.LimitReader(body, maxJSONBodyBytes))
 	if err := dec.Decode(dst); err != nil {
 		return err
 	}

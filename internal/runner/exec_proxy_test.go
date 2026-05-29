@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -40,6 +41,138 @@ func parseNDJSON(body []byte) []ndjsonEvent {
 		}
 	}
 	return events
+}
+
+type errorWriter struct {
+	err error
+}
+
+func (w errorWriter) Write([]byte) (int, error) {
+	return 0, w.err
+}
+
+func TestExecEventPrefix(t *testing.T) {
+	t.Parallel()
+
+	seq, typ, err := execEventPrefix([]byte(stdoutEvent(12, "hello\n") + "\n"))
+	if err != nil {
+		t.Fatalf("expected valid prefix, got error: %v", err)
+	}
+	if seq != 12 {
+		t.Fatalf("expected seq 12, got %d", seq)
+	}
+	if typ != "stdout" {
+		t.Fatalf("expected stdout type, got %s", typ)
+	}
+}
+
+func TestExecEventPrefixErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		line    string
+		wantErr string
+	}{
+		{
+			name:    "missing seq prefix",
+			line:    `{"type":"stdout"}` + "\n",
+			wantErr: "missing",
+		},
+		{
+			name:    "invalid seq",
+			line:    `{"seq":nope,"type":"stdout"}` + "\n",
+			wantErr: "parse seq",
+		},
+		{
+			name:    "missing type prefix",
+			line:    `{"seq":1,"data":"hello"}` + "\n",
+			wantErr: "missing",
+		},
+		{
+			name:    "unterminated type",
+			line:    `{"seq":1,"type":"stdout` + "\n",
+			wantErr: "unterminated type",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, _, err := execEventPrefix([]byte(tt.line))
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestStreamNDJSONReturnsReadError(t *testing.T) {
+	t.Parallel()
+
+	var lastSeq *uint64
+	var dst bytes.Buffer
+	completed, err := streamNDJSON(strings.NewReader(startedEvent("exec-no-newline")), &dst, func() {}, &lastSeq)
+
+	if completed {
+		t.Fatal("expected stream not to complete")
+	}
+	if !errors.Is(err, errExecStreamRead) {
+		t.Fatalf("expected read error, got %v", err)
+	}
+	if lastSeq != nil {
+		t.Fatalf("expected lastSeq to remain nil, got %d", *lastSeq)
+	}
+	if dst.Len() != 0 {
+		t.Fatalf("expected no partial event to be written, got %q", dst.String())
+	}
+}
+
+func TestStreamNDJSONReturnsWriteError(t *testing.T) {
+	t.Parallel()
+
+	writeErr := errors.New("write failed")
+	var lastSeq *uint64
+	completed, err := streamNDJSON(strings.NewReader(startedEvent("exec-write")+"\n"), errorWriter{err: writeErr}, func() {}, &lastSeq)
+
+	if completed {
+		t.Fatal("expected stream not to complete")
+	}
+	if !errors.Is(err, errExecStreamWrite) {
+		t.Fatalf("expected stream write error, got %v", err)
+	}
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("expected original write error, got %v", err)
+	}
+	if lastSeq == nil || *lastSeq != 0 {
+		t.Fatalf("expected lastSeq 0, got %v", lastSeq)
+	}
+}
+
+func TestStreamNDJSONReturnsPrefixError(t *testing.T) {
+	t.Parallel()
+
+	var lastSeq *uint64
+	var dst bytes.Buffer
+	completed, err := streamNDJSON(strings.NewReader(`{"type":"stdout"}`+"\n"), &dst, func() {}, &lastSeq)
+
+	if completed {
+		t.Fatal("expected stream not to complete")
+	}
+	if !errors.Is(err, errExecEventPrefix) {
+		t.Fatalf("expected event prefix error, got %v", err)
+	}
+	if lastSeq != nil {
+		t.Fatalf("expected lastSeq to remain nil, got %d", *lastSeq)
+	}
+	if dst.Len() != 0 {
+		t.Fatalf("expected malformed event not to be written, got %q", dst.String())
+	}
 }
 
 func TestExecProxyHappyPath(t *testing.T) {

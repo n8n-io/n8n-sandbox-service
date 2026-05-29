@@ -23,6 +23,12 @@ const (
 	execRetryBaseBackoff = 50 * time.Millisecond
 )
 
+var (
+	errExecStreamRead  = errors.New("exec stream read failed")
+	errExecStreamWrite = errors.New("exec stream write failed")
+	errExecEventPrefix = errors.New("exec event prefix parse failed")
+)
+
 type execRequestBody struct {
 	Command   string            `json:"command"`
 	Env       map[string]string `json:"env,omitempty"`
@@ -43,7 +49,8 @@ func isTerminalEvent(typ string) bool {
 // ExecProxyHandler returns a handler that proxies POST /sandboxes/{id}/executions
 // to the sandbox daemon with automatic mid-stream retry. If the daemon connection
 // drops before a terminal event, the handler resumes via the daemon's
-// GET /executions/{exec_id}?follow=true&after=<seq> endpoint.
+// GET /executions/{exec_id}?follow=true&after=<seq> endpoint. We have seen
+// connection drops in load tests, and this retrying here mitigates it.
 func ExecProxyHandler(mgr ContainerManager, cfg *config.Config) http.HandlerFunc {
 	client := &http.Client{}
 
@@ -53,20 +60,8 @@ func ExecProxyHandler(mgr ContainerManager, cfg *config.Config) http.HandlerFunc
 			return
 		}
 
-		rawBody, err := io.ReadAll(http.MaxBytesReader(w, r.Body, execMaxJSONBodyBytes))
-		if err != nil {
-			var maxBytesErr *http.MaxBytesError
-			if errors.As(err, &maxBytesErr) {
-				writeError(w, http.StatusBadRequest, "failed to read request body: "+maxBytesErr.Error())
-			} else {
-				writeError(w, http.StatusBadRequest, "failed to read request body")
-			}
-			return
-		}
-
-		var body execRequestBody
-		if err := json.Unmarshal(rawBody, &body); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		body, ok := readAndParseRequestBody(w, r)
+		if !ok {
 			return
 		}
 
@@ -118,11 +113,14 @@ func ExecProxyHandler(mgr ContainerManager, cfg *config.Config) http.HandlerFunc
 		flush()
 
 		var lastSeq *uint64
-		completed := streamNDJSON(upResp.Body, w, flush, &lastSeq)
+		completed, streamErr := streamNDJSON(upResp.Body, w, flush, &lastSeq)
 		if completed {
 			return
 		}
 		upResp.Body.Close()
+		if !shouldRetryStreamError(r, execID, 0, streamErr, lastSeq) {
+			return
+		}
 
 		for attempt := range execMaxRetries {
 			backoff := execRetryBaseBackoff << attempt
@@ -154,71 +152,117 @@ func ExecProxyHandler(mgr ContainerManager, cfg *config.Config) http.HandlerFunc
 				continue
 			}
 
-			completed = streamNDJSON(resumeResp.Body, w, flush, &lastSeq)
+			completed, streamErr = streamNDJSON(resumeResp.Body, w, flush, &lastSeq)
 			resumeResp.Body.Close()
 			if completed {
 				return
 			}
+			if !shouldRetryStreamError(r, execID, attempt+1, streamErr, lastSeq) {
+				return
+			}
 		}
 
-		slog.Error("exec proxy: retries exhausted", "exec_id", execID, "last_seq", lastSeq)
+		slog.Error("exec proxy: retries exhausted", "exec_id", execID, "last_seq", lastSeqValue(lastSeq), "err", streamErr)
 	}
+}
+
+func readAndParseRequestBody(w http.ResponseWriter, r *http.Request) (execRequestBody, bool) {
+	rawBody, err := io.ReadAll(http.MaxBytesReader(w, r.Body, execMaxJSONBodyBytes))
+	if err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			writeError(w, http.StatusBadRequest, "failed to read request body: "+maxBytesErr.Error())
+		} else {
+			writeError(w, http.StatusBadRequest, "failed to read request body")
+		}
+		return execRequestBody{}, false
+	}
+
+	var body execRequestBody
+	if err := json.Unmarshal(rawBody, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return execRequestBody{}, false
+	}
+	return body, true
+}
+
+func shouldRetryStreamError(r *http.Request, execID string, attempt int, err error, lastSeq *uint64) bool {
+	if err == nil || r.Context().Err() != nil {
+		return false
+	}
+	if !errors.Is(err, errExecStreamRead) {
+		slog.Warn("exec proxy: stream failed without retry", "exec_id", execID, "attempt", attempt, "last_seq", lastSeqValue(lastSeq), "err", err)
+		return false
+	}
+
+	slog.Warn("exec proxy: daemon stream interrupted; retrying", "exec_id", execID, "attempt", attempt, "last_seq", lastSeqValue(lastSeq), "err", err)
+	return true
+}
+
+func lastSeqValue(seq *uint64) any {
+	if seq == nil {
+		return nil
+	}
+	return *seq
 }
 
 // streamNDJSON reads NDJSON lines from src and writes them to dst, flushing
 // after each line. It updates lastSeq with the highest sequence number seen
 // and returns true if a terminal event (exit or error) was forwarded.
-func streamNDJSON(src io.Reader, dst io.Writer, flush func(), lastSeq **uint64) bool {
+func streamNDJSON(src io.Reader, dst io.Writer, flush func(), lastSeq **uint64) (bool, error) {
 	reader := bufio.NewReader(src)
 	for {
 		line, err := reader.ReadBytes('\n')
 		if err != nil {
-			return false
+			return false, fmt.Errorf("%w: %w", errExecStreamRead, err)
 		}
 
-		seq, typ, ok := execEventPrefix(line)
-		if ok {
-			*lastSeq = &seq
+		seq, typ, err := execEventPrefix(line)
+		if err != nil {
+			return false, fmt.Errorf("%w: %w", errExecEventPrefix, err)
 		}
+		*lastSeq = &seq
 
-		dst.Write(line)
+		if _, err := dst.Write(line); err != nil {
+			return false, fmt.Errorf("%w: %w", errExecStreamWrite, err)
+		}
 		flush()
 
 		if isTerminalEvent(typ) {
-			return true
+			return true, nil
 		}
 	}
 }
 
-func execEventPrefix(line []byte) (uint64, string, bool) {
+func execEventPrefix(line []byte) (uint64, string, error) {
 	// The daemon marshals exec events with seq and type first, so the proxy can
 	// track resume state without JSON-decoding every streamed event.
 	const seqPrefix = `{"seq":`
 	if !bytes.HasPrefix(line, []byte(seqPrefix)) {
-		return 0, "", false
+		return 0, "", fmt.Errorf("missing %q prefix", seqPrefix)
 	}
 
 	rest := line[len(seqPrefix):]
 	comma := bytes.IndexByte(rest, ',')
 	if comma <= 0 {
-		return 0, "", false
+		return 0, "", errors.New("missing seq terminator")
 	}
 
 	seq, err := strconv.ParseUint(string(rest[:comma]), 10, 64)
 	if err != nil {
-		return 0, "", false
+		return 0, "", fmt.Errorf("parse seq: %w", err)
 	}
 
 	const typePrefix = `,"type":"`
 	rest = rest[comma:]
 	if !bytes.HasPrefix(rest, []byte(typePrefix)) {
-		return seq, "", true
+		return seq, "", fmt.Errorf("missing %q after seq", typePrefix)
 	}
 
 	rest = rest[len(typePrefix):]
 	end := bytes.IndexByte(rest, '"')
 	if end < 0 {
-		return seq, "", true
+		return seq, "", errors.New("unterminated type field")
 	}
-	return seq, string(rest[:end]), true
+	return seq, string(rest[:end]), nil
 }
