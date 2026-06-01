@@ -9,7 +9,8 @@ import (
 // LoggingMiddleware logs HTTP requests.
 func LoggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/healthz" || r.URL.Path == "/livez" || r.URL.Path == "/readyz" {
+		switch r.URL.Path {
+		case "/healthz", "/livez", "/readyz", "/metrics":
 			next.ServeHTTP(w, r)
 			return
 		}
