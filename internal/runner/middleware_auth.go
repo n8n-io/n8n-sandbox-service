@@ -3,11 +3,13 @@ package runner
 import "net/http"
 
 // AuthMiddleware checks for valid API keys.
-// Health endpoints are always allowed through.
+// Health endpoints are always allowed through; /metrics is also unauthenticated
+// when it's mounted (operators are expected to firewall the port).
 func AuthMiddleware(apiKeys map[string]struct{}) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/healthz" || r.URL.Path == "/livez" || r.URL.Path == "/readyz" {
+			switch r.URL.Path {
+			case "/healthz", "/livez", "/readyz", "/metrics":
 				next.ServeHTTP(w, r)
 				return
 			}
