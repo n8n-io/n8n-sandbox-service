@@ -34,10 +34,10 @@ func main() {
 	}
 	logLevel.Set(cfg.LogLevel)
 
-	// Create stateless container manager.
-	mgr, err := manager.New(cfg)
+	// Create stateless sandbox runtime.
+	rt, err := manager.New(cfg)
 	if err != nil {
-		slog.Error("create manager", "error", err)
+		slog.Error("create runtime", "error", err)
 		os.Exit(1)
 	}
 
@@ -46,18 +46,18 @@ func main() {
 		mrec.SetActiveContainers(func() float64 {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			n, err := mgr.ManagedContainerCount(ctx)
+			capacity, err := rt.Capacity(ctx)
 			if err != nil {
-				slog.Warn("metrics: count managed containers", "error", err)
+				slog.Warn("metrics: read runtime capacity", "error", err)
 				return 0
 			}
-			return float64(n)
+			return float64(capacity.Used)
 		})
 		slog.Info("metrics endpoint enabled", "path", "/metrics")
 	}
 
 	// Build HTTP handler.
-	handler := runner.NewRouter(mgr, cfg, mrec)
+	handler := runner.NewRouter(rt, cfg, mrec)
 
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
@@ -71,7 +71,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	go register.Run(ctx, cfg, mgr)
+	go register.Run(ctx, cfg, rt)
 
 	lis, err := net.Listen("tcp", cfg.ControlGRPCListenAddr)
 	if err != nil {
@@ -89,7 +89,7 @@ func main() {
 	}
 	slog.Info("sandbox control grpc mTLS enabled", "addr", cfg.ControlGRPCListenAddr)
 	controlGRPC := grpc.NewServer(grpc.Creds(creds))
-	pb.RegisterSandboxControlServer(controlGRPC, &runner.SandboxControlGRPC{Mgr: mgr, Cfg: cfg, Rec: mrec})
+	pb.RegisterSandboxControlServer(controlGRPC, &runner.SandboxControlGRPC{Runtime: rt, Cfg: cfg, Rec: mrec})
 	go func() {
 		if err := controlGRPC.Serve(lis); err != nil {
 			slog.Error("control grpc serve", "error", err)
@@ -105,7 +105,7 @@ func main() {
 		}
 	}()
 
-	go mgr.EnsureSandboxImage(ctx)
+	go rt.Prepare(ctx)
 
 	select {
 	case <-ctx.Done():
@@ -135,8 +135,8 @@ func main() {
 		controlGRPC.Stop()
 	}
 
-	// 2. Clean up containers
-	mgr.Shutdown()
+	// 2. Clean up sandboxes
+	rt.Shutdown(shutdownCtx)
 
 	slog.Info("server stopped")
 }
