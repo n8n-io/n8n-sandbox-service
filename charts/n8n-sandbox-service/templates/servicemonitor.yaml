@@ -1,0 +1,57 @@
+{{- if and .Values.monitoring.serviceMonitor.enabled .Values.monitoring.serviceMonitor.api.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "n8n-sandbox-service.apiName" . }}
+  labels:
+    {{- include "n8n-sandbox-service.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+    {{- with .Values.monitoring.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.monitoring.serviceMonitor.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "n8n-sandbox-service.selectorLabels" (dict "Release" .Release "Chart" .Chart "Values" .Values "component" "api") | nindent 6 }}
+  endpoints:
+    - port: http
+      path: {{ .Values.monitoring.serviceMonitor.path | quote }}
+      scheme: {{ .Values.monitoring.serviceMonitor.scheme | quote }}
+      interval: {{ .Values.monitoring.serviceMonitor.interval | quote }}
+      {{- if .Values.monitoring.serviceMonitor.scrapeTimeout }}
+      scrapeTimeout: {{ .Values.monitoring.serviceMonitor.scrapeTimeout | quote }}
+      {{- end }}
+{{- end }}
+{{- if and .Values.monitoring.serviceMonitor.enabled .Values.monitoring.serviceMonitor.sysboxRunner.enabled .Values.sysboxRunner.enabled (eq .Values.dataPlane.mode "sysbox") }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "n8n-sandbox-service.sysboxRunnerName" . }}
+  labels:
+    {{- include "n8n-sandbox-service.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sysbox-runner
+    {{- with .Values.monitoring.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.monitoring.serviceMonitor.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "n8n-sandbox-service.selectorLabels" (dict "Release" .Release "Chart" .Chart "Values" .Values "component" "sysbox-runner") | nindent 6 }}
+  endpoints:
+    - port: http
+      path: {{ .Values.monitoring.serviceMonitor.path | quote }}
+      scheme: {{ .Values.monitoring.serviceMonitor.scheme | quote }}
+      interval: {{ .Values.monitoring.serviceMonitor.interval | quote }}
+      {{- if .Values.monitoring.serviceMonitor.scrapeTimeout }}
+      scrapeTimeout: {{ .Values.monitoring.serviceMonitor.scrapeTimeout | quote }}
+      {{- end }}
+{{- end }}
