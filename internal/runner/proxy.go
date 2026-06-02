@@ -12,7 +12,7 @@ import (
 
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
-	"github.com/n8n-io/sandbox-service/internal/runner/manager"
+	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 )
 
 type proxyContextKey struct{}
@@ -23,16 +23,16 @@ type proxyTarget struct {
 }
 
 // ProxyHandler returns a handler that reverse-proxies requests to the sandbox daemon.
-func ProxyHandler(mgr ContainerManager, cfg *config.Config, rec *metrics.RunnerRecorder) http.HandlerFunc {
-	return proxyHandler(mgr, cfg, rec, false)
+func ProxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder) http.HandlerFunc {
+	return proxyHandler(rt, cfg, rec, false)
 }
 
 // UploadProxyHandler is like ProxyHandler but enforces cfg.MaxFileBytes on the request body.
-func UploadProxyHandler(mgr ContainerManager, cfg *config.Config, rec *metrics.RunnerRecorder) http.HandlerFunc {
-	return proxyHandler(mgr, cfg, rec, true)
+func UploadProxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder) http.HandlerFunc {
+	return proxyHandler(rt, cfg, rec, true)
 }
 
-func proxyHandler(mgr ContainerManager, cfg *config.Config, rec *metrics.RunnerRecorder, limitBody bool) http.HandlerFunc {
+func proxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder, limitBody bool) http.HandlerFunc {
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			// Comma-ok assertion: the context key is missing when
@@ -70,27 +70,27 @@ func proxyHandler(mgr ContainerManager, cfg *config.Config, rec *metrics.RunnerR
 			return
 		}
 
-		daemonBaseURL, err := mgr.DaemonURL(r.Context(), id)
-		if err != nil && errors.Is(err, manager.ErrSandboxNotRunning) {
+		daemonBaseURL, err := rt.DaemonURL(r.Context(), id)
+		if err != nil && errors.Is(err, runnerruntime.ErrSandboxNotRunning) {
 			wakeStart := time.Now()
-			wakeErr := mgr.EnsureSandboxRunning(r.Context(), id)
+			wakeErr := rt.EnsureSandboxRunning(r.Context(), id)
 			rec.ObserveContainerOp(metrics.OpEnsureRunning, wakeErr == nil, time.Since(wakeStart))
 			if wakeErr != nil {
-				if errors.Is(wakeErr, manager.ErrSandboxNotFound) {
+				if errors.Is(wakeErr, runnerruntime.ErrSandboxNotFound) {
 					writeError(w, http.StatusNotFound, wakeErr.Error())
 				} else {
 					writeError(w, http.StatusServiceUnavailable, "sandbox start: "+wakeErr.Error())
 				}
 				return
 			}
-			daemonBaseURL, err = mgr.DaemonURL(r.Context(), id)
+			daemonBaseURL, err = rt.DaemonURL(r.Context(), id)
 		}
 		if err != nil {
-			if errors.Is(err, manager.ErrSandboxNotFound) {
+			if errors.Is(err, runnerruntime.ErrSandboxNotFound) {
 				writeError(w, http.StatusNotFound, err.Error())
-			} else if errors.Is(err, manager.ErrSandboxNotRunning) {
-				writeError(w, http.StatusBadGateway, manager.ErrSandboxNotRunning.Error())
-			} else if errors.Is(err, manager.ErrSandboxNetworkUnavailable) {
+			} else if errors.Is(err, runnerruntime.ErrSandboxNotRunning) {
+				writeError(w, http.StatusBadGateway, runnerruntime.ErrSandboxNotRunning.Error())
+			} else if errors.Is(err, runnerruntime.ErrSandboxNetworkUnavailable) {
 				writeError(w, http.StatusServiceUnavailable, "sandbox temporarily unavailable")
 			} else {
 				writeError(w, http.StatusInternalServerError, err.Error())
