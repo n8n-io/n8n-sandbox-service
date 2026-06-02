@@ -8,7 +8,9 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"time"
 
+	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 	"github.com/n8n-io/sandbox-service/internal/runner/manager"
 )
@@ -21,16 +23,16 @@ type proxyTarget struct {
 }
 
 // ProxyHandler returns a handler that reverse-proxies requests to the sandbox daemon.
-func ProxyHandler(mgr ContainerManager, cfg *config.Config) http.HandlerFunc {
-	return proxyHandler(mgr, cfg, false)
+func ProxyHandler(mgr ContainerManager, cfg *config.Config, rec *metrics.RunnerRecorder) http.HandlerFunc {
+	return proxyHandler(mgr, cfg, rec, false)
 }
 
 // UploadProxyHandler is like ProxyHandler but enforces cfg.MaxFileBytes on the request body.
-func UploadProxyHandler(mgr ContainerManager, cfg *config.Config) http.HandlerFunc {
-	return proxyHandler(mgr, cfg, true)
+func UploadProxyHandler(mgr ContainerManager, cfg *config.Config, rec *metrics.RunnerRecorder) http.HandlerFunc {
+	return proxyHandler(mgr, cfg, rec, true)
 }
 
-func proxyHandler(mgr ContainerManager, cfg *config.Config, limitBody bool) http.HandlerFunc {
+func proxyHandler(mgr ContainerManager, cfg *config.Config, rec *metrics.RunnerRecorder, limitBody bool) http.HandlerFunc {
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			// Comma-ok assertion: the context key is missing when
@@ -62,7 +64,7 @@ func proxyHandler(mgr ContainerManager, cfg *config.Config, limitBody bool) http
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		daemonBaseURL, ok := resolveDaemonURL(w, r, mgr)
+		daemonBaseURL, ok := resolveDaemonURL(w, r, mgr, rec)
 		if !ok {
 			return
 		}
@@ -96,7 +98,7 @@ func proxyHandler(mgr ContainerManager, cfg *config.Config, limitBody bool) http
 // resolveDaemonURL validates the sandbox ID, looks up the daemon URL, and
 // wakes the sandbox if necessary. On error it writes an HTTP response and
 // returns ("", false).
-func resolveDaemonURL(w http.ResponseWriter, r *http.Request, mgr ContainerManager) (string, bool) {
+func resolveDaemonURL(w http.ResponseWriter, r *http.Request, mgr ContainerManager, rec *metrics.RunnerRecorder) (string, bool) {
 	id := r.PathValue("id")
 	if !isValidID(id) {
 		writeError(w, http.StatusBadRequest, "invalid sandbox id")
@@ -105,7 +107,12 @@ func resolveDaemonURL(w http.ResponseWriter, r *http.Request, mgr ContainerManag
 
 	daemonBaseURL, err := mgr.DaemonURL(r.Context(), id)
 	if err != nil && errors.Is(err, manager.ErrSandboxNotRunning) {
-		if wakeErr := mgr.EnsureSandboxRunning(r.Context(), id); wakeErr != nil {
+		wakeStart := time.Now()
+		wakeErr := mgr.EnsureSandboxRunning(r.Context(), id)
+		if rec != nil {
+			rec.ObserveContainerOp(metrics.OpEnsureRunning, wakeErr == nil, time.Since(wakeStart))
+		}
+		if wakeErr != nil {
 			if errors.Is(wakeErr, manager.ErrSandboxNotFound) {
 				writeError(w, http.StatusNotFound, wakeErr.Error())
 			} else {

@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 )
 
@@ -194,6 +195,7 @@ func TestExecProxyHappyPath(t *testing.T) {
 	handler := ExecProxyHandler(
 		&fakeContainerManager{daemonURL: daemon.URL},
 		&config.Config{},
+		metrics.NewRunnerRecorder(false),
 	)
 
 	body := fmt.Sprintf(`{"command":"echo hello","exec_id":"%s"}`, execID)
@@ -239,6 +241,7 @@ func TestExecProxyRejectsOversizedBody(t *testing.T) {
 	handler := ExecProxyHandler(
 		&fakeContainerManager{daemonURL: daemon.URL},
 		&config.Config{},
+		metrics.NewRunnerRecorder(false),
 	)
 
 	body := `{"command":"` + strings.Repeat("x", execMaxJSONBodyBytes) + `"}`
@@ -279,6 +282,7 @@ func TestExecProxyStreamsLargeEvent(t *testing.T) {
 	handler := ExecProxyHandler(
 		&fakeContainerManager{daemonURL: daemon.URL},
 		&config.Config{},
+		metrics.NewRunnerRecorder(false),
 	)
 
 	body := fmt.Sprintf(`{"command":"echo hello","exec_id":"%s"}`, execID)
@@ -343,6 +347,7 @@ func TestExecProxyOneRetry(t *testing.T) {
 	handler := ExecProxyHandler(
 		&fakeContainerManager{daemonURL: daemon.URL},
 		&config.Config{},
+		metrics.NewRunnerRecorder(false),
 	)
 
 	body := fmt.Sprintf(`{"command":"echo hello","exec_id":"%s"}`, execID)
@@ -420,6 +425,7 @@ func TestExecProxyResumeWithoutAfterBeforeFirstEvent(t *testing.T) {
 	handler := ExecProxyHandler(
 		&fakeContainerManager{daemonURL: daemon.URL},
 		&config.Config{},
+		metrics.NewRunnerRecorder(false),
 	)
 
 	body := fmt.Sprintf(`{"command":"echo hello","exec_id":"%s"}`, execID)
@@ -490,6 +496,7 @@ func TestExecProxyRetriesExhausted(t *testing.T) {
 	handler := ExecProxyHandler(
 		&fakeContainerManager{daemonURL: daemon.URL},
 		&config.Config{},
+		metrics.NewRunnerRecorder(false),
 	)
 
 	body := fmt.Sprintf(`{"command":"echo hello","exec_id":"%s"}`, execID)
@@ -538,6 +545,7 @@ func TestExecProxyExecIDPropagation(t *testing.T) {
 		handler := ExecProxyHandler(
 			&fakeContainerManager{daemonURL: daemon.URL},
 			&config.Config{},
+			metrics.NewRunnerRecorder(false),
 		)
 
 		req := httptest.NewRequest(http.MethodPost, "/sandboxes/550e8400-e29b-41d4-a716-446655440000/executions", strings.NewReader(`{"command":"echo hi"}`))
@@ -577,6 +585,7 @@ func TestExecProxyExecIDPropagation(t *testing.T) {
 		handler := ExecProxyHandler(
 			&fakeContainerManager{daemonURL: daemon.URL},
 			&config.Config{},
+			metrics.NewRunnerRecorder(false),
 		)
 
 		body := fmt.Sprintf(`{"command":"echo hi","exec_id":"%s"}`, explicitID)
@@ -629,6 +638,7 @@ func TestExecProxyAlreadyCompletedOnResume(t *testing.T) {
 	handler := ExecProxyHandler(
 		&fakeContainerManager{daemonURL: daemon.URL},
 		&config.Config{},
+		metrics.NewRunnerRecorder(false),
 	)
 
 	body := fmt.Sprintf(`{"command":"echo hello","exec_id":"%s"}`, execID)

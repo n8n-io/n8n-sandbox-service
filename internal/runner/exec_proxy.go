@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 )
 
@@ -51,11 +52,11 @@ func isTerminalEvent(typ string) bool {
 // drops before a terminal event, the handler resumes via the daemon's
 // GET /executions/{exec_id}?follow=true&after=<seq> endpoint. We have seen
 // connection drops in load tests, and this retrying here mitigates it.
-func ExecProxyHandler(mgr ContainerManager, cfg *config.Config) http.HandlerFunc {
+func ExecProxyHandler(mgr ContainerManager, cfg *config.Config, rec *metrics.RunnerRecorder) http.HandlerFunc {
 	client := &http.Client{}
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		daemonBaseURL, ok := resolveDaemonURL(w, r, mgr)
+		daemonBaseURL, ok := resolveDaemonURL(w, r, mgr, rec)
 		if !ok {
 			return
 		}
