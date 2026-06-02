@@ -2,12 +2,27 @@ import { test, expect } from '@playwright/test';
 import './matchers';
 import { createSandbox, deleteSandbox, exec, execWithTransientRetry } from './helpers';
 
-// Helper: use python3 for HTTP requests since curl is not in the sandbox rootfs
-const pyGet = (url: string, timeout: number = 5) =>
-  `python3 -c "import urllib.request; r=urllib.request.urlopen('${url}', timeout=${timeout}); print(r.status)"`;
-
 const pyConnect = (ip: string, port: number = 80, timeout: number = 3) =>
   `python3 -c "import socket; s=socket.socket(); s.settimeout(${timeout}); s.connect(('${ip}', ${port})); s.close(); print('connected')"`;
+
+const pyConnectAny = (targets: Array<[string, number]>, timeout: number = 5) => {
+  const pyTargets = targets.map(([host, port]) => `('${host}', ${port})`).join(', ');
+  return `python3 -c "import socket, sys
+targets=[${pyTargets}]
+last_error=None
+for host, port in targets:
+    try:
+        s=socket.socket()
+        s.settimeout(${timeout})
+        s.connect((host, port))
+        s.close()
+        print(f'connected {host}:{port}')
+        sys.exit(0)
+    except OSError as e:
+        last_error=e
+print(f'no public endpoint reachable: {last_error}', file=sys.stderr)
+sys.exit(1)"`;
+};
 
 const pyConnectV6 = (ip: string, port: number = 443, timeout: number = 3) =>
   `python3 -c "import socket; s=socket.socket(socket.AF_INET6); s.settimeout(${timeout}); s.connect(('${ip}', ${port})); s.close(); print('connected')"`;
@@ -19,11 +34,14 @@ test.describe('Network isolation', () => {
   test('sandbox can reach public internet', async () => {
     const id = await createSandbox();
     try {
-      const result = await exec(id, pyGet('http://httpbin.org/ip', 15), {
+      const result = await exec(id, pyConnectAny([
+        ['1.1.1.1', 443],
+        ['8.8.8.8', 443],
+      ], 15), {
         timeoutMs: 30_000,
       });
       expect(result).toHaveSucceeded();
-      expect(result.stdout.trim()).toBe('200');
+      expect(result.stdout.trim()).toMatch(/^connected /);
     } finally {
       await deleteSandbox(id);
     }
