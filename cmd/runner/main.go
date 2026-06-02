@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -17,9 +18,22 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/runner"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
-	"github.com/n8n-io/sandbox-service/internal/runner/manager"
 	"github.com/n8n-io/sandbox-service/internal/runner/register"
+	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
+	dockerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime/docker"
+	firecrackerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime/firecracker"
 )
+
+func newRuntime(cfg *config.Config) (runnerruntime.Runtime, error) {
+	switch cfg.Backend {
+	case config.BackendDocker:
+		return dockerruntime.New(cfg)
+	case config.BackendFirecracker:
+		return firecrackerruntime.New(cfg), nil
+	default:
+		return nil, fmt.Errorf("unsupported runner backend %q", cfg.Backend)
+	}
+}
 
 func main() {
 	var logLevel slog.LevelVar
@@ -35,11 +49,12 @@ func main() {
 	logLevel.Set(cfg.LogLevel)
 
 	// Create stateless sandbox runtime.
-	rt, err := manager.New(cfg)
+	rt, err := newRuntime(cfg)
 	if err != nil {
 		slog.Error("create runtime", "error", err)
 		os.Exit(1)
 	}
+	slog.Info("runner runtime selected", "backend", cfg.Backend)
 
 	mrec := metrics.NewRunnerRecorder(cfg.MetricsEnabled)
 	if mrec.Enabled() {

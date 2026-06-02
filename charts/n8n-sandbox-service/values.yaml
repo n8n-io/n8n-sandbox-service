@@ -176,6 +176,7 @@ sysboxRunner:
     affinity: {}
 
   config:
+    backend: docker
     listenAddr: ":8080"
     controlGrpcListenAddr: ":9091"
     dockerHost: unix:///var/run/docker.sock

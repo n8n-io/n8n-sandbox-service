@@ -26,6 +26,7 @@ metadata:
     {{- include "n8n-sandbox-service.labels" . | nindent 4 }}
     app.kubernetes.io/component: sysbox-runner
 data:
+  SANDBOX_RUNNER_BACKEND: {{ .Values.sysboxRunner.config.backend | quote }}
   SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE: {{ include "n8n-sandbox-service.sandboxImage" . | quote }}
   SANDBOX_RUNNER_DOCKER_HOST: {{ .Values.sysboxRunner.config.dockerHost | quote }}
   SANDBOX_RUNNER_LISTEN_ADDR: {{ .Values.sysboxRunner.config.listenAddr | quote }}

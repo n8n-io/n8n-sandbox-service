@@ -1,4 +1,4 @@
-package manager
+package docker
 
 // ResourceLimits holds the Docker resource limits for a sandbox.
 type ResourceLimits struct {
