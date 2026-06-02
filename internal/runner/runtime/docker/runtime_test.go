@@ -1,4 +1,4 @@
-package manager
+package docker
 
 import (
 	"context"
@@ -137,9 +137,11 @@ func TestDefaultLimitsAppliesDiskQuotaOnlyWhenActive(t *testing.T) {
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			m := &Manager{config: &config.Config{
-				DiskQuotaActive:    tc.active,
-				DefaultDiskQuotaMB: 1024,
+			m := &Runtime{config: &config.Config{
+				Docker: config.DockerConfig{
+					DiskQuotaActive:    tc.active,
+					DefaultDiskQuotaMB: 1024,
+				},
 			}}
 			if got := m.defaultLimits().DiskMB; got != tc.want {
 				t.Errorf("defaultLimits().DiskMB = %d, want %d", got, tc.want)
@@ -233,7 +235,7 @@ func TestEnsureSandboxRunningCleansUpStartedContainerOnWakeFailures(t *testing.T
 		t.Run(tc.name, func(t *testing.T) {
 			events := []string{}
 			const containerID = "container-1"
-			m := newManager(&config.Config{}, &fakeDockerBackend{
+			m := newRuntime(&config.Config{}, &fakeDockerBackend{
 				events:         &events,
 				containerID:    containerID,
 				ip:             tc.containerIP,
@@ -275,7 +277,7 @@ func TestEnsureSandboxRunningCleansUpStartedContainerOnWakeFailures(t *testing.T
 func TestEnsureSandboxRunningFailedWakeAfterNetworkDetachStopsContainerAndRemovesRules(t *testing.T) {
 	events := []string{}
 	const containerID = "container-1"
-	m := newManager(&config.Config{}, &fakeDockerBackend{
+	m := newRuntime(&config.Config{}, &fakeDockerBackend{
 		events:      &events,
 		containerID: containerID,
 		containerIPErr: fmt.Errorf(
@@ -312,7 +314,7 @@ func TestEnsureSandboxRunningFailedWakeAfterNetworkDetachStopsContainerAndRemove
 func TestEnsureSandboxRunningLeavesRulesWhenWakeCleanupCannotStopContainer(t *testing.T) {
 	events := []string{}
 	const containerID = "container-1"
-	m := newManager(&config.Config{}, &fakeDockerBackend{
+	m := newRuntime(&config.Config{}, &fakeDockerBackend{
 		events:         &events,
 		containerID:    containerID,
 		containerIPErr: errors.New("no container ip"),
@@ -336,7 +338,7 @@ func TestEnsureSandboxRunningLeavesRulesWhenWakeCleanupCannotStopContainer(t *te
 func TestEnsureSandboxRunningDoesNotCleanUpAfterSuccessfulWake(t *testing.T) {
 	events := []string{}
 	const containerID = "container-1"
-	m := newManager(&config.Config{}, &fakeDockerBackend{
+	m := newRuntime(&config.Config{}, &fakeDockerBackend{
 		events:      &events,
 		containerID: containerID,
 		ip:          "172.18.0.2",

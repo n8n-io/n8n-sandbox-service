@@ -53,35 +53,39 @@ func TestLoadParsesDefaults(t *testing.T) {
 		t.Errorf("expected ListenAddr :8080, got %s", cfg.ListenAddr)
 	}
 
-	if cfg.DockerHost != "unix:///var/run/docker.sock" {
-		t.Errorf("expected DockerHost unix:///var/run/docker.sock, got %s", cfg.DockerHost)
+	if cfg.Backend != BackendDocker {
+		t.Errorf("expected Backend docker, got %s", cfg.Backend)
 	}
 
-	if cfg.DockerSandboxImage != "test-image" {
-		t.Errorf("expected DockerSandboxImage test-image, got %s", cfg.DockerSandboxImage)
+	if cfg.Docker.Host != "unix:///var/run/docker.sock" {
+		t.Errorf("expected DockerHost unix:///var/run/docker.sock, got %s", cfg.Docker.Host)
 	}
 
-	if cfg.DefaultMemoryMB != 512 {
-		t.Errorf("expected DefaultMemoryMB 512, got %d", cfg.DefaultMemoryMB)
+	if cfg.Docker.SandboxImage != "test-image" {
+		t.Errorf("expected DockerSandboxImage test-image, got %s", cfg.Docker.SandboxImage)
 	}
 
-	if cfg.DefaultCPUPercent != 100 {
-		t.Errorf("expected DefaultCPUPercent 100, got %d", cfg.DefaultCPUPercent)
+	if cfg.Docker.DefaultMemoryMB != 512 {
+		t.Errorf("expected DefaultMemoryMB 512, got %d", cfg.Docker.DefaultMemoryMB)
 	}
 
-	if cfg.DefaultPidsMax != 256 {
-		t.Errorf("expected DefaultPidsMax 256, got %d", cfg.DefaultPidsMax)
+	if cfg.Docker.DefaultCPUPercent != 100 {
+		t.Errorf("expected DefaultCPUPercent 100, got %d", cfg.Docker.DefaultCPUPercent)
 	}
 
-	if cfg.DefaultDiskQuotaMB != 0 {
-		t.Errorf("expected DefaultDiskQuotaMB 0 (no quota by default), got %d", cfg.DefaultDiskQuotaMB)
+	if cfg.Docker.DefaultPidsMax != 256 {
+		t.Errorf("expected DefaultPidsMax 256, got %d", cfg.Docker.DefaultPidsMax)
 	}
 
-	if cfg.DiskQuotaActive {
+	if cfg.Docker.DefaultDiskQuotaMB != 0 {
+		t.Errorf("expected DefaultDiskQuotaMB 0 (no quota by default), got %d", cfg.Docker.DefaultDiskQuotaMB)
+	}
+
+	if cfg.Docker.DiskQuotaActive {
 		t.Error("expected DiskQuotaActive false by default")
 	}
 
-	if !cfg.EnableCgroups {
+	if !cfg.Docker.EnableCgroups {
 		t.Error("expected EnableCgroups true")
 	}
 
@@ -121,10 +125,10 @@ func TestLoadParsesDiskQuotaEnv(t *testing.T) {
 		t.Fatalf("Load() failed: %v", err)
 	}
 
-	if cfg.DefaultDiskQuotaMB != 2048 {
-		t.Errorf("expected DefaultDiskQuotaMB 2048, got %d", cfg.DefaultDiskQuotaMB)
+	if cfg.Docker.DefaultDiskQuotaMB != 2048 {
+		t.Errorf("expected DefaultDiskQuotaMB 2048, got %d", cfg.Docker.DefaultDiskQuotaMB)
 	}
-	if !cfg.DiskQuotaActive {
+	if !cfg.Docker.DiskQuotaActive {
 		t.Error("expected DiskQuotaActive true")
 	}
 }
@@ -149,8 +153,8 @@ func TestLoadAcceptsZeroDefaultDiskQuotaMB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() rejected explicit 0: %v", err)
 	}
-	if cfg.DefaultDiskQuotaMB != 0 {
-		t.Errorf("expected DefaultDiskQuotaMB 0, got %d", cfg.DefaultDiskQuotaMB)
+	if cfg.Docker.DefaultDiskQuotaMB != 0 {
+		t.Errorf("expected DefaultDiskQuotaMB 0, got %d", cfg.Docker.DefaultDiskQuotaMB)
 	}
 }
 
@@ -209,6 +213,39 @@ func TestLoadRequiresSandboxImage(t *testing.T) {
 
 	if _, err := Load(); err == nil {
 		t.Error("expected Load() to fail without SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE")
+	}
+}
+
+func TestLoadParsesFirecrackerBackendWithoutDockerImage(t *testing.T) {
+	t.Setenv("SANDBOX_RUNNER_BACKEND", "firecracker")
+	t.Setenv("SANDBOX_RUNNER_API_KEYS", "test-key")
+	t.Setenv("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE", "")
+	t.Setenv("SANDBOX_RUNNER_API_GRPC_ADDR", "api:9090")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	t.Setenv("SANDBOX_RUNNER_HTTP_BASE_URL", "http://runner:8080")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE", "/tmp/reg-ca.crt")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE", "/tmp/reg.crt")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE", "/tmp/reg.key")
+	t.Setenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE", "/tmp/control.crt")
+	t.Setenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE", "/tmp/control.key")
+	t.Setenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE", "/tmp/control-ca.crt")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	if cfg.Backend != BackendFirecracker {
+		t.Errorf("expected Backend firecracker, got %s", cfg.Backend)
+	}
+}
+
+func TestLoadRejectsInvalidBackend(t *testing.T) {
+	t.Setenv("SANDBOX_RUNNER_BACKEND", "unknown")
+	t.Setenv("SANDBOX_RUNNER_API_KEYS", "test-key")
+	t.Setenv("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE", "test-image")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("expected Load to reject invalid SANDBOX_RUNNER_BACKEND")
 	}
 }
 

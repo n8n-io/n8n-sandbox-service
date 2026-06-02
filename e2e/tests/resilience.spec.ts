@@ -75,7 +75,7 @@ async function waitInnerDockerReady(
   throw new Error(`inner docker on ${runnerContainer} not ready within ${deadlineMs}ms`);
 }
 
-/** Matches internal/runner/manager/manager.go: "sandbox-" + sandboxID[:12] */
+/** Matches internal/runner/runtime/docker/runtime.go: "sandbox-" + sandboxID[:12] */
 function sandboxInnerContainerName(sandboxUUID: string): string {
   return `sandbox-${sandboxUUID.slice(0, 12)}`;
 }

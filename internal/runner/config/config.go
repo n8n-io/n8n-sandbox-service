@@ -26,37 +26,25 @@ const (
 	defaultDockerHost            = "unix:///var/run/docker.sock"
 	defaultControlGRPCListenAddr = ":9091"
 	defaultLogLevel              = slog.LevelInfo
+	defaultBackend               = BackendDocker
 )
 
-// Config holds all runtime configuration parsed from environment variables.
-type Config struct {
-	// APIKeys is the set of valid API keys for authenticating requests.
-	// Parsed from SANDBOX_RUNNER_API_KEYS (comma-separated).
-	APIKeys map[string]struct{}
+type Backend string
 
-	// IdleTTLSeconds is how long a sandbox may be idle before it is reaped.
-	// Parsed from SANDBOX_RUNNER_IDLE_TTL_SECONDS (default 3600).
-	IdleTTLSeconds int
+const (
+	BackendDocker      Backend = "docker"
+	BackendFirecracker Backend = "firecracker"
+)
 
-	// MaxFileBytes is the maximum size of a single file that may be written
-	// into a sandbox. Parsed from SANDBOX_RUNNER_MAX_FILE_BYTES (default 10 MB).
-	MaxFileBytes int64
-
-	// DataDir is the directory under which per-sandbox data is stored.
-	// Parsed from SANDBOX_RUNNER_DATA_DIR (default /var/sandboxes).
-	DataDir string
-
-	// ListenAddr is the TCP address the HTTP server listens on.
-	// Parsed from SANDBOX_RUNNER_LISTEN_ADDR (default :8080).
-	ListenAddr string
-
-	// DockerHost is the daemon endpoint used to manage sandbox containers.
+// DockerConfig holds configuration for the Docker/sysbox runtime backend.
+type DockerConfig struct {
+	// Host is the daemon endpoint used to manage sandbox containers.
 	// Parsed from SANDBOX_RUNNER_DOCKER_HOST (default unix:///var/run/docker.sock).
-	DockerHost string
+	Host string
 
-	// DockerSandboxImage is the image used to start sandboxes.
+	// SandboxImage is the image used to start sandboxes.
 	// Parsed from SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE.
-	DockerSandboxImage string
+	SandboxImage string
 
 	// DefaultMemoryMB is the default memory limit per sandbox in megabytes.
 	// Parsed from SANDBOX_RUNNER_DEFAULT_MEMORY_MB (default 512).
@@ -84,6 +72,42 @@ type Config struct {
 	// EnableCgroups controls whether cgroup setup is enforced for sandbox creation.
 	// Parsed from SANDBOX_RUNNER_ENABLE_CGROUPS (default true).
 	EnableCgroups bool
+}
+
+// FirecrackerConfig holds configuration for the Firecracker runtime backend.
+type FirecrackerConfig struct{}
+
+// Config holds all runtime configuration parsed from environment variables.
+type Config struct {
+	// Backend selects the sandbox runtime implementation.
+	// Parsed from SANDBOX_RUNNER_BACKEND (default docker).
+	Backend Backend
+
+	// Docker contains Docker/sysbox runtime-specific configuration.
+	Docker DockerConfig
+
+	// Firecracker contains Firecracker runtime-specific configuration.
+	Firecracker FirecrackerConfig
+
+	// APIKeys is the set of valid API keys for authenticating requests.
+	// Parsed from SANDBOX_RUNNER_API_KEYS (comma-separated).
+	APIKeys map[string]struct{}
+
+	// IdleTTLSeconds is how long a sandbox may be idle before it is reaped.
+	// Parsed from SANDBOX_RUNNER_IDLE_TTL_SECONDS (default 3600).
+	IdleTTLSeconds int
+
+	// MaxFileBytes is the maximum size of a single file that may be written
+	// into a sandbox. Parsed from SANDBOX_RUNNER_MAX_FILE_BYTES (default 10 MB).
+	MaxFileBytes int64
+
+	// DataDir is the directory under which per-sandbox data is stored.
+	// Parsed from SANDBOX_RUNNER_DATA_DIR (default /var/sandboxes).
+	DataDir string
+
+	// ListenAddr is the TCP address the HTTP server listens on.
+	// Parsed from SANDBOX_RUNNER_LISTEN_ADDR (default :8080).
+	ListenAddr string
 
 	// APIGRPCAddr is the host:port of the API's runner registration gRPC listener.
 	// Parsed from SANDBOX_RUNNER_API_GRPC_ADDR.
@@ -158,6 +182,27 @@ func validateListenAddr(v string) error {
 	return nil
 }
 
+func parseBackend(v string) (Backend, error) {
+	switch backend := Backend(strings.ToLower(strings.TrimSpace(v))); backend {
+	case "":
+		return defaultBackend, nil
+	case BackendDocker, BackendFirecracker:
+		return backend, nil
+	default:
+		return "", fmt.Errorf("must be one of: %s, %s", BackendDocker, BackendFirecracker)
+	}
+}
+
+func defaultDockerConfig() DockerConfig {
+	return DockerConfig{
+		Host:              defaultDockerHost,
+		DefaultMemoryMB:   defaultMemoryMB,
+		DefaultCPUPercent: defaultCPUPercent,
+		DefaultPidsMax:    defaultPidsMax,
+		EnableCgroups:     defaultEnableCgroups,
+	}
+}
+
 // ResolvedControlGRPCAdvertiseAddr returns the host:port sent in heartbeats when the control server is enabled.
 func (c *Config) ResolvedControlGRPCAdvertiseAddr() string {
 	if strings.TrimSpace(c.ControlGRPCListenAddr) == "" {
@@ -182,15 +227,12 @@ func (c *Config) ResolvedControlGRPCAdvertiseAddr() string {
 // It returns an error if any required variable is missing or malformed.
 func Load() (*Config, error) {
 	cfg := &Config{
+		Backend:               defaultBackend,
+		Docker:                defaultDockerConfig(),
 		IdleTTLSeconds:        defaultIdleTTLSeconds,
 		MaxFileBytes:          defaultMaxFileBytes,
 		DataDir:               defaultDataDir,
 		ListenAddr:            defaultListenAddr,
-		DockerHost:            defaultDockerHost,
-		DefaultMemoryMB:       defaultMemoryMB,
-		DefaultCPUPercent:     defaultCPUPercent,
-		DefaultPidsMax:        defaultPidsMax,
-		EnableCgroups:         defaultEnableCgroups,
 		CapacityTotal:         defaultRunnerCapacityTotal,
 		ControlGRPCListenAddr: defaultControlGRPCListenAddr,
 		LogLevel:              defaultLogLevel,
@@ -198,6 +240,15 @@ func Load() (*Config, error) {
 
 	if h, err := os.Hostname(); err == nil && h != "" {
 		cfg.RunnerID = h
+	}
+
+	// SANDBOX_RUNNER_BACKEND (optional)
+	if v := os.Getenv("SANDBOX_RUNNER_BACKEND"); v != "" {
+		backend, err := parseBackend(v)
+		if err != nil {
+			return nil, fmt.Errorf("SANDBOX_RUNNER_BACKEND: %w", err)
+		}
+		cfg.Backend = backend
 	}
 
 	// SANDBOX_RUNNER_LOG_LEVEL (optional)
@@ -255,12 +306,12 @@ func Load() (*Config, error) {
 
 	// SANDBOX_RUNNER_DOCKER_HOST (optional)
 	if v := os.Getenv("SANDBOX_RUNNER_DOCKER_HOST"); v != "" {
-		cfg.DockerHost = v
+		cfg.Docker.Host = v
 	}
 
-	// SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE (required)
-	cfg.DockerSandboxImage = os.Getenv("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE")
-	if cfg.DockerSandboxImage == "" {
+	// SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE (required for docker backend)
+	cfg.Docker.SandboxImage = os.Getenv("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE")
+	if cfg.Backend == BackendDocker && cfg.Docker.SandboxImage == "" {
 		return nil, fmt.Errorf("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE must be set")
 	}
 
@@ -270,7 +321,7 @@ func Load() (*Config, error) {
 		if err != nil || n <= 0 {
 			return nil, fmt.Errorf("SANDBOX_RUNNER_DEFAULT_MEMORY_MB must be a positive integer, got %q", v)
 		}
-		cfg.DefaultMemoryMB = n
+		cfg.Docker.DefaultMemoryMB = n
 	}
 
 	// SANDBOX_RUNNER_DEFAULT_CPU_PERCENT (optional)
@@ -279,7 +330,7 @@ func Load() (*Config, error) {
 		if err != nil || n <= 0 {
 			return nil, fmt.Errorf("SANDBOX_RUNNER_DEFAULT_CPU_PERCENT must be a positive integer, got %q", v)
 		}
-		cfg.DefaultCPUPercent = n
+		cfg.Docker.DefaultCPUPercent = n
 	}
 
 	// SANDBOX_RUNNER_DEFAULT_PIDS_MAX (optional)
@@ -288,7 +339,7 @@ func Load() (*Config, error) {
 		if err != nil || n <= 0 {
 			return nil, fmt.Errorf("SANDBOX_RUNNER_DEFAULT_PIDS_MAX must be a positive integer, got %q", v)
 		}
-		cfg.DefaultPidsMax = n
+		cfg.Docker.DefaultPidsMax = n
 	}
 
 	// SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB (optional; 0 means no quota,
@@ -298,7 +349,7 @@ func Load() (*Config, error) {
 		if err != nil || n < 0 {
 			return nil, fmt.Errorf("SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB must be a non-negative integer, got %q", v)
 		}
-		cfg.DefaultDiskQuotaMB = n
+		cfg.Docker.DefaultDiskQuotaMB = n
 	}
 
 	// SANDBOX_RUNNER_DISK_QUOTA_ACTIVE (optional; set by scripts/start-runner.sh)
@@ -307,7 +358,7 @@ func Load() (*Config, error) {
 		if err != nil {
 			return nil, fmt.Errorf("SANDBOX_RUNNER_DISK_QUOTA_ACTIVE must be a boolean, got %q", v)
 		}
-		cfg.DiskQuotaActive = active
+		cfg.Docker.DiskQuotaActive = active
 	}
 
 	// SANDBOX_RUNNER_ENABLE_CGROUPS (optional)
@@ -316,7 +367,7 @@ func Load() (*Config, error) {
 		if err != nil {
 			return nil, fmt.Errorf("SANDBOX_RUNNER_ENABLE_CGROUPS must be a boolean, got %q", v)
 		}
-		cfg.EnableCgroups = enabled
+		cfg.Docker.EnableCgroups = enabled
 	}
 
 	// SANDBOX_RUNNER_METRICS_ENABLED (optional)
