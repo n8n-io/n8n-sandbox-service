@@ -17,6 +17,7 @@ FROM debian:bookworm-slim AS runner
 
 ARG TARGETARCH
 ARG FIRECRACKER_VERSION=v1.13.1
+ARG FIRECRACKER_X86_64_SHA256=59450b9171ff2ebdf2f9a25be3a248a7ba79fb6371aec51a9d6d8eefca7b4faf
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -33,6 +34,7 @@ RUN set -eux; \
     test "${TARGETARCH}" = "amd64"; \
     fc_arch="x86_64"; \
     curl -fsSL "https://github.com/firecracker-microvm/firecracker/releases/download/${FIRECRACKER_VERSION}/firecracker-${FIRECRACKER_VERSION}-${fc_arch}.tgz" -o /tmp/firecracker.tgz; \
+    echo "${FIRECRACKER_X86_64_SHA256}  /tmp/firecracker.tgz" | sha256sum -c -; \
     tar -xzf /tmp/firecracker.tgz -C /tmp; \
     mkdir -p /opt/firecracker/bin; \
     cp "/tmp/release-${FIRECRACKER_VERSION}-${fc_arch}/firecracker-${FIRECRACKER_VERSION}-${fc_arch}" /opt/firecracker/bin/firecracker; \
