@@ -211,6 +211,20 @@ networkPolicy:
             kubernetes.io/metadata.name: ingress-nginx
 ```
 
+## Prometheus Metrics
+
+The API and sysbox runner expose Prometheus metrics on their HTTP port at `/metrics`. If your cluster uses Prometheus Operator, enable `ServiceMonitor` resources:
+
+```yaml
+monitoring:
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: kube-prometheus-stack
+```
+
+This renders one `ServiceMonitor` for the API Service and, when the in-chart sysbox runner is enabled, one for the runner headless Service. It also enables the matching `/metrics` handlers in the API and runner containers. Use `monitoring.serviceMonitor.api.enabled` or `monitoring.serviceMonitor.sysboxRunner.enabled` to disable either scrape target.
+
 ## Runner Identity
 
 The sysbox runner is deployed as a StatefulSet with a headless Service so each runner pod has direct, DNS-based addressability from the API:

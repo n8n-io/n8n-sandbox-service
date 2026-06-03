@@ -11,6 +11,7 @@ data:
   SANDBOX_API_DATA_DIR: {{ .Values.api.config.dataDir | quote }}
   SANDBOX_API_MAX_FILE_BYTES: {{ .Values.api.config.maxFileBytes | quote }}
   SANDBOX_API_ENABLE_CORS: {{ .Values.api.config.enableCors | quote }}
+  SANDBOX_API_METRICS_ENABLED: {{ and .Values.monitoring.serviceMonitor.enabled .Values.monitoring.serviceMonitor.api.enabled | quote }}
   SANDBOX_API_RUNNER_HEARTBEAT_GRACE: {{ .Values.api.config.runnerHeartbeatGrace | quote }}
   SANDBOX_API_IDLE_STOP_AFTER: {{ .Values.api.config.idleStopAfter | quote }}
   SANDBOX_API_IDLE_DELETE_AFTER: {{ .Values.api.config.idleDeleteAfter | quote }}
@@ -35,6 +36,7 @@ data:
   SANDBOX_RUNNER_IDLE_TTL_SECONDS: {{ .Values.sysboxRunner.config.idleTtlSeconds | quote }}
   SANDBOX_RUNNER_CAPACITY_TOTAL: {{ .Values.sysboxRunner.config.capacityTotal | quote }}
   SANDBOX_RUNNER_MAX_FILE_BYTES: {{ .Values.sysboxRunner.config.maxFileBytes | quote }}
+  SANDBOX_RUNNER_METRICS_ENABLED: {{ and .Values.monitoring.serviceMonitor.enabled .Values.monitoring.serviceMonitor.sysboxRunner.enabled | quote }}
   SANDBOX_RUNNER_DEFAULT_MEMORY_MB: {{ .Values.sysboxRunner.config.defaultMemoryMb | quote }}
   SANDBOX_RUNNER_DEFAULT_CPU_PERCENT: {{ .Values.sysboxRunner.config.defaultCpuPercent | quote }}
   SANDBOX_RUNNER_DEFAULT_PIDS_MAX: {{ .Values.sysboxRunner.config.defaultPidsMax | quote }}

@@ -36,6 +36,18 @@ networkPolicy:
     # The in-chart API is allowed automatically.
     ingressFrom: []
 
+monitoring:
+  serviceMonitor:
+    # Requires the Prometheus Operator ServiceMonitor CRD.
+    enabled: false
+    interval: 30s
+    path: /metrics
+    scheme: http
+    api:
+      enabled: true
+    sysboxRunner:
+      enabled: true
+
 tls:
   # Choose how the mTLS Secrets are provided: existingSecret or certManager.
   mode: existingSecret
@@ -171,8 +183,12 @@ sysboxRunner:
 
   scheduling:
     nodeSelector:
-      sysbox-runtime: running
-    tolerations: []
+      sysbox-install: "yes"
+    tolerations:
+    - key: sysbox-runtime
+      operator: Equal
+      value: not-running
+      effect: NoSchedule
     affinity: {}
 
   config:
