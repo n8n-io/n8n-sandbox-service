@@ -23,7 +23,7 @@ Use `dataPlane.mode: sysbox` for the in-cluster sysbox/DinD runner. Use `dataPla
 The runner binary selects its sandbox backend with `SANDBOX_RUNNER_BACKEND`.
 This chart only renders the sysbox runner today, so `sysboxRunner.config.backend`
 defaults to `docker`. The `firecracker` backend is wired in the binary for
-external/host deployments but is not implemented or charted yet.
+external/host deployments but is not charted here yet.
 
 ## Sysbox Scheduling Defaults
 

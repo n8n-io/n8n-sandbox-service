@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/n8n-io/sandbox-service/internal/logging"
 )
@@ -27,6 +28,23 @@ const (
 	defaultControlGRPCListenAddr = ":9091"
 	defaultLogLevel              = slog.LevelInfo
 	defaultBackend               = BackendDocker
+
+	defaultFirecrackerJailerBin               = "/opt/firecracker/bin/jailer"
+	defaultFirecrackerBin                     = "/opt/firecracker/bin/firecracker"
+	defaultFirecrackerJailerBaseDir           = "/srv/jailer"
+	defaultFirecrackerTemplateDir             = "/srv/firecracker/template"
+	defaultFirecrackerSnapshotMemPath         = "/srv/firecracker/snapshots/mem"
+	defaultFirecrackerSnapshotStatePath       = "/srv/firecracker/snapshots/state"
+	defaultFirecrackerSnapshotVirtioBlockPath = "/rootfs.ext4"
+	defaultFirecrackerGuestIP                 = "172.16.0.10"
+	defaultFirecrackerHostTapDeviceName       = "fc-tap-0"
+	defaultFirecrackerHostTapIPCIDR           = "172.16.0.1/24"
+	defaultFirecrackerDaemonPort              = 8081
+	defaultFirecrackerProxyListenIP           = "127.0.0.1"
+	defaultFirecrackerProxyPortStart          = 18081
+	defaultFirecrackerSocketWaitAttempts      = 120
+	defaultFirecrackerSocketWaitInterval      = 20 * time.Millisecond
+	defaultFirecrackerDaemonWaitTimeout       = 60 * time.Second
 )
 
 type Backend string
@@ -75,7 +93,71 @@ type DockerConfig struct {
 }
 
 // FirecrackerConfig holds configuration for the Firecracker runtime backend.
-type FirecrackerConfig struct{}
+type FirecrackerConfig struct {
+	// JailerBin is the path to the Firecracker jailer binary.
+	// Parsed from SANDBOX_RUNNER_FIRECRACKER_JAILER_BIN.
+	JailerBin string
+
+	// FirecrackerBin is the path to the Firecracker VMM binary.
+	// Parsed from SANDBOX_RUNNER_FIRECRACKER_BIN.
+	FirecrackerBin string
+
+	// JailerBaseDir is passed to jailer --chroot-base-dir.
+	// Parsed from SANDBOX_RUNNER_FIRECRACKER_JAILER_BASE_DIR.
+	JailerBaseDir string
+
+	// TemplateDir contains rootfs.ext4 used by restored snapshots.
+	// Parsed from SANDBOX_RUNNER_FIRECRACKER_TEMPLATE_DIR.
+	TemplateDir string
+
+	// SnapshotMemPath is the host path bind-mounted as /snapshot_mem.
+	// Parsed from SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_MEM_PATH.
+	SnapshotMemPath string
+
+	// SnapshotStatePath is the host path bind-mounted as /snapshot_state.
+	// Parsed from SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_STATE_PATH.
+	SnapshotStatePath string
+
+	// SnapshotVirtioBlockPath is the rootfs path baked into the snapshot.
+	// Parsed from SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_VIRTIO_BLOCK_PATH.
+	SnapshotVirtioBlockPath string
+
+	// GuestIP is the fixed guest IP expected by the snapshot.
+	// Parsed from SANDBOX_RUNNER_FIRECRACKER_GUEST_IP.
+	GuestIP string
+
+	// HostTapDeviceName is the tap device name expected inside each netns.
+	// Parsed from SANDBOX_RUNNER_FIRECRACKER_HOST_TAP_DEVICE_NAME.
+	HostTapDeviceName string
+
+	// HostTapIPCIDR is assigned to the host tap inside each netns.
+	// Parsed from SANDBOX_RUNNER_FIRECRACKER_HOST_TAP_IP_CIDR.
+	HostTapIPCIDR string
+
+	// DaemonPort is the sandbox daemon port inside the guest.
+	// Parsed from SANDBOX_RUNNER_FIRECRACKER_DAEMON_PORT.
+	DaemonPort int
+
+	// ProxyListenIP is the host-side IP used for per-sandbox daemon proxies.
+	// Parsed from SANDBOX_RUNNER_FIRECRACKER_PROXY_LISTEN_IP.
+	ProxyListenIP string
+
+	// ProxyPortStart is the first host-side daemon proxy port.
+	// Parsed from SANDBOX_RUNNER_FIRECRACKER_PROXY_PORT_START.
+	ProxyPortStart int
+
+	// SocketWaitAttempts controls firecracker.socket polling.
+	// Parsed from SANDBOX_RUNNER_FIRECRACKER_SOCKET_WAIT_ATTEMPTS.
+	SocketWaitAttempts int
+
+	// SocketWaitInterval controls delay between firecracker.socket polls.
+	// Parsed from SANDBOX_RUNNER_FIRECRACKER_SOCKET_WAIT_INTERVAL_MS.
+	SocketWaitInterval time.Duration
+
+	// DaemonWaitTimeout controls how long CreateSandbox waits for guest daemon health.
+	// Parsed from SANDBOX_RUNNER_FIRECRACKER_DAEMON_WAIT_TIMEOUT.
+	DaemonWaitTimeout time.Duration
+}
 
 // Config holds all runtime configuration parsed from environment variables.
 type Config struct {
@@ -203,6 +285,108 @@ func defaultDockerConfig() DockerConfig {
 	}
 }
 
+func defaultFirecrackerConfig() FirecrackerConfig {
+	return FirecrackerConfig{
+		JailerBin:               defaultFirecrackerJailerBin,
+		FirecrackerBin:          defaultFirecrackerBin,
+		JailerBaseDir:           defaultFirecrackerJailerBaseDir,
+		TemplateDir:             defaultFirecrackerTemplateDir,
+		SnapshotMemPath:         defaultFirecrackerSnapshotMemPath,
+		SnapshotStatePath:       defaultFirecrackerSnapshotStatePath,
+		SnapshotVirtioBlockPath: defaultFirecrackerSnapshotVirtioBlockPath,
+		GuestIP:                 defaultFirecrackerGuestIP,
+		HostTapDeviceName:       defaultFirecrackerHostTapDeviceName,
+		HostTapIPCIDR:           defaultFirecrackerHostTapIPCIDR,
+		DaemonPort:              defaultFirecrackerDaemonPort,
+		ProxyListenIP:           defaultFirecrackerProxyListenIP,
+		ProxyPortStart:          defaultFirecrackerProxyPortStart,
+		SocketWaitAttempts:      defaultFirecrackerSocketWaitAttempts,
+		SocketWaitInterval:      defaultFirecrackerSocketWaitInterval,
+		DaemonWaitTimeout:       defaultFirecrackerDaemonWaitTimeout,
+	}
+}
+
+func parsePositiveIntEnv(name string) (int, bool, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return 0, false, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return 0, true, fmt.Errorf("%s must be a positive integer, got %q", name, raw)
+	}
+	return n, true, nil
+}
+
+func parseDurationEnv(name string) (time.Duration, bool, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return 0, false, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return 0, true, fmt.Errorf("%s must be a positive duration, got %q", name, raw)
+	}
+	return d, true, nil
+}
+
+func parseMillisecondsEnv(name string) (time.Duration, bool, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return 0, false, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return 0, true, fmt.Errorf("%s must be a positive integer number of milliseconds, got %q", name, raw)
+	}
+	return time.Duration(n) * time.Millisecond, true, nil
+}
+
+func validateFirecrackerConfig(cfg *Config) error {
+	if cfg.Backend != BackendFirecracker {
+		return nil
+	}
+	fc := cfg.Firecracker
+	requiredAbs := map[string]string{
+		"SANDBOX_RUNNER_FIRECRACKER_JAILER_BIN":          fc.JailerBin,
+		"SANDBOX_RUNNER_FIRECRACKER_BIN":                 fc.FirecrackerBin,
+		"SANDBOX_RUNNER_FIRECRACKER_JAILER_BASE_DIR":     fc.JailerBaseDir,
+		"SANDBOX_RUNNER_FIRECRACKER_TEMPLATE_DIR":        fc.TemplateDir,
+		"SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_MEM_PATH":   fc.SnapshotMemPath,
+		"SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_STATE_PATH": fc.SnapshotStatePath,
+	}
+	for name, value := range requiredAbs {
+		if !strings.HasPrefix(value, "/") {
+			return fmt.Errorf("%s must be an absolute path, got %q", name, value)
+		}
+	}
+	if !strings.HasPrefix(fc.SnapshotVirtioBlockPath, "/") {
+		return fmt.Errorf("SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_VIRTIO_BLOCK_PATH must be an absolute path, got %q", fc.SnapshotVirtioBlockPath)
+	}
+	if net.ParseIP(fc.GuestIP) == nil {
+		return fmt.Errorf("SANDBOX_RUNNER_FIRECRACKER_GUEST_IP must be an IP address, got %q", fc.GuestIP)
+	}
+	if _, _, err := net.ParseCIDR(fc.HostTapIPCIDR); err != nil {
+		return fmt.Errorf("SANDBOX_RUNNER_FIRECRACKER_HOST_TAP_IP_CIDR must be CIDR notation, got %q: %w", fc.HostTapIPCIDR, err)
+	}
+	if net.ParseIP(fc.ProxyListenIP) == nil {
+		return fmt.Errorf("SANDBOX_RUNNER_FIRECRACKER_PROXY_LISTEN_IP must be an IP address, got %q", fc.ProxyListenIP)
+	}
+	if fc.DaemonPort <= 0 || fc.DaemonPort > 65535 {
+		return fmt.Errorf("SANDBOX_RUNNER_FIRECRACKER_DAEMON_PORT must be between 1 and 65535, got %d", fc.DaemonPort)
+	}
+	if fc.ProxyPortStart <= 0 || fc.ProxyPortStart > 65535 {
+		return fmt.Errorf("SANDBOX_RUNNER_FIRECRACKER_PROXY_PORT_START must be between 1 and 65535, got %d", fc.ProxyPortStart)
+	}
+	if cfg.CapacityTotal <= 0 {
+		return fmt.Errorf("SANDBOX_RUNNER_CAPACITY_TOTAL must be positive for firecracker backend")
+	}
+	if int64(fc.ProxyPortStart)+int64(cfg.CapacityTotal)-1 > 65535 {
+		return fmt.Errorf("firecracker proxy port range starting at %d exceeds 65535 for capacity %d", fc.ProxyPortStart, cfg.CapacityTotal)
+	}
+	return nil
+}
+
 // ResolvedControlGRPCAdvertiseAddr returns the host:port sent in heartbeats when the control server is enabled.
 func (c *Config) ResolvedControlGRPCAdvertiseAddr() string {
 	if strings.TrimSpace(c.ControlGRPCListenAddr) == "" {
@@ -229,6 +413,7 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		Backend:               defaultBackend,
 		Docker:                defaultDockerConfig(),
+		Firecracker:           defaultFirecrackerConfig(),
 		IdleTTLSeconds:        defaultIdleTTLSeconds,
 		MaxFileBytes:          defaultMaxFileBytes,
 		DataDir:               defaultDataDir,
@@ -370,6 +555,65 @@ func Load() (*Config, error) {
 		cfg.Docker.EnableCgroups = enabled
 	}
 
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_JAILER_BIN")); v != "" {
+		cfg.Firecracker.JailerBin = v
+	}
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_BIN")); v != "" {
+		cfg.Firecracker.FirecrackerBin = v
+	}
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_JAILER_BASE_DIR")); v != "" {
+		cfg.Firecracker.JailerBaseDir = v
+	}
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_TEMPLATE_DIR")); v != "" {
+		cfg.Firecracker.TemplateDir = v
+	}
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_MEM_PATH")); v != "" {
+		cfg.Firecracker.SnapshotMemPath = v
+	}
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_STATE_PATH")); v != "" {
+		cfg.Firecracker.SnapshotStatePath = v
+	}
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_VIRTIO_BLOCK_PATH")); v != "" {
+		cfg.Firecracker.SnapshotVirtioBlockPath = v
+	}
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_GUEST_IP")); v != "" {
+		cfg.Firecracker.GuestIP = v
+	}
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_HOST_TAP_DEVICE_NAME")); v != "" {
+		cfg.Firecracker.HostTapDeviceName = v
+	}
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_HOST_TAP_IP_CIDR")); v != "" {
+		cfg.Firecracker.HostTapIPCIDR = v
+	}
+	if n, ok, err := parsePositiveIntEnv("SANDBOX_RUNNER_FIRECRACKER_DAEMON_PORT"); err != nil {
+		return nil, err
+	} else if ok {
+		cfg.Firecracker.DaemonPort = n
+	}
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_PROXY_LISTEN_IP")); v != "" {
+		cfg.Firecracker.ProxyListenIP = v
+	}
+	if n, ok, err := parsePositiveIntEnv("SANDBOX_RUNNER_FIRECRACKER_PROXY_PORT_START"); err != nil {
+		return nil, err
+	} else if ok {
+		cfg.Firecracker.ProxyPortStart = n
+	}
+	if n, ok, err := parsePositiveIntEnv("SANDBOX_RUNNER_FIRECRACKER_SOCKET_WAIT_ATTEMPTS"); err != nil {
+		return nil, err
+	} else if ok {
+		cfg.Firecracker.SocketWaitAttempts = n
+	}
+	if d, ok, err := parseMillisecondsEnv("SANDBOX_RUNNER_FIRECRACKER_SOCKET_WAIT_INTERVAL_MS"); err != nil {
+		return nil, err
+	} else if ok {
+		cfg.Firecracker.SocketWaitInterval = d
+	}
+	if d, ok, err := parseDurationEnv("SANDBOX_RUNNER_FIRECRACKER_DAEMON_WAIT_TIMEOUT"); err != nil {
+		return nil, err
+	} else if ok {
+		cfg.Firecracker.DaemonWaitTimeout = d
+	}
+
 	// SANDBOX_RUNNER_METRICS_ENABLED (optional)
 	if v := os.Getenv("SANDBOX_RUNNER_METRICS_ENABLED"); v != "" {
 		enabled, err := strconv.ParseBool(v)
@@ -455,6 +699,10 @@ func Load() (*Config, error) {
 	}
 	if ctlN != 3 {
 		return nil, fmt.Errorf("SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE, SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE, and SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE are required for control-plane mTLS")
+	}
+
+	if err := validateFirecrackerConfig(cfg); err != nil {
+		return nil, err
 	}
 
 	return cfg, nil
