@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -225,6 +226,26 @@ func TestProbeDaemonRejectsUnhealthyStatus(t *testing.T) {
 	defer cancel()
 	if err := probeDaemon(ctx, server.URL, time.Second); err == nil {
 		t.Fatal("expected unhealthy status to fail readiness probe")
+	}
+}
+
+func TestStartCommandRunsInOwnProcessGroup(t *testing.T) {
+	proc, err := startCommand(context.Background(), "sh", "-c", "sleep 10")
+	if err != nil {
+		t.Fatalf("startCommand() failed: %v", err)
+	}
+	defer proc.Kill()
+
+	groupProc, ok := proc.(*processGroup)
+	if !ok {
+		t.Fatalf("startCommand() returned %T, want *processGroup", proc)
+	}
+	pgid, err := syscall.Getpgid(groupProc.process.Pid)
+	if err != nil {
+		t.Fatalf("Getpgid() failed: %v", err)
+	}
+	if pgid != groupProc.process.Pid {
+		t.Fatalf("process group = %d, want process pid %d", pgid, groupProc.process.Pid)
 	}
 }
 

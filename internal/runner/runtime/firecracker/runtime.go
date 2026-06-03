@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
@@ -67,6 +68,20 @@ type sandboxState struct {
 
 type process interface {
 	Kill() error
+}
+
+type processGroup struct {
+	process *os.Process
+}
+
+func (p *processGroup) Kill() error {
+	if err := syscall.Kill(-p.process.Pid, syscall.SIGKILL); err != nil {
+		if err == syscall.ESRCH {
+			return os.ErrProcessDone
+		}
+		return err
+	}
+	return nil
 }
 
 type daemonProxy interface {
@@ -523,13 +538,14 @@ func startCommand(ctx context.Context, name string, args ...string) (process, er
 	cmd := exec.Command(name, args...)
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("%s failed: %w", commandString(name, args), err)
 	}
 	go func() {
 		_ = cmd.Wait()
 	}()
-	return cmd.Process, nil
+	return &processGroup{process: cmd.Process}, nil
 }
 
 func pathExists(path string) bool {
