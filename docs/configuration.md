@@ -42,7 +42,7 @@ All services are configured via environment variables.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `SANDBOX_RUNNER_API_KEYS` | *(required)* | Comma-separated list of valid internal API keys accepted from the API container |
-| `SANDBOX_RUNNER_BACKEND` | `docker` | Sandbox runtime backend. Supported values: `docker`, `firecracker`. The Firecracker backend is wired but not implemented yet. |
+| `SANDBOX_RUNNER_BACKEND` | `docker` | Sandbox runtime backend. Supported values: `docker`, `firecracker`. |
 | `SANDBOX_RUNNER_LOG_LEVEL` | `info` | Minimum log severity (`debug`, `info`, `warn`, `error`; case-insensitive) |
 | `SANDBOX_RUNNER_LISTEN_ADDR` | `:8080` | HTTP listen address |
 | `SANDBOX_RUNNER_API_GRPC_ADDR` | *(required)* | API `host:port` for gRPC registration |
@@ -82,7 +82,42 @@ These variables are parsed into the Docker runtime config and are only required 
 
 ### Firecracker runner backend config
 
-The Firecracker backend is selectable but not implemented yet, so it has no supported runtime-specific variables in this version.
+These variables are parsed into the Firecracker runtime config and are only required or meaningful when `SANDBOX_RUNNER_BACKEND=firecracker`.
+
+The Firecracker backend follows the Lambda/Firecracker PoC shape: each sandbox gets a per-slot Linux network namespace with a TAP device, and the runner exposes the guest daemon through a host-local TCP proxy. `DaemonURL` is therefore a `127.0.0.1:<port>` URL, while proxy connections are dialed from inside the sandbox netns to the guest IP.
+
+#### Firecracker slots
+
+A Firecracker slot is one schedulable VM position on a runner. The runner creates slots from `SANDBOX_RUNNER_CAPACITY_TOTAL`; if capacity is `100`, the runner has slots `0` through `99`. A sandbox occupies one slot from create until stop/delete.
+
+Slots give the host-side Firecracker resources stable names without exposing those details to the API or clients. For slot `n`, the runtime derives:
+
+- Network namespace: `fc-sb-n`
+- TAP name inside the namespace: `SANDBOX_RUNNER_FIRECRACKER_HOST_TAP_DEVICE_NAME`
+- Host-local daemon proxy port: `SANDBOX_RUNNER_FIRECRACKER_PROXY_PORT_START + n`
+
+We need this because Firecracker does not provide Docker-style bridge networking or container names for free. Each microVM clone needs its own host network namespace and a TAP device with the snapshot's expected name inside that namespace. The runner also needs a deterministic host-local `DaemonURL` for its existing HTTP proxy. Slots are the small accounting layer that ties those resources together and prevents two sandboxes from trying to use the same netns, TAP, or proxy port.
+
+Slots are deliberately runner-local and ephemeral. They are not persisted, not part of the public API, and not a promise that the same sandbox ID will always get the same slot after restart.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `SANDBOX_RUNNER_FIRECRACKER_JAILER_BIN` | `/opt/firecracker/bin/jailer` | Path to the Firecracker jailer binary |
+| `SANDBOX_RUNNER_FIRECRACKER_BIN` | `/opt/firecracker/bin/firecracker` | Path to the Firecracker VMM binary |
+| `SANDBOX_RUNNER_FIRECRACKER_JAILER_BASE_DIR` | `/srv/jailer` | Base directory passed to `jailer --chroot-base-dir` |
+| `SANDBOX_RUNNER_FIRECRACKER_TEMPLATE_DIR` | `/srv/firecracker/template` | Directory containing the snapshot rootfs (`rootfs.ext4`) |
+| `SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_MEM_PATH` | `/srv/firecracker/snapshots/mem` | Host path bind-mounted into the jail as `/snapshot_mem` |
+| `SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_STATE_PATH` | `/srv/firecracker/snapshots/state` | Host path bind-mounted into the jail as `/snapshot_state` |
+| `SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_VIRTIO_BLOCK_PATH` | `/rootfs.ext4` | Rootfs path expected by the snapshot metadata |
+| `SANDBOX_RUNNER_FIRECRACKER_GUEST_IP` | `172.16.0.10` | Guest IP expected by the restored snapshot |
+| `SANDBOX_RUNNER_FIRECRACKER_HOST_TAP_DEVICE_NAME` | `fc-tap-0` | TAP device name inside each sandbox netns |
+| `SANDBOX_RUNNER_FIRECRACKER_HOST_TAP_IP_CIDR` | `172.16.0.1/24` | Host-side TAP address inside each sandbox netns |
+| `SANDBOX_RUNNER_FIRECRACKER_DAEMON_PORT` | `8081` | Sandbox daemon port inside the guest |
+| `SANDBOX_RUNNER_FIRECRACKER_PROXY_LISTEN_IP` | `127.0.0.1` | Host-side listen IP for daemon proxies |
+| `SANDBOX_RUNNER_FIRECRACKER_PROXY_PORT_START` | `18081` | First host-side proxy port. Slot `n` uses `PROXY_PORT_START+n`. |
+| `SANDBOX_RUNNER_FIRECRACKER_SOCKET_WAIT_ATTEMPTS` | `120` | Number of checks while waiting for `firecracker.socket` |
+| `SANDBOX_RUNNER_FIRECRACKER_SOCKET_WAIT_INTERVAL_MS` | `20` | Delay between Firecracker socket checks in milliseconds |
+| `SANDBOX_RUNNER_FIRECRACKER_DAEMON_WAIT_TIMEOUT` | `60s` | Maximum time to wait for guest daemon health after snapshot restore |
 
 ## Sandbox daemon
 

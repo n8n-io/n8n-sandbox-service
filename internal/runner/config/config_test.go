@@ -237,6 +237,82 @@ func TestLoadParsesFirecrackerBackendWithoutDockerImage(t *testing.T) {
 	if cfg.Backend != BackendFirecracker {
 		t.Errorf("expected Backend firecracker, got %s", cfg.Backend)
 	}
+	if cfg.Firecracker.ProxyListenIP != "127.0.0.1" {
+		t.Errorf("expected default Firecracker proxy listen IP, got %s", cfg.Firecracker.ProxyListenIP)
+	}
+	if cfg.Firecracker.ProxyPortStart != 18081 {
+		t.Errorf("expected default Firecracker proxy port start 18081, got %d", cfg.Firecracker.ProxyPortStart)
+	}
+	if cfg.Firecracker.DaemonPort != 8081 {
+		t.Errorf("expected default Firecracker daemon port 8081, got %d", cfg.Firecracker.DaemonPort)
+	}
+}
+
+func TestLoadParsesFirecrackerConfig(t *testing.T) {
+	t.Setenv("SANDBOX_RUNNER_BACKEND", "firecracker")
+	t.Setenv("SANDBOX_RUNNER_API_KEYS", "test-key")
+	t.Setenv("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE", "")
+	t.Setenv("SANDBOX_RUNNER_API_GRPC_ADDR", "api:9090")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	t.Setenv("SANDBOX_RUNNER_HTTP_BASE_URL", "http://runner:8080")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE", "/tmp/reg-ca.crt")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE", "/tmp/reg.crt")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE", "/tmp/reg.key")
+	t.Setenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE", "/tmp/control.crt")
+	t.Setenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE", "/tmp/control.key")
+	t.Setenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE", "/tmp/control-ca.crt")
+	t.Setenv("SANDBOX_RUNNER_CAPACITY_TOTAL", "4")
+	t.Setenv("SANDBOX_RUNNER_FIRECRACKER_JAILER_BIN", "/custom/jailer")
+	t.Setenv("SANDBOX_RUNNER_FIRECRACKER_BIN", "/custom/firecracker")
+	t.Setenv("SANDBOX_RUNNER_FIRECRACKER_JAILER_BASE_DIR", "/custom/jailer-base")
+	t.Setenv("SANDBOX_RUNNER_FIRECRACKER_TEMPLATE_DIR", "/custom/template")
+	t.Setenv("SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_MEM_PATH", "/custom/mem")
+	t.Setenv("SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_STATE_PATH", "/custom/state")
+	t.Setenv("SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_VIRTIO_BLOCK_PATH", "/custom/rootfs.ext4")
+	t.Setenv("SANDBOX_RUNNER_FIRECRACKER_GUEST_IP", "10.0.0.2")
+	t.Setenv("SANDBOX_RUNNER_FIRECRACKER_HOST_TAP_DEVICE_NAME", "tap0")
+	t.Setenv("SANDBOX_RUNNER_FIRECRACKER_HOST_TAP_IP_CIDR", "10.0.0.1/24")
+	t.Setenv("SANDBOX_RUNNER_FIRECRACKER_DAEMON_PORT", "9090")
+	t.Setenv("SANDBOX_RUNNER_FIRECRACKER_PROXY_LISTEN_IP", "127.0.0.2")
+	t.Setenv("SANDBOX_RUNNER_FIRECRACKER_PROXY_PORT_START", "20000")
+	t.Setenv("SANDBOX_RUNNER_FIRECRACKER_SOCKET_WAIT_ATTEMPTS", "9")
+	t.Setenv("SANDBOX_RUNNER_FIRECRACKER_SOCKET_WAIT_INTERVAL_MS", "50")
+	t.Setenv("SANDBOX_RUNNER_FIRECRACKER_DAEMON_WAIT_TIMEOUT", "10s")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	if cfg.Firecracker.JailerBin != "/custom/jailer" {
+		t.Errorf("expected custom jailer bin, got %s", cfg.Firecracker.JailerBin)
+	}
+	if cfg.Firecracker.GuestIP != "10.0.0.2" {
+		t.Errorf("expected guest IP 10.0.0.2, got %s", cfg.Firecracker.GuestIP)
+	}
+	if cfg.Firecracker.ProxyPortStart != 20000 {
+		t.Errorf("expected proxy port start 20000, got %d", cfg.Firecracker.ProxyPortStart)
+	}
+}
+
+func TestLoadRejectsFirecrackerProxyRangeOverflow(t *testing.T) {
+	t.Setenv("SANDBOX_RUNNER_BACKEND", "firecracker")
+	t.Setenv("SANDBOX_RUNNER_API_KEYS", "test-key")
+	t.Setenv("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE", "")
+	t.Setenv("SANDBOX_RUNNER_API_GRPC_ADDR", "api:9090")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	t.Setenv("SANDBOX_RUNNER_HTTP_BASE_URL", "http://runner:8080")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE", "/tmp/reg-ca.crt")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE", "/tmp/reg.crt")
+	t.Setenv("SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE", "/tmp/reg.key")
+	t.Setenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE", "/tmp/control.crt")
+	t.Setenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE", "/tmp/control.key")
+	t.Setenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE", "/tmp/control-ca.crt")
+	t.Setenv("SANDBOX_RUNNER_CAPACITY_TOTAL", "2")
+	t.Setenv("SANDBOX_RUNNER_FIRECRACKER_PROXY_PORT_START", "65535")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("expected Load to reject overflowing Firecracker proxy port range")
+	}
 }
 
 func TestLoadRejectsInvalidBackend(t *testing.T) {
