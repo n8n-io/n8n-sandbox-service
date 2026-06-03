@@ -155,9 +155,9 @@ Each hop uses `httputil.ReverseProxy` with URL rewriting. The runner can wake a 
 
 1. Client sends `POST /sandboxes/{id}/executions` with command, env, and working directory
 2. API looks up the sandbox in SQLite, proxies the request to the runner's HTTP endpoint
-3. Runner proxies to the daemon at `{container_ip}:8081/executions`
+3. Runner proxies to the daemon at `{container_ip}:8081/executions` using a retry-aware exec proxy
 4. Daemon forks the process, streams stdout/stderr as NDJSON events
-5. Events stream back through the reverse proxy chain to the client
+5. Events stream back through the proxy chain to the client. If the runner→daemon connection drops mid-stream, the runner automatically resumes via `GET /executions/{exec_id}?follow=true&after=<seq>` (up to 3 retries)
 6. Client can poll `GET /sandboxes/{id}/executions/{exec_id}` or cancel with `DELETE`
 
 ### File Operations
