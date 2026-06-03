@@ -577,7 +577,7 @@ func probeDaemon(ctx context.Context, baseURL string, timeout time.Duration) err
 		resp, err := client.Do(req)
 		if err == nil {
 			_ = resp.Body.Close()
-			if resp.StatusCode >= 200 && resp.StatusCode < 500 {
+			if resp.StatusCode == http.StatusOK {
 				return nil
 			}
 		}

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -210,6 +212,19 @@ func TestRuntimeCreateSandboxCleansUpOnFailure(t *testing.T) {
 	}
 	if _, err := rt.GetSandboxInfo(context.Background(), "sandbox-id-123456"); !errors.Is(err, runnerruntime.ErrSandboxNotFound) {
 		t.Fatalf("GetSandboxInfo() error = %v, want ErrSandboxNotFound", err)
+	}
+}
+
+func TestProbeDaemonRejectsUnhealthyStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.NotFound(w, nil)
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := probeDaemon(ctx, server.URL, time.Second); err == nil {
+		t.Fatal("expected unhealthy status to fail readiness probe")
 	}
 }
 
