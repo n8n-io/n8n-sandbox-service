@@ -3,6 +3,7 @@ package firecracker
 import (
 	"context"
 	"errors"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -209,6 +210,53 @@ func TestRuntimeCreateSandboxCleansUpOnFailure(t *testing.T) {
 	}
 	if _, err := rt.GetSandboxInfo(context.Background(), "sandbox-id-123456"); !errors.Is(err, runnerruntime.ErrSandboxNotFound) {
 		t.Fatalf("GetSandboxInfo() error = %v, want ErrSandboxNotFound", err)
+	}
+}
+
+func TestTCPDaemonProxyStopCancelsActiveGuestDial(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen() failed: %v", err)
+	}
+	proxyCtx, cancel := context.WithCancel(context.Background())
+	dialStarted := make(chan struct{})
+	proxy := &tcpDaemonProxy{
+		listener: listener,
+		done:     make(chan struct{}),
+		ctx:      proxyCtx,
+		cancel:   cancel,
+		dial: func(ctx context.Context, _ string, _ string, _ string) (net.Conn, error) {
+			close(dialStarted)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}
+
+	go proxy.serve("fc-sb-0", "172.16.0.10:8081")
+	clientConn, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial() failed: %v", err)
+	}
+	defer clientConn.Close()
+
+	select {
+	case <-dialStarted:
+	case <-time.After(time.Second):
+		t.Fatal("guest dial did not start")
+	}
+
+	stopped := make(chan error, 1)
+	go func() {
+		stopped <- proxy.Stop()
+	}()
+
+	select {
+	case err := <-stopped:
+		if err != nil {
+			t.Fatalf("Stop() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Stop() did not cancel active guest dial")
 	}
 }
 
