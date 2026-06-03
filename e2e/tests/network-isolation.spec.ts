@@ -6,7 +6,7 @@ const tcpConnect = (ip: string, port: number = 80, timeout: number = 3) =>
   `curl --connect-timeout ${timeout} -s -o /dev/null http://${ip}:${port}/`;
 
 const tcpConnectV6 = (ip: string, port: number = 443, timeout: number = 3) =>
-  `curl --connect-timeout ${timeout} -s -o /dev/null -6 "http://[${ip}]:${port}/"`;
+  `curl --connect-timeout ${timeout} -sk -o /dev/null -6 "https://[${ip}]:${port}/"`;
 
 const resolve = (host: string) =>
   `getent ahostsv4 ${host} | head -1 | awk '{print $1}'`;
