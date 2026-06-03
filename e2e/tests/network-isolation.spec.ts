@@ -2,10 +2,6 @@ import { test, expect } from '@playwright/test';
 import './matchers';
 import { createSandbox, deleteSandbox, exec, execWithTransientRetry } from './helpers';
 
-// Helper: use python3 for HTTP requests since curl is not in the sandbox rootfs
-const pyGet = (url: string, timeout: number = 5) =>
-  `python3 -c "import urllib.request; r=urllib.request.urlopen('${url}', timeout=${timeout}); print(r.status)"`;
-
 const pyConnect = (ip: string, port: number = 80, timeout: number = 3) =>
   `python3 -c "import socket; s=socket.socket(); s.settimeout(${timeout}); s.connect(('${ip}', ${port})); s.close(); print('connected')"`;
 
@@ -19,7 +15,7 @@ test.describe('Network isolation', () => {
   test('sandbox can reach public internet', async () => {
     const id = await createSandbox();
     try {
-      const result = await exec(id, pyGet('http://httpbin.org/ip', 15), {
+      const result = await exec(id, `curl -fsSL -o /dev/null -w '%{http_code}' --max-time 15 https://one.one.one.one/`, {
         timeoutMs: 30_000,
       });
       expect(result).toHaveSucceeded();

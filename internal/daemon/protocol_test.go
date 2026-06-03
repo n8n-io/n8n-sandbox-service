@@ -1,10 +1,34 @@
 package daemon
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 	"testing"
 )
+
+func TestExecResponseMarshalStartsWithSeqAndType(t *testing.T) {
+	seq := uint64(7)
+	tests := []Response{
+		{Seq: &seq, Type: ResponseTypeStarted, ExecID: "exec-1"},
+		{Seq: &seq, Type: ResponseTypeStdout, Data: "hello\n"},
+		{Seq: &seq, Type: ResponseTypeStderr, Data: "warn\n"},
+		{Seq: &seq, Type: ResponseTypeExit, ExitCode: 0},
+		{Seq: &seq, Type: ResponseTypeError, Error: "failed"},
+	}
+
+	for _, resp := range tests {
+		data, err := json.Marshal(resp)
+		if err != nil {
+			t.Fatalf("marshal %s response: %v", resp.Type, err)
+		}
+
+		wantPrefix := []byte(`{"seq":7,"type":"` + string(resp.Type) + `"`)
+		if !bytes.HasPrefix(data, wantPrefix) {
+			t.Fatalf("expected %s response to start with %s, got %s", resp.Type, wantPrefix, data)
+		}
+	}
+}
 
 func TestResponseMarshalOmitsExecFlagsForNonExit(t *testing.T) {
 	resp := Response{
