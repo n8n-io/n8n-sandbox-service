@@ -13,8 +13,9 @@ import {
 import { SandboxServiceError } from '@n8n/sandbox-client';
 
 const API_KEY = process.env.SANDBOX_API_KEY || 'test';
+const BOTH_RUNNERS = { tag: ['@docker-runner', '@firecracker-runner'] };
 
-test.describe('Auth', () => {
+test.describe('Auth', BOTH_RUNNERS, () => {
   test('rejects missing API key', async ({ request }) => {
     const resp = await request.post('/sandboxes', {
       headers: { 'Content-Type': 'application/json' },
@@ -32,7 +33,7 @@ test.describe('Auth', () => {
   });
 });
 
-test.describe('Sandbox lifecycle', () => {
+test.describe('Sandbox lifecycle', BOTH_RUNNERS, () => {
   test('create, exec, delete', async ({ request }) => {
     const id = await createSandbox();
     expect(id).toBeTruthy();
@@ -67,7 +68,7 @@ test.describe('Sandbox lifecycle', () => {
   });
 });
 
-test.describe('Exec', () => {
+test.describe('Exec', BOTH_RUNNERS, () => {
   let sandboxId: string;
 
   test.beforeEach(async () => {
@@ -213,7 +214,7 @@ test.describe('Exec', () => {
   });
 });
 
-test.describe('File operations', () => {
+test.describe('File operations', BOTH_RUNNERS, () => {
   let sandboxId: string;
 
   test.beforeEach(async () => {
@@ -700,7 +701,7 @@ test.describe('File operations', () => {
   });
 });
 
-test.describe('Sandbox isolation', () => {
+test.describe('Sandbox isolation', BOTH_RUNNERS, () => {
   test('files are isolated between sandboxes', async ({ request }) => {
     const id1 = await createSandbox();
     const id2 = await createSandbox();
@@ -717,7 +718,7 @@ test.describe('Sandbox isolation', () => {
   });
 });
 
-test.describe('Deleted Sandbox 404 Tests', () => {
+test.describe('Deleted Sandbox 404 Tests', BOTH_RUNNERS, () => {
   test('file operations on deleted sandbox return 404', async ({ request }) => {
     const tempId = await createSandbox();
     await deleteSandbox(tempId);
@@ -741,7 +742,7 @@ test.describe('Deleted Sandbox 404 Tests', () => {
   });
 });
 
-test.describe('Healthz', () => {
+test.describe('Healthz', BOTH_RUNNERS, () => {
   test('returns ok without auth', async ({ request }) => {
     const resp = await request.get('/healthz');
     expect(resp.status()).toBe(200);

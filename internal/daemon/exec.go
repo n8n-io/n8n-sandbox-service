@@ -37,7 +37,9 @@ func HandleExec(ctx context.Context, command string, env []string, workdir strin
 	}
 
 	// Put the child in its own process group so we can kill the whole tree.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// The daemon normally drops to the sandbox user during startup; the
+	// credential fallback keeps direct root-started guests safe too.
+	cmd.SysProcAttr = commandSysProcAttr()
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -82,6 +84,9 @@ func HandleExec(ctx context.Context, command string, env []string, workdir strin
 		for scanner.Scan() {
 			callback(Response{Type: ResponseTypeStdout, Data: scanner.Text() + "\n"})
 		}
+		if err := scanner.Err(); err != nil {
+			slog.Warn("scan stdout", "err", err)
+		}
 	}()
 
 	// Stream stderr.
@@ -91,6 +96,9 @@ func HandleExec(ctx context.Context, command string, env []string, workdir strin
 		scanner := bufio.NewScanner(stderrPipe)
 		for scanner.Scan() {
 			callback(Response{Type: ResponseTypeStderr, Data: scanner.Text() + "\n"})
+		}
+		if err := scanner.Err(); err != nil {
+			slog.Warn("scan stderr", "err", err)
 		}
 	}()
 

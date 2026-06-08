@@ -33,6 +33,12 @@ func (p *fakeProxy) Stop() error {
 	return nil
 }
 
+type daemonProxyFunc func() error
+
+func (f daemonProxyFunc) Stop() error {
+	return f()
+}
+
 type recordedCommand struct {
 	name string
 	args []string
@@ -213,6 +219,52 @@ func TestRuntimeCreateSandboxCleansUpOnFailure(t *testing.T) {
 	}
 	if _, err := rt.GetSandboxInfo(context.Background(), "sandbox-id-123456"); !errors.Is(err, runnerruntime.ErrSandboxNotFound) {
 		t.Fatalf("GetSandboxInfo() error = %v, want ErrSandboxNotFound", err)
+	}
+}
+
+func TestRuntimeDeleteKeepsSlotReservedUntilProxyStops(t *testing.T) {
+	rt := New(testConfig(1))
+	proxyStopStarted := make(chan struct{})
+	releaseProxy := make(chan struct{})
+	proxy := daemonProxyFunc(func() error {
+		close(proxyStopStarted)
+		<-releaseProxy
+		return nil
+	})
+
+	rt.deps.run = func(context.Context, string, ...string) error { return nil }
+	rt.deps.start = func(context.Context, string, ...string) (process, error) { return &fakeProcess{}, nil }
+	rt.deps.pathExists = func(string) bool { return true }
+	rt.deps.loadSnapshot = func(context.Context, string, config.FirecrackerConfig) error { return nil }
+	rt.deps.newProxy = func(context.Context, string, string, string) (daemonProxy, error) { return proxy, nil }
+	rt.deps.probeDaemon = func(context.Context, string) error { return nil }
+
+	if _, err := rt.CreateSandbox(context.Background(), "sandbox-id-123456", nil); err != nil {
+		t.Fatalf("CreateSandbox() failed: %v", err)
+	}
+
+	deleteDone := make(chan error, 1)
+	go func() {
+		deleteDone <- rt.DeleteSandbox(context.Background(), "sandbox-id-123456")
+	}()
+
+	select {
+	case <-proxyStopStarted:
+	case <-time.After(time.Second):
+		t.Fatal("proxy stop did not start")
+	}
+
+	if _, err := rt.CreateSandbox(context.Background(), "sandbox-id-abcdef", nil); err == nil || !strings.Contains(err.Error(), "capacity exhausted") {
+		t.Fatalf("CreateSandbox() while delete in progress error = %v, want capacity exhausted", err)
+	}
+
+	close(releaseProxy)
+	if err := <-deleteDone; err != nil {
+		t.Fatalf("DeleteSandbox() failed: %v", err)
+	}
+
+	if _, err := rt.CreateSandbox(context.Background(), "sandbox-id-abcdef", nil); err != nil {
+		t.Fatalf("CreateSandbox() after delete failed: %v", err)
 	}
 }
 

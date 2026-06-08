@@ -3,7 +3,7 @@ import { createSandboxWithRetry, deleteSandbox, exec } from './helpers';
 
 // Run only from e2e/run-two-runners.sh (two registered runners).
 
-test('sandboxes stay on the correct runner', async () => {
+test('sandboxes stay on the correct runner', { tag: '@docker-runner' }, async () => {
   const id1 = await createSandboxWithRetry();
   const id2 = await createSandboxWithRetry();
 

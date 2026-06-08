@@ -308,7 +308,7 @@ func (r *Runtime) Shutdown(ctx context.Context) {
 	for id, state := range r.sandboxes {
 		states = append(states, state)
 		delete(r.sandboxes, id)
-		r.releaseSlotLocked(state.slot)
+		state.running = false
 	}
 	r.mu.Unlock()
 
@@ -352,8 +352,10 @@ func (r *Runtime) reserveSandbox(sandboxID string) (*sandboxState, error) {
 	return state, nil
 }
 
-// takeSandbox removes the sandbox from in-memory state before host cleanup so
-// placement capacity is released even if cleanup reports a best-effort error.
+// takeSandbox removes the sandbox from in-memory lookup before host cleanup.
+// The slot remains occupied until deleteSandbox has stopped the per-slot proxy
+// and other host resources, otherwise a new sandbox could reuse the same proxy
+// port while the old listener is still alive.
 func (r *Runtime) takeSandbox(sandboxID string) (*sandboxState, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -363,7 +365,6 @@ func (r *Runtime) takeSandbox(sandboxID string) (*sandboxState, error) {
 		return nil, runnerruntime.ErrSandboxNotFound
 	}
 	delete(r.sandboxes, sandboxID)
-	r.releaseSlotLocked(state.slot)
 	state.running = false
 	return state, nil
 }
@@ -376,7 +377,7 @@ func (r *Runtime) deleteSandbox(ctx context.Context, state *sandboxState, releas
 		r.mu.Lock()
 		if current, ok := r.sandboxes[state.id]; ok && current == state {
 			delete(r.sandboxes, state.id)
-			r.releaseSlotLocked(state.slot)
+			state.running = false
 		}
 		r.mu.Unlock()
 	}
@@ -398,6 +399,9 @@ func (r *Runtime) deleteSandbox(ctx context.Context, state *sandboxState, releas
 		slog.Warn("firecracker host cleanup failed", "sandbox_id", state.id, "err", err)
 		errs = append(errs, fmt.Errorf("cleanup firecracker host state: %w", err))
 	}
+	r.mu.Lock()
+	r.releaseSlotLocked(state.slot)
+	r.mu.Unlock()
 	slog.Debug("firecracker sandbox cleanup finished", "sandbox_id", state.id, "vm_id", state.vmID, "slot", state.slot)
 	return joinErrors(errs)
 }

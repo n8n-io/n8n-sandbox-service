@@ -29,10 +29,39 @@ host Firecracker setup and local snapshot cache.
 - The snapshot/rootfs set must be built together and include the n8n sandbox
   daemon listening on the configured daemon port.
 
+## Host and Asset Notes
+
+Firecracker hosts must expose KVM to the runner. The e2e VM setup now fails
+fast unless `/dev/kvm` exists, CPU virtualization flags are present, and the
+relevant KVM module parameters report nested virtualization support. On Intel
+hosts this includes `nested=Y` and `ept=Y`.
+
+The Firecracker e2e path creates the kernel/rootfs template and snapshot on the
+same VM that runs the tests. It installs a pinned upstream Firecracker release,
+downloads the matching upstream Firecracker CI kernel/rootfs inputs, injects the
+locally built sandbox daemon, and then creates `snapshot_mem` and
+`snapshot_state` locally.
+
+The generated rootfs owns the guest filesystem contract: it includes the
+sandbox user, `/home/user`, and a writable sticky `/tmp`. The guest daemon may
+start as kernel `init`, but it drops to UID/GID 1000 before serving API requests,
+so daemon file operations and workload commands run as the sandbox user.
+
+The e2e asset contract is the configured Firecracker release, the matching
+Firecracker CI kernel/rootfs inputs, and the locally built sandbox daemon. The
+target VM generates the full bootable template and snapshot from those pinned
+inputs locally.
+
+Snapshot restore is CPU-sensitive. Firecracker documents that snapshots are only
+compatible when the guest-visible CPU features are invariant between snapshot
+creation and restore. For production VMSS, either create snapshots on each host
+or enforce a homogeneous guest CPU contract, for example by constraining host
+placement and/or using Firecracker CPU templates.
+
 ## Security Hardening TODO
 
 - Keep one proxy per sandbox and close it before releasing the slot.
-- Add tests for slot reuse and cleanup.
+- Add more tests for slot reuse and cleanup.
 - Add file descriptor/timeouts/connection limits.
 - Consider Unix sockets instead of TCP localhost if the Go reverse proxy path allows it later.
 - Add guest-daemon authentication or per-sandbox secret headers if we want defense in depth.
