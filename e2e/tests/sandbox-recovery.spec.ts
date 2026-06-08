@@ -88,7 +88,7 @@ async function waitContainerRestarted(
   );
 }
 
-test.describe('Sandbox recovery on runner', () => {
+test.describe('Sandbox recovery on runner', { tag: '@docker-runner' }, () => {
   test('sandbox container restart keeps same sandbox id reachable', async () => {
     test.skip(!process.env.E2E_RUNNER_CONTAINER_NAME, 'needs E2E_RUNNER_CONTAINER_NAME (from e2e/run.sh)');
     test.setTimeout(150_000);

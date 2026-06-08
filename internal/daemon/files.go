@@ -123,10 +123,16 @@ func HandleFileWrite(path string, data []byte, maxBytes int64, overwrite bool) e
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("file_write mkdir %s: %w", dir, err)
 	}
+	if err := chownSandboxPath(dir); err != nil {
+		return fmt.Errorf("file_write chown dir %s: %w", dir, err)
+	}
 
 	if overwrite {
 		if err := os.WriteFile(resolved, data, 0o644); err != nil {
 			return fmt.Errorf("file_write write %s: %w", resolved, err)
+		}
+		if err := chownSandboxPath(resolved); err != nil {
+			return fmt.Errorf("file_write chown %s: %w", resolved, err)
 		}
 		return nil
 	}
@@ -146,6 +152,9 @@ func HandleFileWrite(path string, data []byte, maxBytes int64, overwrite bool) e
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("file_write close %s: %w", resolved, err)
 	}
+	if err := chownSandboxPath(resolved); err != nil {
+		return fmt.Errorf("file_write chown %s: %w", resolved, err)
+	}
 	return nil
 }
 
@@ -158,6 +167,9 @@ func HandleFileAppend(path string, data []byte) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("file_append mkdir %s: %w", dir, err)
 	}
+	if err := chownSandboxPath(dir); err != nil {
+		return fmt.Errorf("file_append chown dir %s: %w", dir, err)
+	}
 
 	f, err := os.OpenFile(resolved, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644)
 	if err != nil {
@@ -167,6 +179,9 @@ func HandleFileAppend(path string, data []byte) error {
 
 	if _, err := f.Write(data); err != nil {
 		return fmt.Errorf("file_append write %s: %w", resolved, err)
+	}
+	if err := chownSandboxPath(resolved); err != nil {
+		return fmt.Errorf("file_append chown %s: %w", resolved, err)
 	}
 	return nil
 }
@@ -286,6 +301,9 @@ func HandleFileMkdir(path string, recursive bool) error {
 			return fmt.Errorf("file_mkdir mkdir %s: %w", resolved, err)
 		}
 	}
+	if err := chownSandboxPath(resolved); err != nil {
+		return fmt.Errorf("file_mkdir chown %s: %w", resolved, err)
+	}
 	return nil
 }
 
@@ -355,6 +373,9 @@ func copyFile(src, dest string) error {
 		return err
 	}
 	if err := destFile.Close(); err != nil {
+		return err
+	}
+	if err := chownSandboxPath(dest); err != nil {
 		return err
 	}
 	return nil

@@ -15,7 +15,7 @@ function scrapeRunnerMetrics(runnerContainer: string): string {
   );
 }
 
-test.describe('Runner metrics endpoint', () => {
+test.describe('Runner metrics endpoint', { tag: '@docker-runner' }, () => {
   test('is served without X-Api-Key and returns expected families', async () => {
     test.skip(!process.env.E2E_RUNNER_CONTAINER_NAME, 'needs E2E_RUNNER_CONTAINER_NAME (from e2e/run.sh)');
     const runnerContainer = process.env.E2E_RUNNER_CONTAINER_NAME!;

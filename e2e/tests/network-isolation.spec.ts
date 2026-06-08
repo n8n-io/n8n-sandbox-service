@@ -15,7 +15,7 @@ const pyConnectV6 = (ip: string, port: number = 443, timeout: number = 3) =>
 const pyResolve = (host: string) =>
   `python3 -c "import socket; print(socket.gethostbyname('${host}'))"`;
 
-test.describe('Network isolation', () => {
+test.describe('Network isolation', { tag: '@docker-runner' }, () => {
   test('sandbox can reach public internet', async () => {
     const id = await createSandbox();
     try {

@@ -4,7 +4,7 @@ import { apiRequest, createSandbox, execWithTransientRetry } from './helpers';
 
 test.describe.configure({ timeout: 75_000 });
 
-test.describe('idle stop / wake / delete', () => {
+test.describe('idle stop / wake / delete', { tag: '@docker-runner' }, () => {
   test('stop after idle, exec wakes, then row is deleted', async ({ request }) => {
     const id = await createSandbox();
 

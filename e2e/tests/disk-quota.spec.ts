@@ -8,7 +8,7 @@ import { createSandbox, deleteSandbox, exec } from './helpers';
 //
 // Set E2E_VERIFY_DISK_QUOTA=true to assert that quotas actually enforce on
 // this host.
-test.describe('Disk quota enforcement', () => {
+test.describe('Disk quota enforcement', { tag: '@docker-runner' }, () => {
   test.skip(
     process.env.E2E_VERIFY_DISK_QUOTA !== 'true',
     'set E2E_VERIFY_DISK_QUOTA=true to run (requires host kernel with CONFIG_XFS_QUOTA)',
