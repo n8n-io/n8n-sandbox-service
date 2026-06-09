@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import './matchers';
 import { createSandbox, deleteSandbox, docker, exec, innerContainerName } from './helpers';
+import { RUNNER_TAGS } from './tags';
 
 async function waitExecOK(sandboxID: string, command: string, deadlineMs: number): Promise<void> {
   const deadline = Date.now() + deadlineMs;
@@ -88,7 +89,7 @@ async function waitContainerRestarted(
   );
 }
 
-test.describe('Sandbox recovery on runner', { tag: '@docker-runner' }, () => {
+test.describe('Sandbox recovery on runner', { tag: RUNNER_TAGS.docker }, () => {
   test('sandbox container restart keeps same sandbox id reachable', async () => {
     test.skip(!process.env.E2E_RUNNER_CONTAINER_NAME, 'needs E2E_RUNNER_CONTAINER_NAME (from e2e/run.sh)');
     test.setTimeout(150_000);

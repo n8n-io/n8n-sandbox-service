@@ -1,12 +1,13 @@
 import { test, expect } from '@playwright/test';
 import { createSandbox, deleteSandbox } from './helpers';
 import { parseCounter } from './metrics-helpers';
+import { BOTH_RUNNERS } from './tags';
 
 // e2e/run.sh sets SANDBOX_API_METRICS_ENABLED=true on the API container, so
 // /metrics is mounted and bypasses X-Api-Key. These tests exercise the live
 // endpoint against the dockerized API.
 
-test.describe('API metrics endpoint', { tag: '@both' }, () => {
+test.describe('API metrics endpoint', BOTH_RUNNERS, () => {
   test('is served without X-Api-Key and returns expected families', async ({ request }) => {
     const resp = await request.get('/metrics');
     expect(resp.status()).toBe(200);
