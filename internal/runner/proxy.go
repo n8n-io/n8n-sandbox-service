@@ -64,37 +64,8 @@ func proxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.Run
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		if !isValidID(id) {
-			writeError(w, http.StatusBadRequest, "invalid sandbox id")
-			return
-		}
-
-		daemonBaseURL, err := rt.DaemonURL(r.Context(), id)
-		if err != nil && errors.Is(err, runnerruntime.ErrSandboxNotRunning) {
-			wakeStart := time.Now()
-			wakeErr := rt.EnsureSandboxRunning(r.Context(), id)
-			rec.ObserveContainerOp(metrics.OpEnsureRunning, wakeErr == nil, time.Since(wakeStart))
-			if wakeErr != nil {
-				if errors.Is(wakeErr, runnerruntime.ErrSandboxNotFound) {
-					writeError(w, http.StatusNotFound, wakeErr.Error())
-				} else {
-					writeError(w, http.StatusServiceUnavailable, "sandbox start: "+wakeErr.Error())
-				}
-				return
-			}
-			daemonBaseURL, err = rt.DaemonURL(r.Context(), id)
-		}
-		if err != nil {
-			if errors.Is(err, runnerruntime.ErrSandboxNotFound) {
-				writeError(w, http.StatusNotFound, err.Error())
-			} else if errors.Is(err, runnerruntime.ErrSandboxNotRunning) {
-				writeError(w, http.StatusBadGateway, runnerruntime.ErrSandboxNotRunning.Error())
-			} else if errors.Is(err, runnerruntime.ErrSandboxNetworkUnavailable) {
-				writeError(w, http.StatusServiceUnavailable, "sandbox temporarily unavailable")
-			} else {
-				writeError(w, http.StatusInternalServerError, err.Error())
-			}
+		daemonBaseURL, ok := resolveDaemonURL(w, r, rt, rec)
+		if !ok {
 			return
 		}
 
@@ -109,6 +80,7 @@ func proxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.Run
 		}
 
 		// Strip /sandboxes/{id} prefix to get the daemon path.
+		id := r.PathValue("id")
 		prefix := "/sandboxes/" + id
 		daemonPath := strings.TrimPrefix(r.URL.Path, prefix)
 		if daemonPath == "" {
@@ -121,4 +93,47 @@ func proxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.Run
 		})
 		proxy.ServeHTTP(w, r.WithContext(ctx))
 	}
+}
+
+// resolveDaemonURL validates the sandbox ID, looks up the daemon URL, and
+// wakes the sandbox if necessary. On error it writes an HTTP response and
+// returns ("", false).
+func resolveDaemonURL(w http.ResponseWriter, r *http.Request, rt runnerruntime.Runtime, rec *metrics.RunnerRecorder) (string, bool) {
+	id := r.PathValue("id")
+	if !isValidID(id) {
+		writeError(w, http.StatusBadRequest, "invalid sandbox id")
+		return "", false
+	}
+
+	daemonBaseURL, err := rt.DaemonURL(r.Context(), id)
+	if err != nil && errors.Is(err, runnerruntime.ErrSandboxNotRunning) {
+		wakeStart := time.Now()
+		wakeErr := rt.EnsureSandboxRunning(r.Context(), id)
+		if rec != nil {
+			rec.ObserveContainerOp(metrics.OpEnsureRunning, wakeErr == nil, time.Since(wakeStart))
+		}
+		if wakeErr != nil {
+			if errors.Is(wakeErr, runnerruntime.ErrSandboxNotFound) {
+				writeError(w, http.StatusNotFound, wakeErr.Error())
+			} else {
+				writeError(w, http.StatusServiceUnavailable, "sandbox start: "+wakeErr.Error())
+			}
+			return "", false
+		}
+		daemonBaseURL, err = rt.DaemonURL(r.Context(), id)
+	}
+	if err != nil {
+		if errors.Is(err, runnerruntime.ErrSandboxNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+		} else if errors.Is(err, runnerruntime.ErrSandboxNotRunning) {
+			writeError(w, http.StatusBadGateway, runnerruntime.ErrSandboxNotRunning.Error())
+		} else if errors.Is(err, runnerruntime.ErrSandboxNetworkUnavailable) {
+			writeError(w, http.StatusServiceUnavailable, "sandbox temporarily unavailable")
+		} else {
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return "", false
+	}
+
+	return daemonBaseURL, true
 }

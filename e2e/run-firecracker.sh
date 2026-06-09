@@ -151,7 +151,7 @@ sudo env \
 	SANDBOX_RUNNER_ID="e2e-firecracker-runner-$$" \
 	SANDBOX_RUNNER_CAPACITY_TOTAL="${SANDBOX_RUNNER_CAPACITY_TOTAL:-4}" \
 	SANDBOX_RUNNER_FIRECRACKER_PROXY_PORT_START="$FIRECRACKER_PROXY_PORT_START" \
-	"$PROJECT_DIR/bin/runner" >"$RUNNER_LOG" 2>&1 &
+	"$PROJECT_DIR/bin/runner-firecracker" >"$RUNNER_LOG" 2>&1 &
 RUNNER_PID=$!
 
 wait_for_http "Firecracker runner" "http://${RUNNER_ADDR}/readyz"
