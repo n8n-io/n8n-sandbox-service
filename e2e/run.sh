@@ -213,7 +213,8 @@ if [[ ${#MAIN_SPECS[@]} -eq 0 ]]; then
 	echo "No Playwright specs found under tests/ (after excluding placement + resilience specs)" >&2
 	exit 1
 fi
-BASE_URL="http://localhost:$PORT" SANDBOX_API_KEY="$API_KEY" npx playwright test "${MAIN_SPECS[@]}" "$@"
+BASE_URL="http://localhost:$PORT" SANDBOX_API_KEY="$API_KEY" \
+	npx playwright test "${MAIN_SPECS[@]}" --grep '@docker-runner|@both' "$@"
 
 if [[ "${E2E_IDLE_TTL_SUITE:-}" != "1" ]]; then
 	echo "Running API resilience e2e..."

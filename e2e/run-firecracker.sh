@@ -171,4 +171,4 @@ fi
 
 echo "Running Firecracker-compatible e2e tests..."
 BASE_URL="http://127.0.0.1:$PORT" SANDBOX_API_KEY="$API_KEY" \
-	npx playwright test --grep @firecracker-runner "$@"
+	npx playwright test --grep '@firecracker-runner|@both' "$@"

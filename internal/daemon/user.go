@@ -42,10 +42,3 @@ func commandSysProcAttr() *syscall.SysProcAttr {
 	}
 	return attr
 }
-
-func chownSandboxPath(path string) error {
-	if os.Geteuid() != 0 {
-		return nil
-	}
-	return os.Chown(path, sandboxUID, sandboxGID)
-}
