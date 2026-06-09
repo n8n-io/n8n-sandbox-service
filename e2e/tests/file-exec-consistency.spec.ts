@@ -9,6 +9,7 @@ import {
   downloadFile,
   apiRequest,
 } from './helpers';
+import { BOTH_RUNNERS } from './tags';
 
 /**
  * E2E tests verifying that the file API and exec API operate on the same
@@ -16,7 +17,7 @@ import {
  */
 test.describe.configure({ mode: 'serial' });
 
-test.describe('File API and Exec API path consistency', { tag: '@both' }, () => {
+test.describe('File API and Exec API path consistency', BOTH_RUNNERS, () => {
   let sandboxId: string;
 
   test.beforeAll(async () => {

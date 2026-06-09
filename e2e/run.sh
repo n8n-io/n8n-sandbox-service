@@ -22,6 +22,7 @@ PORT="${PORT:-8080}"
 API_KEY="test"
 RUNNER_INTERNAL_API_KEY="runner-test"
 REG_TOKEN="${SANDBOX_API_RUNNER_REGISTRATION_TOKEN:-e2e-reg-token}"
+DOCKER_RUNNER_TAG="@docker-runner"
 STARTED_REGISTRY=false
 TLS_DIR="${E2E_TLS_DIR:-$(mktemp -d)}"
 TLS_DIR_OWNED=0
@@ -214,7 +215,7 @@ if [[ ${#MAIN_SPECS[@]} -eq 0 ]]; then
 	exit 1
 fi
 BASE_URL="http://localhost:$PORT" SANDBOX_API_KEY="$API_KEY" \
-	npx playwright test "${MAIN_SPECS[@]}" --grep '@docker-runner|@both' "$@"
+	npx playwright test "${MAIN_SPECS[@]}" --grep "$DOCKER_RUNNER_TAG" "$@"
 
 if [[ "${E2E_IDLE_TTL_SUITE:-}" != "1" ]]; then
 	echo "Running API resilience e2e..."

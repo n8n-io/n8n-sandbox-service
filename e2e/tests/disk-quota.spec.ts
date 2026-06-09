@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { createSandbox, deleteSandbox, exec } from './helpers';
+import { RUNNER_TAGS } from './tags';
 
 // The runner is always configured with per-sandbox disk quotas (see
 // e2e/run.sh). On hosts whose kernel lacks CONFIG_XFS_QUOTA — notably Docker
@@ -8,7 +9,7 @@ import { createSandbox, deleteSandbox, exec } from './helpers';
 //
 // Set E2E_VERIFY_DISK_QUOTA=true to assert that quotas actually enforce on
 // this host.
-test.describe('Disk quota enforcement', { tag: '@docker-runner' }, () => {
+test.describe('Disk quota enforcement', { tag: RUNNER_TAGS.docker }, () => {
   test.skip(
     process.env.E2E_VERIFY_DISK_QUOTA !== 'true',
     'set E2E_VERIFY_DISK_QUOTA=true to run (requires host kernel with CONFIG_XFS_QUOTA)',
