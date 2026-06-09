@@ -44,32 +44,39 @@ type recordedCommand struct {
 	args []string
 }
 
-func testConfig(capacity int32) *config.Config {
+func testRunnerConfig(capacity int32) *config.Config {
 	return &config.Config{
 		CapacityTotal: capacity,
-		Firecracker: config.FirecrackerConfig{
-			JailerBin:               "/opt/firecracker/bin/jailer",
-			FirecrackerBin:          "/opt/firecracker/bin/firecracker",
-			JailerBaseDir:           "/srv/jailer",
-			TemplateDir:             "/srv/firecracker/template",
-			SnapshotMemPath:         "/srv/firecracker/snapshots/mem",
-			SnapshotStatePath:       "/srv/firecracker/snapshots/state",
-			SnapshotVirtioBlockPath: "/rootfs.ext4",
-			GuestIP:                 "172.16.0.10",
-			HostTapDeviceName:       "fc-tap-0",
-			HostTapIPCIDR:           "172.16.0.1/24",
-			DaemonPort:              8081,
-			ProxyListenIP:           "127.0.0.1",
-			ProxyPortStart:          18081,
-			SocketWaitAttempts:      1,
-			SocketWaitInterval:      time.Nanosecond,
-			DaemonWaitTimeout:       time.Second,
-		},
 	}
 }
 
+func testConfig() Config {
+	return Config{
+		JailerBin:               "/opt/firecracker/bin/jailer",
+		FirecrackerBin:          "/opt/firecracker/bin/firecracker",
+		JailerBaseDir:           "/srv/jailer",
+		TemplateDir:             "/srv/firecracker/template",
+		SnapshotMemPath:         "/srv/firecracker/snapshots/mem",
+		SnapshotStatePath:       "/srv/firecracker/snapshots/state",
+		SnapshotVirtioBlockPath: "/rootfs.ext4",
+		GuestIP:                 "172.16.0.10",
+		HostTapDeviceName:       "fc-tap-0",
+		HostTapIPCIDR:           "172.16.0.1/24",
+		DaemonPort:              8081,
+		ProxyListenIP:           "127.0.0.1",
+		ProxyPortStart:          18081,
+		SocketWaitAttempts:      1,
+		SocketWaitInterval:      time.Nanosecond,
+		DaemonWaitTimeout:       time.Second,
+	}
+}
+
+func testRuntime(capacity int32) *Runtime {
+	return New(testRunnerConfig(capacity), testConfig())
+}
+
 func TestRuntimeReadyChecksFirecrackerAssets(t *testing.T) {
-	rt := New(testConfig(1))
+	rt := testRuntime(1)
 	rt.deps.pathExists = func(path string) bool {
 		return path != "/srv/firecracker/snapshots/state"
 	}
@@ -80,7 +87,7 @@ func TestRuntimeReadyChecksFirecrackerAssets(t *testing.T) {
 }
 
 func TestRuntimeCreateSandboxStartsFirecrackerAndProxy(t *testing.T) {
-	rt := New(testConfig(2))
+	rt := testRuntime(2)
 	proc := &fakeProcess{}
 	proxy := &fakeProxy{}
 	var commands []recordedCommand
@@ -98,7 +105,7 @@ func TestRuntimeCreateSandboxStartsFirecrackerAndProxy(t *testing.T) {
 		return proc, nil
 	}
 	rt.deps.pathExists = func(string) bool { return true }
-	rt.deps.loadSnapshot = func(_ context.Context, socketPath string, _ config.FirecrackerConfig) error {
+	rt.deps.loadSnapshot = func(_ context.Context, socketPath string, _ Config) error {
 		loadedSocket = socketPath
 		return nil
 	}
@@ -166,11 +173,11 @@ func TestRuntimeCreateSandboxStartsFirecrackerAndProxy(t *testing.T) {
 }
 
 func TestRuntimeCreateSandboxEnforcesCapacity(t *testing.T) {
-	rt := New(testConfig(1))
+	rt := testRuntime(1)
 	rt.deps.run = func(context.Context, string, ...string) error { return nil }
 	rt.deps.start = func(context.Context, string, ...string) (process, error) { return &fakeProcess{}, nil }
 	rt.deps.pathExists = func(string) bool { return true }
-	rt.deps.loadSnapshot = func(context.Context, string, config.FirecrackerConfig) error { return nil }
+	rt.deps.loadSnapshot = func(context.Context, string, Config) error { return nil }
 	rt.deps.newProxy = func(context.Context, string, string, string) (daemonProxy, error) { return &fakeProxy{}, nil }
 	rt.deps.probeDaemon = func(context.Context, string) error { return nil }
 
@@ -182,8 +189,96 @@ func TestRuntimeCreateSandboxEnforcesCapacity(t *testing.T) {
 	}
 }
 
+func TestRuntimeDeleteHoldsSlotUntilCleanupCompletes(t *testing.T) {
+	rt := testRuntime(1)
+	proc := &fakeProcess{}
+	proxy := &fakeProxy{}
+	cleanupStarted := make(chan struct{})
+	allowCleanup := make(chan struct{})
+	var runCount int
+	rt.deps.run = func(context.Context, string, ...string) error {
+		runCount++
+		if runCount == 3 {
+			close(cleanupStarted)
+			<-allowCleanup
+		}
+		return nil
+	}
+	rt.deps.start = func(context.Context, string, ...string) (process, error) { return proc, nil }
+	rt.deps.pathExists = func(string) bool { return true }
+	rt.deps.loadSnapshot = func(context.Context, string, Config) error { return nil }
+	rt.deps.newProxy = func(context.Context, string, string, string) (daemonProxy, error) { return proxy, nil }
+	rt.deps.probeDaemon = func(context.Context, string) error { return nil }
+
+	if _, err := rt.CreateSandbox(context.Background(), "sandbox-id-123456", nil); err != nil {
+		t.Fatalf("CreateSandbox() failed: %v", err)
+	}
+
+	deleteDone := make(chan error, 1)
+	go func() {
+		deleteDone <- rt.DeleteSandbox(context.Background(), "sandbox-id-123456")
+	}()
+
+	<-cleanupStarted
+
+	if _, err := rt.CreateSandbox(context.Background(), "sandbox-id-abcdef", nil); err == nil {
+		t.Fatal("expected capacity exhausted while cleanup still owns the slot")
+	}
+	capacity, err := rt.Capacity(context.Background())
+	if err != nil {
+		t.Fatalf("Capacity() failed: %v", err)
+	}
+	if capacity.Used != 1 {
+		t.Fatalf("Capacity().Used = %d, want 1 while cleanup still owns the slot", capacity.Used)
+	}
+
+	close(allowCleanup)
+	if err := <-deleteDone; err != nil {
+		t.Fatalf("DeleteSandbox() failed: %v", err)
+	}
+	if _, err := rt.CreateSandbox(context.Background(), "sandbox-id-abcdef", nil); err != nil {
+		t.Fatalf("CreateSandbox() after cleanup failed: %v", err)
+	}
+}
+
+func TestRuntimeReleaseSlotPanicsForInvalidSlot(t *testing.T) {
+	rt := testRuntime(1)
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected releaseSlotLocked to panic for invalid slot")
+		}
+	}()
+
+	rt.releaseSlotLocked(1)
+}
+
+func TestRuntimeDeleteSandboxDoesNotReleaseReassignedSlot(t *testing.T) {
+	rt := testRuntime(1)
+	rt.deps.run = func(context.Context, string, ...string) error { return nil }
+
+	oldState := &sandboxState{id: "sandbox-id-old123", slot: 0}
+	newState := &sandboxState{id: "sandbox-id-new456", slot: 0}
+	rt.sandboxes[newState.id] = newState
+	rt.slots[0].sandboxID = newState.id
+
+	if err := rt.deleteSandbox(context.Background(), oldState); err != nil {
+		t.Fatalf("deleteSandbox() failed: %v", err)
+	}
+
+	capacity, err := rt.Capacity(context.Background())
+	if err != nil {
+		t.Fatalf("Capacity() failed: %v", err)
+	}
+	if capacity.Used != 1 {
+		t.Fatalf("Capacity().Used = %d, want reassigned slot to remain occupied", capacity.Used)
+	}
+	if rt.slots[0].sandboxID != newState.id {
+		t.Fatalf("slot owner = %q, want %q", rt.slots[0].sandboxID, newState.id)
+	}
+}
+
 func TestRuntimeCreateSandboxCleansUpOnFailure(t *testing.T) {
-	rt := New(testConfig(1))
+	rt := testRuntime(1)
 	proc := &fakeProcess{}
 	proxy := &fakeProxy{}
 	var runCount int
@@ -193,7 +288,7 @@ func TestRuntimeCreateSandboxCleansUpOnFailure(t *testing.T) {
 	}
 	rt.deps.start = func(context.Context, string, ...string) (process, error) { return proc, nil }
 	rt.deps.pathExists = func(string) bool { return true }
-	rt.deps.loadSnapshot = func(context.Context, string, config.FirecrackerConfig) error { return nil }
+	rt.deps.loadSnapshot = func(context.Context, string, Config) error { return nil }
 	rt.deps.newProxy = func(context.Context, string, string, string) (daemonProxy, error) { return proxy, nil }
 	rt.deps.probeDaemon = func(context.Context, string) error { return errors.New("daemon down") }
 
@@ -223,7 +318,7 @@ func TestRuntimeCreateSandboxCleansUpOnFailure(t *testing.T) {
 }
 
 func TestRuntimeDeleteKeepsSlotReservedUntilProxyStops(t *testing.T) {
-	rt := New(testConfig(1))
+	rt := testRuntime(1)
 	proxyStopStarted := make(chan struct{})
 	releaseProxy := make(chan struct{})
 	proxy := daemonProxyFunc(func() error {
@@ -235,7 +330,7 @@ func TestRuntimeDeleteKeepsSlotReservedUntilProxyStops(t *testing.T) {
 	rt.deps.run = func(context.Context, string, ...string) error { return nil }
 	rt.deps.start = func(context.Context, string, ...string) (process, error) { return &fakeProcess{}, nil }
 	rt.deps.pathExists = func(string) bool { return true }
-	rt.deps.loadSnapshot = func(context.Context, string, config.FirecrackerConfig) error { return nil }
+	rt.deps.loadSnapshot = func(context.Context, string, Config) error { return nil }
 	rt.deps.newProxy = func(context.Context, string, string, string) (daemonProxy, error) { return proxy, nil }
 	rt.deps.probeDaemon = func(context.Context, string) error { return nil }
 

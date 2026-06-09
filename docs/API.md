@@ -209,6 +209,9 @@ events are received. If omitted, the server generates a UUID.
 
 **Response:** `200 OK` — `Content-Type: application/x-ndjson`
 
+**Response Headers:**
+- `X-Exec-Id` — The execution identifier (either the client-supplied `exec_id` or the server-generated UUID). Useful for resuming via the GET endpoint if the stream disconnects before the `started` event arrives.
+
 Stream of JSON objects, one per line. The first event is always a `started` event:
 
 ```jsonl
@@ -232,6 +235,11 @@ stream. Closing the HTTP connection does **not** kill the running command — it
 stops the event stream. To cancel a running command, use
 `DELETE /sandboxes/{id}/executions/{exec_id}`. The SDK calls the delete endpoint
 automatically when `abortSignal` fires.
+
+The runner automatically retries mid-stream disconnects from the daemon: if the TCP
+connection drops before the terminal event, the runner resumes via the daemon's
+`GET /executions/{exec_id}?follow=true&after=<seq>` endpoint (up to 3 retries with
+exponential backoff starting at 50 ms). The client sees a seamless NDJSON stream.
 
 The execution stores events in a bounded buffer (up to 16 MiB). Clients can reconnect
 via `GET /sandboxes/{id}/executions/{exec_id}?after=<seq>&follow=true`. Completed executions

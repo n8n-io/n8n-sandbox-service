@@ -291,7 +291,7 @@ echo "==> Creating Firecracker e2e snapshot on this VM..."
 sudo env \
 	MEM_MIB="$FIRECRACKER_E2E_SNAPSHOT_MEM_MIB" \
 	VCPUS="$FIRECRACKER_E2E_SNAPSHOT_VCPUS" \
-	firecracker-sandbox/scripts/create-golden-snapshot.sh \
+	bash e2e/infra/scripts/create-golden-snapshot.sh \
 	--kernel /srv/firecracker/template/vmlinux \
 	--ext4 /srv/firecracker/template/rootfs.ext4 \
 	--daemon-bin ./bin/sandbox-daemon \

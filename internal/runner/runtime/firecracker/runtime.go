@@ -24,9 +24,10 @@ import (
 // Runtime manages Firecracker microVM sandboxes using the same runner-facing
 // contract as the Docker/sysbox backend.
 type Runtime struct {
-	cfg   *config.Config
-	deps  dependencies
-	slots []slotState
+	runnerConfig *config.Config
+	config       Config
+	deps         dependencies
+	slots        []slotState
 
 	mu        sync.Mutex
 	sandboxes map[string]*sandboxState
@@ -35,13 +36,14 @@ type Runtime struct {
 
 var _ runnerruntime.Runtime = (*Runtime)(nil)
 
-func New(cfg *config.Config) *Runtime {
+func New(runnerConfig *config.Config, cfg Config) *Runtime {
 	rt := &Runtime{
-		cfg:       cfg,
-		deps:      defaultDependencies(cfg.Firecracker),
-		slots:     make([]slotState, maxInt32(cfg.CapacityTotal, 0)),
-		sandboxes: make(map[string]*sandboxState),
-		readyCh:   make(chan struct{}),
+		runnerConfig: runnerConfig,
+		config:       cfg,
+		deps:         defaultDependencies(cfg),
+		slots:        make([]slotState, maxInt32(runnerConfig.CapacityTotal, 0)),
+		sandboxes:    make(map[string]*sandboxState),
+		readyCh:      make(chan struct{}),
 	}
 	close(rt.readyCh)
 	return rt
@@ -53,6 +55,11 @@ type slotState struct {
 	sandboxID string
 }
 
+func (s slotState) occupied() bool {
+	return s.sandboxID != ""
+}
+
+// sandboxState holds the host resources backing one live microVM sandbox.
 type sandboxState struct {
 	id         string
 	vmID       string
@@ -64,12 +71,15 @@ type sandboxState struct {
 	process    process
 	proxy      daemonProxy
 	running    bool
+	deleting   bool
 }
 
+// process is the minimum process handle needed for sandbox cleanup.
 type process interface {
 	Kill() error
 }
 
+// processGroup kills Firecracker and any children started in its process group.
 type processGroup struct {
 	process *os.Process
 }
@@ -84,20 +94,22 @@ func (p *processGroup) Kill() error {
 	return nil
 }
 
+// daemonProxy is the host-local proxy for a sandbox guest daemon.
 type daemonProxy interface {
 	Stop() error
 }
 
+// dependencies groups host operations so tests can replace shell, process, and network calls.
 type dependencies struct {
 	run          func(ctx context.Context, name string, args ...string) error
 	start        func(ctx context.Context, name string, args ...string) (process, error)
 	pathExists   func(path string) bool
-	loadSnapshot func(ctx context.Context, socketPath string, cfg config.FirecrackerConfig) error
+	loadSnapshot func(ctx context.Context, socketPath string, cfg Config) error
 	newProxy     func(ctx context.Context, listenAddr string, netnsName string, guestAddr string) (daemonProxy, error)
 	probeDaemon  func(ctx context.Context, baseURL string) error
 }
 
-func defaultDependencies(fc config.FirecrackerConfig) dependencies {
+func defaultDependencies(fc Config) dependencies {
 	return dependencies{
 		run:          runCommand,
 		start:        startCommand,
@@ -119,14 +131,14 @@ func (r *Runtime) Prepare(context.Context) {}
 // Ready checks that the host has the Firecracker binaries and snapshot assets
 // needed to accept sandbox work.
 func (r *Runtime) Ready(context.Context) error {
-	required := map[string]string{
-		"jailer":          r.cfg.Firecracker.JailerBin,
-		"firecracker":     r.cfg.Firecracker.FirecrackerBin,
-		"template rootfs": filepath.Join(r.cfg.Firecracker.TemplateDir, "rootfs.ext4"),
-		"snapshot memory": r.cfg.Firecracker.SnapshotMemPath,
-		"snapshot state":  r.cfg.Firecracker.SnapshotStatePath,
+	requiredPaths := map[string]string{
+		"jailer":          r.config.JailerBin,
+		"firecracker":     r.config.FirecrackerBin,
+		"template rootfs": filepath.Join(r.config.TemplateDir, "rootfs.ext4"),
+		"snapshot memory": r.config.SnapshotMemPath,
+		"snapshot state":  r.config.SnapshotStatePath,
 	}
-	for label, path := range required {
+	for label, path := range requiredPaths {
 		if !r.deps.pathExists(path) {
 			return fmt.Errorf("firecracker %s path does not exist: %s", label, path)
 		}
@@ -149,7 +161,7 @@ func (r *Runtime) Capacity(context.Context) (runnerruntime.Capacity, error) {
 	defer r.mu.Unlock()
 
 	return runnerruntime.Capacity{
-		Used:  int32(len(r.sandboxes)),
+		Used:  int32(r.occupiedSlotsLocked()),
 		Total: int32(len(r.slots)),
 	}, nil
 }
@@ -174,7 +186,7 @@ func (r *Runtime) CreateSandbox(ctx context.Context, sandboxID string, _ *runner
 		"daemon_url", state.daemonURL,
 	)
 	cleanupOnError := func() {
-		_ = r.deleteSandbox(ctx, state, true)
+		_ = r.deleteSandbox(ctx, state)
 	}
 
 	slog.Debug("firecracker preparing jail", "sandbox_id", sandboxID, "vm_id", state.vmID, "socket_path", state.socketPath)
@@ -184,7 +196,7 @@ func (r *Runtime) CreateSandbox(ctx context.Context, sandboxID string, _ *runner
 	}
 	slog.Debug("firecracker jail prepared", "sandbox_id", sandboxID, "vm_id", state.vmID)
 
-	slog.Debug("firecracker setting up network", "sandbox_id", sandboxID, "netns", state.netnsName, "tap", r.cfg.Firecracker.HostTapDeviceName, "tap_cidr", r.cfg.Firecracker.HostTapIPCIDR)
+	slog.Debug("firecracker setting up network", "sandbox_id", sandboxID, "netns", state.netnsName, "tap", r.config.HostTapDeviceName, "tap_cidr", r.config.HostTapIPCIDR)
 	if err := r.setupNetwork(ctx, state); err != nil {
 		cleanupOnError()
 		return nil, fmt.Errorf("setup firecracker network: %w", err)
@@ -207,14 +219,14 @@ func (r *Runtime) CreateSandbox(ctx context.Context, sandboxID string, _ *runner
 	}
 	slog.Debug("firecracker socket ready", "sandbox_id", sandboxID, "socket_path", state.socketPath)
 
-	slog.Debug("firecracker loading snapshot", "sandbox_id", sandboxID, "socket_path", state.socketPath, "snapshot_mem", r.cfg.Firecracker.SnapshotMemPath, "snapshot_state", r.cfg.Firecracker.SnapshotStatePath)
-	if err := r.deps.loadSnapshot(ctx, state.socketPath, r.cfg.Firecracker); err != nil {
+	slog.Debug("firecracker loading snapshot", "sandbox_id", sandboxID, "socket_path", state.socketPath, "snapshot_mem", r.config.SnapshotMemPath, "snapshot_state", r.config.SnapshotStatePath)
+	if err := r.deps.loadSnapshot(ctx, state.socketPath, r.config); err != nil {
 		cleanupOnError()
 		return nil, fmt.Errorf("load firecracker snapshot: %w", err)
 	}
 	slog.Debug("firecracker snapshot loaded", "sandbox_id", sandboxID, "vm_id", state.vmID)
 
-	guestAddr := net.JoinHostPort(r.cfg.Firecracker.GuestIP, fmt.Sprintf("%d", r.cfg.Firecracker.DaemonPort))
+	guestAddr := net.JoinHostPort(r.config.GuestIP, fmt.Sprintf("%d", r.config.DaemonPort))
 	slog.Debug("firecracker starting daemon proxy", "sandbox_id", sandboxID, "listen_addr", state.daemonURLAddr(), "netns", state.netnsName, "guest_addr", guestAddr)
 	proxy, err := r.deps.newProxy(ctx, state.daemonURLAddr(), state.netnsName, guestAddr)
 	if err != nil {
@@ -245,7 +257,7 @@ func (r *Runtime) GetSandboxInfo(_ context.Context, sandboxID string) (*runnerru
 	defer r.mu.Unlock()
 
 	state, ok := r.sandboxes[sandboxID]
-	if !ok {
+	if !ok || state.deleting {
 		return nil, runnerruntime.ErrSandboxNotFound
 	}
 	info := *state.info
@@ -258,17 +270,13 @@ func (r *Runtime) DeleteSandbox(ctx context.Context, sandboxID string) error {
 	if err != nil {
 		return err
 	}
-	return r.deleteSandbox(ctx, state, false)
+	return r.deleteSandbox(ctx, state)
 }
 
 // StopSandbox currently performs the same teardown as DeleteSandbox because the
 // basic Firecracker lifecycle does not yet keep stopped VMs around for reuse.
 func (r *Runtime) StopSandbox(ctx context.Context, sandboxID string) error {
-	state, err := r.takeSandbox(sandboxID)
-	if err != nil {
-		return err
-	}
-	return r.deleteSandbox(ctx, state, false)
+	return r.DeleteSandbox(ctx, sandboxID)
 }
 
 // EnsureSandboxRunning verifies that a sandbox is known and fully created.
@@ -277,7 +285,7 @@ func (r *Runtime) EnsureSandboxRunning(_ context.Context, sandboxID string) erro
 	defer r.mu.Unlock()
 
 	state, ok := r.sandboxes[sandboxID]
-	if !ok {
+	if !ok || state.deleting {
 		return runnerruntime.ErrSandboxNotFound
 	}
 	if !state.running {
@@ -292,8 +300,11 @@ func (r *Runtime) DaemonURL(_ context.Context, sandboxID string) (string, error)
 	defer r.mu.Unlock()
 
 	state, ok := r.sandboxes[sandboxID]
-	if !ok {
+	if !ok || state.deleting {
 		return "", runnerruntime.ErrSandboxNotFound
+	}
+	if !state.running {
+		return "", runnerruntime.ErrSandboxNotRunning
 	}
 	if state.daemonURL == "" {
 		return "", runnerruntime.ErrSandboxNetworkUnavailable
@@ -305,15 +316,18 @@ func (r *Runtime) DaemonURL(_ context.Context, sandboxID string) (string, error)
 func (r *Runtime) Shutdown(ctx context.Context) {
 	r.mu.Lock()
 	states := make([]*sandboxState, 0, len(r.sandboxes))
-	for id, state := range r.sandboxes {
+	for _, state := range r.sandboxes {
+		if state.deleting {
+			continue
+		}
 		states = append(states, state)
-		delete(r.sandboxes, id)
 		state.running = false
+		state.deleting = true
 	}
 	r.mu.Unlock()
 
 	for _, state := range states {
-		_ = r.deleteSandbox(ctx, state, false)
+		_ = r.deleteSandbox(ctx, state)
 	}
 }
 
@@ -333,8 +347,8 @@ func (r *Runtime) reserveSandbox(sandboxID string) (*sandboxState, error) {
 
 	vmID := "sandbox-" + shortID(sandboxID)
 	netnsName := fmt.Sprintf("fc-sb-%d", slot)
-	socketPath := filepath.Join(r.cfg.Firecracker.JailerBaseDir, "firecracker", vmID, "root", "firecracker.socket")
-	daemonURL := fmt.Sprintf("http://%s", net.JoinHostPort(r.cfg.Firecracker.ProxyListenIP, fmt.Sprintf("%d", r.cfg.Firecracker.ProxyPortStart+slot)))
+	socketPath := filepath.Join(r.config.JailerBaseDir, "firecracker", vmID, "root", "firecracker.socket")
+	daemonURL := fmt.Sprintf("http://%s", net.JoinHostPort(r.config.ProxyListenIP, fmt.Sprintf("%d", r.config.ProxyPortStart+slot)))
 	state := &sandboxState{
 		id:         sandboxID,
 		vmID:       vmID,
@@ -345,42 +359,37 @@ func (r *Runtime) reserveSandbox(sandboxID string) (*sandboxState, error) {
 		info: &runnerruntime.SandboxInfo{
 			ID:   sandboxID,
 			Name: vmID,
-			IP:   r.cfg.Firecracker.GuestIP,
+			IP:   r.config.GuestIP,
 		},
 	}
 	r.sandboxes[sandboxID] = state
 	return state, nil
 }
 
-// takeSandbox removes the sandbox from in-memory lookup before host cleanup.
-// The slot remains occupied until deleteSandbox has stopped the per-slot proxy
-// and other host resources, otherwise a new sandbox could reuse the same proxy
-// port while the old listener is still alive.
+// takeSandbox marks the sandbox as deleting while keeping its slot reserved
+// until host cleanup finishes.
 func (r *Runtime) takeSandbox(sandboxID string) (*sandboxState, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	state, ok := r.sandboxes[sandboxID]
-	if !ok {
+	if !ok || state.deleting {
 		return nil, runnerruntime.ErrSandboxNotFound
 	}
-	delete(r.sandboxes, sandboxID)
 	state.running = false
+	state.deleting = true
 	return state, nil
 }
 
-// deleteSandbox stops host-side resources for one sandbox. release is used by
-// create-failure cleanup, where the sandbox may still be reserved in the map.
-func (r *Runtime) deleteSandbox(ctx context.Context, state *sandboxState, release bool) error {
-	slog.Debug("firecracker sandbox cleanup started", "sandbox_id", state.id, "vm_id", state.vmID, "slot", state.slot, "release", release)
-	if release {
-		r.mu.Lock()
-		if current, ok := r.sandboxes[state.id]; ok && current == state {
-			delete(r.sandboxes, state.id)
-			state.running = false
-		}
-		r.mu.Unlock()
+// deleteSandbox stops host-side resources for one sandbox before releasing its slot.
+func (r *Runtime) deleteSandbox(ctx context.Context, state *sandboxState) error {
+	slog.Debug("firecracker sandbox cleanup started", "sandbox_id", state.id, "vm_id", state.vmID, "slot", state.slot)
+	r.mu.Lock()
+	if current, ok := r.sandboxes[state.id]; ok && current == state {
+		state.running = false
+		state.deleting = true
 	}
+	r.mu.Unlock()
 
 	var errs []error
 	if state.proxy != nil {
@@ -399,18 +408,32 @@ func (r *Runtime) deleteSandbox(ctx context.Context, state *sandboxState, releas
 		slog.Warn("firecracker host cleanup failed", "sandbox_id", state.id, "err", err)
 		errs = append(errs, fmt.Errorf("cleanup firecracker host state: %w", err))
 	}
-	r.mu.Lock()
-	r.releaseSlotLocked(state.slot)
-	r.mu.Unlock()
 	slog.Debug("firecracker sandbox cleanup finished", "sandbox_id", state.id, "vm_id", state.vmID, "slot", state.slot)
-	return joinErrors(errs)
+	if err := joinErrors(errs); err != nil {
+		r.mu.Lock()
+		if current, ok := r.sandboxes[state.id]; ok && current == state {
+			state.deleting = false
+		}
+		r.mu.Unlock()
+		return err
+	}
+
+	r.mu.Lock()
+	if current, ok := r.sandboxes[state.id]; ok && current == state {
+		delete(r.sandboxes, state.id)
+		if r.slotOwnedByLocked(state.slot, state.id) {
+			r.releaseSlotLocked(state.slot)
+		}
+	}
+	r.mu.Unlock()
+	return nil
 }
 
 // reserveSlotLocked marks the first free Firecracker slot as occupied. r.mu
 // must be held by the caller.
 func (r *Runtime) reserveSlotLocked(sandboxID string) int {
 	for i := range r.slots {
-		if r.slots[i].sandboxID == "" {
+		if !r.slots[i].occupied() {
 			r.slots[i].sandboxID = sandboxID
 			return i
 		}
@@ -418,12 +441,33 @@ func (r *Runtime) reserveSlotLocked(sandboxID string) int {
 	return -1
 }
 
+// occupiedSlotsLocked counts slots reserved by active or deleting sandboxes.
+func (r *Runtime) occupiedSlotsLocked() int {
+	used := 0
+	for i := range r.slots {
+		if r.slots[i].occupied() {
+			used++
+		}
+	}
+	return used
+}
+
 // releaseSlotLocked marks a Firecracker slot as free. r.mu must be held by the
 // caller.
 func (r *Runtime) releaseSlotLocked(slot int) {
-	if slot >= 0 && slot < len(r.slots) {
-		r.slots[slot] = slotState{}
+	if slot < 0 || slot >= len(r.slots) {
+		panic(fmt.Sprintf("firecracker slot index out of range: %d", slot))
 	}
+	r.slots[slot] = slotState{}
+}
+
+// slotOwnedByLocked reports whether the slot is still reserved for the sandbox
+// whose state is being cleaned up. r.mu must be held by the caller.
+func (r *Runtime) slotOwnedByLocked(slot int, sandboxID string) bool {
+	if slot < 0 || slot >= len(r.slots) {
+		panic(fmt.Sprintf("firecracker slot index out of range: %d", slot))
+	}
+	return r.slots[slot].sandboxID == sandboxID
 }
 
 // daemonURLAddr returns the TCP listen address form expected by net.Listen.
@@ -434,9 +478,9 @@ func (s *sandboxState) daemonURLAddr() string {
 // prepareJail creates the jail root and bind-mounts snapshot assets at the
 // paths expected by the restored Firecracker snapshot.
 func (r *Runtime) prepareJail(ctx context.Context, state *sandboxState) error {
-	jailRoot := filepath.Join(r.cfg.Firecracker.JailerBaseDir, "firecracker", state.vmID, "root")
-	rootfsPath := filepath.Join(r.cfg.Firecracker.TemplateDir, "rootfs.ext4")
-	rootfsTarget := filepath.Join(jailRoot, strings.TrimPrefix(r.cfg.Firecracker.SnapshotVirtioBlockPath, "/"))
+	jailRoot := filepath.Join(r.config.JailerBaseDir, "firecracker", state.vmID, "root")
+	rootfsPath := filepath.Join(r.config.TemplateDir, "rootfs.ext4")
+	rootfsTarget := filepath.Join(jailRoot, strings.TrimPrefix(r.config.SnapshotVirtioBlockPath, "/"))
 	script := fmt.Sprintf(`
 set -eu
 mkdir -p %[1]s
@@ -447,7 +491,7 @@ mount --bind %[3]s %[1]s/snapshot_state
 mount --bind %[4]s %[6]s
 chown 1000:1000 %[6]s
 chmod 0664 %[6]s
-`, shellQuote(jailRoot), shellQuote(r.cfg.Firecracker.SnapshotMemPath), shellQuote(r.cfg.Firecracker.SnapshotStatePath), shellQuote(rootfsPath), shellQuote(filepath.Dir(rootfsTarget)), shellQuote(rootfsTarget))
+`, shellQuote(jailRoot), shellQuote(r.config.SnapshotMemPath), shellQuote(r.config.SnapshotStatePath), shellQuote(rootfsPath), shellQuote(filepath.Dir(rootfsTarget)), shellQuote(rootfsTarget))
 	return r.deps.run(ctx, "sudo", "/bin/sh", "-c", script)
 }
 
@@ -462,25 +506,23 @@ ip netns exec %[1]s ip tuntap add name %[2]s mode tap
 ip netns exec %[1]s ip addr add %[3]s dev %[2]s
 ip netns exec %[1]s ip link set %[2]s up
 ip netns exec %[1]s ip link set lo up
-`, shellQuote(state.netnsName), shellQuote(r.cfg.Firecracker.HostTapDeviceName), shellQuote(r.cfg.Firecracker.HostTapIPCIDR))
+`, shellQuote(state.netnsName), shellQuote(r.config.HostTapDeviceName), shellQuote(r.config.HostTapIPCIDR))
 	return r.deps.run(ctx, "sudo", "/bin/sh", "-c", script)
 }
 
 // startJailer starts Firecracker through jailer inside the sandbox netns.
 func (r *Runtime) startJailer(ctx context.Context, state *sandboxState) (process, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	return r.deps.start(ctx,
 		"sudo",
-		r.cfg.Firecracker.JailerBin,
+		r.config.JailerBin,
 		"--id", state.vmID,
-		"--exec-file", r.cfg.Firecracker.FirecrackerBin,
+		"--exec-file", r.config.FirecrackerBin,
 		"--uid", "1000",
 		"--gid", "1000",
-		"--chroot-base-dir", r.cfg.Firecracker.JailerBaseDir,
+		"--chroot-base-dir", r.config.JailerBaseDir,
 		"--netns", filepath.Join("/run/netns", state.netnsName),
 		"--",
 		"--api-sock", "/firecracker.socket",
@@ -489,10 +531,10 @@ func (r *Runtime) startJailer(ctx context.Context, state *sandboxState) (process
 
 // waitForSocket polls for the Firecracker API Unix socket created by jailer.
 func (r *Runtime) waitForSocket(ctx context.Context, socketPath string) error {
-	ticker := time.NewTicker(r.cfg.Firecracker.SocketWaitInterval)
+	ticker := time.NewTicker(r.config.SocketWaitInterval)
 	defer ticker.Stop()
 
-	for attempt := 0; attempt < r.cfg.Firecracker.SocketWaitAttempts; attempt++ {
+	for attempt := 0; attempt < r.config.SocketWaitAttempts; attempt++ {
 		if r.deps.pathExists(socketPath) {
 			return nil
 		}
@@ -508,8 +550,8 @@ func (r *Runtime) waitForSocket(ctx context.Context, socketPath string) error {
 // cleanupHost removes the bind mounts, network namespace, and jail directory
 // created for a sandbox. It is intentionally best-effort at the shell level.
 func (r *Runtime) cleanupHost(ctx context.Context, state *sandboxState) error {
-	jailDir := filepath.Join(r.cfg.Firecracker.JailerBaseDir, "firecracker", state.vmID)
-	rootfsTarget := filepath.Join(jailDir, "root", strings.TrimPrefix(r.cfg.Firecracker.SnapshotVirtioBlockPath, "/"))
+	jailDir := filepath.Join(r.config.JailerBaseDir, "firecracker", state.vmID)
+	rootfsTarget := filepath.Join(jailDir, "root", strings.TrimPrefix(r.config.SnapshotVirtioBlockPath, "/"))
 	script := fmt.Sprintf(`
 set -eu
 umount -l %[1]s/root/snapshot_mem 2>/dev/null || true
@@ -534,10 +576,8 @@ func runCommand(ctx context.Context, name string, args ...string) error {
 
 // startCommand starts a long-running host process without waiting for it.
 func startCommand(ctx context.Context, name string, args ...string) (process, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	cmd := exec.Command(name, args...)
 	cmd.Stdout = io.Discard
@@ -613,109 +653,4 @@ func probeDaemon(ctx context.Context, baseURL string, timeout time.Duration) err
 		case <-time.After(200 * time.Millisecond):
 		}
 	}
-}
-
-type tcpDaemonProxy struct {
-	listener net.Listener
-	done     chan struct{}
-	ctx      context.Context
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
-	dial     netnsDialFunc
-}
-
-type netnsDialFunc func(ctx context.Context, netnsPath string, network string, address string) (net.Conn, error)
-
-// daemonProxyDialTimeout bounds guest daemon dials so VM teardown cannot leave
-// proxy handlers blocked indefinitely.
-const daemonProxyDialTimeout = 5 * time.Second
-
-// startDaemonProxy exposes one sandbox daemon on a host-local TCP port. Each
-// accepted connection is forwarded from inside the sandbox's network namespace.
-func startDaemonProxy(ctx context.Context, listenAddr string, netnsName string, guestAddr string) (daemonProxy, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-	}
-	listener, err := net.Listen("tcp", listenAddr)
-	if err != nil {
-		return nil, err
-	}
-	proxyCtx, cancel := context.WithCancel(context.Background())
-	proxy := &tcpDaemonProxy{
-		listener: listener,
-		done:     make(chan struct{}),
-		ctx:      proxyCtx,
-		cancel:   cancel,
-		dial:     dialContextInNetNS,
-	}
-	go proxy.serve(netnsName, guestAddr)
-	return proxy, nil
-}
-
-// serve accepts host-side proxy connections until Stop closes the listener.
-func (p *tcpDaemonProxy) serve(netnsName string, guestAddr string) {
-	defer close(p.done)
-	for {
-		p.wg.Add(1)
-		clientConn, err := p.listener.Accept()
-		if err != nil {
-			p.wg.Done()
-			return
-		}
-		slog.Debug("firecracker daemon proxy accepted connection", "local_addr", clientConn.LocalAddr().String(), "remote_addr", clientConn.RemoteAddr().String(), "netns", netnsName, "guest_addr", guestAddr)
-		go func() {
-			defer p.wg.Done()
-			p.handle(clientConn, netnsName, guestAddr)
-		}()
-	}
-}
-
-// handle bridges one host connection to the guest daemon from inside the
-// sandbox network namespace.
-func (p *tcpDaemonProxy) handle(clientConn net.Conn, netnsName string, guestAddr string) {
-	defer clientConn.Close()
-	dialCtx, cancelDial := context.WithTimeout(p.ctx, daemonProxyDialTimeout)
-	defer cancelDial()
-	guestConn, err := p.dial(dialCtx, filepath.Join("/run/netns", netnsName), "tcp", guestAddr)
-	if err != nil {
-		slog.Warn("firecracker daemon proxy guest dial failed", "netns", netnsName, "guest_addr", guestAddr, "client_remote_addr", clientConn.RemoteAddr().String(), "err", err)
-		return
-	}
-	defer guestConn.Close()
-
-	handleDone := make(chan struct{})
-	defer close(handleDone)
-	go func() {
-		select {
-		case <-p.ctx.Done():
-			_ = clientConn.Close()
-			_ = guestConn.Close()
-		case <-handleDone:
-		}
-	}()
-
-	done := make(chan struct{}, 2)
-	go func() {
-		_, _ = io.Copy(guestConn, clientConn)
-		done <- struct{}{}
-	}()
-	go func() {
-		_, _ = io.Copy(clientConn, guestConn)
-		done <- struct{}{}
-	}()
-	<-done
-	_ = clientConn.Close()
-	_ = guestConn.Close()
-	<-done
-}
-
-// Stop closes the listener, cancels active dials, and waits for handlers to exit.
-func (p *tcpDaemonProxy) Stop() error {
-	p.cancel()
-	err := p.listener.Close()
-	<-p.done
-	p.wg.Wait()
-	return err
 }

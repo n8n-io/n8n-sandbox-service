@@ -45,7 +45,8 @@ type ContainerInfo = runnerruntime.SandboxInfo
 
 // Runtime orchestrates container lifecycle without persistent state.
 type Runtime struct {
-	config        *config.Config
+	runnerConfig  *config.Config
+	config        Config
 	gatewayIP     string
 	wakeGroup     singleflight.Group
 	docker        dockerBackend
@@ -60,8 +61,8 @@ var _ runnerruntime.Runtime = (*Runtime)(nil)
 
 // New creates a new Docker runtime. It reconciles any previous containers and ensures
 // the runner bridge exists.
-func New(cfg *config.Config) (*Runtime, error) {
-	m := newRuntime(cfg, &dockerClient{host: cfg.Docker.Host})
+func New(runnerConfig *config.Config, cfg Config) (*Runtime, error) {
+	m := newRuntime(runnerConfig, cfg, &dockerClient{host: cfg.Host})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -81,8 +82,9 @@ func New(cfg *config.Config) (*Runtime, error) {
 
 // newRuntime centralizes Runtime dependency wiring so tests can override Docker,
 // network policy, or daemon readiness behavior without nil defaults.
-func newRuntime(cfg *config.Config, docker dockerBackend) *Runtime {
+func newRuntime(runnerConfig *config.Config, cfg Config, docker dockerBackend) *Runtime {
 	return &Runtime{
+		runnerConfig:  runnerConfig,
 		config:        cfg,
 		docker:        docker,
 		applyPolicy:   netrules.ApplyPolicy,
@@ -95,7 +97,7 @@ func newRuntime(cfg *config.Config, docker dockerBackend) *Runtime {
 // EnsureSandboxImage pulls the sandbox image with retries. It is intended to
 // run in a goroutine after the HTTP server is listening.
 func (m *Runtime) EnsureSandboxImage(ctx context.Context) {
-	image := m.config.Docker.SandboxImage
+	image := m.config.SandboxImage
 
 	for attempt := 1; ; attempt++ {
 		if err := ctx.Err(); err != nil {
@@ -157,9 +159,9 @@ func (m *Runtime) ReadyCh() <-chan struct{} {
 func (m *Runtime) Capacity(ctx context.Context) (runnerruntime.Capacity, error) {
 	n, err := m.ManagedContainerCount(ctx)
 	if err != nil {
-		return runnerruntime.Capacity{Total: m.config.CapacityTotal}, err
+		return runnerruntime.Capacity{Total: m.runnerConfig.CapacityTotal}, err
 	}
-	return runnerruntime.Capacity{Used: int32(n), Total: m.config.CapacityTotal}, nil
+	return runnerruntime.Capacity{Used: int32(n), Total: m.runnerConfig.CapacityTotal}, nil
 }
 
 // CreateSandbox creates and starts a new sandbox.
@@ -208,7 +210,7 @@ func (m *Runtime) CreateContainer(ctx context.Context, sandboxID string, opts *C
 	containerName := "sandbox-" + sandboxID[:12]
 	limits := m.defaultLimits()
 
-	containerID, err := m.docker.createContainer(ctx, sandboxID, containerName, m.config.Docker.SandboxImage, limits, m.config.Docker.EnableCgroups)
+	containerID, err := m.docker.createContainer(ctx, sandboxID, containerName, m.config.SandboxImage, limits, m.config.EnableCgroups)
 	if err != nil {
 		return nil, fmt.Errorf("create container: %w", err)
 	}
@@ -429,13 +431,13 @@ func (m *Runtime) Shutdown(ctx context.Context) {
 
 func (m *Runtime) defaultLimits() *ResourceLimits {
 	var diskMB int64
-	if m.config.Docker.DiskQuotaActive {
-		diskMB = m.config.Docker.DefaultDiskQuotaMB
+	if m.config.DiskQuotaActive {
+		diskMB = m.config.DefaultDiskQuotaMB
 	}
 	return &ResourceLimits{
-		MemoryMB:   m.config.Docker.DefaultMemoryMB,
-		CPUPercent: m.config.Docker.DefaultCPUPercent,
-		PidsMax:    m.config.Docker.DefaultPidsMax,
+		MemoryMB:   m.config.DefaultMemoryMB,
+		CPUPercent: m.config.DefaultCPUPercent,
+		PidsMax:    m.config.DefaultPidsMax,
 		DiskMB:     diskMB,
 	}
 }

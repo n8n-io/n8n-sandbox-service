@@ -2,24 +2,20 @@ import { test, expect } from '@playwright/test';
 import './matchers';
 import { createSandbox, deleteSandbox, exec, execWithTransientRetry } from './helpers';
 
-// Helper: use python3 for HTTP requests since curl is not in the sandbox rootfs
-const pyGet = (url: string, timeout: number = 5) =>
-  `python3 -c "import urllib.request; r=urllib.request.urlopen('${url}', timeout=${timeout}); print(r.status)"`;
+const tcpConnect = (ip: string, port: number = 80, timeout: number = 3) =>
+  `curl --connect-timeout ${timeout} -s -o /dev/null http://${ip}:${port}/`;
 
-const pyConnect = (ip: string, port: number = 80, timeout: number = 3) =>
-  `python3 -c "import socket; s=socket.socket(); s.settimeout(${timeout}); s.connect(('${ip}', ${port})); s.close(); print('connected')"`;
+const tcpConnectV6 = (ip: string, port: number = 443, timeout: number = 3) =>
+  `curl --connect-timeout ${timeout} -sk -o /dev/null -6 "https://[${ip}]:${port}/"`;
 
-const pyConnectV6 = (ip: string, port: number = 443, timeout: number = 3) =>
-  `python3 -c "import socket; s=socket.socket(socket.AF_INET6); s.settimeout(${timeout}); s.connect(('${ip}', ${port})); s.close(); print('connected')"`;
-
-const pyResolve = (host: string) =>
-  `python3 -c "import socket; print(socket.gethostbyname('${host}'))"`;
+const resolve = (host: string) =>
+  `getent ahostsv4 ${host} | head -1 | awk '{print $1}'`;
 
 test.describe('Network isolation', { tag: '@docker-runner' }, () => {
   test('sandbox can reach public internet', async () => {
     const id = await createSandbox();
     try {
-      const result = await exec(id, pyGet('http://httpbin.org/ip', 15), {
+      const result = await exec(id, `curl -fsSL -o /dev/null -w '%{http_code}' --max-time 15 https://example.com/`, {
         timeoutMs: 30_000,
       });
       expect(result).toHaveSucceeded();
@@ -40,7 +36,7 @@ test.describe('Network isolation', { tag: '@docker-runner' }, () => {
       ];
 
       for (const ip of privateIPs) {
-        const result = await execWithTransientRetry(id, pyConnect(ip, 80, 3), { timeoutMs: 10_000 });
+        const result = await execWithTransientRetry(id, tcpConnect(ip, 80, 3), { timeoutMs: 10_000 });
         expect(result.exitCode, `expected private IP ${ip} to be unreachable`).not.toBe(0);
       }
     } finally {
@@ -58,18 +54,11 @@ test.describe('Network isolation', { tag: '@docker-runner' }, () => {
       const sandbox2IP = ipResult.stdout.trim();
       expect(sandbox2IP).toBeTruthy();
 
-      // Start a TCP listener in sandbox 2 on port 9999
-      await exec(id2, `python3 -c "
-import socket, threading
-s = socket.socket()
-s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-s.bind(('0.0.0.0', 9999))
-s.listen(1)
-import time; time.sleep(30)
-" &`, { timeoutMs: 5_000 });
+      // Start an HTTP listener in sandbox 2 on port 9999
+      await exec(id2, `node -e "require('http').createServer((q,r)=>r.end('ok')).listen(9999,'0.0.0.0');setTimeout(()=>{},30000)" &`, { timeoutMs: 5_000 });
 
       // Sandbox 1 should not be able to reach sandbox 2
-      const result = await execWithTransientRetry(id1, pyConnect(sandbox2IP, 9999, 3), { timeoutMs: 10_000 });
+      const result = await execWithTransientRetry(id1, tcpConnect(sandbox2IP, 9999, 3), { timeoutMs: 10_000 });
       expect(result.exitCode, `expected sandbox 1 to not reach sandbox 2 at ${sandbox2IP}`).not.toBe(0);
     } finally {
       await deleteSandbox(id1);
@@ -88,7 +77,7 @@ import time; time.sleep(30)
       ];
 
       for (const ip of v6Targets) {
-        const result = await execWithTransientRetry(id, pyConnectV6(ip, 443, 3), { timeoutMs: 10_000 });
+        const result = await execWithTransientRetry(id, tcpConnectV6(ip, 443, 3), { timeoutMs: 10_000 });
         expect(result.exitCode, `expected IPv6 ${ip} to be unreachable`).not.toBe(0);
       }
     } finally {
@@ -99,7 +88,7 @@ import time; time.sleep(30)
   test('DNS resolution works', async () => {
     const id = await createSandbox();
     try {
-      const result = await execWithTransientRetry(id, pyResolve('example.com'), { timeoutMs: 10_000 });
+      const result = await execWithTransientRetry(id, resolve('example.com'), { timeoutMs: 10_000 });
       expect(result).toHaveSucceeded();
       // Should resolve to an IP address
       expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+\.\d+$/);

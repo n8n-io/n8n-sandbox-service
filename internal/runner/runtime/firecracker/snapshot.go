@@ -1,16 +1,8 @@
 package firecracker
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
-	"io"
-	"net"
-	"net/http"
-	"strings"
-
-	"github.com/n8n-io/sandbox-service/internal/runner/config"
 )
 
 type loadSnapshotRequest struct {
@@ -27,7 +19,7 @@ type memBackend struct {
 
 // loadSnapshot asks the Firecracker API socket to restore the configured full
 // snapshot and immediately resume the VM.
-func loadSnapshot(ctx context.Context, socketPath string, _ config.FirecrackerConfig) error {
+func loadSnapshot(ctx context.Context, socketPath string, _ Config) error {
 	body, err := json.Marshal(loadSnapshotRequest{
 		SnapshotPath: "/snapshot_state",
 		MemBackend: memBackend{
@@ -41,27 +33,6 @@ func loadSnapshot(ctx context.Context, socketPath string, _ config.FirecrackerCo
 		return err
 	}
 
-	transport := &http.Transport{
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			var dialer net.Dialer
-			return dialer.DialContext(ctx, "unix", socketPath)
-		},
-	}
-	client := &http.Client{Transport: transport}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, "http://firecracker/snapshot/load", bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("firecracker snapshot load returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
-	}
-	return nil
+	client := newFirecrackerAPIClient(socketPath)
+	return client.putJSON(ctx, "/snapshot/load", body)
 }

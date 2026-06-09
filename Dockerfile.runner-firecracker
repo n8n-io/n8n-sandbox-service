@@ -8,12 +8,12 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -o /out/runner ./cmd/runner
+RUN CGO_ENABLED=0 GOOS=linux go build -o /out/runner ./cmd/runner-firecracker
 
 # =============================================================================
-# Stage 2: Firecracker runner image
+# Stage 2: Download Firecracker binaries
 # =============================================================================
-FROM debian:bookworm-slim AS runner
+FROM debian:bookworm-slim AS firecracker-binaries
 
 ARG TARGETARCH
 ARG FIRECRACKER_VERSION=v1.13.1
@@ -23,11 +23,6 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
-        iproute2 \
-        iptables \
-        sudo \
-        tini \
-        util-linux \
     && rm -rf /var/lib/apt/lists/*
 
 RUN set -eux; \
@@ -42,11 +37,25 @@ RUN set -eux; \
     chmod +x /opt/firecracker/bin/firecracker /opt/firecracker/bin/jailer; \
     rm -rf /tmp/firecracker.tgz "/tmp/release-${FIRECRACKER_VERSION}-${fc_arch}"
 
+# =============================================================================
+# Stage 3: Firecracker runner image
+# =============================================================================
+FROM debian:bookworm-slim AS runner
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        iproute2 \
+        iptables \
+        sudo \
+        tini \
+        util-linux \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /out/runner /usr/local/bin/sandbox-runner
+COPY --from=firecracker-binaries /opt/firecracker/bin /opt/firecracker/bin
 
 RUN mkdir -p /var/sandboxes /srv/jailer /srv/firecracker/template /srv/firecracker/snapshots
 
-ENV SANDBOX_RUNNER_BACKEND=firecracker
 ENV SANDBOX_RUNNER_DATA_DIR=/var/sandboxes
 ENV SANDBOX_RUNNER_LISTEN_ADDR=:8080
 ENV SANDBOX_RUNNER_FIRECRACKER_JAILER_BIN=/opt/firecracker/bin/jailer
