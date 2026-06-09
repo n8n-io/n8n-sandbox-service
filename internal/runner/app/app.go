@@ -1,8 +1,7 @@
-package main
+package app
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -20,22 +19,13 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 	"github.com/n8n-io/sandbox-service/internal/runner/register"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
-	dockerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime/docker"
-	firecrackerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime/firecracker"
 )
 
-func newRuntime(cfg *config.Config) (runnerruntime.Runtime, error) {
-	switch cfg.Backend {
-	case config.BackendDocker:
-		return dockerruntime.New(cfg)
-	case config.BackendFirecracker:
-		return firecrackerruntime.New(cfg), nil
-	default:
-		return nil, fmt.Errorf("unsupported runner backend %q", cfg.Backend)
-	}
-}
+type RuntimeFactory func(*config.Config) (runnerruntime.Runtime, error)
 
-func main() {
+// Main loads shared runner config, constructs the backend runtime, and runs the
+// common HTTP, registration, and control gRPC servers.
+func Main(runtimeName string, factory RuntimeFactory) {
 	var logLevel slog.LevelVar
 	logLevel.Set(slog.LevelInfo)
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: &logLevel}))
@@ -48,14 +38,17 @@ func main() {
 	}
 	logLevel.Set(cfg.LogLevel)
 
-	// Create stateless sandbox runtime.
-	rt, err := newRuntime(cfg)
+	rt, err := factory(cfg)
 	if err != nil {
-		slog.Error("create runtime", "error", err)
+		slog.Error("create runtime", "runtime", runtimeName, "error", err)
 		os.Exit(1)
 	}
-	slog.Info("runner runtime selected", "backend", cfg.Backend)
+	slog.Info("runner runtime selected", "backend", runtimeName)
 
+	Run(cfg, rt)
+}
+
+func Run(cfg *config.Config, rt runnerruntime.Runtime) {
 	mrec := metrics.NewRunnerRecorder(cfg.MetricsEnabled)
 	if mrec.Enabled() {
 		mrec.SetActiveContainers(func() float64 {
@@ -71,7 +64,6 @@ func main() {
 		slog.Info("metrics endpoint enabled", "path", "/metrics")
 	}
 
-	// Build HTTP handler.
 	handler := runner.NewRouter(rt, cfg, mrec)
 
 	srv := &http.Server{
@@ -111,7 +103,6 @@ func main() {
 		}
 	}()
 
-	// Start server in background.
 	serverErr := make(chan error, 1)
 	go func() {
 		slog.Info("server listening", "addr", cfg.ListenAddr)
@@ -130,8 +121,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Graceful shutdown sequence:
-	// 1. Stop accepting new HTTP requests
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
@@ -150,7 +139,6 @@ func main() {
 		controlGRPC.Stop()
 	}
 
-	// 2. Clean up sandboxes
 	rt.Shutdown(shutdownCtx)
 
 	slog.Info("server stopped")
