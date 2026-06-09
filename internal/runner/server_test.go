@@ -14,7 +14,10 @@ import (
 )
 
 type fakeRuntime struct {
-	readyErr error
+	daemonURL string
+	daemonErr error
+	ensureErr error
+	readyErr  error
 }
 
 func (f *fakeRuntime) Prepare(context.Context) {}
@@ -50,11 +53,14 @@ func (f *fakeRuntime) StopSandbox(context.Context, string) error {
 }
 
 func (f *fakeRuntime) EnsureSandboxRunning(context.Context, string) error {
-	return nil
+	return f.ensureErr
 }
 
 func (f *fakeRuntime) DaemonURL(context.Context, string) (string, error) {
-	return "", nil
+	if f.daemonErr != nil {
+		return "", f.daemonErr
+	}
+	return f.daemonURL, nil
 }
 
 func (f *fakeRuntime) Shutdown(context.Context) {}

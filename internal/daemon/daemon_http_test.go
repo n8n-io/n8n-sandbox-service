@@ -67,6 +67,21 @@ func TestExecEndpointRejectsArrayEnv(t *testing.T) {
 	}
 }
 
+func TestFileCopyRejectsOversizedJSONBody(t *testing.T) {
+	handler := NewHandler()
+
+	body := `{"src":"` + strings.Repeat("x", maxJSONBodyBytes) + `","dest":"/tmp/out"}`
+	req := httptest.NewRequest(http.MethodPost, "/files/copy", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestExecEndpointAppliesDefaultTimeout(t *testing.T) {
 	oldTimeout := defaultExecTimeout
 	defaultExecTimeout = 50 * time.Millisecond

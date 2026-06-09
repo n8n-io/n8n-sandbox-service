@@ -48,7 +48,7 @@ func NewRouter(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.Runner
 	proxy := ProxyHandler(rt, cfg, rec)
 	uploadProxy := UploadProxyHandler(rt, cfg, rec)
 
-	mux.HandleFunc("POST /sandboxes/{id}/executions", proxy)
+	mux.HandleFunc("POST /sandboxes/{id}/executions", ExecProxyHandler(rt, cfg, rec))
 	mux.HandleFunc("GET /sandboxes/{id}/executions/{exec_id}", proxy)
 	mux.HandleFunc("DELETE /sandboxes/{id}/executions/{exec_id}", proxy)
 	mux.HandleFunc("POST /sandboxes/{id}/files/copy", proxy)
