@@ -246,6 +246,31 @@ func TestRuntimeReleaseSlotPanicsForInvalidSlot(t *testing.T) {
 	rt.releaseSlotLocked(1)
 }
 
+func TestRuntimeDeleteSandboxDoesNotReleaseReassignedSlot(t *testing.T) {
+	rt := testRuntime(1)
+	rt.deps.run = func(context.Context, string, ...string) error { return nil }
+
+	oldState := &sandboxState{id: "sandbox-id-old123", slot: 0}
+	newState := &sandboxState{id: "sandbox-id-new456", slot: 0}
+	rt.sandboxes[newState.id] = newState
+	rt.slots[0].sandboxID = newState.id
+
+	if err := rt.deleteSandbox(context.Background(), oldState); err != nil {
+		t.Fatalf("deleteSandbox() failed: %v", err)
+	}
+
+	capacity, err := rt.Capacity(context.Background())
+	if err != nil {
+		t.Fatalf("Capacity() failed: %v", err)
+	}
+	if capacity.Used != 1 {
+		t.Fatalf("Capacity().Used = %d, want reassigned slot to remain occupied", capacity.Used)
+	}
+	if rt.slots[0].sandboxID != newState.id {
+		t.Fatalf("slot owner = %q, want %q", rt.slots[0].sandboxID, newState.id)
+	}
+}
+
 func TestRuntimeCreateSandboxCleansUpOnFailure(t *testing.T) {
 	rt := testRuntime(1)
 	proc := &fakeProcess{}

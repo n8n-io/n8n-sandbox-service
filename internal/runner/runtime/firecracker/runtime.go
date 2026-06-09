@@ -421,8 +421,10 @@ func (r *Runtime) deleteSandbox(ctx context.Context, state *sandboxState) error 
 	r.mu.Lock()
 	if current, ok := r.sandboxes[state.id]; ok && current == state {
 		delete(r.sandboxes, state.id)
+		if r.slotOwnedByLocked(state.slot, state.id) {
+			r.releaseSlotLocked(state.slot)
+		}
 	}
-	r.releaseSlotLocked(state.slot)
 	r.mu.Unlock()
 	return nil
 }
@@ -457,6 +459,15 @@ func (r *Runtime) releaseSlotLocked(slot int) {
 		panic(fmt.Sprintf("firecracker slot index out of range: %d", slot))
 	}
 	r.slots[slot] = slotState{}
+}
+
+// slotOwnedByLocked reports whether the slot is still reserved for the sandbox
+// whose state is being cleaned up. r.mu must be held by the caller.
+func (r *Runtime) slotOwnedByLocked(slot int, sandboxID string) bool {
+	if slot < 0 || slot >= len(r.slots) {
+		panic(fmt.Sprintf("firecracker slot index out of range: %d", slot))
+	}
+	return r.slots[slot].sandboxID == sandboxID
 }
 
 // daemonURLAddr returns the TCP listen address form expected by net.Listen.
