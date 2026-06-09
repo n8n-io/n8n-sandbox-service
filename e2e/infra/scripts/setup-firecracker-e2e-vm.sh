@@ -37,8 +37,19 @@ if [[ "$FIRECRACKER_VERSION" != v* ]]; then
 	FIRECRACKER_VERSION="v${FIRECRACKER_VERSION}"
 fi
 
-if [[ -z "$FIRECRACKER_TARBALL_SHA256" && "$FIRECRACKER_VERSION" == "v1.13.1" ]]; then
-	FIRECRACKER_TARBALL_SHA256="59450b9171ff2ebdf2f9a25be3a248a7ba79fb6371aec51a9d6d8eefca7b4faf"
+if [[ -z "$FIRECRACKER_TARBALL_SHA256" ]]; then
+	case "$FIRECRACKER_VERSION" in
+	v1.13.1)
+		FIRECRACKER_TARBALL_SHA256="59450b9171ff2ebdf2f9a25be3a248a7ba79fb6371aec51a9d6d8eefca7b4faf"
+		;;
+	v1.14.1)
+		FIRECRACKER_TARBALL_SHA256="ea66dc1fbdb2473bbb95a1e822ae7884cd575a891a8f801258723258d36b7c7c"
+		;;
+	*)
+		echo "ERROR: FIRECRACKER_TARBALL_SHA256 is required for ${FIRECRACKER_VERSION}" >&2
+		exit 1
+		;;
+	esac
 fi
 
 install_firecracker_release() {
@@ -48,9 +59,7 @@ install_firecracker_release() {
 	curl -fsSL \
 		"https://github.com/firecracker-microvm/firecracker/releases/download/${FIRECRACKER_VERSION}/firecracker-${FIRECRACKER_VERSION}-x86_64.tgz" \
 		-o "$tmp_fc/firecracker.tgz"
-	if [[ -n "$FIRECRACKER_TARBALL_SHA256" ]]; then
-		echo "${FIRECRACKER_TARBALL_SHA256}  $tmp_fc/firecracker.tgz" | sha256sum -c -
-	fi
+	echo "${FIRECRACKER_TARBALL_SHA256}  $tmp_fc/firecracker.tgz" | sha256sum -c -
 	tar -xzf "$tmp_fc/firecracker.tgz" -C "$tmp_fc"
 	sudo install -m 0755 -d /opt/firecracker/bin
 	sudo install -m 0755 \

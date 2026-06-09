@@ -47,6 +47,8 @@ Firecracker e2e provisioning allows overriding:
   to `Standard_D4s_v3`.
 - `FIRECRACKER_VERSION`: optional Firecracker release override; defaults to
   `v1.14.1`.
+- `FIRECRACKER_TARBALL_SHA256`: required when overriding to a Firecracker
+  release that is not checksum-pinned by the setup script.
 - `FIRECRACKER_CI_VERSION`: optional Firecracker CI asset line override;
   defaults to the configured Firecracker release line, for example `v1.14`.
 - `FIRECRACKER_E2E_ROOTFS_SIZE_MB`: optional ext4 rootfs size; defaults to
