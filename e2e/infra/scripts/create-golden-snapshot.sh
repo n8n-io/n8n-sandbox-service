@@ -24,6 +24,7 @@ JAIL_ROOT=""
 FC_PID=""
 ROOTFS_MOUNT=""
 
+# Prints the required CLI arguments for the snapshot helper.
 usage() {
 	cat >&2 <<EOF
 Usage: $0 --kernel PATH --ext4 PATH --daemon-bin PATH --out DIR
@@ -72,6 +73,8 @@ OUT_DIR="$(realpath "$OUT_DIR")"
 SNAPSHOT_MEM="${OUT_DIR}/snapshot_mem"
 SNAPSHOT_STATE="${OUT_DIR}/snapshot_state"
 
+# Sends a PUT request to the Firecracker API socket in the jail. Firecracker uses
+# REST over a Unix socket for machine configuration and lifecycle actions.
 api_put() {
 	local path=$1 body=$2
 	curl --fail-with-body --silent --show-error \
@@ -81,6 +84,8 @@ api_put() {
 		-d "$body" >/dev/null
 }
 
+# Sends a PATCH request to the Firecracker API socket. Snapshot creation pauses
+# the VM through PATCH /vm before writing the full snapshot.
 api_patch() {
 	local path=$1 body=$2
 	curl --fail-with-body --silent --show-error \
@@ -90,6 +95,8 @@ api_patch() {
 		-d "$body" >/dev/null
 }
 
+# Best-effort cleanup for all host resources created by this helper. It must be
+# safe after partial setup because failures can happen while mounts/netns exist.
 cleanup() {
 	local exit_code=$?
 	set +e

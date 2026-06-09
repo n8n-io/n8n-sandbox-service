@@ -8,12 +8,13 @@ Run with `e2e/run-all.sh`.
 
 ## Backend tags
 
-Specs use two Playwright backend tags:
+Specs use three Playwright backend tags:
 
 - `@docker-runner` for the Docker/Sysbox runner lane.
 - `@firecracker-runner` for the Firecracker runner lane.
+- `@both` for tests that should run in both runner lanes.
 
-Tests compatible with both runners carry both tags. Firecracker e2e runs use `e2e/run-firecracker.sh`, which starts the API and Firecracker runner as host processes on the prepared VM and selects `@firecracker-runner`.
+Firecracker e2e runs use `e2e/run-firecracker.sh`, which starts the API and Firecracker runner as host processes on the prepared VM and selects `@firecracker-runner` and `@both`.
 
 From a local machine, run the full Azure Firecracker flow with:
 

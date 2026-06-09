@@ -7,7 +7,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-test.describe('Resumable Exec', { tag: ['@docker-runner', '@firecracker-runner'] }, () => {
+test.describe('Resumable Exec', { tag: '@both' }, () => {
   let sandboxId: string;
 
   test.beforeEach(async () => {

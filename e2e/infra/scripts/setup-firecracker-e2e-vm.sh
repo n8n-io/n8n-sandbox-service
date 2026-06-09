@@ -16,6 +16,8 @@ FIRECRACKER_E2E_SNAPSHOT_MEM_MIB="${FIRECRACKER_E2E_SNAPSHOT_MEM_MIB:-512}"
 FIRECRACKER_E2E_SNAPSHOT_VCPUS="${FIRECRACKER_E2E_SNAPSHOT_VCPUS:-1}"
 INSTALLED_FIRECRACKER_VERSION=""
 
+# Verifies that Firecracker can boot the selected kernel directly. The e2e
+# snapshot path uses upstream uncompressed ELF vmlinux images, not bzImage.
 require_elf_kernel() {
 	local path=$1
 	if ! LC_ALL=C od -An -N4 -tx1 "$path" | tr -d ' \n' | grep -qi '^7f454c46$'; then
@@ -52,6 +54,8 @@ if [[ -z "$FIRECRACKER_TARBALL_SHA256" ]]; then
 	esac
 fi
 
+# Installs the pinned Firecracker release and jailer into /opt/firecracker/bin.
+# The tarball checksum must be known or provided by the caller before this runs.
 install_firecracker_release() {
 	echo "==> Installing Firecracker ${FIRECRACKER_VERSION}..."
 	tmp_fc="$(mktemp -d)"
@@ -71,6 +75,7 @@ install_firecracker_release() {
 	INSTALLED_FIRECRACKER_VERSION="${FIRECRACKER_VERSION#v}"
 }
 
+# Reads the Azure VM size from the instance metadata service for diagnostics.
 current_azure_vm_size() {
 	curl -fsSL \
 		-H "Metadata: true" \
@@ -78,14 +83,19 @@ current_azure_vm_size() {
 		2>/dev/null || true
 }
 
+# Returns the host CPU model reported by Linux. This is written to the manifest
+# because Firecracker snapshots are sensitive to the guest-visible CPU feature set.
 current_cpu_model() {
 	sed -n 's/^model name[[:space:]]*: //p' /proc/cpuinfo | head -n 1
 }
 
+# Returns the host CPU flags reported by Linux for preflight and diagnostics.
 current_cpu_flags() {
 	sed -n 's/^flags[[:space:]]*: //p' /proc/cpuinfo | head -n 1
 }
 
+# Checks one KVM module parameter and records its value. The Firecracker e2e VM
+# requires nested virtualization support from the Azure host.
 require_kvm_param() {
 	local path=$1 label=$2 expected_regex=$3 value
 	if [[ ! -r "$path" ]]; then
@@ -101,6 +111,8 @@ require_kvm_param() {
 	fi
 }
 
+# Fails fast when the Azure VM cannot run nested Firecracker microVMs. Without
+# these checks, setup can fail much later while booting the snapshot builder VM.
 firecracker_host_preflight() {
 	local failed=0 flags cpu_model
 
@@ -140,6 +152,8 @@ firecracker_host_preflight() {
 	fi
 }
 
+# Reads whether KVM TSC scaling is enabled when the host exposes that parameter.
+# The value is diagnostic context for snapshot compatibility problems.
 current_kvm_tsc_scaling() {
 	if [[ -r /sys/module/kvm_intel/parameters/tsc_scaling ]]; then
 		cat /sys/module/kvm_intel/parameters/tsc_scaling
@@ -148,16 +162,20 @@ current_kvm_tsc_scaling() {
 	fi
 }
 
+# Returns a compact file(1) description when available for manifest diagnostics.
 file_type() {
 	if command -v file >/dev/null 2>&1; then
 		file -b "$1"
 	fi
 }
 
+# JSON-encodes a shell value before embedding it in the generated manifest.
 json_escape() {
 	node -e 'process.stdout.write(JSON.stringify(process.argv[1] ?? ""))' "$1"
 }
 
+# Finds the newest public Firecracker CI artifact key matching a prefix/pattern.
+# These are S3 object keys, not credentials; the bucket is publicly readable.
 s3_latest_key() {
 	local prefix=$1 pattern=$2 key
 	key="$(curl -fsSL "https://s3.amazonaws.com/spec.ccfc.min/?prefix=${prefix}&list-type=2" \
@@ -173,6 +191,8 @@ s3_latest_key() {
 	echo "$key"
 }
 
+# Builds the local kernel/rootfs template from upstream Firecracker CI assets.
+# It adds the sandbox user contract expected by the daemon before creating ext4.
 build_template_assets() {
 	local arch ci_version work rootfs_dir kernel_key ubuntu_key ubuntu_version
 	arch="$(uname -m)"
@@ -211,6 +231,8 @@ build_template_assets() {
 	sudo rm -rf "$work"
 }
 
+# Writes a manifest describing exactly which host and asset inputs produced the
+# local template/snapshot. This is collected with e2e failure artifacts.
 write_manifest() {
 	local manifest=$1
 	sudo tee "$manifest" >/dev/null <<EOF

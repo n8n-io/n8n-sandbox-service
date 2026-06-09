@@ -16,7 +16,7 @@ import {
  */
 test.describe.configure({ mode: 'serial' });
 
-test.describe('File API and Exec API path consistency', { tag: ['@docker-runner', '@firecracker-runner'] }, () => {
+test.describe('File API and Exec API path consistency', { tag: '@both' }, () => {
   let sandboxId: string;
 
   test.beforeAll(async () => {

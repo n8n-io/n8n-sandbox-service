@@ -6,7 +6,7 @@ import { parseCounter } from './metrics-helpers';
 // /metrics is mounted and bypasses X-Api-Key. These tests exercise the live
 // endpoint against the dockerized API.
 
-test.describe('API metrics endpoint', { tag: ['@docker-runner', '@firecracker-runner'] }, () => {
+test.describe('API metrics endpoint', { tag: '@both' }, () => {
   test('is served without X-Api-Key and returns expected families', async ({ request }) => {
     const resp = await request.get('/metrics');
     expect(resp.status()).toBe(200);

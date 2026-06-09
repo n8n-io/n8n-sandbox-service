@@ -13,7 +13,7 @@ import {
 import { SandboxServiceError } from '@n8n/sandbox-client';
 
 const API_KEY = process.env.SANDBOX_API_KEY || 'test';
-const BOTH_RUNNERS = { tag: ['@docker-runner', '@firecracker-runner'] };
+const BOTH_RUNNERS = { tag: '@both' };
 
 test.describe('Auth', BOTH_RUNNERS, () => {
   test('rejects missing API key', async ({ request }) => {
