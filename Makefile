@@ -3,7 +3,7 @@ SHELL := /bin/bash
 MODULE  := github.com/n8n-io/sandbox-service
 BINDIR  := bin
 
-.PHONY: all daemon runner api test clean docker docker-local docker-arm64 docker-amd64 docker-api-arm64 docker-api-amd64 docker-runner-arm64 docker-runner-amd64 docker-firecracker-runner-amd64 docker-sandbox-arm64 docker-sandbox-amd64 fmt fmt-check vet playground up down smoke sdk sdk-install sdk-build sdk-typecheck sdk-test sdk-fmt sdk-fmt-check sdk-lint
+.PHONY: all daemon runner runner-docker runner-firecracker api test clean docker docker-local docker-arm64 docker-amd64 docker-api-arm64 docker-api-amd64 docker-runner-arm64 docker-runner-amd64 docker-firecracker-runner-amd64 docker-sandbox-arm64 docker-sandbox-amd64 fmt fmt-check vet playground up down smoke sdk sdk-install sdk-build sdk-typecheck sdk-test sdk-fmt sdk-fmt-check sdk-lint
 
 all: daemon runner api
 
@@ -31,9 +31,16 @@ vet:
 daemon:
 	CGO_ENABLED=0 GOOS=linux go build -o $(BINDIR)/daemon ./cmd/daemon
 
-## runner: Build the runner service (Linux).
-runner:
-	GOOS=linux go build -o $(BINDIR)/runner ./cmd/runner
+## runner: Build the runner services (Linux).
+runner: runner-docker runner-firecracker
+
+## runner-docker: Build the Docker/sysbox runner service (Linux).
+runner-docker:
+	GOOS=linux go build -o $(BINDIR)/runner-docker ./cmd/runner-docker
+
+## runner-firecracker: Build the Firecracker runner service (Linux).
+runner-firecracker:
+	GOOS=linux go build -o $(BINDIR)/runner-firecracker ./cmd/runner-firecracker
 
 ## api: Build the public API gateway server (Linux).
 api:

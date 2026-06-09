@@ -42,7 +42,6 @@ All services are configured via environment variables.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `SANDBOX_RUNNER_API_KEYS` | *(required)* | Comma-separated list of valid internal API keys accepted from the API container |
-| `SANDBOX_RUNNER_BACKEND` | `docker` | Sandbox runtime backend. Supported values: `docker`, `firecracker`. |
 | `SANDBOX_RUNNER_LOG_LEVEL` | `info` | Minimum log severity (`debug`, `info`, `warn`, `error`; case-insensitive) |
 | `SANDBOX_RUNNER_LISTEN_ADDR` | `:8080` | HTTP listen address |
 | `SANDBOX_RUNNER_API_GRPC_ADDR` | *(required)* | API `host:port` for gRPC registration |
@@ -66,7 +65,7 @@ All services are configured via environment variables.
 
 ### Docker runner backend config
 
-These variables are parsed into the Docker runtime config and are only required or meaningful when `SANDBOX_RUNNER_BACKEND=docker`.
+These variables are parsed by the Docker/sysbox runner entrypoint.
 
 | Variable | Default | Description |
 | --- | --- | --- |
@@ -82,9 +81,7 @@ These variables are parsed into the Docker runtime config and are only required 
 
 ### Firecracker runner backend config
 
-These variables are parsed into the Firecracker runtime config and are only required or meaningful when `SANDBOX_RUNNER_BACKEND=firecracker`.
-
-The Firecracker backend follows the Lambda/Firecracker PoC shape: each sandbox gets a per-slot Linux network namespace with a TAP device, and the runner exposes the guest daemon through a host-local TCP proxy. `DaemonURL` is therefore a `127.0.0.1:<port>` URL, while proxy connections are dialed from inside the sandbox netns to the guest IP.
+These variables are parsed by the Firecracker runner entrypoint.
 
 #### Firecracker slots
 
@@ -95,10 +92,6 @@ Slots give the host-side Firecracker resources stable names without exposing tho
 - Network namespace: `fc-sb-n`
 - TAP name inside the namespace: `SANDBOX_RUNNER_FIRECRACKER_HOST_TAP_DEVICE_NAME`
 - Host-local daemon proxy port: `SANDBOX_RUNNER_FIRECRACKER_PROXY_PORT_START + n`
-
-We need this because Firecracker does not provide Docker-style bridge networking or container names for free. Each microVM clone needs its own host network namespace and a TAP device with the snapshot's expected name inside that namespace. The runner also needs a deterministic host-local `DaemonURL` for its existing HTTP proxy. Slots are the small accounting layer that ties those resources together and prevents two sandboxes from trying to use the same netns, TAP, or proxy port.
-
-Slots are deliberately runner-local and ephemeral. They are not persisted, not part of the public API, and not a promise that the same sandbox ID will always get the same slot after restart.
 
 | Variable | Default | Description |
 | --- | --- | --- |

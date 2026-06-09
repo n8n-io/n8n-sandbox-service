@@ -19,7 +19,7 @@ test.describe('Network isolation', () => {
   test('sandbox can reach public internet', async () => {
     const id = await createSandbox();
     try {
-      const result = await exec(id, pyGet('http://httpbin.org/ip', 15), {
+      const result = await exec(id, pyGet('http://example.com', 15), {
         timeoutMs: 30_000,
       });
       expect(result).toHaveSucceeded();

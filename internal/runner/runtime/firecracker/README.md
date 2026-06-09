@@ -11,6 +11,26 @@ host Firecracker setup and local snapshot cache.
 - Runs each microVM in a Linux network namespace with a TAP device.
 - Exposes the guest daemon through a host-local TCP proxy.
 
+## Networking
+
+The Firecracker backend follows the Lambda/Firecracker PoC shape: each sandbox
+gets a per-slot Linux network namespace with a TAP device, and the runner
+exposes the guest daemon through a host-local TCP proxy. `DaemonURL` is therefore
+a `127.0.0.1:<port>` URL, while proxy connections are dialed from inside the
+sandbox netns to the guest IP.
+
+We need slots because Firecracker does not provide Docker-style bridge networking
+or container names for free. Each microVM clone needs its own host network
+namespace and a TAP device with the snapshot's expected name inside that
+namespace. The runner also needs a deterministic host-local `DaemonURL` for its
+existing HTTP proxy. Slots are the small accounting layer that ties those
+resources together and prevents two sandboxes from trying to use the same netns,
+TAP, or proxy port.
+
+Slots are deliberately runner-local and ephemeral. They are not persisted, not
+part of the public API, and not a promise that the same sandbox ID will always
+get the same slot after restart.
+
 ## Supported Features
 
 - Tracks basic runner-local slot capacity.
@@ -28,12 +48,3 @@ host Firecracker setup and local snapshot cache.
 - Stop and delete both tear down the VM; stopped VM reuse is not implemented.
 - The snapshot/rootfs set must be built together and include the n8n sandbox
   daemon listening on the configured daemon port.
-
-## Security Hardening TODO
-
-- Keep one proxy per sandbox and close it before releasing the slot.
-- Add tests for slot reuse and cleanup.
-- Add file descriptor/timeouts/connection limits.
-- Consider Unix sockets instead of TCP localhost if the Go reverse proxy path allows it later.
-- Add guest-daemon authentication or per-sandbox secret headers if we want defense in depth.
-- Eventually pre-create network slots and verify cleanup before reuse.

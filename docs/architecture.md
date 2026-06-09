@@ -83,7 +83,7 @@ The API gateway is the single public-facing service. It exposes a REST API for s
 
 ### Runner
 
-**Source:** `cmd/runner/`, `internal/runner/`
+**Source:** `cmd/runner-docker/`, `cmd/runner-firecracker/`, `internal/runner/`
 
 Each runner manages a pool of sandbox containers via an inner Docker daemon (Docker-in-Docker). Runners are stateless — all persistent state lives in the API gateway's SQLite store.
 
