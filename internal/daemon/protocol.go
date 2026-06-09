@@ -59,6 +59,8 @@ type Request struct {
 // For file ops, a single Response is sent (result or error).
 type Response struct {
 	// Seq is a monotonically increasing sequence number for exec session events.
+	// Keep Seq and Type as the first marshaled fields: the runner exec proxy
+	// depends on this wire prefix to resume streams without JSON-decoding events.
 	Seq *uint64 `json:"seq,omitempty"`
 
 	// Type indicates the kind of response.
