@@ -85,11 +85,13 @@ The API gateway is the single public-facing service. It exposes a REST API for s
 
 **Source:** `cmd/runner-docker/`, `cmd/runner-firecracker/`, `internal/runner/`
 
-Each runner manages a pool of sandbox containers via an inner Docker daemon (Docker-in-Docker). Runners are stateless — all persistent state lives in the API gateway's SQLite store.
+Each runner hosts sandboxes through the shared `runtime.Runtime` contract. The Docker runner manages containers via an inner Docker daemon (Docker-in-Docker), while the Firecracker runner manages microVM sandboxes. Runners are stateless — all persistent state lives in the API gateway's SQLite store.
 
 | Subcomponent | Location | Responsibility |
 | --- | --- | --- |
+| Runtime contract | `internal/runner/runtime/` | Shared runner backend interface for Docker and Firecracker implementations |
 | Docker runtime | `internal/runner/runtime/docker/` | Create, stop, delete containers; reconcile on startup; manage Docker network |
+| Firecracker runtime | `internal/runner/runtime/firecracker/` | Create, stop, delete microVM sandboxes; manage jailer, snapshot restore, and host networking |
 | Docker client | `internal/runner/runtime/docker/docker_client.go` | Thin wrapper around the `docker` CLI |
 | Registration client | `internal/runner/register/` | gRPC heartbeat stream to API; sends capacity and health info every 10s |
 | gRPC control server | `internal/runner/grpc_control.go` | `SandboxControl` service — accepts create/stop/delete RPCs from API |

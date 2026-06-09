@@ -10,6 +10,8 @@ import (
 	"strings"
 )
 
+const maxFirecrackerAPIResponseBodyBytes int64 = 64 << 10
+
 // firecrackerAPIClient talks to one Firecracker VMM API socket.
 type firecrackerAPIClient struct {
 	client *http.Client
@@ -38,8 +40,11 @@ func (c *firecrackerAPIClient) putJSON(ctx context.Context, path string, body []
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxFirecrackerAPIResponseBodyBytes))
 		return fmt.Errorf("firecracker API PUT %s returned status %d: %s", path, resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+	if _, err := io.Copy(io.Discard, io.LimitReader(resp.Body, maxFirecrackerAPIResponseBodyBytes)); err != nil {
+		return fmt.Errorf("firecracker API PUT %s drain response body: %w", path, err)
 	}
 	return nil
 }
