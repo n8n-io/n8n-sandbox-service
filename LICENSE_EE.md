@@ -1,6 +1,6 @@
 # The n8n Enterprise License (the “Enterprise License”)
 
-Copyright (c) 2022-present n8n GmbH.
+Copyright (c) 2026-present n8n GmbH.
 
 With regard to the n8n Software:
 
