@@ -82,11 +82,11 @@ docker-api-amd64:
 
 ## docker-runner-arm64: Build the runner image for linux/arm64.
 docker-runner-arm64:
-	docker buildx build -f Dockerfile.runner --platform linux/arm64 -t n8n-sandbox-service-runner-dind:latest-arm64 --load .
+	docker buildx build -f Dockerfile.runner-dind --platform linux/arm64 -t n8n-sandbox-service-runner-dind:latest-arm64 --load .
 
 ## docker-runner-amd64: Build the runner image for linux/amd64.
 docker-runner-amd64:
-	docker buildx build -f Dockerfile.runner --platform linux/amd64 -t n8n-sandbox-service-runner-dind:latest-amd64 --load .
+	docker buildx build -f Dockerfile.runner-dind --platform linux/amd64 -t n8n-sandbox-service-runner-dind:latest-amd64 --load .
 
 ## docker-firecracker-runner-amd64: Build the Firecracker runner image for linux/amd64.
 docker-firecracker-runner-amd64:
