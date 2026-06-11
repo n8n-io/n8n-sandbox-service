@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { createSandbox, deleteSandbox } from './helpers';
 import { parseCounter } from './metrics-helpers';
+import { RUNNER_TAGS } from './tags';
 
 // e2e/run.sh sets SANDBOX_RUNNER_METRICS_ENABLED=true on the runner container.
 // The runner is not host-exposed, so these tests scrape /metrics from inside
@@ -15,7 +16,7 @@ function scrapeRunnerMetrics(runnerContainer: string): string {
   );
 }
 
-test.describe('Runner metrics endpoint', () => {
+test.describe('Runner metrics endpoint', { tag: RUNNER_TAGS.docker }, () => {
   test('is served without X-Api-Key and returns expected families', async () => {
     test.skip(!process.env.E2E_RUNNER_CONTAINER_NAME, 'needs E2E_RUNNER_CONTAINER_NAME (from e2e/run.sh)');
     const runnerContainer = process.env.E2E_RUNNER_CONTAINER_NAME!;

@@ -92,6 +92,10 @@ docker-runner-amd64:
 docker-firecracker-runner-amd64:
 	docker buildx build -f Dockerfile.ee.runner-firecracker --platform linux/amd64 -t n8n-sandbox-service-runner-firecracker:latest-amd64 --load .
 
+## docker-firecracker-runner-amd64: Build the Firecracker runner image for linux/amd64.
+docker-firecracker-runner-amd64:
+	docker buildx build -f Dockerfile.runner-firecracker --platform linux/amd64 -t n8n-sandbox-service-runner-firecracker:latest-amd64 --load .
+
 ## docker-sandbox-arm64: Build the sandbox image for linux/arm64.
 docker-sandbox-arm64:
 	docker buildx build -f Dockerfile.sandbox --platform linux/arm64 -t n8n-sandbox:latest-arm64 --load .

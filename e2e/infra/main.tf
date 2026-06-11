@@ -26,7 +26,7 @@ locals {
 resource "azurerm_virtual_network" "e2e" {
   name                = "${var.vm_name}-vnet"
   address_space       = ["10.0.0.0/16"]
-  location            = data.azurerm_resource_group.e2e.location
+  location            = var.location
   resource_group_name = data.azurerm_resource_group.e2e.name
   tags                = local.tags
 }
@@ -40,7 +40,7 @@ resource "azurerm_subnet" "e2e" {
 
 resource "azurerm_public_ip" "e2e" {
   name                = "${var.vm_name}-pip"
-  location            = data.azurerm_resource_group.e2e.location
+  location            = var.location
   resource_group_name = data.azurerm_resource_group.e2e.name
   allocation_method   = "Static"
   sku                 = "Standard"
@@ -49,7 +49,7 @@ resource "azurerm_public_ip" "e2e" {
 
 resource "azurerm_network_security_group" "e2e" {
   name                = "${var.vm_name}-nsg"
-  location            = data.azurerm_resource_group.e2e.location
+  location            = var.location
   resource_group_name = data.azurerm_resource_group.e2e.name
 
   security_rule {
@@ -69,7 +69,7 @@ resource "azurerm_network_security_group" "e2e" {
 
 resource "azurerm_network_interface" "e2e" {
   name                = "${var.vm_name}-nic"
-  location            = data.azurerm_resource_group.e2e.location
+  location            = var.location
   resource_group_name = data.azurerm_resource_group.e2e.name
   tags                = local.tags
 
@@ -89,7 +89,7 @@ resource "azurerm_network_interface_security_group_association" "e2e" {
 resource "azurerm_linux_virtual_machine" "e2e" {
   name                = var.vm_name
   resource_group_name = data.azurerm_resource_group.e2e.name
-  location            = data.azurerm_resource_group.e2e.location
+  location            = var.location
   size                = var.vm_size
   admin_username      = var.admin_username
 

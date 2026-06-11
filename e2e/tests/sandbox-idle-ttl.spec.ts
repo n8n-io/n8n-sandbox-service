@@ -1,10 +1,11 @@
 import { test, expect } from '@playwright/test';
 import './matchers';
 import { apiRequest, createSandbox, execWithTransientRetry } from './helpers';
+import { RUNNER_TAGS } from './tags';
 
 test.describe.configure({ timeout: 75_000 });
 
-test.describe('idle stop / wake / delete', () => {
+test.describe('idle stop / wake / delete', { tag: RUNNER_TAGS.docker }, () => {
   test('stop after idle, exec wakes, then row is deleted', async ({ request }) => {
     const id = await createSandbox();
 
