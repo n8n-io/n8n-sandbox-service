@@ -7,7 +7,7 @@ flowchart TD
     subgraph alpha ["Alpha (every push to main)"]
         A[Push to main] --> B[release-alpha]
         B --> C[Build multi-arch images]
-        C --> D[Push to ACR\napi / runner-dind / sandbox\n:alpha + :sha]
+        C --> D[Push to ACR\napi / runner-dind / runner-firecracker / sandbox\n:alpha + :sha]
     end
 
     subgraph versioned ["Versioned Release (service or sandbox)"]
@@ -31,13 +31,16 @@ flowchart TD
 
 ## Alpha Releases (ACR)
 
-On every push to `main`, the `release-alpha` workflow builds and pushes all three images to Azure Container Registry:
+On every push to `main`, the `release-alpha` workflow builds and pushes the alpha images to Azure Container Registry:
 
 - `n8n-sandbox-service-api:alpha`
 - `n8n-sandbox-service-runner-dind:alpha`
+- `n8n-sandbox-service-runner-firecracker:alpha`
 - `n8n-sandbox-service-sandbox:alpha`
 
 Each image is also tagged with the full commit SHA.
+
+The Firecracker runner alpha image is published for `linux/amd64` only.
 
 ## Service Release (Docker Hub)
 

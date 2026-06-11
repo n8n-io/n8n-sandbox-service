@@ -3,7 +3,7 @@ SHELL := /bin/bash
 MODULE  := github.com/n8n-io/sandbox-service
 BINDIR  := bin
 
-.PHONY: all daemon runner api test clean docker docker-local docker-arm64 docker-amd64 docker-api-arm64 docker-api-amd64 docker-runner-arm64 docker-runner-amd64 docker-sandbox-arm64 docker-sandbox-amd64 fmt fmt-check vet playground up down smoke sdk sdk-install sdk-build sdk-typecheck sdk-test sdk-fmt sdk-fmt-check sdk-lint
+.PHONY: all daemon runner runner-docker runner-firecracker api test clean docker docker-local docker-arm64 docker-amd64 docker-api-arm64 docker-api-amd64 docker-runner-arm64 docker-runner-amd64 docker-firecracker-runner-amd64 docker-sandbox-arm64 docker-sandbox-amd64 fmt fmt-check vet playground up down smoke sdk sdk-install sdk-build sdk-typecheck sdk-test sdk-fmt sdk-fmt-check sdk-lint
 
 all: daemon runner api
 
@@ -31,9 +31,16 @@ vet:
 daemon:
 	CGO_ENABLED=0 GOOS=linux go build -o $(BINDIR)/daemon ./cmd/daemon
 
-## runner: Build the runner service (Linux).
-runner:
-	GOOS=linux go build -o $(BINDIR)/runner ./cmd/runner
+## runner: Build the runner services (Linux).
+runner: runner-docker runner-firecracker
+
+## runner-docker: Build the Docker/sysbox runner service (Linux).
+runner-docker:
+	GOOS=linux go build -o $(BINDIR)/runner-docker ./cmd/runner-docker
+
+## runner-firecracker: Build the Firecracker runner service (Linux).
+runner-firecracker:
+	GOOS=linux go build -o $(BINDIR)/runner-firecracker ./cmd/runner-firecracker.ee
 
 ## api: Build the public API gateway server (Linux).
 api:
@@ -54,7 +61,7 @@ clean:
 ARCH := $(shell uname -m | sed 's/aarch64/arm64/' | sed 's/x86_64/amd64/')
 
 ## docker: Build API + runner images for linux/amd64.
-docker: docker-api-amd64 docker-runner-amd64
+docker: docker-api-amd64 docker-runner-amd64 docker-firecracker-runner-amd64
 
 ## docker-local: Build API, runner, and sandbox images for current architecture.
 docker-local: docker-api-$(ARCH) docker-runner-$(ARCH) docker-sandbox-$(ARCH)
@@ -63,7 +70,7 @@ docker-local: docker-api-$(ARCH) docker-runner-$(ARCH) docker-sandbox-$(ARCH)
 docker-arm64: docker-api-arm64 docker-runner-arm64 docker-sandbox-arm64
 
 ## docker-amd64: Build API, runner, and sandbox images for linux/amd64.
-docker-amd64: docker-api-amd64 docker-runner-amd64 docker-sandbox-amd64
+docker-amd64: docker-api-amd64 docker-runner-amd64 docker-firecracker-runner-amd64 docker-sandbox-amd64
 
 ## docker-api-arm64: Build the API image for linux/arm64.
 docker-api-arm64:
@@ -75,11 +82,15 @@ docker-api-amd64:
 
 ## docker-runner-arm64: Build the runner image for linux/arm64.
 docker-runner-arm64:
-	docker buildx build -f Dockerfile.runner --platform linux/arm64 -t n8n-sandbox-service-runner-dind:latest-arm64 --load .
+	docker buildx build -f Dockerfile.runner-dind --platform linux/arm64 -t n8n-sandbox-service-runner-dind:latest-arm64 --load .
 
 ## docker-runner-amd64: Build the runner image for linux/amd64.
 docker-runner-amd64:
-	docker buildx build -f Dockerfile.runner --platform linux/amd64 -t n8n-sandbox-service-runner-dind:latest-amd64 --load .
+	docker buildx build -f Dockerfile.runner-dind --platform linux/amd64 -t n8n-sandbox-service-runner-dind:latest-amd64 --load .
+
+## docker-firecracker-runner-amd64: Build the Firecracker runner image for linux/amd64.
+docker-firecracker-runner-amd64:
+	docker buildx build -f Dockerfile.ee.runner-firecracker --platform linux/amd64 -t n8n-sandbox-service-runner-firecracker:latest-amd64 --load .
 
 ## docker-sandbox-arm64: Build the sandbox image for linux/arm64.
 docker-sandbox-arm64:

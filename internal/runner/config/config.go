@@ -19,16 +19,11 @@ const (
 	defaultMaxFileBytes          = 10 * 1024 * 1024 // 10 MB
 	defaultDataDir               = "/var/sandboxes"
 	defaultListenAddr            = ":8080"
-	defaultMemoryMB              = 512
-	defaultCPUPercent            = 100
-	defaultPidsMax               = 256
-	defaultEnableCgroups         = true
-	defaultDockerHost            = "unix:///var/run/docker.sock"
 	defaultControlGRPCListenAddr = ":9091"
 	defaultLogLevel              = slog.LevelInfo
 )
 
-// Config holds all runtime configuration parsed from environment variables.
+// Config holds shared runner configuration parsed from environment variables.
 type Config struct {
 	// APIKeys is the set of valid API keys for authenticating requests.
 	// Parsed from SANDBOX_RUNNER_API_KEYS (comma-separated).
@@ -49,41 +44,6 @@ type Config struct {
 	// ListenAddr is the TCP address the HTTP server listens on.
 	// Parsed from SANDBOX_RUNNER_LISTEN_ADDR (default :8080).
 	ListenAddr string
-
-	// DockerHost is the daemon endpoint used to manage sandbox containers.
-	// Parsed from SANDBOX_RUNNER_DOCKER_HOST (default unix:///var/run/docker.sock).
-	DockerHost string
-
-	// DockerSandboxImage is the image used to start sandboxes.
-	// Parsed from SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE.
-	DockerSandboxImage string
-
-	// DefaultMemoryMB is the default memory limit per sandbox in megabytes.
-	// Parsed from SANDBOX_RUNNER_DEFAULT_MEMORY_MB (default 512).
-	DefaultMemoryMB int64
-
-	// DefaultCPUPercent is the default CPU limit as a percentage of one core.
-	// Parsed from SANDBOX_RUNNER_DEFAULT_CPU_PERCENT (default 100).
-	DefaultCPUPercent int
-
-	// DefaultPidsMax is the default max process count per sandbox.
-	// Parsed from SANDBOX_RUNNER_DEFAULT_PIDS_MAX (default 256).
-	DefaultPidsMax int
-
-	// DefaultDiskQuotaMB is the default writable-layer disk quota in megabytes.
-	// Parsed from SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB (default 0, meaning no quota).
-	// Only applied when DiskQuotaActive is true.
-	DefaultDiskQuotaMB int64
-
-	// DiskQuotaActive indicates that the runner's inner dockerd is configured
-	// against an xfs+prjquota data root and can honor `--storage-opt size=`.
-	// Set by scripts/start-runner.sh after a successful storage-pool mount.
-	// Parsed from SANDBOX_RUNNER_DISK_QUOTA_ACTIVE (default false).
-	DiskQuotaActive bool
-
-	// EnableCgroups controls whether cgroup setup is enforced for sandbox creation.
-	// Parsed from SANDBOX_RUNNER_ENABLE_CGROUPS (default true).
-	EnableCgroups bool
 
 	// APIGRPCAddr is the host:port of the API's runner registration gRPC listener.
 	// Parsed from SANDBOX_RUNNER_API_GRPC_ADDR.
@@ -186,11 +146,6 @@ func Load() (*Config, error) {
 		MaxFileBytes:          defaultMaxFileBytes,
 		DataDir:               defaultDataDir,
 		ListenAddr:            defaultListenAddr,
-		DockerHost:            defaultDockerHost,
-		DefaultMemoryMB:       defaultMemoryMB,
-		DefaultCPUPercent:     defaultCPUPercent,
-		DefaultPidsMax:        defaultPidsMax,
-		EnableCgroups:         defaultEnableCgroups,
 		CapacityTotal:         defaultRunnerCapacityTotal,
 		ControlGRPCListenAddr: defaultControlGRPCListenAddr,
 		LogLevel:              defaultLogLevel,
@@ -251,72 +206,6 @@ func Load() (*Config, error) {
 	// SANDBOX_RUNNER_LISTEN_ADDR (optional)
 	if v := os.Getenv("SANDBOX_RUNNER_LISTEN_ADDR"); v != "" {
 		cfg.ListenAddr = v
-	}
-
-	// SANDBOX_RUNNER_DOCKER_HOST (optional)
-	if v := os.Getenv("SANDBOX_RUNNER_DOCKER_HOST"); v != "" {
-		cfg.DockerHost = v
-	}
-
-	// SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE (required)
-	cfg.DockerSandboxImage = os.Getenv("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE")
-	if cfg.DockerSandboxImage == "" {
-		return nil, fmt.Errorf("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE must be set")
-	}
-
-	// SANDBOX_RUNNER_DEFAULT_MEMORY_MB (optional)
-	if v := os.Getenv("SANDBOX_RUNNER_DEFAULT_MEMORY_MB"); v != "" {
-		n, err := strconv.ParseInt(v, 10, 64)
-		if err != nil || n <= 0 {
-			return nil, fmt.Errorf("SANDBOX_RUNNER_DEFAULT_MEMORY_MB must be a positive integer, got %q", v)
-		}
-		cfg.DefaultMemoryMB = n
-	}
-
-	// SANDBOX_RUNNER_DEFAULT_CPU_PERCENT (optional)
-	if v := os.Getenv("SANDBOX_RUNNER_DEFAULT_CPU_PERCENT"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n <= 0 {
-			return nil, fmt.Errorf("SANDBOX_RUNNER_DEFAULT_CPU_PERCENT must be a positive integer, got %q", v)
-		}
-		cfg.DefaultCPUPercent = n
-	}
-
-	// SANDBOX_RUNNER_DEFAULT_PIDS_MAX (optional)
-	if v := os.Getenv("SANDBOX_RUNNER_DEFAULT_PIDS_MAX"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n <= 0 {
-			return nil, fmt.Errorf("SANDBOX_RUNNER_DEFAULT_PIDS_MAX must be a positive integer, got %q", v)
-		}
-		cfg.DefaultPidsMax = n
-	}
-
-	// SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB (optional; 0 means no quota,
-	// matching how scripts/start-runner.sh treats an unset value)
-	if v := os.Getenv("SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB"); v != "" {
-		n, err := strconv.ParseInt(v, 10, 64)
-		if err != nil || n < 0 {
-			return nil, fmt.Errorf("SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB must be a non-negative integer, got %q", v)
-		}
-		cfg.DefaultDiskQuotaMB = n
-	}
-
-	// SANDBOX_RUNNER_DISK_QUOTA_ACTIVE (optional; set by scripts/start-runner.sh)
-	if v := os.Getenv("SANDBOX_RUNNER_DISK_QUOTA_ACTIVE"); v != "" {
-		active, err := strconv.ParseBool(v)
-		if err != nil {
-			return nil, fmt.Errorf("SANDBOX_RUNNER_DISK_QUOTA_ACTIVE must be a boolean, got %q", v)
-		}
-		cfg.DiskQuotaActive = active
-	}
-
-	// SANDBOX_RUNNER_ENABLE_CGROUPS (optional)
-	if v := os.Getenv("SANDBOX_RUNNER_ENABLE_CGROUPS"); v != "" {
-		enabled, err := strconv.ParseBool(v)
-		if err != nil {
-			return nil, fmt.Errorf("SANDBOX_RUNNER_ENABLE_CGROUPS must be a boolean, got %q", v)
-		}
-		cfg.EnableCgroups = enabled
 	}
 
 	// SANDBOX_RUNNER_METRICS_ENABLED (optional)

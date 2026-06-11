@@ -193,7 +193,7 @@ func TestExecProxyHappyPath(t *testing.T) {
 	defer daemon.Close()
 
 	handler := ExecProxyHandler(
-		&fakeContainerManager{daemonURL: daemon.URL},
+		&fakeRuntime{daemonURL: daemon.URL},
 		&config.Config{},
 		metrics.NewRunnerRecorder(false),
 	)
@@ -239,7 +239,7 @@ func TestExecProxyRejectsOversizedBody(t *testing.T) {
 	defer daemon.Close()
 
 	handler := ExecProxyHandler(
-		&fakeContainerManager{daemonURL: daemon.URL},
+		&fakeRuntime{daemonURL: daemon.URL},
 		&config.Config{},
 		metrics.NewRunnerRecorder(false),
 	)
@@ -280,7 +280,7 @@ func TestExecProxyStreamsLargeEvent(t *testing.T) {
 	defer daemon.Close()
 
 	handler := ExecProxyHandler(
-		&fakeContainerManager{daemonURL: daemon.URL},
+		&fakeRuntime{daemonURL: daemon.URL},
 		&config.Config{},
 		metrics.NewRunnerRecorder(false),
 	)
@@ -345,7 +345,7 @@ func TestExecProxyOneRetry(t *testing.T) {
 	defer daemon.Close()
 
 	handler := ExecProxyHandler(
-		&fakeContainerManager{daemonURL: daemon.URL},
+		&fakeRuntime{daemonURL: daemon.URL},
 		&config.Config{},
 		metrics.NewRunnerRecorder(false),
 	)
@@ -423,7 +423,7 @@ func TestExecProxyResumeWithoutAfterBeforeFirstEvent(t *testing.T) {
 	defer daemon.Close()
 
 	handler := ExecProxyHandler(
-		&fakeContainerManager{daemonURL: daemon.URL},
+		&fakeRuntime{daemonURL: daemon.URL},
 		&config.Config{},
 		metrics.NewRunnerRecorder(false),
 	)
@@ -494,7 +494,7 @@ func TestExecProxyRetriesExhausted(t *testing.T) {
 	defer daemon.Close()
 
 	handler := ExecProxyHandler(
-		&fakeContainerManager{daemonURL: daemon.URL},
+		&fakeRuntime{daemonURL: daemon.URL},
 		&config.Config{},
 		metrics.NewRunnerRecorder(false),
 	)
@@ -543,7 +543,7 @@ func TestExecProxyExecIDPropagation(t *testing.T) {
 		defer daemon.Close()
 
 		handler := ExecProxyHandler(
-			&fakeContainerManager{daemonURL: daemon.URL},
+			&fakeRuntime{daemonURL: daemon.URL},
 			&config.Config{},
 			metrics.NewRunnerRecorder(false),
 		)
@@ -583,7 +583,7 @@ func TestExecProxyExecIDPropagation(t *testing.T) {
 		defer daemon.Close()
 
 		handler := ExecProxyHandler(
-			&fakeContainerManager{daemonURL: daemon.URL},
+			&fakeRuntime{daemonURL: daemon.URL},
 			&config.Config{},
 			metrics.NewRunnerRecorder(false),
 		)
@@ -636,7 +636,7 @@ func TestExecProxyAlreadyCompletedOnResume(t *testing.T) {
 	defer daemon.Close()
 
 	handler := ExecProxyHandler(
-		&fakeContainerManager{daemonURL: daemon.URL},
+		&fakeRuntime{daemonURL: daemon.URL},
 		&config.Config{},
 		metrics.NewRunnerRecorder(false),
 	)

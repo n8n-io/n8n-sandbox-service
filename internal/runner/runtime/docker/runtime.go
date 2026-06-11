@@ -1,9 +1,8 @@
-package manager
+package docker
 
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,19 +11,20 @@ import (
 	"time"
 
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
-	"github.com/n8n-io/sandbox-service/internal/runner/netrules"
+	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
+	"github.com/n8n-io/sandbox-service/internal/runner/runtime/docker/netrules"
 	"golang.org/x/sync/singleflight"
 )
 
 // ErrSandboxNotFound is returned when a sandbox ID is not found.
-var ErrSandboxNotFound = errors.New("sandbox not found")
+var ErrSandboxNotFound = runnerruntime.ErrSandboxNotFound
 
 // ErrSandboxNetworkUnavailable is returned when a container exists but has no
 // network attachment/IP yet.
-var ErrSandboxNetworkUnavailable = errors.New("sandbox network unavailable")
+var ErrSandboxNetworkUnavailable = runnerruntime.ErrSandboxNetworkUnavailable
 
 // ErrSandboxNotRunning is returned when a sandbox container exists but is not running.
-var ErrSandboxNotRunning = errors.New("sandbox not running")
+var ErrSandboxNotRunning = runnerruntime.ErrSandboxNotRunning
 
 const (
 	containerStatusRunning    = "running"
@@ -38,18 +38,15 @@ const (
 )
 
 // CreateOptions holds optional parameters for sandbox creation.
-type CreateOptions struct{}
+type CreateOptions = runnerruntime.CreateOptions
 
 // ContainerInfo represents information about a created container.
-type ContainerInfo struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	IP   string `json:"ip"`
-}
+type ContainerInfo = runnerruntime.SandboxInfo
 
-// Manager orchestrates container lifecycle without persistent state.
-type Manager struct {
-	config        *config.Config
+// Runtime orchestrates container lifecycle without persistent state.
+type Runtime struct {
+	runnerConfig  *config.Config
+	config        Config
 	gatewayIP     string
 	wakeGroup     singleflight.Group
 	docker        dockerBackend
@@ -60,10 +57,12 @@ type Manager struct {
 	imageReadyCh  chan struct{}
 }
 
-// New creates a new Manager. It reconciles any previous containers and ensures
+var _ runnerruntime.Runtime = (*Runtime)(nil)
+
+// New creates a new Docker runtime. It reconciles any previous containers and ensures
 // the runner bridge exists.
-func New(cfg *config.Config) (*Manager, error) {
-	m := newManager(cfg, &dockerClient{host: cfg.DockerHost})
+func New(runnerConfig *config.Config, cfg Config) (*Runtime, error) {
+	m := newRuntime(runnerConfig, cfg, &dockerClient{host: cfg.Host})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -81,10 +80,11 @@ func New(cfg *config.Config) (*Manager, error) {
 	return m, nil
 }
 
-// newManager centralizes Manager dependency wiring so tests can override Docker,
+// newRuntime centralizes Runtime dependency wiring so tests can override Docker,
 // network policy, or daemon readiness behavior without nil defaults.
-func newManager(cfg *config.Config, docker dockerBackend) *Manager {
-	return &Manager{
+func newRuntime(runnerConfig *config.Config, cfg Config, docker dockerBackend) *Runtime {
+	return &Runtime{
+		runnerConfig:  runnerConfig,
 		config:        cfg,
 		docker:        docker,
 		applyPolicy:   netrules.ApplyPolicy,
@@ -96,8 +96,8 @@ func newManager(cfg *config.Config, docker dockerBackend) *Manager {
 
 // EnsureSandboxImage pulls the sandbox image with retries. It is intended to
 // run in a goroutine after the HTTP server is listening.
-func (m *Manager) EnsureSandboxImage(ctx context.Context) {
-	image := m.config.DockerSandboxImage
+func (m *Runtime) EnsureSandboxImage(ctx context.Context) {
+	image := m.config.SandboxImage
 
 	for attempt := 1; ; attempt++ {
 		if err := ctx.Err(); err != nil {
@@ -125,17 +125,75 @@ func (m *Manager) EnsureSandboxImage(ctx context.Context) {
 }
 
 // ImageReady reports whether the sandbox image has been pulled successfully.
-func (m *Manager) ImageReady() bool {
+func (m *Runtime) ImageReady() bool {
 	return m.imageReady.Load()
 }
 
 // ImageReadyCh returns a channel that is closed when the sandbox image becomes available.
-func (m *Manager) ImageReadyCh() <-chan struct{} {
+func (m *Runtime) ImageReadyCh() <-chan struct{} {
 	return m.imageReadyCh
 }
 
+// Prepare readies the Docker sandbox image for future sandbox creation.
+func (m *Runtime) Prepare(ctx context.Context) {
+	m.EnsureSandboxImage(ctx)
+}
+
+// Ready reports whether the Docker-backed runtime can accept sandbox work.
+func (m *Runtime) Ready(ctx context.Context) error {
+	if !m.ImageReady() {
+		return fmt.Errorf("sandbox image not ready")
+	}
+	if err := m.DockerHealthy(ctx); err != nil {
+		return fmt.Errorf("docker unavailable")
+	}
+	return nil
+}
+
+// ReadyCh returns a channel that is closed when the runtime first becomes ready.
+func (m *Runtime) ReadyCh() <-chan struct{} {
+	return m.ImageReadyCh()
+}
+
+// Capacity reports how many Docker-backed sandboxes are active on this runner.
+func (m *Runtime) Capacity(ctx context.Context) (runnerruntime.Capacity, error) {
+	n, err := m.ManagedContainerCount(ctx)
+	if err != nil {
+		return runnerruntime.Capacity{Total: m.runnerConfig.CapacityTotal}, err
+	}
+	return runnerruntime.Capacity{Used: int32(n), Total: m.runnerConfig.CapacityTotal}, nil
+}
+
+// CreateSandbox creates and starts a new sandbox.
+func (m *Runtime) CreateSandbox(ctx context.Context, sandboxID string, opts *runnerruntime.CreateOptions) (*runnerruntime.SandboxInfo, error) {
+	return m.CreateContainer(ctx, sandboxID, opts)
+}
+
+// GetSandboxInfo returns information about a sandbox by its sandbox ID.
+func (m *Runtime) GetSandboxInfo(ctx context.Context, sandboxID string) (*runnerruntime.SandboxInfo, error) {
+	containerID, err := m.FindContainerIDByLabel(ctx, sandboxID)
+	if err != nil {
+		return nil, err
+	}
+	return m.GetContainerInfo(ctx, containerID)
+}
+
+// DeleteSandbox removes a sandbox by its sandbox ID.
+func (m *Runtime) DeleteSandbox(ctx context.Context, sandboxID string) error {
+	containerID, err := m.FindContainerIDByLabel(ctx, sandboxID)
+	if err != nil {
+		return err
+	}
+	return m.DeleteContainer(ctx, containerID)
+}
+
+// StopSandbox stops a sandbox without removing it.
+func (m *Runtime) StopSandbox(ctx context.Context, sandboxID string) error {
+	return m.StopSandboxContainer(ctx, sandboxID)
+}
+
 // CreateContainer creates and starts a new container.
-func (m *Manager) CreateContainer(ctx context.Context, sandboxID string, opts *CreateOptions) (*ContainerInfo, error) {
+func (m *Runtime) CreateContainer(ctx context.Context, sandboxID string, opts *CreateOptions) (*ContainerInfo, error) {
 	if !m.imageReady.Load() {
 		return nil, fmt.Errorf("sandbox image not yet available")
 	}
@@ -152,7 +210,7 @@ func (m *Manager) CreateContainer(ctx context.Context, sandboxID string, opts *C
 	containerName := "sandbox-" + sandboxID[:12]
 	limits := m.defaultLimits()
 
-	containerID, err := m.docker.createContainer(ctx, sandboxID, containerName, m.config.DockerSandboxImage, limits, m.config.EnableCgroups)
+	containerID, err := m.docker.createContainer(ctx, sandboxID, containerName, m.config.SandboxImage, limits, m.config.EnableCgroups)
 	if err != nil {
 		return nil, fmt.Errorf("create container: %w", err)
 	}
@@ -194,12 +252,12 @@ func (m *Manager) CreateContainer(ctx context.Context, sandboxID string, opts *C
 }
 
 // DockerHealthy checks whether the inner Docker daemon is reachable.
-func (m *Manager) DockerHealthy(ctx context.Context) error {
+func (m *Runtime) DockerHealthy(ctx context.Context) error {
 	return m.docker.ping(ctx)
 }
 
 // GetContainerInfo returns information about a container by its ID.
-func (m *Manager) GetContainerInfo(ctx context.Context, containerID string) (*ContainerInfo, error) {
+func (m *Runtime) GetContainerInfo(ctx context.Context, containerID string) (*ContainerInfo, error) {
 	inspect, err := m.docker.inspectContainer(ctx, containerID)
 	if err != nil {
 		if isDockerNotFound(err) {
@@ -222,7 +280,7 @@ func (m *Manager) GetContainerInfo(ctx context.Context, containerID string) (*Co
 
 // EnsureSandboxRunning starts a stopped container if needed, reapplies network
 // policy for its current IP, and waits until the daemon accepts traffic.
-func (m *Manager) EnsureSandboxRunning(ctx context.Context, sandboxID string) error {
+func (m *Runtime) EnsureSandboxRunning(ctx context.Context, sandboxID string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -237,7 +295,7 @@ func (m *Manager) EnsureSandboxRunning(ctx context.Context, sandboxID string) er
 	return err
 }
 
-func (m *Manager) ensureSandboxRunningOnce(ctx context.Context, sandboxID string) error {
+func (m *Runtime) ensureSandboxRunningOnce(ctx context.Context, sandboxID string) error {
 	containerID, err := m.FindContainerIDByLabel(ctx, sandboxID)
 	if err != nil {
 		return err
@@ -275,7 +333,7 @@ func (m *Manager) ensureSandboxRunningOnce(ctx context.Context, sandboxID string
 	return nil
 }
 
-func (m *Manager) cleanupWakeFailure(containerID string) {
+func (m *Runtime) cleanupWakeFailure(containerID string) {
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := m.docker.stopContainer(cleanupCtx, containerID); err != nil {
@@ -290,7 +348,7 @@ func (m *Manager) cleanupWakeFailure(containerID string) {
 }
 
 // StopSandboxContainer stops a running sandbox container without removing it.
-func (m *Manager) StopSandboxContainer(ctx context.Context, sandboxID string) error {
+func (m *Runtime) StopSandboxContainer(ctx context.Context, sandboxID string) error {
 	containerID, err := m.FindContainerIDByLabel(ctx, sandboxID)
 	if err != nil {
 		return err
@@ -309,7 +367,7 @@ func (m *Manager) StopSandboxContainer(ctx context.Context, sandboxID string) er
 }
 
 // DaemonURL returns the daemon URL for a container by sandbox ID.
-func (m *Manager) DaemonURL(ctx context.Context, sandboxID string) (string, error) {
+func (m *Runtime) DaemonURL(ctx context.Context, sandboxID string) (string, error) {
 	containerID, err := m.FindContainerIDByLabel(ctx, sandboxID)
 	if err != nil {
 		return "", err
@@ -336,7 +394,7 @@ func (m *Manager) DaemonURL(ctx context.Context, sandboxID string) (string, erro
 }
 
 // DeleteContainer stops and removes a container.
-func (m *Manager) DeleteContainer(ctx context.Context, containerID string) error {
+func (m *Runtime) DeleteContainer(ctx context.Context, containerID string) error {
 	if err := m.removeContainerAndTeardownRules(ctx, containerID); err != nil {
 		return err
 	}
@@ -349,7 +407,7 @@ func (m *Manager) DeleteContainer(ctx context.Context, containerID string) error
 // rules. Order matters: rules must outlive the container so it cannot run
 // unconfined during teardown. Both failure paths are logged; the
 // removeContainer error is also returned so callers decide whether to bail.
-func (m *Manager) removeContainerAndTeardownRules(ctx context.Context, containerID string) error {
+func (m *Runtime) removeContainerAndTeardownRules(ctx context.Context, containerID string) error {
 	if containerID == "" {
 		return nil
 	}
@@ -365,16 +423,13 @@ func (m *Manager) removeContainerAndTeardownRules(ctx context.Context, container
 }
 
 // Shutdown cleans up all managed containers.
-func (m *Manager) Shutdown() {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-
+func (m *Runtime) Shutdown(ctx context.Context) {
 	if err := m.reconcileContainers(ctx); err != nil {
 		slog.Warn("shutdown container cleanup", "err", err)
 	}
 }
 
-func (m *Manager) defaultLimits() *ResourceLimits {
+func (m *Runtime) defaultLimits() *ResourceLimits {
 	var diskMB int64
 	if m.config.DiskQuotaActive {
 		diskMB = m.config.DefaultDiskQuotaMB
@@ -468,7 +523,7 @@ func isSuccessfulExit(body []byte) bool {
 	return bytes.Contains(body, []byte(`"type":"exit"`)) && bytes.Contains(body, []byte(`"exit_code":0`))
 }
 
-func (m *Manager) reconcileContainers(ctx context.Context) error {
+func (m *Runtime) reconcileContainers(ctx context.Context) error {
 	ids, err := m.docker.listContainersByLabel(ctx, containerLabelManaged, containerLabelManagedVal)
 	if err != nil {
 		return err
@@ -481,7 +536,7 @@ func (m *Manager) reconcileContainers(ctx context.Context) error {
 	return nil
 }
 
-func (m *Manager) ensureRunnerBridge(ctx context.Context) (string, error) {
+func (m *Runtime) ensureRunnerBridge(ctx context.Context) (string, error) {
 	inspect, err := m.docker.inspectNetwork(ctx, runnerBridgeNetwork)
 	if err != nil {
 		if !isDockerNotFound(err) {
@@ -493,7 +548,7 @@ func (m *Manager) ensureRunnerBridge(ctx context.Context) (string, error) {
 	return firstGateway(inspect), nil
 }
 
-func (m *Manager) createRunnerBridge(ctx context.Context) (string, error) {
+func (m *Runtime) createRunnerBridge(ctx context.Context) (string, error) {
 	if _, err := m.docker.run(ctx, "network", "create", "--driver", "bridge", "--opt", "com.docker.network.bridge.enable_icc=false", runnerBridgeNetwork); err != nil {
 		return "", err
 	}
@@ -505,7 +560,7 @@ func (m *Manager) createRunnerBridge(ctx context.Context) (string, error) {
 }
 
 // ManagedContainerCount returns how many sandbox containers this runner is managing.
-func (m *Manager) ManagedContainerCount(ctx context.Context) (int, error) {
+func (m *Runtime) ManagedContainerCount(ctx context.Context) (int, error) {
 	ids, err := m.docker.listContainersByLabel(ctx, containerLabelManaged, containerLabelManagedVal)
 	if err != nil {
 		return 0, err
@@ -514,7 +569,7 @@ func (m *Manager) ManagedContainerCount(ctx context.Context) (int, error) {
 }
 
 // FindContainerIDByLabel finds a container ID by sandbox ID using label filters.
-func (m *Manager) FindContainerIDByLabel(ctx context.Context, sandboxID string) (string, error) {
+func (m *Runtime) FindContainerIDByLabel(ctx context.Context, sandboxID string) (string, error) {
 	lines, err := m.docker.findContainerByLabels(ctx,
 		"label="+containerLabelManaged+"="+containerLabelManagedVal,
 		"label="+containerLabelSandboxID+"="+sandboxID)

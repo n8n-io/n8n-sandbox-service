@@ -1,5 +1,5 @@
 name: Publish sandbox images to ACR (alpha)
-description: Run tests, then build and push API, runner, and sandbox images; move alpha tags
+description: Run tests, then build and push API, runner, Firecracker runner, and sandbox images; move alpha tags
 inputs:
   azure-client-id:
     required: true
@@ -59,7 +59,13 @@ runs:
         build_push() {
           local file=$1
           local image=$2
+          local platform=${3:-}
+          local platform_args=()
+          if [[ -n "$platform" ]]; then
+            platform_args=(--platform "$platform")
+          fi
           docker build -f "$file" \
+            "${platform_args[@]}" \
             -t "${REGISTRY}/${image}:${SHA}" \
             -t "${REGISTRY}/${image}:alpha" \
             .
@@ -68,5 +74,6 @@ runs:
         }
 
         build_push Dockerfile.api n8n-sandbox-service-api
-        build_push Dockerfile.runner n8n-sandbox-service-runner-dind
+        build_push Dockerfile.runner-dind n8n-sandbox-service-runner-dind
+        build_push Dockerfile.ee.runner-firecracker n8n-sandbox-service-runner-firecracker linux/amd64
         build_push Dockerfile.sandbox n8n-sandbox-service-sandbox

@@ -15,7 +15,7 @@ test.describe('Network isolation', () => {
   test('sandbox can reach public internet', async () => {
     const id = await createSandbox();
     try {
-      const result = await exec(id, `curl -fsSL -o /dev/null -w '%{http_code}' --max-time 15 https://one.one.one.one/`, {
+      const result = await exec(id, `curl -fsSL -o /dev/null -w '%{http_code}' --max-time 15 https://example.com/`, {
         timeoutMs: 30_000,
       });
       expect(result).toHaveSucceeded();

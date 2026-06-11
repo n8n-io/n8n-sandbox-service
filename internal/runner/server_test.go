@@ -10,53 +10,63 @@ import (
 
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
-	"github.com/n8n-io/sandbox-service/internal/runner/manager"
+	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 )
 
-type fakeContainerManager struct {
-	dockerErr  error
-	imageReady bool
-	daemonURL  string
-	daemonErr  error
+type fakeRuntime struct {
+	daemonURL string
+	daemonErr error
+	ensureErr error
+	readyErr  error
 }
 
-func (f *fakeContainerManager) CreateContainer(context.Context, string, *manager.CreateOptions) (*manager.ContainerInfo, error) {
+func (f *fakeRuntime) Prepare(context.Context) {}
+
+func (f *fakeRuntime) Ready(context.Context) error {
+	return f.readyErr
+}
+
+func (f *fakeRuntime) ReadyCh() <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+
+func (f *fakeRuntime) Capacity(context.Context) (runnerruntime.Capacity, error) {
+	return runnerruntime.Capacity{}, nil
+}
+
+func (f *fakeRuntime) CreateSandbox(context.Context, string, *runnerruntime.CreateOptions) (*runnerruntime.SandboxInfo, error) {
 	return nil, nil
 }
 
-func (f *fakeContainerManager) GetContainerInfo(context.Context, string) (*manager.ContainerInfo, error) {
+func (f *fakeRuntime) GetSandboxInfo(context.Context, string) (*runnerruntime.SandboxInfo, error) {
 	return nil, nil
 }
 
-func (f *fakeContainerManager) DeleteContainer(context.Context, string) error {
+func (f *fakeRuntime) DeleteSandbox(context.Context, string) error {
 	return nil
 }
 
-func (f *fakeContainerManager) EnsureSandboxRunning(context.Context, string) error {
+func (f *fakeRuntime) StopSandbox(context.Context, string) error {
 	return nil
 }
 
-func (f *fakeContainerManager) DaemonURL(_ context.Context, _ string) (string, error) {
+func (f *fakeRuntime) EnsureSandboxRunning(context.Context, string) error {
+	return f.ensureErr
+}
+
+func (f *fakeRuntime) DaemonURL(context.Context, string) (string, error) {
 	if f.daemonErr != nil {
 		return "", f.daemonErr
 	}
 	return f.daemonURL, nil
 }
 
-func (f *fakeContainerManager) FindContainerIDByLabel(context.Context, string) (string, error) {
-	return "", manager.ErrSandboxNotFound
-}
+func (f *fakeRuntime) Shutdown(context.Context) {}
 
-func (f *fakeContainerManager) DockerHealthy(context.Context) error {
-	return f.dockerErr
-}
-
-func (f *fakeContainerManager) ImageReady() bool {
-	return f.imageReady
-}
-
-func TestRunnerLivenessEndpointsDoNotCheckDocker(t *testing.T) {
-	router := NewRouter(&fakeContainerManager{dockerErr: errors.New("docker down")}, &config.Config{}, metrics.NewRunnerRecorder(false))
+func TestRunnerLivenessEndpointsDoNotCheckRuntime(t *testing.T) {
+	router := NewRouter(&fakeRuntime{readyErr: errors.New("runtime down")}, &config.Config{}, metrics.NewRunnerRecorder(false))
 
 	for _, path := range []string{"/healthz", "/livez"} {
 		t.Run(path, func(t *testing.T) {
@@ -72,8 +82,8 @@ func TestRunnerLivenessEndpointsDoNotCheckDocker(t *testing.T) {
 	}
 }
 
-func TestRunnerReadyzChecksDocker(t *testing.T) {
-	router := NewRouter(&fakeContainerManager{imageReady: true}, &config.Config{}, metrics.NewRunnerRecorder(false))
+func TestRunnerReadyzChecksRuntime(t *testing.T) {
+	router := NewRouter(&fakeRuntime{}, &config.Config{}, metrics.NewRunnerRecorder(false))
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	rec := httptest.NewRecorder()
 
@@ -84,8 +94,8 @@ func TestRunnerReadyzChecksDocker(t *testing.T) {
 	}
 }
 
-func TestRunnerReadyzFailsWhenDockerUnavailable(t *testing.T) {
-	router := NewRouter(&fakeContainerManager{dockerErr: errors.New("docker down"), imageReady: true}, &config.Config{}, metrics.NewRunnerRecorder(false))
+func TestRunnerReadyzFailsWhenRuntimeUnavailable(t *testing.T) {
+	router := NewRouter(&fakeRuntime{readyErr: errors.New("runtime down")}, &config.Config{}, metrics.NewRunnerRecorder(false))
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	rec := httptest.NewRecorder()
 
@@ -96,21 +106,21 @@ func TestRunnerReadyzFailsWhenDockerUnavailable(t *testing.T) {
 	}
 }
 
-func TestRunnerReadyzFailsWhenImageNotReady(t *testing.T) {
-	router := NewRouter(&fakeContainerManager{imageReady: false}, &config.Config{}, metrics.NewRunnerRecorder(false))
+func TestRunnerReadyzFailsWhenRuntimeNotReady(t *testing.T) {
+	router := NewRouter(&fakeRuntime{readyErr: errors.New("runtime not ready")}, &config.Config{}, metrics.NewRunnerRecorder(false))
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	rec := httptest.NewRecorder()
 
 	router.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("expected readyz to return 503 when image not ready, got %d", rec.Code)
+		t.Fatalf("expected readyz to return 503 when runtime not ready, got %d", rec.Code)
 	}
 }
 
 func TestRunnerMetricsEndpointEnabledBypassesAuth(t *testing.T) {
 	cfg := &config.Config{APIKeys: map[string]struct{}{"k": {}}}
-	router := NewRouter(&fakeContainerManager{imageReady: true}, cfg, metrics.NewRunnerRecorder(true))
+	router := NewRouter(&fakeRuntime{}, cfg, metrics.NewRunnerRecorder(true))
 
 	// Warm-up: a request the mux can dispatch so HTTPMiddleware records a series.
 	// Scrapes only emit families that have at least one observed series.
@@ -139,7 +149,7 @@ func TestRunnerMetricsEndpointEnabledBypassesAuth(t *testing.T) {
 
 func TestRunnerMetricsEndpointDisabledReturns404(t *testing.T) {
 	cfg := &config.Config{APIKeys: map[string]struct{}{"k": {}}}
-	router := NewRouter(&fakeContainerManager{}, cfg, metrics.NewRunnerRecorder(false))
+	router := NewRouter(&fakeRuntime{}, cfg, metrics.NewRunnerRecorder(false))
 
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	req.Header.Set("X-Api-Key", "k")

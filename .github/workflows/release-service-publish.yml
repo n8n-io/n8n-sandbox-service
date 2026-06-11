@@ -43,7 +43,7 @@ jobs:
         uses: ./.github/actions/docker-publish
         with:
           image: n8nio/n8n-sandbox-service-runner-dind
-          dockerfile: Dockerfile.runner
+          dockerfile: Dockerfile.runner-dind
           version: ${{ steps.version.outputs.version }}
           extra-tags: stable
           dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
