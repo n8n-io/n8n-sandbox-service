@@ -63,7 +63,7 @@ services:
   runner-1:
     build:
       context: .
-      dockerfile: Dockerfile.runner
+      dockerfile: Dockerfile.runner-dind
     image: n8n-sandbox-service-runner-dind:latest-${ARCH}
     container_name: n8n-sandbox-service-runner-dind-local-1
     depends_on:
