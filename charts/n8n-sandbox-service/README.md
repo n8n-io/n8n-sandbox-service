@@ -20,6 +20,10 @@ helm upgrade --install n8n-sandbox-service ./charts/n8n-sandbox-service \
 
 Use `dataPlane.mode: sysbox` for the in-cluster sysbox/DinD runner. Use `dataPlane.mode: external` when runners live outside Kubernetes. In external mode, the chart renders the API resources but does not render the sysbox runner StatefulSet.
 
+The chart renders the Docker/sysbox runner image. The Firecracker runner is a
+separate image/entrypoint for external host deployments and is not charted here
+yet.
+
 ## Sysbox Scheduling Defaults
 
 The default runner scheduling follows the Sysbox Kubernetes convention:

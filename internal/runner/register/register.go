@@ -14,11 +14,11 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/grpc/pb"
 	"github.com/n8n-io/sandbox-service/internal/grpctls"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
-	"github.com/n8n-io/sandbox-service/internal/runner/manager"
+	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 )
 
 // Run maintains a registration stream to the API until ctx is cancelled.
-func Run(ctx context.Context, cfg *config.Config, mgr *manager.Manager) {
+func Run(ctx context.Context, cfg *config.Config, rt runnerruntime.Runtime) {
 	backoff := time.Second
 	for {
 		select {
@@ -26,7 +26,7 @@ func Run(ctx context.Context, cfg *config.Config, mgr *manager.Manager) {
 			return
 		default:
 		}
-		err := connectOnce(ctx, cfg, mgr)
+		err := connectOnce(ctx, cfg, rt)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -49,7 +49,7 @@ func Run(ctx context.Context, cfg *config.Config, mgr *manager.Manager) {
 	}
 }
 
-func connectOnce(ctx context.Context, cfg *config.Config, mgr *manager.Manager) error {
+func connectOnce(ctx context.Context, cfg *config.Config, rt runnerruntime.Runtime) error {
 	serverName := cfg.GRPCServerName
 	if serverName == "" {
 		host, _, err := net.SplitHostPort(cfg.APIGRPCAddr)
@@ -107,17 +107,21 @@ func connectOnce(ctx context.Context, cfg *config.Config, mgr *manager.Manager) 
 	}()
 
 	send := func() error {
-		n, err := mgr.ManagedContainerCount(ctx)
+		capacity, err := rt.Capacity(ctx)
 		if err != nil {
-			slog.Debug("managed container count failed", "error", err)
-			n = 0
+			slog.Debug("runtime capacity failed", "error", err)
+			capacity = runnerruntime.Capacity{Total: cfg.CapacityTotal}
+		}
+		healthy := true
+		if err := rt.Ready(ctx); err != nil {
+			healthy = false
 		}
 		hb := &pb.RunnerHeartbeat{
 			RunnerId:        cfg.RunnerID,
 			HttpBaseUrl:     cfg.RunnerHTTPBaseURL,
-			Healthy:         mgr.ImageReady(),
-			CapacityTotal:   cfg.CapacityTotal,
-			CapacityUsed:    int32(n),
+			Healthy:         healthy,
+			CapacityTotal:   capacity.Total,
+			CapacityUsed:    capacity.Used,
 			ControlGrpcAddr: cfg.ResolvedControlGRPCAdvertiseAddr(),
 		}
 		return stream.Send(hb)
@@ -137,7 +141,7 @@ func connectOnce(ctx context.Context, cfg *config.Config, mgr *manager.Manager) 
 	tick := time.NewTicker(10 * time.Second)
 	defer tick.Stop()
 
-	imageReadyCh := mgr.ImageReadyCh()
+	readyCh := rt.ReadyCh()
 
 	for {
 		select {
@@ -145,8 +149,8 @@ func connectOnce(ctx context.Context, cfg *config.Config, mgr *manager.Manager) 
 			return ctx.Err()
 		case err := <-errCh:
 			return err
-		case <-imageReadyCh:
-			imageReadyCh = nil
+		case <-readyCh:
+			readyCh = nil
 			if err := send(); err != nil {
 				return err
 			}

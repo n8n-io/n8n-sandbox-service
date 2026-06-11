@@ -13,15 +13,15 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/grpc/pb"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
-	"github.com/n8n-io/sandbox-service/internal/runner/manager"
+	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 )
 
 // SandboxControlGRPC implements runner.v1.SandboxControl (API → runner).
 type SandboxControlGRPC struct {
 	pb.UnimplementedSandboxControlServer
-	Mgr *manager.Manager
-	Cfg *config.Config
-	Rec *metrics.RunnerRecorder
+	Runtime runnerruntime.Runtime
+	Cfg     *config.Config
+	Rec     *metrics.RunnerRecorder
 }
 
 var _ pb.SandboxControlServer = (*SandboxControlGRPC)(nil)
@@ -57,31 +57,31 @@ func (s *SandboxControlGRPC) checkAPIKey(ctx context.Context) error {
 	return nil
 }
 
-// CreateSandbox creates a managed container for the given sandbox id.
+// CreateSandbox creates a managed sandbox for the given sandbox id.
 func (s *SandboxControlGRPC) CreateSandbox(ctx context.Context, req *pb.CreateSandboxRequest) (*pb.CreateSandboxResponse, error) {
 	if err := s.checkAPIKey(ctx); err != nil {
 		return nil, err
 	}
-	if !s.Mgr.ImageReady() {
-		return nil, status.Error(codes.Unavailable, "sandbox image not yet available")
+	if err := s.Runtime.Ready(ctx); err != nil {
+		return nil, status.Error(codes.Unavailable, err.Error())
 	}
 	sandboxID := strings.TrimSpace(req.GetSandboxId())
 	if !isValidID(sandboxID) {
 		return nil, status.Error(codes.InvalidArgument, "invalid sandbox id")
 	}
 	start := time.Now()
-	info, err := s.Mgr.CreateContainer(ctx, sandboxID, &manager.CreateOptions{})
+	info, err := s.Runtime.CreateSandbox(ctx, sandboxID, &runnerruntime.CreateOptions{})
 	s.Rec.ObserveContainerOp(metrics.OpCreate, err == nil && info != nil, time.Since(start))
 	if err != nil {
 		return nil, toGRPCError(err)
 	}
 	if info == nil {
-		return nil, status.Error(codes.Internal, "create container returned nil info")
+		return nil, status.Error(codes.Internal, "create sandbox returned nil info")
 	}
 	return &pb.CreateSandboxResponse{SandboxId: sandboxID, ContainerIp: info.IP}, nil
 }
 
-// StopSandbox stops the sandbox container without removing it.
+// StopSandbox stops the sandbox without removing it.
 func (s *SandboxControlGRPC) StopSandbox(ctx context.Context, req *pb.StopSandboxRequest) (*pb.StopSandboxResponse, error) {
 	if err := s.checkAPIKey(ctx); err != nil {
 		return nil, err
@@ -90,8 +90,8 @@ func (s *SandboxControlGRPC) StopSandbox(ctx context.Context, req *pb.StopSandbo
 	if !isValidID(sandboxID) {
 		return nil, status.Error(codes.InvalidArgument, "invalid sandbox id")
 	}
-	if err := s.Mgr.StopSandboxContainer(ctx, sandboxID); err != nil {
-		if errors.Is(err, manager.ErrSandboxNotFound) {
+	if err := s.Runtime.StopSandbox(ctx, sandboxID); err != nil {
+		if errors.Is(err, runnerruntime.ErrSandboxNotFound) {
 			return &pb.StopSandboxResponse{}, nil
 		}
 		return nil, toGRPCError(err)
@@ -99,7 +99,7 @@ func (s *SandboxControlGRPC) StopSandbox(ctx context.Context, req *pb.StopSandbo
 	return &pb.StopSandboxResponse{}, nil
 }
 
-// DeleteSandbox removes the sandbox container if it exists.
+// DeleteSandbox removes the sandbox if it exists.
 func (s *SandboxControlGRPC) DeleteSandbox(ctx context.Context, req *pb.DeleteSandboxRequest) (*pb.DeleteSandboxResponse, error) {
 	if err := s.checkAPIKey(ctx); err != nil {
 		return nil, err
@@ -108,17 +108,13 @@ func (s *SandboxControlGRPC) DeleteSandbox(ctx context.Context, req *pb.DeleteSa
 	if !isValidID(sandboxID) {
 		return nil, status.Error(codes.InvalidArgument, "invalid sandbox id")
 	}
-	containerID, err := s.Mgr.FindContainerIDByLabel(ctx, sandboxID)
-	if err != nil {
-		if errors.Is(err, manager.ErrSandboxNotFound) {
-			return &pb.DeleteSandboxResponse{}, nil
-		}
-		return nil, toGRPCError(err)
-	}
 	start := time.Now()
-	err = s.Mgr.DeleteContainer(ctx, containerID)
+	err := s.Runtime.DeleteSandbox(ctx, sandboxID)
 	s.Rec.ObserveContainerOp(metrics.OpDelete, err == nil, time.Since(start))
 	if err != nil {
+		if errors.Is(err, runnerruntime.ErrSandboxNotFound) {
+			return &pb.DeleteSandboxResponse{}, nil
+		}
 		return nil, toGRPCError(err)
 	}
 	return &pb.DeleteSandboxResponse{}, nil

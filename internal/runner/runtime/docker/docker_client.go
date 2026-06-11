@@ -1,4 +1,4 @@
-package manager
+package docker
 
 import (
 	"bytes"
@@ -68,7 +68,7 @@ type dockerBackend interface {
 }
 
 // dockerClient is a thin wrapper around the docker CLI. It is the only place
-// in the manager package that shells out to docker.
+// in the Docker runtime package that shells out to docker.
 type dockerClient struct {
 	host string
 }

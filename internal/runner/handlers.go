@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"regexp"
 
-	"github.com/n8n-io/sandbox-service/internal/runner/manager"
+	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 )
 
 var uuidRegex = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -20,7 +20,7 @@ type ContainerResponse struct {
 }
 
 // GetSandbox handles GET /sandboxes/{id}
-func GetSandbox(mgr ContainerManager) http.HandlerFunc {
+func GetSandbox(rt runnerruntime.Runtime) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sandboxID := r.PathValue("id")
 		if !isValidID(sandboxID) {
@@ -28,8 +28,8 @@ func GetSandbox(mgr ContainerManager) http.HandlerFunc {
 			return
 		}
 
-		if _, err := mgr.FindContainerIDByLabel(r.Context(), sandboxID); err != nil {
-			if errors.Is(err, manager.ErrSandboxNotFound) {
+		if _, err := rt.GetSandboxInfo(r.Context(), sandboxID); err != nil {
+			if errors.Is(err, runnerruntime.ErrSandboxNotFound) {
 				writeError(w, http.StatusNotFound, err.Error())
 			} else {
 				writeError(w, http.StatusInternalServerError, err.Error())
