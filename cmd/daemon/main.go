@@ -27,6 +27,11 @@ func main() {
 		logLevel.Set(lvl)
 	}
 
+	if err := daemon.PrepareSandboxUser(); err != nil {
+		slog.Error("prepare sandbox user", "error", err)
+		os.Exit(1)
+	}
+
 	slog.Info("daemon starting", "listen_addr", *listenAddr)
 
 	if err := daemon.Run(*listenAddr); err != nil {

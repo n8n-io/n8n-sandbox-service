@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import type { APIRequestContext } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { createSandbox, deleteSandbox, exec } from './helpers';
+import { RUNNER_TAGS } from './tags';
 
 const API_KEY = process.env.SANDBOX_API_KEY || 'test';
 
@@ -97,7 +98,7 @@ function runnerHostListsSandbox(runnerContainer: string, sandboxUUID: string): b
   }
 }
 
-test.describe('API restart resilience', () => {
+test.describe('API restart resilience', { tag: RUNNER_TAGS.docker }, () => {
   test('sandboxes keep working after API container restart', { tag: '@e2e-api-restart' }, async ({ request }) => {
     test.skip(!process.env.E2E_API_CONTAINER_NAME, 'needs E2E_API_CONTAINER_NAME (from e2e/run.sh)');
     test.setTimeout(100_000);
@@ -121,7 +122,7 @@ test.describe('API restart resilience', () => {
   });
 });
 
-test.describe('Runner failure resilience', () => {
+test.describe('Runner failure resilience', { tag: RUNNER_TAGS.docker }, () => {
   test(
     'stopped runner: 503 on sandboxes there; other runner and new sandboxes still work',
     { tag: '@e2e-stopped-runner' },

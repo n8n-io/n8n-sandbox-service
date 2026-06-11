@@ -8,6 +8,12 @@ variable "vm_name" {
   type        = string
 }
 
+variable "location" {
+  description = "Azure region for VM resources."
+  type        = string
+  default     = "germanywestcentral"
+}
+
 variable "vm_size" {
   description = "Azure VM size"
   type        = string

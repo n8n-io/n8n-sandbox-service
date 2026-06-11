@@ -1,0 +1,70 @@
+# =============================================================================
+# Stage 1: Build the runner server binary
+# =============================================================================
+FROM golang:1.25-bookworm AS builder
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux go build -o /out/runner ./cmd/runner-firecracker
+
+# =============================================================================
+# Stage 2: Download Firecracker binaries
+# =============================================================================
+FROM debian:bookworm-slim AS firecracker-binaries
+
+ARG TARGETARCH
+ARG FIRECRACKER_VERSION=v1.13.1
+ARG FIRECRACKER_X86_64_SHA256=59450b9171ff2ebdf2f9a25be3a248a7ba79fb6371aec51a9d6d8eefca7b4faf
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN set -eux; \
+    test "${TARGETARCH}" = "amd64"; \
+    fc_arch="x86_64"; \
+    curl -fsSL "https://github.com/firecracker-microvm/firecracker/releases/download/${FIRECRACKER_VERSION}/firecracker-${FIRECRACKER_VERSION}-${fc_arch}.tgz" -o /tmp/firecracker.tgz; \
+    echo "${FIRECRACKER_X86_64_SHA256}  /tmp/firecracker.tgz" | sha256sum -c -; \
+    tar -xzf /tmp/firecracker.tgz -C /tmp; \
+    mkdir -p /opt/firecracker/bin; \
+    cp "/tmp/release-${FIRECRACKER_VERSION}-${fc_arch}/firecracker-${FIRECRACKER_VERSION}-${fc_arch}" /opt/firecracker/bin/firecracker; \
+    cp "/tmp/release-${FIRECRACKER_VERSION}-${fc_arch}/jailer-${FIRECRACKER_VERSION}-${fc_arch}" /opt/firecracker/bin/jailer; \
+    chmod +x /opt/firecracker/bin/firecracker /opt/firecracker/bin/jailer; \
+    rm -rf /tmp/firecracker.tgz "/tmp/release-${FIRECRACKER_VERSION}-${fc_arch}"
+
+# =============================================================================
+# Stage 3: Firecracker runner image
+# =============================================================================
+FROM debian:bookworm-slim AS runner
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        iproute2 \
+        iptables \
+        sudo \
+        tini \
+        util-linux \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /out/runner /usr/local/bin/sandbox-runner
+COPY --from=firecracker-binaries /opt/firecracker/bin /opt/firecracker/bin
+
+RUN mkdir -p /var/sandboxes /srv/jailer /srv/firecracker/template /srv/firecracker/snapshots
+
+ENV SANDBOX_RUNNER_DATA_DIR=/var/sandboxes
+ENV SANDBOX_RUNNER_LISTEN_ADDR=:8080
+ENV SANDBOX_RUNNER_FIRECRACKER_JAILER_BIN=/opt/firecracker/bin/jailer
+ENV SANDBOX_RUNNER_FIRECRACKER_BIN=/opt/firecracker/bin/firecracker
+ENV SANDBOX_RUNNER_FIRECRACKER_JAILER_BASE_DIR=/srv/jailer
+ENV SANDBOX_RUNNER_FIRECRACKER_TEMPLATE_DIR=/srv/firecracker/template
+ENV SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_MEM_PATH=/srv/firecracker/snapshots/mem
+ENV SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_STATE_PATH=/srv/firecracker/snapshots/state
+
+EXPOSE 8080 9091
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/sandbox-runner"]
