@@ -4,7 +4,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/runner/app"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
-	firecrackerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime/firecracker"
+	firecrackerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime/firecracker.ee"
 )
 
 func main() {

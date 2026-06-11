@@ -8,7 +8,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -o /out/runner ./cmd/runner-firecracker
+RUN CGO_ENABLED=0 GOOS=linux go build -o /out/runner ./cmd/runner-firecracker.ee
 
 # =============================================================================
 # Stage 2: Download Firecracker binaries
