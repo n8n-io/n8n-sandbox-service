@@ -72,6 +72,11 @@ install_firecracker_release() {
 	sudo install -m 0755 \
 		"$tmp_fc/release-${FIRECRACKER_VERSION}-x86_64/jailer-${FIRECRACKER_VERSION}-x86_64" \
 		/opt/firecracker/bin/jailer
+	if [[ -f "$tmp_fc/release-${FIRECRACKER_VERSION}-x86_64/cpu-template-helper-${FIRECRACKER_VERSION}-x86_64" ]]; then
+		sudo install -m 0755 \
+			"$tmp_fc/release-${FIRECRACKER_VERSION}-x86_64/cpu-template-helper-${FIRECRACKER_VERSION}-x86_64" \
+			/opt/firecracker/bin/cpu-template-helper
+	fi
 	INSTALLED_FIRECRACKER_VERSION="${FIRECRACKER_VERSION#v}"
 }
 
@@ -318,19 +323,23 @@ echo "==> Building sandbox daemon for local Firecracker snapshot..."
 cd ~/project
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/sandbox-daemon ./cmd/daemon
 
-echo "==> Creating Firecracker e2e snapshot on this VM..."
-sudo env \
-	MEM_MIB="$FIRECRACKER_E2E_SNAPSHOT_MEM_MIB" \
-	VCPUS="$FIRECRACKER_E2E_SNAPSHOT_VCPUS" \
-	bash e2e/infra/scripts/create-golden-snapshot.sh \
-	--kernel /srv/firecracker/template/vmlinux \
-	--ext4 /srv/firecracker/template/rootfs.ext4 \
-	--daemon-bin ./bin/sandbox-daemon \
-	--out /srv/firecracker/snapshots
+if [[ -z "${FIRECRACKER_E2E_SKIP_GOLDEN_SNAPSHOT:-}" ]]; then
+	echo "==> Creating Firecracker e2e snapshot on this VM..."
+	sudo env \
+		MEM_MIB="$FIRECRACKER_E2E_SNAPSHOT_MEM_MIB" \
+		VCPUS="$FIRECRACKER_E2E_SNAPSHOT_VCPUS" \
+		bash e2e/infra/scripts/create-golden-snapshot.sh \
+		--kernel /srv/firecracker/template/vmlinux \
+		--ext4 /srv/firecracker/template/rootfs.ext4 \
+		--daemon-bin ./bin/sandbox-daemon \
+		--out /srv/firecracker/snapshots
 
-sudo ln -sf snapshot_mem /srv/firecracker/snapshots/mem
-sudo ln -sf snapshot_state /srv/firecracker/snapshots/state
-sudo chown -R 1000:1000 /srv/firecracker/template /srv/firecracker/snapshots
-sudo chmod 0644 /srv/firecracker/snapshots/snapshot_mem /srv/firecracker/snapshots/snapshot_state
+	sudo ln -sf snapshot_mem /srv/firecracker/snapshots/mem
+	sudo ln -sf snapshot_state /srv/firecracker/snapshots/state
+	sudo chown -R 1000:1000 /srv/firecracker/template /srv/firecracker/snapshots
+	sudo chmod 0644 /srv/firecracker/snapshots/snapshot_mem /srv/firecracker/snapshots/snapshot_state
+else
+	echo "==> Skipping golden snapshot creation (FIRECRACKER_E2E_SKIP_GOLDEN_SNAPSHOT is set)"
+fi
 
 echo "==> Firecracker VM setup complete"

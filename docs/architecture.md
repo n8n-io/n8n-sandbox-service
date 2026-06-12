@@ -91,7 +91,7 @@ Each runner hosts sandboxes through the shared `runtime.Runtime` contract. The D
 | --- | --- | --- |
 | Runtime contract | `internal/runner/runtime/` | Shared runner backend interface for Docker and Firecracker implementations |
 | Docker runtime | `internal/runner/runtime/docker/` | Create, stop, delete containers; reconcile on startup; manage Docker network |
-| Firecracker runtime | `internal/runner/runtime/firecracker.ee/` | Create, stop, delete microVM sandboxes; manage jailer, snapshot restore, and host networking |
+| Firecracker runtime | `internal/runner/runtime/firecracker.ee/` | Create, stop, delete microVM sandboxes; manage jailer, snapshot restore, and host networking ([snapshot portability](../firecracker-intel-snapshot-compat-report.md)) |
 | Docker client | `internal/runner/runtime/docker/docker_client.go` | Thin wrapper around the `docker` CLI |
 | Registration client | `internal/runner/register/` | gRPC heartbeat stream to API; sends capacity and health info every 10s |
 | gRPC control server | `internal/runner/grpc_control.go` | `SandboxControl` service — accepts create/stop/delete RPCs from API |

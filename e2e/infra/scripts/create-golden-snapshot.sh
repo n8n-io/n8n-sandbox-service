@@ -9,6 +9,8 @@ DAEMON_BIN=""
 OUT_DIR=""
 MEM_MIB="${MEM_MIB:-512}"
 VCPUS="${VCPUS:-1}"
+CPU_TEMPLATE="${CPU_TEMPLATE:-}"
+CPU_CONFIG_FILE="${CPU_CONFIG_FILE:-}"
 FIRECRACKER_BIN="${FIRECRACKER_BIN:-/opt/firecracker/bin/firecracker}"
 JAILER_BIN="${JAILER_BIN:-/opt/firecracker/bin/jailer}"
 JAILER_BASE_DIR="${JAILER_BASE_DIR:-/srv/jailer}"
@@ -173,7 +175,15 @@ mount --bind "$SNAPSHOT_STATE" "${JAIL_ROOT}/snapshot_state"
 boot_args="console=ttyS0 reboot=k panic=1 pci=off init=/sandbox-daemon ip=${GUEST_IP}::${HOST_TAP_IP}:255.255.255.0::eth0:off"
 
 echo "==> Configuring and booting Firecracker snapshot VM..."
-api_put "/machine-config" "{\"vcpu_count\":${VCPUS},\"mem_size_mib\":${MEM_MIB},\"smt\":false}"
+if [[ -n "$CPU_CONFIG_FILE" && -f "$CPU_CONFIG_FILE" ]]; then
+	api_put "/cpu-config" "$(cat "$CPU_CONFIG_FILE")"
+fi
+machine_config="{\"vcpu_count\":${VCPUS},\"mem_size_mib\":${MEM_MIB},\"smt\":false"
+if [[ -n "$CPU_TEMPLATE" ]]; then
+	machine_config+=",\"cpu_template\":\"${CPU_TEMPLATE}\""
+fi
+machine_config+="}"
+api_put "/machine-config" "$machine_config"
 api_put "/boot-source" "{\"kernel_image_path\":\"/vmlinux\",\"boot_args\":\"${boot_args}\"}"
 api_put "/drives/rootfs" "{\"drive_id\":\"rootfs\",\"path_on_host\":\"/rootfs.ext4\",\"is_root_device\":true,\"is_read_only\":false}"
 api_put "/network-interfaces/eth0" "{\"iface_id\":\"eth0\",\"guest_mac\":\"${GUEST_MAC}\",\"host_dev_name\":\"${HOST_TAP_DEVICE_NAME}\"}"
