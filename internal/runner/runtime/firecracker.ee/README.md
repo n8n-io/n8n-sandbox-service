@@ -4,6 +4,8 @@ This runtime starts each sandbox as a Firecracker microVM restored from a
 prebuilt snapshot. It is intended for VM/VMSS hosts where the runner owns the
 host Firecracker setup and local snapshot cache.
 
+Entry point: `cmd/runner-firecracker.ee/`.
+
 ## Technology
 
 - Uses upstream Firecracker and jailer.
@@ -48,3 +50,19 @@ get the same slot after restart.
 - Stop and delete both tear down the VM; stopped VM reuse is not implemented.
 - The snapshot/rootfs set must be built together and include the n8n sandbox
   daemon listening on the configured daemon port.
+
+## Host and asset notes
+
+Firecracker hosts must expose KVM to the runner (nested-virtualization-capable Azure
+D/E-series, `/dev/kvm`, Intel `nested=Y` and `ept=Y`). The e2e path builds kernel,
+rootfs, and golden snapshot on the target VM from pinned Firecracker CI inputs and
+the locally built sandbox daemon.
+
+## Snapshot restore across hosts
+
+Restore is CPU-sensitive on heterogeneous VMSS pools. Production uses `/snapshot/load`
+only — no `/cpu-config` at restore. See the
+[snapshot portability report](../../../../docs/firecracker-intel-snapshot-compat-report.md)
+for failure modes, template guidance, and operational mitigations.
+
+Study tooling: [snapshot compatibility study](../../../../scripts/firecracker-snapshot-compat/README.md).
