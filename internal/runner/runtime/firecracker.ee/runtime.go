@@ -68,6 +68,8 @@ type sandboxState struct {
 	netnsName  string
 	socketPath string
 	daemonURL  string
+	dataDir    string
+	rootfsPath string
 	process    process
 	proxy      daemonProxy
 	running    bool
@@ -104,6 +106,7 @@ type dependencies struct {
 	run          func(ctx context.Context, name string, args ...string) error
 	start        func(ctx context.Context, name string, args ...string) (process, error)
 	pathExists   func(path string) bool
+	cloneRootfs  func(ctx context.Context, templatePath, destPath string) error
 	loadSnapshot func(ctx context.Context, socketPath string, cfg Config) error
 	newProxy     func(ctx context.Context, listenAddr string, netnsName string, guestAddr string) (daemonProxy, error)
 	probeDaemon  func(ctx context.Context, baseURL string) error
@@ -114,6 +117,7 @@ func defaultDependencies(fc Config) dependencies {
 		run:          runCommand,
 		start:        startCommand,
 		pathExists:   pathExists,
+		cloneRootfs:  cloneRootfs,
 		loadSnapshot: loadSnapshot,
 		newProxy: func(ctx context.Context, listenAddr string, netnsName string, guestAddr string) (daemonProxy, error) {
 			return startDaemonProxy(ctx, listenAddr, netnsName, guestAddr)
@@ -188,6 +192,14 @@ func (r *Runtime) CreateSandbox(ctx context.Context, sandboxID string, _ *runner
 	cleanupOnError := func() {
 		_ = r.deleteSandbox(ctx, state)
 	}
+
+	templateRootfs := filepath.Join(r.config.TemplateDir, "rootfs.ext4")
+	slog.Debug("firecracker cloning rootfs", "sandbox_id", sandboxID, "template", templateRootfs, "dest", state.rootfsPath)
+	if err := r.deps.cloneRootfs(ctx, templateRootfs, state.rootfsPath); err != nil {
+		cleanupOnError()
+		return nil, fmt.Errorf("clone sandbox rootfs: %w", err)
+	}
+	slog.Debug("firecracker rootfs cloned", "sandbox_id", sandboxID, "rootfs", state.rootfsPath)
 
 	slog.Debug("firecracker preparing jail", "sandbox_id", sandboxID, "vm_id", state.vmID, "socket_path", state.socketPath)
 	if err := r.prepareJail(ctx, state); err != nil {
@@ -356,6 +368,8 @@ func (r *Runtime) reserveSandbox(sandboxID string) (*sandboxState, error) {
 		netnsName:  netnsName,
 		socketPath: socketPath,
 		daemonURL:  daemonURL,
+		dataDir:    sandboxDataDir(r.runnerConfig.DataDir, sandboxID),
+		rootfsPath: sandboxRootfsPath(r.runnerConfig.DataDir, sandboxID),
 		info: &runnerruntime.SandboxInfo{
 			ID:   sandboxID,
 			Name: vmID,
@@ -407,6 +421,10 @@ func (r *Runtime) deleteSandbox(ctx context.Context, state *sandboxState) error 
 	if err := r.cleanupHost(ctx, state); err != nil {
 		slog.Warn("firecracker host cleanup failed", "sandbox_id", state.id, "err", err)
 		errs = append(errs, fmt.Errorf("cleanup firecracker host state: %w", err))
+	}
+	if err := removeSandboxDataDir(ctx, state.dataDir); err != nil {
+		slog.Warn("firecracker sandbox data cleanup failed", "sandbox_id", state.id, "data_dir", state.dataDir, "err", err)
+		errs = append(errs, fmt.Errorf("remove sandbox data dir: %w", err))
 	}
 	slog.Debug("firecracker sandbox cleanup finished", "sandbox_id", state.id, "vm_id", state.vmID, "slot", state.slot)
 	if err := joinErrors(errs); err != nil {
@@ -479,7 +497,6 @@ func (s *sandboxState) daemonURLAddr() string {
 // paths expected by the restored Firecracker snapshot.
 func (r *Runtime) prepareJail(ctx context.Context, state *sandboxState) error {
 	jailRoot := filepath.Join(r.config.JailerBaseDir, "firecracker", state.vmID, "root")
-	rootfsPath := filepath.Join(r.config.TemplateDir, "rootfs.ext4")
 	rootfsTarget := filepath.Join(jailRoot, strings.TrimPrefix(r.config.SnapshotVirtioBlockPath, "/"))
 	script := fmt.Sprintf(`
 set -eu
@@ -491,7 +508,7 @@ mount --bind %[3]s %[1]s/snapshot_state
 mount --bind %[4]s %[6]s
 chown 1000:1000 %[6]s
 chmod 0664 %[6]s
-`, shellQuote(jailRoot), shellQuote(r.config.SnapshotMemPath), shellQuote(r.config.SnapshotStatePath), shellQuote(rootfsPath), shellQuote(filepath.Dir(rootfsTarget)), shellQuote(rootfsTarget))
+`, shellQuote(jailRoot), shellQuote(r.config.SnapshotMemPath), shellQuote(r.config.SnapshotStatePath), shellQuote(state.rootfsPath), shellQuote(filepath.Dir(rootfsTarget)), shellQuote(rootfsTarget))
 	return r.deps.run(ctx, "sudo", "/bin/sh", "-c", script)
 }
 

@@ -36,11 +36,29 @@ get the same slot after restart.
 - Tracks basic runner-local slot capacity.
 - Validates required Firecracker binaries and snapshot assets in readiness.
 - Starts Firecracker through jailer and restores the configured snapshot.
+- Clones the golden template rootfs to a per-sandbox writable disk image at
+  `SANDBOX_RUNNER_DATA_DIR/<sandbox_id>/rootfs.ext4` before jail setup.
 - Creates per-sandbox network namespace/TAP state.
 - Exposes the guest daemon through a host-local proxy URL.
 - Waits for guest daemon `/healthz` before returning a sandbox as ready.
-- Cleans up the VM process, proxy, jail state, and network namespace on
-  stop/delete or create failure.
+- Cleans up the VM process, proxy, jail state, per-sandbox rootfs data, and
+  network namespace on stop/delete or create failure.
+
+## Resource limits
+
+CPU, memory, and disk are **not** configured through runner environment
+variables (unlike the Docker/sysbox backend). They are fixed when the golden
+snapshot and template `rootfs.ext4` are built:
+
+- **CPU and memory** — baked into the snapshot (`vcpu_count`, `mem_size_mib` in
+  the golden-snapshot build; see `e2e/infra/scripts/create-golden-snapshot.sh`).
+- **Disk** — capped by the ext4 image size of the golden template
+  (`rootfs.ext4`; see `FIRECRACKER_E2E_ROOTFS_SIZE_MB` in
+  `e2e/infra/scripts/setup-firecracker-e2e-vm.sh` for the e2e default). Each
+  sandbox gets a sparse copy of that image at create time.
+
+To change limits in production, rebuild the golden snapshot/rootfs on the host
+rather than tuning runner env vars.
 
 ## Current Limitations
 

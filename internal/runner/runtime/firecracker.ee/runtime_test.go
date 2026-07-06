@@ -41,7 +41,18 @@ type recordedCommand struct {
 func testRunnerConfig(capacity int32) *config.Config {
 	return &config.Config{
 		CapacityTotal: capacity,
+		DataDir:       "/var/sandboxes",
 	}
+}
+
+func stubCreateDeps(rt *Runtime) {
+	rt.deps.run = func(context.Context, string, ...string) error { return nil }
+	rt.deps.start = func(context.Context, string, ...string) (process, error) { return &fakeProcess{}, nil }
+	rt.deps.pathExists = func(string) bool { return true }
+	rt.deps.cloneRootfs = func(context.Context, string, string) error { return nil }
+	rt.deps.loadSnapshot = func(context.Context, string, Config) error { return nil }
+	rt.deps.newProxy = func(context.Context, string, string, string) (daemonProxy, error) { return &fakeProxy{}, nil }
+	rt.deps.probeDaemon = func(context.Context, string) error { return nil }
 }
 
 func testConfig() Config {
@@ -90,6 +101,8 @@ func TestRuntimeCreateSandboxStartsFirecrackerAndProxy(t *testing.T) {
 	var proxyListenAddr string
 	var proxyNetNS string
 	var proxyGuestAddr string
+	var clonedTemplate string
+	var clonedDest string
 	rt.deps.run = func(_ context.Context, name string, args ...string) error {
 		commands = append(commands, recordedCommand{name: name, args: args})
 		return nil
@@ -99,6 +112,11 @@ func TestRuntimeCreateSandboxStartsFirecrackerAndProxy(t *testing.T) {
 		return proc, nil
 	}
 	rt.deps.pathExists = func(string) bool { return true }
+	rt.deps.cloneRootfs = func(_ context.Context, templatePath, destPath string) error {
+		clonedTemplate = templatePath
+		clonedDest = destPath
+		return nil
+	}
 	rt.deps.loadSnapshot = func(_ context.Context, socketPath string, _ Config) error {
 		loadedSocket = socketPath
 		return nil
@@ -123,8 +141,21 @@ func TestRuntimeCreateSandboxStartsFirecrackerAndProxy(t *testing.T) {
 	if info.ID != "sandbox-id-123456" || info.IP != "172.16.0.10" {
 		t.Fatalf("CreateSandbox() info = %+v", info)
 	}
+	if clonedTemplate != "/srv/firecracker/template/rootfs.ext4" {
+		t.Fatalf("cloned template = %s", clonedTemplate)
+	}
+	if clonedDest != "/var/sandboxes/sandbox-id-123456/rootfs.ext4" {
+		t.Fatalf("cloned dest = %s", clonedDest)
+	}
 	if len(commands) != 2 {
 		t.Fatalf("run commands = %d, want prepare and network setup", len(commands))
+	}
+	prepareScript := commands[0].args[len(commands[0].args)-1]
+	if !strings.Contains(prepareScript, "/var/sandboxes/sandbox-id-123456/rootfs.ext4") {
+		t.Fatalf("prepare jail script = %q, want per-sandbox rootfs bind mount", prepareScript)
+	}
+	if strings.Contains(prepareScript, "/srv/firecracker/template/rootfs.ext4") {
+		t.Fatalf("prepare jail script still references shared template rootfs")
 	}
 	if len(started) != 1 {
 		t.Fatalf("start commands = %d, want jailer start", len(started))
@@ -168,12 +199,7 @@ func TestRuntimeCreateSandboxStartsFirecrackerAndProxy(t *testing.T) {
 
 func TestRuntimeCreateSandboxEnforcesCapacity(t *testing.T) {
 	rt := testRuntime(1)
-	rt.deps.run = func(context.Context, string, ...string) error { return nil }
-	rt.deps.start = func(context.Context, string, ...string) (process, error) { return &fakeProcess{}, nil }
-	rt.deps.pathExists = func(string) bool { return true }
-	rt.deps.loadSnapshot = func(context.Context, string, Config) error { return nil }
-	rt.deps.newProxy = func(context.Context, string, string, string) (daemonProxy, error) { return &fakeProxy{}, nil }
-	rt.deps.probeDaemon = func(context.Context, string) error { return nil }
+	stubCreateDeps(rt)
 
 	if _, err := rt.CreateSandbox(context.Background(), "sandbox-id-123456", nil); err != nil {
 		t.Fatalf("CreateSandbox() failed: %v", err)
@@ -200,6 +226,7 @@ func TestRuntimeDeleteHoldsSlotUntilCleanupCompletes(t *testing.T) {
 	}
 	rt.deps.start = func(context.Context, string, ...string) (process, error) { return proc, nil }
 	rt.deps.pathExists = func(string) bool { return true }
+	rt.deps.cloneRootfs = func(context.Context, string, string) error { return nil }
 	rt.deps.loadSnapshot = func(context.Context, string, Config) error { return nil }
 	rt.deps.newProxy = func(context.Context, string, string, string) (daemonProxy, error) { return proxy, nil }
 	rt.deps.probeDaemon = func(context.Context, string) error { return nil }
@@ -282,6 +309,7 @@ func TestRuntimeCreateSandboxCleansUpOnFailure(t *testing.T) {
 	}
 	rt.deps.start = func(context.Context, string, ...string) (process, error) { return proc, nil }
 	rt.deps.pathExists = func(string) bool { return true }
+	rt.deps.cloneRootfs = func(context.Context, string, string) error { return nil }
 	rt.deps.loadSnapshot = func(context.Context, string, Config) error { return nil }
 	rt.deps.newProxy = func(context.Context, string, string, string) (daemonProxy, error) { return proxy, nil }
 	rt.deps.probeDaemon = func(context.Context, string) error { return errors.New("daemon down") }

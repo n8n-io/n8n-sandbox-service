@@ -716,6 +716,25 @@ test.describe('Sandbox isolation', BOTH_RUNNERS, () => {
       await deleteSandbox(id2);
     }
   });
+
+  test('concurrent writes to the same path do not leak across sandboxes', async () => {
+    const id1 = await createSandbox();
+    const id2 = await createSandbox();
+    const sharedPath = '/tmp/shared-isolation.txt';
+
+    try {
+      await Promise.all([
+        uploadFile(id1, 'tmp/shared-isolation.txt', 'sandbox-one'),
+        uploadFile(id2, 'tmp/shared-isolation.txt', 'sandbox-two'),
+      ]);
+
+      expect(await downloadFile(id1, sharedPath)).toBe('sandbox-one');
+      expect(await downloadFile(id2, sharedPath)).toBe('sandbox-two');
+    } finally {
+      await deleteSandbox(id1);
+      await deleteSandbox(id2);
+    }
+  });
 });
 
 test.describe('Deleted Sandbox 404 Tests', BOTH_RUNNERS, () => {

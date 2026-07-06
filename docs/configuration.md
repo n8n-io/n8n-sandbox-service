@@ -112,6 +112,14 @@ Slots give the host-side Firecracker resources stable names without exposing tho
 | `SANDBOX_RUNNER_FIRECRACKER_SOCKET_WAIT_INTERVAL_MS` | `20` | Delay between Firecracker socket checks in milliseconds |
 | `SANDBOX_RUNNER_FIRECRACKER_DAEMON_WAIT_TIMEOUT` | `60s` | Maximum time to wait for guest daemon health after snapshot restore |
 
+#### Resource limits
+
+The Firecracker runner does **not** read `SANDBOX_RUNNER_DEFAULT_MEMORY_MB`,
+`SANDBOX_RUNNER_DEFAULT_CPU_PERCENT`, or `SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB`.
+CPU and memory are fixed in the golden memory snapshot; disk capacity is fixed
+by the template `rootfs.ext4` size. Change those by rebuilding the host snapshot
+assets (see [`internal/runner/runtime/firecracker.ee/README.md`](../internal/runner/runtime/firecracker.ee/README.md)).
+
 ## Sandbox daemon
 
 These variables are set inside each sandbox container and are typically baked into the sandbox image or passed through the runner.
