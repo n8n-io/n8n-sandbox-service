@@ -36,13 +36,18 @@ get the same slot after restart.
 - Tracks basic runner-local slot capacity.
 - Validates required Firecracker binaries and snapshot assets in readiness.
 - Starts Firecracker through jailer and restores the configured snapshot.
-- Clones the golden template rootfs to a per-sandbox writable disk image at
-  `SANDBOX_RUNNER_DATA_DIR/<sandbox_id>/rootfs.ext4` before jail setup.
+- Clones the golden template rootfs and snapshot assets to a per-sandbox data
+  directory at `SANDBOX_RUNNER_DATA_DIR/<sandbox_id>/` before jail setup.
+- Stops running sandboxes via pause + snapshot/create, persisting per-sandbox
+  `snapshot_mem` and `snapshot_state` files for later wake.
+- Wakes stopped sandboxes by restoring the per-sandbox snapshot on demand
+  (`EnsureSandboxRunning`), with singleflight deduplication for concurrent wakes.
 - Creates per-sandbox network namespace/TAP state.
 - Exposes the guest daemon through a host-local proxy URL.
 - Waits for guest daemon `/healthz` before returning a sandbox as ready.
-- Cleans up the VM process, proxy, jail state, per-sandbox rootfs data, and
-  network namespace on stop/delete or create failure.
+- Cleans up the VM process, proxy, jail state, per-sandbox data directory, and
+  network namespace on delete or create failure. Stopped sandboxes keep their
+  data directory until delete or LRU eviction when disk space is low.
 
 ## Resource limits
 
@@ -63,6 +68,7 @@ rather than tuning runner env vars.
 ## Current Limitations
 
 - Slots are allocated in memory and are not pre-created or persisted.
-- Stop and delete both tear down the VM; stopped VM reuse is not implemented.
+- LRU eviction of stopped sandboxes for disk space is runner-local and does not
+  notify the API.
 - The snapshot/rootfs set must be built together and include the n8n sandbox
   daemon listening on the configured daemon port.

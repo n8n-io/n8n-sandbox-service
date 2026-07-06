@@ -55,6 +55,7 @@ jobs:
 
           cd ~/project
           bash e2e/run-firecracker.sh
+          bash e2e/run-firecracker-idle-ttl.sh
           EOF
 
       - name: Collect logs on failure

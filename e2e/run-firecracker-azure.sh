@@ -68,4 +68,7 @@ export PATH=/usr/local/go/bin:$HOME/go/bin:$PATH
 
 cd ~/project
 bash e2e/run-firecracker.sh "$@"
+if [[ $# -eq 0 ]]; then
+	bash e2e/run-firecracker-idle-ttl.sh
+fi
 EOF

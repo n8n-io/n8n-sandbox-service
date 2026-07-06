@@ -50,6 +50,9 @@ func Main(runtimeName string, factory RuntimeFactory) {
 
 func Run(cfg *config.Config, rt runnerruntime.Runtime) {
 	mrec := metrics.NewRunnerRecorder(cfg.MetricsEnabled)
+	if fc, ok := rt.(interface{ SetMetricsRecorder(*metrics.RunnerRecorder) }); ok {
+		fc.SetMetricsRecorder(mrec)
+	}
 	if mrec.Enabled() {
 		mrec.SetActiveContainers(func() float64 {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -60,6 +63,16 @@ func Run(cfg *config.Config, rt runnerruntime.Runtime) {
 				return 0
 			}
 			return float64(capacity.Used)
+		})
+		mrec.SetStoppedContainers(func() float64 {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			capacity, err := rt.Capacity(ctx)
+			if err != nil {
+				slog.Warn("metrics: read runtime capacity", "error", err)
+				return 0
+			}
+			return float64(capacity.Stopped)
 		})
 		slog.Info("metrics endpoint enabled", "path", "/metrics")
 	}

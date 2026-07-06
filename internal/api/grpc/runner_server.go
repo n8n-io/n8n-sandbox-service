@@ -113,6 +113,7 @@ func (s *RunnerRegistryServer) Connect(stream grpc.BidiStreamingServer[pb.Runner
 			hb.GetHealthy(),
 			hb.GetCapacityTotal(),
 			hb.GetCapacityUsed(),
+			hb.GetCapacityStopped(),
 		)
 		if !registered {
 			registered = true
@@ -124,6 +125,7 @@ func (s *RunnerRegistryServer) Connect(stream grpc.BidiStreamingServer[pb.Runner
 				"healthy", hb.GetHealthy(),
 				"capacity_total", hb.GetCapacityTotal(),
 				"capacity_used", hb.GetCapacityUsed(),
+				"capacity_stopped", hb.GetCapacityStopped(),
 			)
 		}
 		if err := stream.Send(&pb.ControlMessage{Ack: true}); err != nil {

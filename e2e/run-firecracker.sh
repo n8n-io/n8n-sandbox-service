@@ -110,21 +110,31 @@ sudo mkdir -p "$RUNNER_DATA_DIR"
 rm -f "$API_LOG" "$RUNNER_LOG"
 
 echo "Starting API host process on port ${PORT}..."
-env \
-	SANDBOX_API_LISTEN_ADDR="127.0.0.1:${PORT}" \
-	SANDBOX_API_GRPC_LISTEN_ADDR="$API_GRPC_ADDR" \
-	SANDBOX_API_DATA_DIR="$API_DATA_DIR" \
-	SANDBOX_API_KEYS="$API_KEY" \
-	SANDBOX_API_METRICS_ENABLED=true \
-	SANDBOX_API_RUNNER_REGISTRATION_TOKEN="$REG_TOKEN" \
-	SANDBOX_API_RUNNER_API_KEY="$RUNNER_INTERNAL_API_KEY" \
-	SANDBOX_API_GRPC_TLS_CERT_FILE="$TLS_DIR/api/grpc-server.crt" \
-	SANDBOX_API_GRPC_TLS_KEY_FILE="$TLS_DIR/api/grpc-server.key" \
-	SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE="$TLS_DIR/api/ca.crt" \
-	SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE="$TLS_DIR/api/ca.crt" \
-	SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE="$TLS_DIR/api/control-grpc-api-client.crt" \
-	SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE="$TLS_DIR/api/control-grpc-api-client.key" \
-	"$PROJECT_DIR/bin/api" >"$API_LOG" 2>&1 &
+API_ENV=(
+	SANDBOX_API_LISTEN_ADDR="127.0.0.1:${PORT}"
+	SANDBOX_API_GRPC_LISTEN_ADDR="$API_GRPC_ADDR"
+	SANDBOX_API_DATA_DIR="$API_DATA_DIR"
+	SANDBOX_API_KEYS="$API_KEY"
+	SANDBOX_API_METRICS_ENABLED=true
+	SANDBOX_API_RUNNER_REGISTRATION_TOKEN="$REG_TOKEN"
+	SANDBOX_API_RUNNER_API_KEY="$RUNNER_INTERNAL_API_KEY"
+	SANDBOX_API_GRPC_TLS_CERT_FILE="$TLS_DIR/api/grpc-server.crt"
+	SANDBOX_API_GRPC_TLS_KEY_FILE="$TLS_DIR/api/grpc-server.key"
+	SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE="$TLS_DIR/api/ca.crt"
+	SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE="$TLS_DIR/api/ca.crt"
+	SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE="$TLS_DIR/api/control-grpc-api-client.crt"
+	SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE="$TLS_DIR/api/control-grpc-api-client.key"
+	SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_SERVER_NAME="localhost"
+)
+if [[ "${E2E_IDLE_TTL_SUITE:-}" == "1" ]]; then
+	API_ENV+=(
+		SANDBOX_API_IDLE_STOP_AFTER=3s
+		SANDBOX_API_IDLE_DELETE_AFTER=10s
+		SANDBOX_API_IDLE_DELETE_SAFETY_BUFFER=2s
+		SANDBOX_API_IDLE_SWEEP_INTERVAL=1s
+	)
+fi
+env "${API_ENV[@]}" "$PROJECT_DIR/bin/api" >"$API_LOG" 2>&1 &
 API_PID=$!
 
 wait_for_http "API" "http://127.0.0.1:${PORT}/healthz"
@@ -158,6 +168,15 @@ RUNNER_PID=$!
 wait_for_http "Firecracker runner" "http://${RUNNER_ADDR}/readyz"
 wait_for_runner_registered
 
+export E2E_PROJECT_DIR="$PROJECT_DIR"
+export E2E_RUNNER_HTTP_ADDR="$RUNNER_ADDR"
+export E2E_RUNNER_API_KEY="$RUNNER_INTERNAL_API_KEY"
+export E2E_RUNNER_CONTROL_GRPC_ADDR="$RUNNER_CONTROL_ADVERTISE_ADDR"
+export E2E_RUNNER_CONTROL_TLS_CA="$TLS_DIR/api/ca.crt"
+export E2E_RUNNER_CONTROL_TLS_CERT="$TLS_DIR/api/control-grpc-api-client.crt"
+export E2E_RUNNER_CONTROL_TLS_KEY="$TLS_DIR/api/control-grpc-api-client.key"
+export E2E_RUNNER_CONTROL_TLS_SERVER_NAME="localhost"
+
 if [[ "${E2E_SKIP_BUILD:-}" != "1" ]]; then
 	echo "Building SDK..."
 	pnpm --dir "$PROJECT_DIR/sdk" install
@@ -171,5 +190,21 @@ if [[ ! -d node_modules ]] || [[ ! -f node_modules/@n8n/sandbox-client/dist/inde
 fi
 
 echo "Running Firecracker-compatible e2e tests..."
+PLAYWRIGHT_SPECS=()
+if [[ "${E2E_IDLE_TTL_SUITE:-}" == "1" ]]; then
+	PLAYWRIGHT_SPECS=("tests/sandbox-idle-ttl.spec.ts")
+else
+	shopt -s nullglob
+	for f in tests/*.spec.ts; do
+		bn=$(basename "$f")
+		[[ "$bn" == sandbox-idle-ttl.spec.ts ]] && continue
+		PLAYWRIGHT_SPECS+=("$f")
+	done
+	shopt -u nullglob
+fi
+if [[ ${#PLAYWRIGHT_SPECS[@]} -eq 0 ]]; then
+	echo "No Playwright specs found under tests/ (after excluding sandbox-idle-ttl.spec.ts)" >&2
+	exit 1
+fi
 BASE_URL="http://127.0.0.1:$PORT" SANDBOX_API_KEY="$API_KEY" \
-	npx playwright test --grep "$FIRECRACKER_RUNNER_TAG" "$@"
+	npx playwright test "${PLAYWRIGHT_SPECS[@]}" --grep "$FIRECRACKER_RUNNER_TAG" "$@"

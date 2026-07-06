@@ -114,7 +114,7 @@ func resolveDaemonURL(w http.ResponseWriter, r *http.Request, rt runnerruntime.R
 		}
 		if wakeErr != nil {
 			if errors.Is(wakeErr, runnerruntime.ErrSandboxNotFound) {
-				writeError(w, http.StatusNotFound, wakeErr.Error())
+				writeSandboxNotFound(w)
 			} else {
 				writeError(w, http.StatusServiceUnavailable, "sandbox start: "+wakeErr.Error())
 			}
@@ -124,7 +124,7 @@ func resolveDaemonURL(w http.ResponseWriter, r *http.Request, rt runnerruntime.R
 	}
 	if err != nil {
 		if errors.Is(err, runnerruntime.ErrSandboxNotFound) {
-			writeError(w, http.StatusNotFound, err.Error())
+			writeSandboxNotFound(w)
 		} else if errors.Is(err, runnerruntime.ErrSandboxNotRunning) {
 			writeError(w, http.StatusBadGateway, runnerruntime.ErrSandboxNotRunning.Error())
 		} else if errors.Is(err, runnerruntime.ErrSandboxNetworkUnavailable) {

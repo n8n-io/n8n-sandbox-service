@@ -12,6 +12,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // Namespace is the prefix applied to every metric this package emits.
@@ -27,7 +28,9 @@ const (
 const (
 	OpCreate        = "create"
 	OpDelete        = "delete"
+	OpStop          = "stop"
 	OpEnsureRunning = "ensure_running"
+	OpEvict         = "evict"
 )
 
 // Handler returns the http.Handler that serves the registry's metrics in
@@ -253,11 +256,36 @@ func (r *RunnerRecorder) SetActiveContainers(f func() float64) {
 		prometheus.GaugeOpts{
 			Namespace:   Namespace,
 			Name:        "containers_active",
-			Help:        "Current number of sandbox containers tracked by the runner.",
+			Help:        "Current number of slot-blocking sandboxes on the runner.",
 			ConstLabels: prometheus.Labels{"role": RoleRunner},
 		},
 		f,
 	))
+}
+
+// SetStoppedContainers registers a scrape-time gauge for managed stopped sandboxes.
+func (r *RunnerRecorder) SetStoppedContainers(f func() float64) {
+	if r.reg == nil {
+		return
+	}
+	r.reg.MustRegister(prometheus.NewGaugeFunc(
+		prometheus.GaugeOpts{
+			Namespace:   Namespace,
+			Name:        "containers_stopped",
+			Help:        "Current number of managed stopped sandboxes not occupying a concurrent slot.",
+			ConstLabels: prometheus.Labels{"role": RoleRunner},
+		},
+		f,
+	))
+}
+
+// ContainerOpCount returns the counter value for a runner container operation.
+// Intended for tests in other packages.
+func (r *RunnerRecorder) ContainerOpCount(operation string, success bool) float64 {
+	if r.reg == nil {
+		return 0
+	}
+	return testutil.ToFloat64(r.containerOps.WithLabelValues(operation, resultLabel(success)))
 }
 
 func resultLabel(success bool) string {

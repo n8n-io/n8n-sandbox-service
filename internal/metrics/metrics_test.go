@@ -83,12 +83,20 @@ func TestRunnerRecorderObservations(t *testing.T) {
 	r.ObserveContainerOp(OpCreate, true, 2*time.Second)
 	r.ObserveContainerOp(OpCreate, false, 500*time.Millisecond)
 	r.ObserveContainerOp(OpEnsureRunning, true, 100*time.Millisecond)
+	r.ObserveContainerOp(OpStop, true, 50*time.Millisecond)
+	r.ObserveContainerOp(OpEvict, true, 0)
 
 	if got := testutil.ToFloat64(r.containerOps.WithLabelValues(OpCreate, "success")); got != 1 {
 		t.Errorf("container_operations_total{create,success} = %v, want 1", got)
 	}
 	if got := testutil.ToFloat64(r.containerOps.WithLabelValues(OpEnsureRunning, "success")); got != 1 {
 		t.Errorf("container_operations_total{ensure_running,success} = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(r.containerOps.WithLabelValues(OpStop, "success")); got != 1 {
+		t.Errorf("container_operations_total{stop,success} = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(r.containerOps.WithLabelValues(OpEvict, "success")); got != 1 {
+		t.Errorf("container_operations_total{evict,success} = %v, want 1", got)
 	}
 
 	body := scrape(t, r.Registry())
@@ -111,6 +119,22 @@ func TestRunnerRecorderDisabled(t *testing.T) {
 	r.ObserveHTTP("/x", http.MethodGet, http.StatusOK, time.Millisecond)
 	r.ObserveContainerOp(OpCreate, true, time.Second)
 	r.SetActiveContainers(func() float64 { return 1 })
+}
+
+func TestRunnerRecorderStoppedGaugeScrape(t *testing.T) {
+	r := NewRunnerRecorder(true)
+	r.SetActiveContainers(func() float64 { return 2 })
+	r.SetStoppedContainers(func() float64 { return 3 })
+
+	body := scrape(t, r.Registry())
+	for _, want := range []string{
+		"sandbox_containers_active",
+		"sandbox_containers_stopped",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("scrape body missing %q", want)
+		}
+	}
 }
 
 func TestRouteFromPattern(t *testing.T) {

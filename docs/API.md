@@ -18,7 +18,7 @@ The API and runner use two buckets so clients (including the SDK) can decide **w
 - **503 Service Unavailable** — **Transient / retry**: overload, no capacity yet, network or upstream not ready, or the sandbox daemon is not reachable *for the moment* while the container is otherwise expected to be usable. Safe to back off and retry the same operation.
 - **502 Bad Gateway** — **Not retryable as “wait and retry”**: the request does not make sense to repeat unchanged; fix state first (new sandbox, repair registry/routing, or handle the reported error). Examples: stored sandbox has **no runner HTTP base URL**, or **delete** failed on the runner control plane.
 
-**404** `sandbox not found` — Unknown id, or the sandbox is past its idle delete-after wake window (`SANDBOX_API_IDLE_DELETE_AFTER`, default `24h`); the API uses the same status and body as a missing sandbox. Exec and file routes may return **503** or **502** from the runner after the API successfully reaches the runner; the API may return **503** `runner unavailable` before the runner is contacted.
+**404** `sandbox not found` — Unknown id, the sandbox is past its idle delete-after wake window (`SANDBOX_API_IDLE_DELETE_AFTER`, default `24h`), or the runner no longer tracks the sandbox (eviction, delete, or runner restart). On exec/file proxy routes, when the runner signals sandbox gone (`X-Sandbox-Gone: 1` or `{"error":"sandbox not found"}`), the API removes the store row so subsequent `GET /sandboxes/{id}` also returns 404. Other runner **404** responses (for example `execution not found` or missing file paths) do **not** delete the sandbox. Exec and file routes may return **503** or **502** from the runner after the API successfully reaches the runner; the API may return **503** `runner unavailable` before the runner is contacted.
 
 ---
 
@@ -121,7 +121,7 @@ curl -X POST http://localhost:8080/sandboxes \
 
 ### GET /sandboxes/{id}
 
-Get sandbox details.
+Get sandbox details. This is a read-only status check: it does **not** update `last_active_at` or extend idle timers. Only traffic that reaches the runner (exec, files, etc.) counts as activity.
 
 **Path Parameters:**
 - `id` — Sandbox UUID

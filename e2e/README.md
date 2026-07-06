@@ -28,6 +28,11 @@ RESOURCE_GROUP=my-resource-group bash e2e/run-firecracker-azure.sh
 The wrapper provisions the VM, runs the Firecracker e2e tests over SSH, collects
 logs on failure, and destroys the VM resources on exit.
 
+**Idle TTL (Firecracker):** Like Docker, the default `e2e/run-firecracker.sh` uses
+production `SANDBOX_API_IDLE_*` defaults and excludes `tests/sandbox-idle-ttl.spec.ts`.
+Run **`e2e/run-firecracker-idle-ttl.sh`** for a dedicated stack with short idle
+timers and only that spec.
+
 `e2e/run-firecracker.sh` starts the runner on `127.0.0.1:18082` and starts
 per-sandbox Firecracker daemon proxies at `18100` by default. Keep those port
 ranges separate when overriding `RUNNER_ADDR` or `FIRECRACKER_PROXY_PORT_START`.
