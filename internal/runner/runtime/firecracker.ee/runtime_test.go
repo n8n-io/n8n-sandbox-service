@@ -171,10 +171,11 @@ func TestRuntimeCreateSandboxStartsFirecrackerAndProxy(t *testing.T) {
 	if clonedDest != "/var/sandboxes/sandbox-id-123456/rootfs.ext4" {
 		t.Fatalf("cloned dest = %s", clonedDest)
 	}
-	if len(commands) != 2 {
-		t.Fatalf("run commands = %d, want prepare and network setup", len(commands))
+	if len(commands) != 3 {
+		t.Fatalf("run commands = %d, want prepare jail, host NAT, and network setup", len(commands))
 	}
 	prepareScript := commands[0].args[len(commands[0].args)-1]
+	networkScript := commands[2].args[len(commands[2].args)-1]
 	if !strings.Contains(prepareScript, "/var/sandboxes/sandbox-id-123456/rootfs.ext4") {
 		t.Fatalf("prepare jail script = %q, want per-sandbox rootfs bind mount", prepareScript)
 	}
@@ -183,6 +184,12 @@ func TestRuntimeCreateSandboxStartsFirecrackerAndProxy(t *testing.T) {
 	}
 	if !strings.Contains(prepareScript, "chown 1000:1000") || !strings.Contains(prepareScript, "snapshot_mem") {
 		t.Fatalf("prepare jail script = %q, want snapshot files chowned for jailer uid", prepareScript)
+	}
+	if !strings.Contains(networkScript, "fc-veth-0") || !strings.Contains(networkScript, "fc-uplink") {
+		t.Fatalf("network script = %q, want veth uplink setup", networkScript)
+	}
+	if !strings.Contains(networkScript, "172.16.0.0/12") {
+		t.Fatalf("network script = %q, want private CIDR egress drop", networkScript)
 	}
 	if strings.Contains(prepareScript, "/srv/firecracker/snapshots/mem") {
 		t.Fatalf("prepare jail script still references shared golden snapshot mem")
@@ -248,7 +255,7 @@ func TestRuntimeDeleteHoldsSlotUntilCleanupCompletes(t *testing.T) {
 	var runCount int
 	rt.deps.run = func(context.Context, string, ...string) error {
 		runCount++
-		if runCount == 3 {
+		if runCount == 4 {
 			close(cleanupStarted)
 			<-allowCleanup
 		}
@@ -358,8 +365,8 @@ func TestRuntimeCreateSandboxCleansUpOnFailure(t *testing.T) {
 	if !proxy.stopped {
 		t.Fatal("expected proxy to be stopped during cleanup")
 	}
-	if runCount != 3 {
-		t.Fatalf("runCount = %d, want prepare, network, and cleanup", runCount)
+	if runCount != 4 {
+		t.Fatalf("runCount = %d, want prepare, host NAT, network, and cleanup", runCount)
 	}
 
 	capacity, err := rt.Capacity(context.Background())

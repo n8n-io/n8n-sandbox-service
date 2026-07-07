@@ -1,0 +1,149 @@
+name: Publish Service Staging
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: >-
+          Release version label (default: {SERVICE_VERSION}-staging.{short_sha}).
+          Becomes tag service/v{version}.
+        required: false
+        type: string
+      run_tests:
+        description: Run unit tests before publishing
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: publish-service-staging-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: ALL
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Resolve version
+        id: meta
+        run: |
+          BASE="$(tr -d '[:space:]' < SERVICE_VERSION)"
+          SHA="$(git rev-parse --short HEAD)"
+          FULL_SHA="$(git rev-parse HEAD)"
+          VERSION="${{ inputs.version }}"
+          if [[ -z "$VERSION" ]]; then
+            VERSION="${BASE}-staging.${SHA}"
+          fi
+          TAG="service/v${VERSION}"
+          TARBALL="dist/firecracker-golden-build-${VERSION}.tar.gz"
+          {
+            echo "version=${VERSION}"
+            echo "tag=${TAG}"
+            echo "tarball=${TARBALL}"
+            echo "full_sha=${FULL_SHA}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Run tests
+        if: inputs.run_tests
+        uses: ./.github/actions/sandbox-service-test
+
+      - name: Package Firecracker golden build tarball
+        run: |
+          chmod +x scripts/package-firecracker-golden-build.sh
+          ./scripts/package-firecracker-golden-build.sh \
+            --version "${{ steps.meta.outputs.version }}" \
+            --output "${{ steps.meta.outputs.tarball }}"
+
+      - name: Azure Service Principal login (OIDC)
+        uses: azure/login@cb79c773a3cfa27f31f25eb3f677781210c9ce3d # v1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Publish images to ACR
+        env:
+          ACR_NAME: ${{ secrets.AZURE_ACR_NAME }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          FULL_SHA: ${{ steps.meta.outputs.full_sha }}
+        run: |
+          set -euo pipefail
+          REGISTRY="${ACR_NAME}.azurecr.io"
+          az acr login -n "$ACR_NAME"
+
+          build_push() {
+            local file=$1
+            local image=$2
+            local platform=${3:-}
+            local platform_args=()
+            if [[ -n "$platform" ]]; then
+              platform_args=(--platform "$platform")
+            fi
+            docker build -f "$file" \
+              "${platform_args[@]}" \
+              -t "${REGISTRY}/${image}:${VERSION}" \
+              -t "${REGISTRY}/${image}:${FULL_SHA}" \
+              .
+            docker push "${REGISTRY}/${image}:${VERSION}"
+            docker push "${REGISTRY}/${image}:${FULL_SHA}"
+          }
+
+          build_push Dockerfile.api n8n-sandbox-service-api
+          build_push Dockerfile.runner-dind n8n-sandbox-service-runner-dind
+          build_push Dockerfile.ee.runner-firecracker n8n-sandbox-service-runner-firecracker linux/amd64
+
+      - name: Create GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          TARBALL: ${{ steps.meta.outputs.tarball }}
+          FULL_SHA: ${{ steps.meta.outputs.full_sha }}
+          ACR_NAME: ${{ secrets.AZURE_ACR_NAME }}
+        run: |
+          REGISTRY="${ACR_NAME}.azurecr.io"
+          NOTES_FILE="$(mktemp)"
+          cat > "$NOTES_FILE" <<EOF
+          ## Staging candidate \`${VERSION}\`
+
+          Built from \`${FULL_SHA}\` on \`${GITHUB_REF_NAME}\`.
+
+          ### Container images (ACR)
+
+          - \`${REGISTRY}/n8n-sandbox-service-api:${VERSION}\`
+          - \`${REGISTRY}/n8n-sandbox-service-runner-dind:${VERSION}\`
+          - \`${REGISTRY}/n8n-sandbox-service-runner-firecracker:${VERSION}\`
+
+          Each image is also tagged with the full commit SHA.
+
+          ### Firecracker golden build
+
+          Download \`firecracker-golden-build-${VERSION}.tar.gz\` from the assets below.
+          Use it on runner VMs to rebuild the golden snapshot before deploying the
+          Firecracker runner image above.
+
+          ### Smoke test
+
+          After deploying to staging:
+
+          \`\`\`bash
+          SMOKE_ENV=stage ./scripts/smoke-sandbox.sh
+          \`\`\`
+          EOF
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$TARBALL" --clobber
+            gh release edit "$TAG" --prerelease --title "Service staging ${VERSION}" --notes-file "$NOTES_FILE"
+          else
+            gh release create "$TAG" \
+              --prerelease \
+              --title "Service staging ${VERSION}" \
+              --notes-file "$NOTES_FILE" \
+              "$TARBALL"
+          fi

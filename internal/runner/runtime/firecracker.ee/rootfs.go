@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/n8n-io/sandbox-service/internal/shellquote"
 )
 
 func sandboxDataDir(dataDir, sandboxID string) string {
@@ -37,7 +39,7 @@ if cp --sparse=always %s %s 2>/dev/null; then
   exit 0
 fi
 cp %s %s
-`, shellQuote(templatePath), shellQuote(destPath), shellQuote(templatePath), shellQuote(destPath), shellQuote(templatePath), shellQuote(destPath))
+`, shellquote.Quote(templatePath), shellquote.Quote(destPath), shellquote.Quote(templatePath), shellquote.Quote(destPath), shellquote.Quote(templatePath), shellquote.Quote(destPath))
 	return runCommand(ctx, "/bin/sh", "-c", script)
 }
 

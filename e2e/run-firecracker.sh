@@ -55,6 +55,7 @@ cleanup() {
 		wait "$API_PID" >/dev/null 2>&1 || true
 	fi
 	sudo rm -rf /srv/jailer/firecracker/sandbox-* >/dev/null 2>&1 || true
+	for i in $(seq 0 63); do sudo ip link delete "fc-veth-${i}" >/dev/null 2>&1 || true; done
 	sudo ip netns list | awk '{print $1}' | grep '^fc-sb-' | xargs -r -n1 sudo ip netns delete || true
 	if [[ "$TLS_DIR_OWNED" == "1" ]]; then
 		rm -rf "$TLS_DIR"

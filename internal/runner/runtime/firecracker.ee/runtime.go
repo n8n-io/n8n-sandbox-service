@@ -20,6 +20,8 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
+	fcnetwork "github.com/n8n-io/sandbox-service/internal/runner/runtime/firecracker.ee/network"
+	"github.com/n8n-io/sandbox-service/internal/shellquote"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -31,11 +33,13 @@ type Runtime struct {
 	deps         dependencies
 	slots        []slotState
 
-	mu        sync.Mutex
-	sandboxes map[string]*sandboxState
-	wakeGroup singleflight.Group
-	metrics   *metrics.RunnerRecorder
-	readyCh   chan struct{}
+	mu          sync.Mutex
+	sandboxes   map[string]*sandboxState
+	wakeGroup   singleflight.Group
+	metrics     *metrics.RunnerRecorder
+	readyCh     chan struct{}
+	hostNATOnce sync.Once
+	hostNATErr  error
 }
 
 var _ runnerruntime.Runtime = (*Runtime)(nil)
@@ -151,9 +155,20 @@ func defaultDependencies(fc Config) dependencies {
 	}
 }
 
-// Prepare is a no-op for Firecracker because host assets are checked by Ready
-// and per-sandbox state is created lazily during CreateSandbox.
-func (r *Runtime) Prepare(context.Context) {}
+// Prepare ensures host-level NAT prerequisites exist for sandbox netns uplinks.
+func (r *Runtime) Prepare(ctx context.Context) {
+	_ = r.ensureHostNATReady(ctx)
+}
+
+func (r *Runtime) ensureHostNATReady(ctx context.Context) error {
+	r.hostNATOnce.Do(func() {
+		if err := fcnetwork.EnsureHostNAT(ctx, r.deps.run); err != nil {
+			slog.Error("firecracker host NAT setup failed", "error", err)
+			r.hostNATErr = err
+		}
+	})
+	return r.hostNATErr
+}
 
 // Ready checks that the host has the Firecracker binaries and snapshot assets
 // needed to accept sandbox work.
@@ -466,22 +481,17 @@ mount --bind %[3]s %[1]s/snapshot_state
 mount --bind %[4]s %[6]s
 chown 1000:1000 %[1]s/snapshot_mem %[1]s/snapshot_state %[6]s
 chmod 0664 %[1]s/snapshot_mem %[1]s/snapshot_state %[6]s
-`, shellQuote(jailRoot), shellQuote(state.snapshotMemPath), shellQuote(state.snapshotStatePath), shellQuote(state.rootfsPath), shellQuote(filepath.Dir(rootfsTarget)), shellQuote(rootfsTarget))
+`, shellquote.Quote(jailRoot), shellquote.Quote(state.snapshotMemPath), shellquote.Quote(state.snapshotStatePath), shellquote.Quote(state.rootfsPath), shellquote.Quote(filepath.Dir(rootfsTarget)), shellquote.Quote(rootfsTarget))
 	return r.deps.run(ctx, "sudo", "/bin/sh", "-c", script)
 }
 
-// setupNetwork creates one network namespace per sandbox slot and places a TAP
-// device inside it, matching the isolation model from the Firecracker PoC.
+// setupNetwork creates one network namespace per sandbox slot with TAP, veth
+// uplink, and per-netns egress iptables matching Docker private-CIDR policy.
 func (r *Runtime) setupNetwork(ctx context.Context, state *sandboxState) error {
-	script := fmt.Sprintf(`
-set -eu
-ip netns delete %[1]s 2>/dev/null || true
-ip netns add %[1]s
-ip netns exec %[1]s ip tuntap add name %[2]s mode tap
-ip netns exec %[1]s ip addr add %[3]s dev %[2]s
-ip netns exec %[1]s ip link set %[2]s up
-ip netns exec %[1]s ip link set lo up
-`, shellQuote(state.netnsName), shellQuote(r.config.HostTapDeviceName), shellQuote(r.config.HostTapIPCIDR))
+	if err := r.ensureHostNATReady(ctx); err != nil {
+		return fmt.Errorf("host NAT not configured: %w", err)
+	}
+	script := fcnetwork.SetupScript(state.slot, state.netnsName, r.config.HostTapDeviceName, r.config.HostTapIPCIDR)
 	return r.deps.run(ctx, "sudo", "/bin/sh", "-c", script)
 }
 
@@ -532,9 +542,10 @@ set -eu
 umount -l %[1]s/root/snapshot_mem 2>/dev/null || true
 umount -l %[1]s/root/snapshot_state 2>/dev/null || true
 umount -l %[3]s 2>/dev/null || true
-ip netns delete %[2]s 2>/dev/null || true
+%[4]s
 rm -rf %[1]s
-`, shellQuote(jailDir), shellQuote(state.netnsName), shellQuote(rootfsTarget))
+`, shellquote.Quote(jailDir), shellquote.Quote(state.netnsName), shellquote.Quote(rootfsTarget),
+		strings.TrimSpace(fcnetwork.CleanupScript(state.netnsName, fcnetwork.HostVethName(state.slot))))
 	return r.deps.run(ctx, "sudo", "/bin/sh", "-c", script)
 }
 
@@ -586,10 +597,6 @@ func maxInt32(n int32, min int) int {
 func shortID(id string) string {
 	sum := sha256.Sum256([]byte(id))
 	return hex.EncodeToString(sum[:])[:12]
-}
-
-func shellQuote(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
 func joinErrors(errs []error) error {

@@ -6,22 +6,13 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+
+	"github.com/n8n-io/sandbox-service/internal/runner/runtime/netpolicy"
 )
 
 const chainPrefix = "N8N-SB-"
 
 var mu sync.Mutex
-
-var privateRangesV4 = []string{
-	"10.0.0.0/8",
-	"172.16.0.0/12",
-	"192.168.0.0/16",
-	"169.254.0.0/16",
-	"127.0.0.0/8",
-	"100.64.0.0/10",
-	"198.18.0.0/15",
-	"240.0.0.0/4",
-}
 
 // ChainName returns the per-sandbox egress chain name.
 func ChainName(containerID string) string {
@@ -70,7 +61,7 @@ func ApplyPolicy(containerID, sourceIP, gatewayIP string, daemonPort int) error 
 	if err := run("iptables", "-A", egressChain, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"); err != nil {
 		return fmt.Errorf("allow established traffic: %w", err)
 	}
-	for _, cidr := range privateRangesV4 {
+	for _, cidr := range netpolicy.PrivateRangesV4 {
 		if err := run("iptables", "-A", egressChain, "-d", cidr, "-j", "DROP"); err != nil {
 			return fmt.Errorf("drop private range %s: %w", cidr, err)
 		}

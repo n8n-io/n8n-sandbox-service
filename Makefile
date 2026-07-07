@@ -139,6 +139,6 @@ up:
 down:
 	bash scripts/docker-compose-local.sh down
 
-## smoke: Create a sandbox, run `echo hello world` via exec, pretty-print JSON (needs `make up`).
+## smoke: Core API smoke test against local compose (create, exec, DNS, HTTPS, files).
 smoke:
 	sh scripts/smoke-local-sandbox.sh

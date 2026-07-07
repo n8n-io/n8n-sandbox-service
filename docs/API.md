@@ -121,7 +121,9 @@ curl -X POST http://localhost:8080/sandboxes \
 
 ### GET /sandboxes/{id}
 
-Get sandbox details. This is a read-only status check: it does **not** update `last_active_at` or extend idle timers. Only traffic that reaches the runner (exec, files, etc.) counts as activity.
+Get sandbox details.
+
+This is a read-only status check: it does not update `last_active_at` or extend idle timers. Only traffic that reaches the runner (exec, files, etc.) counts as activity.
 
 **Path Parameters:**
 - `id` — Sandbox UUID

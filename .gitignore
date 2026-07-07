@@ -7,3 +7,5 @@ node_modules
 .gomodcache/
 charts/n8n-cloud-sandbox-service/
 scripts/smoke-dev-sandbox.env
+scripts/smoke-sandbox.*.env
+!scripts/smoke-sandbox.env.example

@@ -16,7 +16,7 @@ flowchart TD
         G --> H{Merge PR}
         H --> I[Run tests]
         I --> J[Build + push multi-arch\nimages to Docker Hub]
-        J --> K[Create git tag +\nGitHub Release]
+        J --> K[Create git tag +\nGitHub Release +\ngolden-build tarball]
         K --> L[Open post-release\nversion-bump PR to main]
     end
 
@@ -60,9 +60,41 @@ Publishes the API and runner images to Docker Hub. Version tracked in `SERVICE_V
 4. Merge the PR. This triggers the `Service Publish` workflow, which:
    - Runs tests
    - Builds and pushes multi-arch images to Docker Hub
+   - Packages `firecracker-golden-build-{version}.tar.gz` and attaches it to the release
    - Creates a git tag (`service/v{version}`) and GitHub Release
    - Opens a post-release PR to sync `SERVICE_VERSION` back to `main`
 5. Merge the post-release PR.
+
+### Firecracker golden build asset
+
+Each service release includes `firecracker-golden-build-{version}.tar.gz` on the
+GitHub Release. The tarball contains `create-golden-snapshot.sh`,
+`setup-firecracker-e2e-vm.sh`, and a `MANIFEST.json` with pinned versions.
+
+Package locally:
+
+```bash
+./scripts/package-firecracker-golden-build.sh --version "$(tr -d '[:space:]' < SERVICE_VERSION)"
+```
+
+## Staging candidates (pre-merge)
+
+Use **Actions → Publish Service Staging** on your feature branch before merging
+to `main`. The workflow:
+
+1. Optionally runs unit tests
+2. Builds and pushes API, runner-dind, and Firecracker runner images to ACR
+   tagged `{SERVICE_VERSION}-staging.{short_sha}` (override with the `version` input)
+3. Creates a GitHub **prerelease** (`service/v{version}`) with the golden-build tarball
+
+After deploying those image tags to staging, run:
+
+```bash
+SMOKE_ENV=stage ./scripts/smoke-sandbox.sh
+```
+
+On Firecracker runner VMs, download the prerelease tarball and rebuild the
+golden snapshot before rolling out the new `runner-firecracker` image.
 
 ## Sandbox Release (Docker Hub)
 

@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import './matchers';
 import { createSandbox, deleteSandbox, exec, execWithTransientRetry } from './helpers';
-import { RUNNER_TAGS } from './tags';
+import { BOTH_RUNNERS } from './tags';
 
 const tcpConnect = (ip: string, port: number = 80, timeout: number = 3) =>
   `curl --connect-timeout ${timeout} -s -o /dev/null http://${ip}:${port}/`;
@@ -12,7 +12,7 @@ const tcpConnectV6 = (ip: string, port: number = 443, timeout: number = 3) =>
 const resolve = (host: string) =>
   `getent ahostsv4 ${host} | head -1 | awk '{print $1}'`;
 
-test.describe('Network isolation', { tag: RUNNER_TAGS.docker }, () => {
+test.describe('Network isolation', BOTH_RUNNERS, () => {
   test('sandbox can reach public internet', async () => {
     const id = await createSandbox();
     try {

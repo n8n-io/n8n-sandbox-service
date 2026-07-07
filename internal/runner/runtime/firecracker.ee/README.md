@@ -13,11 +13,34 @@ host Firecracker setup and local snapshot cache.
 
 ## Networking
 
-The Firecracker backend follows the Lambda/Firecracker PoC shape: each sandbox
-gets a per-slot Linux network namespace with a TAP device, and the runner
-exposes the guest daemon through a host-local TCP proxy. `DaemonURL` is therefore
-a `127.0.0.1:<port>` URL, while proxy connections are dialed from inside the
-sandbox netns to the guest IP.
+Each sandbox slot gets an isolated Linux network namespace. Three interfaces
+matter:
+
+| Piece | Role |
+|-------|------|
+| **TAP** (`fc-tap-0`) | Virtio NIC the microVM talks to; gateway `172.16.0.1`, guest `172.16.0.10` (baked into the golden snapshot). |
+| **veth uplink** (`fc-uplink` in netns ↔ `fc-veth-{slot}` on host) | Routes guest traffic out of the netns to the host routing table. |
+| **Host proxy** (`127.0.0.1:{port}`) | API/exec path: runner listens on the host, dials the guest daemon from inside the netns. |
+
+```
+Guest 172.16.0.10 ── virtio ── TAP (172.16.0.1)
+                                  │
+                       netns fc-sb-{slot}   [FORWARD: drop private CIDRs]
+                                  │
+                         veth fc-uplink
+                                  │
+Host fc-veth-{slot} ── FORWARD ── MASQUERADE ── internet
+
+API/exec: 127.0.0.1 proxy ── setns ── guest:8081
+```
+
+**`network/`** owns sandbox networking: topology (netns, TAP, veth, routes, NAT)
+in `network.go`, egress policy (private-CIDR `iptables FORWARD` rules) in
+`egress.go`. Host `ip_forward` and default interface MASQUERADE are verified
+idempotently at runner startup.
+
+Guest IPv6 is disabled via `ipv6.disable=1` in the golden snapshot kernel boot
+args — rebuild the snapshot after changing boot args.
 
 We need slots because Firecracker does not provide Docker-style bridge networking
 or container names for free. Each microVM clone needs its own host network
@@ -42,7 +65,8 @@ get the same slot after restart.
   `snapshot_mem` and `snapshot_state` files for later wake.
 - Wakes stopped sandboxes by restoring the per-sandbox snapshot on demand
   (`EnsureSandboxRunning`), with singleflight deduplication for concurrent wakes.
-- Creates per-sandbox network namespace/TAP state.
+- Creates per-sandbox network namespace/TAP state with veth uplink and private-CIDR
+  egress filtering (Docker `netpolicy` parity).
 - Exposes the guest daemon through a host-local proxy URL.
 - Waits for guest daemon `/healthz` before returning a sandbox as ready.
 - Cleans up the VM process, proxy, jail state, per-sandbox data directory, and
@@ -70,5 +94,7 @@ rather than tuning runner env vars.
 - Slots are allocated in memory and are not pre-created or persisted.
 - LRU eviction of stopped sandboxes for disk space is runner-local and does not
   notify the API.
+- Per-sandbox egress uses per-netns iptables (not nftables sets or a pre-wired
+  slot pool); optimize if create latency becomes critical.
 - The snapshot/rootfs set must be built together and include the n8n sandbox
   daemon listening on the configured daemon port.
