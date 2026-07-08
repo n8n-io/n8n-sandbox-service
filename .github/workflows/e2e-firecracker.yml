@@ -39,41 +39,10 @@ jobs:
 
       - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
 
-      - name: Provision Azure VM
-        id: vm
-        env:
-          RESOURCE_GROUP: ${{ secrets.AZURE_E2E_RESOURCE_GROUP }}
-          E2E_PEER_VM_ENABLED: "true"
-        run: bash e2e/infra/scripts/provision-firecracker-e2e-vm.sh
-
       - name: Run Firecracker e2e tests
         env:
-          VM_IP: ${{ steps.vm.outputs.vm_ip }}
-          VM_PRIVATE_IP: ${{ steps.vm.outputs.vm_private_ip }}
-          PEER_VM_PRIVATE_IP: ${{ steps.vm.outputs.peer_vm_private_ip }}
-          SSH_KEY_PATH: ${{ steps.vm.outputs.ssh_key_path }}
-        run: |
-          SSH_OPTS="-o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=6"
-          ssh $SSH_OPTS -i "$SSH_KEY_PATH" "azureuser@${VM_IP}" bash -s << 'EOF'
-          set -euxo pipefail
-          export PATH=/usr/local/go/bin:$HOME/go/bin:$PATH
-
-          cd ~/project
-          bash e2e/run-firecracker.sh
-          sleep 2
-          bash e2e/run-firecracker-idle-ttl.sh
-          EOF
-
-          sleep 2
-          bash e2e/run-firecracker-two-runners-azure.sh
-
-      - name: Collect logs on failure
-        if: failure()
-        continue-on-error: true
-        env:
-          VM_IP: ${{ steps.vm.outputs.vm_ip }}
-          SSH_KEY_PATH: ${{ steps.vm.outputs.ssh_key_path }}
-        run: bash e2e/infra/scripts/collect-firecracker-e2e-vm-logs.sh
+          RESOURCE_GROUP: ${{ secrets.AZURE_E2E_RESOURCE_GROUP }}
+        run: bash e2e/run-firecracker-azure.sh
 
       - name: Upload artifacts
         if: failure()
@@ -82,8 +51,3 @@ jobs:
           name: e2e-firecracker-logs
           path: /tmp/e2e-firecracker-artifacts/
           retention-days: 7
-
-      - name: Cleanup Azure VM
-        if: always()
-        continue-on-error: true
-        run: bash e2e/infra/scripts/cleanup-e2e-vm.sh
