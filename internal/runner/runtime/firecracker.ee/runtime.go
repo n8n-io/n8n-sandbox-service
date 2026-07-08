@@ -60,6 +60,9 @@ func New(runnerConfig *config.Config, cfg Config) *Runtime {
 		readyCh:      make(chan struct{}),
 	}
 	close(rt.readyCh)
+	ctx, cancel := reconcileContext()
+	defer cancel()
+	rt.reconcileOnStartup(ctx)
 	return rt
 }
 

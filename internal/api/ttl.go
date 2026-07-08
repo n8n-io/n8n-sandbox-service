@@ -51,14 +51,14 @@ func StartIdleSweeper(ctx context.Context, s *store.Store, cfg *config.APIConfig
 				// Use the same ctx as the ticker loop so stop/delete RPCs honor
 				// sweepCancel() from shutdown instead of blocking on Background.
 				now := time.Now().Unix()
-				if cfg.IdleDeleteAfter > 0 {
-					sweepIdleDeleteSandboxes(ctx, s, cfg, tlsCfg, now)
+				if cfg.IdleStopAfter > 0 {
+					sweepIdleStopSandboxes(ctx, s, cfg, tlsCfg, now)
 				}
 				if ctx.Err() != nil {
 					return
 				}
-				if cfg.IdleStopAfter > 0 {
-					sweepIdleStopSandboxes(ctx, s, cfg, tlsCfg, now)
+				if cfg.IdleDeleteAfter > 0 {
+					sweepIdleDeleteSandboxes(ctx, s, cfg, tlsCfg, now)
 				}
 			}
 		}

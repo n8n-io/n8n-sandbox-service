@@ -90,6 +90,8 @@ async function waitContainerRestarted(
 }
 
 test.describe('Sandbox recovery on runner', { tag: RUNNER_TAGS.docker }, () => {
+  // Inner docker restart/stop semantics; Firecracker uses runner-restart.spec.ts
+  // and stop/wake specs instead.
   test('sandbox container restart keeps same sandbox id reachable', async () => {
     test.skip(!process.env.E2E_RUNNER_CONTAINER_NAME, 'needs E2E_RUNNER_CONTAINER_NAME (from e2e/run.sh)');
     test.setTimeout(150_000);

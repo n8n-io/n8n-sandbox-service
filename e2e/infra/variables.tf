@@ -36,3 +36,9 @@ variable "os_disk_size_gb" {
   type        = number
   default     = 50
 }
+
+variable "peer_vm_enabled" {
+  description = "When true, provision a second VM on the same subnet for Firecracker two-runner e2e"
+  type        = bool
+  default     = false
+}

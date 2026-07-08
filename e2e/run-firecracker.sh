@@ -6,6 +6,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=e2e/lib/common.sh
+source "$SCRIPT_DIR/lib/common.sh"
 export PATH=/usr/local/go/bin:$HOME/go/bin:$PATH
 
 PORT="${PORT:-8080}"
@@ -47,13 +49,16 @@ cleanup() {
 
 	echo "Stopping Firecracker e2e resources..."
 	if [[ -n "$RUNNER_PID" ]]; then
-		sudo kill "$RUNNER_PID" >/dev/null 2>&1 || true
-		wait "$RUNNER_PID" >/dev/null 2>&1 || true
+		e2e_stop_supervised_pid "$RUNNER_PID"
 	fi
 	if [[ -n "$API_PID" ]]; then
-		kill "$API_PID" >/dev/null 2>&1 || true
-		wait "$API_PID" >/dev/null 2>&1 || true
+		e2e_stop_pid "$API_PID"
 	fi
+	e2e_kill_tcp_listeners \
+		"$(e2e_addr_port "127.0.0.1:${PORT}")" \
+		"$(e2e_addr_port "$API_GRPC_ADDR")" \
+		"$(e2e_addr_port "$RUNNER_ADDR")" \
+		"$(e2e_addr_port "$RUNNER_CONTROL_LISTEN_ADDR")"
 	sudo rm -rf /srv/jailer/firecracker/sandbox-* >/dev/null 2>&1 || true
 	for i in $(seq 0 63); do sudo ip link delete "fc-veth-${i}" >/dev/null 2>&1 || true; done
 	sudo ip netns list | awk '{print $1}' | grep '^fc-sb-' | xargs -r -n1 sudo ip netns delete || true
@@ -110,6 +115,12 @@ mkdir -p "$API_DATA_DIR"
 sudo mkdir -p "$RUNNER_DATA_DIR"
 rm -f "$API_LOG" "$RUNNER_LOG"
 
+e2e_kill_tcp_listeners \
+	"$(e2e_addr_port "127.0.0.1:${PORT}")" \
+	"$(e2e_addr_port "$API_GRPC_ADDR")" \
+	"$(e2e_addr_port "$RUNNER_ADDR")" \
+	"$(e2e_addr_port "$RUNNER_CONTROL_LISTEN_ADDR")"
+
 echo "Starting API host process on port ${PORT}..."
 API_ENV=(
 	SANDBOX_API_LISTEN_ADDR="127.0.0.1:${PORT}"
@@ -141,30 +152,47 @@ API_PID=$!
 wait_for_http "API" "http://127.0.0.1:${PORT}/healthz"
 
 echo "Starting Firecracker runner host process..."
-sudo env \
-	PATH="/usr/local/go/bin:$PATH" \
-	SANDBOX_RUNNER_BACKEND=firecracker \
-	SANDBOX_RUNNER_LISTEN_ADDR="$RUNNER_ADDR" \
-	SANDBOX_RUNNER_DATA_DIR="$RUNNER_DATA_DIR" \
-	SANDBOX_RUNNER_API_KEYS="$RUNNER_INTERNAL_API_KEY" \
-	SANDBOX_RUNNER_METRICS_ENABLED=true \
-	SANDBOX_RUNNER_API_GRPC_ADDR="$API_GRPC_ADDR" \
-	SANDBOX_RUNNER_REGISTRATION_TOKEN="$REG_TOKEN" \
-	SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE="$TLS_DIR/runner/ca.crt" \
-	SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE="$TLS_DIR/runner/grpc-client.crt" \
-	SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE="$TLS_DIR/runner/grpc-client.key" \
-	SANDBOX_RUNNER_REGISTRATION_GRPC_SERVER_NAME="$API_TLS_DNS" \
-	SANDBOX_RUNNER_HTTP_BASE_URL="http://${RUNNER_ADDR}" \
-	SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR="$RUNNER_CONTROL_LISTEN_ADDR" \
-	SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR="$RUNNER_CONTROL_ADVERTISE_ADDR" \
-	SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE="$TLS_DIR/runner/control-grpc-server.crt" \
-	SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE="$TLS_DIR/runner/control-grpc-server.key" \
-	SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE="$TLS_DIR/runner/ca.crt" \
-	SANDBOX_RUNNER_ID="e2e-firecracker-runner-$$" \
-	SANDBOX_RUNNER_CAPACITY_TOTAL="${SANDBOX_RUNNER_CAPACITY_TOTAL:-4}" \
-	SANDBOX_RUNNER_FIRECRACKER_PROXY_PORT_START="$FIRECRACKER_PROXY_PORT_START" \
-	"$PROJECT_DIR/bin/runner-firecracker" >"$RUNNER_LOG" 2>&1 &
+RUNNER_ENV=(
+	PATH="/usr/local/go/bin:$PATH"
+	SANDBOX_RUNNER_BACKEND=firecracker
+	SANDBOX_RUNNER_LISTEN_ADDR="$RUNNER_ADDR"
+	SANDBOX_RUNNER_DATA_DIR="$RUNNER_DATA_DIR"
+	SANDBOX_RUNNER_API_KEYS="$RUNNER_INTERNAL_API_KEY"
+	SANDBOX_RUNNER_METRICS_ENABLED=true
+	SANDBOX_RUNNER_API_GRPC_ADDR="$API_GRPC_ADDR"
+	SANDBOX_RUNNER_REGISTRATION_TOKEN="$REG_TOKEN"
+	SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE="$TLS_DIR/runner/ca.crt"
+	SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE="$TLS_DIR/runner/grpc-client.crt"
+	SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE="$TLS_DIR/runner/grpc-client.key"
+	SANDBOX_RUNNER_REGISTRATION_GRPC_SERVER_NAME="$API_TLS_DNS"
+	SANDBOX_RUNNER_HTTP_BASE_URL="http://${RUNNER_ADDR}"
+	SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR="$RUNNER_CONTROL_LISTEN_ADDR"
+	SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR="$RUNNER_CONTROL_ADVERTISE_ADDR"
+	SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE="$TLS_DIR/runner/control-grpc-server.crt"
+	SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE="$TLS_DIR/runner/control-grpc-server.key"
+	SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE="$TLS_DIR/runner/ca.crt"
+	SANDBOX_RUNNER_ID="e2e-firecracker-runner-$$"
+	SANDBOX_RUNNER_CAPACITY_TOTAL="${SANDBOX_RUNNER_CAPACITY_TOTAL:-4}"
+	SANDBOX_RUNNER_FIRECRACKER_PROXY_PORT_START="$FIRECRACKER_PROXY_PORT_START"
+)
+RUNNER_BIN="$PROJECT_DIR/bin/runner-firecracker"
+FC_RUNNER_ENV_FILE="${E2E_FIRECRACKER_RUNNER_ENV_FILE:-$SCRIPT_DIR/.fc-runner-env.$$}"
+{
+	echo "RUNNER_ADDR=$(printf '%q' "$RUNNER_ADDR")"
+	echo "RUNNER_LOG=$(printf '%q' "$RUNNER_LOG")"
+	echo "RUNNER_BIN=$(printf '%q' "$RUNNER_BIN")"
+	echo "RUNNER_ENV=("
+	for item in "${RUNNER_ENV[@]}"; do
+		printf '  %q\n' "$item"
+	done
+	echo ")"
+} >"$FC_RUNNER_ENV_FILE"
+export E2E_FIRECRACKER_RUNNER_ENV_FILE="$FC_RUNNER_ENV_FILE"
+
+sudo env "${RUNNER_ENV[@]}" "$RUNNER_BIN" >"$RUNNER_LOG" 2>&1 &
 RUNNER_PID=$!
+export E2E_RUNNER_PID="$RUNNER_PID"
+echo "export E2E_RUNNER_PID=${RUNNER_PID}" >>"$FC_RUNNER_ENV_FILE"
 
 wait_for_http "Firecracker runner" "http://${RUNNER_ADDR}/readyz"
 wait_for_runner_registered

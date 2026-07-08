@@ -54,6 +54,11 @@ Slots are deliberately runner-local and ephemeral. They are not persisted, not
 part of the public API, and not a promise that the same sandbox ID will always
 get the same slot after restart.
 
+Run **one Firecracker runner process per host**. Multiple runners on the same
+machine collide on Linux netns/veth names (`fc-sb-{n}`, `fc-veth-{n}`); use
+separate VMs (or containers with isolated network namespaces) for multi-runner e2e
+and production layouts.
+
 ## Supported Features
 
 - Tracks basic runner-local slot capacity.
@@ -84,7 +89,9 @@ snapshot and template `rootfs.ext4` are built:
 - **Disk** — capped by the ext4 image size of the golden template
   (`rootfs.ext4`; see `FIRECRACKER_E2E_ROOTFS_SIZE_MB` in
   `e2e/infra/scripts/setup-firecracker-e2e-vm.sh` for the e2e default). Each
-  sandbox gets a sparse copy of that image at create time.
+  sandbox gets a sparse copy of that image at create time. There is no
+  `SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB` equivalent; ENOSPC occurs when the
+  guest fills that ext4 device.
 
 To change limits in production, rebuild the golden snapshot/rootfs on the host
 rather than tuning runner env vars.
@@ -92,6 +99,9 @@ rather than tuning runner env vars.
 ## Current Limitations
 
 - Slots are allocated in memory and are not pre-created or persisted.
+- On runner startup, orphaned per-sandbox data directories, jailer state, and
+  slot network namespaces are removed. Sandboxes are not reattached after a
+  runner restart (same contract as the Docker runner reconcile).
 - LRU eviction of stopped sandboxes for disk space is runner-local and does not
   notify the API.
 - Per-sandbox egress uses per-netns iptables (not nftables sets or a pre-wired

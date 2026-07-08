@@ -31,7 +31,14 @@ logs on failure, and destroys the VM resources on exit.
 **Idle TTL (Firecracker):** Like Docker, the default `e2e/run-firecracker.sh` uses
 production `SANDBOX_API_IDLE_*` defaults and excludes `tests/sandbox-idle-ttl.spec.ts`.
 Run **`e2e/run-firecracker-idle-ttl.sh`** for a dedicated stack with short idle
-timers and only that spec.
+timers and only that spec (uses its own HTTP/gRPC/control ports so it can run
+back-to-back with the main suite on the same VM).
+
+**Two runners (Firecracker):** Firecracker runners cannot share one host network
+namespace, so two-runner placement/resilience tests use a **control VM** (API +
+runner 1) and a **peer VM** (runner 2). Provision with `E2E_PEER_VM_ENABLED=true`
+and run **`e2e/run-firecracker-two-runners-azure.sh`** (or the full
+`e2e/run-firecracker-azure.sh` flow, which includes this phase).
 
 `e2e/run-firecracker.sh` starts the runner on `127.0.0.1:18082` and starts
 per-sandbox Firecracker daemon proxies at `18100` by default. Keep those port

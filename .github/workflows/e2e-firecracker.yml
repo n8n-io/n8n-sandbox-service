@@ -43,20 +43,29 @@ jobs:
         id: vm
         env:
           RESOURCE_GROUP: ${{ secrets.AZURE_E2E_RESOURCE_GROUP }}
+          E2E_PEER_VM_ENABLED: "true"
         run: bash e2e/infra/scripts/provision-firecracker-e2e-vm.sh
 
       - name: Run Firecracker e2e tests
+        env:
+          VM_IP: ${{ steps.vm.outputs.vm_ip }}
+          VM_PRIVATE_IP: ${{ steps.vm.outputs.vm_private_ip }}
+          PEER_VM_PRIVATE_IP: ${{ steps.vm.outputs.peer_vm_private_ip }}
+          SSH_KEY_PATH: ${{ steps.vm.outputs.ssh_key_path }}
         run: |
           SSH_OPTS="-o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=6"
-          ssh $SSH_OPTS -i "${{ steps.vm.outputs.ssh_key_path }}" \
-            "azureuser@${{ steps.vm.outputs.vm_ip }}" bash -s << 'EOF'
+          ssh $SSH_OPTS -i "$SSH_KEY_PATH" "azureuser@${VM_IP}" bash -s << 'EOF'
           set -euxo pipefail
           export PATH=/usr/local/go/bin:$HOME/go/bin:$PATH
 
           cd ~/project
           bash e2e/run-firecracker.sh
+          sleep 2
           bash e2e/run-firecracker-idle-ttl.sh
           EOF
+
+          sleep 2
+          bash e2e/run-firecracker-two-runners-azure.sh
 
       - name: Collect logs on failure
         if: failure()

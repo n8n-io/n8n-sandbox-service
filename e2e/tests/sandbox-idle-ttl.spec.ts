@@ -14,8 +14,9 @@ test.describe('idle stop / wake / delete', BOTH_RUNNERS, () => {
   test('stop after idle, exec wakes, then row is deleted', async ({ request }) => {
     const id = await createSandbox();
 
-    // run.sh: stop_after=3s, sweep=1s; Firecracker stop (pause + snapshot) can take much longer.
-    await waitForSandboxStatus(request, id, 'stopped', 90_000);
+    // run.sh / run-firecracker-idle-ttl.sh: stop_after=3s, sweep=1s.
+    // Firecracker stop (pause + snapshot) can take much longer than Docker stop.
+    await waitForSandboxStatus(request, id, 'stopped', 120_000);
 
     const execRes = await execWithTransientRetry(id, 'echo wake');
     expect(execRes).toHaveSucceeded();

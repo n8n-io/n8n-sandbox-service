@@ -57,6 +57,9 @@ Firecracker e2e provisioning allows overriding:
   generation; defaults to `512`.
 - `FIRECRACKER_E2E_SNAPSHOT_VCPUS`: optional vCPU count for local snapshot
   generation; defaults to `1`.
+- `E2E_PEER_VM_ENABLED`: when `true`, provisions a second VM on the same subnet
+  for Firecracker two-runner e2e. Both hosts are set up in parallel via
+  `e2e_setup_firecracker_host` (repo transfer + `setup-firecracker-e2e-vm.sh`).
 
 The Firecracker e2e setup builds the bootable template locally on the VM:
 

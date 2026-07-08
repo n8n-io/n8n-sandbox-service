@@ -93,14 +93,28 @@ func testConfig() Config {
 }
 
 func testRuntime(capacity int32) *Runtime {
-	return New(testRunnerConfig(capacity), testConfig())
+	return newTestRuntime(capacity)
 }
 
 func testRuntimeT(t *testing.T, capacity int32) *Runtime {
 	t.Helper()
-	cfg := testRunnerConfig(capacity)
-	cfg.DataDir = t.TempDir()
-	return New(cfg, testConfig())
+	rt := newTestRuntime(capacity)
+	rt.runnerConfig.DataDir = t.TempDir()
+	return rt
+}
+
+// newTestRuntime constructs a runtime without startup reconcile (unit tests only).
+func newTestRuntime(capacity int32) *Runtime {
+	rt := &Runtime{
+		runnerConfig: testRunnerConfig(capacity),
+		config:       testConfig(),
+		deps:         defaultDependencies(testConfig()),
+		slots:        make([]slotState, capacity),
+		sandboxes:    make(map[string]*sandboxState),
+		readyCh:      make(chan struct{}),
+	}
+	close(rt.readyCh)
+	return rt
 }
 
 func TestRuntimeReadyChecksFirecrackerAssets(t *testing.T) {

@@ -223,6 +223,9 @@ export async function waitForSandboxStatus(
     await new Promise((r) => setTimeout(r, 500));
   }
   const last = await apiRequest(request, 'GET', `/sandboxes/${id}`);
+  if (last.status === 404) {
+    throw new Error(`sandbox ${id} was deleted before reaching status ${status}`);
+  }
   const j = (await last.json()) as { status?: string };
   expect(j.status).toBe(status);
 }
@@ -280,10 +283,14 @@ export function stopSandboxViaRunner(sandboxId: string): void {
   });
 }
 
+export function scrapeRunnerMetricsAt(addr: string): string {
+  const host = addr.replace(/^https?:\/\//, '');
+  return execFileSync('curl', ['-sf', `http://${host}/metrics`], { encoding: 'utf8' });
+}
+
 export function scrapeRunnerMetrics(): string {
   if (process.env.E2E_RUNNER_HTTP_ADDR) {
-    const addr = process.env.E2E_RUNNER_HTTP_ADDR.replace(/^https?:\/\//, '');
-    return execFileSync('curl', ['-sf', `http://${addr}/metrics`], { encoding: 'utf8' });
+    return scrapeRunnerMetricsAt(process.env.E2E_RUNNER_HTTP_ADDR);
   }
   const runnerContainer = process.env.E2E_RUNNER_CONTAINER_NAME;
   if (!runnerContainer) {
@@ -294,6 +301,64 @@ export function scrapeRunnerMetrics(): string {
     ['exec', runnerContainer, 'wget', '-q', '-O', '-', 'http://localhost:8080/metrics'],
     { encoding: 'utf8' },
   );
+}
+
+export async function waitRunnerHttpReady(addr: string, deadlineMs = 75_000): Promise<void> {
+  const url = `http://${addr.replace(/^https?:\/\//, '')}/readyz`;
+  const deadline = Date.now() + deadlineMs;
+  while (Date.now() < deadline) {
+    try {
+      execFileSync('curl', ['-sf', url], { stdio: 'pipe' });
+      return;
+    } catch {
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  }
+  throw new Error(`runner not ready at ${url} within ${deadlineMs}ms`);
+}
+
+export function restartRunnerForE2E(): void {
+  if (process.env.E2E_RUNNER_CONTAINER_NAME) {
+    execFileSync('docker', ['restart', process.env.E2E_RUNNER_CONTAINER_NAME], { stdio: 'inherit' });
+    return;
+  }
+  const envFile = process.env.E2E_FIRECRACKER_RUNNER_ENV_FILE;
+  if (!envFile) {
+    throw new Error('need E2E_RUNNER_CONTAINER_NAME or E2E_FIRECRACKER_RUNNER_ENV_FILE to restart runner');
+  }
+  const projectDir = e2eProjectDir();
+  execFileSync('bash', [`${projectDir}/e2e/lib/restart-firecracker-runner.sh`], {
+    stdio: 'inherit',
+    env: { ...process.env, E2E_FIRECRACKER_RUNNER_ENV_FILE: envFile },
+  });
+}
+
+export function stopFirecrackerRunnerPid(pid: string, remote?: { ssh: string; sshOpts?: string }): void {
+  if (remote?.ssh) {
+    const sshArgs = remote.sshOpts ? remote.sshOpts.split(/\s+/).filter(Boolean) : [];
+    execFileSync('ssh', [...sshArgs, remote.ssh, 'sudo', 'kill', '-TERM', pid], { stdio: 'pipe' });
+    return;
+  }
+  execFileSync('sudo', ['kill', '-TERM', pid], { stdio: 'pipe' });
+}
+
+export function restartFirecrackerRunnerFromEnvFile(
+  envFile: string,
+  remote?: { ssh: string; sshOpts?: string },
+): void {
+  const projectDir = e2eProjectDir();
+  if (remote?.ssh) {
+    const sshArgs = remote.sshOpts ? remote.sshOpts.split(/\s+/).filter(Boolean) : [];
+    execFileSync('ssh', [...sshArgs, remote.ssh, 'bash', `${projectDir}/e2e/lib/restart-firecracker-runner.sh`], {
+      stdio: 'inherit',
+      env: { ...process.env, E2E_FIRECRACKER_RUNNER_ENV_FILE: envFile },
+    });
+    return;
+  }
+  execFileSync('bash', [`${projectDir}/e2e/lib/restart-firecracker-runner.sh`], {
+    stdio: 'inherit',
+    env: { ...process.env, E2E_FIRECRACKER_RUNNER_ENV_FILE: envFile },
+  });
 }
 
 export function innerContainerName(sandboxID: string): string {
