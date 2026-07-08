@@ -11,8 +11,6 @@ import {
   waitRunnerHttpReady,
 } from './helpers';
 import { parseGauge } from './metrics-helpers';
-import { BOTH_RUNNERS } from './tags';
-
 const API_KEY = process.env.SANDBOX_API_KEY || 'test';
 
 function sleep(ms: number): Promise<void> {
@@ -120,7 +118,7 @@ async function waitFirecrackerRunnerHostingFirstSandbox(
   throw new Error('could not detect which Firecracker runner hosts the first sandbox');
 }
 
-test.describe('API restart resilience', BOTH_RUNNERS, () => {
+test.describe('API restart resilience', () => {
   test('sandboxes keep working after API container restart', { tag: '@e2e-api-restart' }, async ({ request }) => {
     test.skip(!process.env.E2E_API_CONTAINER_NAME, 'needs E2E_API_CONTAINER_NAME (from e2e/run.sh)');
     test.setTimeout(100_000);
@@ -144,7 +142,7 @@ test.describe('API restart resilience', BOTH_RUNNERS, () => {
   });
 });
 
-test.describe('Runner failure resilience', BOTH_RUNNERS, () => {
+test.describe('Runner failure resilience', () => {
   test(
     'stopped runner: 503 on sandboxes there; other runner and new sandboxes still work',
     { tag: '@e2e-stopped-runner' },

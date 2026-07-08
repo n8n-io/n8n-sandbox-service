@@ -1,8 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { test, expect } from '@playwright/test';
 import { apiRequest, createSandbox, deleteSandbox, exec, restartRunnerForE2E, waitRunnerHttpReady } from './helpers';
-import { BOTH_RUNNERS } from './tags';
-
 async function waitDockerRunnerReady(container: string, deadlineMs = 75_000): Promise<void> {
   const deadline = Date.now() + deadlineMs;
   while (Date.now() < deadline) {
@@ -20,7 +18,7 @@ async function waitDockerRunnerReady(container: string, deadlineMs = 75_000): Pr
   throw new Error(`runner container ${container} not ready within ${deadlineMs}ms`);
 }
 
-test.describe('Runner restart', BOTH_RUNNERS, () => {
+test.describe('Runner restart', () => {
   test('sandboxes are unavailable after runner restart', async ({ request }) => {
     test.setTimeout(120_000);
 

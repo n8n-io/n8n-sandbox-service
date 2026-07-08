@@ -1,10 +1,8 @@
 import { test, expect } from '@playwright/test';
 import { createSandboxWithRetry, deleteSandbox, execWithTransientRetry } from './helpers';
-import { BOTH_RUNNERS } from './tags';
-
 // Run from e2e/run-two-runners.sh (Docker) or e2e/run-firecracker-two-runners-azure.sh.
 
-test('sandboxes stay on the correct runner', BOTH_RUNNERS, async () => {
+test('sandboxes stay on the correct runner', async () => {
   const id1 = await createSandboxWithRetry();
   const id2 = await createSandboxWithRetry();
 

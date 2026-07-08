@@ -2,13 +2,11 @@ import { test, expect } from '@playwright/test';
 import './matchers';
 import { SandboxServiceError } from '@n8n/sandbox-client';
 import { client, createSandbox, deleteSandbox, startAndDisconnect } from './helpers';
-import { BOTH_RUNNERS } from './tags';
-
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-test.describe('Resumable Exec', BOTH_RUNNERS, () => {
+test.describe('Resumable Exec', () => {
   let sandboxId: string;
 
   test.beforeEach(async () => {

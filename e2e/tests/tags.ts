@@ -1,8 +1,5 @@
-export const RUNNER_TAGS = {
-  docker: '@docker-runner',
-  firecracker: '@firecracker-runner',
-};
-
-export const BOTH_RUNNERS = {
-  tag: [RUNNER_TAGS.docker, RUNNER_TAGS.firecracker],
-};
+// Specs run on every runner lane by default. Apply one of these markers only to
+// a spec (or describe) that is backend-specific; each lane excludes the other
+// lane's marker via `playwright test --grep-invert`.
+export const DOCKER_ONLY = { tag: '@docker-only' };
+export const FIRECRACKER_ONLY = { tag: '@firecracker-only' };

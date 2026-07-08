@@ -6,11 +6,9 @@ import {
   waitForSandbox404,
   waitForSandboxStatus,
 } from './helpers';
-import { BOTH_RUNNERS } from './tags';
-
 test.describe.configure({ timeout: 180_000 });
 
-test.describe('idle stop / wake / delete', BOTH_RUNNERS, () => {
+test.describe('idle stop / wake / delete', () => {
   test('stop after idle, exec wakes, then row is deleted', async ({ request }) => {
     const id = await createSandbox();
 

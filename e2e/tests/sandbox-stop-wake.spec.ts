@@ -7,11 +7,9 @@ import {
   execWithTransientRetry,
   stopSandboxViaRunner,
 } from './helpers';
-import { BOTH_RUNNERS } from './tags';
-
 test.describe.configure({ timeout: 120_000 });
 
-test.describe('direct stop / wake', BOTH_RUNNERS, () => {
+test.describe('direct stop / wake', () => {
   test('runner stop then exec wakes sandbox', async ({ request }) => {
     const id = await createSandbox();
     try {

@@ -1,9 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { createSandbox, deleteSandbox, execWithTransientRetry, scrapeRunnerMetrics, stopSandboxViaRunner } from './helpers';
 import { parseCounter } from './metrics-helpers';
-import { BOTH_RUNNERS } from './tags';
-
-test.describe('Runner stop/wake metrics', BOTH_RUNNERS, () => {
+test.describe('Runner stop/wake metrics', () => {
   test('records stop and ensure_running operations', async () => {
     test.setTimeout(120_000);
 

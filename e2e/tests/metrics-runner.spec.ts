@@ -1,9 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { createSandbox, deleteSandbox, scrapeRunnerMetrics } from './helpers';
 import { parseCounter } from './metrics-helpers';
-import { BOTH_RUNNERS } from './tags';
-
-test.describe('Runner metrics endpoint', BOTH_RUNNERS, () => {
+test.describe('Runner metrics endpoint', () => {
   test('is served without X-Api-Key and returns expected families', async () => {
     const body = scrapeRunnerMetrics();
     const expected = [
