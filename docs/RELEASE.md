@@ -1,13 +1,13 @@
 # Release Process
 
-This repository has three independent release pipelines: **service** (API + runner), **sandbox** (sandbox image), and **SDK**.
+This repository has three independent release pipelines: service (API + runner), sandbox (sandbox image), and SDK.
 
 ```mermaid
 flowchart TD
     subgraph alpha ["Alpha (every push to main)"]
         A[Push to main] --> B[release-alpha]
         B --> C[Build multi-arch images]
-        C --> D[Push to ACR\napi / runner-dind / runner-firecracker / sandbox\n:alpha + :sha]
+        C --> D[Push to private registry\napi / runner-dind / runner-firecracker / sandbox\n:alpha + :sha]
     end
 
     subgraph versioned ["Versioned Release (service or sandbox)"]
@@ -16,7 +16,7 @@ flowchart TD
         G --> H{Merge PR}
         H --> I[Run tests]
         I --> J[Build + push multi-arch\nimages to Docker Hub]
-        J --> K[Create git tag +\nGitHub Release]
+        J --> K[Create git tag +\nGitHub Release +\ngolden-build tarball]
         K --> L[Open post-release\nversion-bump PR to main]
     end
 
@@ -29,9 +29,9 @@ flowchart TD
     end
 ```
 
-## Alpha Releases (ACR)
+## Alpha Releases
 
-On every push to `main`, the `release-alpha` workflow builds and pushes the alpha images to Azure Container Registry:
+On every push to `main`, the `release-alpha` workflow builds and pushes the alpha images to the private container registry:
 
 - `n8n-sandbox-service-api:alpha`
 - `n8n-sandbox-service-runner-dind:alpha`
@@ -60,9 +60,63 @@ Publishes the API and runner images to Docker Hub. Version tracked in `SERVICE_V
 4. Merge the PR. This triggers the `Service Publish` workflow, which:
    - Runs tests
    - Builds and pushes multi-arch images to Docker Hub
+   - Packages `firecracker-golden-build-{version}.tar.gz` and attaches it to the release
    - Creates a git tag (`service/v{version}`) and GitHub Release
    - Opens a post-release PR to sync `SERVICE_VERSION` back to `main`
 5. Merge the post-release PR.
+
+### Firecracker golden build asset
+
+Each service release (and staging prerelease) includes
+`firecracker-golden-build-{version}.tar.gz` on the GitHub Release. The tarball
+contains `create-golden-snapshot.sh`, `setup-firecracker-e2e-vm.sh`, and a
+`MANIFEST.json` with pinned versions.
+
+Package locally:
+
+```bash
+./scripts/package-firecracker-golden-build.sh --version "$(tr -d '[:space:]' < SERVICE_VERSION)"
+```
+
+#### Copy-on-release contract
+
+Deployments should consume golden-build scripts only from the release
+tarball for the exact service version they deploy — never a separate copy. This
+keeps a single source of truth so the snapshot scripts and the runner binary
+can't drift apart.
+
+Deploy sequence (per environment):
+
+1. Download and unpack `firecracker-golden-build-{version}.tar.gz`; read `MANIFEST.json`.
+2. Assert the golden build and the runner image you deploy came from the same
+   commit: compare `git_sha` in `MANIFEST.json` against the runner image's SHA
+   tag (every image is tagged with its full commit SHA).
+3. Rebuild the golden snapshot on every runner VM (`setup-firecracker-e2e-vm.sh`
+   or `create-golden-snapshot.sh` from the tarball).
+4. Roll the `runner-firecracker` image to `{version}` — after step 3, never before.
+5. Roll the API and dind images to `{version}`.
+6. Gate the rollout on `SMOKE_ENV={env} ./scripts/smoke-sandbox.sh`.
+
+## Staging candidates (pre-merge)
+
+Use **Actions → Publish Service Staging** on your feature branch before merging
+to `main`. The workflow:
+
+1. Optionally runs unit tests
+2. Builds and pushes API, runner-dind, and Firecracker runner images to the
+   private container registry tagged `{SERVICE_VERSION}-staging.{short_sha}`
+   (override with the `version` input)
+3. Creates a GitHub prerelease (`service/v{version}`) with the golden-build tarball
+
+After deploying those image tags to staging, run:
+
+```bash
+SMOKE_ENV=stage ./scripts/smoke-sandbox.sh
+```
+
+On Firecracker runner VMs, download the prerelease tarball and rebuild the
+golden snapshot before rolling out the new `runner-firecracker` image (see the
+copy-on-release contract above).
 
 ## Sandbox Release (Docker Hub)
 

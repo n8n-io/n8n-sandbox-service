@@ -1,4 +1,4 @@
-import { APIRequestContext } from '@playwright/test';
+import { APIRequestContext, expect } from '@playwright/test';
 import * as http from 'node:http';
 import * as https from 'node:https';
 import { SandboxClient, type ExecResult } from '@n8n/sandbox-client';
@@ -206,6 +206,46 @@ export async function apiRequest(
   };
 }
 
+/** Poll GET /sandboxes/{id} until status matches (GET does not bump last_active_at). */
+export async function waitForSandboxStatus(
+  request: APIRequestContext,
+  id: string,
+  status: string,
+  timeoutMs = 90_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const res = await apiRequest(request, 'GET', `/sandboxes/${id}`);
+    if (res.status === 200) {
+      const j = (await res.json()) as { status?: string };
+      if (j.status === status) return;
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  const last = await apiRequest(request, 'GET', `/sandboxes/${id}`);
+  if (last.status === 404) {
+    throw new Error(`sandbox ${id} was deleted before reaching status ${status}`);
+  }
+  const j = (await last.json()) as { status?: string };
+  expect(j.status).toBe(status);
+}
+
+/** Poll until sandbox row is gone (404). */
+export async function waitForSandbox404(
+  request: APIRequestContext,
+  id: string,
+  timeoutMs = 90_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const res = await apiRequest(request, 'GET', `/sandboxes/${id}`);
+    if (res.status === 404) return;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  const last = await apiRequest(request, 'GET', `/sandboxes/${id}`);
+  expect(last.status).toBe(404);
+}
+
 export function docker(args: string[]): string {
   return execFileSync('docker', args, {
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -225,6 +265,100 @@ export function dockerOutput(args: string[]): string {
     const stderr = e.stderr ? String(e.stderr) : '';
     return `${stdout}\n${stderr}`.trim();
   }
+}
+
+function e2eProjectDir(): string {
+  return process.env.E2E_PROJECT_DIR || `${process.cwd()}/..`;
+}
+
+export function stopSandboxViaRunner(sandboxId: string): void {
+  if (!process.env.E2E_RUNNER_CONTROL_GRPC_ADDR || !process.env.E2E_RUNNER_API_KEY) {
+    throw new Error('E2E_RUNNER_CONTROL_GRPC_ADDR and E2E_RUNNER_API_KEY must be set');
+  }
+  execFileSync('go', ['run', './cmd/e2e-runnerctl', 'stop', sandboxId], {
+    cwd: e2eProjectDir(),
+    stdio: ['pipe', 'pipe', 'pipe'],
+    encoding: 'utf8',
+    env: { ...process.env },
+  });
+}
+
+export function scrapeRunnerMetricsAt(addr: string): string {
+  const host = addr.replace(/^https?:\/\//, '');
+  return execFileSync('curl', ['-sf', `http://${host}/metrics`], { encoding: 'utf8' });
+}
+
+export function scrapeRunnerMetrics(): string {
+  if (process.env.E2E_RUNNER_HTTP_ADDR) {
+    return scrapeRunnerMetricsAt(process.env.E2E_RUNNER_HTTP_ADDR);
+  }
+  const runnerContainer = process.env.E2E_RUNNER_CONTAINER_NAME;
+  if (!runnerContainer) {
+    throw new Error('need E2E_RUNNER_HTTP_ADDR or E2E_RUNNER_CONTAINER_NAME for runner metrics');
+  }
+  return execFileSync(
+    'docker',
+    ['exec', runnerContainer, 'wget', '-q', '-O', '-', 'http://localhost:8080/metrics'],
+    { encoding: 'utf8' },
+  );
+}
+
+export async function waitRunnerHttpReady(addr: string, deadlineMs = 75_000): Promise<void> {
+  const url = `http://${addr.replace(/^https?:\/\//, '')}/readyz`;
+  const deadline = Date.now() + deadlineMs;
+  while (Date.now() < deadline) {
+    try {
+      execFileSync('curl', ['-sf', url], { stdio: 'pipe' });
+      return;
+    } catch {
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  }
+  throw new Error(`runner not ready at ${url} within ${deadlineMs}ms`);
+}
+
+export function restartRunnerForE2E(): void {
+  if (process.env.E2E_RUNNER_CONTAINER_NAME) {
+    execFileSync('docker', ['restart', process.env.E2E_RUNNER_CONTAINER_NAME], { stdio: 'inherit' });
+    return;
+  }
+  const envFile = process.env.E2E_FIRECRACKER_RUNNER_ENV_FILE;
+  if (!envFile) {
+    throw new Error('need E2E_RUNNER_CONTAINER_NAME or E2E_FIRECRACKER_RUNNER_ENV_FILE to restart runner');
+  }
+  const projectDir = e2eProjectDir();
+  execFileSync('bash', [`${projectDir}/e2e/lib/restart-firecracker-runner.sh`], {
+    stdio: 'inherit',
+    env: { ...process.env, E2E_FIRECRACKER_RUNNER_ENV_FILE: envFile },
+  });
+}
+
+export function stopFirecrackerRunnerPid(pid: string, remote?: { ssh: string; sshOpts?: string }): void {
+  if (remote?.ssh) {
+    const sshArgs = remote.sshOpts ? remote.sshOpts.split(/\s+/).filter(Boolean) : [];
+    execFileSync('ssh', [...sshArgs, remote.ssh, 'sudo', 'kill', '-TERM', pid], { stdio: 'pipe' });
+    return;
+  }
+  execFileSync('sudo', ['kill', '-TERM', pid], { stdio: 'pipe' });
+}
+
+export function restartFirecrackerRunnerFromEnvFile(
+  envFile: string,
+  remote?: { ssh: string; sshOpts?: string },
+): void {
+  const projectDir = e2eProjectDir();
+  if (remote?.ssh) {
+    const sshArgs = remote.sshOpts ? remote.sshOpts.split(/\s+/).filter(Boolean) : [];
+    execFileSync('ssh', [...sshArgs, remote.ssh, 'bash', `${projectDir}/e2e/lib/restart-firecracker-runner.sh`], {
+      stdio: 'inherit',
+      env: { ...process.env, E2E_FIRECRACKER_RUNNER_ENV_FILE: envFile },
+    });
+    return;
+  }
+  execFileSync('bash', [`${projectDir}/e2e/lib/restart-firecracker-runner.sh`], {
+    stdio: 'inherit',
+    env: { ...process.env, E2E_FIRECRACKER_RUNNER_ENV_FILE: envFile },
+  });
 }
 
 export function innerContainerName(sandboxID: string): string {

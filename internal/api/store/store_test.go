@@ -74,15 +74,12 @@ func TestListForIdleReapDeleteAndStop(t *testing.T) {
 	for _, r := range delRows {
 		ids = append(ids, r.ID)
 	}
-	// Old last_active_at: running + stopped rows (not the recent one).
-	if len(ids) != 2 {
-		t.Fatalf("delete candidates: got %d rows %v want 2 (a-run-old, b-stop-old)", len(ids), ids)
+	// Old last_active_at: stopped row only (running rows are stop candidates).
+	if len(ids) != 1 {
+		t.Fatalf("delete candidates: got %d rows %v want 1 (b-stop-old)", len(ids), ids)
 	}
-	wantDel := map[string]bool{"a-run-old": true, "b-stop-old": true}
-	for _, id := range ids {
-		if !wantDel[id] {
-			t.Fatalf("unexpected delete id %q", id)
-		}
+	if ids[0] != "b-stop-old" {
+		t.Fatalf("unexpected delete id %q", ids[0])
 	}
 
 	stopRows, err := s.ListForIdleReapStop(cutoff)

@@ -122,6 +122,7 @@ func connectOnce(ctx context.Context, cfg *config.Config, rt runnerruntime.Runti
 			Healthy:         healthy,
 			CapacityTotal:   capacity.Total,
 			CapacityUsed:    capacity.Used,
+			CapacityStopped: capacity.Stopped,
 			ControlGrpcAddr: cfg.ResolvedControlGRPCAdvertiseAddr(),
 		}
 		return stream.Send(hb)

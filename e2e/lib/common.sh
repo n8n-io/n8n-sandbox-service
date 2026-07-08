@@ -107,3 +107,191 @@ e2e_install_playwright_deps_if_needed() {
 		pnpm install --frozen-lockfile
 	fi
 }
+
+# Adds /etc/hosts entries for cross-VM Firecracker mTLS DNS names.
+e2e_install_firecracker_hosts() {
+	local control_private_ip=$1 peer_private_ip=$2
+	local block="# n8n-sandbox-firecracker-e2e
+${control_private_ip} sandbox-api-e2e-mtls runner-control-a
+${peer_private_ip} runner-control-b"
+	if grep -q 'n8n-sandbox-firecracker-e2e' /etc/hosts 2>/dev/null; then
+		sudo sed -i '/# n8n-sandbox-firecracker-e2e/,+2d' /etc/hosts
+	fi
+	printf '%s\n' "$block" | sudo tee -a /etc/hosts >/dev/null
+}
+
+e2e_shell_quote() {
+	printf '%q' "$1"
+}
+
+# Optional FIRECRACKER_* overrides forwarded to setup-firecracker-e2e-vm.sh.
+e2e_firecracker_setup_remote_env() {
+	local remote_env=""
+	if [[ -n "${FIRECRACKER_VERSION:-}" ]]; then
+		remote_env+=" FIRECRACKER_VERSION=$(e2e_shell_quote "$FIRECRACKER_VERSION")"
+	fi
+	if [[ -n "${FIRECRACKER_TARBALL_SHA256:-}" ]]; then
+		remote_env+=" FIRECRACKER_TARBALL_SHA256=$(e2e_shell_quote "$FIRECRACKER_TARBALL_SHA256")"
+	fi
+	if [[ -n "${FIRECRACKER_CI_VERSION:-}" ]]; then
+		remote_env+=" FIRECRACKER_CI_VERSION=$(e2e_shell_quote "$FIRECRACKER_CI_VERSION")"
+	fi
+	if [[ -n "${FIRECRACKER_E2E_ROOTFS_SIZE_MB:-}" ]]; then
+		remote_env+=" FIRECRACKER_E2E_ROOTFS_SIZE_MB=$(e2e_shell_quote "$FIRECRACKER_E2E_ROOTFS_SIZE_MB")"
+	fi
+	printf '%s' "$remote_env"
+}
+
+e2e_pack_repo_tarball() {
+	local dest=$1 project_dir=$2
+	local GNUTAR
+	GNUTAR=$(command -v gtar || command -v tar)
+	COPYFILE_DISABLE=1 "$GNUTAR" czf "$dest" \
+		--no-xattrs \
+		--exclude=.git \
+		--exclude='.DS_Store' \
+		--exclude='._*' \
+		--exclude=bin \
+		--exclude=dist \
+		--exclude=node_modules \
+		--exclude='e2e/infra/.terraform' \
+		--exclude='e2e/infra/*.tfstate*' \
+		-C "$project_dir" .
+}
+
+# Builds an SSH ProxyCommand that reaches a jump host with an explicit identity.
+# ProxyJump ignores the command-line -i identity for the jump hop, so we spell
+# the jump connection out here to force it to use the ephemeral e2e key.
+e2e_ssh_proxy_command() {
+	local ssh_key=$1 admin=$2 jump_host=$3
+	printf 'ssh -i "%s" -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=6 -W %%h:%%p %s@%s' \
+		"$ssh_key" "$admin" "$jump_host"
+}
+
+# SSH to a Firecracker e2e host. Pass jump_host to reach a peer over private IP.
+e2e_ssh_firecracker_host() {
+	local ssh_key=$1 admin=$2 host=$3 jump_host=$4
+	shift 4
+	local -a opts=(-o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=6 -i "$ssh_key")
+	if [[ -n "$jump_host" ]]; then
+		opts+=(-o "ProxyCommand=$(e2e_ssh_proxy_command "$ssh_key" "$admin" "$jump_host")")
+	fi
+	ssh "${opts[@]}" "${admin}@${host}" "$@"
+}
+
+e2e_scp_to_firecracker_host() {
+	local ssh_key=$1 admin=$2 local_path=$3 remote_path=$4 host=$5 jump_host=$6
+	local -a opts=(-o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=6 -i "$ssh_key")
+	if [[ -n "$jump_host" ]]; then
+		opts+=(-o "ProxyCommand=$(e2e_ssh_proxy_command "$ssh_key" "$admin" "$jump_host")")
+	fi
+	scp "${opts[@]}" "$local_path" "${admin}@${host}:${remote_path}"
+}
+
+e2e_scp_dir_to_firecracker_host() {
+	local ssh_key=$1 admin=$2 local_path=$3 remote_path=$4 host=$5 jump_host=$6
+	local -a opts=(-o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=6 -r -i "$ssh_key")
+	if [[ -n "$jump_host" ]]; then
+		opts+=(-o "ProxyCommand=$(e2e_ssh_proxy_command "$ssh_key" "$admin" "$jump_host")")
+	fi
+	scp "${opts[@]}" "$local_path" "${admin}@${host}:${remote_path}"
+}
+
+# Wait for SSH, transfer the repo, and run setup-firecracker-e2e-vm.sh on one host.
+e2e_setup_firecracker_host() {
+	local label=$1 ssh_key=$2 admin=$3 ssh_host=$4 jump_host=$5 repo_tgz=$6 remote_env=$7
+
+	echo "==> [${label}] Waiting for SSH on ${ssh_host}..."
+	local i
+	for i in $(seq 1 60); do
+		if e2e_ssh_firecracker_host "$ssh_key" "$admin" "$ssh_host" "$jump_host" echo ready 2>/dev/null; then
+			echo "==> [${label}] SSH is available."
+			break
+		fi
+		if [[ "$i" -eq 60 ]]; then
+			echo "==> [${label}] SSH failed after 3 minutes. Last attempt:" >&2
+			e2e_ssh_firecracker_host "$ssh_key" "$admin" "$ssh_host" "$jump_host" echo ready || true
+			return 1
+		fi
+		echo "==> [${label}] Waiting for SSH... ($i/60)"
+		sleep 3
+	done
+
+	echo "==> [${label}] Transferring code..."
+	e2e_scp_to_firecracker_host "$ssh_key" "$admin" "$repo_tgz" "/tmp/repo.tar.gz" "$ssh_host" "$jump_host"
+	e2e_ssh_firecracker_host "$ssh_key" "$admin" "$ssh_host" "$jump_host" \
+		"mkdir -p ~/project && tar xzf /tmp/repo.tar.gz -C ~/project && rm /tmp/repo.tar.gz"
+
+	echo "==> [${label}] Running Firecracker VM setup..."
+	# shellcheck disable=SC2086
+	e2e_ssh_firecracker_host "$ssh_key" "$admin" "$ssh_host" "$jump_host" \
+		"${remote_env} bash ~/project/e2e/infra/scripts/setup-firecracker-e2e-vm.sh"
+}
+
+# SSH to the peer VM over its private IP via the control VM jump host.
+e2e_ssh_peer() {
+	local control_ip=$1 peer_private_ip=$2 ssh_key=$3 admin=$4
+	shift 4
+	e2e_ssh_firecracker_host "$ssh_key" "$admin" "$peer_private_ip" "$control_ip" "$@"
+}
+
+# SCP a local file to the peer VM via the control VM jump host.
+e2e_scp_to_peer() {
+	local control_ip=$1 peer_private_ip=$2 ssh_key=$3 admin=$4 local_path=$5 remote_path=$6
+	e2e_scp_to_firecracker_host "$ssh_key" "$admin" "$local_path" "$remote_path" "$peer_private_ip" "$control_ip"
+}
+
+# SCP a directory tree to the peer VM via the control VM jump host.
+e2e_scp_dir_to_peer() {
+	local control_ip=$1 peer_private_ip=$2 ssh_key=$3 admin=$4 local_path=$5 remote_path=$6
+	e2e_scp_dir_to_firecracker_host "$ssh_key" "$admin" "$local_path" "$remote_path" "$peer_private_ip" "$control_ip"
+}
+
+# Returns the TCP port from a host:port listen address.
+e2e_addr_port() {
+	local addr=$1
+	echo "${addr##*:}"
+}
+
+# Best-effort release of listeners left from a prior e2e stack on the same VM.
+e2e_kill_tcp_listeners() {
+	local port
+	for port in "$@"; do
+		[[ -n "$port" ]] || continue
+		sudo fuser -k "${port}/tcp" >/dev/null 2>&1 || true
+	done
+}
+
+# Stops a root-owned background process started via sudo (runner-firecracker).
+e2e_stop_supervised_pid() {
+	local pid=$1
+	[[ -n "$pid" ]] || return 0
+	sudo kill -TERM "$pid" >/dev/null 2>&1 || true
+	local i
+	for i in $(seq 1 30); do
+		if ! sudo kill -0 "$pid" >/dev/null 2>&1; then
+			wait "$pid" >/dev/null 2>&1 || true
+			return 0
+		fi
+		sleep 0.2
+	done
+	sudo kill -KILL "$pid" >/dev/null 2>&1 || true
+	wait "$pid" >/dev/null 2>&1 || true
+}
+
+# Stops a process owned by the current user (API host process).
+e2e_stop_pid() {
+	local pid=$1
+	[[ -n "$pid" ]] || return 0
+	kill -TERM "$pid" >/dev/null 2>&1 || true
+	local i
+	for i in $(seq 1 30); do
+		if ! kill -0 "$pid" >/dev/null 2>&1; then
+			wait "$pid" >/dev/null 2>&1 || true
+			return 0
+		fi
+		sleep 0.2
+	done
+	kill -KILL "$pid" >/dev/null 2>&1 || true
+	wait "$pid" >/dev/null 2>&1 || true
+}

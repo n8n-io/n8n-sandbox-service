@@ -59,10 +59,19 @@ Stop all services:
 make down
 ```
 
-Quick smoke test (creates a sandbox, runs `echo hello world`, prints JSON):
+Quick smoke test (create, exec, DNS, HTTPS, file write/read, delete):
 
 ```bash
 make smoke
+```
+
+Deployed environments (copy `scripts/smoke-sandbox.env.example` to
+`scripts/smoke-sandbox.<env>.env` or `scripts/smoke-dev-sandbox.env`):
+
+```bash
+SMOKE_ENV=dev sh scripts/smoke-sandbox.sh
+SMOKE_ENV=stage sh scripts/smoke-sandbox.sh
+# or: sh scripts/smoke-dev-sandbox.sh
 ```
 
 ## Tests

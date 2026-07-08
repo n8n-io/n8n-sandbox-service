@@ -1,6 +1,18 @@
 // Small Prometheus text-format helpers for e2e metrics assertions. Shared by
 // the API and runner metrics specs so the parsing lives in one place.
 
+// parseGauge returns the value of a gauge sample with the given metric name.
+export function parseGauge(body: string, name: string): number {
+  for (const raw of body.split('\n')) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    if (!line.startsWith(name)) continue;
+    const value = Number(line.split(/\s+/).pop());
+    if (Number.isFinite(value)) return value;
+  }
+  return 0;
+}
+
 // parseCounter returns the value of a single counter sample matching every
 // label in `labels`. Returns 0 if no series matches — the metric family may
 // not have been observed yet (Prometheus only emits a family once at least

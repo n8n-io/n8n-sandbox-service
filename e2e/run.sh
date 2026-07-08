@@ -22,7 +22,7 @@ PORT="${PORT:-8080}"
 API_KEY="test"
 RUNNER_INTERNAL_API_KEY="runner-test"
 REG_TOKEN="${SANDBOX_API_RUNNER_REGISTRATION_TOKEN:-e2e-reg-token}"
-DOCKER_RUNNER_TAG="@docker-runner"
+FIRECRACKER_ONLY_TAG="@firecracker-only"
 STARTED_REGISTRY=false
 TLS_DIR="${E2E_TLS_DIR:-$(mktemp -d)}"
 TLS_DIR_OWNED=0
@@ -144,11 +144,14 @@ docker run "${API_DOCKER_RUN[@]}"
 
 e2e_wait_for_api_http "$PORT" "$API_CONTAINER_NAME"
 
+RUNNER_CONTROL_HOST_PORT="${RUNNER_CONTROL_HOST_PORT:-19091}"
+
 echo "Starting runner service..."
 docker run -d \
 	"${RUNTIME_ARGS[@]}" \
 	--network "$NETWORK_NAME" \
 	--network-alias "$RUNNER_CONTROL_ALIAS" \
+	-p "${RUNNER_CONTROL_HOST_PORT}:9091" \
 	-v "$TLS_DIR/runner:/grpc-tls:ro" \
 	-e "SANDBOX_RUNNER_API_KEYS=$RUNNER_INTERNAL_API_KEY" \
 	-e "SANDBOX_RUNNER_METRICS_ENABLED=true" \
@@ -193,6 +196,13 @@ e2e_install_playwright_deps_if_needed "$SCRIPT_DIR"
 
 export E2E_API_CONTAINER_NAME="$API_CONTAINER_NAME"
 export E2E_RUNNER_CONTAINER_NAME="$RUNNER_CONTAINER_NAME"
+export E2E_PROJECT_DIR="$PROJECT_DIR"
+export E2E_RUNNER_API_KEY="$RUNNER_INTERNAL_API_KEY"
+export E2E_RUNNER_CONTROL_GRPC_ADDR="127.0.0.1:${RUNNER_CONTROL_HOST_PORT}"
+export E2E_RUNNER_CONTROL_TLS_CA="$TLS_DIR/api/ca.crt"
+export E2E_RUNNER_CONTROL_TLS_CERT="$TLS_DIR/api/control-grpc-api-client.crt"
+export E2E_RUNNER_CONTROL_TLS_KEY="$TLS_DIR/api/control-grpc-api-client.key"
+export E2E_RUNNER_CONTROL_TLS_SERVER_NAME="$RUNNER_CONTROL_ALIAS"
 
 echo "Running e2e tests (excluding topology-only + resilience; API restart runs last)..."
 MAIN_SPECS=()
@@ -215,7 +225,7 @@ if [[ ${#MAIN_SPECS[@]} -eq 0 ]]; then
 	exit 1
 fi
 BASE_URL="http://localhost:$PORT" SANDBOX_API_KEY="$API_KEY" \
-	npx playwright test "${MAIN_SPECS[@]}" --grep "$DOCKER_RUNNER_TAG" "$@"
+	npx playwright test "${MAIN_SPECS[@]}" --grep-invert "$FIRECRACKER_ONLY_TAG" "$@"
 
 if [[ "${E2E_IDLE_TTL_SUITE:-}" != "1" ]]; then
 	echo "Running API resilience e2e..."

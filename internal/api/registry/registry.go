@@ -18,6 +18,7 @@ type Runner struct {
 	Healthy         bool
 	CapacityTotal   int32
 	CapacityUsed    int32
+	CapacityStopped int32
 	LastSeen        time.Time
 }
 
@@ -43,7 +44,7 @@ func New(heartbeatGrace time.Duration) *Registry {
 
 // Upsert updates or inserts a runner from a heartbeat. The caller must reject invalid
 // httpBaseURL before calling (e.g. gRPC registration validates with IsValidRunnerHTTPBaseURL).
-func (r *Registry) Upsert(id, httpBaseURL, controlGRPCAddr string, healthy bool, capTotal, capUsed int32) {
+func (r *Registry) Upsert(id, httpBaseURL, controlGRPCAddr string, healthy bool, capTotal, capUsed, capStopped int32) {
 	if id == "" || httpBaseURL == "" {
 		return
 	}
@@ -64,6 +65,7 @@ func (r *Registry) Upsert(id, httpBaseURL, controlGRPCAddr string, healthy bool,
 		Healthy:         healthy,
 		CapacityTotal:   capTotal,
 		CapacityUsed:    capUsed,
+		CapacityStopped: capStopped,
 		LastSeen:        time.Now(),
 	}
 }

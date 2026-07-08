@@ -11,11 +11,9 @@ import {
   apiRequest,
 } from './helpers';
 import { SandboxServiceError } from '@n8n/sandbox-client';
-import { BOTH_RUNNERS } from './tags';
-
 const API_KEY = process.env.SANDBOX_API_KEY || 'test';
 
-test.describe('Auth', BOTH_RUNNERS, () => {
+test.describe('Auth', () => {
   test('rejects missing API key', async ({ request }) => {
     const resp = await request.post('/sandboxes', {
       headers: { 'Content-Type': 'application/json' },
@@ -33,7 +31,7 @@ test.describe('Auth', BOTH_RUNNERS, () => {
   });
 });
 
-test.describe('Sandbox lifecycle', BOTH_RUNNERS, () => {
+test.describe('Sandbox lifecycle', () => {
   test('create, exec, delete', async ({ request }) => {
     const id = await createSandbox();
     expect(id).toBeTruthy();
@@ -68,7 +66,7 @@ test.describe('Sandbox lifecycle', BOTH_RUNNERS, () => {
   });
 });
 
-test.describe('Exec', BOTH_RUNNERS, () => {
+test.describe('Exec', () => {
   let sandboxId: string;
 
   test.beforeEach(async () => {
@@ -214,7 +212,7 @@ test.describe('Exec', BOTH_RUNNERS, () => {
   });
 });
 
-test.describe('File operations', BOTH_RUNNERS, () => {
+test.describe('File operations', () => {
   let sandboxId: string;
 
   test.beforeEach(async () => {
@@ -701,7 +699,7 @@ test.describe('File operations', BOTH_RUNNERS, () => {
   });
 });
 
-test.describe('Sandbox isolation', BOTH_RUNNERS, () => {
+test.describe('Sandbox isolation', () => {
   test('files are isolated between sandboxes', async ({ request }) => {
     const id1 = await createSandbox();
     const id2 = await createSandbox();
@@ -716,9 +714,28 @@ test.describe('Sandbox isolation', BOTH_RUNNERS, () => {
       await deleteSandbox(id2);
     }
   });
+
+  test('concurrent writes to the same path do not leak across sandboxes', async () => {
+    const id1 = await createSandbox();
+    const id2 = await createSandbox();
+    const sharedPath = '/tmp/shared-isolation.txt';
+
+    try {
+      await Promise.all([
+        uploadFile(id1, 'tmp/shared-isolation.txt', 'sandbox-one'),
+        uploadFile(id2, 'tmp/shared-isolation.txt', 'sandbox-two'),
+      ]);
+
+      expect(await downloadFile(id1, sharedPath)).toBe('sandbox-one');
+      expect(await downloadFile(id2, sharedPath)).toBe('sandbox-two');
+    } finally {
+      await deleteSandbox(id1);
+      await deleteSandbox(id2);
+    }
+  });
 });
 
-test.describe('Deleted Sandbox 404 Tests', BOTH_RUNNERS, () => {
+test.describe('Deleted Sandbox 404 Tests', () => {
   test('file operations on deleted sandbox return 404', async ({ request }) => {
     const tempId = await createSandbox();
     await deleteSandbox(tempId);
@@ -742,7 +759,7 @@ test.describe('Deleted Sandbox 404 Tests', BOTH_RUNNERS, () => {
   });
 });
 
-test.describe('Healthz', BOTH_RUNNERS, () => {
+test.describe('Healthz', () => {
   test('returns ok without auth', async ({ request }) => {
     const resp = await request.get('/healthz');
     expect(resp.status()).toBe(200);

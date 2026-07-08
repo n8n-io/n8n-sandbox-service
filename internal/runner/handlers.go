@@ -30,7 +30,7 @@ func GetSandbox(rt runnerruntime.Runtime) http.HandlerFunc {
 
 		if _, err := rt.GetSandboxInfo(r.Context(), sandboxID); err != nil {
 			if errors.Is(err, runnerruntime.ErrSandboxNotFound) {
-				writeError(w, http.StatusNotFound, err.Error())
+				writeSandboxNotFound(w)
 			} else {
 				writeError(w, http.StatusInternalServerError, err.Error())
 			}

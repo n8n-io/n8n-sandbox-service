@@ -161,13 +161,15 @@ func (s *Store) Delete(id string) error {
 	return nil
 }
 
-// ListForIdleReapDelete returns sandboxes whose last_active_at is at or before
-// cutoff (Unix seconds).
+// ListForIdleReapDelete returns stopped sandboxes whose last_active_at is at or
+// before cutoff (Unix seconds). Running sandboxes are stopped first by the
+// idle sweeper before they become delete candidates.
 func (s *Store) ListForIdleReapDelete(cutoff int64) ([]*SandboxRecord, error) {
 	const q = `
 		SELECT id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr
 		FROM sandboxes
-		WHERE last_active_at <= ?`
+		WHERE status = 'stopped'
+		  AND last_active_at <= ?`
 	return s.querySandboxRecords(q, cutoff)
 }
 

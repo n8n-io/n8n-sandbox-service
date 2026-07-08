@@ -16,6 +16,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/runnerctl"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
+	"github.com/n8n-io/sandbox-service/internal/sandboxproxy"
 )
 
 func runnerProxyForPick(w http.ResponseWriter, r *http.Request, limitBody bool, cfg *config.APIConfig, pick func() (*registry.Runner, error)) bool {
@@ -29,7 +30,7 @@ func runnerProxyForPick(w http.ResponseWriter, r *http.Request, limitBody bool, 
 		return false
 	}
 	u, _ := url.Parse(strings.TrimRight(run.HTTPBaseURL, "/"))
-	proxy := newRunnerReverseProxy(u, cfg.RunnerAPIKey)
+	proxy := newRunnerReverseProxy(u, cfg.RunnerAPIKey, nil)
 	if limitBody {
 		r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxFileBytes)
 	}
@@ -70,7 +71,9 @@ func sandboxProxyHandler(s *store.Store, cfg *config.APIConfig) func(bool) http.
 			_ = s.UpdateStatus(id, "running")
 
 			u, _ := url.Parse(strings.TrimRight(rec.RunnerHTTPBase, "/"))
-			proxy := newRunnerReverseProxy(u, cfg.RunnerAPIKey)
+			proxy := newRunnerReverseProxy(u, cfg.RunnerAPIKey, func(resp *http.Response) {
+				reapSandboxIfRunnerGone(s, id, resp)
+			})
 			if limitBody {
 				r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxFileBytes)
 			}
@@ -128,14 +131,11 @@ func handleGetSandbox(s *store.Store, cfg *config.APIConfig) http.HandlerFunc {
 			writeError(w, http.StatusNotFound, "sandbox not found")
 			return
 		}
-		if err := s.UpdateLastActive(id); err != nil {
-			// non-fatal
-		}
 		resp := &SandboxResponse{
 			ID:           rec.ID,
 			Status:       rec.Status,
 			CreatedAt:    rec.CreatedAt,
-			LastActiveAt: time.Now().Unix(),
+			LastActiveAt: rec.LastActiveAt,
 		}
 		writeJSON(w, http.StatusOK, resp)
 	}
@@ -191,6 +191,7 @@ func handleCreateSandbox(s *store.Store, reg *registry.Registry, cfg *config.API
 			"runner_healthy", run.Healthy,
 			"runner_capacity_total", run.CapacityTotal,
 			"runner_capacity_used", run.CapacityUsed,
+			"runner_capacity_stopped", run.CapacityStopped,
 		)
 		gresp, err := runnerctl.CreateSandbox(r.Context(), controlAddr, cfg.RunnerAPIKey, tlsCfg, sandboxID, "{}")
 		if err != nil {
@@ -296,7 +297,7 @@ func isValidUUID(id string) bool {
 	return id != "" && uuidRegex.MatchString(id)
 }
 
-func newRunnerReverseProxy(runnerURL *url.URL, runnerAPIKey string) *httputil.ReverseProxy {
+func newRunnerReverseProxy(runnerURL *url.URL, runnerAPIKey string, onResponse func(*http.Response)) *httputil.ReverseProxy {
 	target := *runnerURL
 	return &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
@@ -309,6 +310,12 @@ func newRunnerReverseProxy(runnerURL *url.URL, runnerAPIKey string) *httputil.Re
 			} else {
 				pr.Out.Header.Del("X-Api-Key")
 			}
+		},
+		ModifyResponse: func(resp *http.Response) error {
+			if onResponse != nil {
+				onResponse(resp)
+			}
+			return nil
 		},
 		FlushInterval: -1,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
@@ -324,4 +331,15 @@ func newRunnerReverseProxy(runnerURL *url.URL, runnerAPIKey string) *httputil.Re
 			writeError(w, http.StatusServiceUnavailable, "runner unavailable")
 		},
 	}
+}
+
+func reapSandboxIfRunnerGone(s *store.Store, sandboxID string, resp *http.Response) {
+	if !sandboxproxy.RunnerReportsSandboxGone(resp) {
+		return
+	}
+	if err := s.Delete(sandboxID); err != nil {
+		slog.Error("remove sandbox after runner not-found", "sandbox_id", sandboxID, "err", err)
+		return
+	}
+	slog.Info("removed sandbox record after runner not-found", "sandbox_id", sandboxID)
 }

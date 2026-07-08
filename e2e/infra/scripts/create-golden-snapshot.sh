@@ -170,7 +170,7 @@ mount --bind "$ROOTFS" "${JAIL_ROOT}/rootfs.ext4"
 mount --bind "$SNAPSHOT_MEM" "${JAIL_ROOT}/snapshot_mem"
 mount --bind "$SNAPSHOT_STATE" "${JAIL_ROOT}/snapshot_state"
 
-boot_args="console=ttyS0 reboot=k panic=1 pci=off init=/sandbox-daemon ip=${GUEST_IP}::${HOST_TAP_IP}:255.255.255.0::eth0:off"
+boot_args="console=ttyS0 reboot=k panic=1 pci=off ipv6.disable=1 init=/sandbox-daemon ip=${GUEST_IP}::${HOST_TAP_IP}:255.255.255.0::eth0:off"
 
 echo "==> Configuring and booting Firecracker snapshot VM..."
 api_put "/machine-config" "{\"vcpu_count\":${VCPUS},\"mem_size_mib\":${MEM_MIB},\"smt\":false}"

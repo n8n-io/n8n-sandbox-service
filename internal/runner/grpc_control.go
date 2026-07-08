@@ -90,12 +90,16 @@ func (s *SandboxControlGRPC) StopSandbox(ctx context.Context, req *pb.StopSandbo
 	if !isValidID(sandboxID) {
 		return nil, status.Error(codes.InvalidArgument, "invalid sandbox id")
 	}
+	start := time.Now()
 	if err := s.Runtime.StopSandbox(ctx, sandboxID); err != nil {
 		if errors.Is(err, runnerruntime.ErrSandboxNotFound) {
+			s.Rec.ObserveContainerOp(metrics.OpStop, true, time.Since(start))
 			return &pb.StopSandboxResponse{}, nil
 		}
+		s.Rec.ObserveContainerOp(metrics.OpStop, false, time.Since(start))
 		return nil, toGRPCError(err)
 	}
+	s.Rec.ObserveContainerOp(metrics.OpStop, true, time.Since(start))
 	return &pb.StopSandboxResponse{}, nil
 }
 

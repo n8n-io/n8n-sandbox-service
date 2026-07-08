@@ -22,6 +22,8 @@ message RunnerHeartbeat {
   int32 capacity_total = 4;
   int32 capacity_used = 5;
   string control_grpc_addr = 6;
+  // Managed sandboxes that are stopped and not occupying a concurrent-VM slot.
+  int32 capacity_stopped = 7;
 }
 
 message ControlMessage {

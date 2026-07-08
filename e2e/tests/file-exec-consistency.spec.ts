@@ -9,15 +9,13 @@ import {
   downloadFile,
   apiRequest,
 } from './helpers';
-import { BOTH_RUNNERS } from './tags';
-
 /**
  * E2E tests verifying that the file API and exec API operate on the same
  * filesystem — files created through one are visible through the other.
  */
 test.describe.configure({ mode: 'serial' });
 
-test.describe('File API and Exec API path consistency', BOTH_RUNNERS, () => {
+test.describe('File API and Exec API path consistency', () => {
   let sandboxId: string;
 
   test.beforeAll(async () => {

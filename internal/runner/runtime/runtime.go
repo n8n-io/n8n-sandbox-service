@@ -25,10 +25,12 @@ type SandboxInfo struct {
 	IP   string `json:"ip"`
 }
 
-// Capacity reports the current sandbox usage and total schedulable slots.
+// Capacity reports concurrent slot usage and optionally how many managed
+// sandboxes are stopped (not slot-blocking).
 type Capacity struct {
-	Used  int32
-	Total int32
+	Used    int32 // slot-blocking sandboxes (running microVMs / active containers)
+	Total   int32
+	Stopped int32 // managed but not slot-blocking (Firecracker stopped snapshots)
 }
 
 // Runtime is the sandbox backend contract used by the shared runner process.

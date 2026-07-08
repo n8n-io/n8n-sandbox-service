@@ -6,6 +6,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -41,7 +43,32 @@ type recordedCommand struct {
 func testRunnerConfig(capacity int32) *config.Config {
 	return &config.Config{
 		CapacityTotal: capacity,
+		DataDir:       "/var/sandboxes",
 	}
+}
+
+func stubCreateDeps(rt *Runtime) {
+	rt.deps.run = func(context.Context, string, ...string) error { return nil }
+	rt.deps.start = func(context.Context, string, ...string) (process, error) { return &fakeProcess{}, nil }
+	rt.deps.pathExists = func(string) bool { return true }
+	rt.deps.cloneRootfs = func(context.Context, string, string) error { return nil }
+	rt.deps.cloneGoldenSnapshot = func(_ context.Context, _, _, dataDir string) error {
+		if err := os.MkdirAll(dataDir, 0o755); err != nil {
+			return err
+		}
+		for _, name := range []string{"snapshot_mem", "snapshot_state"} {
+			if err := os.WriteFile(filepath.Join(dataDir, name), []byte{0}, 0o644); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	rt.deps.pauseVM = func(context.Context, string) error { return nil }
+	rt.deps.createSnapshot = func(context.Context, string) error { return nil }
+	rt.deps.loadSnapshot = func(context.Context, string, Config) error { return nil }
+	rt.deps.newProxy = func(context.Context, string, string, string) (daemonProxy, error) { return &fakeProxy{}, nil }
+	rt.deps.probeDaemon = func(context.Context, string) error { return nil }
+	rt.deps.freeBytesInDir = freeBytesInDir
 }
 
 func testConfig() Config {
@@ -66,7 +93,28 @@ func testConfig() Config {
 }
 
 func testRuntime(capacity int32) *Runtime {
-	return New(testRunnerConfig(capacity), testConfig())
+	return newTestRuntime(capacity)
+}
+
+func testRuntimeT(t *testing.T, capacity int32) *Runtime {
+	t.Helper()
+	rt := newTestRuntime(capacity)
+	rt.runnerConfig.DataDir = t.TempDir()
+	return rt
+}
+
+// newTestRuntime constructs a runtime without startup reconcile (unit tests only).
+func newTestRuntime(capacity int32) *Runtime {
+	rt := &Runtime{
+		runnerConfig: testRunnerConfig(capacity),
+		config:       testConfig(),
+		deps:         defaultDependencies(testConfig()),
+		slots:        make([]slotState, capacity),
+		sandboxes:    make(map[string]*sandboxState),
+		readyCh:      make(chan struct{}),
+	}
+	close(rt.readyCh)
+	return rt
 }
 
 func TestRuntimeReadyChecksFirecrackerAssets(t *testing.T) {
@@ -90,6 +138,8 @@ func TestRuntimeCreateSandboxStartsFirecrackerAndProxy(t *testing.T) {
 	var proxyListenAddr string
 	var proxyNetNS string
 	var proxyGuestAddr string
+	var clonedTemplate string
+	var clonedDest string
 	rt.deps.run = func(_ context.Context, name string, args ...string) error {
 		commands = append(commands, recordedCommand{name: name, args: args})
 		return nil
@@ -99,6 +149,12 @@ func TestRuntimeCreateSandboxStartsFirecrackerAndProxy(t *testing.T) {
 		return proc, nil
 	}
 	rt.deps.pathExists = func(string) bool { return true }
+	rt.deps.cloneRootfs = func(_ context.Context, templatePath, destPath string) error {
+		clonedTemplate = templatePath
+		clonedDest = destPath
+		return nil
+	}
+	rt.deps.cloneGoldenSnapshot = func(context.Context, string, string, string) error { return nil }
 	rt.deps.loadSnapshot = func(_ context.Context, socketPath string, _ Config) error {
 		loadedSocket = socketPath
 		return nil
@@ -123,8 +179,34 @@ func TestRuntimeCreateSandboxStartsFirecrackerAndProxy(t *testing.T) {
 	if info.ID != "sandbox-id-123456" || info.IP != "172.16.0.10" {
 		t.Fatalf("CreateSandbox() info = %+v", info)
 	}
-	if len(commands) != 2 {
-		t.Fatalf("run commands = %d, want prepare and network setup", len(commands))
+	if clonedTemplate != "/srv/firecracker/template/rootfs.ext4" {
+		t.Fatalf("cloned template = %s", clonedTemplate)
+	}
+	if clonedDest != "/var/sandboxes/sandbox-id-123456/rootfs.ext4" {
+		t.Fatalf("cloned dest = %s", clonedDest)
+	}
+	if len(commands) != 3 {
+		t.Fatalf("run commands = %d, want prepare jail, host NAT, and network setup", len(commands))
+	}
+	prepareScript := commands[0].args[len(commands[0].args)-1]
+	networkScript := commands[2].args[len(commands[2].args)-1]
+	if !strings.Contains(prepareScript, "/var/sandboxes/sandbox-id-123456/rootfs.ext4") {
+		t.Fatalf("prepare jail script = %q, want per-sandbox rootfs bind mount", prepareScript)
+	}
+	if !strings.Contains(prepareScript, "/var/sandboxes/sandbox-id-123456/snapshot_mem") {
+		t.Fatalf("prepare jail script = %q, want per-sandbox snapshot mem bind mount", prepareScript)
+	}
+	if !strings.Contains(prepareScript, "chown 1000:1000") || !strings.Contains(prepareScript, "snapshot_mem") {
+		t.Fatalf("prepare jail script = %q, want snapshot files chowned for jailer uid", prepareScript)
+	}
+	if !strings.Contains(networkScript, "fc-veth-0") || !strings.Contains(networkScript, "fc-uplink") {
+		t.Fatalf("network script = %q, want veth uplink setup", networkScript)
+	}
+	if !strings.Contains(networkScript, "172.16.0.0/12") {
+		t.Fatalf("network script = %q, want private CIDR egress drop", networkScript)
+	}
+	if strings.Contains(prepareScript, "/srv/firecracker/snapshots/mem") {
+		t.Fatalf("prepare jail script still references shared golden snapshot mem")
 	}
 	if len(started) != 1 {
 		t.Fatalf("start commands = %d, want jailer start", len(started))
@@ -167,13 +249,8 @@ func TestRuntimeCreateSandboxStartsFirecrackerAndProxy(t *testing.T) {
 }
 
 func TestRuntimeCreateSandboxEnforcesCapacity(t *testing.T) {
-	rt := testRuntime(1)
-	rt.deps.run = func(context.Context, string, ...string) error { return nil }
-	rt.deps.start = func(context.Context, string, ...string) (process, error) { return &fakeProcess{}, nil }
-	rt.deps.pathExists = func(string) bool { return true }
-	rt.deps.loadSnapshot = func(context.Context, string, Config) error { return nil }
-	rt.deps.newProxy = func(context.Context, string, string, string) (daemonProxy, error) { return &fakeProxy{}, nil }
-	rt.deps.probeDaemon = func(context.Context, string) error { return nil }
+	rt := testRuntimeT(t, 1)
+	stubCreateDeps(rt)
 
 	if _, err := rt.CreateSandbox(context.Background(), "sandbox-id-123456", nil); err != nil {
 		t.Fatalf("CreateSandbox() failed: %v", err)
@@ -192,7 +269,7 @@ func TestRuntimeDeleteHoldsSlotUntilCleanupCompletes(t *testing.T) {
 	var runCount int
 	rt.deps.run = func(context.Context, string, ...string) error {
 		runCount++
-		if runCount == 3 {
+		if runCount == 4 {
 			close(cleanupStarted)
 			<-allowCleanup
 		}
@@ -200,6 +277,8 @@ func TestRuntimeDeleteHoldsSlotUntilCleanupCompletes(t *testing.T) {
 	}
 	rt.deps.start = func(context.Context, string, ...string) (process, error) { return proc, nil }
 	rt.deps.pathExists = func(string) bool { return true }
+	rt.deps.cloneRootfs = func(context.Context, string, string) error { return nil }
+	rt.deps.cloneGoldenSnapshot = func(context.Context, string, string, string) error { return nil }
 	rt.deps.loadSnapshot = func(context.Context, string, Config) error { return nil }
 	rt.deps.newProxy = func(context.Context, string, string, string) (daemonProxy, error) { return proxy, nil }
 	rt.deps.probeDaemon = func(context.Context, string) error { return nil }
@@ -215,15 +294,18 @@ func TestRuntimeDeleteHoldsSlotUntilCleanupCompletes(t *testing.T) {
 
 	<-cleanupStarted
 
+	rt.mu.Lock()
+	occupied := rt.occupiedSlotsLocked()
+	slotOwner := rt.slots[0].sandboxID
+	rt.mu.Unlock()
+	if occupied != 1 {
+		t.Fatalf("occupied slots = %d, want 1 while cleanup still owns the slot", occupied)
+	}
+	if slotOwner != "sandbox-id-123456" {
+		t.Fatalf("slot owner = %q, want deleting sandbox to keep slot until cleanup", slotOwner)
+	}
 	if _, err := rt.CreateSandbox(context.Background(), "sandbox-id-abcdef", nil); err == nil {
 		t.Fatal("expected capacity exhausted while cleanup still owns the slot")
-	}
-	capacity, err := rt.Capacity(context.Background())
-	if err != nil {
-		t.Fatalf("Capacity() failed: %v", err)
-	}
-	if capacity.Used != 1 {
-		t.Fatalf("Capacity().Used = %d, want 1 while cleanup still owns the slot", capacity.Used)
 	}
 
 	close(allowCleanup)
@@ -282,6 +364,8 @@ func TestRuntimeCreateSandboxCleansUpOnFailure(t *testing.T) {
 	}
 	rt.deps.start = func(context.Context, string, ...string) (process, error) { return proc, nil }
 	rt.deps.pathExists = func(string) bool { return true }
+	rt.deps.cloneRootfs = func(context.Context, string, string) error { return nil }
+	rt.deps.cloneGoldenSnapshot = func(context.Context, string, string, string) error { return nil }
 	rt.deps.loadSnapshot = func(context.Context, string, Config) error { return nil }
 	rt.deps.newProxy = func(context.Context, string, string, string) (daemonProxy, error) { return proxy, nil }
 	rt.deps.probeDaemon = func(context.Context, string) error { return errors.New("daemon down") }
@@ -295,8 +379,8 @@ func TestRuntimeCreateSandboxCleansUpOnFailure(t *testing.T) {
 	if !proxy.stopped {
 		t.Fatal("expected proxy to be stopped during cleanup")
 	}
-	if runCount != 3 {
-		t.Fatalf("runCount = %d, want prepare, network, and cleanup", runCount)
+	if runCount != 4 {
+		t.Fatalf("runCount = %d, want prepare, host NAT, network, and cleanup", runCount)
 	}
 
 	capacity, err := rt.Capacity(context.Background())
@@ -398,4 +482,86 @@ func containsArg(args []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestRuntimeStopSandboxKeepsSandboxStopped(t *testing.T) {
+	rt := testRuntimeT(t, 2)
+	stubCreateDeps(rt)
+	var paused, snapshotted bool
+	rt.deps.pauseVM = func(_ context.Context, _ string) error {
+		paused = true
+		return nil
+	}
+	rt.deps.createSnapshot = func(_ context.Context, _ string) error {
+		snapshotted = true
+		return nil
+	}
+
+	if _, err := rt.CreateSandbox(context.Background(), "sandbox-id-123456", nil); err != nil {
+		t.Fatalf("CreateSandbox() failed: %v", err)
+	}
+	if err := rt.StopSandbox(context.Background(), "sandbox-id-123456"); err != nil {
+		t.Fatalf("StopSandbox() failed: %v", err)
+	}
+	if !paused || !snapshotted {
+		t.Fatalf("paused=%v snapshotted=%v, want both true", paused, snapshotted)
+	}
+
+	if _, err := rt.DaemonURL(context.Background(), "sandbox-id-123456"); !errors.Is(err, runnerruntime.ErrSandboxNotRunning) {
+		t.Fatalf("DaemonURL() error = %v, want ErrSandboxNotRunning", err)
+	}
+	capacity, err := rt.Capacity(context.Background())
+	if err != nil {
+		t.Fatalf("Capacity() failed: %v", err)
+	}
+	if capacity.Used != 0 {
+		t.Fatalf("Capacity().Used = %d, want slot released after stop", capacity.Used)
+	}
+	if capacity.Stopped != 1 {
+		t.Fatalf("Capacity().Stopped = %d, want 1 stopped sandbox", capacity.Stopped)
+	}
+	rt.mu.Lock()
+	occupied := rt.occupiedSlotsLocked()
+	rt.mu.Unlock()
+	if occupied != 0 {
+		t.Fatalf("occupied slots = %d, want slot released after stop", occupied)
+	}
+}
+
+func TestRuntimeEnsureSandboxRunningWakesStoppedSandbox(t *testing.T) {
+	rt := testRuntimeT(t, 2)
+	stubCreateDeps(rt)
+	var pauseCount, loadCount int
+	rt.deps.pauseVM = func(context.Context, string) error {
+		pauseCount++
+		return nil
+	}
+	rt.deps.createSnapshot = func(context.Context, string) error { return nil }
+	rt.deps.loadSnapshot = func(context.Context, string, Config) error {
+		loadCount++
+		return nil
+	}
+
+	if _, err := rt.CreateSandbox(context.Background(), "sandbox-id-123456", nil); err != nil {
+		t.Fatalf("CreateSandbox() failed: %v", err)
+	}
+	if err := rt.StopSandbox(context.Background(), "sandbox-id-123456"); err != nil {
+		t.Fatalf("StopSandbox() failed: %v", err)
+	}
+	if err := rt.EnsureSandboxRunning(context.Background(), "sandbox-id-123456"); err != nil {
+		t.Fatalf("EnsureSandboxRunning() failed: %v", err)
+	}
+	if pauseCount != 1 {
+		t.Fatalf("pauseCount = %d, want 1", pauseCount)
+	}
+	if loadCount != 2 {
+		t.Fatalf("loadCount = %d, want create + wake", loadCount)
+	}
+	url, err := rt.DaemonURL(context.Background(), "sandbox-id-123456")
+	if err != nil {
+		t.Fatalf("DaemonURL() failed: %v", err)
+	}
+	if url != "http://127.0.0.1:18081" {
+		t.Fatalf("DaemonURL() = %s", url)
+	}
 }

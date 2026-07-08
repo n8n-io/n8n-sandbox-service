@@ -66,6 +66,13 @@ jobs:
           git tag --force "${TAG}"
           git push --force origin "${TAG}"
 
+      - name: Package Firecracker golden build tarball
+        run: |
+          chmod +x scripts/package-firecracker-golden-build.sh
+          ./scripts/package-firecracker-golden-build.sh \
+            --version "${{ steps.version.outputs.version }}" \
+            --output "dist/firecracker-golden-build-${{ steps.version.outputs.version }}.tar.gz"
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ steps.generate-token.outputs.token }}
@@ -78,7 +85,14 @@ jobs:
           - \`n8nio/n8n-sandbox-service-api:${VERSION}\`
           - \`n8nio/n8n-sandbox-service-runner-dind:${VERSION}\`
 
-          Platforms: \`linux/amd64\`, \`linux/arm64\`"
+          Platforms: \`linux/amd64\`, \`linux/arm64\`
+
+          ## Firecracker golden build
+
+          Download \`firecracker-golden-build-${VERSION}.tar.gz\` from the release assets.
+          Use it on runner VMs to rebuild the golden snapshot when upgrading the
+          Firecracker runner." \
+            "dist/firecracker-golden-build-${VERSION}.tar.gz"
 
       - name: Open version-bump PR against main
         env:
