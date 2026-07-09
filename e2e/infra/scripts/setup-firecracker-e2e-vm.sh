@@ -16,20 +16,6 @@ FIRECRACKER_E2E_SNAPSHOT_MEM_MIB="${FIRECRACKER_E2E_SNAPSHOT_MEM_MIB:-512}"
 FIRECRACKER_E2E_SNAPSHOT_VCPUS="${FIRECRACKER_E2E_SNAPSHOT_VCPUS:-1}"
 INSTALLED_FIRECRACKER_VERSION=""
 
-# Verifies that Firecracker can boot the selected kernel directly. The e2e
-# snapshot path uses upstream uncompressed ELF vmlinux images, not bzImage.
-require_elf_kernel() {
-	local path=$1
-	if ! LC_ALL=C od -An -N4 -tx1 "$path" | tr -d ' \n' | grep -qi '^7f454c46$'; then
-		echo "ERROR: kernel must be an uncompressed ELF vmlinux image: $path" >&2
-		echo "Firecracker cannot boot bzImage/PE/compressed kernel images for local snapshot creation." >&2
-		if command -v file >/dev/null 2>&1; then
-			file "$path" >&2 || true
-		fi
-		exit 1
-	fi
-}
-
 if [[ "$(uname -m)" != "x86_64" ]]; then
 	echo "Firecracker e2e assets are currently amd64/x86_64 only; got $(uname -m)" >&2
 	exit 1
@@ -174,65 +160,16 @@ json_escape() {
 	node -e 'process.stdout.write(JSON.stringify(process.argv[1] ?? ""))' "$1"
 }
 
-# Finds the newest public Firecracker CI artifact key matching a prefix/pattern.
-# These are S3 object keys, not credentials; the bucket is publicly readable.
-s3_latest_key() {
-	local prefix=$1 pattern=$2 key
-	key="$(curl -fsSL "https://s3.amazonaws.com/spec.ccfc.min/?prefix=${prefix}&list-type=2" \
-		| tr '<' '\n' \
-		| sed -n 's#^Key>\(firecracker-ci/[^<]*\)#\1#p' \
-		| grep -E "$pattern" \
-		| sort -V \
-		| tail -n 1)"
-	if [[ -z "$key" ]]; then
-		echo "ERROR: could not find Firecracker CI asset for prefix ${prefix}" >&2
-		exit 1
-	fi
-	echo "$key"
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Builds the local kernel/rootfs template from upstream Firecracker CI assets.
-# It adds the sandbox user contract expected by the daemon before creating ext4.
 build_template_assets() {
-	local arch ci_version work rootfs_dir kernel_key ubuntu_key ubuntu_version
-	arch="$(uname -m)"
-	ci_version="${FIRECRACKER_CI_VERSION#v}"
-	ci_version="v${ci_version}"
-
-	echo "==> Building Firecracker template assets locally from Firecracker CI ${ci_version}..."
-	work="$(mktemp -d)"
-	rootfs_dir="${work}/rootfs"
-
-	kernel_key="$(s3_latest_key "firecracker-ci/${ci_version}/${arch}/vmlinux-" "firecracker-ci/${ci_version}/${arch}/vmlinux-[0-9]+\\.[0-9]+\\.[0-9]+$")"
-	ubuntu_key="$(s3_latest_key "firecracker-ci/${ci_version}/${arch}/ubuntu-" "firecracker-ci/${ci_version}/${arch}/ubuntu-[0-9]+\\.[0-9]+\\.squashfs$")"
-	ubuntu_version="$(basename "$ubuntu_key" .squashfs | grep -oE '[0-9]+\.[0-9]+')"
-
-	curl -fsSL "https://s3.amazonaws.com/spec.ccfc.min/${kernel_key}" -o "${work}/vmlinux"
-	curl -fsSL "https://s3.amazonaws.com/spec.ccfc.min/${ubuntu_key}" -o "${work}/ubuntu-${ubuntu_version}.squashfs"
-	require_elf_kernel "${work}/vmlinux"
-
-	unsquashfs -f -d "$rootfs_dir" "${work}/ubuntu-${ubuntu_version}.squashfs" >/dev/null
-	sudo chown -R root:root "$rootfs_dir"
-	if ! sudo grep -q '^user:' "$rootfs_dir/etc/group"; then
-		echo 'user:x:1000:' | sudo tee -a "$rootfs_dir/etc/group" >/dev/null
-	fi
-	if ! sudo grep -q '^user:' "$rootfs_dir/etc/passwd"; then
-		echo 'user:x:1000:1000:Sandbox User:/home/user:/bin/sh' | sudo tee -a "$rootfs_dir/etc/passwd" >/dev/null
-	fi
-	sudo install -d -m 0755 -o 1000 -g 1000 "$rootfs_dir/home/user"
-	sudo install -d -m 1777 -o root -g root "$rootfs_dir/tmp"
-	# Ubuntu squashfs ships resolv.conf as a symlink; tee follows it and writes
-	# outside the staged rootfs unless we replace it with a regular file first.
-	sudo rm -f "$rootfs_dir/etc/resolv.conf"
-	printf 'nameserver 8.8.8.8\nnameserver 1.1.1.1\n' | sudo tee "$rootfs_dir/etc/resolv.conf" >/dev/null
-	truncate -s "${FIRECRACKER_E2E_ROOTFS_SIZE_MB}M" "${work}/rootfs.ext4"
-	sudo mkfs.ext4 -d "$rootfs_dir" -F "${work}/rootfs.ext4" >/dev/null
-
-	sudo rm -rf /srv/firecracker/template /srv/firecracker/snapshots
-	sudo mkdir -p /srv/firecracker/template /srv/firecracker/snapshots
-	sudo install -m 0644 "${work}/vmlinux" /srv/firecracker/template/vmlinux
-	sudo install -m 0664 "${work}/rootfs.ext4" /srv/firecracker/template/rootfs.ext4
-	sudo rm -rf "$work"
+	sudo rm -rf /srv/firecracker/snapshots
+	sudo mkdir -p /srv/firecracker/snapshots
+	FIRECRACKER_CI_VERSION="$FIRECRACKER_CI_VERSION" \
+		FIRECRACKER_ROOTFS_SIZE_MB="$FIRECRACKER_E2E_ROOTFS_SIZE_MB" \
+		TEMPLATE_DIR="/srv/firecracker/template" \
+		bash "${SCRIPT_DIR}/build-rootfs-template.sh"
 }
 
 # Writes a manifest describing exactly which host and asset inputs produced the
@@ -277,14 +214,7 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
 install_firecracker_release
 
 echo "==> Preparing Firecracker host networking..."
-sudo sysctl -w net.ipv4.ip_forward=1
-default_iface="$(ip route show default | sed -n 's/.* dev \([^ ]*\).*/\1/p' | head -n 1)"
-if [[ -z "$default_iface" ]]; then
-	echo "ERROR: could not determine default network interface" >&2
-	exit 1
-fi
-sudo iptables -t nat -C POSTROUTING -o "$default_iface" -j MASQUERADE 2>/dev/null \
-	|| sudo iptables -t nat -A POSTROUTING -o "$default_iface" -j MASQUERADE
+bash "${SCRIPT_DIR}/configure-host-nat.sh"
 
 echo "==> Preparing Firecracker cgroups and jailer dir..."
 sudo mkdir -p /sys/fs/cgroup/firecracker /srv/jailer /srv/firecracker/template /srv/firecracker/snapshots

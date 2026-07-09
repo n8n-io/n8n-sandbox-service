@@ -18,3 +18,7 @@ Always document them into docs/API.md
 ## Keep documentation up-to-date
 
 Remember to update any relevant documentation in the docs/ folder if any of the changes affect them
+
+## Firecracker runner
+
+All Firecracker runner related files should contain `.ee` or be in a directory that contains `.ee` in the name, so the enterprise license applies.
