@@ -221,6 +221,9 @@ build_template_assets() {
 	fi
 	sudo install -d -m 0755 -o 1000 -g 1000 "$rootfs_dir/home/user"
 	sudo install -d -m 1777 -o root -g root "$rootfs_dir/tmp"
+	# Ubuntu squashfs ships resolv.conf as a symlink; tee follows it and writes
+	# outside the staged rootfs unless we replace it with a regular file first.
+	sudo rm -f "$rootfs_dir/etc/resolv.conf"
 	printf 'nameserver 8.8.8.8\nnameserver 1.1.1.1\n' | sudo tee "$rootfs_dir/etc/resolv.conf" >/dev/null
 	truncate -s "${FIRECRACKER_E2E_ROOTFS_SIZE_MB}M" "${work}/rootfs.ext4"
 	sudo mkfs.ext4 -d "$rootfs_dir" -F "${work}/rootfs.ext4" >/dev/null
