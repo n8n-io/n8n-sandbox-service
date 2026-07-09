@@ -46,15 +46,17 @@ The Firecracker runner alpha image is published for `linux/amd64` only.
 
 Publishes the API and runner images to Docker Hub. Version tracked in `SERVICE_VERSION`.
 
-**Images:**
+Images:
+
 - `n8nio/n8n-sandbox-service-api`
 - `n8nio/n8n-sandbox-service-runner-dind`
+- `n8nio/n8n-sandbox-service-runner-firecracker` (linux/amd64 only; requires KVM on the host)
 
-**Tags:** `{version}`, `latest`, `stable`
+Tags: `{version}`, `latest`, `stable`
 
 ### Steps
 
-1. Go to **Actions → Service Release Prep** and run the workflow, choosing `patch`, `minor`, or `major`.
+1. Go to Actions → Service Release Prep and run the workflow, choosing `patch`, `minor`, or `major`.
 2. The workflow bumps `SERVICE_VERSION`, creates a release branch (`service/release/{version}`), and opens a PR.
 3. The `Service Release Validate` workflow runs CI on the PR.
 4. Merge the PR. This triggers the `Service Publish` workflow, which:
@@ -69,8 +71,8 @@ Publishes the API and runner images to Docker Hub. Version tracked in `SERVICE_V
 
 Each service release (and staging prerelease) includes
 `firecracker-golden-build-{version}.tar.gz` on the GitHub Release. The tarball
-(schema v2) contains `build-rootfs-template.sh`, `configure-host-nat.sh`,
-`create-golden-snapshot.sh`, a pre-built `bin/sandbox-daemon`, and a
+(schema v2) contains `install-runner-host.sh`, `firecracker-ci-assets.sh`,
+`build-rootfs-template.sh`, `configure-host-nat.sh`, `create-golden-snapshot.sh`, a pre-built `bin/sandbox-daemon`, and a
 `MANIFEST.json` with entrypoints and pinned versions.
 
 Package locally:
@@ -102,7 +104,7 @@ Deploy sequence (per environment):
 
 ## Staging candidates (pre-merge)
 
-Use **Actions → Publish Service Staging** on your feature branch before merging
+Use Actions → Publish Service Staging on your feature branch before merging
 to `main`. The workflow:
 
 1. Optionally runs unit tests
@@ -125,13 +127,13 @@ copy-on-release contract above).
 
 Publishes the sandbox image to Docker Hub. Version tracked in `SANDBOX_VERSION`.
 
-**Image:** `n8nio/n8n-sandbox-service-sandbox`
+Image: `n8nio/n8n-sandbox-service-sandbox`
 
-**Tags:** `{version}`, `latest`
+Tags: `{version}`, `latest`
 
 ### Steps
 
-1. Go to **Actions → Sandbox Release Prep** and run the workflow, choosing `patch`, `minor`, or `major`.
+1. Go to Actions → Sandbox Release Prep and run the workflow, choosing `patch`, `minor`, or `major`.
 2. The workflow bumps `SANDBOX_VERSION`, creates a release branch (`sandbox/release/{version}`), and opens a PR.
 3. The `Sandbox Release Validate` workflow runs CI on the PR.
 4. Merge the PR. This triggers the `Sandbox Publish` workflow, which:
@@ -147,7 +149,7 @@ Publishes `@n8n/sandbox-client` to npm. Version tracked in `sdk/package.json`.
 
 ### Steps
 
-1. Go to **Actions → SDK Release Prep** and run the workflow, choosing `patch`, `minor`, or `major`.
+1. Go to Actions → SDK Release Prep and run the workflow, choosing `patch`, `minor`, or `major`.
 2. Merge the release PR. This triggers the `SDK Publish` workflow, which publishes to npm, creates a git tag (`sdk/v{version}`) and GitHub Release, and opens a post-release PR.
 3. Merge the post-release PR.
 

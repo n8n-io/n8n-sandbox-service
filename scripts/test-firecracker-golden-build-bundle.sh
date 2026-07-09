@@ -11,7 +11,7 @@ if [[ "$(uname -m)" != "x86_64" ]]; then
 	exit 1
 fi
 
-for cmd in curl unsquashfs mkfs.ext4 truncate debugfs; do
+for cmd in curl unsquashfs mkfs.ext4 truncate debugfs jq; do
 	if ! command -v "$cmd" >/dev/null 2>&1; then
 		echo "missing required command: $cmd" >&2
 		exit 1
@@ -48,26 +48,28 @@ bash "${ROOT}/scripts/package-firecracker-golden-build.sh" \
 	--version "ci-self-test" \
 	--output "$bundle_tar"
 
-bundle_root="${work}/unpacked"
-mkdir -p "$bundle_root"
-tar -C "$bundle_root" -xzf "$bundle_tar"
+bundle_dir="${work}/unpacked/firecracker-golden-build"
+mkdir -p "$(dirname "$bundle_dir")"
+tar -C "${work}/unpacked" -xzf "$bundle_tar"
 
-manifest="${bundle_root}/firecracker-golden-build/MANIFEST.json"
-for required in \
+manifest="${bundle_dir}/MANIFEST.json"
+if [[ "$(jq -r .schema_version "$manifest")" != "2" ]]; then
+	echo "ERROR: expected MANIFEST.json schema_version 2" >&2
+	exit 1
+fi
+
+for path in \
+	"scripts/install-runner-host.sh" \
+	"scripts/firecracker-ci-assets.sh" \
 	"scripts/build-rootfs-template.sh" \
 	"scripts/configure-host-nat.sh" \
 	"scripts/create-golden-snapshot.sh" \
 	"bin/sandbox-daemon"; do
-	if [[ ! -f "${bundle_root}/firecracker-golden-build/${required}" ]]; then
-		echo "ERROR: bundle missing ${required}" >&2
+	if [[ ! -f "${bundle_dir}/${path}" || ! -x "${bundle_dir}/${path}" ]]; then
+		echo "ERROR: bundle missing or non-executable: ${path}" >&2
+		ls -l "${bundle_dir}/${path}" >&2 2>/dev/null || true
 		exit 1
 	fi
 done
-
-schema_version="$(node -e 'const m=require(process.argv[1]); process.stdout.write(String(m.schema_version))' "$manifest")"
-if [[ "$schema_version" != "2" ]]; then
-	echo "ERROR: expected MANIFEST.json schema_version 2, got ${schema_version}" >&2
-	exit 1
-fi
 
 echo "OK    golden-build bundle v2 self-test passed"

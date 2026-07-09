@@ -14,7 +14,6 @@ FIRECRACKER_CI_VERSION="${FIRECRACKER_CI_VERSION:-${FIRECRACKER_VERSION%.*}}"
 FIRECRACKER_E2E_ROOTFS_SIZE_MB="${FIRECRACKER_E2E_ROOTFS_SIZE_MB:-1024}"
 FIRECRACKER_E2E_SNAPSHOT_MEM_MIB="${FIRECRACKER_E2E_SNAPSHOT_MEM_MIB:-512}"
 FIRECRACKER_E2E_SNAPSHOT_VCPUS="${FIRECRACKER_E2E_SNAPSHOT_VCPUS:-1}"
-INSTALLED_FIRECRACKER_VERSION=""
 
 if [[ "$(uname -m)" != "x86_64" ]]; then
 	echo "Firecracker e2e assets are currently amd64/x86_64 only; got $(uname -m)" >&2
@@ -24,42 +23,6 @@ fi
 if [[ "$FIRECRACKER_VERSION" != v* ]]; then
 	FIRECRACKER_VERSION="v${FIRECRACKER_VERSION}"
 fi
-
-if [[ -z "$FIRECRACKER_TARBALL_SHA256" ]]; then
-	case "$FIRECRACKER_VERSION" in
-	v1.13.1)
-		FIRECRACKER_TARBALL_SHA256="59450b9171ff2ebdf2f9a25be3a248a7ba79fb6371aec51a9d6d8eefca7b4faf"
-		;;
-	v1.14.1)
-		FIRECRACKER_TARBALL_SHA256="ea66dc1fbdb2473bbb95a1e822ae7884cd575a891a8f801258723258d36b7c7c"
-		;;
-	*)
-		echo "ERROR: FIRECRACKER_TARBALL_SHA256 is required for ${FIRECRACKER_VERSION}" >&2
-		exit 1
-		;;
-	esac
-fi
-
-# Installs the pinned Firecracker release and jailer into /opt/firecracker/bin.
-# The tarball checksum must be known or provided by the caller before this runs.
-install_firecracker_release() {
-	echo "==> Installing Firecracker ${FIRECRACKER_VERSION}..."
-	tmp_fc="$(mktemp -d)"
-	trap 'rm -rf "$tmp_fc"' EXIT
-	curl -fsSL \
-		"https://github.com/firecracker-microvm/firecracker/releases/download/${FIRECRACKER_VERSION}/firecracker-${FIRECRACKER_VERSION}-x86_64.tgz" \
-		-o "$tmp_fc/firecracker.tgz"
-	echo "${FIRECRACKER_TARBALL_SHA256}  $tmp_fc/firecracker.tgz" | sha256sum -c -
-	tar -xzf "$tmp_fc/firecracker.tgz" -C "$tmp_fc"
-	sudo install -m 0755 -d /opt/firecracker/bin
-	sudo install -m 0755 \
-		"$tmp_fc/release-${FIRECRACKER_VERSION}-x86_64/firecracker-${FIRECRACKER_VERSION}-x86_64" \
-		/opt/firecracker/bin/firecracker
-	sudo install -m 0755 \
-		"$tmp_fc/release-${FIRECRACKER_VERSION}-x86_64/jailer-${FIRECRACKER_VERSION}-x86_64" \
-		/opt/firecracker/bin/jailer
-	INSTALLED_FIRECRACKER_VERSION="${FIRECRACKER_VERSION#v}"
-}
 
 # Reads the Azure VM size from the instance metadata service for diagnostics.
 current_azure_vm_size() {
@@ -178,7 +141,7 @@ write_manifest() {
 	local manifest=$1
 	sudo tee "$manifest" >/dev/null <<EOF
 {
-  "firecracker_version": $(json_escape "${INSTALLED_FIRECRACKER_VERSION:-${FIRECRACKER_VERSION#v}}"),
+  "firecracker_version": $(json_escape "${FIRECRACKER_VERSION#v}"),
   "firecracker_ci_version": $(json_escape "${FIRECRACKER_CI_VERSION}"),
   "azure_vm_size": $(json_escape "$(current_azure_vm_size)"),
   "cpu_model": $(json_escape "$(current_cpu_model)"),
@@ -193,35 +156,14 @@ EOF
 
 firecracker_host_preflight
 
-echo "==> Installing system dependencies..."
-sudo apt-get update -qq
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-	binutils \
-	ca-certificates \
-	curl \
-	e2fsprogs \
-	file \
-	gzip \
-	iproute2 \
-	iptables \
-	make \
-	openssl \
-	squashfs-tools \
-	sudo \
-	tar \
-	util-linux
-
-install_firecracker_release
-
-echo "==> Preparing Firecracker host networking..."
-bash "${SCRIPT_DIR}/configure-host-nat.sh"
-
-echo "==> Preparing Firecracker cgroups and jailer dir..."
-sudo mkdir -p /sys/fs/cgroup/firecracker /srv/jailer /srv/firecracker/template /srv/firecracker/snapshots
-sudo chown -R 1000:1000 /sys/fs/cgroup/firecracker
-if ! mountpoint -q /srv/jailer; then
-	sudo mount -t tmpfs -o "rw,nosuid,mode=0755,size=${JAILER_TMPFS_SIZE}" tmpfs /srv/jailer
-fi
+sudo env \
+	FIRECRACKER_VERSION="$FIRECRACKER_VERSION" \
+	FIRECRACKER_TARBALL_SHA256="${FIRECRACKER_TARBALL_SHA256:-}" \
+	JAILER_TMPFS_SIZE="$JAILER_TMPFS_SIZE" \
+	FIRECRACKER_CI_VERSION="$FIRECRACKER_CI_VERSION" \
+	CONFIGURE_HOST_NAT_SCRIPT="${SCRIPT_DIR}/configure-host-nat.sh" \
+	FIRECRACKER_CI_ASSETS_BIN="${SCRIPT_DIR}/firecracker-ci-assets.sh" \
+	bash "${SCRIPT_DIR}/install-runner-host.sh"
 
 echo "==> Installing Go ${GO_VERSION}..."
 curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tar.gz

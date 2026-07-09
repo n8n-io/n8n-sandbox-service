@@ -6,9 +6,10 @@ The n8n Sandbox Service provides isolated execution environments via a REST API.
 
 | Platform | Use case | Guide |
 |----------|----------|-------|
-| **Linux** | Production (sysbox-runc isolation) | [quickstart-linux.md](quickstart-linux.md) |
-| **macOS** | Local development (privileged containers) | [quickstart-macos.md](quickstart-macos.md) |
-| **Kubernetes** | Production cluster deployment | [quickstart-k8s.md](quickstart-k8s.md) |
+| Linux | Production (sysbox-runc isolation) | [quickstart-linux.md](quickstart-linux.md) |
+| Linux | Firecracker runner (KVM host) | [quickstart-firecracker-linux.md](quickstart-firecracker-linux.md) |
+| macOS | Local development (privileged containers) | [quickstart-macos.md](quickstart-macos.md) |
+| Kubernetes | Production cluster deployment | [quickstart-k8s.md](quickstart-k8s.md) |
 
 > Both platform guides share common [prerequisites](prerequisites.md).
 

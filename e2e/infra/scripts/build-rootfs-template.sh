@@ -3,6 +3,9 @@
 # CI assets. Used by e2e VM setup and golden-build bundle consumers (infra runners).
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FIRECRACKER_CI_ASSETS_BIN="${FIRECRACKER_CI_ASSETS_BIN:-${SCRIPT_DIR}/firecracker-ci-assets.sh}"
+
 FIRECRACKER_CI_VERSION="${FIRECRACKER_CI_VERSION:-v1.14}"
 FIRECRACKER_CI_VMLINUX="${FIRECRACKER_CI_VMLINUX:-}"
 FIRECRACKER_CI_ROOTFS_SQUASHFS="${FIRECRACKER_CI_ROOTFS_SQUASHFS:-}"
@@ -38,47 +41,8 @@ require_elf_kernel() {
 	local path=$1
 	if ! LC_ALL=C od -An -N4 -tx1 "$path" | tr -d ' \n' | grep -qi '^7f454c46$'; then
 		echo "ERROR: kernel must be an uncompressed ELF vmlinux image: $path" >&2
-		echo "Firecracker cannot boot bzImage/PE/compressed kernel images." >&2
-		if command -v file >/dev/null 2>&1; then
-			file "$path" >&2 || true
-		fi
 		exit 1
 	fi
-}
-
-s3_latest_key() {
-	local prefix=$1 pattern=$2 key
-	key="$(curl -fsSL "https://s3.amazonaws.com/spec.ccfc.min/?prefix=${prefix}&list-type=2" \
-		| tr '<' '\n' \
-		| sed -n 's#^Key>\(firecracker-ci/[^<]*\)#\1#p' \
-		| grep -E "$pattern" \
-		| sort -V \
-		| tail -n 1)"
-	if [[ -z "$key" ]]; then
-		echo "ERROR: could not find Firecracker CI asset for prefix ${prefix}" >&2
-		exit 1
-	fi
-	echo "$key"
-}
-
-download_ci_assets() {
-	local arch ci_version kernel_key ubuntu_key ubuntu_version dest
-	arch="$(uname -m)"
-	ci_version="${FIRECRACKER_CI_VERSION#v}"
-	ci_version="v${ci_version}"
-	dest="$1"
-
-	echo "==> Downloading Firecracker CI assets (${ci_version}, ${arch})..."
-
-	kernel_key="$(s3_latest_key "firecracker-ci/${ci_version}/${arch}/vmlinux-" "firecracker-ci/${ci_version}/${arch}/vmlinux-[0-9]+\\.[0-9]+\\.[0-9]+$")"
-	ubuntu_key="$(s3_latest_key "firecracker-ci/${ci_version}/${arch}/ubuntu-" "firecracker-ci/${ci_version}/${arch}/ubuntu-[0-9]+\\.[0-9]+\\.squashfs$")"
-	ubuntu_version="$(basename "$ubuntu_key" .squashfs | grep -oE '[0-9]+\.[0-9]+')"
-
-	curl -fsSL "https://s3.amazonaws.com/spec.ccfc.min/${kernel_key}" -o "${dest}/vmlinux"
-	curl -fsSL "https://s3.amazonaws.com/spec.ccfc.min/${ubuntu_key}" -o "${dest}/ubuntu-${ubuntu_version}.squashfs"
-
-	FIRECRACKER_CI_VMLINUX="${dest}/vmlinux"
-	FIRECRACKER_CI_ROOTFS_SQUASHFS="${dest}/ubuntu-${ubuntu_version}.squashfs"
 }
 
 verify_rootfs_resolv_conf() {
@@ -136,7 +100,15 @@ cleanup() {
 trap cleanup EXIT
 
 if [[ -z "$FIRECRACKER_CI_VMLINUX" || -z "$FIRECRACKER_CI_ROOTFS_SQUASHFS" ]]; then
-	download_ci_assets "$work"
+	ci_assets_dir="${work}/ci-assets"
+	if [[ ! -x "$FIRECRACKER_CI_ASSETS_BIN" ]]; then
+		echo "ERROR: missing firecracker-ci-assets script: ${FIRECRACKER_CI_ASSETS_BIN}" >&2
+		exit 1
+	fi
+	FIRECRACKER_CI_VERSION="$FIRECRACKER_CI_VERSION" \
+		"$FIRECRACKER_CI_ASSETS_BIN" download "$ci_assets_dir"
+	# shellcheck disable=SC1090
+	source "${ci_assets_dir}/manifest.env"
 fi
 
 if [[ ! -f "$FIRECRACKER_CI_VMLINUX" ]]; then

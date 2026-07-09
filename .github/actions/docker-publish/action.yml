@@ -19,6 +19,10 @@ inputs:
     required: false
     default: ""
     description: Additional tags to apply, newline-separated
+  platforms:
+    required: false
+    default: "linux/amd64,linux/arm64"
+    description: Target platforms (comma-separated)
   dockerhub-username:
     required: true
     description: Docker Hub username
@@ -36,6 +40,7 @@ runs:
         password: ${{ inputs.dockerhub-token }}
 
     - name: Set up QEMU
+      if: contains(inputs.platforms, 'arm64')
       uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4
       with:
         platforms: arm64
@@ -75,6 +80,6 @@ runs:
       with:
         context: .
         file: ${{ inputs.dockerfile }}
-        platforms: linux/amd64,linux/arm64
+        platforms: ${{ inputs.platforms }}
         push: true
         tags: ${{ steps.tags.outputs.tags }}

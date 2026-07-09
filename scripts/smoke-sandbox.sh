@@ -2,7 +2,7 @@
 # Smoke test against a deployed or local sandbox API.
 #
 # Exercises core paths aligned with e2e (no idle TTL or other special config):
-# create → exec → DNS → HTTPS → file write/read → delete.
+# create → exec → resolv.conf → DNS → HTTPS → file write/read → delete.
 #
 # Environment:
 #   SANDBOX_API_BASE       — API base URL (required unless set in env file)
@@ -15,6 +15,7 @@
 #   KUBE_AUTH_SECRET_KEY   — Secret data key (comma-separated keys; first is used)
 #   SMOKE_VERBOSE          — Set to 1 to print full exec NDJSON streams
 #   SMOKE_EXEC_TIMEOUT_MS  — Exec timeout in ms (default: 60000)
+#   SMOKE_EXTENDED         — Set to 1 to create a second sandbox (snapshot restore path)
 set -eu
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
@@ -77,13 +78,15 @@ if [ -z "${KEY}" ]; then
 fi
 
 sid=""
+sid2=""
 tmp_files=""
 
 cleanup() {
-	if [ -n "${sid}" ]; then
+	for cleanup_sid in ${sid} ${sid2}; do
+		[ -n "${cleanup_sid}" ] || continue
 		# shellcheck disable=SC2086
-		curl ${CURL_COMMON} -o /dev/null -X DELETE "${BASE}/sandboxes/${sid}" -H "X-Api-Key: ${KEY}" >/dev/null 2>&1 || true
-	fi
+		curl ${CURL_COMMON} -o /dev/null -X DELETE "${BASE}/sandboxes/${cleanup_sid}" -H "X-Api-Key: ${KEY}" >/dev/null 2>&1 || true
+	done
 	if [ -n "${tmp_files}" ]; then
 		# shellcheck disable=SC2086
 		rm -f ${tmp_files}
@@ -127,6 +130,10 @@ exec_stdout() {
 	jq -se 'map(select(.type=="stdout")) | map(.data) | join("")' "${out}"
 }
 
+trim_output() {
+	printf '%s' "$1" | tr -d '\r\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+}
+
 print_exec_verbose() {
 	local out="$1"
 	if [ "${SMOKE_VERBOSE:-0}" != "1" ]; then
@@ -142,6 +149,7 @@ assert_exec() {
 	local label="$1"
 	local command="$2"
 	local want_exit="${3:-0}"
+	local target_sid="${4:-$sid}"
 	local out
 	local got_exit got_stdout
 	local attempt=0
@@ -150,10 +158,10 @@ assert_exec() {
 	got_exit=""
 	while [ "${attempt}" -lt 5 ]; do
 		attempt=$((attempt + 1))
-		if api_json -N -X POST "${BASE}/sandboxes/${sid}/executions" \
+		if api_json -N -X POST "${BASE}/sandboxes/${target_sid}/executions" \
 			-d "{\"command\":$(jq -n --arg c "${command}" '$c'),\"timeout_ms\":${EXEC_TIMEOUT_MS}}" >"${out}" \
 			&& jq -se 'map(select(.type=="exit")) | length > 0' "${out}" >/dev/null 2>&1; then
-			got_exit="$(exec_exit_code "${out}")"
+			got_exit="$(trim_output "$(exec_exit_code "${out}")")"
 			if [ "${got_exit}" = "${want_exit}" ]; then
 				break
 			fi
@@ -175,64 +183,87 @@ assert_exec() {
 	printf '\n'
 }
 
+create_sandbox() {
+	local label="$1"
+	local create_json="" attempt=0 new_sid=""
+
+	printf '==> %s\n' "${label}" >&2
+	while [ "${attempt}" -lt 5 ]; do
+		attempt=$((attempt + 1))
+		if create_json="$(api_json -X POST "${BASE}/sandboxes" -d '{}' 2>/dev/null)"; then
+			break
+		fi
+		sleep 2
+	done
+	if [ -z "${create_json}" ]; then
+		fail "${label}: request failed after retries"
+	fi
+	new_sid="$(printf '%s' "${create_json}" | jq -r .id)"
+	if [ -z "${new_sid}" ] || [ "${new_sid}" = "null" ]; then
+		fail "${label}: missing id"
+	fi
+	printf '    sandbox_id: %s\n' "${new_sid}" >&2
+	printf '%s' "${new_sid}"
+}
+
+delete_sandbox() {
+	local target_sid="$1"
+	local label="$2"
+	local http_code=""
+
+	step "${label}"
+	http_code="$(trim_output "$(api_curl -o /dev/null -w "%{http_code}" -X DELETE "${BASE}/sandboxes/${target_sid}")")"
+	if [ "${http_code}" != "204" ]; then
+		fail "${label}: HTTP ${http_code}, want 204"
+	fi
+	printf '    delete: %s\n' "${http_code}"
+	if [ "${target_sid}" = "${sid}" ]; then
+		sid=""
+	fi
+	if [ "${target_sid}" = "${sid2}" ]; then
+		sid2=""
+	fi
+}
+
 write_file() {
 	local path="$1"
 	local content="$2"
-	printf '%s' "${content}" | api_curl -X PUT -G "${BASE}/sandboxes/${sid}/files" \
-		--data-urlencode "path=${path}" \
-		-H "Content-Type: application/octet-stream" \
-		--data-binary @-
+	local target_sid="${3:-$sid}"
+	local http_code
+
+	http_code="$(trim_output "$(
+		printf '%s' "${content}" | api_curl -o /dev/null -w "%{http_code}" -X PUT \
+			"${BASE}/sandboxes/${target_sid}/files?path=${path}" \
+			-H "Content-Type: application/octet-stream" \
+			--data-binary @-
+	)")"
+	if [ "${http_code}" != "200" ]; then
+		fail "file write ${path}: HTTP ${http_code}, want 200"
+	fi
 }
 
 read_file() {
 	local path="$1"
-	api_curl -G "${BASE}/sandboxes/${sid}/files/content" --data-urlencode "path=${path}"
+	local target_sid="${2:-$sid}"
+	api_curl "${BASE}/sandboxes/${target_sid}/files/content?path=${path}"
+}
+
+run_core_guest_checks() {
+	local target_sid="$1"
+	local prefix="${2:-}"
+
+	assert_exec "${prefix}warm-up" "true" 0 "${target_sid}"
+	assert_exec "${prefix}exec echo" "echo hello world" 0 "${target_sid}"
+	assert_exec "${prefix}resolv.conf" "grep -E '^nameserver ' /etc/resolv.conf" 0 "${target_sid}"
+	assert_exec "${prefix}dns resolve" "getent ahostsv4 example.com | head -1 | awk '{print \$1}'" 0 "${target_sid}"
+	assert_exec "${prefix}https example.com" "curl -fsSL -o /dev/null --max-time 20 https://example.com/" 0 "${target_sid}"
 }
 
 step "healthz"
 api_curl "${BASE}/healthz" >/dev/null
 
-step "create sandbox"
-create_json=""
-attempt=0
-while [ "${attempt}" -lt 5 ]; do
-	attempt=$((attempt + 1))
-	if create_json="$(api_json -X POST "${BASE}/sandboxes" -d '{}' 2>/dev/null)"; then
-		break
-	fi
-	sleep 2
-done
-if [ -z "${create_json}" ]; then
-	fail "create sandbox: request failed after retries"
-fi
-sid="$(printf '%s' "${create_json}" | jq -r .id)"
-if [ -z "${sid}" ] || [ "${sid}" = "null" ]; then
-	fail "create sandbox: missing id"
-fi
-printf '    sandbox_id: %s\n' "${sid}"
-
-assert_exec "warm-up" "true"
-assert_exec "exec echo" "echo hello world"
-assert_exec "dns resolve" "getent ahostsv4 example.com | head -1 | awk '{print \$1}'"
-
-https_out="$(mktemp_track)"
-https_attempt=0
-https_ok=0
-while [ "${https_attempt}" -lt 5 ]; do
-	https_attempt=$((https_attempt + 1))
-	if api_json -N -X POST "${BASE}/sandboxes/${sid}/executions" \
-		-d "{\"command\":\"curl -fsSL -o /dev/null -w '%{http_code}' --max-time 20 https://example.com/\",\"timeout_ms\":${EXEC_TIMEOUT_MS}}" >"${https_out}" \
-		&& [ "$(exec_exit_code "${https_out}")" = "0" ] \
-		&& [ "$(exec_stdout "${https_out}" | tr -d '\n')" = "200" ]; then
-		https_ok=1
-		break
-	fi
-	sleep 2
-done
-if [ "${https_ok}" -ne 1 ]; then
-	fail "https example.com: exit or status not 200 (got $(exec_stdout "${https_out}" | tr -d '\n' || true))"
-fi
-printf '    https example.com: ok (200)\n'
+sid="$(create_sandbox "create sandbox")"
+run_core_guest_checks "${sid}"
 
 step "file write/read"
 write_file "${SMOKE_FILE_PATH}" "${SMOKE_FILE_CONTENT}"
@@ -244,12 +275,12 @@ printf '    file write/read: ok\n'
 
 assert_exec "exec reads uploaded file" "cat ${SMOKE_FILE_PATH}"
 
-step "delete sandbox"
-http_code="$(api_curl -o /dev/null -w "%{http_code}" -X DELETE "${BASE}/sandboxes/${sid}")"
-sid=""
-if [ "${http_code}" != "204" ]; then
-	fail "delete sandbox: HTTP ${http_code}, want 204"
+delete_sandbox "${sid}" "delete sandbox"
+
+if [ "${SMOKE_EXTENDED:-0}" = "1" ]; then
+	sid2="$(create_sandbox "extended: create second sandbox")"
+	run_core_guest_checks "${sid2}" "extended: "
+	delete_sandbox "${sid2}" "extended: delete second sandbox"
 fi
-printf '    delete: %s\n' "${http_code}"
 
 printf '==> smoke passed\n'

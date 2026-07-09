@@ -59,10 +59,16 @@ Stop all services:
 make down
 ```
 
-Quick smoke test (create, exec, DNS, HTTPS, file write/read, delete):
+Quick smoke test (create, exec, resolv.conf, DNS, HTTPS, file write/read, delete):
 
 ```bash
 make smoke
+```
+
+For Firecracker staging, also exercise a second sandbox create (snapshot restore path):
+
+```bash
+SMOKE_ENV=stage SMOKE_EXTENDED=1 sh scripts/smoke-sandbox.sh
 ```
 
 Deployed environments (copy `scripts/smoke-sandbox.env.example` to

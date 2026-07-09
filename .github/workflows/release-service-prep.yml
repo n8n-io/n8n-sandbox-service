@@ -62,6 +62,7 @@ jobs:
             **Images that will be published:**
             - `n8nio/n8n-sandbox-service-api:${{ steps.bump.outputs.version }}`
             - `n8nio/n8n-sandbox-service-runner-dind:${{ steps.bump.outputs.version }}`
+            - `n8nio/n8n-sandbox-service-runner-firecracker:${{ steps.bump.outputs.version }}` (linux/amd64 only)
 
             Merging this PR will trigger the service image publish workflow.
           branch: service/release-pr/${{ steps.bump.outputs.version }}
