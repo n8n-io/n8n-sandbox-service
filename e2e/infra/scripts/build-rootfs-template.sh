@@ -145,7 +145,7 @@ maybe_sudo rm -rf "$TEMPLATE_DIR"
 maybe_sudo install -d -m 0755 "$TEMPLATE_DIR"
 maybe_sudo install -m 0644 "$FIRECRACKER_CI_VMLINUX" "${TEMPLATE_DIR}/vmlinux"
 maybe_sudo install -m 0664 "$ext4_path" "${TEMPLATE_DIR}/rootfs.ext4"
-maybe_sudo chown -R 1000:1000 "$TEMPLATE_DIR"
+maybe_sudo chown -R "$(id -u):$(id -g)" "$TEMPLATE_DIR"
 maybe_sudo chmod 0664 "${TEMPLATE_DIR}/rootfs.ext4"
 maybe_sudo chmod 0644 "${TEMPLATE_DIR}/vmlinux"
 
