@@ -63,15 +63,23 @@ WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
 
 BUNDLE="${WORKDIR}/firecracker-golden-build"
-mkdir -p "${BUNDLE}/scripts"
+mkdir -p "${BUNDLE}/scripts" "${BUNDLE}/bin"
 
 cp "${ROOT}/scripts/firecracker-golden-build/README.md" "${BUNDLE}/README.md"
-cp "${ROOT}/e2e/infra/scripts/create-golden-snapshot.sh" "${BUNDLE}/scripts/"
-cp "${ROOT}/e2e/infra/scripts/setup-firecracker-e2e-vm.sh" "${BUNDLE}/scripts/"
+install -m 0755 "${ROOT}/e2e/infra/scripts/create-golden-snapshot.sh" "${BUNDLE}/scripts/"
+install -m 0755 "${ROOT}/e2e/infra/scripts/build-rootfs-template.sh" "${BUNDLE}/scripts/"
+install -m 0755 "${ROOT}/e2e/infra/scripts/configure-host-nat.sh" "${BUNDLE}/scripts/"
+install -m 0755 "${ROOT}/e2e/infra/scripts/install-runner-host.sh" "${BUNDLE}/scripts/"
+install -m 0755 "${ROOT}/e2e/infra/scripts/firecracker-ci-assets.sh" "${BUNDLE}/scripts/"
+install -m 0755 "${ROOT}/e2e/infra/scripts/setup-firecracker-e2e-vm.sh" "${BUNDLE}/scripts/"
+
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "${BUNDLE}/bin/sandbox-daemon" "${ROOT}/cmd/daemon"
+chmod 0755 "${BUNDLE}/bin/sandbox-daemon"
+DAEMON_SHA256="$(sha256sum "${BUNDLE}/bin/sandbox-daemon" | awk '{print $1}')"
 
 cat >"${BUNDLE}/MANIFEST.json" <<EOF
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "service_version": "${SERVICE_VERSION}",
   "bundle_version": "${VERSION}",
   "git_sha": "${GIT_SHA}",
@@ -80,11 +88,29 @@ cat >"${BUNDLE}/MANIFEST.json" <<EOF
   "packaged_at": "${PACKAGED_AT}",
   "firecracker_version": "${FIRECRACKER_VERSION}",
   "go_version": "${GO_VERSION}",
+  "entrypoints": {
+    "install_runner_host": "scripts/install-runner-host.sh",
+    "firecracker_ci_assets": "scripts/firecracker-ci-assets.sh",
+    "build_rootfs_template": "scripts/build-rootfs-template.sh",
+    "create_snapshot": "scripts/create-golden-snapshot.sh",
+    "configure_host_nat": "scripts/configure-host-nat.sh"
+  },
+  "binaries": {
+    "sandbox-daemon": {
+      "path": "bin/sandbox-daemon",
+      "sha256": "${DAEMON_SHA256}"
+    }
+  },
   "assets": [
     "README.md",
     "MANIFEST.json",
+    "scripts/install-runner-host.sh",
+    "scripts/firecracker-ci-assets.sh",
+    "scripts/build-rootfs-template.sh",
+    "scripts/configure-host-nat.sh",
     "scripts/create-golden-snapshot.sh",
-    "scripts/setup-firecracker-e2e-vm.sh"
+    "scripts/setup-firecracker-e2e-vm.sh",
+    "bin/sandbox-daemon"
   ]
 }
 EOF

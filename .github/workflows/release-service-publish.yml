@@ -49,6 +49,17 @@ jobs:
           dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
           dockerhub-token: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      - name: Publish Firecracker runner image
+        uses: ./.github/actions/docker-publish
+        with:
+          image: n8nio/n8n-sandbox-service-runner-firecracker
+          dockerfile: Dockerfile.ee.runner-firecracker
+          version: ${{ steps.version.outputs.version }}
+          platforms: linux/amd64
+          extra-tags: stable
+          dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
+          dockerhub-token: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Generate GitHub App Token
         id: generate-token
         uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
@@ -84,8 +95,9 @@ jobs:
 
           - \`n8nio/n8n-sandbox-service-api:${VERSION}\`
           - \`n8nio/n8n-sandbox-service-runner-dind:${VERSION}\`
+          - \`n8nio/n8n-sandbox-service-runner-firecracker:${VERSION}\` (linux/amd64 only)
 
-          Platforms: \`linux/amd64\`, \`linux/arm64\`
+          Platforms: API and runner-dind — \`linux/amd64\`, \`linux/arm64\`. Firecracker runner — \`linux/amd64\` only.
 
           ## Firecracker golden build
 
