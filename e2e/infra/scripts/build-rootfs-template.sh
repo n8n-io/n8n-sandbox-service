@@ -95,7 +95,7 @@ work="$(mktemp -d)"
 rootfs_dir="${work}/rootfs"
 ext4_path="${work}/rootfs.ext4"
 cleanup() {
-	rm -rf "$work"
+	maybe_sudo rm -rf "$work"
 }
 trap cleanup EXIT
 

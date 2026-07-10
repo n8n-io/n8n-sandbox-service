@@ -24,7 +24,6 @@ trap 'rm -rf "$work"' EXIT
 
 echo "==> Running build-rootfs-template.sh (FIRECRACKER_CI_VERSION=${FIRECRACKER_CI_VERSION})..."
 FIRECRACKER_CI_VERSION="$FIRECRACKER_CI_VERSION" \
-	FIRECRACKER_ROOTFS_SIZE_MB=256 \
 	TEMPLATE_DIR="$template_dir" \
 	bash "$BUILD_SCRIPT"
 
