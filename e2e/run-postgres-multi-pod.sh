@@ -104,7 +104,8 @@ start_api_pod() {
 		--network "$NETWORK_NAME"
 		-p "${port}:8080"
 	)
-	e2e_append_api_container_env run "$API_KEY" "$REG_TOKEN" "$RUNNER_INTERNAL_API_KEY" "$TLS_DIR"
+	e2e_api_container_env_args "$API_KEY" "$REG_TOKEN" "$RUNNER_INTERNAL_API_KEY" "$TLS_DIR"
+	run+=("${E2E_API_CONTAINER_ENV_ARGS[@]}")
 	run+=(--name "$name" "$API_IMAGE")
 	docker run "${run[@]}"
 	e2e_wait_for_api_http "$port" "$name"
@@ -167,6 +168,7 @@ e2e_build_sdk_unless_skip "$PROJECT_DIR"
 e2e_install_playwright_deps_if_needed "$SCRIPT_DIR"
 
 echo "Running multi-pod API tests..."
+E2E_MULTI_POD=1 \
 BASE_URL_A="http://localhost:$PORT_A" \
 BASE_URL_B="http://localhost:$PORT_B" \
 SANDBOX_API_KEY="$API_KEY" \

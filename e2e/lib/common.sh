@@ -356,12 +356,11 @@ e2e_stop_postgres_container() {
 	docker rm "$container" >/dev/null 2>&1 || true
 }
 
-# Appends shared API container docker args (TLS, keys, optional idle TTL, store backend).
-# Caller must set API_DOCKER_RUN=(-d ...) then call this before --name and image.
-e2e_append_api_container_env() {
-	local -n _run=$1
-	local api_key=$2 reg_token=$3 runner_api_key=$4 tls_dir=$5
-	_run+=(
+# Sets E2E_API_CONTAINER_ENV_ARGS with shared API container docker args (TLS, keys,
+# optional idle TTL, store backend). Caller appends: API_DOCKER_RUN+=("${E2E_API_CONTAINER_ENV_ARGS[@]}")
+e2e_api_container_env_args() {
+	local api_key=$1 reg_token=$2 runner_api_key=$3 tls_dir=$4
+	E2E_API_CONTAINER_ENV_ARGS=(
 		-v "$tls_dir/api:/grpc-tls:ro"
 		-e "SANDBOX_API_KEYS=$api_key"
 		-e "SANDBOX_API_METRICS_ENABLED=true"
@@ -375,9 +374,9 @@ e2e_append_api_container_env() {
 		-e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE=/grpc-tls/control-grpc-api-client.key"
 	)
 	if ((${#API_STORE_ENV[@]})); then
-		_run+=("${API_STORE_ENV[@]}")
+		E2E_API_CONTAINER_ENV_ARGS+=("${API_STORE_ENV[@]}")
 	fi
 	if ((${#API_IDLE_ENV[@]})); then
-		_run+=("${API_IDLE_ENV[@]}")
+		E2E_API_CONTAINER_ENV_ARGS+=("${API_IDLE_ENV[@]}")
 	fi
 }

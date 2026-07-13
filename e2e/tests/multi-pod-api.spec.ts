@@ -7,7 +7,12 @@ const BASE_URL_B = process.env.BASE_URL_B || 'http://localhost:18093';
 
 // Run from e2e/run-postgres-multi-pod.sh (two API pods, one Postgres, Docker runner).
 
+const multiPodHarness = process.env.E2E_MULTI_POD === '1';
+
 test.describe('multi-pod API (Postgres)', () => {
+  test.beforeEach(() => {
+    test.skip(!multiPodHarness, 'requires e2e/run-postgres-multi-pod.sh (E2E_MULTI_POD=1)');
+  });
   test('runner heartbeats on pod A; create and exec on pod B', async () => {
     const clientB = sandboxClient(BASE_URL_B);
 

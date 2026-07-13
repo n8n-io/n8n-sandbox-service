@@ -130,7 +130,8 @@ API_DOCKER_RUN+=(
 	--network "$NETWORK_NAME"
 	-p "$PORT:8080"
 )
-e2e_append_api_container_env API_DOCKER_RUN "$API_KEY" "$REG_TOKEN" "$RUNNER_INTERNAL_API_KEY" "$TLS_DIR"
+e2e_api_container_env_args "$API_KEY" "$REG_TOKEN" "$RUNNER_INTERNAL_API_KEY" "$TLS_DIR"
+API_DOCKER_RUN+=("${E2E_API_CONTAINER_ENV_ARGS[@]}")
 API_DOCKER_RUN+=(--name "$API_CONTAINER_NAME" "$API_IMAGE")
 docker run "${API_DOCKER_RUN[@]}"
 
@@ -207,6 +208,7 @@ else
 		[[ "$bn" == resilience.spec.ts ]] && continue
 		[[ "$bn" == placement-no-runners.spec.ts ]] && continue
 		[[ "$bn" == placement-two-runners.spec.ts ]] && continue
+		[[ "$bn" == multi-pod-api.spec.ts ]] && continue
 		[[ "$bn" == sandbox-idle-ttl.spec.ts ]] && continue
 		MAIN_SPECS+=("$f")
 	done
