@@ -19,7 +19,7 @@ import (
 type RunnerRegistryServer struct {
 	pb.UnimplementedRunnerRegistryServer
 	Token string
-	Reg   *registry.Registry
+	Reg   registry.RunnerRegistry
 }
 
 var _ pb.RunnerRegistryServer = (*RunnerRegistryServer)(nil)

@@ -38,7 +38,7 @@ func runnerProxyForPick(w http.ResponseWriter, r *http.Request, limitBody bool, 
 	return true
 }
 
-func sandboxProxyHandler(s *store.Store, cfg *config.APIConfig) func(bool) http.HandlerFunc {
+func sandboxProxyHandler(s store.SandboxStore, cfg *config.APIConfig) func(bool) http.HandlerFunc {
 	return func(limitBody bool) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			id := r.PathValue("id")
@@ -91,7 +91,7 @@ type SandboxResponse struct {
 	LastActiveAt int64  `json:"last_active_at"`
 }
 
-func handleListSandboxes(s *store.Store) http.HandlerFunc {
+func handleListSandboxes(s store.SandboxStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		records, err := s.List()
 		if err != nil {
@@ -111,7 +111,7 @@ func handleListSandboxes(s *store.Store) http.HandlerFunc {
 	}
 }
 
-func handleGetSandbox(s *store.Store, cfg *config.APIConfig) http.HandlerFunc {
+func handleGetSandbox(s store.SandboxStore, cfg *config.APIConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if !isValidUUID(id) {
@@ -160,12 +160,12 @@ func runnerControlTLS(cfg *config.APIConfig) *runnerctl.TLS {
 	}
 }
 
-func handleCreateSandbox(s *store.Store, reg *registry.Registry, cfg *config.APIConfig, rec *metrics.APIRecorder) http.HandlerFunc {
+func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, rec *metrics.APIRecorder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		success := false
 		defer func() { rec.ObserveSandboxOp(metrics.OpCreate, success) }()
 
-		run, err := reg.PickRoundRobin()
+		run, err := reg.PickLowestUsed()
 		if err != nil {
 			if errors.Is(err, registry.ErrNoRunners) {
 				slog.Warn("create sandbox failed: no eligible runners")
@@ -248,7 +248,7 @@ func handleCreateSandbox(s *store.Store, reg *registry.Registry, cfg *config.API
 	}
 }
 
-func handleDeleteSandbox(s *store.Store, cfg *config.APIConfig, mrec *metrics.APIRecorder) http.HandlerFunc {
+func handleDeleteSandbox(s store.SandboxStore, cfg *config.APIConfig, mrec *metrics.APIRecorder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		success := false
 		defer func() { mrec.ObserveSandboxOp(metrics.OpDelete, success) }()
@@ -333,7 +333,7 @@ func newRunnerReverseProxy(runnerURL *url.URL, runnerAPIKey string, onResponse f
 	}
 }
 
-func reapSandboxIfRunnerGone(s *store.Store, sandboxID string, resp *http.Response) {
+func reapSandboxIfRunnerGone(s store.SandboxStore, sandboxID string, resp *http.Response) {
 	if !sandboxproxy.RunnerReportsSandboxGone(resp) {
 		return
 	}

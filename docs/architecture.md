@@ -59,7 +59,17 @@ The system has three tiers:
 2. **Runner** — manages sandbox container lifecycle via Docker-in-Docker; proxies exec/file operations to daemons
 3. **Daemon** — lightweight HTTP server running inside each sandbox container; executes commands and manages files
 
-Multiple runners can register with a single API gateway for horizontal scaling. The API distributes sandbox creation across runners using round-robin placement.
+Multiple runners can register with a single API gateway for horizontal scaling. The API distributes sandbox creation across eligible runners using load-aware placement (lowest `capacity_used`).
+
+### Multi-pod API (Postgres)
+
+For multiple API replicas (e.g. n8n Cloud), set `SANDBOX_API_STORE=postgres`. All pods share:
+
+- **Sandbox metadata** (`sandboxes` table) — any pod can proxy, get, or delete any sandbox using stored runner routing info
+- **Runner registry** (`runners` table) — heartbeats from gRPC streams on any pod are visible cluster-wide
+- **Sweeper leadership** — a Postgres session advisory lock ensures only one pod runs the idle stop/delete sweeper per tick
+
+SQLite remains the default for single-pod deployments (`SANDBOX_API_STORE=sqlite` or unset).
 
 ## Components
 
@@ -73,9 +83,10 @@ The API gateway is the single public-facing service. It exposes a REST API for s
 | --- | --- | --- |
 | HTTP handlers | `internal/api/handlers.go` | Sandbox CRUD, reverse proxy to runners |
 | Gateway setup | `internal/api/gateway.go` | Route registration, middleware chain |
-| Runner registry | `internal/api/registry/` | In-memory registry of connected runners, round-robin placement |
+| Runner registry | `internal/api/registry/` | Runner heartbeats and placement (in-memory for SQLite; Postgres for multi-pod) |
 | gRPC server | `internal/api/grpc/` | `RunnerRegistry` service — accepts runner heartbeat streams |
-| Store | `internal/api/store/` | SQLite-backed sandbox metadata (ID, status, runner assignment) |
+| Store | `internal/api/store/` | Sandbox metadata (`sqlite` default, `postgres` for multi-pod) |
+| Sweeper lock | `internal/api/store/postgres.go` | Postgres advisory lock for idle sweeper leadership |
 | Idle sweeper | `internal/api/ttl.go` | Periodic scan to stop/delete idle sandboxes |
 | Config | `internal/api/config/` | Environment variable parsing and validation |
 
@@ -85,7 +96,7 @@ The API gateway is the single public-facing service. It exposes a REST API for s
 
 **Source:** `cmd/runner-docker/`, `cmd/runner-firecracker.ee/`, `internal/runner/`
 
-Each runner hosts sandboxes through the shared `runtime.Runtime` contract. The Docker runner manages containers via an inner Docker daemon (Docker-in-Docker), while the Firecracker runner manages microVM sandboxes. Runners are stateless — all persistent state lives in the API gateway's SQLite store.
+Each runner hosts sandboxes through the shared `runtime.Runtime` contract. The Docker runner manages containers via an inner Docker daemon (Docker-in-Docker), while the Firecracker runner manages microVM sandboxes. Runners are stateless — persistent sandbox metadata lives in the API store (SQLite or Postgres).
 
 | Subcomponent | Location | Responsibility |
 | --- | --- | --- |

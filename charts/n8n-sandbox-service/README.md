@@ -239,4 +239,29 @@ If a runner dies, sandboxes on that runner should be treated as lost.
 
 ## API Persistence
 
-Keep `api.replicaCount: 1` while the API uses its local SQLite store. `api.persistence.enabled` is enabled by default so sandbox routing state survives API pod restarts.
+**SQLite (default):** Keep `api.replicaCount: 1`. `api.persistence.enabled` is enabled by default so sandbox routing state survives API pod restarts.
+
+**Postgres (multi-pod):** Set `api.replicaCount` to 2 or more and configure Postgres via environment variables:
+
+```yaml
+api:
+  replicaCount: 3
+  persistence:
+    enabled: false
+  config:
+    store: postgres
+  extraEnv:
+    - name: SANDBOX_API_POSTGRES_HOST
+      value: your-postgres-host
+    - name: SANDBOX_API_POSTGRES_USER
+      value: sandbox
+    - name: SANDBOX_API_POSTGRES_DB
+      value: sandbox
+    - name: SANDBOX_API_POSTGRES_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: sandbox-api-postgres
+          key: password
+```
+
+Postgres integration tests (optional): run `go test -tags=integration ./internal/api/...` with `SANDBOX_TEST_POSTGRES_HOST` and related env vars set.

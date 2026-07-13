@@ -118,6 +118,7 @@ api:
   config:
     listenAddr: ":8080"
     grpcListenAddr: ":9090"
+    store: sqlite
     dataDir: /tmp/sandbox-api
     maxFileBytes: "10485760"
     enableCors: "false"

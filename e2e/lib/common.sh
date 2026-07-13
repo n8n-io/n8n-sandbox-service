@@ -295,3 +295,89 @@ e2e_stop_pid() {
 	kill -KILL "$pid" >/dev/null 2>&1 || true
 	wait "$pid" >/dev/null 2>&1 || true
 }
+
+# e2e_store_backend returns sqlite (default) or postgres from E2E_STORE.
+e2e_store_backend() {
+	echo "${E2E_STORE:-sqlite}"
+}
+
+# e2e_configure_api_store starts Postgres when E2E_STORE=postgres and sets
+# API_STORE_ENV / API_DATA_VOLUME_ARGS for the API container(s).
+e2e_configure_api_store() {
+	local network=$1 postgres_container=$2
+	API_STORE_ENV=()
+	if [[ "$(e2e_store_backend)" != "postgres" ]]; then
+		return 0
+	fi
+
+	E2E_POSTGRES_CONTAINER="$postgres_container"
+	echo "Starting Postgres for API store ($E2E_POSTGRES_CONTAINER)..."
+	docker run -d \
+		--network "$network" \
+		--name "$E2E_POSTGRES_CONTAINER" \
+		-e POSTGRES_USER=sandbox \
+		-e POSTGRES_PASSWORD=sandbox \
+		-e POSTGRES_DB=sandbox \
+		postgres:16-alpine >/dev/null
+
+	e2e_wait_for_postgres "$E2E_POSTGRES_CONTAINER"
+
+	API_DATA_VOLUME_ARGS=()
+	API_STORE_ENV=(
+		-e "SANDBOX_API_STORE=postgres"
+		-e "SANDBOX_API_POSTGRES_HOST=$E2E_POSTGRES_CONTAINER"
+		-e "SANDBOX_API_POSTGRES_PORT=5432"
+		-e "SANDBOX_API_POSTGRES_USER=sandbox"
+		-e "SANDBOX_API_POSTGRES_PASSWORD=sandbox"
+		-e "SANDBOX_API_POSTGRES_DB=sandbox"
+		-e "SANDBOX_API_POSTGRES_SSLMODE=disable"
+	)
+}
+
+e2e_wait_for_postgres() {
+	local container=$1
+	local i
+	for i in $(seq 1 30); do
+		if docker exec "$container" pg_isready -U sandbox -d sandbox >/dev/null 2>&1; then
+			echo "Postgres is ready."
+			return 0
+		fi
+		sleep 1
+	done
+	echo "Postgres failed to start within 30s" >&2
+	docker logs "$container" 2>&1 || true
+	return 1
+}
+
+e2e_stop_postgres_container() {
+	local container=${1:-${E2E_POSTGRES_CONTAINER:-}}
+	[[ -n "$container" ]] || return 0
+	docker stop "$container" >/dev/null 2>&1 || true
+	docker rm "$container" >/dev/null 2>&1 || true
+}
+
+# Appends shared API container docker args (TLS, keys, optional idle TTL, store backend).
+# Caller must set API_DOCKER_RUN=(-d ...) then call this before --name and image.
+e2e_append_api_container_env() {
+	local -n _run=$1
+	local api_key=$2 reg_token=$3 runner_api_key=$4 tls_dir=$5
+	_run+=(
+		-v "$tls_dir/api:/grpc-tls:ro"
+		-e "SANDBOX_API_KEYS=$api_key"
+		-e "SANDBOX_API_METRICS_ENABLED=true"
+		-e "SANDBOX_API_RUNNER_REGISTRATION_TOKEN=$reg_token"
+		-e "SANDBOX_API_RUNNER_API_KEY=$runner_api_key"
+		-e "SANDBOX_API_GRPC_TLS_CERT_FILE=/grpc-tls/grpc-server.crt"
+		-e "SANDBOX_API_GRPC_TLS_KEY_FILE=/grpc-tls/grpc-server.key"
+		-e "SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE=/grpc-tls/ca.crt"
+		-e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE=/grpc-tls/ca.crt"
+		-e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE=/grpc-tls/control-grpc-api-client.crt"
+		-e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE=/grpc-tls/control-grpc-api-client.key"
+	)
+	if ((${#API_STORE_ENV[@]})); then
+		_run+=("${API_STORE_ENV[@]}")
+	fi
+	if ((${#API_IDLE_ENV[@]})); then
+		_run+=("${API_IDLE_ENV[@]}")
+	fi
+}
