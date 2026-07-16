@@ -356,6 +356,35 @@ e2e_stop_postgres_container() {
 	docker rm "$container" >/dev/null 2>&1 || true
 }
 
+# e2e_start_api_grpc_proxy runs nginx TCP passthrough to two API pods (simulates a k8s Service).
+# The proxy gets network-alias $alias so runners can dial a stable gRPC address.
+e2e_start_api_grpc_proxy() {
+	local network=$1 proxy_name=$2 alias=$3 api1=$4 api2=$5 conf_dir=$6
+	cat >"$conf_dir/grpc-proxy.conf" <<EOF
+events {
+	worker_connections 1024;
+}
+stream {
+	upstream api_grpc {
+		server ${api1}:9090 max_fails=1 fail_timeout=5s;
+		server ${api2}:9090 max_fails=1 fail_timeout=5s;
+	}
+	server {
+		listen 9090;
+		proxy_pass api_grpc;
+		proxy_connect_timeout 5s;
+	}
+}
+EOF
+	docker rm -f "$proxy_name" >/dev/null 2>&1 || true
+	docker run -d \
+		--network "$network" \
+		--network-alias "$alias" \
+		--name "$proxy_name" \
+		-v "$conf_dir/grpc-proxy.conf:/etc/nginx/nginx.conf:ro" \
+		nginx:1.27-alpine >/dev/null
+}
+
 # Sets E2E_API_CONTAINER_ENV_ARGS with shared API container docker args (TLS, keys,
 # optional idle TTL, store backend). Caller appends: API_DOCKER_RUN+=("${E2E_API_CONTAINER_ENV_ARGS[@]}")
 e2e_api_container_env_args() {

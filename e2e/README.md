@@ -8,6 +8,8 @@ Idle TTL: The default `e2e/run.sh` API uses production defaults for `SANDBOX_API
 
 Postgres API: Phase 5 of `run-all.sh` runs **`e2e/run-postgres.sh`** (idle TTL, two-runner placement, and multi-pod API specs against Postgres with the Docker runner). Run it alone with `e2e/run-postgres.sh`.
 
+Multi-pod failover: `e2e/run-postgres-multi-pod.sh` fronts both API pods with an nginx gRPC TCP proxy (like a k8s Service), then runs `@multi-pod-failover` tests that stop the lead API pod and assert runner re-registration and idle sweeping on the surviving pod.
+
 ## Backend tags
 
 Specs run on every runner lane by default. Apply a marker

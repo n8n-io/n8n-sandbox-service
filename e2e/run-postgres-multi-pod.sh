@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Two API pods + Postgres + one Docker runner. Runner registers on pod A; tests use pod B.
+# Two API pods + Postgres + one Docker runner. Runner registers via a gRPC TCP proxy
+# (simulates k8s Service). Failover tests stop pod A and assert pod B picks up.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -20,6 +21,7 @@ PUSH_SANDBOX_IMAGE="localhost:${REGISTRY_PORT}/n8n-sandbox:e2e-${ARCH}"
 REMOTE_SANDBOX_IMAGE="${REGISTRY_INTERNAL_ADDR}/n8n-sandbox:e2e-${ARCH}"
 API1_NAME="sandbox-api-e2e-mp-a-$$"
 API2_NAME="sandbox-api-e2e-mp-b-$$"
+GRPC_PROXY_NAME="sandbox-api-grpc-proxy-$$"
 POSTGRES_CONTAINER_NAME="sandbox-postgres-e2e-mp-$$"
 RUNNER_NAME="sandbox-runner-e2e-mp-$$"
 NETWORK_NAME="sandbox-e2e-net-mp-$$"
@@ -39,8 +41,8 @@ RUNNER_CONTROL_ALIAS="runner-control"
 
 cleanup() {
 	echo "Stopping multi-pod e2e resources..."
-	docker stop "$API1_NAME" "$API2_NAME" "$RUNNER_NAME" >/dev/null 2>&1 || true
-	docker rm "$API1_NAME" "$API2_NAME" "$RUNNER_NAME" >/dev/null 2>&1 || true
+	docker stop "$API1_NAME" "$API2_NAME" "$GRPC_PROXY_NAME" "$RUNNER_NAME" >/dev/null 2>&1 || true
+	docker rm "$API1_NAME" "$API2_NAME" "$GRPC_PROXY_NAME" "$RUNNER_NAME" >/dev/null 2>&1 || true
 	if ! $STARTED_REGISTRY && docker network inspect "$NETWORK_NAME" >/dev/null 2>&1; then
 		docker network disconnect "$NETWORK_NAME" "$REGISTRY_NAME" >/dev/null 2>&1 || true
 	fi
@@ -117,6 +119,9 @@ start_api_pod "$API1_NAME" "$PORT_A"
 echo "Starting API pod B on port $PORT_B..."
 start_api_pod "$API2_NAME" "$PORT_B"
 
+echo "Starting gRPC registration proxy (${API_TLS_DNS}:9090 -> both API pods)..."
+e2e_start_api_grpc_proxy "$NETWORK_NAME" "$GRPC_PROXY_NAME" "$API_TLS_DNS" "$API1_NAME" "$API2_NAME" "$TLS_DIR"
+
 RUNTIME_ARGS=()
 if [[ "${PRIVILEGED:-}" == "1" ]] || [[ "$(uname)" == "Darwin" ]]; then
 	RUNTIME_ARGS+=(--privileged)
@@ -124,7 +129,7 @@ else
 	RUNTIME_ARGS+=(--runtime=sysbox-runc)
 fi
 
-echo "Starting runner (registers on API pod A)..."
+echo "Starting runner (registers via gRPC proxy)..."
 docker run -d \
 	"${RUNTIME_ARGS[@]}" \
 	--network "$NETWORK_NAME" \
@@ -133,7 +138,7 @@ docker run -d \
 	-e "SANDBOX_RUNNER_API_KEYS=$RUNNER_INTERNAL_API_KEY" \
 	-e "SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE=$REMOTE_SANDBOX_IMAGE" \
 	-e "SANDBOX_RUNNER_DOCKER_INSECURE_REGISTRIES=$REGISTRY_INTERNAL_ADDR" \
-	-e "SANDBOX_RUNNER_API_GRPC_ADDR=${API1_NAME}:9090" \
+	-e "SANDBOX_RUNNER_API_GRPC_ADDR=${API_TLS_DNS}:9090" \
 	-e "SANDBOX_RUNNER_REGISTRATION_TOKEN=$REG_TOKEN" \
 	-e "SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE=/grpc-tls/ca.crt" \
 	-e "SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE=/grpc-tls/grpc-client.crt" \
@@ -167,9 +172,33 @@ sleep 5
 e2e_build_sdk_unless_skip "$PROJECT_DIR"
 e2e_install_playwright_deps_if_needed "$SCRIPT_DIR"
 
+multi_pod_env=(
+	E2E_MULTI_POD=1
+	E2E_API_POD_A_CONTAINER="$API1_NAME"
+	E2E_API_POD_B_CONTAINER="$API2_NAME"
+	BASE_URL_A="http://localhost:$PORT_A"
+	BASE_URL_B="http://localhost:$PORT_B"
+	SANDBOX_API_KEY="$API_KEY"
+)
+
 echo "Running multi-pod API tests..."
-E2E_MULTI_POD=1 \
-BASE_URL_A="http://localhost:$PORT_A" \
-BASE_URL_B="http://localhost:$PORT_B" \
-SANDBOX_API_KEY="$API_KEY" \
-	npx playwright test tests/multi-pod-api.spec.ts "$@"
+env "${multi_pod_env[@]}" npx playwright test tests/multi-pod-api.spec.ts --grep-invert '@multi-pod-failover' "$@"
+
+echo "Recycling API pods with short idle TTL for failover sweeper test..."
+docker stop -t 10 "$API1_NAME" "$API2_NAME" >/dev/null 2>&1 || true
+docker rm "$API1_NAME" "$API2_NAME" >/dev/null 2>&1 || true
+
+API_IDLE_ENV=(
+	-e "SANDBOX_API_IDLE_STOP_AFTER=3s"
+	-e "SANDBOX_API_IDLE_DELETE_AFTER=10s"
+	-e "SANDBOX_API_IDLE_DELETE_SAFETY_BUFFER=2s"
+	-e "SANDBOX_API_IDLE_SWEEP_INTERVAL=1s"
+)
+
+start_api_pod "$API1_NAME" "$PORT_A"
+start_api_pod "$API2_NAME" "$PORT_B"
+sleep 5
+
+echo "Running multi-pod failover tests..."
+env E2E_MULTI_POD_FAILOVER=1 "${multi_pod_env[@]}" \
+	npx playwright test tests/multi-pod-api.spec.ts --grep '@multi-pod-failover' "$@"
