@@ -47,6 +47,7 @@ func NewSQLite(dbPath string) (*SQLiteStore, error) {
 		{sql: sqliteAddRunnerIDCol, name: "runner_id"},
 		{sql: sqliteAddRunnerHTTPBaseURLCol, name: "runner_http_base_url"},
 		{sql: sqliteAddRunnerControlGRPCAddrCol, name: "runner_control_grpc_addr"},
+		{sql: sqliteAddTenantIDCol, name: "tenant_id"},
 	} {
 		if _, err := db.Exec(stmt.sql); err != nil {
 			if strings.Contains(err.Error(), "duplicate column") ||
@@ -56,6 +57,17 @@ func NewSQLite(dbPath string) (*SQLiteStore, error) {
 			_ = db.Close()
 			return nil, fmt.Errorf("store: migration %s: %w", stmt.name, err)
 		}
+	}
+
+	if _, err := db.Exec(sqliteTenantsSchema); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: tenants schema: %w", err)
+	}
+
+	// FK enforcement for api_keys → tenants
+	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: enable foreign_keys: %w", err)
 	}
 
 	slog.Debug("store: opened sqlite database", "path", dbPath)
@@ -71,12 +83,14 @@ func (s *SQLiteStore) Backend() Backend { return BackendSQLite }
 
 func (s *SQLiteStore) Close() error { return s.db.Close() }
 
+const sqliteSandboxCols = `id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id`
+
 func (s *SQLiteStore) Create(record *SandboxRecord) error {
 	const q = `
 		INSERT INTO sandboxes
-			(id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr)
+			(id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id)
 		VALUES
-			(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	_, err := s.db.Exec(q,
 		record.ID,
@@ -90,6 +104,7 @@ func (s *SQLiteStore) Create(record *SandboxRecord) error {
 		record.RunnerID,
 		record.RunnerHTTPBase,
 		record.RunnerControlGRPCAddr,
+		record.TenantID,
 	)
 	if err != nil {
 		return fmt.Errorf("store: create sandbox %s: %w", record.ID, err)
@@ -98,11 +113,7 @@ func (s *SQLiteStore) Create(record *SandboxRecord) error {
 }
 
 func (s *SQLiteStore) Get(id string) (*SandboxRecord, error) {
-	const q = `
-		SELECT id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr
-		FROM sandboxes
-		WHERE id = ?`
-
+	q := `SELECT ` + sqliteSandboxCols + ` FROM sandboxes WHERE id = ?`
 	row := s.db.QueryRow(q, id)
 	rec, err := scanRecord(row)
 	if err != nil {
@@ -140,8 +151,7 @@ func (s *SQLiteStore) Delete(id string) error {
 }
 
 func (s *SQLiteStore) ListForIdleReapDelete(cutoff int64) ([]*SandboxRecord, error) {
-	const q = `
-		SELECT id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr
+	q := `SELECT ` + sqliteSandboxCols + `
 		FROM sandboxes
 		WHERE status = 'stopped'
 		  AND last_active_at <= ?`
@@ -149,8 +159,7 @@ func (s *SQLiteStore) ListForIdleReapDelete(cutoff int64) ([]*SandboxRecord, err
 }
 
 func (s *SQLiteStore) ListForIdleReapStop(cutoff int64) ([]*SandboxRecord, error) {
-	const q = `
-		SELECT id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr
+	q := `SELECT ` + sqliteSandboxCols + `
 		FROM sandboxes
 		WHERE status = 'running'
 		  AND last_active_at <= ?`
@@ -186,28 +195,134 @@ func (s *SQLiteStore) Count() (int64, error) {
 	return n, nil
 }
 
-func (s *SQLiteStore) List() ([]*SandboxRecord, error) {
-	const q = `
-		SELECT id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr
-		FROM sandboxes
-		ORDER BY created_at DESC`
+func (s *SQLiteStore) CountByTenant(tenantID string) (int64, error) {
+	var n int64
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sandboxes WHERE tenant_id = ?`, tenantID).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: count sandboxes by tenant: %w", err)
+	}
+	return n, nil
+}
 
-	rows, err := s.db.Query(q)
+func (s *SQLiteStore) List() ([]*SandboxRecord, error) {
+	q := `SELECT ` + sqliteSandboxCols + ` FROM sandboxes ORDER BY created_at DESC`
+	return s.querySandboxRecords(q)
+}
+
+func (s *SQLiteStore) ListByTenant(tenantID string) ([]*SandboxRecord, error) {
+	q := `SELECT ` + sqliteSandboxCols + ` FROM sandboxes WHERE tenant_id = ? ORDER BY created_at DESC`
+	return s.querySandboxRecords(q, tenantID)
+}
+
+func (s *SQLiteStore) CreateTenant(t *Tenant) error {
+	const q = `INSERT INTO tenants (id, name, external_ref, max_sandboxes, created_at) VALUES (?, ?, ?, ?, ?)`
+	_, err := s.db.Exec(q, t.ID, t.Name, t.ExternalRef, t.MaxSandboxes, t.CreatedAt)
 	if err != nil {
-		return nil, fmt.Errorf("store: list sandboxes: %w", err)
+		return fmt.Errorf("store: create tenant %s: %w", t.ID, err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) GetTenant(id string) (*Tenant, error) {
+	row := s.db.QueryRow(`SELECT id, name, external_ref, max_sandboxes, created_at FROM tenants WHERE id = ?`, id)
+	t, err := scanTenant(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("store: get tenant %s: %w", id, err)
+	}
+	return t, nil
+}
+
+func (s *SQLiteStore) ListTenants() ([]*Tenant, error) {
+	rows, err := s.db.Query(`SELECT id, name, external_ref, max_sandboxes, created_at FROM tenants ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("store: list tenants: %w", err)
 	}
 	defer rows.Close()
-
-	var records []*SandboxRecord
+	var out []*Tenant
 	for rows.Next() {
-		rec, err := scanRecord(rows)
+		t, err := scanTenant(rows)
 		if err != nil {
-			return nil, fmt.Errorf("store: list sandboxes scan: %w", err)
+			return nil, fmt.Errorf("store: list tenants scan: %w", err)
 		}
-		records = append(records, rec)
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLiteStore) DeleteTenant(id string) error {
+	if _, err := s.db.Exec(`DELETE FROM api_keys WHERE tenant_id = ?`, id); err != nil {
+		return fmt.Errorf("store: delete tenant keys %s: %w", id, err)
+	}
+	if _, err := s.db.Exec(`DELETE FROM tenants WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("store: delete tenant %s: %w", id, err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) CreateAPIKey(k *APIKey) error {
+	var revoked any
+	if k.RevokedAt > 0 {
+		revoked = k.RevokedAt
+	}
+	const q = `INSERT INTO api_keys (id, tenant_id, key_hash, prefix, created_at, revoked_at) VALUES (?, ?, ?, ?, ?, ?)`
+	_, err := s.db.Exec(q, k.ID, k.TenantID, k.KeyHash, k.Prefix, k.CreatedAt, revoked)
+	if err != nil {
+		return fmt.Errorf("store: create api key %s: %w", k.ID, err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) GetAPIKey(id string) (*APIKey, error) {
+	row := s.db.QueryRow(`SELECT id, tenant_id, key_hash, prefix, created_at, revoked_at FROM api_keys WHERE id = ?`, id)
+	k, err := scanAPIKey(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("store: get api key %s: %w", id, err)
+	}
+	return k, nil
+}
+
+func (s *SQLiteStore) ListAPIKeysByTenant(tenantID string) ([]*APIKey, error) {
+	rows, err := s.db.Query(`SELECT id, tenant_id, key_hash, prefix, created_at, revoked_at FROM api_keys WHERE tenant_id = ? ORDER BY created_at DESC`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("store: list api keys: %w", err)
+	}
+	defer rows.Close()
+	return scanAPIKeyRows(rows)
+}
+
+func (s *SQLiteStore) ListActiveAPIKeysByPrefix(prefix string) ([]*APIKey, error) {
+	rows, err := s.db.Query(`SELECT id, tenant_id, key_hash, prefix, created_at, revoked_at FROM api_keys WHERE prefix = ? AND revoked_at IS NULL`, prefix)
+	if err != nil {
+		return nil, fmt.Errorf("store: list api keys by prefix: %w", err)
+	}
+	defer rows.Close()
+	return scanAPIKeyRows(rows)
+}
+
+func (s *SQLiteStore) RevokeAPIKey(id string) error {
+	now := time.Now().Unix()
+	if _, err := s.db.Exec(`UPDATE api_keys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`, now, id); err != nil {
+		return fmt.Errorf("store: revoke api key %s: %w", id, err)
+	}
+	return nil
+}
+
+func scanAPIKeyRows(rows *sql.Rows) ([]*APIKey, error) {
+	var out []*APIKey
+	for rows.Next() {
+		k, err := scanAPIKey(rows)
+		if err != nil {
+			return nil, fmt.Errorf("store: scan api key: %w", err)
+		}
+		out = append(out, k)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: list sandboxes rows: %w", err)
+		return nil, err
 	}
-	return records, nil
+	return out, nil
 }

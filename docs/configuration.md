@@ -14,7 +14,7 @@ All services are configured via environment variables.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `SANDBOX_API_KEYS` | *(required)* | Comma-separated list of valid external API keys |
+| `SANDBOX_API_KEYS` | *(required)* | Comma-separated **admin** API keys. Full access to all sandboxes and `/admin/tenants` key management. Self-hosted can use these alone without minting tenant keys. |
 | `SANDBOX_API_RUNNER_REGISTRATION_TOKEN` | *(required)* | Shared secret; runners authenticate to the private gRPC registration service with `Authorization: Bearer …` |
 | `SANDBOX_API_RUNNER_API_KEY` | *(empty)* | Optional API key injected by the API when calling runner HTTP |
 | `SANDBOX_API_LOG_LEVEL` | `info` | Minimum log severity (`debug`, `info`, `warn`, `error`; case-insensitive) |

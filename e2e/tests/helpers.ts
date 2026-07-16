@@ -4,22 +4,65 @@ import * as https from 'node:https';
 import { SandboxClient, type ExecResult } from '@n8n/sandbox-client';
 import { execFileSync } from 'node:child_process';
 
-const API_KEY = process.env.SANDBOX_API_KEY || 'test';
-const BASE_URL = process.env.BASE_URL || 'http://localhost:8080';
+/** Admin key from env (SANDBOX_API_KEYS). Used to mint tenant keys. */
+export const ADMIN_API_KEY = process.env.SANDBOX_API_KEY || 'test';
+const BASE_URL = process.env.BASE_URL || process.env.BASE_URL_A || 'http://localhost:8080';
 
-export const client = new SandboxClient({ baseUrl: BASE_URL, apiKey: API_KEY });
+let tenantApiKey: string | null = null;
+let tenantMintPromise: Promise<string> | null = null;
 
-export function sandboxClient(baseUrl: string = BASE_URL): SandboxClient {
-  return new SandboxClient({ baseUrl, apiKey: API_KEY });
+async function mintTenantApiKey(mintBaseUrl: string = BASE_URL): Promise<string> {
+  const res = await fetch(`${mintBaseUrl}/admin/tenants`, {
+    method: 'POST',
+    headers: {
+      'X-Api-Key': ADMIN_API_KEY,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ name: `e2e-${process.pid}-${Date.now()}` }),
+  });
+  if (!res.ok) {
+    throw new Error(`mint tenant API key failed: ${res.status} ${await res.text()}`);
+  }
+  const body = (await res.json()) as {
+    tenant: { id: string };
+    key: { api_key: string };
+  };
+  tenantApiKey = body.key.api_key;
+  client = new SandboxClient({ baseUrl: mintBaseUrl, apiKey: tenantApiKey });
+  return tenantApiKey;
+}
+
+/** Resolves the tenant API key used for sandbox traffic (mints once per process). */
+export async function getApiKey(mintBaseUrl?: string): Promise<string> {
+  if (tenantApiKey) return tenantApiKey;
+  if (!tenantMintPromise) {
+    tenantMintPromise = mintTenantApiKey(mintBaseUrl ?? BASE_URL).catch((err) => {
+      tenantMintPromise = null;
+      throw err;
+    });
+  }
+  return tenantMintPromise;
+}
+
+export async function ensureTenantAuth(mintBaseUrl?: string): Promise<void> {
+  await getApiKey(mintBaseUrl);
+}
+
+/** Tenant-scoped client (initialized after ensureTenantAuth / first helper call). */
+export let client = new SandboxClient({ baseUrl: BASE_URL, apiKey: ADMIN_API_KEY });
+
+export function sandboxClient(baseUrl: string = BASE_URL, apiKey?: string): SandboxClient {
+  return new SandboxClient({ baseUrl, apiKey: apiKey ?? tenantApiKey ?? ADMIN_API_KEY });
 }
 
 export type { ExecResult };
 
-function headers(extra?: Record<string, string>): Record<string, string> {
-  return { 'X-Api-Key': API_KEY, ...extra };
+async function headers(extra?: Record<string, string>): Promise<Record<string, string>> {
+  return { 'X-Api-Key': await getApiKey(), ...extra };
 }
 
 export async function createSandbox(): Promise<string> {
+  await ensureTenantAuth();
   const record = await client.createSandbox();
   return record.id;
 }
@@ -57,6 +100,7 @@ export async function createSandboxWithRetry(maxAttempts = 5): Promise<string> {
 }
 
 export async function deleteSandbox(id: string, c: SandboxClient = client): Promise<void> {
+  await ensureTenantAuth();
   await c.deleteSandbox(id);
 }
 
@@ -65,6 +109,7 @@ export async function exec(
   command: string,
   opts?: { env?: Record<string, string>; workdir?: string; timeoutMs?: number },
 ): Promise<ExecResult> {
+  await ensureTenantAuth();
   return client.exec(id, {
     command,
     env: opts?.env,
@@ -92,14 +137,16 @@ export async function execWithTransientRetry(
   id: string,
   command: string,
   opts?: { env?: Record<string, string>; workdir?: string; timeoutMs?: number; retryWindowMs?: number },
-  c: SandboxClient = client,
+  c?: SandboxClient,
 ): Promise<ExecResult> {
+  await ensureTenantAuth();
+  const active = c ?? client;
   const deadlineMs = opts?.retryWindowMs ?? 12_000;
   const deadline = Date.now() + deadlineMs;
   let lastErr: unknown;
   while (Date.now() < deadline) {
     try {
-      return await c.exec(id, {
+      return await active.exec(id, {
         command,
         env: opts?.env,
         workdir: opts?.workdir,
@@ -121,6 +168,7 @@ export async function uploadFile(
   path: string,
   content: string | Buffer,
 ): Promise<void> {
+  await ensureTenantAuth();
   const filePath = path.startsWith('/') ? path : `/${path}`;
   await client.writeFile(id, filePath, content);
 }
@@ -129,6 +177,7 @@ export async function downloadFile(
   id: string,
   path: string,
 ): Promise<string> {
+  await ensureTenantAuth();
   const filePath = path.startsWith('/') ? path : `/${path}`;
   const buf = await client.readFile(id, filePath);
   return buf.toString('utf-8');
@@ -139,7 +188,8 @@ export async function downloadFile(
  * arrives, then destroys the response (simulating a client disconnect).
  * Returns the exec_id from the started event.
  */
-export function startAndDisconnect(sandboxId: string, command: string): Promise<string> {
+export async function startAndDisconnect(sandboxId: string, command: string): Promise<string> {
+  const apiKey = await getApiKey();
   return new Promise((resolve, reject) => {
     const url = new URL(`${BASE_URL}/sandboxes/${sandboxId}/executions`);
     const reqFn = url.protocol === 'https:' ? https.request : http.request;
@@ -151,7 +201,7 @@ export function startAndDisconnect(sandboxId: string, command: string): Promise<
       {
         method: 'POST',
         headers: {
-          'X-Api-Key': API_KEY,
+          'X-Api-Key': apiKey,
           'Content-Type': 'application/json',
           'Content-Length': Buffer.byteLength(body).toString(),
         },
@@ -202,7 +252,7 @@ export async function apiRequest(
   path: string,
   opts?: { data?: unknown; rawHeaders?: Record<string, string> },
 ): Promise<{ status: number; body: string; json: () => Promise<unknown> }> {
-  const h = opts?.rawHeaders ?? headers({ 'Content-Type': 'application/json' });
+  const h = opts?.rawHeaders ?? (await headers({ 'Content-Type': 'application/json' }));
   const resp = await request.fetch(path, {
     method,
     headers: h,

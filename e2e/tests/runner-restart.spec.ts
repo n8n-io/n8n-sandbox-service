@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { test, expect } from '@playwright/test';
-import { apiRequest, createSandbox, deleteSandbox, exec, restartRunnerForE2E, waitRunnerHttpReady } from './helpers';
+import { apiRequest, createSandbox, deleteSandbox, exec, getApiKey, restartRunnerForE2E, waitRunnerHttpReady } from './helpers';
 async function waitDockerRunnerReady(container: string, deadlineMs = 75_000): Promise<void> {
   const deadline = Date.now() + deadlineMs;
   while (Date.now() < deadline) {
@@ -36,7 +36,7 @@ test.describe('Runner restart', () => {
 
       const execRes = await request.post(`/sandboxes/${id}/executions`, {
         headers: {
-          'X-Api-Key': process.env.SANDBOX_API_KEY || 'test',
+          'X-Api-Key': await getApiKey(),
           'Content-Type': 'application/json',
         },
         data: { command: 'true' },
