@@ -20,11 +20,19 @@ All services are configured via environment variables.
 | `SANDBOX_API_LOG_LEVEL` | `info` | Minimum log severity (`debug`, `info`, `warn`, `error`; case-insensitive) |
 | `SANDBOX_API_LISTEN_ADDR` | `:8080` | Public HTTP listen address |
 | `SANDBOX_API_GRPC_LISTEN_ADDR` | `:9090` | Private gRPC listen address for runner registration streams |
-| `SANDBOX_API_DATA_DIR` | `/var/lib/n8n-sandbox-api` | SQLite store directory; must already exist and be writable by the API user. Mount a persistent volume here to retain sandbox state across container restarts. |
+| `SANDBOX_API_STORE` | `sqlite` | Store backend: `sqlite` (default, single API pod) or `postgres` (multi-pod) |
+| `SANDBOX_API_DATA_DIR` | `/var/lib/n8n-sandbox-api` | SQLite store directory when `SANDBOX_API_STORE=sqlite`; must exist and be writable. Mount a persistent volume here to retain sandbox state across API pod restarts. |
+| `SANDBOX_API_POSTGRES_HOST` | *(required with postgres)* | Postgres host |
+| `SANDBOX_API_POSTGRES_PORT` | `5432` | Postgres port |
+| `SANDBOX_API_POSTGRES_USER` | *(required with postgres)* | Postgres user |
+| `SANDBOX_API_POSTGRES_PASSWORD` | *(required with postgres)* | Postgres password |
+| `SANDBOX_API_POSTGRES_DB` | *(required with postgres)* | Postgres database name |
+| `SANDBOX_API_POSTGRES_SSLMODE` | `require` | Postgres TLS mode (`disable`, `require`, `verify-full`, etc.) |
 | `SANDBOX_API_MAX_FILE_BYTES` | `10485760` | Maximum file upload size (10 MB) |
 | `SANDBOX_API_ENABLE_CORS` | `false` | Enable CORS headers (allow all origins); needed for the browser playground |
 | `SANDBOX_API_METRICS_ENABLED` | `false` | When true, expose Prometheus `/metrics` on the public listener (no `X-Api-Key`; firewall the port). See [Metrics](#metrics). |
 | `SANDBOX_API_RUNNER_HEARTBEAT_GRACE` | `45s` | How long after the last gRPC heartbeat a runner remains eligible for placement (Go [`time.ParseDuration`](https://pkg.go.dev/time#ParseDuration) syntax, e.g. `45s`, `2m`) |
+| `SANDBOX_API_ORPHAN_REAP_BUFFER` | `5m` | How long after a runner deregisters before the idle sweeper removes its orphaned sandbox rows from the store |
 | `SANDBOX_API_GRPC_TLS_CERT_FILE` | *(required)* | Server certificate (PEM) for the registration gRPC listener |
 | `SANDBOX_API_GRPC_TLS_KEY_FILE` | *(required)* | Server private key (PEM) |
 | `SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE` | *(required)* | CA bundle (PEM) that signed runner client certificates |
@@ -33,7 +41,11 @@ All services are configured via environment variables.
 | `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE` | *(required)* | API client key (PEM) |
 | `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_SERVER_NAME` | *(empty)* | TLS verify name when it must differ from the dial host (defaults to the runner host) |
 
-**Heartbeat grace:** Runners stay in the in-memory registry while their gRPC stream is open. Between heartbeats, the API still considers a runner usable for new placements only if its last heartbeat was within `SANDBOX_API_RUNNER_HEARTBEAT_GRACE`. After that window, the runner is skipped until the next heartbeat (or dropped when the stream ends). Tune this if heartbeats are infrequent or the network is slow, so runners are not marked stale too aggressively.
+**Heartbeat grace:** Runners stay registered while their gRPC stream is open and heartbeats are written to the store (Postgres) or in-memory registry (SQLite). Between heartbeats, the API still considers a runner usable for new placements only if its last heartbeat was within `SANDBOX_API_RUNNER_HEARTBEAT_GRACE`. After that window, the runner is skipped until the next heartbeat.
+
+**Multi-pod (Postgres):** Set `SANDBOX_API_STORE=postgres` and the `SANDBOX_API_POSTGRES_*` variables when running multiple API replicas. Sandbox metadata and runner heartbeats are shared in Postgres; the idle sweeper uses a Postgres advisory lock so only one pod sweeps at a time. New sandboxes are placed on the eligible runner with the lowest reported `capacity_used`. Disable `api.persistence` in Helm when using Postgres (state lives in the database, not local disk).
+
+The idle sweeper waits `SANDBOX_API_ORPHAN_REAP_BUFFER` (default `5m`) after a runner's last heartbeat before removing its orphaned sandbox rows from the API store (sandboxes that are already idle stop/delete candidates). With SQLite, this is based on observing the runner stream close; with Postgres, it is based on `last_seen` in the shared registry.
 
 ## Runner
 

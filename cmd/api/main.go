@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"log/slog"
 	"net"
 	"net/http"
@@ -35,37 +36,55 @@ func main() {
 	}
 	logLevel.Set(cfg.LogLevel)
 
-	// Ensure data directory exists
-	if info, err := os.Stat(cfg.DataDir); err != nil {
-		slog.Error("data dir not accessible", "path", cfg.DataDir, "error", err)
-		os.Exit(1)
-	} else if !info.IsDir() {
-		slog.Error("data dir is not a directory", "path", cfg.DataDir)
-		os.Exit(1)
-	}
+	var (
+		sandboxStore store.SandboxStore
+		runnerReg    registry.RunnerRegistry
+		sweepLockDB  *sql.DB
+	)
 
-	// Open SQLite store for state management
-	dbPath := filepath.Join(cfg.DataDir, "api.db")
-	s, err := store.New(dbPath)
-	if err != nil {
-		slog.Error("open store", "error", err)
-		os.Exit(1)
-	}
-	defer s.Close()
+	switch cfg.Store {
+	case config.StorePostgres:
+		pgStore, err := store.NewPostgres(cfg.Postgres)
+		if err != nil {
+			slog.Error("open postgres store", "error", err)
+			os.Exit(1)
+		}
+		sandboxStore = pgStore
+		runnerReg = registry.NewPostgres(pgStore.DB(), cfg.HeartbeatGrace)
+		sweepLockDB = pgStore.DB()
+		slog.Info("using postgres store", "host", cfg.Postgres.Host, "db", cfg.Postgres.Database)
+	default:
+		if info, err := os.Stat(cfg.DataDir); err != nil {
+			slog.Error("data dir not accessible", "path", cfg.DataDir, "error", err)
+			os.Exit(1)
+		} else if !info.IsDir() {
+			slog.Error("data dir is not a directory", "path", cfg.DataDir)
+			os.Exit(1)
+		}
 
-	reg := registry.New(cfg.HeartbeatGrace)
+		dbPath := filepath.Join(cfg.DataDir, "api.db")
+		sqliteStore, err := store.NewSQLite(dbPath)
+		if err != nil {
+			slog.Error("open sqlite store", "error", err)
+			os.Exit(1)
+		}
+		sandboxStore = sqliteStore
+		runnerReg = registry.NewMemory(cfg.HeartbeatGrace)
+		slog.Info("using sqlite store", "path", dbPath)
+	}
+	defer sandboxStore.Close()
 
 	mrec := metrics.NewAPIRecorder(cfg.MetricsEnabled)
 	if mrec.Enabled() {
 		mrec.SetActiveSandboxes(func() float64 {
-			n, err := s.Count()
+			n, err := sandboxStore.Count()
 			if err != nil {
 				slog.Warn("metrics: count sandboxes", "error", err)
 				return 0
 			}
 			return float64(n)
 		})
-		mrec.SetRunnersRegistered(func() float64 { return float64(reg.Len()) })
+		mrec.SetRunnersRegistered(func() float64 { return float64(runnerReg.Len()) })
 		slog.Info("metrics endpoint enabled", "path", "/metrics")
 	}
 
@@ -73,10 +92,9 @@ func main() {
 
 	sweepCtx, sweepCancel := context.WithCancel(context.Background())
 	defer sweepCancel()
-	api.StartIdleSweeper(sweepCtx, s, cfg)
+	api.StartIdleSweeper(sweepCtx, sandboxStore, runnerReg, cfg, sweepLockDB)
 
-	// Create API gateway with state management
-	handler, err := api.NewGatewayRouter(s, cfg, reg, mrec)
+	handler, err := api.NewGatewayRouter(sandboxStore, cfg, runnerReg, mrec)
 	if err != nil {
 		slog.Error("failed to create api router", "error", err)
 		os.Exit(1)
@@ -109,12 +127,12 @@ func main() {
 	grpcSrv := grpc.NewServer(grpc.Creds(creds))
 	pb.RegisterRunnerRegistryServer(grpcSrv, &grpcapi.RunnerRegistryServer{
 		Token: cfg.RegistrationToken,
-		Reg:   reg,
+		Reg:   runnerReg,
 	})
 
 	serverErr := make(chan error, 1)
 	go func() {
-		slog.Info("api listening", "addr", cfg.ListenAddr, "grpc_addr", cfg.GRPCListenAddr)
+		slog.Info("api listening", "addr", cfg.ListenAddr, "grpc_addr", cfg.GRPCListenAddr, "store", cfg.Store)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			serverErr <- err
 		}
@@ -143,7 +161,6 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	// Active runner streams would block GracefulStop indefinitely; close RPCs on shutdown.
 	grpcSrv.Stop()
 	if err := srv.Shutdown(ctx); err != nil {
 		slog.Error("graceful shutdown failed", "error", err)

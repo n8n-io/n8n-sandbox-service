@@ -227,6 +227,7 @@ else
 	for f in tests/*.spec.ts; do
 		bn=$(basename "$f")
 		[[ "$bn" == sandbox-idle-ttl.spec.ts ]] && continue
+		[[ "$bn" == multi-pod-api.spec.ts ]] && continue
 		PLAYWRIGHT_SPECS+=("$f")
 	done
 	shopt -u nullglob

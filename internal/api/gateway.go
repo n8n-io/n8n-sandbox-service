@@ -12,7 +12,7 @@ import (
 // NewGatewayRouter creates the public API gateway that manages state and
 // coordinates with registered runner services. If rec is enabled, its
 // /metrics handler is mounted and HTTPMiddleware wraps the request chain.
-func NewGatewayRouter(s *store.Store, cfg *config.APIConfig, reg *registry.Registry, rec *metrics.APIRecorder) (http.Handler, error) {
+func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.RunnerRegistry, rec *metrics.APIRecorder) (http.Handler, error) {
 	sandboxProxy := sandboxProxyHandler(s, cfg)
 
 	mux := http.NewServeMux()

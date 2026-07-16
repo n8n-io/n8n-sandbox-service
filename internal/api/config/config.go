@@ -12,14 +12,43 @@ import (
 )
 
 const (
-	defaultListenAddr      = ":8080"
-	defaultGRPCListenAddr  = ":9090"
-	defaultMaxFileBytes    = 10 * 1024 * 1024 // 10 MB
-	defaultHeartbeatGrace  = 45 * time.Second
-	defaultIdleStopAfter   = time.Hour
-	defaultIdleDeleteAfter = 24 * time.Hour
-	defaultLogLevel        = slog.LevelInfo
+	defaultListenAddr       = ":8080"
+	defaultGRPCListenAddr   = ":9090"
+	defaultMaxFileBytes     = 10 * 1024 * 1024 // 10 MB
+	defaultHeartbeatGrace   = 45 * time.Second
+	defaultOrphanReapBuffer = 5 * time.Minute
+	defaultIdleStopAfter    = time.Hour
+	defaultIdleDeleteAfter  = 24 * time.Hour
+	defaultLogLevel         = slog.LevelInfo
+	defaultPostgresPort     = 5432
+	defaultPostgresSSLMode  = "require"
 )
+
+// StoreBackend selects the API sandbox store implementation.
+type StoreBackend string
+
+const (
+	StoreSQLite   StoreBackend = "sqlite"
+	StorePostgres StoreBackend = "postgres"
+)
+
+// PostgresConfig holds connection settings for the Postgres store backend.
+type PostgresConfig struct {
+	Host     string
+	Port     int
+	User     string
+	Password string
+	Database string
+	SSLMode  string
+}
+
+// DSN returns a libpq connection string for pgx/stdlib.
+func (p PostgresConfig) DSN() string {
+	return fmt.Sprintf(
+		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
+		p.Host, p.Port, p.User, p.Password, p.Database, p.SSLMode,
+	)
+}
 
 // APIConfig contains configuration for the public API gateway.
 type APIConfig struct {
@@ -41,8 +70,14 @@ type APIConfig struct {
 	// RunnerAPIKey is the optional API key sent to runner via X-Api-Key.
 	RunnerAPIKey string
 
-	// DataDir is the directory for storing API state.
+	// DataDir is the directory for storing API state (SQLite file when Store=sqlite).
 	DataDir string
+
+	// Store selects sqlite (default) or postgres for multi-pod deployments.
+	Store StoreBackend
+
+	// Postgres connection settings when Store=postgres.
+	Postgres PostgresConfig
 
 	// HeartbeatGrace is how long after the last gRPC heartbeat a runner may still be chosen for placement.
 	HeartbeatGrace time.Duration
@@ -72,6 +107,9 @@ type APIConfig struct {
 	IdleDeleteSafetyBuffer time.Duration
 	// IdleSweepInterval is how often the idle stop/delete sweeper runs (default 1m).
 	IdleSweepInterval time.Duration
+	// OrphanReapBuffer is how long after a runner deregisters before the idle
+	// sweeper removes its orphaned sandbox rows from the store.
+	OrphanReapBuffer time.Duration
 
 	// LogLevel controls the minimum log severity.
 	// Parsed from SANDBOX_API_LOG_LEVEL (default info).
@@ -87,14 +125,17 @@ type APIConfig struct {
 // LoadAPI reads API gateway configuration from environment variables.
 func LoadAPI() (*APIConfig, error) {
 	cfg := &APIConfig{
-		ListenAddr:      defaultListenAddr,
-		GRPCListenAddr:  defaultGRPCListenAddr,
-		MaxFileBytes:    defaultMaxFileBytes,
-		DataDir:         "/var/lib/n8n-sandbox-api",
-		HeartbeatGrace:  defaultHeartbeatGrace,
-		IdleStopAfter:   defaultIdleStopAfter,
-		IdleDeleteAfter: defaultIdleDeleteAfter,
-		LogLevel:        defaultLogLevel,
+		ListenAddr:       defaultListenAddr,
+		GRPCListenAddr:   defaultGRPCListenAddr,
+		MaxFileBytes:     defaultMaxFileBytes,
+		DataDir:          "/var/lib/n8n-sandbox-api",
+		Store:            StoreSQLite,
+		Postgres:         PostgresConfig{Port: defaultPostgresPort, SSLMode: defaultPostgresSSLMode},
+		HeartbeatGrace:   defaultHeartbeatGrace,
+		OrphanReapBuffer: defaultOrphanReapBuffer,
+		IdleStopAfter:    defaultIdleStopAfter,
+		IdleDeleteAfter:  defaultIdleDeleteAfter,
+		LogLevel:         defaultLogLevel,
 	}
 
 	// SANDBOX_API_LOG_LEVEL (optional)
@@ -241,6 +282,52 @@ func LoadAPI() (*APIConfig, error) {
 			return nil, fmt.Errorf("SANDBOX_API_IDLE_SWEEP_INTERVAL must be a positive duration, got %q", v)
 		}
 		cfg.IdleSweepInterval = d
+	}
+
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_ORPHAN_REAP_BUFFER")); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d <= 0 {
+			return nil, fmt.Errorf("SANDBOX_API_ORPHAN_REAP_BUFFER must be a positive duration, got %q", v)
+		}
+		cfg.OrphanReapBuffer = d
+	}
+
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_STORE")); v != "" {
+		switch StoreBackend(strings.ToLower(v)) {
+		case StoreSQLite, StorePostgres:
+			cfg.Store = StoreBackend(strings.ToLower(v))
+		default:
+			return nil, fmt.Errorf("SANDBOX_API_STORE must be sqlite or postgres, got %q", v)
+		}
+	}
+
+	if cfg.Store == StorePostgres {
+		cfg.Postgres.Host = strings.TrimSpace(os.Getenv("SANDBOX_API_POSTGRES_HOST"))
+		cfg.Postgres.User = strings.TrimSpace(os.Getenv("SANDBOX_API_POSTGRES_USER"))
+		cfg.Postgres.Password = os.Getenv("SANDBOX_API_POSTGRES_PASSWORD")
+		cfg.Postgres.Database = strings.TrimSpace(os.Getenv("SANDBOX_API_POSTGRES_DB"))
+		if v := strings.TrimSpace(os.Getenv("SANDBOX_API_POSTGRES_PORT")); v != "" {
+			port, err := strconv.Atoi(v)
+			if err != nil || port <= 0 {
+				return nil, fmt.Errorf("SANDBOX_API_POSTGRES_PORT must be a positive integer, got %q", v)
+			}
+			cfg.Postgres.Port = port
+		}
+		if v := strings.TrimSpace(os.Getenv("SANDBOX_API_POSTGRES_SSLMODE")); v != "" {
+			cfg.Postgres.SSLMode = v
+		}
+		if cfg.Postgres.Host == "" {
+			return nil, fmt.Errorf("SANDBOX_API_POSTGRES_HOST must be set when SANDBOX_API_STORE=postgres")
+		}
+		if cfg.Postgres.User == "" {
+			return nil, fmt.Errorf("SANDBOX_API_POSTGRES_USER must be set when SANDBOX_API_STORE=postgres")
+		}
+		if cfg.Postgres.Password == "" {
+			return nil, fmt.Errorf("SANDBOX_API_POSTGRES_PASSWORD must be set when SANDBOX_API_STORE=postgres")
+		}
+		if cfg.Postgres.Database == "" {
+			return nil, fmt.Errorf("SANDBOX_API_POSTGRES_DB must be set when SANDBOX_API_STORE=postgres")
+		}
 	}
 
 	return cfg, nil

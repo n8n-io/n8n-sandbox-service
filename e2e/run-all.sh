@@ -35,25 +35,31 @@ export E2E_SKIP_BUILD=1
 export E2E_TLS_DIR="$TLS_DIR"
 export E2E_API_TLS_DNS="$API_TLS_DNS"
 
-echo "======== E2E 1/3: no-runner (API only) ========"
+echo "======== E2E 1/5: no-runner (API only) ========"
 "$SCRIPT_DIR/run-no-runner.sh" "$@"
 
 echo "Cooling down between e2e phases (host Docker / DinD)..."
 sleep 2
 
-echo "======== E2E 2/3: two runners =================="
+echo "======== E2E 2/5: two runners =================="
 "$SCRIPT_DIR/run-two-runners.sh" "$@"
 
 echo "Cooling down between e2e phases (host Docker / DinD)..."
 sleep 2
 
-echo "======== E2E 3/4: single runner (full suite) =="
+echo "======== E2E 3/5: single runner (full suite) =="
 "$SCRIPT_DIR/run.sh" "$@"
 
 echo "Cooling down between e2e phases (host Docker / DinD)..."
 sleep 2
 
-echo "======== E2E 4/4: idle TTL (dedicated stack) ===="
+echo "======== E2E 4/5: idle TTL (dedicated stack) ===="
 "$SCRIPT_DIR/run-idle-ttl.sh" "$@"
+
+echo "Cooling down between e2e phases (host Docker / DinD)..."
+sleep 2
+
+echo "======== E2E 5/5: Postgres API (Docker runner) ="
+"$SCRIPT_DIR/run-postgres.sh" "$@"
 
 echo "======== All e2e phases passed ================"
