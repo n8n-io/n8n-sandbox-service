@@ -32,7 +32,7 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	mux.HandleFunc("DELETE /sandboxes/{id}", handleDeleteSandbox(s, cfg, rec))
 
 	mux.HandleFunc("GET /admin/tenants", handleListTenants(s))
-	mux.HandleFunc("POST /admin/tenants", handleCreateTenant(s))
+	mux.HandleFunc("POST /admin/tenants", handleCreateTenant(s, cfg))
 	mux.HandleFunc("GET /admin/tenants/{id}", handleGetTenant(s))
 	mux.HandleFunc("DELETE /admin/tenants/{id}", handleDeleteTenant(s))
 	mux.HandleFunc("GET /admin/tenants/{id}/keys", handleListTenantKeys(s))

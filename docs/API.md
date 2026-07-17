@@ -4,11 +4,11 @@ All endpoints except `/healthz` and `/metrics` require the `X-Api-Key` header fo
 
 ### API keys and tenants
 
-`SANDBOX_API_KEYS` are **admin** keys. An admin key can create/list/delete any sandbox and manage tenants (same behavior as before for self-hosted single-key setups).
+`SANDBOX_API_KEYS` are admin keys. An admin key can create/list/delete any sandbox, manage tenants and mint tenant API keys via the admin API.
 
-Optionally, create **tenants** and mint **tenant API keys** via the admin API. A tenant key may only create sandboxes for that tenant and may only list/get/delete/proxy its own sandboxes. Self-hosted operators can ignore tenant APIs entirely and keep using the admin key.
+A tenant key may only create sandboxes for that tenant and may only list/get/delete/proxy its own sandboxes. Self-hosted operators can ignore tenant APIs entirely and keep using the admin key.
 
-Tenant keys are returned in plaintext **once** on create; only a hash is stored.
+Tenant keys are returned in plaintext once on create; only a hash is stored.
 
 ---
 
@@ -79,8 +79,8 @@ curl http://localhost:8080/metrics
 
 List sandboxes, ordered by creation time (newest first).
 
-- **Admin key:** all sandboxes
-- **Tenant key:** only sandboxes owned by that tenant
+- Admin key: all sandboxes
+- Tenant key: only sandboxes owned by that tenant
 
 **Response:** `200 OK`
 
@@ -108,7 +108,7 @@ curl http://localhost:8080/sandboxes \
 
 Create a new sandbox. No request body is required.
 
-With a **tenant** key, the sandbox is owned by that tenant and counts toward the tenant's `max_sandboxes` quota (`403` when exceeded). With an **admin** key, the sandbox has no tenant owner (admin-visible only for ownership checks; admins see all sandboxes in list).
+With a tenant key, the sandbox is owned by that tenant and counts toward the tenant's `max_sandboxes` quota (`403` when exceeded). With an admin key, the sandbox has no tenant owner (admin-visible only for ownership checks; admins see all sandboxes in list).
 
 Resource limits (memory, CPU, process count) are configured on the runner via environment variables. Network policy blocks all private IP ranges and allows public internet access.
 
@@ -622,7 +622,7 @@ curl "http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/stat?
 
 ## Admin: tenants and API keys
 
-All `/admin/*` routes require an **admin** API key (`SANDBOX_API_KEYS`). Tenant keys receive `403`.
+All `/admin/*` routes require an admin API key (`SANDBOX_API_KEYS`). Tenant keys receive `403`.
 
 ### GET /admin/tenants
 
@@ -657,7 +657,7 @@ Create a tenant. By default also mints one API key (`create_key` defaults to `tr
 }
 ```
 
-`max_sandboxes` defaults to `50`; `0` means unlimited.
+`max_sandboxes` defaults to `SANDBOX_API_DEFAULT_MAX_SANDBOXES` (default `50`); `0` means unlimited.
 
 **Response:** `201 Created`
 

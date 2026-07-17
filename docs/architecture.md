@@ -130,7 +130,7 @@ A lightweight HTTP server embedded in every sandbox container. It is the only pr
 
 ### Client → API (REST + API Key)
 
-All client requests go through the API gateway over HTTP. Authentication uses an `X-Api-Key` header. Keys in `SANDBOX_API_KEYS` are admin keys (full access). Optionally, admin-minted tenant keys (stored hashed in the API database) are scoped to that tenant's sandboxes.
+All client requests go through the API gateway over HTTP. Authentication uses an `X-Api-Key` header. Keys in `SANDBOX_API_KEYS` are admin keys (full access). Admin-minted tenant keys (stored hashed in the API database) are scoped to that tenant's sandboxes.
 
 ### API ↔ Runner Registration (gRPC Bidirectional Streaming + mTLS)
 

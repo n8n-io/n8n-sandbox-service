@@ -1,12 +1,13 @@
 #!/bin/sh
 # Smoke test against a deployed or local sandbox API.
 #
-# Exercises core paths aligned with e2e (no idle TTL or other special config):
-# create → exec → resolv.conf → DNS → HTTPS → file write/read → delete.
+# Uses SANDBOX_API_KEY as an admin key to mint a tenant API key, then runs
+# create → exec → resolv.conf → DNS → HTTPS → file write/read → delete
+# with that tenant key (not the admin key).
 #
 # Environment:
 #   SANDBOX_API_BASE       — API base URL (required unless set in env file)
-#   SANDBOX_API_KEY        — X-Api-Key (optional if kubectl secret vars are set)
+#   SANDBOX_API_KEY        — admin X-Api-Key (optional if kubectl secret vars are set)
 #   SMOKE_ENV_FILE         — Env file to source (default: none)
 #   SMOKE_DEV_ENV_FILE     — Alias for SMOKE_ENV_FILE (backward compatible)
 #   SMOKE_ENV              — Load scripts/smoke-sandbox.<env>.env (e.g. dev, stage, prod)
@@ -269,7 +270,7 @@ step "healthz"
 # shellcheck disable=SC2086
 curl ${CURL_COMMON} "${BASE}/healthz" >/dev/null
 
-step "mint tenant API key"
+step "mint tenant API key (admin key)"
 tenant_json="$(
 	# shellcheck disable=SC2086
 	curl ${CURL_COMMON} -X POST "${BASE}/admin/tenants" \
@@ -283,8 +284,9 @@ if [ -z "${TENANT_ID}" ] || [ "${TENANT_ID}" = "null" ] || [ -z "${KEY}" ] || [ 
 	fail "mint tenant: missing tenant.id or key.api_key (${tenant_json})"
 fi
 printf '    tenant_id: %s\n' "${TENANT_ID}"
+printf '    using tenant API key for sandbox create/exec/delete\n'
 
-sid="$(create_sandbox "create sandbox")"
+sid="$(create_sandbox "create sandbox (tenant key)")"
 run_core_guest_checks "${sid}"
 
 step "file write/read"

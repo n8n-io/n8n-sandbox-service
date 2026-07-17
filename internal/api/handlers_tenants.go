@@ -8,10 +8,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/n8n-io/sandbox-service/internal/api/config"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
 )
-
-const defaultMaxSandboxes = 50
 
 type createTenantRequest struct {
 	Name         string `json:"name"`
@@ -84,7 +83,7 @@ func handleListTenants(s store.SandboxStore) http.HandlerFunc {
 	}
 }
 
-func handleCreateTenant(s store.SandboxStore) http.HandlerFunc {
+func handleCreateTenant(s store.SandboxStore, cfg *config.APIConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !requireAdmin(w, r) {
 			return
@@ -96,7 +95,7 @@ func handleCreateTenant(s store.SandboxStore) http.HandlerFunc {
 				return
 			}
 		}
-		maxSandboxes := defaultMaxSandboxes
+		maxSandboxes := cfg.DefaultMaxSandboxes
 		if req.MaxSandboxes != nil {
 			if *req.MaxSandboxes < 0 {
 				writeError(w, http.StatusBadRequest, "max_sandboxes must be >= 0")
