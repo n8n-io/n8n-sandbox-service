@@ -18,6 +18,7 @@ REMOTE_SANDBOX_IMAGE="${REGISTRY_INTERNAL_ADDR}/n8n-sandbox:e2e-${ARCH}"
 RUNNER1_NAME="sandbox-runner-e2e-a-$$"
 RUNNER2_NAME="sandbox-runner-e2e-b-$$"
 API_CONTAINER_NAME="sandbox-api-e2e-2r-$$"
+POSTGRES_CONTAINER_NAME="sandbox-postgres-e2e-2r-$$"
 NETWORK_NAME="sandbox-e2e-net-2r-$$"
 PORT="${PORT:-18081}"
 API_KEY="test"
@@ -54,6 +55,7 @@ cleanup() {
 	if [[ "$TLS_DIR_OWNED" == "1" ]]; then
 		rm -rf "$TLS_DIR"
 	fi
+	e2e_stop_postgres_container "$POSTGRES_CONTAINER_NAME"
 }
 trap cleanup EXIT
 
@@ -68,6 +70,9 @@ API_DATA_VOLUME_ARGS=()
 e2e_setup_api_container "$TLS_DIR" "$API_IMAGE"
 
 e2e_docker_network_create "$NETWORK_NAME"
+
+API_STORE_ENV=()
+e2e_configure_api_store "$NETWORK_NAME" "$POSTGRES_CONTAINER_NAME"
 
 if ! docker ps --format '{{.Names}}' | grep -qx "${REGISTRY_NAME}"; then
 	echo "Starting local registry..."
@@ -109,16 +114,11 @@ fi
 API_DOCKER_RUN+=(
 	--network "$NETWORK_NAME"
 	-p "$PORT:8080"
-	-v "$TLS_DIR/api:/grpc-tls:ro"
-	-e "SANDBOX_API_KEYS=$API_KEY"
-	-e "SANDBOX_API_RUNNER_REGISTRATION_TOKEN=$REG_TOKEN"
-	-e "SANDBOX_API_RUNNER_API_KEY=$RUNNER_INTERNAL_API_KEY"
-	-e "SANDBOX_API_GRPC_TLS_CERT_FILE=/grpc-tls/grpc-server.crt"
-	-e "SANDBOX_API_GRPC_TLS_KEY_FILE=/grpc-tls/grpc-server.key"
-	-e "SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE=/grpc-tls/ca.crt"
-	-e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE=/grpc-tls/ca.crt"
-	-e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE=/grpc-tls/control-grpc-api-client.crt"
-	-e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE=/grpc-tls/control-grpc-api-client.key"
+)
+API_IDLE_ENV=()
+e2e_api_container_env_args "$API_KEY" "$REG_TOKEN" "$RUNNER_INTERNAL_API_KEY" "$TLS_DIR"
+API_DOCKER_RUN+=("${E2E_API_CONTAINER_ENV_ARGS[@]}")
+API_DOCKER_RUN+=(
 	--name "$API_CONTAINER_NAME"
 	"$API_IMAGE"
 )

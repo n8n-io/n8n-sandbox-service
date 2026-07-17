@@ -295,3 +295,117 @@ e2e_stop_pid() {
 	kill -KILL "$pid" >/dev/null 2>&1 || true
 	wait "$pid" >/dev/null 2>&1 || true
 }
+
+# e2e_store_backend returns sqlite (default) or postgres from E2E_STORE.
+e2e_store_backend() {
+	echo "${E2E_STORE:-sqlite}"
+}
+
+# e2e_configure_api_store starts Postgres when E2E_STORE=postgres and sets
+# API_STORE_ENV / API_DATA_VOLUME_ARGS for the API container(s).
+e2e_configure_api_store() {
+	local network=$1 postgres_container=$2
+	API_STORE_ENV=()
+	if [[ "$(e2e_store_backend)" != "postgres" ]]; then
+		return 0
+	fi
+
+	E2E_POSTGRES_CONTAINER="$postgres_container"
+	echo "Starting Postgres for API store ($E2E_POSTGRES_CONTAINER)..."
+	docker run -d \
+		--network "$network" \
+		--name "$E2E_POSTGRES_CONTAINER" \
+		-e POSTGRES_USER=sandbox \
+		-e POSTGRES_PASSWORD=sandbox \
+		-e POSTGRES_DB=sandbox \
+		postgres:16-alpine >/dev/null
+
+	e2e_wait_for_postgres "$E2E_POSTGRES_CONTAINER"
+
+	API_DATA_VOLUME_ARGS=()
+	API_STORE_ENV=(
+		-e "SANDBOX_API_STORE=postgres"
+		-e "SANDBOX_API_POSTGRES_HOST=$E2E_POSTGRES_CONTAINER"
+		-e "SANDBOX_API_POSTGRES_PORT=5432"
+		-e "SANDBOX_API_POSTGRES_USER=sandbox"
+		-e "SANDBOX_API_POSTGRES_PASSWORD=sandbox"
+		-e "SANDBOX_API_POSTGRES_DB=sandbox"
+		-e "SANDBOX_API_POSTGRES_SSLMODE=disable"
+	)
+}
+
+e2e_wait_for_postgres() {
+	local container=$1
+	local i
+	for i in $(seq 1 30); do
+		if docker exec "$container" pg_isready -U sandbox -d sandbox >/dev/null 2>&1; then
+			echo "Postgres is ready."
+			return 0
+		fi
+		sleep 1
+	done
+	echo "Postgres failed to start within 30s" >&2
+	docker logs "$container" 2>&1 || true
+	return 1
+}
+
+e2e_stop_postgres_container() {
+	local container=${1:-${E2E_POSTGRES_CONTAINER:-}}
+	[[ -n "$container" ]] || return 0
+	docker stop "$container" >/dev/null 2>&1 || true
+	docker rm "$container" >/dev/null 2>&1 || true
+}
+
+# e2e_start_api_grpc_proxy runs nginx TCP passthrough to two API pods (simulates a k8s Service).
+# The proxy gets network-alias $alias so runners can dial a stable gRPC address.
+e2e_start_api_grpc_proxy() {
+	local network=$1 proxy_name=$2 alias=$3 api1=$4 api2=$5 conf_dir=$6
+	cat >"$conf_dir/grpc-proxy.conf" <<EOF
+events {
+	worker_connections 1024;
+}
+stream {
+	upstream api_grpc {
+		server ${api1}:9090 max_fails=1 fail_timeout=5s;
+		server ${api2}:9090 max_fails=1 fail_timeout=5s;
+	}
+	server {
+		listen 9090;
+		proxy_pass api_grpc;
+		proxy_connect_timeout 5s;
+	}
+}
+EOF
+	docker rm -f "$proxy_name" >/dev/null 2>&1 || true
+	docker run -d \
+		--network "$network" \
+		--network-alias "$alias" \
+		--name "$proxy_name" \
+		-v "$conf_dir/grpc-proxy.conf:/etc/nginx/nginx.conf:ro" \
+		nginx:1.27-alpine >/dev/null
+}
+
+# Sets E2E_API_CONTAINER_ENV_ARGS with shared API container docker args (TLS, keys,
+# optional idle TTL, store backend). Caller appends: API_DOCKER_RUN+=("${E2E_API_CONTAINER_ENV_ARGS[@]}")
+e2e_api_container_env_args() {
+	local api_key=$1 reg_token=$2 runner_api_key=$3 tls_dir=$4
+	E2E_API_CONTAINER_ENV_ARGS=(
+		-v "$tls_dir/api:/grpc-tls:ro"
+		-e "SANDBOX_API_KEYS=$api_key"
+		-e "SANDBOX_API_METRICS_ENABLED=true"
+		-e "SANDBOX_API_RUNNER_REGISTRATION_TOKEN=$reg_token"
+		-e "SANDBOX_API_RUNNER_API_KEY=$runner_api_key"
+		-e "SANDBOX_API_GRPC_TLS_CERT_FILE=/grpc-tls/grpc-server.crt"
+		-e "SANDBOX_API_GRPC_TLS_KEY_FILE=/grpc-tls/grpc-server.key"
+		-e "SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE=/grpc-tls/ca.crt"
+		-e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE=/grpc-tls/ca.crt"
+		-e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE=/grpc-tls/control-grpc-api-client.crt"
+		-e "SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE=/grpc-tls/control-grpc-api-client.key"
+	)
+	if ((${#API_STORE_ENV[@]})); then
+		E2E_API_CONTAINER_ENV_ARGS+=("${API_STORE_ENV[@]}")
+	fi
+	if ((${#API_IDLE_ENV[@]})); then
+		E2E_API_CONTAINER_ENV_ARGS+=("${API_IDLE_ENV[@]}")
+	fi
+}

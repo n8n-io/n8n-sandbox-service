@@ -9,6 +9,10 @@ const BASE_URL = process.env.BASE_URL || 'http://localhost:8080';
 
 export const client = new SandboxClient({ baseUrl: BASE_URL, apiKey: API_KEY });
 
+export function sandboxClient(baseUrl: string = BASE_URL): SandboxClient {
+  return new SandboxClient({ baseUrl, apiKey: API_KEY });
+}
+
 export type { ExecResult };
 
 function headers(extra?: Record<string, string>): Record<string, string> {
@@ -52,8 +56,8 @@ export async function createSandboxWithRetry(maxAttempts = 5): Promise<string> {
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 
-export async function deleteSandbox(id: string): Promise<void> {
-  await client.deleteSandbox(id);
+export async function deleteSandbox(id: string, c: SandboxClient = client): Promise<void> {
+  await c.deleteSandbox(id);
 }
 
 export async function exec(
@@ -88,13 +92,19 @@ export async function execWithTransientRetry(
   id: string,
   command: string,
   opts?: { env?: Record<string, string>; workdir?: string; timeoutMs?: number; retryWindowMs?: number },
+  c: SandboxClient = client,
 ): Promise<ExecResult> {
   const deadlineMs = opts?.retryWindowMs ?? 12_000;
   const deadline = Date.now() + deadlineMs;
   let lastErr: unknown;
   while (Date.now() < deadline) {
     try {
-      return await exec(id, command, opts);
+      return await c.exec(id, {
+        command,
+        env: opts?.env,
+        workdir: opts?.workdir,
+        timeoutMs: opts?.timeoutMs,
+      });
     } catch (err) {
       lastErr = err;
       if (!isTransientExecError(err)) {

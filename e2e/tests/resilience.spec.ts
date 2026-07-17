@@ -103,6 +103,31 @@ function runnerHostListsSandbox(runnerContainer: string, sandboxUUID: string): b
   }
 }
 
+/** PickLowestUsed needs an updated capacity_used heartbeat before the next create. */
+async function createSandboxOnLiveRunner(liveRunner: string, deadRunner: string): Promise<string> {
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    const id = await createSandbox();
+    try {
+      while (Date.now() < deadline) {
+        const onLive = runnerHostListsSandbox(liveRunner, id);
+        const onDead = runnerHostListsSandbox(deadRunner, id);
+        if (onLive && !onDead) return id;
+        if (onDead && !onLive) {
+          await deleteSandbox(id);
+          await sleep(2_000);
+          break;
+        }
+        await sleep(500);
+      }
+    } catch (err) {
+      await deleteSandbox(id).catch(() => {});
+      throw err;
+    }
+  }
+  throw new Error(`could not place sandbox on live runner ${liveRunner} within 60s`);
+}
+
 async function waitFirecrackerRunnerHostingFirstSandbox(
   addr1: string,
   addr2: string,
@@ -116,6 +141,38 @@ async function waitFirecrackerRunnerHostingFirstSandbox(
     await sleep(500);
   }
   throw new Error('could not detect which Firecracker runner hosts the first sandbox');
+}
+
+/** PickLowestUsed needs an updated capacity_used heartbeat before the next create. */
+async function createSandboxOnLiveFirecrackerRunner(
+  addr1: string,
+  addr2: string,
+  deadKey: '1' | '2',
+): Promise<string> {
+  const deadAddr = deadKey === '1' ? addr1 : addr2;
+  const liveAddr = deadKey === '1' ? addr2 : addr1;
+  const deadline = Date.now() + 60_000;
+
+  while (Date.now() < deadline) {
+    const id = await createSandbox();
+    try {
+      while (Date.now() < deadline) {
+        const deadUsed = parseGauge(scrapeRunnerMetricsAt(deadAddr), 'sandbox_containers_active');
+        const liveUsed = parseGauge(scrapeRunnerMetricsAt(liveAddr), 'sandbox_containers_active');
+        if (deadUsed === 1 && liveUsed === 1) return id;
+        if (deadUsed >= 2 && liveUsed === 0) {
+          await deleteSandbox(id);
+          await sleep(2_000);
+          break;
+        }
+        await sleep(500);
+      }
+    } catch (err) {
+      await deleteSandbox(id).catch(() => {});
+      throw err;
+    }
+  }
+  throw new Error('could not place sandbox on live Firecracker runner within 60s');
 }
 
 test.describe('API restart resilience', () => {
@@ -180,7 +237,7 @@ test.describe('Runner failure resilience', () => {
         const addr1 = process.env.E2E_RUNNER1_HTTP_ADDR!;
         const addr2 = process.env.E2E_RUNNER2_HTTP_ADDR!;
         const deadKey = await waitFirecrackerRunnerHostingFirstSandbox(addr1, addr2);
-        id2 = await createSandbox();
+        id2 = await createSandboxOnLiveFirecrackerRunner(addr1, addr2, deadKey);
 
         const deadPid = deadKey === '1' ? process.env.E2E_RUNNER1_PID! : process.env.E2E_RUNNER2_PID!;
         stoppedRunnerEnvFile =
@@ -194,7 +251,6 @@ test.describe('Runner failure resilience', () => {
       } else {
         const runner1 = process.env.E2E_RUNNER1_CONTAINER_NAME!;
         const runner2 = process.env.E2E_RUNNER2_CONTAINER_NAME!;
-        id2 = await createSandbox();
 
         let id1On1 = false;
         let id1On2 = false;
@@ -207,6 +263,8 @@ test.describe('Runner failure resilience', () => {
         expect(id1On1 !== id1On2).toBe(true);
         const deadRunner = id1On1 ? runner1 : runner2;
         const liveRunner = id1On1 ? runner2 : runner1;
+
+        id2 = await createSandboxOnLiveRunner(liveRunner, deadRunner);
 
         expect(runnerHostListsSandbox(liveRunner, id2)).toBe(true);
         expect(runnerHostListsSandbox(deadRunner, id2)).toBe(false);
