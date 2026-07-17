@@ -9,9 +9,12 @@ import {
   uploadFile,
   downloadFile,
   apiRequest,
+  getApiKey,
+  ADMIN_API_KEY,
+  ensureTenantAuth,
+  sandboxClient,
 } from './helpers';
 import { SandboxServiceError } from '@n8n/sandbox-client';
-const API_KEY = process.env.SANDBOX_API_KEY || 'test';
 
 test.describe('Auth', () => {
   test('rejects missing API key', async ({ request }) => {
@@ -234,7 +237,7 @@ test.describe('File operations', () => {
   test('file append', async ({ request }) => {
     await uploadFile(sandboxId, 'tmp/append.txt', 'first');
     const resp = await request.post(`/sandboxes/${sandboxId}/files?path=${encodeURIComponent('/tmp/append.txt')}`, {
-      headers: { 'X-Api-Key': API_KEY, 'Content-Type': 'application/octet-stream' },
+      headers: { 'X-Api-Key': await getApiKey(), 'Content-Type': 'application/octet-stream' },
       data: '-second',
     });
     expect(resp.status()).toBe(200);
@@ -247,7 +250,7 @@ test.describe('File operations', () => {
     const resp = await request.put(
       `/sandboxes/${sandboxId}/files?path=${encodeURIComponent('/tmp/nowrite.txt')}&overwrite=false`,
       {
-        headers: { 'X-Api-Key': API_KEY, 'Content-Type': 'application/octet-stream' },
+        headers: { 'X-Api-Key': await getApiKey(), 'Content-Type': 'application/octet-stream' },
         data: 'overwrite attempt',
       },
     );
@@ -367,7 +370,7 @@ test.describe('File operations', () => {
 
   test('upload missing path returns 400', async ({ request }) => {
     const resp = await request.put(`/sandboxes/${sandboxId}/files`, {
-      headers: { 'X-Api-Key': API_KEY, 'Content-Type': 'application/octet-stream' },
+      headers: { 'X-Api-Key': await getApiKey(), 'Content-Type': 'application/octet-stream' },
       data: 'content',
     });
     expect(resp.status()).toBe(400);
@@ -397,7 +400,7 @@ test.describe('File operations', () => {
     await uploadFile(sandboxId, '/tmp/binary.bin', buf);
     const resp = await request.get(
       `/sandboxes/${sandboxId}/files/content?path=${encodeURIComponent('/tmp/binary.bin')}`,
-      { headers: { 'X-Api-Key': API_KEY } },
+      { headers: { 'X-Api-Key': await getApiKey() } },
     );
     expect(resp.status()).toBe(200);
     const body = await resp.body();
@@ -436,7 +439,7 @@ test.describe('File operations', () => {
 
   test('append missing path returns 400', async ({ request }) => {
     const resp = await request.post(`/sandboxes/${sandboxId}/files`, {
-      headers: { 'X-Api-Key': API_KEY, 'Content-Type': 'application/octet-stream' },
+      headers: { 'X-Api-Key': await getApiKey(), 'Content-Type': 'application/octet-stream' },
       data: 'data',
     });
     expect(resp.status()).toBe(400);
@@ -446,7 +449,7 @@ test.describe('File operations', () => {
     const resp = await request.post(
       `/sandboxes/${sandboxId}/files?path=${encodeURIComponent('/tmp/append-new.txt')}`,
       {
-        headers: { 'X-Api-Key': API_KEY, 'Content-Type': 'application/octet-stream' },
+        headers: { 'X-Api-Key': await getApiKey(), 'Content-Type': 'application/octet-stream' },
         data: 'created by append',
       },
     );
@@ -460,7 +463,7 @@ test.describe('File operations', () => {
     const resp = await request.post(
       `/sandboxes/${sandboxId}/files?path=${encodeURIComponent('/tmp/append dir/log file.txt')}`,
       {
-        headers: { 'X-Api-Key': API_KEY, 'Content-Type': 'application/octet-stream' },
+        headers: { 'X-Api-Key': await getApiKey(), 'Content-Type': 'application/octet-stream' },
         data: '-line2',
       },
     );
@@ -756,6 +759,60 @@ test.describe('Deleted Sandbox 404 Tests', () => {
       const resp = await apiRequest(request, endpoint.method as any, endpoint.path, endpoint.data ? { data: endpoint.data } : {});
       expect(resp.status, `${endpoint.method} ${endpoint.path} should return 404`).toBe(404);
     }
+  });
+});
+
+test.describe('Tenant isolation', () => {
+  test('tenant cannot access another tenant sandbox', async ({ request }) => {
+    await ensureTenantAuth();
+    const id = await createSandbox();
+
+    const other = await request.post('/admin/tenants', {
+      headers: { 'X-Api-Key': ADMIN_API_KEY, 'Content-Type': 'application/json' },
+      data: { name: `other-${Date.now()}` },
+    });
+    expect(other.status()).toBe(201);
+    const otherBody = await other.json();
+    const otherKey = otherBody.key.api_key as string;
+
+    const getResp = await request.get(`/sandboxes/${id}`, {
+      headers: { 'X-Api-Key': otherKey },
+    });
+    expect(getResp.status()).toBe(404);
+
+    const listResp = await request.get('/sandboxes', {
+      headers: { 'X-Api-Key': otherKey },
+    });
+    expect(listResp.status()).toBe(200);
+    expect(await listResp.json()).toEqual([]);
+
+    await deleteSandbox(id);
+    await request.delete(`/admin/tenants/${otherBody.tenant.id}`, {
+      headers: { 'X-Api-Key': ADMIN_API_KEY },
+    });
+  });
+
+  test('admin key can create and list without minting a tenant key', async ({ request }) => {
+    const adminClient = sandboxClient(undefined, ADMIN_API_KEY);
+    const record = await adminClient.createSandbox();
+    expect(record.id).toBeTruthy();
+
+    const list = await request.get('/sandboxes', {
+      headers: { 'X-Api-Key': ADMIN_API_KEY },
+    });
+    expect(list.status()).toBe(200);
+    const body = (await list.json()) as Array<{ id: string }>;
+    expect(body.some((s) => s.id === record.id)).toBe(true);
+
+    await adminClient.deleteSandbox(record.id);
+  });
+
+  test('tenant cannot call admin routes', async ({ request }) => {
+    const key = await getApiKey();
+    const resp = await request.get('/admin/tenants', {
+      headers: { 'X-Api-Key': key },
+    });
+    expect(resp.status()).toBe(403);
   });
 });
 

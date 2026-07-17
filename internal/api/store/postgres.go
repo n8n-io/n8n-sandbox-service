@@ -37,9 +37,21 @@ func NewPostgres(cfg config.PostgresConfig) (*PostgresStore, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: run sandboxes schema: %w", err)
 	}
+	if _, err := db.Exec(postgresAddTenantIDCol); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: add tenant_id column: %w", err)
+	}
+	if _, err := db.Exec(postgresSandboxTenantIndex); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: sandboxes tenant index: %w", err)
+	}
 	if _, err := db.Exec(postgresRunnersSchema); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: run runners schema: %w", err)
+	}
+	if _, err := db.Exec(postgresTenantsSchema); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: run tenants schema: %w", err)
 	}
 
 	slog.Debug("store: opened postgres database", "host", cfg.Host, "db", cfg.Database)
@@ -53,12 +65,14 @@ func (s *PostgresStore) Backend() Backend { return BackendPostgres }
 
 func (s *PostgresStore) Close() error { return s.db.Close() }
 
+const pgSandboxCols = `id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id`
+
 func (s *PostgresStore) Create(record *SandboxRecord) error {
 	const q = `
 		INSERT INTO sandboxes
-			(id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr)
+			(id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id)
 		VALUES
-			($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`
+			($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`
 
 	_, err := s.db.Exec(q,
 		record.ID,
@@ -72,6 +86,7 @@ func (s *PostgresStore) Create(record *SandboxRecord) error {
 		record.RunnerID,
 		record.RunnerHTTPBase,
 		record.RunnerControlGRPCAddr,
+		record.TenantID,
 	)
 	if err != nil {
 		return fmt.Errorf("store: create sandbox %s: %w", record.ID, err)
@@ -80,11 +95,7 @@ func (s *PostgresStore) Create(record *SandboxRecord) error {
 }
 
 func (s *PostgresStore) Get(id string) (*SandboxRecord, error) {
-	const q = `
-		SELECT id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr
-		FROM sandboxes
-		WHERE id = $1`
-
+	q := `SELECT ` + pgSandboxCols + ` FROM sandboxes WHERE id = $1`
 	row := s.db.QueryRow(q, id)
 	rec, err := scanRecord(row)
 	if err != nil {
@@ -122,8 +133,7 @@ func (s *PostgresStore) Delete(id string) error {
 }
 
 func (s *PostgresStore) ListForIdleReapDelete(cutoff int64) ([]*SandboxRecord, error) {
-	const q = `
-		SELECT id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr
+	q := `SELECT ` + pgSandboxCols + `
 		FROM sandboxes
 		WHERE status = 'stopped'
 		  AND last_active_at <= $1`
@@ -131,8 +141,7 @@ func (s *PostgresStore) ListForIdleReapDelete(cutoff int64) ([]*SandboxRecord, e
 }
 
 func (s *PostgresStore) ListForIdleReapStop(cutoff int64) ([]*SandboxRecord, error) {
-	const q = `
-		SELECT id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr
+	q := `SELECT ` + pgSandboxCols + `
 		FROM sandboxes
 		WHERE status = 'running'
 		  AND last_active_at <= $1`
@@ -168,30 +177,121 @@ func (s *PostgresStore) Count() (int64, error) {
 	return n, nil
 }
 
-func (s *PostgresStore) List() ([]*SandboxRecord, error) {
-	const q = `
-		SELECT id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr
-		FROM sandboxes
-		ORDER BY created_at DESC`
+func (s *PostgresStore) CountByTenant(tenantID string) (int64, error) {
+	var n int64
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sandboxes WHERE tenant_id = $1`, tenantID).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: count sandboxes by tenant: %w", err)
+	}
+	return n, nil
+}
 
-	rows, err := s.db.Query(q)
+func (s *PostgresStore) List() ([]*SandboxRecord, error) {
+	q := `SELECT ` + pgSandboxCols + ` FROM sandboxes ORDER BY created_at DESC`
+	return s.querySandboxRecords(q)
+}
+
+func (s *PostgresStore) ListByTenant(tenantID string) ([]*SandboxRecord, error) {
+	q := `SELECT ` + pgSandboxCols + ` FROM sandboxes WHERE tenant_id = $1 ORDER BY created_at DESC`
+	return s.querySandboxRecords(q, tenantID)
+}
+
+func (s *PostgresStore) CreateTenant(t *Tenant) error {
+	const q = `INSERT INTO tenants (id, name, external_ref, max_sandboxes, created_at) VALUES ($1, $2, $3, $4, $5)`
+	_, err := s.db.Exec(q, t.ID, t.Name, t.ExternalRef, t.MaxSandboxes, t.CreatedAt)
 	if err != nil {
-		return nil, fmt.Errorf("store: list sandboxes: %w", err)
+		return fmt.Errorf("store: create tenant %s: %w", t.ID, err)
+	}
+	return nil
+}
+
+func (s *PostgresStore) GetTenant(id string) (*Tenant, error) {
+	row := s.db.QueryRow(`SELECT id, name, external_ref, max_sandboxes, created_at FROM tenants WHERE id = $1`, id)
+	t, err := scanTenant(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("store: get tenant %s: %w", id, err)
+	}
+	return t, nil
+}
+
+func (s *PostgresStore) ListTenants() ([]*Tenant, error) {
+	rows, err := s.db.Query(`SELECT id, name, external_ref, max_sandboxes, created_at FROM tenants ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("store: list tenants: %w", err)
 	}
 	defer rows.Close()
-
-	var records []*SandboxRecord
+	var out []*Tenant
 	for rows.Next() {
-		rec, err := scanRecord(rows)
+		t, err := scanTenant(rows)
 		if err != nil {
-			return nil, fmt.Errorf("store: list sandboxes scan: %w", err)
+			return nil, fmt.Errorf("store: list tenants scan: %w", err)
 		}
-		records = append(records, rec)
+		out = append(out, t)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: list sandboxes rows: %w", err)
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) DeleteTenant(id string) error {
+	if _, err := s.db.Exec(`DELETE FROM api_keys WHERE tenant_id = $1`, id); err != nil {
+		return fmt.Errorf("store: delete tenant keys %s: %w", id, err)
 	}
-	return records, nil
+	if _, err := s.db.Exec(`DELETE FROM tenants WHERE id = $1`, id); err != nil {
+		return fmt.Errorf("store: delete tenant %s: %w", id, err)
+	}
+	return nil
+}
+
+func (s *PostgresStore) CreateAPIKey(k *APIKey) error {
+	var revoked any
+	if k.RevokedAt > 0 {
+		revoked = k.RevokedAt
+	}
+	const q = `INSERT INTO api_keys (id, tenant_id, key_hash, prefix, created_at, revoked_at) VALUES ($1, $2, $3, $4, $5, $6)`
+	_, err := s.db.Exec(q, k.ID, k.TenantID, k.KeyHash, k.Prefix, k.CreatedAt, revoked)
+	if err != nil {
+		return fmt.Errorf("store: create api key %s: %w", k.ID, err)
+	}
+	return nil
+}
+
+func (s *PostgresStore) GetAPIKey(id string) (*APIKey, error) {
+	row := s.db.QueryRow(`SELECT id, tenant_id, key_hash, prefix, created_at, revoked_at FROM api_keys WHERE id = $1`, id)
+	k, err := scanAPIKey(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("store: get api key %s: %w", id, err)
+	}
+	return k, nil
+}
+
+func (s *PostgresStore) ListAPIKeysByTenant(tenantID string) ([]*APIKey, error) {
+	rows, err := s.db.Query(`SELECT id, tenant_id, key_hash, prefix, created_at, revoked_at FROM api_keys WHERE tenant_id = $1 ORDER BY created_at DESC`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("store: list api keys: %w", err)
+	}
+	defer rows.Close()
+	return scanAPIKeyRows(rows)
+}
+
+func (s *PostgresStore) ListActiveAPIKeysByPrefix(prefix string) ([]*APIKey, error) {
+	rows, err := s.db.Query(`SELECT id, tenant_id, key_hash, prefix, created_at, revoked_at FROM api_keys WHERE prefix = $1 AND revoked_at IS NULL`, prefix)
+	if err != nil {
+		return nil, fmt.Errorf("store: list api keys by prefix: %w", err)
+	}
+	defer rows.Close()
+	return scanAPIKeyRows(rows)
+}
+
+func (s *PostgresStore) RevokeAPIKey(id string) error {
+	now := time.Now().Unix()
+	if _, err := s.db.Exec(`UPDATE api_keys SET revoked_at = $1 WHERE id = $2 AND revoked_at IS NULL`, now, id); err != nil {
+		return fmt.Errorf("store: revoke api key %s: %w", id, err)
+	}
+	return nil
 }
 
 // idleSweepLockKey is the Postgres advisory lock key for the idle sandbox sweeper.

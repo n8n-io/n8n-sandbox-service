@@ -1,12 +1,13 @@
 #!/bin/sh
 # Smoke test against a deployed or local sandbox API.
 #
-# Exercises core paths aligned with e2e (no idle TTL or other special config):
-# create → exec → resolv.conf → DNS → HTTPS → file write/read → delete.
+# Uses SANDBOX_API_KEY as an admin key to mint a tenant API key, then runs
+# create → exec → resolv.conf → DNS → HTTPS → file write/read → delete
+# with that tenant key (not the admin key).
 #
 # Environment:
 #   SANDBOX_API_BASE       — API base URL (required unless set in env file)
-#   SANDBOX_API_KEY        — X-Api-Key (optional if kubectl secret vars are set)
+#   SANDBOX_API_KEY        — admin X-Api-Key (optional if kubectl secret vars are set)
 #   SMOKE_ENV_FILE         — Env file to source (default: none)
 #   SMOKE_DEV_ENV_FILE     — Alias for SMOKE_ENV_FILE (backward compatible)
 #   SMOKE_ENV              — Load scripts/smoke-sandbox.<env>.env (e.g. dev, stage, prod)
@@ -36,7 +37,9 @@ if [ -n "${ENV_FILE}" ] && [ -f "${ENV_FILE}" ]; then
 fi
 
 BASE="${SANDBOX_API_BASE:-}"
-KEY="${SANDBOX_API_KEY:-}"
+ADMIN_KEY="${SANDBOX_API_KEY:-}"
+KEY=""
+TENANT_ID=""
 EXEC_TIMEOUT_MS="${SMOKE_EXEC_TIMEOUT_MS:-60000}"
 SMOKE_FILE_PATH="/tmp/n8n-sandbox-smoke.txt"
 SMOKE_FILE_CONTENT="smoke-$(date -u +%Y%m%dT%H%M%SZ)"
@@ -62,7 +65,7 @@ https://*)
 	;;
 esac
 
-if [ -z "${KEY}" ]; then
+if [ -z "${ADMIN_KEY}" ]; then
 	if ! command -v kubectl >/dev/null 2>&1; then
 		echo "SANDBOX_API_KEY or kubectl is required" >&2
 		exit 1
@@ -70,8 +73,8 @@ if [ -z "${KEY}" ]; then
 	NAMESPACE="${KUBE_NAMESPACE:?KUBE_NAMESPACE is required when SANDBOX_API_KEY is not set}"
 	AUTH_SECRET="${KUBE_AUTH_SECRET:?KUBE_AUTH_SECRET is required when SANDBOX_API_KEY is not set}"
 	AUTH_SECRET_KEY="${KUBE_AUTH_SECRET_KEY:?KUBE_AUTH_SECRET_KEY is required when SANDBOX_API_KEY is not set}"
-	KEY="$(kubectl -n "${NAMESPACE}" get secret "${AUTH_SECRET}" -o "jsonpath={.data.${AUTH_SECRET_KEY}}" | base64 -d | cut -d, -f1)"
-	if [ -z "${KEY}" ]; then
+	ADMIN_KEY="$(kubectl -n "${NAMESPACE}" get secret "${AUTH_SECRET}" -o "jsonpath={.data.${AUTH_SECRET_KEY}}" | base64 -d | cut -d, -f1)"
+	if [ -z "${ADMIN_KEY}" ]; then
 		echo "could not read API key from secret/${AUTH_SECRET} key ${AUTH_SECRET_KEY}" >&2
 		exit 1
 	fi
@@ -85,8 +88,12 @@ cleanup() {
 	for cleanup_sid in ${sid} ${sid2}; do
 		[ -n "${cleanup_sid}" ] || continue
 		# shellcheck disable=SC2086
-		curl ${CURL_COMMON} -o /dev/null -X DELETE "${BASE}/sandboxes/${cleanup_sid}" -H "X-Api-Key: ${KEY}" >/dev/null 2>&1 || true
+		curl ${CURL_COMMON} -o /dev/null -X DELETE "${BASE}/sandboxes/${cleanup_sid}" -H "X-Api-Key: ${KEY:-${ADMIN_KEY}}" >/dev/null 2>&1 || true
 	done
+	if [ -n "${TENANT_ID}" ]; then
+		# shellcheck disable=SC2086
+		curl ${CURL_COMMON} -o /dev/null -X DELETE "${BASE}/admin/tenants/${TENANT_ID}" -H "X-Api-Key: ${ADMIN_KEY}" >/dev/null 2>&1 || true
+	fi
 	if [ -n "${tmp_files}" ]; then
 		# shellcheck disable=SC2086
 		rm -f ${tmp_files}
@@ -260,9 +267,26 @@ run_core_guest_checks() {
 }
 
 step "healthz"
-api_curl "${BASE}/healthz" >/dev/null
+# shellcheck disable=SC2086
+curl ${CURL_COMMON} "${BASE}/healthz" >/dev/null
 
-sid="$(create_sandbox "create sandbox")"
+step "mint tenant API key (admin key)"
+tenant_json="$(
+	# shellcheck disable=SC2086
+	curl ${CURL_COMMON} -X POST "${BASE}/admin/tenants" \
+		-H "X-Api-Key: ${ADMIN_KEY}" \
+		-H "Content-Type: application/json" \
+		-d "{\"name\":\"smoke-$(date -u +%Y%m%dT%H%M%SZ)\"}"
+)"
+TENANT_ID="$(printf '%s' "${tenant_json}" | jq -r .tenant.id)"
+KEY="$(printf '%s' "${tenant_json}" | jq -r .key.api_key)"
+if [ -z "${TENANT_ID}" ] || [ "${TENANT_ID}" = "null" ] || [ -z "${KEY}" ] || [ "${KEY}" = "null" ]; then
+	fail "mint tenant: missing tenant.id or key.api_key (${tenant_json})"
+fi
+printf '    tenant_id: %s\n' "${TENANT_ID}"
+printf '    using tenant API key for sandbox create/exec/delete\n'
+
+sid="$(create_sandbox "create sandbox (tenant key)")"
 run_core_guest_checks "${sid}"
 
 step "file write/read"

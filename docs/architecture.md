@@ -130,7 +130,7 @@ A lightweight HTTP server embedded in every sandbox container. It is the only pr
 
 ### Client → API (REST + API Key)
 
-All client requests go through the API gateway over HTTP. Authentication uses an `X-Api-Key` header validated with constant-time comparison.
+All client requests go through the API gateway over HTTP. Authentication uses an `X-Api-Key` header. Keys in `SANDBOX_API_KEYS` are admin keys (full access). Admin-minted tenant keys (stored hashed in the API database) are scoped to that tenant's sandboxes.
 
 ### API ↔ Runner Registration (gRPC Bidirectional Streaming + mTLS)
 
@@ -181,7 +181,7 @@ File read, write, list, stat, copy, move, and delete follow the same two-hop rev
 
 | Layer | Mechanism | Purpose |
 | --- | --- | --- |
-| Client → API | `X-Api-Key` header (constant-time comparison) | Authenticate API consumers |
+| Client → API | `X-Api-Key` (admin env keys or hashed tenant keys) | Authenticate and authorize API consumers |
 | API ↔ Runner registration | mTLS + bearer token | Authenticate runners during gRPC registration |
 | API → Runner control | mTLS + API key in gRPC metadata | Authenticate control-plane RPCs |
 | File paths | Path resolution and validation | Prevent directory traversal |

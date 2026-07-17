@@ -9,9 +9,9 @@ import {
   scrapeRunnerMetricsAt,
   stopFirecrackerRunnerPid,
   waitRunnerHttpReady,
+  getApiKey,
 } from './helpers';
 import { parseGauge } from './metrics-helpers';
-const API_KEY = process.env.SANDBOX_API_KEY || 'test';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -275,7 +275,7 @@ test.describe('Runner failure resilience', () => {
       }
 
       const bad = await request.post(`/sandboxes/${id1}/executions`, {
-        headers: { 'X-Api-Key': API_KEY, 'Content-Type': 'application/json' },
+        headers: { 'X-Api-Key': await getApiKey(), 'Content-Type': 'application/json' },
         data: { command: 'true' },
       });
       expect(bad.status()).toBe(503);

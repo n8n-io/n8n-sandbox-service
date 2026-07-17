@@ -35,6 +35,10 @@ func TestLoadAPIParsesDefaults(t *testing.T) {
 		t.Errorf("expected MaxFileBytes 10MB, got %d", cfg.MaxFileBytes)
 	}
 
+	if cfg.DefaultMaxSandboxes != 50 {
+		t.Errorf("expected DefaultMaxSandboxes 50, got %d", cfg.DefaultMaxSandboxes)
+	}
+
 	if cfg.GRPCListenAddr != ":9090" {
 		t.Errorf("expected GRPCListenAddr :9090, got %s", cfg.GRPCListenAddr)
 	}
@@ -88,6 +92,21 @@ func TestLoadAPIHeartbeatGraceFromEnv(t *testing.T) {
 	}
 	if cfg.HeartbeatGrace != 90*time.Second {
 		t.Fatalf("HeartbeatGrace: want 90s, got %s", cfg.HeartbeatGrace)
+	}
+}
+
+func TestLoadAPIDefaultMaxSandboxesFromEnv(t *testing.T) {
+	t.Setenv("SANDBOX_API_KEYS", "test-key")
+	t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	t.Setenv("SANDBOX_API_DEFAULT_MAX_SANDBOXES", "10")
+	setRequiredGRPCMTLS(t)
+
+	cfg, err := LoadAPI()
+	if err != nil {
+		t.Fatalf("LoadAPI() failed: %v", err)
+	}
+	if cfg.DefaultMaxSandboxes != 10 {
+		t.Fatalf("DefaultMaxSandboxes: want 10, got %d", cfg.DefaultMaxSandboxes)
 	}
 }
 
