@@ -29,6 +29,17 @@ inputs:
   dockerhub-token:
     required: true
     description: Docker Hub access token
+  ghcr-image:
+    required: false
+    default: ""
+    description: >
+      GHCR image name (e.g. ghcr.io/n8n-io/n8n-sandbox-service-api) to mirror
+      all tags to. GHCR has no anonymous pull rate limits, unlike Docker Hub.
+      Requires ghcr-token.
+  ghcr-token:
+    required: false
+    default: ""
+    description: Token with packages:write, for pushing the ghcr-image mirror
 
 runs:
   using: composite
@@ -38,6 +49,14 @@ runs:
       with:
         username: ${{ inputs.dockerhub-username }}
         password: ${{ inputs.dockerhub-token }}
+
+    - name: Log in to GHCR
+      if: inputs.ghcr-image != ''
+      uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ inputs.ghcr-token }}
 
     - name: Set up QEMU
       if: contains(inputs.platforms, 'arm64')
@@ -56,6 +75,7 @@ runs:
         VERSION: ${{ inputs.version }}
         PUSH_LATEST: ${{ inputs.push-latest }}
         EXTRA_TAGS: ${{ inputs.extra-tags }}
+        GHCR_IMAGE: ${{ inputs.ghcr-image }}
       run: |
         TAGS="${IMAGE}:${VERSION}"
         if [[ "$PUSH_LATEST" == "true" ]]; then
@@ -69,6 +89,10 @@ runs:
         ${IMAGE}:${tag}"
           fi
         done <<< "$EXTRA_TAGS"
+        if [[ -n "$GHCR_IMAGE" ]]; then
+          TAGS="${TAGS}
+        ${TAGS//${IMAGE}:/${GHCR_IMAGE}:}"
+        fi
         {
           echo "tags<<EOF"
           echo "$TAGS"

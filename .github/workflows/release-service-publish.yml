@@ -9,6 +9,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  packages: write
 
 jobs:
   publish:
@@ -33,32 +34,38 @@ jobs:
         uses: ./.github/actions/docker-publish
         with:
           image: n8nio/n8n-sandbox-service-api
+          ghcr-image: ghcr.io/n8n-io/n8n-sandbox-service-api
           dockerfile: Dockerfile.api
           version: ${{ steps.version.outputs.version }}
           extra-tags: stable
           dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
           dockerhub-token: ${{ secrets.DOCKERHUB_TOKEN }}
+          ghcr-token: ${{ github.token }}
 
       - name: Publish runner image
         uses: ./.github/actions/docker-publish
         with:
           image: n8nio/n8n-sandbox-service-runner-dind
+          ghcr-image: ghcr.io/n8n-io/n8n-sandbox-service-runner-dind
           dockerfile: Dockerfile.runner-dind
           version: ${{ steps.version.outputs.version }}
           extra-tags: stable
           dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
           dockerhub-token: ${{ secrets.DOCKERHUB_TOKEN }}
+          ghcr-token: ${{ github.token }}
 
       - name: Publish Firecracker runner image
         uses: ./.github/actions/docker-publish
         with:
           image: n8nio/n8n-sandbox-service-runner-firecracker
+          ghcr-image: ghcr.io/n8n-io/n8n-sandbox-service-runner-firecracker
           dockerfile: Dockerfile.ee.runner-firecracker
           version: ${{ steps.version.outputs.version }}
           platforms: linux/amd64
           extra-tags: stable
           dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
           dockerhub-token: ${{ secrets.DOCKERHUB_TOKEN }}
+          ghcr-token: ${{ github.token }}
 
       - name: Generate GitHub App Token
         id: generate-token
