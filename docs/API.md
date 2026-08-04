@@ -110,6 +110,8 @@ Create a new sandbox. No request body is required.
 
 With a tenant key, the sandbox is owned by that tenant and counts toward the tenant's `max_sandboxes` quota (`403` when exceeded). With an admin key, the sandbox has no tenant owner (admin-visible only for ownership checks; admins see all sandboxes in list).
 
+Quota enforcement is a soft check-then-act (`CountByTenant` before create). Concurrent `POST /sandboxes` from the same tenant can briefly exceed `max_sandboxes` and consume shared runner capacity. Treat the limit as a soft ceiling, not a hard atomic reservation.
+
 Resource limits (memory, CPU, process count) are configured on the runner via environment variables. Network policy blocks all private IP ranges and allows public internet access.
 
 **Response:** `201 Created`
@@ -174,7 +176,7 @@ Delete a sandbox.
 
 **Response:** `204 No Content`
 
-**Errors:** `400` invalid id
+**Errors:** `400` invalid id, `404` sandbox not found (unknown id, already deleted, or not owned by the caller — same status as `GET` so tenants cannot probe cross-tenant existence)
 
 **Example:**
 

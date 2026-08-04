@@ -132,6 +132,8 @@ A lightweight HTTP server embedded in every sandbox container. It is the only pr
 
 All client requests go through the API gateway over HTTP. Authentication uses an `X-Api-Key` header. Keys in `SANDBOX_API_KEYS` are admin keys (full access). Admin-minted tenant keys (stored hashed in the API database) are scoped to that tenant's sandboxes.
 
+Per-tenant `max_sandboxes` is enforced with a soft check-then-act before create. Concurrent creates can briefly exceed the quota and burn shared runner capacity; the limit is not an atomic reservation.
+
 ### API ↔ Runner Registration (gRPC Bidirectional Streaming + mTLS)
 
 Runners register with the API by opening a long-lived gRPC stream (`RunnerRegistry.Connect`). The runner sends periodic heartbeats containing its ID, HTTP base URL, health status, and capacity metrics. The API uses these to maintain a live registry and route requests. The gRPC channel is secured with mutual TLS and an additional bearer token.

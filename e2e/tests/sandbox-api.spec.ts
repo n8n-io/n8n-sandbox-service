@@ -60,12 +60,12 @@ test.describe('Sandbox lifecycle', () => {
     expect(resp.status).toBe(400);
   });
 
-  test('delete is idempotent', async ({ request }) => {
+  test('delete of missing sandbox returns 404', async ({ request }) => {
     const id = await createSandbox();
     const resp1 = await apiRequest(request, 'DELETE', `/sandboxes/${id}`);
     expect(resp1.status).toBe(204);
     const resp2 = await apiRequest(request, 'DELETE', `/sandboxes/${id}`);
-    expect(resp2.status).toBe(204);
+    expect(resp2.status).toBe(404);
   });
 });
 

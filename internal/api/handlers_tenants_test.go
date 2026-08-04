@@ -170,6 +170,23 @@ func TestTenantCannotAccessOtherTenantSandbox(t *testing.T) {
 	if rrAdmin.Code != http.StatusOK || !strings.Contains(rrAdmin.Body.String(), sid) {
 		t.Fatalf("admin list: got %d %s", rrAdmin.Code, rrAdmin.Body.String())
 	}
+
+	delB := httptest.NewRequest(http.MethodDelete, "/sandboxes/"+sid, nil)
+	delB.Header.Set("X-Api-Key", keyB)
+	rrDelB := httptest.NewRecorder()
+	router.ServeHTTP(rrDelB, delB)
+	if rrDelB.Code != http.StatusNotFound {
+		t.Fatalf("other tenant delete: expected %d, got %d", http.StatusNotFound, rrDelB.Code)
+	}
+
+	missing := "11111111-2222-3333-4444-555555555555"
+	delMissing := httptest.NewRequest(http.MethodDelete, "/sandboxes/"+missing, nil)
+	delMissing.Header.Set("X-Api-Key", keyB)
+	rrMissing := httptest.NewRecorder()
+	router.ServeHTTP(rrMissing, delMissing)
+	if rrMissing.Code != http.StatusNotFound {
+		t.Fatalf("missing delete: expected %d, got %d", http.StatusNotFound, rrMissing.Code)
+	}
 }
 
 func TestRevokedTenantKeyRejected(t *testing.T) {

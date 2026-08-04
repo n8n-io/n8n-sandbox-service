@@ -309,13 +309,9 @@ func handleDeleteSandbox(s store.SandboxStore, cfg *config.APIConfig, mrec *metr
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		if rec == nil {
-			w.WriteHeader(http.StatusNoContent)
-			success = true
-			return
-		}
-		if !canAccessSandbox(r, rec) {
-			// Don't leak existence to other tenants.
+		if rec == nil || !canAccessSandbox(r, rec) {
+			// Same 404 as GET for missing and inaccessible — do not leak
+			// cross-tenant existence via 204 vs 404.
 			writeError(w, http.StatusNotFound, "sandbox not found")
 			return
 		}
