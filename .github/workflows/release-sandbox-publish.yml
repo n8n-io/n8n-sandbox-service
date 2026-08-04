@@ -9,6 +9,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  packages: write
 
 jobs:
   publish:
@@ -30,10 +31,12 @@ jobs:
         uses: ./.github/actions/docker-publish
         with:
           image: n8nio/n8n-sandbox-service-sandbox
+          ghcr-image: ghcr.io/n8n-io/n8n-sandbox-service-sandbox
           dockerfile: Dockerfile.sandbox
           version: ${{ steps.version.outputs.version }}
           dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
           dockerhub-token: ${{ secrets.DOCKERHUB_TOKEN }}
+          ghcr-token: ${{ github.token }}
 
       - name: Generate GitHub App Token
         id: generate-token
