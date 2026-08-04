@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -191,8 +192,9 @@ func LoadAPI() (*APIConfig, error) {
 
 	if v := os.Getenv("SANDBOX_API_DEFAULT_MAX_SANDBOXES"); v != "" {
 		n, err := strconv.Atoi(v)
-		if err != nil || n < 0 {
-			return nil, fmt.Errorf("SANDBOX_API_DEFAULT_MAX_SANDBOXES must be an integer >= 0, got %q", v)
+		// tenants.max_sandboxes is INTEGER (signed 32-bit) in SQLite/Postgres.
+		if err != nil || n < 0 || n > math.MaxInt32 {
+			return nil, fmt.Errorf("SANDBOX_API_DEFAULT_MAX_SANDBOXES must be an integer between 0 and %d, got %q", math.MaxInt32, v)
 		}
 		cfg.DefaultMaxSandboxes = n
 	}

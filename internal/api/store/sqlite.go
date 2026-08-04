@@ -19,7 +19,7 @@ type SQLiteStore struct {
 // NewSQLite opens (or creates) the SQLite database at dbPath, runs schema migrations,
 // and returns a ready store. Use ":memory:" for an in-process ephemeral database.
 func NewSQLite(dbPath string) (*SQLiteStore, error) {
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sql.Open("sqlite", sqliteDSN(dbPath))
 	if err != nil {
 		return nil, fmt.Errorf("store: open db %s: %w", dbPath, err)
 	}
@@ -64,14 +64,21 @@ func NewSQLite(dbPath string) (*SQLiteStore, error) {
 		return nil, fmt.Errorf("store: tenants schema: %w", err)
 	}
 
-	// FK enforcement for api_keys → tenants
-	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("store: enable foreign_keys: %w", err)
-	}
-
 	slog.Debug("store: opened sqlite database", "path", dbPath)
 	return &SQLiteStore{db: db}, nil
+}
+
+// sqliteDSN adds modernc _pragma flags so every pooled connection gets them.
+// A one-shot Exec("PRAGMA …") only affects the connection that ran it.
+func sqliteDSN(dbPath string) string {
+	const fk = "_pragma=foreign_keys(1)"
+	if dbPath == ":memory:" {
+		return ":memory:?" + fk
+	}
+	if strings.Contains(dbPath, "?") {
+		return dbPath + "&" + fk
+	}
+	return dbPath + "?" + fk
 }
 
 // New opens SQLite at dbPath. It is an alias for NewSQLite for backward compatibility.
@@ -222,6 +229,31 @@ func (s *SQLiteStore) CreateTenant(t *Tenant) error {
 	return nil
 }
 
+func (s *SQLiteStore) CreateTenantWithAPIKey(t *Tenant, k *APIKey) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: begin tenant+key: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	const tenantQ = `INSERT INTO tenants (id, name, external_ref, max_sandboxes, created_at) VALUES (?, ?, ?, ?, ?)`
+	if _, err := tx.Exec(tenantQ, t.ID, t.Name, t.ExternalRef, t.MaxSandboxes, t.CreatedAt); err != nil {
+		return fmt.Errorf("store: create tenant %s: %w", t.ID, err)
+	}
+	var revoked any
+	if k.RevokedAt > 0 {
+		revoked = k.RevokedAt
+	}
+	const keyQ = `INSERT INTO api_keys (id, tenant_id, key_hash, prefix, created_at, revoked_at) VALUES (?, ?, ?, ?, ?, ?)`
+	if _, err := tx.Exec(keyQ, k.ID, k.TenantID, k.KeyHash, k.Prefix, k.CreatedAt, revoked); err != nil {
+		return fmt.Errorf("store: create api key %s: %w", k.ID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit tenant+key: %w", err)
+	}
+	return nil
+}
+
 func (s *SQLiteStore) GetTenant(id string) (*Tenant, error) {
 	row := s.db.QueryRow(`SELECT id, name, external_ref, max_sandboxes, created_at FROM tenants WHERE id = ?`, id)
 	t, err := scanTenant(row)
@@ -252,9 +284,14 @@ func (s *SQLiteStore) ListTenants() ([]*Tenant, error) {
 }
 
 func (s *SQLiteStore) DeleteTenant(id string) error {
-	if _, err := s.db.Exec(`DELETE FROM api_keys WHERE tenant_id = ?`, id); err != nil {
-		return fmt.Errorf("store: delete tenant keys %s: %w", id, err)
+	n, err := s.CountByTenant(id)
+	if err != nil {
+		return err
 	}
+	if n > 0 {
+		return ErrTenantHasSandboxes
+	}
+	// api_keys cascade via ON DELETE CASCADE (foreign_keys enabled via DSN _pragma)
 	if _, err := s.db.Exec(`DELETE FROM tenants WHERE id = ?`, id); err != nil {
 		return fmt.Errorf("store: delete tenant %s: %w", id, err)
 	}

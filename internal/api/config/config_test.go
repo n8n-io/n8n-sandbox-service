@@ -110,6 +110,21 @@ func TestLoadAPIDefaultMaxSandboxesFromEnv(t *testing.T) {
 	}
 }
 
+func TestLoadAPIRejectsInvalidDefaultMaxSandboxes(t *testing.T) {
+	for _, v := range []string{"-1", "abc", "2147483648", "1.5"} {
+		t.Run(v, func(t *testing.T) {
+			t.Setenv("SANDBOX_API_KEYS", "test-key")
+			t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+			t.Setenv("SANDBOX_API_DEFAULT_MAX_SANDBOXES", v)
+			setRequiredGRPCMTLS(t)
+
+			if _, err := LoadAPI(); err == nil {
+				t.Fatalf("expected LoadAPI to reject SANDBOX_API_DEFAULT_MAX_SANDBOXES=%q", v)
+			}
+		})
+	}
+}
+
 func TestLoadAPIRejectsInvalidHeartbeatGrace(t *testing.T) {
 	t.Setenv("SANDBOX_API_KEYS", "test-key")
 	t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")

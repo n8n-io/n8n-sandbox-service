@@ -76,6 +76,26 @@ func TestAdminCanCreateTenantAndKey(t *testing.T) {
 	}
 }
 
+func TestCreateTenantRejectsTrailingJSON(t *testing.T) {
+	router, s := newTestGateway(t, "admin-key")
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/tenants", strings.NewReader(`{"name":"acme"}{"extra":1}`))
+	req.Header.Set("X-Api-Key", "admin-key")
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected %d, got %d body=%s", http.StatusBadRequest, rr.Code, rr.Body.String())
+	}
+	tenants, err := s.ListTenants()
+	if err != nil {
+		t.Fatalf("list tenants: %v", err)
+	}
+	if len(tenants) != 0 {
+		t.Fatalf("expected no tenant provisioned, got %d", len(tenants))
+	}
+}
+
 func TestTenantCannotAccessOtherTenantSandbox(t *testing.T) {
 	router, s := newTestGateway(t, "admin-key")
 
@@ -179,5 +199,46 @@ func TestRevokedTenantKeyRejected(t *testing.T) {
 	router.ServeHTTP(listRR, listReq)
 	if listRR.Code != http.StatusUnauthorized {
 		t.Fatalf("revoked key: expected %d, got %d", http.StatusUnauthorized, listRR.Code)
+	}
+}
+
+func TestDeleteTenantConflictWhenSandboxesExist(t *testing.T) {
+	router, s := newTestGateway(t, "admin-key")
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/tenants", strings.NewReader(`{"name":"busy"}`))
+	req.Header.Set("X-Api-Key", "admin-key")
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	var created createTenantResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if err := s.Create(&store.SandboxRecord{
+		ID:     "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		Status: "running", CreatedAt: 1, LastActiveAt: 1,
+		TenantID: created.Tenant.ID,
+	}); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+
+	del := httptest.NewRequest(http.MethodDelete, "/admin/tenants/"+created.Tenant.ID, nil)
+	del.Header.Set("X-Api-Key", "admin-key")
+	delRR := httptest.NewRecorder()
+	router.ServeHTTP(delRR, del)
+	if delRR.Code != http.StatusConflict {
+		t.Fatalf("delete with sandboxes: expected %d, got %d body=%s", http.StatusConflict, delRR.Code, delRR.Body.String())
+	}
+
+	if err := s.Delete("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"); err != nil {
+		t.Fatalf("delete sandbox: %v", err)
+	}
+	del2 := httptest.NewRequest(http.MethodDelete, "/admin/tenants/"+created.Tenant.ID, nil)
+	del2.Header.Set("X-Api-Key", "admin-key")
+	del2RR := httptest.NewRecorder()
+	router.ServeHTTP(del2RR, del2)
+	if del2RR.Code != http.StatusNoContent {
+		t.Fatalf("delete after sandboxes gone: expected %d, got %d", http.StatusNoContent, del2RR.Code)
 	}
 }

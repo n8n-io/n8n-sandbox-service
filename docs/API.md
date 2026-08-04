@@ -657,7 +657,16 @@ Create a tenant. By default also mints one API key (`create_key` defaults to `tr
 }
 ```
 
-`max_sandboxes` defaults to `SANDBOX_API_DEFAULT_MAX_SANDBOXES` (default `50`); `0` means unlimited.
+| Field          | Type   | Required | Default |
+|----------------|--------|----------|---------|
+| `name`         | string | no       | `""` |
+| `external_ref` | string | no       | `""` |
+| `max_sandboxes`| int    | no       | `SANDBOX_API_DEFAULT_MAX_SANDBOXES` (`50`) |
+| `create_key`   | bool   | no       | `true` |
+
+`name` is an optional human-readable label. `external_ref` is an optional opaque id from the caller (for example an n8n instance id); the API does not enforce uniqueness.
+
+`max_sandboxes` is the per-tenant sandbox quota (`0` = unlimited). Must be between `0` and `2147483647`. When omitted, the service default applies.
 
 **Response:** `201 Created`
 
@@ -697,7 +706,9 @@ Get a tenant by id.
 
 ### DELETE /admin/tenants/{id}
 
-Delete a tenant and revoke its API keys (`204`). Existing sandboxes for that tenant remain until deleted/reaped; they become inaccessible to tenant keys.
+Delete a tenant and its API keys (`204`).
+
+Fails with `409 Conflict` if the tenant still owns sandboxes — delete those first (admin can delete any sandbox). This avoids orphaning running sandboxes after credentials are removed.
 
 ### GET /admin/tenants/{id}/keys
 

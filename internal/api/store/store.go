@@ -1,7 +1,14 @@
 // Package store provides persistent storage for sandbox records (SQLite or Postgres).
 package store
 
-import "io"
+import (
+	"errors"
+	"io"
+)
+
+// ErrTenantHasSandboxes is returned when DeleteTenant is called while the tenant
+// still owns sandbox rows.
+var ErrTenantHasSandboxes = errors.New("tenant has sandboxes")
 
 // Backend identifies the sandbox store implementation.
 type Backend string
@@ -63,6 +70,8 @@ type SandboxStore interface {
 	Backend() Backend
 
 	CreateTenant(t *Tenant) error
+	// CreateTenantWithAPIKey inserts the tenant and its first API key in one transaction.
+	CreateTenantWithAPIKey(t *Tenant, k *APIKey) error
 	GetTenant(id string) (*Tenant, error)
 	ListTenants() ([]*Tenant, error)
 	DeleteTenant(id string) error

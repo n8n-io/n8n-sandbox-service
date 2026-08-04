@@ -85,11 +85,26 @@ sid2=""
 tmp_files=""
 
 cleanup() {
+	# Known IDs from this run (may be empty if interrupted mid-create).
 	for cleanup_sid in ${sid} ${sid2}; do
 		[ -n "${cleanup_sid}" ] || continue
 		# shellcheck disable=SC2086
 		curl ${CURL_COMMON} -o /dev/null -X DELETE "${BASE}/sandboxes/${cleanup_sid}" -H "X-Api-Key: ${KEY:-${ADMIN_KEY}}" >/dev/null 2>&1 || true
 	done
+	# Sweep any remaining sandboxes for this tenant (e.g. create returned on
+	# server but sid was never assigned locally) so tenant delete is not 409.
+	if [ -n "${KEY}" ]; then
+		list_json="$(
+			# shellcheck disable=SC2086
+			curl ${CURL_COMMON} "${BASE}/sandboxes" -H "X-Api-Key: ${KEY}" 2>/dev/null || true
+		)"
+		ids="$(printf '%s' "${list_json}" | jq -r '.[].id // empty' 2>/dev/null || true)"
+		for cleanup_sid in ${ids}; do
+			[ -n "${cleanup_sid}" ] || continue
+			# shellcheck disable=SC2086
+			curl ${CURL_COMMON} -o /dev/null -X DELETE "${BASE}/sandboxes/${cleanup_sid}" -H "X-Api-Key: ${KEY}" >/dev/null 2>&1 || true
+		done
+	fi
 	if [ -n "${TENANT_ID}" ]; then
 		# shellcheck disable=SC2086
 		curl ${CURL_COMMON} -o /dev/null -X DELETE "${BASE}/admin/tenants/${TENANT_ID}" -H "X-Api-Key: ${ADMIN_KEY}" >/dev/null 2>&1 || true

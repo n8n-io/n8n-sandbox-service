@@ -4,6 +4,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"io"
+	"math"
 	"net/http"
 	"time"
 
@@ -90,15 +93,20 @@ func handleCreateTenant(s store.SandboxStore, cfg *config.APIConfig) http.Handle
 		}
 		var req createTenantRequest
 		if r.Body != nil && r.ContentLength != 0 {
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			dec := json.NewDecoder(r.Body)
+			if err := dec.Decode(&req); err != nil {
+				writeError(w, http.StatusBadRequest, "invalid JSON body")
+				return
+			}
+			if _, err := dec.Token(); err != io.EOF {
 				writeError(w, http.StatusBadRequest, "invalid JSON body")
 				return
 			}
 		}
 		maxSandboxes := cfg.DefaultMaxSandboxes
 		if req.MaxSandboxes != nil {
-			if *req.MaxSandboxes < 0 {
-				writeError(w, http.StatusBadRequest, "max_sandboxes must be >= 0")
+			if *req.MaxSandboxes < 0 || *req.MaxSandboxes > math.MaxInt32 {
+				writeError(w, http.StatusBadRequest, "max_sandboxes must be between 0 and 2147483647")
 				return
 			}
 			maxSandboxes = *req.MaxSandboxes
@@ -116,20 +124,23 @@ func handleCreateTenant(s store.SandboxStore, cfg *config.APIConfig) http.Handle
 			MaxSandboxes: maxSandboxes,
 			CreatedAt:    now,
 		}
-		if err := s.CreateTenant(t); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to create tenant: "+err.Error())
-			return
-		}
 
 		resp := createTenantResponse{Tenant: tenantToResponse(t)}
 		if createKey {
-			keyResp, err := mintAPIKey(s, t.ID)
+			k, plaintext, err := newAPIKey(t.ID)
 			if err != nil {
-				_ = s.DeleteTenant(t.ID)
 				writeError(w, http.StatusInternalServerError, "failed to create api key: "+err.Error())
 				return
 			}
-			resp.Key = keyResp
+			if err := s.CreateTenantWithAPIKey(t, k); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to create tenant: "+err.Error())
+				return
+			}
+			keyResp := apiKeyToResponse(k, plaintext)
+			resp.Key = &keyResp
+		} else if err := s.CreateTenant(t); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to create tenant: "+err.Error())
+			return
 		}
 		writeJSON(w, http.StatusCreated, resp)
 	}
@@ -178,6 +189,10 @@ func handleDeleteTenant(s store.SandboxStore) http.HandlerFunc {
 			return
 		}
 		if err := s.DeleteTenant(id); err != nil {
+			if errors.Is(err, store.ErrTenantHasSandboxes) {
+				writeError(w, http.StatusConflict, "tenant has sandboxes; delete them first")
+				return
+			}
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -273,24 +288,31 @@ func handleRevokeTenantKey(s store.SandboxStore) http.HandlerFunc {
 	}
 }
 
-func mintAPIKey(s store.SandboxStore, tenantID string) (*apiKeyResponse, error) {
+func newAPIKey(tenantID string) (*store.APIKey, string, error) {
 	prefixBytes := make([]byte, 4)
 	secretBytes := make([]byte, 24)
 	if _, err := rand.Read(prefixBytes); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if _, err := rand.Read(secretBytes); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	prefix := hex.EncodeToString(prefixBytes)
 	plaintext := "sbk_" + prefix + "_" + hex.EncodeToString(secretBytes)
-	now := time.Now().Unix()
 	k := &store.APIKey{
 		ID:        uuid.New().String(),
 		TenantID:  tenantID,
 		KeyHash:   hashAPIKey(plaintext),
 		Prefix:    prefix,
-		CreatedAt: now,
+		CreatedAt: time.Now().Unix(),
+	}
+	return k, plaintext, nil
+}
+
+func mintAPIKey(s store.SandboxStore, tenantID string) (*apiKeyResponse, error) {
+	k, plaintext, err := newAPIKey(tenantID)
+	if err != nil {
+		return nil, err
 	}
 	if err := s.CreateAPIKey(k); err != nil {
 		return nil, err

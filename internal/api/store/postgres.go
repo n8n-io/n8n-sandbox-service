@@ -204,6 +204,31 @@ func (s *PostgresStore) CreateTenant(t *Tenant) error {
 	return nil
 }
 
+func (s *PostgresStore) CreateTenantWithAPIKey(t *Tenant, k *APIKey) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: begin tenant+key: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	const tenantQ = `INSERT INTO tenants (id, name, external_ref, max_sandboxes, created_at) VALUES ($1, $2, $3, $4, $5)`
+	if _, err := tx.Exec(tenantQ, t.ID, t.Name, t.ExternalRef, t.MaxSandboxes, t.CreatedAt); err != nil {
+		return fmt.Errorf("store: create tenant %s: %w", t.ID, err)
+	}
+	var revoked any
+	if k.RevokedAt > 0 {
+		revoked = k.RevokedAt
+	}
+	const keyQ = `INSERT INTO api_keys (id, tenant_id, key_hash, prefix, created_at, revoked_at) VALUES ($1, $2, $3, $4, $5, $6)`
+	if _, err := tx.Exec(keyQ, k.ID, k.TenantID, k.KeyHash, k.Prefix, k.CreatedAt, revoked); err != nil {
+		return fmt.Errorf("store: create api key %s: %w", k.ID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit tenant+key: %w", err)
+	}
+	return nil
+}
+
 func (s *PostgresStore) GetTenant(id string) (*Tenant, error) {
 	row := s.db.QueryRow(`SELECT id, name, external_ref, max_sandboxes, created_at FROM tenants WHERE id = $1`, id)
 	t, err := scanTenant(row)
@@ -234,9 +259,14 @@ func (s *PostgresStore) ListTenants() ([]*Tenant, error) {
 }
 
 func (s *PostgresStore) DeleteTenant(id string) error {
-	if _, err := s.db.Exec(`DELETE FROM api_keys WHERE tenant_id = $1`, id); err != nil {
-		return fmt.Errorf("store: delete tenant keys %s: %w", id, err)
+	n, err := s.CountByTenant(id)
+	if err != nil {
+		return err
 	}
+	if n > 0 {
+		return ErrTenantHasSandboxes
+	}
+	// api_keys cascade via ON DELETE CASCADE
 	if _, err := s.db.Exec(`DELETE FROM tenants WHERE id = $1`, id); err != nil {
 		return fmt.Errorf("store: delete tenant %s: %w", id, err)
 	}

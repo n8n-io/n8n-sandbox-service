@@ -766,45 +766,53 @@ test.describe('Tenant isolation', () => {
   test('tenant cannot access another tenant sandbox', async ({ request }) => {
     await ensureTenantAuth();
     const id = await createSandbox();
+    let otherTenantId: string | undefined;
 
-    const other = await request.post('/admin/tenants', {
-      headers: { 'X-Api-Key': ADMIN_API_KEY, 'Content-Type': 'application/json' },
-      data: { name: `other-${Date.now()}` },
-    });
-    expect(other.status()).toBe(201);
-    const otherBody = await other.json();
-    const otherKey = otherBody.key.api_key as string;
+    try {
+      const other = await request.post('/admin/tenants', {
+        headers: { 'X-Api-Key': ADMIN_API_KEY, 'Content-Type': 'application/json' },
+        data: { name: `other-${Date.now()}` },
+      });
+      expect(other.status()).toBe(201);
+      const otherBody = await other.json();
+      otherTenantId = otherBody.tenant.id as string;
+      const otherKey = otherBody.key.api_key as string;
 
-    const getResp = await request.get(`/sandboxes/${id}`, {
-      headers: { 'X-Api-Key': otherKey },
-    });
-    expect(getResp.status()).toBe(404);
+      const getResp = await request.get(`/sandboxes/${id}`, {
+        headers: { 'X-Api-Key': otherKey },
+      });
+      expect(getResp.status()).toBe(404);
 
-    const listResp = await request.get('/sandboxes', {
-      headers: { 'X-Api-Key': otherKey },
-    });
-    expect(listResp.status()).toBe(200);
-    expect(await listResp.json()).toEqual([]);
-
-    await deleteSandbox(id);
-    await request.delete(`/admin/tenants/${otherBody.tenant.id}`, {
-      headers: { 'X-Api-Key': ADMIN_API_KEY },
-    });
+      const listResp = await request.get('/sandboxes', {
+        headers: { 'X-Api-Key': otherKey },
+      });
+      expect(listResp.status()).toBe(200);
+      expect(await listResp.json()).toEqual([]);
+    } finally {
+      await deleteSandbox(id).catch(() => undefined);
+      if (otherTenantId) {
+        await request.delete(`/admin/tenants/${otherTenantId}`, {
+          headers: { 'X-Api-Key': ADMIN_API_KEY },
+        });
+      }
+    }
   });
 
   test('admin key can create and list without minting a tenant key', async ({ request }) => {
     const adminClient = sandboxClient(undefined, ADMIN_API_KEY);
     const record = await adminClient.createSandbox();
-    expect(record.id).toBeTruthy();
+    try {
+      expect(record.id).toBeTruthy();
 
-    const list = await request.get('/sandboxes', {
-      headers: { 'X-Api-Key': ADMIN_API_KEY },
-    });
-    expect(list.status()).toBe(200);
-    const body = (await list.json()) as Array<{ id: string }>;
-    expect(body.some((s) => s.id === record.id)).toBe(true);
-
-    await adminClient.deleteSandbox(record.id);
+      const list = await request.get('/sandboxes', {
+        headers: { 'X-Api-Key': ADMIN_API_KEY },
+      });
+      expect(list.status()).toBe(200);
+      const body = (await list.json()) as Array<{ id: string }>;
+      expect(body.some((s) => s.id === record.id)).toBe(true);
+    } finally {
+      await adminClient.deleteSandbox(record.id).catch(() => undefined);
+    }
   });
 
   test('tenant cannot call admin routes', async ({ request }) => {
