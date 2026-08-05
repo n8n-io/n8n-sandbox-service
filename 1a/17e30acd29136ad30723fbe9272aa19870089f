@@ -1,0 +1,19 @@
+Dockerfile.sandbox
+  s_8259f5d802e7c5::t_7d194ca18e9d70 25
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "1a17e30acd29136ad30723fbe9272aa19870089f",
+  "prompts": {},
+  "sessions": {
+    "s_8259f5d802e7c5": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "7451834b-79bf-4019-87dc-6da321fc16d8",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Robin Braumann <robin.braumann@n8n.io>"
+    }
+  }
+}
