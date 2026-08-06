@@ -163,7 +163,8 @@ fi
 mkdir -p "$OUT_DIR"
 rm -f "$SNAPSHOT_MEM" "$SNAPSHOT_STATE"
 touch "$SNAPSHOT_MEM" "$SNAPSHOT_STATE"
-chown 1000:1000 "$SNAPSHOT_MEM" "$SNAPSHOT_STATE"
+# Jailer runs Firecracker as uid/gid 1000; virtio block needs RW on rootfs.
+chown 1000:1000 "$KERNEL" "$ROOTFS" "$SNAPSHOT_MEM" "$SNAPSHOT_STATE"
 touch "${JAIL_ROOT}/vmlinux" "${JAIL_ROOT}/rootfs.ext4" "${JAIL_ROOT}/snapshot_mem" "${JAIL_ROOT}/snapshot_state"
 mount --bind "$KERNEL" "${JAIL_ROOT}/vmlinux"
 mount --bind "$ROOTFS" "${JAIL_ROOT}/rootfs.ext4"
