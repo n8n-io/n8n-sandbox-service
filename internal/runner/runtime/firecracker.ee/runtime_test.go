@@ -104,8 +104,9 @@ func testRuntimeT(t *testing.T, capacity int32) *Runtime {
 }
 
 // newTestRuntime constructs a runtime without startup reconcile (unit tests only).
+// ReadyCh stays open and admissionOK is false until markAdmissionOK is called.
 func newTestRuntime(capacity int32) *Runtime {
-	rt := &Runtime{
+	return &Runtime{
 		runnerConfig: testRunnerConfig(capacity),
 		config:       testConfig(),
 		deps:         defaultDependencies(testConfig()),
@@ -113,18 +114,36 @@ func newTestRuntime(capacity int32) *Runtime {
 		sandboxes:    make(map[string]*sandboxState),
 		readyCh:      make(chan struct{}),
 	}
-	close(rt.readyCh)
-	return rt
 }
 
 func TestRuntimeReadyChecksFirecrackerAssets(t *testing.T) {
 	rt := testRuntime(1)
+	rt.markAdmissionOK()
 	rt.deps.pathExists = func(path string) bool {
 		return path != "/srv/firecracker/snapshots/state"
 	}
 
 	if err := rt.Ready(context.Background()); err == nil || !strings.Contains(err.Error(), "snapshot state") {
 		t.Fatalf("Ready() error = %v, want missing snapshot state", err)
+	}
+}
+
+func TestRuntimeReadyRequiresVmlinux(t *testing.T) {
+	rt := testRuntime(1)
+	rt.markAdmissionOK()
+	rt.deps.pathExists = func(path string) bool {
+		return path != "/srv/firecracker/template/vmlinux"
+	}
+	if err := rt.Ready(context.Background()); err == nil || !strings.Contains(err.Error(), "vmlinux") {
+		t.Fatalf("Ready() error = %v, want missing vmlinux", err)
+	}
+}
+
+func TestRuntimeReadyRequiresAdmission(t *testing.T) {
+	rt := testRuntime(1)
+	rt.deps.pathExists = func(string) bool { return true }
+	if err := rt.Ready(context.Background()); err == nil || !strings.Contains(err.Error(), "admission canary") {
+		t.Fatalf("Ready() error = %v, want admission canary failure", err)
 	}
 }
 

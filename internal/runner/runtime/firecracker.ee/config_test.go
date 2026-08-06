@@ -36,6 +36,10 @@ func TestLoadConfigParsesOverrides(t *testing.T) {
 	t.Setenv("SANDBOX_RUNNER_FIRECRACKER_SOCKET_WAIT_ATTEMPTS", "9")
 	t.Setenv("SANDBOX_RUNNER_FIRECRACKER_SOCKET_WAIT_INTERVAL_MS", "50")
 	t.Setenv("SANDBOX_RUNNER_FIRECRACKER_DAEMON_WAIT_TIMEOUT", "10s")
+	t.Setenv("SANDBOX_RUNNER_FIRECRACKER_MANIFEST_PATH", "/srv/firecracker/MANIFEST.json")
+	t.Setenv("SANDBOX_RUNNER_FIRECRACKER_EXPECTED_GIT_SHA", "deadbeef")
+	t.Setenv("SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT", "/srv/firecracker/scripts/create-golden-snapshot.sh")
+	t.Setenv("SANDBOX_RUNNER_FIRECRACKER_DAEMON_BIN", "/srv/firecracker/bin/sandbox-daemon")
 
 	cfg, err := LoadConfig(4)
 	if err != nil {
@@ -49,6 +53,18 @@ func TestLoadConfigParsesOverrides(t *testing.T) {
 	}
 	if cfg.ProxyPortStart != 20000 {
 		t.Errorf("expected proxy port start 20000, got %d", cfg.ProxyPortStart)
+	}
+	if cfg.ManifestPath != "/srv/firecracker/MANIFEST.json" {
+		t.Errorf("expected manifest path, got %s", cfg.ManifestPath)
+	}
+	if cfg.ExpectedGitSHA != "deadbeef" {
+		t.Errorf("expected git sha, got %s", cfg.ExpectedGitSHA)
+	}
+	if cfg.CreateSnapshotScript != "/srv/firecracker/scripts/create-golden-snapshot.sh" {
+		t.Errorf("expected create snapshot script, got %s", cfg.CreateSnapshotScript)
+	}
+	if cfg.DaemonBin != "/srv/firecracker/bin/sandbox-daemon" {
+		t.Errorf("expected daemon bin, got %s", cfg.DaemonBin)
 	}
 }
 

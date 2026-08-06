@@ -26,6 +26,7 @@ const (
 	defaultSocketWaitAttempts      = 120
 	defaultSocketWaitInterval      = 20 * time.Millisecond
 	defaultDaemonWaitTimeout       = 60 * time.Second
+	defaultDaemonBin               = "/srv/firecracker/bin/sandbox-daemon"
 )
 
 // Config holds configuration for the Firecracker runtime backend.
@@ -93,6 +94,23 @@ type Config struct {
 	// DaemonWaitTimeout controls how long CreateSandbox waits for guest daemon health.
 	// Parsed from SANDBOX_RUNNER_FIRECRACKER_DAEMON_WAIT_TIMEOUT.
 	DaemonWaitTimeout time.Duration
+
+	// ManifestPath is an optional release MANIFEST.json used to pin guest assets.
+	// Parsed from SANDBOX_RUNNER_FIRECRACKER_MANIFEST_PATH.
+	ManifestPath string
+
+	// ExpectedGitSHA, when set, must match MANIFEST.json git_sha.
+	// Parsed from SANDBOX_RUNNER_FIRECRACKER_EXPECTED_GIT_SHA.
+	ExpectedGitSHA string
+
+	// CreateSnapshotScript creates the host-local golden snapshot when mem/state are missing.
+	// Empty means do not auto-create (Ready fails until snapshots exist).
+	// Parsed from SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT.
+	CreateSnapshotScript string
+
+	// DaemonBin is the host path to sandbox-daemon used when creating a golden snapshot.
+	// Parsed from SANDBOX_RUNNER_FIRECRACKER_DAEMON_BIN.
+	DaemonBin string
 }
 
 func defaultConfig() Config {
@@ -113,6 +131,7 @@ func defaultConfig() Config {
 		SocketWaitAttempts:      defaultSocketWaitAttempts,
 		SocketWaitInterval:      defaultSocketWaitInterval,
 		DaemonWaitTimeout:       defaultDaemonWaitTimeout,
+		DaemonBin:               defaultDaemonBin,
 	}
 }
 
@@ -177,6 +196,18 @@ func LoadConfig(capacityTotal int32) (Config, error) {
 		return Config{}, err
 	} else if ok {
 		cfg.DaemonWaitTimeout = d
+	}
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_MANIFEST_PATH")); v != "" {
+		cfg.ManifestPath = v
+	}
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_EXPECTED_GIT_SHA")); v != "" {
+		cfg.ExpectedGitSHA = v
+	}
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT")); v != "" {
+		cfg.CreateSnapshotScript = v
+	}
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_DAEMON_BIN")); v != "" {
+		cfg.DaemonBin = v
 	}
 
 	if err := validateConfig(cfg, capacityTotal); err != nil {
@@ -258,6 +289,15 @@ func validateConfig(cfg Config, capacityTotal int32) error {
 	}
 	if int64(cfg.ProxyPortStart)+int64(capacityTotal)-1 > 65535 {
 		return fmt.Errorf("firecracker proxy port range starting at %d exceeds 65535 for capacity %d", cfg.ProxyPortStart, capacityTotal)
+	}
+	if cfg.ManifestPath != "" && !strings.HasPrefix(cfg.ManifestPath, "/") {
+		return fmt.Errorf("SANDBOX_RUNNER_FIRECRACKER_MANIFEST_PATH must be an absolute path, got %q", cfg.ManifestPath)
+	}
+	if cfg.CreateSnapshotScript != "" && !strings.HasPrefix(cfg.CreateSnapshotScript, "/") {
+		return fmt.Errorf("SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT must be an absolute path, got %q", cfg.CreateSnapshotScript)
+	}
+	if cfg.DaemonBin != "" && !strings.HasPrefix(cfg.DaemonBin, "/") {
+		return fmt.Errorf("SANDBOX_RUNNER_FIRECRACKER_DAEMON_BIN must be an absolute path, got %q", cfg.DaemonBin)
 	}
 	return nil
 }

@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -38,6 +39,8 @@ type Runtime struct {
 	wakeGroup   singleflight.Group
 	metrics     *metrics.RunnerRecorder
 	readyCh     chan struct{}
+	readyOnce   sync.Once
+	admissionOK atomic.Bool
 	hostNATOnce sync.Once
 	hostNATErr  error
 }
@@ -59,7 +62,6 @@ func New(runnerConfig *config.Config, cfg Config) *Runtime {
 		sandboxes:    make(map[string]*sandboxState),
 		readyCh:      make(chan struct{}),
 	}
-	close(rt.readyCh)
 	ctx, cancel := reconcileContext()
 	defer cancel()
 	rt.reconcileOnStartup(ctx)
@@ -158,10 +160,7 @@ func defaultDependencies(fc Config) dependencies {
 	}
 }
 
-// Prepare ensures host-level NAT prerequisites exist for sandbox netns uplinks.
-func (r *Runtime) Prepare(ctx context.Context) {
-	_ = r.ensureHostNATReady(ctx)
-}
+// Prepare is implemented in admission.go: host NAT + pin + snapshot + canary.
 
 func (r *Runtime) ensureHostNATReady(ctx context.Context) error {
 	r.hostNATOnce.Do(func() {
@@ -173,15 +172,15 @@ func (r *Runtime) ensureHostNATReady(ctx context.Context) error {
 	return r.hostNATErr
 }
 
-// Ready checks that the host has the Firecracker binaries and snapshot assets
-// needed to accept sandbox work.
+// Ready checks that pinned guest assets exist and the admission canary has passed.
 func (r *Runtime) Ready(context.Context) error {
 	requiredPaths := map[string]string{
-		"jailer":          r.config.JailerBin,
-		"firecracker":     r.config.FirecrackerBin,
-		"template rootfs": filepath.Join(r.config.TemplateDir, "rootfs.ext4"),
-		"snapshot memory": r.config.SnapshotMemPath,
-		"snapshot state":  r.config.SnapshotStatePath,
+		"jailer":           r.config.JailerBin,
+		"firecracker":      r.config.FirecrackerBin,
+		"template rootfs":  filepath.Join(r.config.TemplateDir, "rootfs.ext4"),
+		"template vmlinux": filepath.Join(r.config.TemplateDir, "vmlinux"),
+		"snapshot memory":  r.config.SnapshotMemPath,
+		"snapshot state":   r.config.SnapshotStatePath,
 	}
 	for label, path := range requiredPaths {
 		if !r.deps.pathExists(path) {
@@ -191,11 +190,13 @@ func (r *Runtime) Ready(context.Context) error {
 	if len(r.slots) == 0 {
 		return fmt.Errorf("firecracker runtime has no capacity")
 	}
+	if !r.admissionOK.Load() {
+		return fmt.Errorf("firecracker admission canary has not passed")
+	}
 	return nil
 }
 
-// ReadyCh is already closed because the Firecracker backend has no asynchronous
-// image-pull phase like the Docker backend.
+// ReadyCh is closed after Prepare completes admission successfully.
 func (r *Runtime) ReadyCh() <-chan struct{} {
 	return r.readyCh
 }

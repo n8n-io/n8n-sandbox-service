@@ -137,9 +137,12 @@ entrypoints or fail loudly when they are missing.
 Rollout order on Firecracker runners:
 
 1. Install/replace bundle on the host (or bake into a new gallery image).
-2. Rebuild the host-local snapshot using bundle entrypoints.
+2. Rebuild the host-local snapshot using bundle entrypoints (or set
+   `SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT` so the runner creates it
+   on first `Prepare`).
 3. Roll `runner-firecracker` to the matching commit/version.
-4. Gate on smoke tests.
+4. Gate on admission: runner stays unhealthy until pin + canary pass
+   (`/readyz` and registration `Healthy`).
 
 ## Cloud-specific notes (Azure)
 
