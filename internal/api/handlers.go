@@ -272,6 +272,10 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 				"container_ip", containerIP,
 				"error", err,
 			)
+			if errors.Is(err, store.ErrTenantNotFound) {
+				writeError(w, http.StatusConflict, "tenant not found")
+				return
+			}
 			writeError(w, http.StatusInternalServerError, "failed to store sandbox: "+err.Error())
 			return
 		}

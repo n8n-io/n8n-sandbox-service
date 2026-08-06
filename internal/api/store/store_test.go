@@ -216,6 +216,79 @@ func TestDeleteTenantRejectsWhenSandboxesExist(t *testing.T) {
 	}
 }
 
+func TestCreateSandboxRequiresExistingTenant(t *testing.T) {
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	defer s.Close()
+
+	now := time.Now().Unix()
+	err = s.Create(&SandboxRecord{
+		ID: "s-missing-tenant", Status: "running", CreatedAt: now, LastActiveAt: now,
+		TenantID: "99999999-9999-9999-9999-999999999999",
+	})
+	if !errors.Is(err, ErrTenantNotFound) {
+		t.Fatalf("Create: got %v, want ErrTenantNotFound", err)
+	}
+
+	if err := s.Create(&SandboxRecord{
+		ID: "s-admin", Status: "running", CreatedAt: now, LastActiveAt: now,
+		TenantID: AdminTenantID,
+	}); err != nil {
+		t.Fatalf("Create admin-owned: %v", err)
+	}
+}
+
+func TestDeleteTenantSerializesWithCreate(t *testing.T) {
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	defer s.Close()
+
+	now := time.Now().Unix()
+	tenantID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	if err := s.CreateTenant(&Tenant{ID: tenantID, Name: "t", MaxSandboxes: 5, CreatedAt: now}); err != nil {
+		t.Fatalf("create tenant: %v", err)
+	}
+
+	// Hold the create transaction open (tenant locked) while delete runs on another
+	// goroutine — delete must wait, then see the inserted sandbox and refuse.
+	tx, err := s.db.Begin()
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if _, err := tx.Exec(`UPDATE tenants SET name = name WHERE id = ?`, tenantID); err != nil {
+		t.Fatalf("lock tenant: %v", err)
+	}
+	if err := s.insertSandbox(tx, &SandboxRecord{
+		ID: "s-racing", Status: "running", CreatedAt: now, LastActiveAt: now, TenantID: tenantID,
+	}); err != nil {
+		t.Fatalf("insert in tx: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- s.DeleteTenant(tenantID)
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("DeleteTenant returned before create committed: %v", err)
+	case <-time.After(100 * time.Millisecond):
+		// still blocked on the tenant row lock — good
+	}
+
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit create: %v", err)
+	}
+	err = <-done
+	if !errors.Is(err, ErrTenantHasSandboxes) {
+		t.Fatalf("DeleteTenant: got %v, want ErrTenantHasSandboxes", err)
+	}
+}
+
 func TestCreateTenantWithAPIKeyAtomic(t *testing.T) {
 	s, err := New(":memory:")
 	if err != nil {

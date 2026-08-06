@@ -125,7 +125,7 @@ Resource limits (memory, CPU, process count) are configured on the runner via en
 }
 ```
 
-**Errors:** `503` when no sandbox runners are registered or available
+**Errors:** `503` when no sandbox runners are registered or available; `409` if the tenant was deleted before the sandbox row could be stored (runner create is rolled back)
 
 **Example:**
 
@@ -711,6 +711,8 @@ Get a tenant by id.
 Delete a tenant and its API keys (`204`).
 
 Fails with `409 Conflict` if the tenant still owns sandboxes — delete those first (admin can delete any sandbox). This avoids orphaning running sandboxes after credentials are removed.
+
+`DeleteTenant` locks the tenant row while checking ownership and deleting, and tenant sandbox `Create` takes the same lock before insert. That closes the race where a sandbox create is in flight (runner VM already started, store row not yet written) while delete sees an empty count.
 
 ### GET /admin/tenants/{id}/keys
 

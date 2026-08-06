@@ -10,6 +10,10 @@ import (
 // still owns sandbox rows.
 var ErrTenantHasSandboxes = errors.New("tenant has sandboxes")
 
+// ErrTenantNotFound is returned when persisting a tenant-owned sandbox whose
+// tenant row no longer exists (e.g. deleted concurrently during create).
+var ErrTenantNotFound = errors.New("tenant not found")
+
 // Backend identifies the sandbox store implementation.
 type Backend string
 
