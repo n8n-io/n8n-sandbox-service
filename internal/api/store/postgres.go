@@ -41,6 +41,10 @@ func NewPostgres(cfg config.PostgresConfig) (*PostgresStore, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: add tenant_id column: %w", err)
 	}
+	if _, err := db.Exec(postgresBackfillAdminTenantID); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: backfill admin tenant_id: %w", err)
+	}
 	if _, err := db.Exec(postgresSandboxTenantIndex); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: sandboxes tenant index: %w", err)

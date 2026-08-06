@@ -59,6 +59,11 @@ func NewSQLite(dbPath string) (*SQLiteStore, error) {
 		}
 	}
 
+	if _, err := db.Exec(sqliteBackfillAdminTenantID); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: backfill admin tenant_id: %w", err)
+	}
+
 	if _, err := db.Exec(sqliteTenantsSchema); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: tenants schema: %w", err)

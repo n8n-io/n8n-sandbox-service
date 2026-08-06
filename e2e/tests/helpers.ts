@@ -1,7 +1,7 @@
 import { APIRequestContext, expect } from '@playwright/test';
 import * as http from 'node:http';
 import * as https from 'node:https';
-import { SandboxClient, type ExecResult } from '@n8n/sandbox-client';
+import { SandboxClient, SandboxServiceError, type ExecResult } from '@n8n/sandbox-client';
 import { execFileSync } from 'node:child_process';
 
 /** Admin key from env (SANDBOX_API_KEYS). Used to mint tenant keys. */
@@ -10,6 +10,33 @@ const BASE_URL = process.env.BASE_URL || process.env.BASE_URL_A || 'http://local
 
 let tenantApiKey: string | null = null;
 let tenantMintPromise: Promise<string> | null = null;
+
+/** Admin SandboxClient (SANDBOX_API_KEYS). */
+export function adminClient(baseUrl: string = BASE_URL): SandboxClient {
+  return new SandboxClient({ baseUrl, apiKey: ADMIN_API_KEY });
+}
+
+/** SandboxClient for an explicit base URL and API key. */
+export function apiClient(baseUrl: string, apiKey: string): SandboxClient {
+  return new SandboxClient({ baseUrl, apiKey });
+}
+
+/**
+ * Tenant SandboxClient using the minted process key.
+ * Call ensureTenantAuth / getApiKey first.
+ */
+export function tenantClient(baseUrl: string = BASE_URL): SandboxClient {
+  if (!tenantApiKey) {
+    throw new Error('tenantClient: call ensureTenantAuth()/getApiKey() first');
+  }
+  return apiClient(baseUrl, tenantApiKey);
+}
+
+/**
+ * Process-wide tenant client for BASE_URL (or the mint URL). Assigned by
+ * ensureTenantAuth / getApiKey; do not use before that.
+ */
+export let client!: SandboxClient;
 
 async function mintTenantApiKey(mintBaseUrl: string = BASE_URL): Promise<string> {
   const res = await fetch(`${mintBaseUrl}/admin/tenants`, {
@@ -28,7 +55,7 @@ async function mintTenantApiKey(mintBaseUrl: string = BASE_URL): Promise<string>
     key: { api_key: string };
   };
   tenantApiKey = body.key.api_key;
-  client = new SandboxClient({ baseUrl: mintBaseUrl, apiKey: tenantApiKey });
+  client = apiClient(mintBaseUrl, tenantApiKey);
   return tenantApiKey;
 }
 
@@ -46,13 +73,6 @@ export async function getApiKey(mintBaseUrl?: string): Promise<string> {
 
 export async function ensureTenantAuth(mintBaseUrl?: string): Promise<void> {
   await getApiKey(mintBaseUrl);
-}
-
-/** Tenant-scoped client (initialized after ensureTenantAuth / first helper call). */
-export let client = new SandboxClient({ baseUrl: BASE_URL, apiKey: ADMIN_API_KEY });
-
-export function sandboxClient(baseUrl: string = BASE_URL, apiKey?: string): SandboxClient {
-  return new SandboxClient({ baseUrl, apiKey: apiKey ?? tenantApiKey ?? ADMIN_API_KEY });
 }
 
 export type { ExecResult };
@@ -99,9 +119,16 @@ export async function createSandboxWithRetry(maxAttempts = 5): Promise<string> {
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 
-export async function deleteSandbox(id: string, c: SandboxClient = client): Promise<void> {
+export async function deleteSandbox(id: string, c?: SandboxClient): Promise<void> {
   await ensureTenantAuth();
-  await c.deleteSandbox(id);
+  try {
+    await (c ?? client).deleteSandbox(id);
+  } catch (err) {
+    // Idempotent cleanup: row may already be gone after runner-gone reap or a
+    // retried DELETE whose first attempt succeeded.
+    if (err instanceof SandboxServiceError && err.status === 404) return;
+    throw err;
+  }
 }
 
 export async function exec(

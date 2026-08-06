@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { SandboxClient } from "../src/client.js";
+import { SandboxServiceError } from "../src/errors.js";
 import { HttpClient } from "../src/http.js";
 
 vi.mock("../src/http.js", () => {
@@ -87,6 +88,13 @@ describe("SandboxClient", () => {
     await client.deleteSandbox("abc");
 
     expect(mock.requestVoid).toHaveBeenCalledWith("DELETE", "/sandboxes/abc");
+  });
+
+  it("deleteSandbox treats 404 as success", async () => {
+    const mock = getMockHttp(client);
+    mock.requestVoid.mockRejectedValue(new SandboxServiceError("sandbox not found", 404));
+
+    await expect(client.deleteSandbox("abc")).resolves.toBeUndefined();
   });
 
   it("readFile sends GET /sandboxes/{id}/files/content", async () => {

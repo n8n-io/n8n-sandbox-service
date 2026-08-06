@@ -122,5 +122,5 @@ func canAccessSandbox(r *http.Request, rec *store.SandboxRecord) bool {
 	if id.Role == roleAdmin {
 		return true
 	}
-	return id.Role == roleTenant && rec.TenantID != "" && rec.TenantID == id.TenantID
+	return id.Role == roleTenant && !store.IsAdminTenantID(rec.TenantID) && rec.TenantID == id.TenantID
 }

@@ -6,7 +6,7 @@ import {
   deleteSandbox,
   ensureTenantAuth,
   getApiKey,
-  sandboxClient,
+  tenantClient,
   waitForSandboxStatus,
 } from './helpers';
 import { parseGauge } from './metrics-helpers';
@@ -73,8 +73,7 @@ test.describe('multi-pod API (Postgres)', () => {
 
   test('runner heartbeats on pod A; create and exec on pod B', async () => {
     await ensureTenantAuth(BASE_URL_A);
-    const key = await getApiKey();
-    const clientB = sandboxClient(BASE_URL_B, key);
+    const clientB = tenantClient(BASE_URL_B);
 
     const record = await clientB.createSandbox();
     try {
@@ -88,9 +87,8 @@ test.describe('multi-pod API (Postgres)', () => {
 
   test('sandbox created on pod B is visible on pod A', async () => {
     await ensureTenantAuth(BASE_URL_A);
-    const key = await getApiKey();
-    const clientA = sandboxClient(BASE_URL_A, key);
-    const clientB = sandboxClient(BASE_URL_B, key);
+    const clientA = tenantClient(BASE_URL_A);
+    const clientB = tenantClient(BASE_URL_B);
 
     const record = await clientB.createSandbox();
     try {
@@ -124,7 +122,7 @@ test.describe.serial('multi-pod API failover @multi-pod-failover', () => {
 
     // Pod A is down; mint against the surviving pod (shared Postgres).
     await ensureTenantAuth(BASE_URL_B);
-    const clientB = sandboxClient(BASE_URL_B, await getApiKey());
+    const clientB = tenantClient(BASE_URL_B);
     const record = await clientB.createSandbox();
     try {
       const result = await execWithTransientRetry(record.id, 'echo failover', undefined, clientB);
@@ -140,7 +138,7 @@ test.describe.serial('multi-pod API failover @multi-pod-failover', () => {
 
     await ensureTenantAuth(BASE_URL_B);
     const key = await getApiKey();
-    const clientB = sandboxClient(BASE_URL_B, key);
+    const clientB = tenantClient(BASE_URL_B);
     const record = await clientB.createSandbox();
 
     const reqB = await playwrightRequest.newContext({

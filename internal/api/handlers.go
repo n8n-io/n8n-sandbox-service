@@ -183,7 +183,7 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 			writeError(w, http.StatusUnauthorized, "invalid API key")
 			return
 		}
-		tenantID := ""
+		tenantID := store.AdminTenantID
 		if authID.Role == roleTenant {
 			tenantID = authID.TenantID
 			tenant, err := s.GetTenant(tenantID)

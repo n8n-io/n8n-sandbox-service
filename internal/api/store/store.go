@@ -16,7 +16,18 @@ type Backend string
 const (
 	BackendSQLite   Backend = "sqlite"
 	BackendPostgres Backend = "postgres"
+
+	// AdminTenantID is stored on sandboxes created with an admin API key (not
+	// owned by any tenant). Chosen to be non-UUID so it cannot collide with
+	// real tenant ids.
+	AdminTenantID = "__admin__"
 )
+
+// IsAdminTenantID reports whether tenantID marks an admin-owned sandbox.
+// Empty is treated the same for rows that predate the sentinel backfill.
+func IsAdminTenantID(tenantID string) bool {
+	return tenantID == "" || tenantID == AdminTenantID
+}
 
 // SandboxRecord is the in-memory representation of a row in the sandboxes table.
 type SandboxRecord struct {
@@ -31,7 +42,7 @@ type SandboxRecord struct {
 	RunnerID              string // Runner that hosts this sandbox (from registration)
 	RunnerHTTPBase        string // Base URL to reach that runner's HTTP API (for proxying)
 	RunnerControlGRPCAddr string // host:port for SandboxControl gRPC
-	TenantID              string // empty = admin-created / legacy
+	TenantID              string // AdminTenantID = admin-owned; otherwise a tenants.id UUID
 }
 
 // Tenant is a provisioned consumer of the sandbox API (e.g. an n8n instance).

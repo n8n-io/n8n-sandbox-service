@@ -149,6 +149,8 @@ try {
 }
 ```
 
+`deleteSandbox` treats HTTP 404 as success (already gone), so a retried delete after a dropped `204` does not fail.
+
 ## Development
 
 ```sh

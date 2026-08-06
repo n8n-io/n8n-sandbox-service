@@ -25,7 +25,10 @@ const sqliteAddRunnerHTTPBaseURLCol = `ALTER TABLE sandboxes ADD COLUMN runner_h
 
 const sqliteAddRunnerControlGRPCAddrCol = `ALTER TABLE sandboxes ADD COLUMN runner_control_grpc_addr TEXT DEFAULT ''`
 
-const sqliteAddTenantIDCol = `ALTER TABLE sandboxes ADD COLUMN tenant_id TEXT NOT NULL DEFAULT ''`
+const sqliteAddTenantIDCol = `ALTER TABLE sandboxes ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '__admin__'`
+
+// Backfill legacy empty tenant_id to the admin sentinel.
+const sqliteBackfillAdminTenantID = `UPDATE sandboxes SET tenant_id = '__admin__' WHERE tenant_id = ''`
 
 const sqliteTenantsSchema = `
 CREATE TABLE IF NOT EXISTS tenants (

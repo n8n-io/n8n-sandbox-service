@@ -12,7 +12,7 @@ import {
   getApiKey,
   ADMIN_API_KEY,
   ensureTenantAuth,
-  sandboxClient,
+  adminClient,
 } from './helpers';
 import { SandboxServiceError } from '@n8n/sandbox-client';
 
@@ -777,17 +777,78 @@ test.describe('Tenant isolation', () => {
       const otherBody = await other.json();
       otherTenantId = otherBody.tenant.id as string;
       const otherKey = otherBody.key.api_key as string;
+      const otherHeaders = { 'X-Api-Key': otherKey };
 
       const getResp = await request.get(`/sandboxes/${id}`, {
-        headers: { 'X-Api-Key': otherKey },
+        headers: otherHeaders,
       });
       expect(getResp.status()).toBe(404);
 
       const listResp = await request.get('/sandboxes', {
-        headers: { 'X-Api-Key': otherKey },
+        headers: otherHeaders,
       });
       expect(listResp.status()).toBe(200);
       expect(await listResp.json()).toEqual([]);
+
+      const deleteResp = await request.delete(`/sandboxes/${id}`, {
+        headers: otherHeaders,
+      });
+      expect(deleteResp.status()).toBe(404);
+
+      const execResp = await request.post(`/sandboxes/${id}/executions`, {
+        headers: { ...otherHeaders, 'Content-Type': 'application/json' },
+        data: { command: 'echo pwned' },
+      });
+      expect(execResp.status()).toBe(404);
+
+      const proxyRoutes: Array<{
+        method: 'GET' | 'PUT' | 'POST' | 'DELETE';
+        path: string;
+        data?: string | Record<string, string>;
+        contentType?: string;
+      }> = [
+        { method: 'GET', path: `/sandboxes/${id}/files` },
+        { method: 'GET', path: `/sandboxes/${id}/files/content?path=/tmp/x` },
+        {
+          method: 'PUT',
+          path: `/sandboxes/${id}/files?path=/tmp/x`,
+          data: 'pwned',
+          contentType: 'application/octet-stream',
+        },
+        {
+          method: 'POST',
+          path: `/sandboxes/${id}/files?path=/tmp/x`,
+          data: 'pwned',
+          contentType: 'application/octet-stream',
+        },
+        { method: 'DELETE', path: `/sandboxes/${id}/files?path=/tmp/x` },
+        {
+          method: 'POST',
+          path: `/sandboxes/${id}/files/copy`,
+          data: { src: '/tmp/a', dest: '/tmp/b' },
+          contentType: 'application/json',
+        },
+        {
+          method: 'POST',
+          path: `/sandboxes/${id}/files/move`,
+          data: { src: '/tmp/a', dest: '/tmp/b' },
+          contentType: 'application/json',
+        },
+        { method: 'POST', path: `/sandboxes/${id}/mkdir?path=/tmp/pwned` },
+        { method: 'GET', path: `/sandboxes/${id}/stat?path=/tmp/x` },
+      ];
+
+      for (const route of proxyRoutes) {
+        const resp = await request.fetch(route.path, {
+          method: route.method,
+          headers: {
+            ...otherHeaders,
+            ...(route.contentType ? { 'Content-Type': route.contentType } : {}),
+          },
+          data: route.data,
+        });
+        expect(resp.status(), `${route.method} ${route.path}`).toBe(404);
+      }
     } finally {
       await deleteSandbox(id).catch(() => undefined);
       if (otherTenantId) {
@@ -799,8 +860,8 @@ test.describe('Tenant isolation', () => {
   });
 
   test('admin key can create and list without minting a tenant key', async ({ request }) => {
-    const adminClient = sandboxClient(undefined, ADMIN_API_KEY);
-    const record = await adminClient.createSandbox();
+    const admin = adminClient();
+    const record = await admin.createSandbox();
     try {
       expect(record.id).toBeTruthy();
 
@@ -811,7 +872,7 @@ test.describe('Tenant isolation', () => {
       const body = (await list.json()) as Array<{ id: string }>;
       expect(body.some((s) => s.id === record.id)).toBe(true);
     } finally {
-      await adminClient.deleteSandbox(record.id).catch(() => undefined);
+      await admin.deleteSandbox(record.id).catch(() => undefined);
     }
   });
 
