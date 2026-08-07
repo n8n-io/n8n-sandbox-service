@@ -116,7 +116,7 @@ Resource limits (memory, CPU, process count) are configured on the runner via en
 }
 ```
 
-**Errors:** `400` invalid supplied id, `502` stale sandbox cleanup failed, `503` no sandbox runners are registered or available
+**Errors:** `400` invalid request body or supplied id, `502` stale sandbox cleanup failed, `503` no sandbox runners are registered or available
 
 **Examples:**
 

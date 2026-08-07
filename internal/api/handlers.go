@@ -181,7 +181,12 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 		defer func() { rec.ObserveSandboxOp(metrics.OpCreate, success) }()
 
 		var req createSandboxRequest
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
+		if err := decoder.Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+		if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
@@ -193,6 +198,13 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 				return
 			}
 			sandboxID = *req.ID
+
+			unlock, err := s.LockSandbox(r.Context(), sandboxID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			defer unlock()
 
 			existing, err := s.Get(sandboxID)
 			if err != nil {

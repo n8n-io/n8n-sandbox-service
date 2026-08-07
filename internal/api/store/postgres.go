@@ -121,6 +121,22 @@ func (s *PostgresStore) Delete(id string) error {
 	return nil
 }
 
+func (s *PostgresStore) LockSandbox(ctx context.Context, id string) (func(), error) {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("store: acquire conn for sandbox lock: %w", err)
+	}
+	lockID := "sandbox:" + id
+	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock(hashtextextended($1, 0))`, lockID); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("store: lock sandbox %s: %w", id, err)
+	}
+	return func() {
+		_, _ = conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock(hashtextextended($1, 0))`, lockID)
+		_ = conn.Close()
+	}, nil
+}
+
 func (s *PostgresStore) ListForIdleReapDelete(cutoff int64) ([]*SandboxRecord, error) {
 	const q = `
 		SELECT id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr
