@@ -14,6 +14,10 @@ var ErrTenantHasSandboxes = errors.New("tenant has sandboxes")
 // tenant row no longer exists (e.g. deleted concurrently during create).
 var ErrTenantNotFound = errors.New("tenant not found")
 
+// ErrAPIKeyTenantMismatch is returned when CreateTenantWithAPIKey is called with
+// k.TenantID != t.ID.
+var ErrAPIKeyTenantMismatch = errors.New("api key tenant_id does not match tenant")
+
 // Backend identifies the sandbox store implementation.
 type Backend string
 
@@ -86,7 +90,7 @@ type SandboxStore interface {
 
 	CreateTenant(t *Tenant) error
 	// CreateTenantWithAPIKey inserts the tenant and its first API key in one transaction.
-	// k.TenantID is set to t.ID (the tenant is authoritative).
+	// k.TenantID must equal t.ID.
 	CreateTenantWithAPIKey(t *Tenant, k *APIKey) error
 	GetTenant(id string) (*Tenant, error)
 	ListTenants() ([]*Tenant, error)

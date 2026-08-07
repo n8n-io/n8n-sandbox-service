@@ -179,6 +179,14 @@ func TestTenantCannotAccessOtherTenantSandbox(t *testing.T) {
 		t.Fatalf("other tenant delete: expected %d, got %d", http.StatusNotFound, rrDelB.Code)
 	}
 
+	getAfterDel := httptest.NewRequest(http.MethodGet, "/sandboxes/"+sid, nil)
+	getAfterDel.Header.Set("X-Api-Key", keyA)
+	rrAfterDel := httptest.NewRecorder()
+	router.ServeHTTP(rrAfterDel, getAfterDel)
+	if rrAfterDel.Code != http.StatusOK {
+		t.Fatalf("owner get after foreign delete: expected %d, got %d body=%s", http.StatusOK, rrAfterDel.Code, rrAfterDel.Body.String())
+	}
+
 	missing := "11111111-2222-3333-4444-555555555555"
 	delMissing := httptest.NewRequest(http.MethodDelete, "/sandboxes/"+missing, nil)
 	delMissing.Header.Set("X-Api-Key", keyB)

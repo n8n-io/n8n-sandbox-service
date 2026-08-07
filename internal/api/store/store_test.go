@@ -299,16 +299,11 @@ func TestCreateTenantWithAPIKeyAtomic(t *testing.T) {
 		ID: "cccccccc-cccc-cccc-cccc-cccccccccccc", Name: "acme", MaxSandboxes: 10, CreatedAt: now,
 	}
 	key := &APIKey{
-		ID: "dddddddd-dddd-dddd-dddd-dddddddddddd",
-		// Mismatched TenantID must be overwritten with t.ID.
-		TenantID: "00000000-0000-0000-0000-000000000000",
-		KeyHash:  "hash", Prefix: "feedface", CreatedAt: now,
+		ID: "dddddddd-dddd-dddd-dddd-dddddddddddd", TenantID: tenant.ID,
+		KeyHash: "hash", Prefix: "feedface", CreatedAt: now,
 	}
 	if err := s.CreateTenantWithAPIKey(tenant, key); err != nil {
 		t.Fatalf("CreateTenantWithAPIKey: %v", err)
-	}
-	if key.TenantID != tenant.ID {
-		t.Fatalf("key.TenantID = %q, want %q", key.TenantID, tenant.ID)
 	}
 	got, err := s.GetTenant(tenant.ID)
 	if err != nil || got == nil {
@@ -318,8 +313,24 @@ func TestCreateTenantWithAPIKeyAtomic(t *testing.T) {
 	if err != nil || len(keys) != 1 {
 		t.Fatalf("ListAPIKeysByTenant: len=%d err=%v", len(keys), err)
 	}
-	if keys[0].TenantID != tenant.ID {
-		t.Fatalf("stored key TenantID = %q, want %q", keys[0].TenantID, tenant.ID)
+
+	mismatchTenant := &Tenant{
+		ID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", Name: "mismatch", MaxSandboxes: 1, CreatedAt: now,
+	}
+	mismatchKey := &APIKey{
+		ID:       "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		TenantID: "00000000-0000-0000-0000-000000000000",
+		KeyHash:  "x", Prefix: "badbad00", CreatedAt: now,
+	}
+	if err := s.CreateTenantWithAPIKey(mismatchTenant, mismatchKey); !errors.Is(err, ErrAPIKeyTenantMismatch) {
+		t.Fatalf("CreateTenantWithAPIKey mismatch: got %v, want ErrAPIKeyTenantMismatch", err)
+	}
+	got, err = s.GetTenant(mismatchTenant.ID)
+	if err != nil {
+		t.Fatalf("GetTenant after mismatch: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("tenant should not be created on mismatch, got %+v", got)
 	}
 
 	orphanTenant := &Tenant{

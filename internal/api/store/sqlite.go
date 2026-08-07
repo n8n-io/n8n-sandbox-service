@@ -304,6 +304,9 @@ func (s *SQLiteStore) CreateTenant(t *Tenant) error {
 }
 
 func (s *SQLiteStore) CreateTenantWithAPIKey(t *Tenant, k *APIKey) error {
+	if k.TenantID != t.ID {
+		return ErrAPIKeyTenantMismatch
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: begin tenant+key: %w", err)
@@ -314,7 +317,6 @@ func (s *SQLiteStore) CreateTenantWithAPIKey(t *Tenant, k *APIKey) error {
 	if _, err := tx.Exec(tenantQ, t.ID, t.Name, t.ExternalRef, t.MaxSandboxes, t.CreatedAt); err != nil {
 		return fmt.Errorf("store: create tenant %s: %w", t.ID, err)
 	}
-	k.TenantID = t.ID
 	var revoked any
 	if k.RevokedAt > 0 {
 		revoked = k.RevokedAt
