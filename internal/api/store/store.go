@@ -86,6 +86,7 @@ type SandboxStore interface {
 
 	CreateTenant(t *Tenant) error
 	// CreateTenantWithAPIKey inserts the tenant and its first API key in one transaction.
+	// k.TenantID is set to t.ID (the tenant is authoritative).
 	CreateTenantWithAPIKey(t *Tenant, k *APIKey) error
 	GetTenant(id string) (*Tenant, error)
 	ListTenants() ([]*Tenant, error)

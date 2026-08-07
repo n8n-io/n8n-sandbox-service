@@ -253,18 +253,16 @@ func TestDeleteTenantSerializesWithCreate(t *testing.T) {
 		t.Fatalf("create tenant: %v", err)
 	}
 
-	// Hold the create transaction open (tenant locked) while delete runs on another
-	// goroutine — delete must wait, then see the inserted sandbox and refuse.
-	tx, err := s.db.Begin()
+	// Hold the create transaction open (BEGIN IMMEDIATE) while delete runs on
+	// another goroutine — delete must wait, then see the inserted sandbox and refuse.
+	conn, err := s.beginImmediate()
 	if err != nil {
-		t.Fatalf("begin: %v", err)
+		t.Fatalf("beginImmediate: %v", err)
 	}
-	if _, err := tx.Exec(`UPDATE tenants SET name = name WHERE id = ?`, tenantID); err != nil {
-		t.Fatalf("lock tenant: %v", err)
-	}
-	if err := s.insertSandbox(tx, &SandboxRecord{
+	if err := s.insertSandbox(conn, &SandboxRecord{
 		ID: "s-racing", Status: "running", CreatedAt: now, LastActiveAt: now, TenantID: tenantID,
 	}); err != nil {
+		rollbackConn(conn)
 		t.Fatalf("insert in tx: %v", err)
 	}
 
@@ -277,10 +275,10 @@ func TestDeleteTenantSerializesWithCreate(t *testing.T) {
 	case err := <-done:
 		t.Fatalf("DeleteTenant returned before create committed: %v", err)
 	case <-time.After(100 * time.Millisecond):
-		// still blocked on the tenant row lock — good
+		// still blocked on the IMMEDIATE write lock / connection — good
 	}
 
-	if err := tx.Commit(); err != nil {
+	if err := commitConn(conn); err != nil {
 		t.Fatalf("commit create: %v", err)
 	}
 	err = <-done
@@ -301,11 +299,16 @@ func TestCreateTenantWithAPIKeyAtomic(t *testing.T) {
 		ID: "cccccccc-cccc-cccc-cccc-cccccccccccc", Name: "acme", MaxSandboxes: 10, CreatedAt: now,
 	}
 	key := &APIKey{
-		ID: "dddddddd-dddd-dddd-dddd-dddddddddddd", TenantID: tenant.ID,
-		KeyHash: "hash", Prefix: "feedface", CreatedAt: now,
+		ID: "dddddddd-dddd-dddd-dddd-dddddddddddd",
+		// Mismatched TenantID must be overwritten with t.ID.
+		TenantID: "00000000-0000-0000-0000-000000000000",
+		KeyHash:  "hash", Prefix: "feedface", CreatedAt: now,
 	}
 	if err := s.CreateTenantWithAPIKey(tenant, key); err != nil {
 		t.Fatalf("CreateTenantWithAPIKey: %v", err)
+	}
+	if key.TenantID != tenant.ID {
+		t.Fatalf("key.TenantID = %q, want %q", key.TenantID, tenant.ID)
 	}
 	got, err := s.GetTenant(tenant.ID)
 	if err != nil || got == nil {
@@ -315,18 +318,20 @@ func TestCreateTenantWithAPIKeyAtomic(t *testing.T) {
 	if err != nil || len(keys) != 1 {
 		t.Fatalf("ListAPIKeysByTenant: len=%d err=%v", len(keys), err)
 	}
+	if keys[0].TenantID != tenant.ID {
+		t.Fatalf("stored key TenantID = %q, want %q", keys[0].TenantID, tenant.ID)
+	}
 
 	orphanTenant := &Tenant{
 		ID: "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee", Name: "orphan", MaxSandboxes: 1, CreatedAt: now,
 	}
 	badKey := &APIKey{
-		ID: "ffffffff-ffff-ffff-ffff-ffffffffffff",
-		// FK target does not exist; insert fails after tenant row and must roll back.
-		TenantID: "00000000-0000-0000-0000-000000000000",
-		KeyHash:  "x", Prefix: "badbad00", CreatedAt: now,
+		// Duplicate primary key; insert fails after tenant row and must roll back.
+		ID: key.ID, TenantID: orphanTenant.ID,
+		KeyHash: "x", Prefix: "badbad00", CreatedAt: now,
 	}
 	if err := s.CreateTenantWithAPIKey(orphanTenant, badKey); err == nil {
-		t.Fatal("expected CreateTenantWithAPIKey to fail on bad key FK")
+		t.Fatal("expected CreateTenantWithAPIKey to fail on duplicate key id")
 	}
 	got, err = s.GetTenant(orphanTenant.ID)
 	if err != nil {

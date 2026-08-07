@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -98,7 +99,7 @@ func (s *SQLiteStore) Close() error { return s.db.Close() }
 const sqliteSandboxCols = `id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id`
 
 type sqliteExecer interface {
-	Exec(query string, args ...any) (sql.Result, error)
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
 func (s *SQLiteStore) insertSandbox(e sqliteExecer, record *SandboxRecord) error {
@@ -108,7 +109,7 @@ func (s *SQLiteStore) insertSandbox(e sqliteExecer, record *SandboxRecord) error
 		VALUES
 			(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
-	_, err := e.Exec(q,
+	_, err := e.ExecContext(context.Background(), q,
 		record.ID,
 		record.Status,
 		record.CreatedAt,
@@ -128,35 +129,67 @@ func (s *SQLiteStore) insertSandbox(e sqliteExecer, record *SandboxRecord) error
 	return nil
 }
 
+// beginImmediate starts a transaction with a RESERVED write lock (BEGIN IMMEDIATE).
+// Caller must Commit or Rollback, then Close the conn.
+func (s *SQLiteStore) beginImmediate() (*sql.Conn, error) {
+	conn, err := s.db.Conn(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	if _, err := conn.ExecContext(context.Background(), "BEGIN IMMEDIATE"); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	return conn, nil
+}
+
+func commitConn(conn *sql.Conn) error {
+	_, err := conn.ExecContext(context.Background(), "COMMIT")
+	cerr := conn.Close()
+	if err != nil {
+		return err
+	}
+	return cerr
+}
+
+func rollbackConn(conn *sql.Conn) {
+	_, _ = conn.ExecContext(context.Background(), "ROLLBACK")
+	_ = conn.Close()
+}
+
 func (s *SQLiteStore) Create(record *SandboxRecord) error {
 	if IsAdminTenantID(record.TenantID) {
 		return s.insertSandbox(s.db, record)
 	}
 
-	tx, err := s.db.Begin()
+	// BEGIN IMMEDIATE write-locks the DB so DeleteTenant cannot interleave
+	// after its emptiness check.
+	conn, err := s.beginImmediate()
 	if err != nil {
 		return fmt.Errorf("store: begin create sandbox: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	committed := false
+	defer func() {
+		if !committed {
+			rollbackConn(conn)
+		}
+	}()
 
-	// Write-lock the tenant row so DeleteTenant cannot commit until this insert finishes.
-	res, err := tx.Exec(`UPDATE tenants SET name = name WHERE id = ?`, record.TenantID)
-	if err != nil {
-		return fmt.Errorf("store: lock tenant %s: %w", record.TenantID, err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("store: lock tenant %s rows: %w", record.TenantID, err)
-	}
-	if n == 0 {
+	var tenantID string
+	err = conn.QueryRowContext(context.Background(), `SELECT id FROM tenants WHERE id = ?`, record.TenantID).Scan(&tenantID)
+	if errors.Is(err, sql.ErrNoRows) {
 		return ErrTenantNotFound
 	}
-	if err := s.insertSandbox(tx, record); err != nil {
+	if err != nil {
+		return fmt.Errorf("store: get tenant %s: %w", record.TenantID, err)
+	}
+	if err := s.insertSandbox(conn, record); err != nil {
 		return err
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commitConn(conn); err != nil {
 		return fmt.Errorf("store: commit create sandbox: %w", err)
 	}
+	committed = true
 	return nil
 }
 
@@ -281,6 +314,7 @@ func (s *SQLiteStore) CreateTenantWithAPIKey(t *Tenant, k *APIKey) error {
 	if _, err := tx.Exec(tenantQ, t.ID, t.Name, t.ExternalRef, t.MaxSandboxes, t.CreatedAt); err != nil {
 		return fmt.Errorf("store: create tenant %s: %w", t.ID, err)
 	}
+	k.TenantID = t.ID
 	var revoked any
 	if k.RevokedAt > 0 {
 		revoked = k.RevokedAt
@@ -325,40 +359,43 @@ func (s *SQLiteStore) ListTenants() ([]*Tenant, error) {
 }
 
 func (s *SQLiteStore) DeleteTenant(id string) error {
-	tx, err := s.db.Begin()
+	// BEGIN IMMEDIATE write-locks the DB so a concurrent Create cannot insert
+	// a sandbox after the emptiness check.
+	conn, err := s.beginImmediate()
 	if err != nil {
 		return fmt.Errorf("store: begin delete tenant: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	committed := false
+	defer func() {
+		if !committed {
+			rollbackConn(conn)
+		}
+	}()
 
-	// Write-lock the tenant row so a concurrent Create cannot insert a sandbox
-	// after the emptiness check and before this delete commits.
-	res, err := tx.Exec(`UPDATE tenants SET name = name WHERE id = ?`, id)
-	if err != nil {
-		return fmt.Errorf("store: lock tenant %s: %w", id, err)
-	}
-	locked, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("store: lock tenant %s rows: %w", id, err)
-	}
-	if locked == 0 {
+	var tenantID string
+	err = conn.QueryRowContext(context.Background(), `SELECT id FROM tenants WHERE id = ?`, id).Scan(&tenantID)
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("store: get tenant %s: %w", id, err)
 	}
 
 	var n int64
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM sandboxes WHERE tenant_id = ?`, id).Scan(&n); err != nil {
+	if err := conn.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM sandboxes WHERE tenant_id = ?`, id).Scan(&n); err != nil {
 		return fmt.Errorf("store: count sandboxes by tenant: %w", err)
 	}
 	if n > 0 {
 		return ErrTenantHasSandboxes
 	}
 	// api_keys cascade via ON DELETE CASCADE (foreign_keys enabled via DSN _pragma)
-	if _, err := tx.Exec(`DELETE FROM tenants WHERE id = ?`, id); err != nil {
+	if _, err := conn.ExecContext(context.Background(), `DELETE FROM tenants WHERE id = ?`, id); err != nil {
 		return fmt.Errorf("store: delete tenant %s: %w", id, err)
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commitConn(conn); err != nil {
 		return fmt.Errorf("store: commit delete tenant: %w", err)
 	}
+	committed = true
 	return nil
 }
 

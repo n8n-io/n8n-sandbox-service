@@ -102,6 +102,20 @@ func (s *PostgresStore) insertSandbox(e pgExecer, record *SandboxRecord) error {
 	return nil
 }
 
+// lockTenantForUpdate takes a row lock on tenants.id until tx ends.
+// Returns false when the tenant row does not exist.
+func lockTenantForUpdate(tx *sql.Tx, id string) (bool, error) {
+	var lockedID string
+	err := tx.QueryRow(`SELECT id FROM tenants WHERE id = $1 FOR UPDATE`, id).Scan(&lockedID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func (s *PostgresStore) Create(record *SandboxRecord) error {
 	if IsAdminTenantID(record.TenantID) {
 		return s.insertSandbox(s.db, record)
@@ -114,15 +128,11 @@ func (s *PostgresStore) Create(record *SandboxRecord) error {
 	defer func() { _ = tx.Rollback() }()
 
 	// Lock the tenant row so DeleteTenant cannot commit until this insert finishes.
-	res, err := tx.Exec(`UPDATE tenants SET name = name WHERE id = $1`, record.TenantID)
+	ok, err := lockTenantForUpdate(tx, record.TenantID)
 	if err != nil {
 		return fmt.Errorf("store: lock tenant %s: %w", record.TenantID, err)
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("store: lock tenant %s rows: %w", record.TenantID, err)
-	}
-	if n == 0 {
+	if !ok {
 		return ErrTenantNotFound
 	}
 	if err := s.insertSandbox(tx, record); err != nil {
@@ -255,6 +265,7 @@ func (s *PostgresStore) CreateTenantWithAPIKey(t *Tenant, k *APIKey) error {
 	if _, err := tx.Exec(tenantQ, t.ID, t.Name, t.ExternalRef, t.MaxSandboxes, t.CreatedAt); err != nil {
 		return fmt.Errorf("store: create tenant %s: %w", t.ID, err)
 	}
+	k.TenantID = t.ID
 	var revoked any
 	if k.RevokedAt > 0 {
 		revoked = k.RevokedAt
@@ -307,15 +318,11 @@ func (s *PostgresStore) DeleteTenant(id string) error {
 
 	// Lock the tenant row so a concurrent Create cannot insert a sandbox after
 	// the emptiness check and before this delete commits.
-	res, err := tx.Exec(`UPDATE tenants SET name = name WHERE id = $1`, id)
+	ok, err := lockTenantForUpdate(tx, id)
 	if err != nil {
 		return fmt.Errorf("store: lock tenant %s: %w", id, err)
 	}
-	locked, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("store: lock tenant %s rows: %w", id, err)
-	}
-	if locked == 0 {
+	if !ok {
 		return nil
 	}
 
