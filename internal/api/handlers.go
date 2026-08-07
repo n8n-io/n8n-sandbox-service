@@ -327,6 +327,13 @@ func handleDeleteSandbox(s store.SandboxStore, cfg *config.APIConfig, mrec *metr
 			return
 		}
 
+		unlock, err := s.LockSandbox(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		defer unlock()
+
 		rec, err := s.Get(id)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
