@@ -1,0 +1,26 @@
+internal/api/handlers.go
+  s_02fa5a53ff6b07::t_03115a8ed8b3ad 330-336
+internal/api/store/postgres.go
+  s_02fa5a53ff6b07::t_9da10fafc5b98e 17-18,46-59,61,69,140,144-145,147,149-150,152-158
+internal/api/ttl.go
+  s_02fa5a53ff6b07::t_af7760a85a6e93 137-153,169-171,174-192,194-195,214-216,219-237,239-240
+internal/api/store/postgres_integration_test.go
+  s_02fa5a53ff6b07::t_6a70eeb8124bd1 7,107-148
+  s_02fa5a53ff6b07::t_5ca5b1200541df 149-150
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "1fc6f947849f720c0779f859bf431bed910e8f6b",
+  "prompts": {},
+  "sessions": {
+    "s_02fa5a53ff6b07": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "4b9ea011-0576-4291-8fcc-58ead87cde9e",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Robin Braumann <robin.braumann@n8n.io>"
+    }
+  }
+}
