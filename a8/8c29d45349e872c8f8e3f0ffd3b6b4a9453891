@@ -1,0 +1,39 @@
+sdk/README.md
+  s_02fa5a53ff6b07::t_012b8e69db7e8c 41-45
+sdk/src/types.ts
+  s_02fa5a53ff6b07::t_dfd005fe7aa3d7 14-19
+sdk/test/client.test.ts
+  s_02fa5a53ff6b07::t_d5091400078440 68-85
+sdk/src/client.ts
+  s_02fa5a53ff6b07::t_cacd236fcfd4e4 17,48-49
+sdk/src/index.ts
+  s_02fa5a53ff6b07::t_cb337f3826f677 5
+docs/API.md
+  s_02fa5a53ff6b07::t_bc5162ce40bdba 96-104,108,119,121,124,127-132
+internal/api/handlers.go
+  s_02fa5a53ff6b07::t_508dc18835a00c 184
+  s_02fa5a53ff6b07::t_dabc5db397b685 4,6,96-108,183,185-213,268-272,290,295-306,329
+sdk/src/sandboxes.ts
+  s_02fa5a53ff6b07::t_3291502a963fd7 2,4-7,9-13
+  s_02fa5a53ff6b07::t_2c4946e0426977 8
+  s_02fa5a53ff6b07::t_15a104ecdacb2d 14
+e2e/tests/sandbox-api.spec.ts
+  s_02fa5a53ff6b07::t_5eca185dfc8bd0 2
+  s_02fa5a53ff6b07::t_f5610fd14ff613 36-66
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "a88c29d45349e872c8f8e3f0ffd3b6b4a9453891",
+  "prompts": {},
+  "sessions": {
+    "s_02fa5a53ff6b07": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "4b9ea011-0576-4291-8fcc-58ead87cde9e",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Robin Braumann <robin.braumann@n8n.io>"
+    }
+  }
+}
