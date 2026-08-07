@@ -106,7 +106,15 @@ curl http://localhost:8080/sandboxes \
 
 ### POST /sandboxes
 
-Create a new sandbox. No request body is required.
+Create a sandbox. With no request body, the service generates a UUID. Callers may instead supply a lowercase UUID to create or reconnect to a deterministic sandbox:
+
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+If that ID still belongs to the caller and is within its idle-delete window, the existing sandbox is returned. If it has passed the window, the stale sandbox is deleted before the ID is reused. If the ID belongs to another tenant (or to admin when the caller is a tenant), the request fails with `409`.
 
 With a tenant key, the sandbox is owned by that tenant and counts toward the tenant's `max_sandboxes` quota (`403` when exceeded). With an admin key, the sandbox is stored with `tenant_id` `__admin__` (admin-owned; not visible to tenant keys; admins see all sandboxes in list).
 
@@ -114,7 +122,7 @@ Quota enforcement is a soft check-then-act (`CountByTenant` before create). Conc
 
 Resource limits (memory, CPU, process count) are configured on the runner via environment variables. Network policy blocks all private IP ranges and allows public internet access.
 
-**Response:** `201 Created`
+**Response:** `201 Created` for a new sandbox, or `200 OK` when returning an existing caller-supplied sandbox
 
 ```json
 {
@@ -125,13 +133,20 @@ Resource limits (memory, CPU, process count) are configured on the runner via en
 }
 ```
 
-**Errors:** `503` when no sandbox runners are registered or available; `409` if the tenant was deleted before the sandbox row could be stored (runner create is rolled back)
+**Errors:** `400` invalid request body or supplied id, `403` tenant sandbox quota exceeded, `409` if the supplied id is owned by another tenant/admin or the tenant was deleted before the sandbox row could be stored (runner create is rolled back), `502` stale sandbox cleanup failed, `503` no sandbox runners are registered or available
 
-**Example:**
+**Examples:**
 
 ```bash
+# Server-generated ID
 curl -X POST http://localhost:8080/sandboxes \
   -H "X-Api-Key: YOUR_API_KEY"
+
+# Caller-supplied deterministic ID
+curl -X POST http://localhost:8080/sandboxes \
+  -H "X-Api-Key: YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"id":"550e8400-e29b-41d4-a716-446655440000"}'
 ```
 
 ---

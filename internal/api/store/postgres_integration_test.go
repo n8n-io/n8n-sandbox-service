@@ -4,6 +4,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strconv"
 	"sync"
@@ -101,6 +102,50 @@ func TestPostgresStoreCRUD(t *testing.T) {
 	if len(rows) == 0 {
 		t.Fatal("expected stop candidate")
 	}
+}
+
+func TestPostgresSandboxLockKeepsStoreUsableAndReleasesAfterCancellation(t *testing.T) {
+	s := openTestPostgresStore(t)
+	s.db.SetMaxOpenConns(1)
+
+	unlock, err := s.LockSandbox(context.Background(), "shared-sandbox")
+	if err != nil {
+		t.Fatalf("lock sandbox: %v", err)
+	}
+	var unlockOnce sync.Once
+	release := func() { unlockOnce.Do(unlock) }
+	defer release()
+
+	countDone := make(chan error, 1)
+	go func() {
+		_, err := s.Count()
+		countDone <- err
+	}()
+	select {
+	case err := <-countDone:
+		if err != nil {
+			t.Fatalf("count while sandbox locked: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("store query blocked by sandbox lock")
+	}
+
+	waitCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	waitUnlock, err := s.LockSandbox(waitCtx, "shared-sandbox")
+	if waitUnlock != nil {
+		waitUnlock()
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("contended lock error = %v, want context deadline exceeded", err)
+	}
+
+	release()
+	unlock, err = s.LockSandbox(context.Background(), "shared-sandbox")
+	if err != nil {
+		t.Fatalf("reacquire sandbox lock: %v", err)
+	}
+	unlock()
 }
 
 func TestTryRunExcludesConcurrentHolder(t *testing.T) {

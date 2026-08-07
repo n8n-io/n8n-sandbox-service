@@ -134,6 +134,23 @@ func reapOrphanSandbox(s store.SandboxStore, rec *store.SandboxRecord, runnerID 
 	logSandboxDeleted(rec.ID, runnerID, "orphan")
 }
 
+func withLockedSandbox(ctx context.Context, s store.SandboxStore, id string, fn func(*store.SandboxRecord)) error {
+	unlock, err := s.LockSandbox(ctx, id)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	rec, err := s.Get(id)
+	if err != nil {
+		return err
+	}
+	if rec != nil {
+		fn(rec)
+	}
+	return nil
+}
+
 func sweepIdleDeleteSandboxes(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) {
 	deleteSec := int64(cfg.IdleDeleteAfter.Seconds())
 	bufferSec := int64(cfg.IdleDeleteSafetyBuffer.Seconds())
@@ -149,23 +166,34 @@ func sweepIdleDeleteSandboxes(ctx context.Context, s store.SandboxStore, reg reg
 		if rec == nil {
 			continue
 		}
-		if orphanReapDue(reg, rec.RunnerID, cfg, now) {
-			reapOrphanSandbox(s, rec, rec.RunnerID)
-			continue
-		}
-		controlAddr := resolveControlAddr(rec, reg)
-		if err := runnerctl.DeleteSandbox(ctx, controlAddr, cfg.RunnerAPIKey, tlsCfg, rec.ID); err != nil {
-			if ctx.Err() != nil {
+		id := rec.ID
+		err := withLockedSandbox(ctx, s, id, func(rec *store.SandboxRecord) {
+			if rec.Status != "stopped" || rec.LastActiveAt > deleteCutoff {
 				return
 			}
-			slog.Error("idle delete failed", "sandbox_id", rec.ID, "err", err)
-			continue
+			if orphanReapDue(reg, rec.RunnerID, cfg, now) {
+				reapOrphanSandbox(s, rec, rec.RunnerID)
+				return
+			}
+			controlAddr := resolveControlAddr(rec, reg)
+			if err := runnerctl.DeleteSandbox(ctx, controlAddr, cfg.RunnerAPIKey, tlsCfg, rec.ID); err != nil {
+				if ctx.Err() == nil {
+					slog.Error("idle delete failed", "sandbox_id", rec.ID, "err", err)
+				}
+				return
+			}
+			if err := s.Delete(rec.ID); err != nil {
+				slog.Error("idle delete store failed", "sandbox_id", rec.ID, "err", err)
+				return
+			}
+			logSandboxDeleted(rec.ID, rec.RunnerID, "idle")
+		})
+		if err != nil && ctx.Err() == nil {
+			slog.Error("idle delete lock or refresh failed", "sandbox_id", id, "err", err)
 		}
-		if err := s.Delete(rec.ID); err != nil {
-			slog.Error("idle delete store failed", "sandbox_id", rec.ID, "err", err)
-			continue
+		if ctx.Err() != nil {
+			return
 		}
-		logSandboxDeleted(rec.ID, rec.RunnerID, "idle")
 	}
 }
 
@@ -183,22 +211,33 @@ func sweepIdleStopSandboxes(ctx context.Context, s store.SandboxStore, reg regis
 		if rec == nil {
 			continue
 		}
-		if orphanReapDue(reg, rec.RunnerID, cfg, now) {
-			reapOrphanSandbox(s, rec, rec.RunnerID)
-			continue
-		}
-		controlAddr := resolveControlAddr(rec, reg)
-		if err := runnerctl.StopSandbox(ctx, controlAddr, cfg.RunnerAPIKey, tlsCfg, rec.ID); err != nil {
-			if ctx.Err() != nil {
+		id := rec.ID
+		err := withLockedSandbox(ctx, s, id, func(rec *store.SandboxRecord) {
+			if rec.Status != "running" || rec.LastActiveAt > stopCutoff {
 				return
 			}
-			slog.Error("idle stop failed", "sandbox_id", rec.ID, "err", err)
-			continue
+			if orphanReapDue(reg, rec.RunnerID, cfg, now) {
+				reapOrphanSandbox(s, rec, rec.RunnerID)
+				return
+			}
+			controlAddr := resolveControlAddr(rec, reg)
+			if err := runnerctl.StopSandbox(ctx, controlAddr, cfg.RunnerAPIKey, tlsCfg, rec.ID); err != nil {
+				if ctx.Err() == nil {
+					slog.Error("idle stop failed", "sandbox_id", rec.ID, "err", err)
+				}
+				return
+			}
+			if err := s.UpdateStatus(rec.ID, "stopped"); err != nil {
+				slog.Error("idle stop status update failed", "sandbox_id", rec.ID, "err", err)
+				return
+			}
+			logSandboxStopped(rec.ID, rec.RunnerID, "idle")
+		})
+		if err != nil && ctx.Err() == nil {
+			slog.Error("idle stop lock or refresh failed", "sandbox_id", id, "err", err)
 		}
-		if err := s.UpdateStatus(rec.ID, "stopped"); err != nil {
-			slog.Error("idle stop status update failed", "sandbox_id", rec.ID, "err", err)
-			continue
+		if ctx.Err() != nil {
+			return
 		}
-		logSandboxStopped(rec.ID, rec.RunnerID, "idle")
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"strings"
 	"time"
@@ -14,7 +15,8 @@ import (
 
 // SQLiteStore wraps a *sql.DB and exposes CRUD operations for SandboxRecord rows.
 type SQLiteStore struct {
-	db *sql.DB
+	db           *sql.DB
+	sandboxLocks [64]chan struct{}
 }
 
 // NewSQLite opens (or creates) the SQLite database at dbPath, runs schema migrations,
@@ -71,7 +73,11 @@ func NewSQLite(dbPath string) (*SQLiteStore, error) {
 	}
 
 	slog.Debug("store: opened sqlite database", "path", dbPath)
-	return &SQLiteStore{db: db}, nil
+	store := &SQLiteStore{db: db}
+	for i := range store.sandboxLocks {
+		store.sandboxLocks[i] = make(chan struct{}, 1)
+	}
+	return store, nil
 }
 
 // sqliteDSN adds modernc _pragma flags so every pooled connection gets them.
@@ -229,6 +235,18 @@ func (s *SQLiteStore) Delete(id string) error {
 		return fmt.Errorf("store: delete sandbox %s: %w", id, err)
 	}
 	return nil
+}
+
+func (s *SQLiteStore) LockSandbox(ctx context.Context, id string) (func(), error) {
+	hash := fnv.New32a()
+	_, _ = hash.Write([]byte(id))
+	lock := s.sandboxLocks[hash.Sum32()%uint32(len(s.sandboxLocks))]
+	select {
+	case lock <- struct{}{}:
+		return func() { <-lock }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 func (s *SQLiteStore) ListForIdleReapDelete(cutoff int64) ([]*SandboxRecord, error) {

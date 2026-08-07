@@ -38,6 +38,11 @@ By default the client retries transient failures: 3 extra attempts (four tries t
 const sandbox = await client.createSandbox();
 console.log(sandbox.id); // UUID
 
+// Create or reconnect to a deterministic sandbox
+const stableSandbox = await client.createSandbox({
+  id: '550e8400-e29b-41d4-a716-446655440000',
+});
+
 // Get sandbox info
 const info = await client.getSandbox(sandbox.id);
 

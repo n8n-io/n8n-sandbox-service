@@ -14,7 +14,8 @@ import (
 
 // PostgresStore wraps a *sql.DB backed by Postgres.
 type PostgresStore struct {
-	db *sql.DB
+	db     *sql.DB
+	lockDB *sql.DB
 }
 
 // NewPostgres opens Postgres using cfg, runs schema migrations, and returns a ready store.
@@ -58,8 +59,22 @@ func NewPostgres(cfg config.PostgresConfig) (*PostgresStore, error) {
 		return nil, fmt.Errorf("store: run tenants schema: %w", err)
 	}
 
+	lockDB, err := sql.Open("pgx", cfg.DSN())
+	if err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: open postgres lock pool: %w", err)
+	}
+	lockDB.SetMaxOpenConns(5)
+	lockDB.SetMaxIdleConns(1)
+	lockDB.SetConnMaxLifetime(30 * time.Minute)
+	if err := lockDB.Ping(); err != nil {
+		_ = lockDB.Close()
+		_ = db.Close()
+		return nil, fmt.Errorf("store: ping postgres lock pool: %w", err)
+	}
+
 	slog.Debug("store: opened postgres database", "host", cfg.Host, "db", cfg.Database)
-	return &PostgresStore{db: db}, nil
+	return &PostgresStore{db: db, lockDB: lockDB}, nil
 }
 
 // DB returns the underlying database handle (for registry and sweeper lock).
@@ -67,7 +82,7 @@ func (s *PostgresStore) DB() *sql.DB { return s.db }
 
 func (s *PostgresStore) Backend() Backend { return BackendPostgres }
 
-func (s *PostgresStore) Close() error { return s.db.Close() }
+func (s *PostgresStore) Close() error { return errors.Join(s.db.Close(), s.lockDB.Close()) }
 
 const pgSandboxCols = `id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id`
 
@@ -180,6 +195,28 @@ func (s *PostgresStore) Delete(id string) error {
 		return fmt.Errorf("store: delete sandbox %s: %w", id, err)
 	}
 	return nil
+}
+
+func (s *PostgresStore) LockSandbox(ctx context.Context, id string) (func(), error) {
+	conn, err := s.lockDB.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("store: acquire conn for sandbox lock: %w", err)
+	}
+	tx, err := conn.BeginTx(context.Background(), nil)
+	if err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("store: begin sandbox lock transaction: %w", err)
+	}
+	unlock := func() {
+		_ = tx.Rollback()
+		_ = conn.Close()
+	}
+	lockID := "sandbox:" + id
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, lockID); err != nil {
+		unlock()
+		return nil, fmt.Errorf("store: lock sandbox %s: %w", id, err)
+	}
+	return unlock, nil
 }
 
 func (s *PostgresStore) ListForIdleReapDelete(cutoff int64) ([]*SandboxRecord, error) {

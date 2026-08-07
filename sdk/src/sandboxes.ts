@@ -1,9 +1,18 @@
 import type { HttpClient } from "./http";
 import { SandboxServiceError } from "./errors";
-import type { SandboxRecord, SandboxWireResponse } from "./types";
+import type { CreateSandboxOptions, SandboxRecord, SandboxWireResponse } from "./types";
 
-export async function createSandbox(http: HttpClient): Promise<SandboxRecord> {
-  const response = await http.requestJson<SandboxWireResponse>("POST", "/sandboxes");
+export async function createSandbox(
+  http: HttpClient,
+  options?: CreateSandboxOptions,
+): Promise<SandboxRecord> {
+  const response =
+    options?.id !== undefined
+      ? await http.requestJson<SandboxWireResponse>("POST", "/sandboxes", {
+          data: { id: options.id },
+          isSafeToRetry: true,
+        })
+      : await http.requestJson<SandboxWireResponse>("POST", "/sandboxes");
   return mapSandboxRecord(response);
 }
 
