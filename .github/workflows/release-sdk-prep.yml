@@ -55,19 +55,21 @@ jobs:
         run: git push origin HEAD:refs/heads/sdk/release/${{ steps.bump.outputs.version }}
 
       - name: Create Pull Request
-        id: create-pr
-        uses: peter-evans/create-pull-request@c0f553fe549906ede9cf27b5156039d195d2ece0 # v8.1.0
-        with:
-          token: ${{ steps.generate-token.outputs.token }}
-          commit-message: 'sdk: release v${{ steps.bump.outputs.version }}'
-          labels: 'release/sdk'
-          title: 'sdk: release v${{ steps.bump.outputs.version }}'
-          body: |
-            Automated release PR for `@n8n/sandbox-client@${{ steps.bump.outputs.version }}`.
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: |
+          printf '%s\n' \
+            "Automated release PR for \`@n8n/sandbox-client@${VERSION}\`." \
+            "" \
+            "Merging this PR will trigger the SDK publish workflow." \
+            > /tmp/pr-body.md
 
-            Merging this PR will trigger the SDK publish workflow.
-          branch: sdk/release-pr/${{ steps.bump.outputs.version }}
-          base: sdk/release/${{ steps.bump.outputs.version }}
-          delete-branch: true
-          author: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
-          committer: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
+          .github/scripts/create-signed-commit-pr.sh \
+            --base "sdk/release/${VERSION}" \
+            --branch "sdk/release-pr/${VERSION}" \
+            --title "sdk: release v${VERSION}" \
+            --body-file /tmp/pr-body.md \
+            --label "release/sdk" \
+            --message "sdk: release v${VERSION}" \
+            -- sdk/package.json sdk/pnpm-lock.yaml

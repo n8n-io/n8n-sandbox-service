@@ -50,21 +50,24 @@ jobs:
         run: git push origin HEAD:refs/heads/sandbox/release/${{ steps.bump.outputs.version }}
 
       - name: Create Pull Request
-        uses: peter-evans/create-pull-request@c0f553fe549906ede9cf27b5156039d195d2ece0 # v8.1.0
-        with:
-          token: ${{ steps.generate-token.outputs.token }}
-          commit-message: 'sandbox: release v${{ steps.bump.outputs.version }}'
-          labels: 'release/sandbox'
-          title: 'sandbox: release v${{ steps.bump.outputs.version }}'
-          body: |
-            Automated release PR for sandbox image v${{ steps.bump.outputs.version }}.
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: |
+          printf '%s\n' \
+            "Automated release PR for sandbox image v${VERSION}." \
+            "" \
+            "**Image that will be published:**" \
+            "- \`n8nio/n8n-sandbox-service-sandbox:${VERSION}\`" \
+            "" \
+            "Merging this PR will trigger the sandbox image publish workflow." \
+            > /tmp/pr-body.md
 
-            **Image that will be published:**
-            - `n8nio/n8n-sandbox-service-sandbox:${{ steps.bump.outputs.version }}`
-
-            Merging this PR will trigger the sandbox image publish workflow.
-          branch: sandbox/release-pr/${{ steps.bump.outputs.version }}
-          base: sandbox/release/${{ steps.bump.outputs.version }}
-          delete-branch: true
-          author: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
-          committer: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
+          .github/scripts/create-signed-commit-pr.sh \
+            --base "sandbox/release/${VERSION}" \
+            --branch "sandbox/release-pr/${VERSION}" \
+            --title "sandbox: release v${VERSION}" \
+            --body-file /tmp/pr-body.md \
+            --label "release/sandbox" \
+            --message "sandbox: release v${VERSION}" \
+            -- SANDBOX_VERSION
