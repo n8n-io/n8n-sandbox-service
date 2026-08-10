@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,6 +15,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 )
 
 const (
@@ -24,6 +27,10 @@ const (
 	admissionCanaryPayload  = "admission-canary-ok"
 )
 
+// Bounds canary DeleteSandbox so cleanup survives probe cancellation without
+// hanging forever on a stuck umount/netns host command.
+var admissionCanaryCleanupTimeout = 30 * time.Second
+
 type releaseManifest struct {
 	GitSHA   string `json:"git_sha"`
 	Binaries struct {
@@ -33,10 +40,10 @@ type releaseManifest struct {
 	} `json:"binaries"`
 }
 
-// Prepare ensures host NAT, then pins guest assets, ensures a golden snapshot,
-// and runs an admission canary before marking the runtime ready.
+// Prepare pins guest assets, ensures a golden snapshot, configures host NAT,
+// and runs an admission canary before marking the runtime ready. Failures
+// (including transient host NAT) retry with backoff via runAdmissionLoop.
 func (r *Runtime) Prepare(ctx context.Context) {
-	_ = r.ensureHostNATReady(ctx)
 	r.runAdmissionLoop(ctx)
 }
 
@@ -74,6 +81,9 @@ func sleepContext(ctx context.Context, d time.Duration) bool {
 }
 
 func (r *Runtime) admitOnce(ctx context.Context) error {
+	if err := r.ensureHostNATReady(ctx); err != nil {
+		return fmt.Errorf("host NAT not configured: %w", err)
+	}
 	if err := r.pinBaseAssets(); err != nil {
 		return err
 	}
@@ -187,6 +197,10 @@ func (r *Runtime) ensureGoldenSnapshot(ctx context.Context) error {
 	if !r.deps.pathExists(r.config.DaemonBin) {
 		return fmt.Errorf("daemon binary for snapshot create does not exist: %s", r.config.DaemonBin)
 	}
+	if !snapshotDirsMatch(r.config.SnapshotMemPath, r.config.SnapshotStatePath) {
+		return fmt.Errorf("golden snapshot create requires SnapshotMemPath and SnapshotStatePath in the same directory (got %q and %q); create-golden-snapshot.sh writes snapshot_mem and snapshot_state into a single --out directory",
+			r.config.SnapshotMemPath, r.config.SnapshotStatePath)
+	}
 
 	outDir := filepath.Dir(r.config.SnapshotMemPath)
 	kernel := filepath.Join(r.config.TemplateDir, "vmlinux")
@@ -231,30 +245,72 @@ func ensureSnapshotSymlinks(outDir, memPath, statePath string, exists func(strin
 	return nil
 }
 
-func (r *Runtime) runAdmissionCanary(ctx context.Context) error {
+func (r *Runtime) runAdmissionCanary(ctx context.Context) (err error) {
+	// A prior canary whose delete failed still holds a slot; free it before creating
+	// another, or capacity-1 runners can never admit (and never create user sandboxes).
+	if cleanErr := r.cleanupLeftoverAdmissionCanaries(ctx); cleanErr != nil {
+		return cleanErr
+	}
+
 	sandboxID := admissionCanaryIDPrefix + shortID(fmt.Sprintf("%d", time.Now().UnixNano()))
 	// shortID is 12 hex chars; prefix makes the full id well over CreateSandbox's 12-char minimum.
 	if len(sandboxID) < 12 {
 		return fmt.Errorf("internal error: admission canary sandbox id too short: %q", sandboxID)
 	}
 	slog.Info("firecracker admission canary starting", "sandbox_id", sandboxID)
-	if _, err := r.CreateSandbox(ctx, sandboxID, nil); err != nil {
-		return fmt.Errorf("admission canary create: %w", err)
+	if _, createErr := r.CreateSandbox(ctx, sandboxID, nil); createErr != nil {
+		return fmt.Errorf("admission canary create: %w", createErr)
 	}
 	defer func() {
-		if delErr := r.DeleteSandbox(context.WithoutCancel(ctx), sandboxID); delErr != nil {
-			slog.Warn("firecracker admission canary cleanup failed", "sandbox_id", sandboxID, "error", delErr)
+		// Detach from probe cancellation so we still tear down the canary, but keep a
+		// deadline so a hung umount/netns cleanup cannot block Prepare/shutdown forever.
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), admissionCanaryCleanupTimeout)
+		defer cancel()
+		delErr := r.DeleteSandbox(cleanupCtx, sandboxID)
+		if delErr == nil {
+			return
 		}
+		// Cleanup is part of admission success: a stuck canary permanently consumes a
+		// slot, so Ready must not pass until the slot is released.
+		if err == nil {
+			err = fmt.Errorf("admission canary cleanup: %w", delErr)
+			return
+		}
+		err = fmt.Errorf("%w; admission canary cleanup: %v", err, delErr)
 	}()
 
-	daemonURL, err := r.DaemonURL(ctx, sandboxID)
-	if err != nil {
-		return fmt.Errorf("admission canary daemon url: %w", err)
+	daemonURL, urlErr := r.DaemonURL(ctx, sandboxID)
+	if urlErr != nil {
+		return fmt.Errorf("admission canary daemon url: %w", urlErr)
 	}
-	if err := probeAdmissionDaemon(ctx, daemonURL); err != nil {
-		return fmt.Errorf("admission canary daemon probe: %w", err)
+	if probeErr := probeAdmissionDaemon(ctx, daemonURL); probeErr != nil {
+		return fmt.Errorf("admission canary daemon probe: %w", probeErr)
 	}
 	slog.Info("firecracker admission canary passed", "sandbox_id", sandboxID)
+	return nil
+}
+
+// cleanupLeftoverAdmissionCanaries deletes canaries left behind when a previous
+// admission attempt's DeleteSandbox failed. Used so admission retries can recover
+// capacity instead of failing CreateSandbox with "capacity exhausted".
+func (r *Runtime) cleanupLeftoverAdmissionCanaries(ctx context.Context) error {
+	r.mu.Lock()
+	ids := make([]string, 0)
+	for id, state := range r.sandboxes {
+		if state.deleting {
+			continue
+		}
+		if strings.HasPrefix(id, admissionCanaryIDPrefix) {
+			ids = append(ids, id)
+		}
+	}
+	r.mu.Unlock()
+
+	for _, id := range ids {
+		if delErr := r.DeleteSandbox(ctx, id); delErr != nil && !errors.Is(delErr, runnerruntime.ErrSandboxNotFound) {
+			return fmt.Errorf("cleanup leftover admission canary %s: %w", id, delErr)
+		}
+	}
 	return nil
 }
 
@@ -289,8 +345,11 @@ func probeAdmissionDaemon(ctx context.Context, baseURL string) error {
 	if err != nil {
 		return fmt.Errorf("executions: %w", err)
 	}
-	execBody, _ := io.ReadAll(execResp.Body)
+	execBody, err := io.ReadAll(execResp.Body)
 	_ = execResp.Body.Close()
+	if err != nil {
+		return fmt.Errorf("executions read body: %w", err)
+	}
 	if execResp.StatusCode != http.StatusOK {
 		return fmt.Errorf("executions status %d", execResp.StatusCode)
 	}
@@ -330,8 +389,11 @@ func probeAdmissionDaemon(ctx context.Context, baseURL string) error {
 	if err != nil {
 		return fmt.Errorf("files get: %w", err)
 	}
-	got, _ := io.ReadAll(getResp.Body)
+	got, err := io.ReadAll(getResp.Body)
 	_ = getResp.Body.Close()
+	if err != nil {
+		return fmt.Errorf("files get read body: %w", err)
+	}
 	if getResp.StatusCode != http.StatusOK {
 		return fmt.Errorf("files get status %d", getResp.StatusCode)
 	}

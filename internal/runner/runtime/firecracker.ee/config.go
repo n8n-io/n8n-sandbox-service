@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -53,6 +54,7 @@ type Config struct {
 
 	// SnapshotStatePath is the host path bind-mounted as /snapshot_state.
 	// Parsed from SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_STATE_PATH.
+	// When CreateSnapshotScript is set, must share a directory with SnapshotMemPath.
 	SnapshotStatePath string
 
 	// SnapshotVirtioBlockPath is the rootfs path baked into the snapshot.
@@ -296,8 +298,19 @@ func validateConfig(cfg Config, capacityTotal int32) error {
 	if cfg.CreateSnapshotScript != "" && !strings.HasPrefix(cfg.CreateSnapshotScript, "/") {
 		return fmt.Errorf("SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT must be an absolute path, got %q", cfg.CreateSnapshotScript)
 	}
+	if cfg.CreateSnapshotScript != "" && !snapshotDirsMatch(cfg.SnapshotMemPath, cfg.SnapshotStatePath) {
+		return fmt.Errorf("SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_MEM_PATH (%q) and SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_STATE_PATH (%q) must be in the same directory when SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT is set; create-golden-snapshot.sh writes snapshot_mem and snapshot_state into a single --out directory",
+			cfg.SnapshotMemPath, cfg.SnapshotStatePath)
+	}
 	if cfg.DaemonBin != "" && !strings.HasPrefix(cfg.DaemonBin, "/") {
 		return fmt.Errorf("SANDBOX_RUNNER_FIRECRACKER_DAEMON_BIN must be an absolute path, got %q", cfg.DaemonBin)
 	}
 	return nil
+}
+
+// snapshotDirsMatch reports whether mem and state paths share a parent directory.
+// Required for auto-create: the script emits both files into one --out dir and the
+// runner symlinks the configured names to snapshot_mem/snapshot_state there.
+func snapshotDirsMatch(memPath, statePath string) bool {
+	return filepath.Clean(filepath.Dir(memPath)) == filepath.Clean(filepath.Dir(statePath))
 }

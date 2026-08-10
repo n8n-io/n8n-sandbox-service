@@ -112,7 +112,7 @@ Slots give the host-side Firecracker resources stable names without exposing tho
 | `SANDBOX_RUNNER_FIRECRACKER_JAILER_BASE_DIR` | `/srv/jailer` | Base directory passed to `jailer --chroot-base-dir` |
 | `SANDBOX_RUNNER_FIRECRACKER_TEMPLATE_DIR` | `/srv/firecracker/template` | Directory containing the snapshot rootfs (`rootfs.ext4`) |
 | `SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_MEM_PATH` | `/srv/firecracker/snapshots/mem` | Host path bind-mounted into the jail as `/snapshot_mem` |
-| `SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_STATE_PATH` | `/srv/firecracker/snapshots/state` | Host path bind-mounted into the jail as `/snapshot_state` |
+| `SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_STATE_PATH` | `/srv/firecracker/snapshots/state` | Host path bind-mounted into the jail as `/snapshot_state`. When auto-create is enabled, must share a directory with `SNAPSHOT_MEM_PATH` |
 | `SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_VIRTIO_BLOCK_PATH` | `/rootfs.ext4` | Rootfs path expected by the snapshot metadata |
 | `SANDBOX_RUNNER_FIRECRACKER_GUEST_IP` | `172.16.0.10` | Guest IP expected by the restored snapshot |
 | `SANDBOX_RUNNER_FIRECRACKER_HOST_TAP_DEVICE_NAME` | `fc-tap-0` | TAP device name inside each sandbox netns |
@@ -125,10 +125,10 @@ Slots give the host-side Firecracker resources stable names without exposing tho
 | `SANDBOX_RUNNER_FIRECRACKER_DAEMON_WAIT_TIMEOUT` | `60s` | Maximum time to wait for guest daemon health after snapshot restore |
 | `SANDBOX_RUNNER_FIRECRACKER_MANIFEST_PATH` | _(empty)_ | Optional absolute path to release `MANIFEST.json` for git_sha / daemon checksum pinning |
 | `SANDBOX_RUNNER_FIRECRACKER_EXPECTED_GIT_SHA` | _(empty)_ | When set, must match `git_sha` in the manifest (requires `MANIFEST_PATH`) |
-| `SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT` | _(empty)_ | Absolute path to `create-golden-snapshot.sh`. When set and mem/state are missing, Prepare runs it. Production Firecracker hosts set this so the runner owns host-local snapshot creation. Empty = do not auto-create |
+| `SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT` | _(empty)_ | Absolute path to `create-golden-snapshot.sh`. When set and mem/state are missing, Prepare runs it (mem/state paths must share a directory). Production Firecracker hosts set this so the runner owns host-local snapshot creation. Empty = do not auto-create |
 | `SANDBOX_RUNNER_FIRECRACKER_DAEMON_BIN` | `/srv/firecracker/bin/sandbox-daemon` | Host path to `sandbox-daemon` used for golden snapshot create and optional manifest checksum |
 
-On startup, `Prepare` pins guest assets (binaries, `rootfs.ext4`, `vmlinux`, optional manifest), ensures the host-local golden snapshot exists (create via script when configured), runs an admission canary (restore + `/healthz` + exec + files), then marks the runner healthy. Until that succeeds, heartbeats report `Healthy=false` and `/readyz` fails.
+On startup, `Prepare` configures host NAT (retried on transient failure), pins guest assets (binaries, `rootfs.ext4`, `vmlinux`, optional manifest), ensures the host-local golden snapshot exists (create via script when configured), runs an admission canary (restore + `/healthz` + exec + files + successful canary delete), then marks the runner healthy. Until that succeeds, heartbeats report `Healthy=false` and `/readyz` fails.
 
 #### Resource limits
 

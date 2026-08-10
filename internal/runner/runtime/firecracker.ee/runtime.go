@@ -41,8 +41,8 @@ type Runtime struct {
 	readyCh     chan struct{}
 	readyOnce   sync.Once
 	admissionOK atomic.Bool
-	hostNATOnce sync.Once
-	hostNATErr  error
+	hostNATMu   sync.Mutex
+	hostNATOK   bool
 }
 
 var _ runnerruntime.Runtime = (*Runtime)(nil)
@@ -162,14 +162,20 @@ func defaultDependencies(fc Config) dependencies {
 
 // Prepare is implemented in admission.go: host NAT + pin + snapshot + canary.
 
+// ensureHostNATReady runs host NAT setup once successfully. Failures are not
+// cached so admission backoff (and later CreateSandbox) can retry transient errors.
 func (r *Runtime) ensureHostNATReady(ctx context.Context) error {
-	r.hostNATOnce.Do(func() {
-		if err := fcnetwork.EnsureHostNAT(ctx, r.deps.run); err != nil {
-			slog.Error("firecracker host NAT setup failed", "error", err)
-			r.hostNATErr = err
-		}
-	})
-	return r.hostNATErr
+	r.hostNATMu.Lock()
+	defer r.hostNATMu.Unlock()
+	if r.hostNATOK {
+		return nil
+	}
+	if err := fcnetwork.EnsureHostNAT(ctx, r.deps.run); err != nil {
+		slog.Error("firecracker host NAT setup failed", "error", err)
+		return err
+	}
+	r.hostNATOK = true
+	return nil
 }
 
 // Ready checks that pinned guest assets exist and the admission canary has passed.

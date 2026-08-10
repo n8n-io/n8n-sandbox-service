@@ -1,6 +1,9 @@
 package firecracker
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestLoadConfigParsesDefaults(t *testing.T) {
 	cfg, err := LoadConfig(1)
@@ -73,6 +76,27 @@ func TestLoadConfigRejectsProxyRangeOverflow(t *testing.T) {
 
 	if _, err := LoadConfig(2); err == nil {
 		t.Fatal("expected LoadConfig to reject overflowing proxy port range")
+	}
+}
+
+func TestLoadConfigRejectsSplitSnapshotDirsWhenCreateScriptSet(t *testing.T) {
+	t.Setenv("SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_MEM_PATH", "/srv/firecracker/snapshots/mem")
+	t.Setenv("SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_STATE_PATH", "/var/firecracker/state")
+	t.Setenv("SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT", "/srv/firecracker/scripts/create-golden-snapshot.sh")
+
+	_, err := LoadConfig(1)
+	if err == nil || !strings.Contains(err.Error(), "must be in the same directory") {
+		t.Fatalf("LoadConfig() error = %v, want same-directory rejection", err)
+	}
+}
+
+func TestLoadConfigAllowsSplitSnapshotDirsWithoutCreateScript(t *testing.T) {
+	t.Setenv("SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_MEM_PATH", "/srv/firecracker/snapshots/mem")
+	t.Setenv("SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_STATE_PATH", "/var/firecracker/state")
+	t.Setenv("SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT", "")
+
+	if _, err := LoadConfig(1); err != nil {
+		t.Fatalf("LoadConfig() failed without create script: %v", err)
 	}
 }
 

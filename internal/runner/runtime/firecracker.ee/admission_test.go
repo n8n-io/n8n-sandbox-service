@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -93,6 +94,20 @@ func TestEnsureGoldenSnapshotRequiresScriptWhenMissing(t *testing.T) {
 	rt.deps.pathExists = func(string) bool { return false }
 	if err := rt.ensureGoldenSnapshot(context.Background()); err == nil || !strings.Contains(err.Error(), "create script is not configured") {
 		t.Fatalf("ensureGoldenSnapshot() error = %v, want missing script", err)
+	}
+}
+
+func TestEnsureGoldenSnapshotRejectsSplitSnapshotDirs(t *testing.T) {
+	rt := testRuntime(1)
+	rt.config.CreateSnapshotScript = "/srv/firecracker/scripts/create-golden-snapshot.sh"
+	rt.config.DaemonBin = "/srv/firecracker/bin/sandbox-daemon"
+	rt.config.SnapshotMemPath = "/srv/firecracker/snapshots/mem"
+	rt.config.SnapshotStatePath = "/var/firecracker/state"
+	rt.deps.pathExists = func(path string) bool {
+		return path == rt.config.CreateSnapshotScript || path == rt.config.DaemonBin
+	}
+	if err := rt.ensureGoldenSnapshot(context.Background()); err == nil || !strings.Contains(err.Error(), "same directory") {
+		t.Fatalf("ensureGoldenSnapshot() error = %v, want same-directory rejection", err)
 	}
 }
 
@@ -192,6 +207,122 @@ func TestRunAdmissionCanary(t *testing.T) {
 	}
 }
 
+func TestRunAdmissionCanaryCleanupTimesOut(t *testing.T) {
+	prev := admissionCanaryCleanupTimeout
+	admissionCanaryCleanupTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { admissionCanaryCleanupTimeout = prev })
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	srv := startAdmissionCanaryServer(t, ln)
+	defer srv.Close()
+
+	rt := testRuntimeT(t, 1)
+	rt.config.ProxyPortStart = port
+	stubCreateDeps(rt)
+	rt.deps.run = func(ctx context.Context, _ string, args ...string) error {
+		for _, a := range args {
+			if strings.Contains(a, "umount") {
+				<-ctx.Done()
+				return ctx.Err()
+			}
+		}
+		return nil
+	}
+
+	start := time.Now()
+	err = rt.runAdmissionCanary(context.Background())
+	elapsed := time.Since(start)
+	if err == nil || !strings.Contains(err.Error(), "admission canary cleanup") {
+		t.Fatalf("runAdmissionCanary() error = %v, want cleanup failure", err)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("canary cleanup took %v; expected bounded timeout", elapsed)
+	}
+}
+
+func TestRunAdmissionCanaryFailsWhenCleanupFails(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	srv := startAdmissionCanaryServer(t, ln)
+	defer srv.Close()
+
+	rt := testRuntimeT(t, 1)
+	rt.config.ProxyPortStart = port
+	stubCreateDeps(rt)
+	rt.deps.run = func(_ context.Context, _ string, args ...string) error {
+		for _, a := range args {
+			if strings.Contains(a, "umount") {
+				return fmt.Errorf("forced host cleanup failure")
+			}
+		}
+		return nil
+	}
+
+	err = rt.runAdmissionCanary(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "admission canary cleanup") {
+		t.Fatalf("runAdmissionCanary() error = %v, want cleanup failure", err)
+	}
+	if len(rt.sandboxes) != 1 {
+		t.Fatalf("expected stuck canary still occupying a slot, have %d sandboxes", len(rt.sandboxes))
+	}
+	cap, capErr := rt.Capacity(context.Background())
+	if capErr != nil {
+		t.Fatalf("Capacity() failed: %v", capErr)
+	}
+	if cap.Used != 1 {
+		t.Fatalf("Capacity.Used = %d, want 1 (canary still holding slot)", cap.Used)
+	}
+	if rt.admissionOK.Load() {
+		t.Fatal("admissionOK must stay false when canary cleanup fails")
+	}
+
+	// Recovery: once host cleanup works again, the next admit attempt should
+	// purge the leftover canary and complete successfully on a capacity-1 runner.
+	stubCreateDeps(rt)
+	rt.config.ProxyPortStart = port
+	if err := rt.runAdmissionCanary(context.Background()); err != nil {
+		t.Fatalf("runAdmissionCanary() recovery failed: %v", err)
+	}
+	if len(rt.sandboxes) != 0 {
+		t.Fatalf("expected canary deleted after recovery, still have %d", len(rt.sandboxes))
+	}
+	cap, capErr = rt.Capacity(context.Background())
+	if capErr != nil {
+		t.Fatalf("Capacity() after recovery failed: %v", capErr)
+	}
+	if cap.Used != 0 {
+		t.Fatalf("Capacity.Used = %d after recovery, want 0", cap.Used)
+	}
+}
+
+func startAdmissionCanaryServer(t *testing.T, ln net.Listener) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/healthz":
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPost && r.URL.Path == "/executions":
+			_, _ = w.Write([]byte(`{"type":"exit","exit_code":0}` + "\n"))
+		case r.Method == http.MethodPut && r.URL.Path == "/files":
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodGet && r.URL.Path == "/files/content":
+			_, _ = w.Write([]byte(admissionCanaryPayload))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	srv.Listener = ln
+	srv.Start()
+	return srv
+}
+
 func TestProbeAdmissionDaemon(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -215,30 +346,143 @@ func TestProbeAdmissionDaemon(t *testing.T) {
 	}
 }
 
-func TestPrepareMarksAdmissionOK(t *testing.T) {
-	rt := testRuntime(1)
-	rt.deps.pathExists = func(string) bool { return true }
-	rt.deps.run = func(context.Context, string, ...string) error { return nil }
+func TestProbeAdmissionDaemonFailsOnTruncatedBody(t *testing.T) {
+	tests := []struct {
+		name       string
+		wantSubstr string
+		hijackPath string
+		partial    string
+	}{
+		{
+			name:       "truncated executions body with success markers",
+			wantSubstr: "executions read body",
+			hijackPath: "/executions",
+			partial:    `{"type":"exit","exit_code":0}`,
+		},
+		{
+			name:       "truncated files content matching payload",
+			wantSubstr: "files get read body",
+			hijackPath: "/files/content",
+			partial:    admissionCanaryPayload,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodGet && r.URL.Path == "/healthz":
+					w.WriteHeader(http.StatusOK)
+				case r.Method == http.MethodPost && r.URL.Path == "/executions":
+					if tc.hijackPath == "/executions" {
+						writeTruncatedHTTPResponse(t, w, tc.partial)
+						return
+					}
+					_, _ = w.Write([]byte(`{"type":"exit","exit_code":0}` + "\n"))
+				case r.Method == http.MethodPut && r.URL.Path == "/files":
+					w.WriteHeader(http.StatusOK)
+				case r.Method == http.MethodGet && r.URL.Path == "/files/content":
+					if tc.hijackPath == "/files/content" {
+						writeTruncatedHTTPResponse(t, w, tc.partial)
+						return
+					}
+					_, _ = w.Write([]byte(admissionCanaryPayload))
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer srv.Close()
 
-	// Bypass real canary create by short-circuiting admitOnce via a successful
-	// pin/ensure and a fake CreateSandbox path: replace CreateSandbox dependency
-	// by marking admission after a manual admit that skips canary VM.
-	// Use a context that cancels after mark via injecting through admitOnce loop:
-	// call markAdmissionOK path by running admitOnce with canary stubbed via HTTP
-	// CreateSandbox would need real deps — instead unit-test mark + ReadyCh.
+			err := probeAdmissionDaemon(context.Background(), srv.URL)
+			if err == nil || !strings.Contains(err.Error(), tc.wantSubstr) {
+				t.Fatalf("probeAdmissionDaemon() error = %v, want %q", err, tc.wantSubstr)
+			}
+		})
+	}
+}
+
+// writeTruncatedHTTPResponse sends a 200 with Content-Length longer than the
+// body, then closes the connection so io.ReadAll returns a partial body + error.
+func writeTruncatedHTTPResponse(t *testing.T, w http.ResponseWriter, partial string) {
+	t.Helper()
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		t.Fatal("ResponseWriter does not support hijacking")
+	}
+	conn, bufrw, err := hj.Hijack()
+	if err != nil {
+		t.Fatalf("Hijack: %v", err)
+	}
+	_, _ = fmt.Fprintf(bufrw, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n%s", len(partial)+64, partial)
+	_ = bufrw.Flush()
+	_ = conn.Close()
+}
+
+func TestEnsureHostNATReadyRetriesAfterFailure(t *testing.T) {
+	rt := testRuntime(1)
+	var calls int
+	rt.deps.run = func(context.Context, string, ...string) error {
+		calls++
+		if calls == 1 {
+			return fmt.Errorf("transient nat failure")
+		}
+		return nil
+	}
+
+	if err := rt.ensureHostNATReady(context.Background()); err == nil || !strings.Contains(err.Error(), "transient nat failure") {
+		t.Fatalf("ensureHostNATReady() first call error = %v, want transient failure", err)
+	}
+	if rt.hostNATOK {
+		t.Fatal("hostNATOK must stay false after failed setup")
+	}
+
+	if err := rt.ensureHostNATReady(context.Background()); err != nil {
+		t.Fatalf("ensureHostNATReady() retry failed: %v", err)
+	}
+	if !rt.hostNATOK {
+		t.Fatal("hostNATOK should be true after successful setup")
+	}
+	if err := rt.ensureHostNATReady(context.Background()); err != nil {
+		t.Fatalf("ensureHostNATReady() after success: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("EnsureHostNAT calls = %d, want 2 (fail once, succeed once, then cache)", calls)
+	}
+}
+
+func TestPrepareSucceedsViaAdmitOnce(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	srv := startAdmissionCanaryServer(t, ln)
+	defer srv.Close()
+
+	rt := testRuntimeT(t, 1)
+	rt.config.ProxyPortStart = port
+	stubCreateDeps(rt)
+
 	select {
 	case <-rt.ReadyCh():
 		t.Fatal("ReadyCh should not be closed before admission")
 	default:
 	}
-	rt.markAdmissionOK()
+
+	rt.Prepare(context.Background())
+
 	select {
 	case <-rt.ReadyCh():
-	case <-time.After(time.Second):
-		t.Fatal("ReadyCh should close after markAdmissionOK")
+	default:
+		t.Fatal("ReadyCh should be closed after Prepare succeeds")
 	}
 	if err := rt.Ready(context.Background()); err != nil {
-		t.Fatalf("Ready() after admission: %v", err)
+		t.Fatalf("Ready() after Prepare: %v", err)
+	}
+	if !rt.admissionOK.Load() {
+		t.Fatal("admissionOK should be true after Prepare")
+	}
+	if len(rt.sandboxes) != 0 {
+		t.Fatalf("expected canary cleaned up after admitOnce, have %d sandboxes", len(rt.sandboxes))
 	}
 }
 
