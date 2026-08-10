@@ -93,28 +93,19 @@ jobs:
           GH_TOKEN: ${{ steps.generate-token.outputs.token }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          BRANCH="sdk/post-release/${VERSION}"
-
           git fetch origin main
-          git checkout -b "${BRANCH}" origin/main
-
+          git checkout --detach origin/main
           cd sdk
           npm version "${VERSION}" --no-git-tag-version --allow-same-version
           pnpm install --lockfile-only
           cd ..
 
-          git add sdk/package.json sdk/pnpm-lock.yaml
-          git commit -m "sdk: bump version to v${VERSION}"
-
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
-          git push origin "${BRANCH}"
-
-          gh pr create \
+          npm ci --prefix .github/scripts
+          node .github/scripts/create-signed-commit-pr.mjs \
             --base main \
-            --head "${BRANCH}" \
+            --branch "sdk/post-release/${VERSION}" \
             --title "sdk: bump version to v${VERSION}" \
             --body "Automated post-release PR to update version on main after publishing @n8n/sandbox-client@${VERSION}." \
-            --label "release/sdk"
+            --label "release/sdk" \
+            --message "sdk: bump version to v${VERSION}" \
+            -- sdk/package.json sdk/pnpm-lock.yaml

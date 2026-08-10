@@ -73,24 +73,13 @@ jobs:
           GH_TOKEN: ${{ steps.generate-token.outputs.token }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          BRANCH="sandbox/post-release/${VERSION}"
-
-          git fetch origin main
-          git checkout -b "${BRANCH}" origin/main
-
           printf '%s' "${VERSION}" > SANDBOX_VERSION
-          git add SANDBOX_VERSION
-          git commit -m "sandbox: bump version to v${VERSION}"
-
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
-          git push origin "${BRANCH}"
-
-          gh pr create \
+          npm ci --prefix .github/scripts
+          node .github/scripts/create-signed-commit-pr.mjs \
             --base main \
-            --head "${BRANCH}" \
+            --branch "sandbox/post-release/${VERSION}" \
             --title "sandbox: bump version to v${VERSION}" \
             --body "Automated post-release PR to update SANDBOX_VERSION on main after publishing v${VERSION}." \
-            --label "release/sandbox"
+            --label "release/sandbox" \
+            --message "sandbox: bump version to v${VERSION}" \
+            -- SANDBOX_VERSION
