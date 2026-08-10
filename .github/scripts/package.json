@@ -1,0 +1,8 @@
+{
+  "name": "n8n-sandbox-service-github-scripts",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "zx": "8.8.5"
+  }
+}
