@@ -65,6 +65,24 @@ describe("SandboxClient", () => {
     });
   });
 
+  it("creates or reuses a caller-supplied sandbox ID", async () => {
+    const mock = getMockHttp(client);
+    mock.requestJson.mockResolvedValue({
+      id: "11111111-1111-4111-8111-111111111111",
+      status: "running",
+      created_at: 1000,
+      last_active_at: 1000,
+    });
+
+    const result = await client.createSandbox({ id: "11111111-1111-4111-8111-111111111111" });
+
+    expect(mock.requestJson).toHaveBeenCalledWith("POST", "/sandboxes", {
+      data: { id: "11111111-1111-4111-8111-111111111111" },
+      isSafeToRetry: true,
+    });
+    expect(result.id).toBe("11111111-1111-4111-8111-111111111111");
+  });
+
   it("getSandbox sends GET /sandboxes/{id}", async () => {
     const mock = getMockHttp(client);
     mock.requestJson.mockResolvedValue({

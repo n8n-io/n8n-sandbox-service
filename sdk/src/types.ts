@@ -11,6 +11,12 @@ export interface SandboxClientOptions {
   retry?: RetryOptions;
 }
 
+/** Options for creating a sandbox. */
+export interface CreateSandboxOptions {
+  /** UUID to create or reuse. The service generates one when omitted. */
+  id?: string;
+}
+
 /** Retry policy for transient HTTP failures. */
 export interface RetryOptions {
   /**

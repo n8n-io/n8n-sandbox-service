@@ -1,7 +1,9 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httputil"
@@ -91,6 +93,19 @@ type SandboxResponse struct {
 	LastActiveAt int64  `json:"last_active_at"`
 }
 
+type createSandboxRequest struct {
+	ID *string `json:"id"`
+}
+
+func sandboxResponse(rec *store.SandboxRecord) *SandboxResponse {
+	return &SandboxResponse{
+		ID:           rec.ID,
+		Status:       rec.Status,
+		CreatedAt:    rec.CreatedAt,
+		LastActiveAt: rec.LastActiveAt,
+	}
+}
+
 func handleListSandboxes(s store.SandboxStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		records, err := s.List()
@@ -165,6 +180,49 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 		success := false
 		defer func() { rec.ObserveSandboxOp(metrics.OpCreate, success) }()
 
+		var req createSandboxRequest
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
+		if err := decoder.Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+		if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+
+		sandboxID := generateUUID()
+		if req.ID != nil {
+			if !isValidUUID(*req.ID) {
+				writeError(w, http.StatusBadRequest, "invalid sandbox id")
+				return
+			}
+			sandboxID = *req.ID
+
+			unlock, err := s.LockSandbox(r.Context(), sandboxID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			defer unlock()
+
+			existing, err := s.Get(sandboxID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			if existing != nil {
+				if !isPastIdleDeleteWindow(existing, cfg, time.Now().Unix()) {
+					writeJSON(w, http.StatusOK, sandboxResponse(existing))
+					success = true
+					return
+				}
+				if !deleteSandboxRecord(w, r, s, cfg, existing) {
+					return
+				}
+			}
+		}
+
 		run, err := reg.PickLowestUsed()
 		if err != nil {
 			if errors.Is(err, registry.ErrNoRunners) {
@@ -180,7 +238,6 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 		controlAddr := run.ControlGRPCAddr
 		tlsCfg := runnerControlTLS(cfg)
 
-		sandboxID := generateUUID()
 		now := time.Now().Unix()
 		slog.Info(
 			"create sandbox: runner selected",
@@ -220,6 +277,11 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 		}
 		if err := s.Create(record); err != nil {
 			_ = runnerctl.DeleteSandbox(r.Context(), controlAddr, cfg.RunnerAPIKey, tlsCfg, sandboxID)
+			if existing, getErr := s.Get(sandboxID); getErr == nil && existing != nil {
+				writeJSON(w, http.StatusOK, sandboxResponse(existing))
+				success = true
+				return
+			}
 			slog.Error(
 				"create sandbox failed: store record",
 				"sandbox_id", sandboxID,
@@ -237,15 +299,21 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 			"container_ip", containerIP,
 		)
 
-		resp := &SandboxResponse{
-			ID:           sandboxID,
-			Status:       "running",
-			CreatedAt:    now,
-			LastActiveAt: now,
-		}
-		writeJSON(w, http.StatusCreated, resp)
+		writeJSON(w, http.StatusCreated, sandboxResponse(record))
 		success = true
 	}
+}
+
+func deleteSandboxRecord(w http.ResponseWriter, r *http.Request, s store.SandboxStore, cfg *config.APIConfig, rec *store.SandboxRecord) bool {
+	if err := runnerctl.DeleteSandbox(r.Context(), rec.RunnerControlGRPCAddr, cfg.RunnerAPIKey, runnerControlTLS(cfg), rec.ID); err != nil {
+		writeError(w, http.StatusBadGateway, "failed to delete container: "+err.Error())
+		return false
+	}
+	if err := s.Delete(rec.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return false
+	}
+	return true
 }
 
 func handleDeleteSandbox(s store.SandboxStore, cfg *config.APIConfig, mrec *metrics.APIRecorder) http.HandlerFunc {
@@ -259,6 +327,13 @@ func handleDeleteSandbox(s store.SandboxStore, cfg *config.APIConfig, mrec *metr
 			return
 		}
 
+		unlock, err := s.LockSandbox(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		defer unlock()
+
 		rec, err := s.Get(id)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
@@ -270,15 +345,7 @@ func handleDeleteSandbox(s store.SandboxStore, cfg *config.APIConfig, mrec *metr
 			return
 		}
 
-		controlAddr := rec.RunnerControlGRPCAddr
-		tlsCfg := runnerControlTLS(cfg)
-		if err := runnerctl.DeleteSandbox(r.Context(), controlAddr, cfg.RunnerAPIKey, tlsCfg, id); err != nil {
-			writeError(w, http.StatusBadGateway, "failed to delete container: "+err.Error())
-			return
-		}
-
-		if err := s.Delete(id); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+		if !deleteSandboxRecord(w, r, s, cfg, rec) {
 			return
 		}
 

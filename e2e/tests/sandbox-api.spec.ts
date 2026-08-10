@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { randomUUID } from 'node:crypto';
 import './matchers';
 import {
   client,
@@ -32,6 +33,55 @@ test.describe('Auth', () => {
 });
 
 test.describe('Sandbox lifecycle', () => {
+  test('creates and reuses a client-supplied sandbox ID', async ({ request }) => {
+    const id = randomUUID();
+    try {
+      const initialResponses = await Promise.all(
+        Array.from({ length: 2 }, () =>
+          request.post('/sandboxes', {
+            headers: { 'X-Api-Key': API_KEY, 'Content-Type': 'application/json' },
+            data: { id },
+          }),
+        ),
+      );
+      expect(initialResponses.map((response) => response.status()).sort()).toEqual([200, 201]);
+      for (const response of initialResponses) {
+        expect((await response.json()).id).toBe(id);
+      }
+
+      const reused = await request.post('/sandboxes', {
+        headers: { 'X-Api-Key': API_KEY, 'Content-Type': 'application/json' },
+        data: { id },
+      });
+      expect(reused.status()).toBe(200);
+      expect((await reused.json()).id).toBe(id);
+    } finally {
+      await deleteSandbox(id);
+    }
+  });
+
+  test('rejects invalid client-supplied sandbox IDs', async ({ request }) => {
+    for (const id of ['', 'not-a-uuid', randomUUID().toUpperCase()]) {
+      const response = await request.post('/sandboxes', {
+        headers: { 'X-Api-Key': API_KEY, 'Content-Type': 'application/json' },
+        data: { id },
+      });
+      expect(response.status()).toBe(400);
+    }
+  });
+
+  test('rejects trailing data in a create request', async ({ request }) => {
+    const id = randomUUID();
+    const response = await request.post('/sandboxes', {
+      headers: { 'X-Api-Key': API_KEY, 'Content-Type': 'application/json' },
+      data: `{"id":"${id}"} {}`,
+    });
+    expect(response.status()).toBe(400);
+
+    const sandbox = await apiRequest(request, 'GET', `/sandboxes/${id}`);
+    expect(sandbox.status).toBe(404);
+  });
+
   test('create, exec, delete', async ({ request }) => {
     const id = await createSandbox();
     expect(id).toBeTruthy();

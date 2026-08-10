@@ -1,7 +1,10 @@
 // Package store provides persistent storage for sandbox records (SQLite or Postgres).
 package store
 
-import "io"
+import (
+	"context"
+	"io"
+)
 
 // Backend identifies the sandbox store implementation.
 type Backend string
@@ -34,6 +37,7 @@ type SandboxStore interface {
 	UpdateStatus(id, status string) error
 	UpdateLastActive(id string) error
 	Delete(id string) error
+	LockSandbox(ctx context.Context, id string) (unlock func(), err error)
 	ListForIdleReapDelete(cutoff int64) ([]*SandboxRecord, error)
 	ListForIdleReapStop(cutoff int64) ([]*SandboxRecord, error)
 	Count() (int64, error)
