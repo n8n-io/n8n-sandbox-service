@@ -13,8 +13,7 @@
 //
 // Requires: gh, zx (npm ci --prefix .github/scripts). Auth via GH_TOKEN / GITHUB_TOKEN.
 
-import { readFileSync, existsSync } from 'node:fs'
-import { $, sleep } from 'zx'
+import { $, fs, minimist, retry } from 'zx'
 
 $.verbose = true
 $.timeout = '60s'
@@ -22,90 +21,20 @@ $.timeout = '60s'
 const USAGE =
   'usage: create-signed-commit-pr.mjs --base BASE --branch BRANCH --title TITLE (--body BODY|--body-file PATH) --label LABEL --message MESSAGE -- FILE...'
 
-function parseArgs(argv) {
-  // Drop leading non-flag args (script path when invoked via `zx script.mjs ...`).
-  let i = 0
-  while (i < argv.length && !argv[i].startsWith('-')) i++
+const args = minimist(process.argv.slice(2), {
+  string: ['base', 'branch', 'title', 'body', 'body-file', 'label', 'message'],
+})
+const files = args._
+const body = args['body-file'] ? fs.readFileSync(args['body-file'], 'utf8') : args.body
 
-  const out = {
-    base: '',
-    branch: '',
-    title: '',
-    body: '',
-    bodyFile: '',
-    label: '',
-    message: '',
-    files: [],
-  }
-
-  for (; i < argv.length; i++) {
-    const arg = argv[i]
-    const next = () => {
-      const v = argv[++i]
-      if (v === undefined) {
-        console.error(`missing value for ${arg}`)
-        console.error(USAGE)
-        process.exit(2)
-      }
-      return v
-    }
-
-    switch (arg) {
-      case '--base':
-        out.base = next()
-        break
-      case '--branch':
-        out.branch = next()
-        break
-      case '--title':
-        out.title = next()
-        break
-      case '--body':
-        out.body = next()
-        break
-      case '--body-file':
-        out.bodyFile = next()
-        break
-      case '--label':
-        out.label = next()
-        break
-      case '--message':
-        out.message = next()
-        break
-      case '--':
-        out.files.push(...argv.slice(i + 1))
-        return out
-      default:
-        console.error(`unknown argument: ${arg}`)
-        console.error(USAGE)
-        process.exit(2)
-    }
-  }
-  return out
-}
-
-async function retry(label, fn, { attempts = 3, delayMs = 1000 } = {}) {
-  let lastErr
-  for (let i = 1; i <= attempts; i++) {
-    try {
-      return await fn(i)
-    } catch (err) {
-      lastErr = err
-      if (i === attempts) break
-      console.error(`${label} failed (attempt ${i}/${attempts}):`, err)
-      await sleep(delayMs * i)
-    }
-  }
-  throw lastErr
-}
-
-const args = parseArgs(process.argv.slice(2))
-if (args.bodyFile) {
-  args.body = readFileSync(args.bodyFile, 'utf8')
-}
-
-if (!args.base || !args.branch || !args.title || !args.body || !args.message || args.files.length < 1) {
+if (!args.base || !args.branch || !args.title || !body || !args.message || files.length < 1) {
   console.error(USAGE)
+  process.exit(2)
+}
+
+const PROTECTED_BRANCHES = new Set(['main'])
+if (PROTECTED_BRANCHES.has(args.branch) || args.branch === args.base) {
+  console.error(`refusing to mutate protected branch: ${args.branch}`)
   process.exit(2)
 }
 
@@ -117,17 +46,16 @@ if (!repo) {
 
 // Validate and encode file payloads before any remote ref mutation so a
 // missing/unreadable file cannot wipe an existing PR branch.
-const additions = []
-for (const filePath of args.files) {
-  if (!existsSync(filePath)) {
+const additions = files.map((filePath) => {
+  if (!fs.existsSync(filePath)) {
     console.error(`file not found: ${filePath}`)
     process.exit(1)
   }
-  additions.push({
+  return {
     path: filePath,
-    contents: readFileSync(filePath).toString('base64'),
-  })
-}
+    contents: fs.readFileSync(filePath).toString('base64'),
+  }
+})
 
 async function refSha(ref) {
   const path = `repos/${repo}/git/ref/heads/${ref}`
@@ -159,14 +87,19 @@ async function createBranch(sha) {
 
 async function deleteBranch() {
   const path = `repos/${repo}/git/refs/heads/${args.branch}`
-  await $`gh api ${path} --method DELETE`.nothrow()
+  const result = await $`gh api ${path} --method DELETE`.nothrow()
+  if (result.exitCode === 0) return
+  // Already deleted is success; anything else must surface for retry/recovery.
+  if (!(await refSha(args.branch))) return
+  throw new Error(
+    `failed to delete heads/${args.branch}: ${result.stderr || result.stdout || `exit ${result.exitCode}`}`,
+  )
 }
 
 async function hasOpenPr(branch) {
   const result =
     await $`gh pr list --repo ${repo} --head ${branch} --state open --json number --limit 1`
-  const prs = JSON.parse(result.stdout || '[]')
-  return prs.length > 0
+  return JSON.parse(result.stdout || '[]').length > 0
 }
 
 const baseSha = await refSha(args.base)
@@ -215,7 +148,7 @@ const payload = {
 }
 
 try {
-  await retry('createCommitOnBranch', async () => {
+  await retry(3, '1s', async () => {
     const tip = await refSha(args.branch)
     // Timeout/5xx after the mutation applied (or a concurrent run won): tip
     // has moved off base — do not re-issue the mutation.
@@ -226,7 +159,6 @@ try {
 
     const raw = await $({
       input: JSON.stringify(payload),
-      timeout: '60s',
     })`gh api graphql --input -`
     const response = JSON.parse(raw.stdout)
     const oid = response?.data?.createCommitOnBranch?.commit?.oid ?? ''
@@ -241,33 +173,26 @@ try {
   // Only roll back if the tip is still the base SHA we moved to. Re-reading
   // avoids restoring a stale previousSha over a commit another run just wrote.
   try {
-    await retry(
-      'restore branch after commit failure',
-      async () => {
-        const tip = await refSha(args.branch)
-        if (previousSha && tip === baseSha) {
-          console.error(`restoring ${args.branch} to ${previousSha}`)
-          await setBranchShaFrom(baseSha, previousSha)
-        } else if (createdBranch && tip === baseSha) {
-          console.error(`deleting empty branch ${args.branch}`)
-          await deleteBranch()
-        } else {
-          console.error(
-            `not rolling back ${args.branch}: tip is ${tip || '(missing)'} (base ${baseSha})`,
-          )
-        }
-      },
-      { attempts: 5 },
-    )
+    await retry(5, '1s', async () => {
+      const tip = await refSha(args.branch)
+      if (previousSha && tip === baseSha) {
+        console.error(`restoring ${args.branch} to ${previousSha}`)
+        await setBranchShaFrom(baseSha, previousSha)
+      } else if (createdBranch && tip === baseSha) {
+        console.error(`deleting empty branch ${args.branch}`)
+        await deleteBranch()
+      } else {
+        console.error(
+          `not rolling back ${args.branch}: tip is ${tip || '(missing)'} (base ${baseSha})`,
+        )
+      }
+    })
   } catch (restoreErr) {
     console.error(`failed to recover ${args.branch} after commit error:`, restoreErr)
     throw new Error(
       `createCommitOnBranch failed and could not restore ${args.branch}; branch may be stuck at base`,
       { cause: restoreErr },
     )
-  }
-  if (err instanceof Error && err.message === 'createCommitOnBranch returned no oid') {
-    process.exit(1)
   }
   throw err
 }
@@ -285,12 +210,12 @@ if (!openPr) {
     '--title',
     args.title,
     '--body',
-    args.body,
+    body,
   ]
-  if (args.label) {
-    createArgs.push('--label', args.label)
-  }
-  await retry('gh pr create', async () => {
+  if (args.label) createArgs.push('--label', args.label)
+  await retry(3, '1s', async () => {
+    // First create may have succeeded before a timeout; don't re-issue.
+    if (await hasOpenPr(args.branch)) return
     await $`gh ${createArgs}`
   })
 }
