@@ -8,6 +8,7 @@ import {
   uploadFile,
   downloadFile,
   apiRequest,
+  getApiKey,
 } from './helpers';
 /**
  * E2E tests verifying that the file API and exec API operate on the same
@@ -102,7 +103,7 @@ test.describe('File API and Exec API path consistency', () => {
     // After unlink, some setups (busy CI / overlay) can briefly still serve the file;
     // poll until the file API observes the delete.
     const noStore = {
-      'X-Api-Key': process.env.SANDBOX_API_KEY || 'test',
+      'X-Api-Key': await getApiKey(),
       'Cache-Control': 'no-store',
       Pragma: 'no-cache',
     };

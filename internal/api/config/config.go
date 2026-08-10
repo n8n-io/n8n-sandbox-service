@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -22,6 +23,7 @@ const (
 	defaultLogLevel         = slog.LevelInfo
 	defaultPostgresPort     = 5432
 	defaultPostgresSSLMode  = "require"
+	defaultMaxSandboxes     = 50
 )
 
 // StoreBackend selects the API sandbox store implementation.
@@ -66,6 +68,10 @@ type APIConfig struct {
 
 	// MaxFileBytes is the maximum size of file upload requests accepted by API.
 	MaxFileBytes int64
+
+	// DefaultMaxSandboxes is the default per-tenant sandbox quota when
+	// POST /admin/tenants omits max_sandboxes (0 = unlimited).
+	DefaultMaxSandboxes int
 
 	// RunnerAPIKey is the optional API key sent to runner via X-Api-Key.
 	RunnerAPIKey string
@@ -125,17 +131,18 @@ type APIConfig struct {
 // LoadAPI reads API gateway configuration from environment variables.
 func LoadAPI() (*APIConfig, error) {
 	cfg := &APIConfig{
-		ListenAddr:       defaultListenAddr,
-		GRPCListenAddr:   defaultGRPCListenAddr,
-		MaxFileBytes:     defaultMaxFileBytes,
-		DataDir:          "/var/lib/n8n-sandbox-api",
-		Store:            StoreSQLite,
-		Postgres:         PostgresConfig{Port: defaultPostgresPort, SSLMode: defaultPostgresSSLMode},
-		HeartbeatGrace:   defaultHeartbeatGrace,
-		OrphanReapBuffer: defaultOrphanReapBuffer,
-		IdleStopAfter:    defaultIdleStopAfter,
-		IdleDeleteAfter:  defaultIdleDeleteAfter,
-		LogLevel:         defaultLogLevel,
+		ListenAddr:          defaultListenAddr,
+		GRPCListenAddr:      defaultGRPCListenAddr,
+		MaxFileBytes:        defaultMaxFileBytes,
+		DefaultMaxSandboxes: defaultMaxSandboxes,
+		DataDir:             "/var/lib/n8n-sandbox-api",
+		Store:               StoreSQLite,
+		Postgres:            PostgresConfig{Port: defaultPostgresPort, SSLMode: defaultPostgresSSLMode},
+		HeartbeatGrace:      defaultHeartbeatGrace,
+		OrphanReapBuffer:    defaultOrphanReapBuffer,
+		IdleStopAfter:       defaultIdleStopAfter,
+		IdleDeleteAfter:     defaultIdleDeleteAfter,
+		LogLevel:            defaultLogLevel,
 	}
 
 	// SANDBOX_API_LOG_LEVEL (optional)
@@ -181,6 +188,15 @@ func LoadAPI() (*APIConfig, error) {
 			return nil, fmt.Errorf("SANDBOX_API_MAX_FILE_BYTES must be a positive integer, got %q", v)
 		}
 		cfg.MaxFileBytes = n
+	}
+
+	if v := os.Getenv("SANDBOX_API_DEFAULT_MAX_SANDBOXES"); v != "" {
+		n, err := strconv.Atoi(v)
+		// tenants.max_sandboxes is INTEGER (signed 32-bit) in SQLite/Postgres.
+		if err != nil || n < 0 || n > math.MaxInt32 {
+			return nil, fmt.Errorf("SANDBOX_API_DEFAULT_MAX_SANDBOXES must be an integer between 0 and %d, got %q", math.MaxInt32, v)
+		}
+		cfg.DefaultMaxSandboxes = n
 	}
 
 	cfg.RunnerAPIKey = os.Getenv("SANDBOX_API_RUNNER_API_KEY")

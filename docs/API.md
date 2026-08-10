@@ -2,6 +2,16 @@
 
 All endpoints except `/healthz` and `/metrics` require the `X-Api-Key` header for authentication. `/metrics` is only exposed when `SANDBOX_API_METRICS_ENABLED=true` and is intended to be scraped over a private network.
 
+### API keys and tenants
+
+`SANDBOX_API_KEYS` are admin keys. An admin key can create/list/delete any sandbox, manage tenants and mint tenant API keys via the admin API.
+
+A tenant key may only create sandboxes for that tenant and may only list/get/delete/proxy its own sandboxes. Self-hosted operators can ignore tenant APIs entirely and keep using the admin key.
+
+Tenant keys are returned in plaintext once on create; only a hash is stored.
+
+---
+
 ## Error Response Format
 
 ```json
@@ -67,7 +77,10 @@ curl http://localhost:8080/metrics
 
 ### GET /sandboxes
 
-List all sandboxes, ordered by creation time (newest first).
+List sandboxes, ordered by creation time (newest first).
+
+- Admin key: all sandboxes
+- Tenant key: only sandboxes owned by that tenant
 
 **Response:** `200 OK`
 
@@ -101,7 +114,11 @@ Create a sandbox. With no request body, the service generates a UUID. Callers ma
 }
 ```
 
-If that ID is still available within its idle-delete window, the existing sandbox is returned. If it has passed the window, the stale sandbox is deleted before the ID is reused.
+If that ID still belongs to the caller and is within its idle-delete window, the existing sandbox is returned. If it has passed the window, the stale sandbox is deleted before the ID is reused. If the ID belongs to another tenant (or to admin when the caller is a tenant), the request fails with `409`.
+
+With a tenant key, the sandbox is owned by that tenant and counts toward the tenant's `max_sandboxes` quota (`403` when exceeded). With an admin key, the sandbox is stored with `tenant_id` `__admin__` (admin-owned; not visible to tenant keys; admins see all sandboxes in list).
+
+Quota enforcement is a soft check-then-act (`CountByTenant` before create). Concurrent `POST /sandboxes` from the same tenant can briefly exceed `max_sandboxes` and consume shared runner capacity. Treat the limit as a soft ceiling, not a hard atomic reservation.
 
 Resource limits (memory, CPU, process count) are configured on the runner via environment variables. Network policy blocks all private IP ranges and allows public internet access.
 
@@ -116,7 +133,7 @@ Resource limits (memory, CPU, process count) are configured on the runner via en
 }
 ```
 
-**Errors:** `400` invalid request body or supplied id, `502` stale sandbox cleanup failed, `503` no sandbox runners are registered or available
+**Errors:** `400` invalid request body or supplied id, `403` tenant sandbox quota exceeded, `409` if the supplied id is owned by another tenant/admin or the tenant was deleted before the sandbox row could be stored (runner create is rolled back), `502` stale sandbox cleanup failed, `503` no sandbox runners are registered or available
 
 **Examples:**
 
@@ -174,7 +191,7 @@ Delete a sandbox.
 
 **Response:** `204 No Content`
 
-**Errors:** `400` invalid id
+**Errors:** `400` invalid id, `404` sandbox not found (unknown id, already deleted, or not owned by the caller — same status as `GET` so tenants cannot probe cross-tenant existence)
 
 **Example:**
 
@@ -617,3 +634,109 @@ Get file or directory metadata.
 curl "http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/stat?path=/home/user/file.txt" \
   -H "X-Api-Key: YOUR_API_KEY"
 ```
+
+---
+
+## Admin: tenants and API keys
+
+All `/admin/*` routes require an admin API key (`SANDBOX_API_KEYS`). Tenant keys receive `403`.
+
+### GET /admin/tenants
+
+List tenants.
+
+**Response:** `200 OK`
+
+```json
+[
+  {
+    "id": "uuid",
+    "name": "string",
+    "external_ref": "string",
+    "max_sandboxes": 50,
+    "created_at": 1700000000
+  }
+]
+```
+
+### POST /admin/tenants
+
+Create a tenant. By default also mints one API key (`create_key` defaults to `true`).
+
+**Request body (optional):**
+
+```json
+{
+  "name": "my-instance",
+  "external_ref": "n8n-instance-id",
+  "max_sandboxes": 50,
+  "create_key": true
+}
+```
+
+| Field          | Type   | Required | Default |
+|----------------|--------|----------|---------|
+| `name`         | string | no       | `""` |
+| `external_ref` | string | no       | `""` |
+| `max_sandboxes`| int    | no       | `SANDBOX_API_DEFAULT_MAX_SANDBOXES` (`50`) |
+| `create_key`   | bool   | no       | `true` |
+
+`name` is an optional human-readable label. `external_ref` is an optional opaque id from the caller (for example an n8n instance id); the API does not enforce uniqueness.
+
+`max_sandboxes` is the per-tenant sandbox quota (`0` = unlimited). Must be between `0` and `2147483647`. When omitted, the service default applies.
+
+**Response:** `201 Created`
+
+```json
+{
+  "tenant": {
+    "id": "uuid",
+    "name": "my-instance",
+    "external_ref": "n8n-instance-id",
+    "max_sandboxes": 50,
+    "created_at": 1700000000
+  },
+  "key": {
+    "id": "uuid",
+    "tenant_id": "uuid",
+    "prefix": "a1b2c3d4",
+    "created_at": 1700000000,
+    "api_key": "sbk_a1b2c3d4_…"
+  }
+}
+```
+
+The plaintext `api_key` is only returned on create. Store it securely.
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/admin/tenants \
+  -H "X-Api-Key: ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"cloud-instance-1","external_ref":"inst_123"}'
+```
+
+### GET /admin/tenants/{id}
+
+Get a tenant by id.
+
+### DELETE /admin/tenants/{id}
+
+Delete a tenant and its API keys (`204`).
+
+Fails with `409 Conflict` if the tenant still owns sandboxes — delete those first (admin can delete any sandbox). This avoids orphaning running sandboxes after credentials are removed.
+
+`DeleteTenant` locks the tenant row while checking ownership and deleting, and tenant sandbox `Create` takes the same lock before insert. That closes the race where a sandbox create is in flight (runner VM already started, store row not yet written) while delete sees an empty count.
+
+### GET /admin/tenants/{id}/keys
+
+List API key metadata for a tenant (no plaintext secrets).
+
+### POST /admin/tenants/{id}/keys
+
+Mint an additional API key for the tenant. Returns plaintext `api_key` once (`201`).
+
+### DELETE /admin/tenants/{id}/keys/{keyId}
+
+Revoke an API key (`204`). Revoked keys are rejected immediately.

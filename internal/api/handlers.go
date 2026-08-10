@@ -54,7 +54,7 @@ func sandboxProxyHandler(s store.SandboxStore, cfg *config.APIConfig) func(bool)
 				writeError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
-			if rec == nil {
+			if rec == nil || !canAccessSandbox(r, rec) {
 				writeError(w, http.StatusNotFound, "sandbox not found")
 				return
 			}
@@ -108,7 +108,20 @@ func sandboxResponse(rec *store.SandboxRecord) *SandboxResponse {
 
 func handleListSandboxes(s store.SandboxStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		records, err := s.List()
+		id, ok := authFromContext(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "invalid API key")
+			return
+		}
+		var (
+			records []*store.SandboxRecord
+			err     error
+		)
+		if id.Role == roleAdmin {
+			records, err = s.List()
+		} else {
+			records, err = s.ListByTenant(id.TenantID)
+		}
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -138,7 +151,7 @@ func handleGetSandbox(s store.SandboxStore, cfg *config.APIConfig) http.HandlerF
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		if rec == nil {
+		if rec == nil || !canAccessSandbox(r, rec) {
 			writeError(w, http.StatusNotFound, "sandbox not found")
 			return
 		}
@@ -180,6 +193,12 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 		success := false
 		defer func() { rec.ObserveSandboxOp(metrics.OpCreate, success) }()
 
+		authID, ok := authFromContext(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "invalid API key")
+			return
+		}
+
 		var req createSandboxRequest
 		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
 		if err := decoder.Decode(&req); err != nil && !errors.Is(err, io.EOF) {
@@ -212,12 +231,41 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 				return
 			}
 			if existing != nil {
+				if !canAccessSandbox(r, existing) {
+					writeError(w, http.StatusConflict, "sandbox id unavailable")
+					return
+				}
 				if !isPastIdleDeleteWindow(existing, cfg, time.Now().Unix()) {
 					writeJSON(w, http.StatusOK, sandboxResponse(existing))
 					success = true
 					return
 				}
 				if !deleteSandboxRecord(w, r, s, cfg, existing) {
+					return
+				}
+			}
+		}
+
+		tenantID := store.AdminTenantID
+		if authID.Role == roleTenant {
+			tenantID = authID.TenantID
+			tenant, err := s.GetTenant(tenantID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			if tenant == nil {
+				writeError(w, http.StatusUnauthorized, "invalid API key")
+				return
+			}
+			if tenant.MaxSandboxes > 0 {
+				n, err := s.CountByTenant(tenantID)
+				if err != nil {
+					writeError(w, http.StatusInternalServerError, err.Error())
+					return
+				}
+				if n >= int64(tenant.MaxSandboxes) {
+					writeError(w, http.StatusForbidden, "tenant sandbox quota exceeded")
 					return
 				}
 			}
@@ -249,6 +297,7 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 			"runner_capacity_total", run.CapacityTotal,
 			"runner_capacity_used", run.CapacityUsed,
 			"runner_capacity_stopped", run.CapacityStopped,
+			"tenant_id", tenantID,
 		)
 		gresp, err := runnerctl.CreateSandbox(r.Context(), controlAddr, cfg.RunnerAPIKey, tlsCfg, sandboxID, "{}")
 		if err != nil {
@@ -274,12 +323,17 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 			RunnerID:              run.ID,
 			RunnerHTTPBase:        strings.TrimRight(run.HTTPBaseURL, "/"),
 			RunnerControlGRPCAddr: controlAddr,
+			TenantID:              tenantID,
 		}
 		if err := s.Create(record); err != nil {
 			_ = runnerctl.DeleteSandbox(r.Context(), controlAddr, cfg.RunnerAPIKey, tlsCfg, sandboxID)
 			if existing, getErr := s.Get(sandboxID); getErr == nil && existing != nil {
-				writeJSON(w, http.StatusOK, sandboxResponse(existing))
-				success = true
+				if canAccessSandbox(r, existing) {
+					writeJSON(w, http.StatusOK, sandboxResponse(existing))
+					success = true
+					return
+				}
+				writeError(w, http.StatusConflict, "sandbox id unavailable")
 				return
 			}
 			slog.Error(
@@ -289,6 +343,10 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 				"container_ip", containerIP,
 				"error", err,
 			)
+			if errors.Is(err, store.ErrTenantNotFound) {
+				writeError(w, http.StatusConflict, "tenant not found")
+				return
+			}
 			writeError(w, http.StatusInternalServerError, "failed to store sandbox: "+err.Error())
 			return
 		}
@@ -339,9 +397,10 @@ func handleDeleteSandbox(s store.SandboxStore, cfg *config.APIConfig, mrec *metr
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		if rec == nil {
-			w.WriteHeader(http.StatusNoContent)
-			success = true
+		if rec == nil || !canAccessSandbox(r, rec) {
+			// Same 404 as GET for missing and inaccessible — do not leak
+			// cross-tenant existence via 204 vs 404.
+			writeError(w, http.StatusNotFound, "sandbox not found")
 			return
 		}
 

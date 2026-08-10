@@ -3,8 +3,21 @@ package store
 
 import (
 	"context"
+	"errors"
 	"io"
 )
+
+// ErrTenantHasSandboxes is returned when DeleteTenant is called while the tenant
+// still owns sandbox rows.
+var ErrTenantHasSandboxes = errors.New("tenant has sandboxes")
+
+// ErrTenantNotFound is returned when persisting a tenant-owned sandbox whose
+// tenant row no longer exists (e.g. deleted concurrently during create).
+var ErrTenantNotFound = errors.New("tenant not found")
+
+// ErrAPIKeyTenantMismatch is returned when CreateTenantWithAPIKey is called with
+// k.TenantID != t.ID.
+var ErrAPIKeyTenantMismatch = errors.New("api key tenant_id does not match tenant")
 
 // Backend identifies the sandbox store implementation.
 type Backend string
@@ -12,7 +25,18 @@ type Backend string
 const (
 	BackendSQLite   Backend = "sqlite"
 	BackendPostgres Backend = "postgres"
+
+	// AdminTenantID is stored on sandboxes created with an admin API key (not
+	// owned by any tenant). Chosen to be non-UUID so it cannot collide with
+	// real tenant ids.
+	AdminTenantID = "__admin__"
 )
+
+// IsAdminTenantID reports whether tenantID marks an admin-owned sandbox.
+// Empty is treated the same for rows that predate the sentinel backfill.
+func IsAdminTenantID(tenantID string) bool {
+	return tenantID == "" || tenantID == AdminTenantID
+}
 
 // SandboxRecord is the in-memory representation of a row in the sandboxes table.
 type SandboxRecord struct {
@@ -27,9 +51,29 @@ type SandboxRecord struct {
 	RunnerID              string // Runner that hosts this sandbox (from registration)
 	RunnerHTTPBase        string // Base URL to reach that runner's HTTP API (for proxying)
 	RunnerControlGRPCAddr string // host:port for SandboxControl gRPC
+	TenantID              string // AdminTenantID = admin-owned; otherwise a tenants.id UUID
 }
 
-// SandboxStore exposes CRUD operations for SandboxRecord rows.
+// Tenant is a provisioned consumer of the sandbox API (e.g. an n8n instance).
+type Tenant struct {
+	ID           string
+	Name         string
+	ExternalRef  string
+	MaxSandboxes int // 0 = unlimited
+	CreatedAt    int64
+}
+
+// APIKey is a hashed tenant credential. Plaintext is never stored.
+type APIKey struct {
+	ID        string
+	TenantID  string
+	KeyHash   string
+	Prefix    string
+	CreatedAt int64
+	RevokedAt int64 // 0 = active
+}
+
+// SandboxStore exposes CRUD operations for SandboxRecord rows and tenant keys.
 type SandboxStore interface {
 	io.Closer
 	Create(record *SandboxRecord) error
@@ -41,8 +85,24 @@ type SandboxStore interface {
 	ListForIdleReapDelete(cutoff int64) ([]*SandboxRecord, error)
 	ListForIdleReapStop(cutoff int64) ([]*SandboxRecord, error)
 	Count() (int64, error)
+	CountByTenant(tenantID string) (int64, error)
 	List() ([]*SandboxRecord, error)
+	ListByTenant(tenantID string) ([]*SandboxRecord, error)
 	Backend() Backend
+
+	CreateTenant(t *Tenant) error
+	// CreateTenantWithAPIKey inserts the tenant and its first API key in one transaction.
+	// k.TenantID must equal t.ID.
+	CreateTenantWithAPIKey(t *Tenant, k *APIKey) error
+	GetTenant(id string) (*Tenant, error)
+	ListTenants() ([]*Tenant, error)
+	DeleteTenant(id string) error
+
+	CreateAPIKey(k *APIKey) error
+	GetAPIKey(id string) (*APIKey, error)
+	ListAPIKeysByTenant(tenantID string) ([]*APIKey, error)
+	ListActiveAPIKeysByPrefix(prefix string) ([]*APIKey, error)
+	RevokeAPIKey(id string) error
 }
 
 // scanner is the common interface satisfied by both *sql.Row and *sql.Rows.
@@ -65,9 +125,32 @@ func scanRecord(row scanner) (*SandboxRecord, error) {
 		&r.RunnerID,
 		&r.RunnerHTTPBase,
 		&r.RunnerControlGRPCAddr,
+		&r.TenantID,
 	)
 	if err != nil {
 		return nil, err
 	}
 	return &r, nil
+}
+
+func scanTenant(row scanner) (*Tenant, error) {
+	var t Tenant
+	err := row.Scan(&t.ID, &t.Name, &t.ExternalRef, &t.MaxSandboxes, &t.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+func scanAPIKey(row scanner) (*APIKey, error) {
+	var k APIKey
+	var revokedAt *int64
+	err := row.Scan(&k.ID, &k.TenantID, &k.KeyHash, &k.Prefix, &k.CreatedAt, &revokedAt)
+	if err != nil {
+		return nil, err
+	}
+	if revokedAt != nil {
+		k.RevokedAt = *revokedAt
+	}
+	return &k, nil
 }

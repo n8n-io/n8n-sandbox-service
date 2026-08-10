@@ -4,14 +4,15 @@ import './matchers';
 import {
   execWithTransientRetry,
   deleteSandbox,
-  sandboxClient,
+  ensureTenantAuth,
+  getApiKey,
+  tenantClient,
   waitForSandboxStatus,
 } from './helpers';
 import { parseGauge } from './metrics-helpers';
 
 const BASE_URL_A = process.env.BASE_URL_A || 'http://localhost:18092';
 const BASE_URL_B = process.env.BASE_URL_B || 'http://localhost:18093';
-const API_KEY = process.env.SANDBOX_API_KEY || 'test';
 const POD_A = process.env.E2E_API_POD_A_CONTAINER || '';
 
 // Run from e2e/run-postgres-multi-pod.sh (two API pods, one Postgres, Docker runner).
@@ -71,7 +72,8 @@ test.describe('multi-pod API (Postgres)', () => {
   });
 
   test('runner heartbeats on pod A; create and exec on pod B', async () => {
-    const clientB = sandboxClient(BASE_URL_B);
+    await ensureTenantAuth(BASE_URL_A);
+    const clientB = tenantClient(BASE_URL_B);
 
     const record = await clientB.createSandbox();
     try {
@@ -84,8 +86,9 @@ test.describe('multi-pod API (Postgres)', () => {
   });
 
   test('sandbox created on pod B is visible on pod A', async () => {
-    const clientA = sandboxClient(BASE_URL_A);
-    const clientB = sandboxClient(BASE_URL_B);
+    await ensureTenantAuth(BASE_URL_A);
+    const clientA = tenantClient(BASE_URL_A);
+    const clientB = tenantClient(BASE_URL_B);
 
     const record = await clientB.createSandbox();
     try {
@@ -117,7 +120,9 @@ test.describe.serial('multi-pod API failover @multi-pod-failover', () => {
 
     await waitForRegisteredRunners(BASE_URL_B, 1, 45_000);
 
-    const clientB = sandboxClient(BASE_URL_B);
+    // Pod A is down; mint against the surviving pod (shared Postgres).
+    await ensureTenantAuth(BASE_URL_B);
+    const clientB = tenantClient(BASE_URL_B);
     const record = await clientB.createSandbox();
     try {
       const result = await execWithTransientRetry(record.id, 'echo failover', undefined, clientB);
@@ -131,12 +136,14 @@ test.describe.serial('multi-pod API failover @multi-pod-failover', () => {
   test('lead API pod death: idle sweeper continues on surviving pod', async () => {
     test.setTimeout(120_000);
 
-    const clientB = sandboxClient(BASE_URL_B);
+    await ensureTenantAuth(BASE_URL_B);
+    const key = await getApiKey();
+    const clientB = tenantClient(BASE_URL_B);
     const record = await clientB.createSandbox();
 
     const reqB = await playwrightRequest.newContext({
       baseURL: BASE_URL_B,
-      extraHTTPHeaders: { 'X-Api-Key': API_KEY },
+      extraHTTPHeaders: { 'X-Api-Key': key },
     });
     try {
       await waitForSandboxStatus(reqB, record.id, 'stopped', 90_000);

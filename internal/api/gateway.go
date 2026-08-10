@@ -31,6 +31,14 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	mux.HandleFunc("GET /sandboxes/{id}", handleGetSandbox(s, cfg))
 	mux.HandleFunc("DELETE /sandboxes/{id}", handleDeleteSandbox(s, cfg, rec))
 
+	mux.HandleFunc("GET /admin/tenants", handleListTenants(s))
+	mux.HandleFunc("POST /admin/tenants", handleCreateTenant(s, cfg))
+	mux.HandleFunc("GET /admin/tenants/{id}", handleGetTenant(s))
+	mux.HandleFunc("DELETE /admin/tenants/{id}", handleDeleteTenant(s))
+	mux.HandleFunc("GET /admin/tenants/{id}/keys", handleListTenantKeys(s))
+	mux.HandleFunc("POST /admin/tenants/{id}/keys", handleCreateTenantKey(s))
+	mux.HandleFunc("DELETE /admin/tenants/{id}/keys/{keyId}", handleRevokeTenantKey(s))
+
 	mux.HandleFunc("POST /sandboxes/{id}/executions", sandboxProxy(false))
 	mux.HandleFunc("GET /sandboxes/{id}/executions/{exec_id}", sandboxProxy(false))
 	mux.HandleFunc("DELETE /sandboxes/{id}/executions/{exec_id}", sandboxProxy(false))
@@ -48,7 +56,7 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	if rec.Enabled() {
 		handler = metrics.HTTPMiddleware(rec)(handler)
 	}
-	handler = AuthMiddleware(cfg.APIKeys)(handler)
+	handler = AuthMiddleware(cfg.APIKeys, s)(handler)
 	handler = LoggingMiddleware(handler)
 	if cfg.EnableCORS {
 		handler = CORSMiddleware(handler)

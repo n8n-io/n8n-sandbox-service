@@ -1,4 +1,5 @@
 import type { HttpClient } from "./http";
+import { SandboxServiceError } from "./errors";
 import type { CreateSandboxOptions, SandboxRecord, SandboxWireResponse } from "./types";
 
 export async function createSandbox(
@@ -20,8 +21,14 @@ export async function getSandbox(http: HttpClient, id: string): Promise<SandboxR
   return mapSandboxRecord(response);
 }
 
+/** Deletes a sandbox. Treats 404 as success so retries after a dropped 204 stay idempotent. */
 export async function deleteSandbox(http: HttpClient, id: string): Promise<void> {
-  await http.requestVoid("DELETE", `/sandboxes/${id}`);
+  try {
+    await http.requestVoid("DELETE", `/sandboxes/${id}`);
+  } catch (err) {
+    if (err instanceof SandboxServiceError && err.status === 404) return;
+    throw err;
+  }
 }
 
 function mapSandboxRecord(wire: SandboxWireResponse): SandboxRecord {

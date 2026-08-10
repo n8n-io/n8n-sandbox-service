@@ -11,6 +11,7 @@ data:
   SANDBOX_API_STORE: {{ .Values.api.config.store | quote }}
   SANDBOX_API_DATA_DIR: {{ .Values.api.config.dataDir | quote }}
   SANDBOX_API_MAX_FILE_BYTES: {{ .Values.api.config.maxFileBytes | quote }}
+  SANDBOX_API_DEFAULT_MAX_SANDBOXES: {{ .Values.api.config.defaultMaxSandboxes | quote }}
   SANDBOX_API_ENABLE_CORS: {{ .Values.api.config.enableCors | quote }}
   SANDBOX_API_METRICS_ENABLED: {{ and .Values.monitoring.serviceMonitor.enabled .Values.monitoring.serviceMonitor.api.enabled | quote }}
   SANDBOX_API_RUNNER_HEARTBEAT_GRACE: {{ .Values.api.config.runnerHeartbeatGrace | quote }}
