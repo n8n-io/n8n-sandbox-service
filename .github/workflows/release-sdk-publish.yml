@@ -100,7 +100,8 @@ jobs:
           pnpm install --lockfile-only
           cd ..
 
-          .github/scripts/create-signed-commit-pr.sh \
+          npm ci --prefix .github/scripts
+          node .github/scripts/create-signed-commit-pr.mjs \
             --base main \
             --branch "sdk/post-release/${VERSION}" \
             --title "sdk: bump version to v${VERSION}" \

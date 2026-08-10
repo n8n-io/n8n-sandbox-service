@@ -65,7 +65,8 @@ jobs:
             "Merging this PR will trigger the service image publish workflow." \
             > /tmp/pr-body.md
 
-          .github/scripts/create-signed-commit-pr.sh \
+          npm ci --prefix .github/scripts
+          node .github/scripts/create-signed-commit-pr.mjs \
             --base "service/release/${VERSION}" \
             --branch "service/release-pr/${VERSION}" \
             --title "service: release v${VERSION}" \

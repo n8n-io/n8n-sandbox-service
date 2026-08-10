@@ -119,7 +119,8 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           printf '%s' "${VERSION}" > SERVICE_VERSION
-          .github/scripts/create-signed-commit-pr.sh \
+          npm ci --prefix .github/scripts
+          node .github/scripts/create-signed-commit-pr.mjs \
             --base main \
             --branch "service/post-release/${VERSION}" \
             --title "service: bump version to v${VERSION}" \

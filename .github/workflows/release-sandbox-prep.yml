@@ -63,7 +63,8 @@ jobs:
             "Merging this PR will trigger the sandbox image publish workflow." \
             > /tmp/pr-body.md
 
-          .github/scripts/create-signed-commit-pr.sh \
+          npm ci --prefix .github/scripts
+          node .github/scripts/create-signed-commit-pr.mjs \
             --base "sandbox/release/${VERSION}" \
             --branch "sandbox/release-pr/${VERSION}" \
             --title "sandbox: release v${VERSION}" \

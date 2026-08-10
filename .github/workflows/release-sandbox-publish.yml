@@ -74,7 +74,8 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           printf '%s' "${VERSION}" > SANDBOX_VERSION
-          .github/scripts/create-signed-commit-pr.sh \
+          npm ci --prefix .github/scripts
+          node .github/scripts/create-signed-commit-pr.mjs \
             --base main \
             --branch "sandbox/post-release/${VERSION}" \
             --title "sandbox: bump version to v${VERSION}" \

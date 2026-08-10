@@ -65,7 +65,8 @@ jobs:
             "Merging this PR will trigger the SDK publish workflow." \
             > /tmp/pr-body.md
 
-          .github/scripts/create-signed-commit-pr.sh \
+          npm ci --prefix .github/scripts
+          node .github/scripts/create-signed-commit-pr.mjs \
             --base "sdk/release/${VERSION}" \
             --branch "sdk/release-pr/${VERSION}" \
             --title "sdk: release v${VERSION}" \
