@@ -18,9 +18,19 @@ for cmd in curl unsquashfs mkfs.ext4 truncate debugfs jq; do
 	fi
 done
 
+maybe_sudo() {
+	if [[ "$(id -u)" -eq 0 ]]; then
+		"$@"
+	else
+		sudo "$@"
+	fi
+}
+
 work="$(mktemp -d)"
 template_dir="${work}/template"
-trap 'rm -rf "$work"' EXIT
+# build-rootfs-template.sh chowns TEMPLATE_DIR to 1000:1000 for the jailer,
+# so cleanup must escalate when the CI runner is a different uid.
+trap 'maybe_sudo rm -rf "$work"' EXIT
 
 echo "==> Running build-rootfs-template.sh (FIRECRACKER_CI_VERSION=${FIRECRACKER_CI_VERSION})..."
 FIRECRACKER_CI_VERSION="$FIRECRACKER_CI_VERSION" \
