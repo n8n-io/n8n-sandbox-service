@@ -162,14 +162,16 @@ build_template_assets() {
 	# Export via sudo: the e2e user cannot talk to docker.sock, but
 	# build-rootfs-template.sh only needs a filesystem tar (gallery bake path).
 	local cid rootfs_tar
-	rootfs_tar="$(mktemp /tmp/sandbox-rootfs-XXXXXX.tar)"
+	rootfs_tar="/tmp/sandbox-rootfs-$$.tar"
 	cid="$(sudo docker create "$SANDBOX_IMAGE")"
-	sudo docker export "$cid" -o "$rootfs_tar"
+	# Write as root into a new path (avoid mktemp + docker -o ownership quirks).
+	sudo docker export "$cid" | sudo tee "$rootfs_tar" >/dev/null
 	sudo docker rm -f "$cid" >/dev/null
 	sudo chmod 0644 "$rootfs_tar"
 
 	FIRECRACKER_CI_VERSION="$FIRECRACKER_CI_VERSION" \
 		FIRECRACKER_ROOTFS_SIZE_MB="$FIRECRACKER_E2E_ROOTFS_SIZE_MB" \
+		SANDBOX_IMAGE= \
 		SANDBOX_ROOTFS_TAR="$rootfs_tar" \
 		TEMPLATE_DIR="/srv/firecracker/template" \
 		bash "${SCRIPT_DIR}/build-rootfs-template.sh"

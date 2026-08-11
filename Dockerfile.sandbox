@@ -13,11 +13,14 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /out/daemon ./cmd/daemon
 # =============================================================================
 # Stage 2: Sandbox image
 # =============================================================================
+# Node >=22 is required by @n8n/workflow-sdk → isolated-vm. Debian bookworm's
+# apt nodejs is still 18, so install the official Node 22 binary instead.
 FROM debian:bookworm-slim
 
+ARG TARGETARCH
+ARG NODE_VERSION=22.16.0
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    nodejs \
-    npm \
     python3 \
     python3-pip \
     ca-certificates \
@@ -25,9 +28,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ripgrep \
     wget \
     sudo \
+    xz-utils \
+    && arch="${TARGETARCH}" \
+    && if [ -z "$arch" ]; then \
+         case "$(uname -m)" in \
+           x86_64) arch=amd64 ;; \
+           aarch64) arch=arm64 ;; \
+           *) echo "unsupported arch $(uname -m)" >&2; exit 1 ;; \
+         esac; \
+       fi \
+    && case "$arch" in \
+         amd64) node_arch=x64 ;; \
+         arm64) node_arch=arm64 ;; \
+         *) echo "unsupported TARGETARCH=${arch}" >&2; exit 1 ;; \
+       esac \
+    && curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${node_arch}.tar.xz" \
+         | tar -xJ -C /usr/local --strip-components=1 \
+    && node -v && npm -v \
     && npm install -g typescript \
+    && apt-get purge -y xz-utils \
+    && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
-
 RUN groupadd --gid 1000 user && useradd --uid 1000 --gid 1000 --create-home --shell /bin/sh user
 RUN echo "user ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/user && chmod 0440 /etc/sudoers.d/user
 
