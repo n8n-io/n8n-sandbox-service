@@ -98,14 +98,18 @@ unpack_sandbox_image() {
 		return 0
 	fi
 	if command -v docker >/dev/null 2>&1; then
-		echo "==> Exporting ${image} with docker..."
-		cid="$(docker create "$image")"
-		if ! docker export "$cid" | tar -x -C "$dest"; then
-			docker rm -f "$cid" >/dev/null 2>&1 || true
+		local docker_bin=(docker)
+		if ! docker info >/dev/null 2>&1 && command -v sudo >/dev/null 2>&1; then
+			docker_bin=(sudo docker)
+		fi
+		echo "==> Exporting ${image} with ${docker_bin[*]}..."
+		cid="$("${docker_bin[@]}" create "$image")"
+		if ! "${docker_bin[@]}" export "$cid" | tar -x -C "$dest"; then
+			"${docker_bin[@]}" rm -f "$cid" >/dev/null 2>&1 || true
 			echo "ERROR: docker export failed for ${image}" >&2
 			exit 1
 		fi
-		docker rm -f "$cid" >/dev/null
+		"${docker_bin[@]}" rm -f "$cid" >/dev/null
 		return 0
 	fi
 	echo "ERROR: unpacking SANDBOX_IMAGE requires crane or docker on PATH" >&2
