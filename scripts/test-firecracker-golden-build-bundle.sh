@@ -5,13 +5,15 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_SCRIPT="${ROOT}/e2e/infra/scripts/build-rootfs-template.sh"
 FIRECRACKER_CI_VERSION="${FIRECRACKER_CI_VERSION:-v1.14}"
+SANDBOX_IMAGE="${SANDBOX_IMAGE:-n8n-sandbox:golden-build-self-test}"
+FIRECRACKER_ROOTFS_SIZE_MB="${FIRECRACKER_ROOTFS_SIZE_MB:-2048}"
 
 if [[ "$(uname -m)" != "x86_64" ]]; then
 	echo "golden-build bundle self-test requires linux/amd64; got $(uname -m)" >&2
 	exit 1
 fi
 
-for cmd in curl unsquashfs mkfs.ext4 truncate debugfs jq; do
+for cmd in curl docker mkfs.ext4 truncate debugfs jq; do
 	if ! command -v "$cmd" >/dev/null 2>&1; then
 		echo "missing required command: $cmd" >&2
 		exit 1
@@ -32,8 +34,13 @@ template_dir="${work}/template"
 # so cleanup must escalate when the CI runner is a different uid.
 trap 'maybe_sudo rm -rf "$work"' EXIT
 
+echo "==> Building sandbox image ${SANDBOX_IMAGE} from Dockerfile.sandbox..."
+docker build -f "${ROOT}/Dockerfile.sandbox" -t "$SANDBOX_IMAGE" "$ROOT"
+
 echo "==> Running build-rootfs-template.sh (FIRECRACKER_CI_VERSION=${FIRECRACKER_CI_VERSION})..."
 FIRECRACKER_CI_VERSION="$FIRECRACKER_CI_VERSION" \
+	SANDBOX_IMAGE="$SANDBOX_IMAGE" \
+	FIRECRACKER_ROOTFS_SIZE_MB="$FIRECRACKER_ROOTFS_SIZE_MB" \
 	TEMPLATE_DIR="$template_dir" \
 	bash "$BUILD_SCRIPT"
 
@@ -51,6 +58,13 @@ if ! grep -q 'nameserver 8.8.8.8' <<<"$resolv" || ! grep -q 'nameserver 1.1.1.1'
 	exit 1
 fi
 
+workspace="$(debugfs -R 'stat /home/user/workspace/package.json' "${template_dir}/rootfs.ext4" 2>/dev/null || true)"
+if [[ -z "$workspace" ]] || grep -qi 'No such file' <<<"$workspace"; then
+	echo "ERROR: rootfs.ext4 missing sandbox workspace package.json" >&2
+	printf '%s\n' "$workspace" >&2
+	exit 1
+fi
+
 echo "==> Packaging golden-build bundle..."
 bundle_tar="${work}/bundle.tar.gz"
 bash "${ROOT}/scripts/package-firecracker-golden-build.sh" \
@@ -64,6 +78,14 @@ tar -C "${work}/unpacked" -xzf "$bundle_tar"
 manifest="${bundle_dir}/MANIFEST.json"
 if [[ "$(jq -r .schema_version "$manifest")" != "2" ]]; then
 	echo "ERROR: expected MANIFEST.json schema_version 2" >&2
+	exit 1
+fi
+if [[ "$(jq -r .sandbox_image.ref "$manifest")" == "null" || -z "$(jq -r .sandbox_image.ref "$manifest")" ]]; then
+	echo "ERROR: MANIFEST.json missing sandbox_image.ref" >&2
+	exit 1
+fi
+if [[ "$(jq -r .firecracker_rootfs_size_mb "$manifest")" != "2048" ]]; then
+	echo "ERROR: expected firecracker_rootfs_size_mb 2048" >&2
 	exit 1
 fi
 

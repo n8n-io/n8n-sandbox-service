@@ -8,10 +8,10 @@ asset alongside each service release (`service/v{version}`).
 
 | Path | Purpose |
 |------|---------|
-| `MANIFEST.json` | Service version, git ref, entrypoints, and pinned tool versions |
+| `MANIFEST.json` | Service/sandbox versions, sandbox image pin, entrypoints, checksums |
 | `scripts/install-runner-host.sh` | Generic host prerequisites (packages, Firecracker, NAT, dirs) |
-| `scripts/firecracker-ci-assets.sh` | Download/verify Firecracker CI kernel and squashfs from S3 |
-| `scripts/build-rootfs-template.sh` | Build `rootfs.ext4` and install `vmlinux` from Firecracker CI assets |
+| `scripts/firecracker-ci-assets.sh` | Download/verify Firecracker CI `vmlinux` from S3 |
+| `scripts/build-rootfs-template.sh` | Build `rootfs.ext4` from sandbox OCI image + install `vmlinux` |
 | `scripts/configure-host-nat.sh` | Host IPv4 forwarding and NAT/FORWARD rules for sandbox netns egress |
 | `scripts/create-golden-snapshot.sh` | Build the golden snapshot from kernel, rootfs, and daemon |
 | `scripts/setup-firecracker-e2e-vm.sh` | Full e2e VM bootstrap (delegates to the scripts above) |
@@ -35,21 +35,27 @@ asset alongside each service release (`service/v{version}`).
    sudo ./scripts/install-runner-host.sh --download-ci-assets
    ```
 
-   Omit `--download-ci-assets` when CI kernel/squashfs are already baked under
+   Omit `--download-ci-assets` when CI `vmlinux` is already baked under
    `/srv/firecracker/ci-assets`.
 
-3. Build the rootfs template from baked or downloaded Firecracker CI assets:
+3. Build the rootfs template from the pinned sandbox image (see `sandbox_image.ref`
+   in `MANIFEST.json`) and baked/downloaded `vmlinux`:
 
    ```bash
    source /srv/firecracker/ci-assets/manifest.env
+   SANDBOX_IMAGE="$(jq -r .sandbox_image.ref MANIFEST.json)"
    sudo env \
      FIRECRACKER_CI_VMLINUX="$FIRECRACKER_CI_VMLINUX" \
-     FIRECRACKER_CI_ROOTFS_SQUASHFS="$FIRECRACKER_CI_ROOTFS_SQUASHFS" \
+     SANDBOX_IMAGE="$SANDBOX_IMAGE" \
+     FIRECRACKER_ROOTFS_SIZE_MB="$(jq -r .firecracker_rootfs_size_mb MANIFEST.json)" \
      TEMPLATE_DIR=/srv/firecracker/template \
      ./scripts/build-rootfs-template.sh
    ```
 
-4. Create the golden snapshot:
+   Production gallery bake exports the sandbox image with crane on the operator
+   machine and passes `SANDBOX_ROOTFS_TAR` so runner VMs never need Docker.
+
+4. Create the golden snapshot (injects this bundle's `bin/sandbox-daemon` as PID 1):
 
    ```bash
    sudo ./scripts/create-golden-snapshot.sh \

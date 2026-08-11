@@ -11,9 +11,11 @@ FIRECRACKER_VERSION="${FIRECRACKER_VERSION:-v1.14.1}"
 FIRECRACKER_TARBALL_SHA256="${FIRECRACKER_TARBALL_SHA256:-}"
 JAILER_TMPFS_SIZE="${JAILER_TMPFS_SIZE:-8G}"
 FIRECRACKER_CI_VERSION="${FIRECRACKER_CI_VERSION:-${FIRECRACKER_VERSION%.*}}"
-FIRECRACKER_E2E_ROOTFS_SIZE_MB="${FIRECRACKER_E2E_ROOTFS_SIZE_MB:-1024}"
+FIRECRACKER_E2E_ROOTFS_SIZE_MB="${FIRECRACKER_E2E_ROOTFS_SIZE_MB:-2048}"
 FIRECRACKER_E2E_SNAPSHOT_MEM_MIB="${FIRECRACKER_E2E_SNAPSHOT_MEM_MIB:-512}"
 FIRECRACKER_E2E_SNAPSHOT_VCPUS="${FIRECRACKER_E2E_SNAPSHOT_VCPUS:-1}"
+SANDBOX_IMAGE="${SANDBOX_IMAGE:-n8n-sandbox:e2e-firecracker}"
+SANDBOX_ROOTFS_TAR="${SANDBOX_ROOTFS_TAR:-}"
 
 if [[ "$(uname -m)" != "x86_64" ]]; then
 	echo "Firecracker e2e assets are currently amd64/x86_64 only; got $(uname -m)" >&2
@@ -125,12 +127,40 @@ json_escape() {
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Builds the local kernel/rootfs template from upstream Firecracker CI assets.
+# Ensures docker is available so we can build/export Dockerfile.sandbox on the VM.
+ensure_docker_for_sandbox_image() {
+	if command -v docker >/dev/null 2>&1; then
+		return 0
+	fi
+	echo "==> Installing docker.io for sandbox image build..."
+	sudo apt-get update -qq
+	sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io
+	sudo systemctl enable --now docker >/dev/null 2>&1 || true
+}
+
+# Builds the local kernel/rootfs template from the sandbox OCI image + CI vmlinux.
 build_template_assets() {
+	local project_root
+	project_root="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+
 	sudo rm -rf /srv/firecracker/snapshots
 	sudo mkdir -p /srv/firecracker/snapshots
+
+	if [[ -n "$SANDBOX_ROOTFS_TAR" ]]; then
+		FIRECRACKER_CI_VERSION="$FIRECRACKER_CI_VERSION" \
+			FIRECRACKER_ROOTFS_SIZE_MB="$FIRECRACKER_E2E_ROOTFS_SIZE_MB" \
+			SANDBOX_ROOTFS_TAR="$SANDBOX_ROOTFS_TAR" \
+			TEMPLATE_DIR="/srv/firecracker/template" \
+			bash "${SCRIPT_DIR}/build-rootfs-template.sh"
+		return 0
+	fi
+
+	ensure_docker_for_sandbox_image
+	echo "==> Building sandbox image ${SANDBOX_IMAGE} from Dockerfile.sandbox..."
+	sudo docker build -f "${project_root}/Dockerfile.sandbox" -t "$SANDBOX_IMAGE" "$project_root"
 	FIRECRACKER_CI_VERSION="$FIRECRACKER_CI_VERSION" \
 		FIRECRACKER_ROOTFS_SIZE_MB="$FIRECRACKER_E2E_ROOTFS_SIZE_MB" \
+		SANDBOX_IMAGE="$SANDBOX_IMAGE" \
 		TEMPLATE_DIR="/srv/firecracker/template" \
 		bash "${SCRIPT_DIR}/build-rootfs-template.sh"
 }

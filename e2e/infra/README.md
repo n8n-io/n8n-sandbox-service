@@ -9,9 +9,10 @@ on manual dispatch and on PRs labeled `e2e-sysbox`.
 The same Terraform VM shape is also reused by the Firecracker e2e lane via
 `e2e/infra/scripts/provision-firecracker-e2e-vm.sh`. That path uses a
 Firecracker-specific setup script, runs a nested KVM capability preflight,
-installs Firecracker/jailer, builds the kernel/rootfs template locally from
-pinned upstream inputs, and creates the snapshot on the VM. The Firecracker
-workflow runs on manual dispatch and on PRs labeled `e2e-firecracker`.
+installs Firecracker/jailer, builds the kernel/rootfs template from
+`Dockerfile.sandbox` plus Firecracker CI `vmlinux`, and creates the snapshot on
+the VM. The Firecracker workflow runs on manual dispatch and on PRs labeled
+`e2e-firecracker`.
 
 ## Prerequisites
 
@@ -52,11 +53,14 @@ Firecracker e2e provisioning allows overriding:
 - `FIRECRACKER_CI_VERSION`: optional Firecracker CI asset line override;
   defaults to the configured Firecracker release line, for example `v1.14`.
 - `FIRECRACKER_E2E_ROOTFS_SIZE_MB`: optional ext4 rootfs size; defaults to
-  `1024`.
+  `2048`.
 - `FIRECRACKER_E2E_SNAPSHOT_MEM_MIB`: optional guest memory for local snapshot
   generation; defaults to `512`.
 - `FIRECRACKER_E2E_SNAPSHOT_VCPUS`: optional vCPU count for local snapshot
   generation; defaults to `1`.
+- `SANDBOX_IMAGE`: optional local tag for the sandbox image built from
+  `Dockerfile.sandbox` during setup; defaults to `n8n-sandbox:e2e-firecracker`.
+- `SANDBOX_ROOTFS_TAR`: optional pre-exported rootfs tar (skips docker build).
 - `E2E_PEER_VM_ENABLED`: when `true`, provisions a second VM on the same subnet
   for Firecracker two-runner e2e. Both hosts are set up in parallel via
   `e2e_setup_firecracker_host` (repo transfer + `setup-firecracker-e2e-vm.sh`).
@@ -64,15 +68,16 @@ Firecracker e2e provisioning allows overriding:
 The Firecracker e2e setup builds the bootable template locally on the VM:
 
 1. Install the configured Firecracker release and jailer.
-2. Download the matching Firecracker CI `vmlinux` and Ubuntu squashfs.
-3. Convert the squashfs to `/srv/firecracker/template/rootfs.ext4`.
+2. Download the matching Firecracker CI `vmlinux`.
+3. Build `Dockerfile.sandbox` (or use `SANDBOX_ROOTFS_TAR`) and pack
+   `/srv/firecracker/template/rootfs.ext4`.
 4. Build the n8n sandbox daemon locally and inject it into the rootfs.
 5. Boot the VM locally and write `snapshots/mem` and `snapshots/state`.
 
 The e2e asset contract is the configured Firecracker release, the matching
-Firecracker CI kernel/rootfs inputs, and the locally built sandbox daemon. The
-e2e VM generates the bootable template and snapshot from those pinned inputs
-locally.
+Firecracker CI kernel, the sandbox image userspace, and the locally built
+sandbox daemon. The e2e VM generates the bootable template and snapshot from
+those pinned inputs locally.
 
 The setup writes `/srv/firecracker/manifest.json` for diagnostics:
 

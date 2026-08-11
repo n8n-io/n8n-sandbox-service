@@ -48,6 +48,10 @@ if [[ -z "$OUTPUT" ]]; then
 fi
 
 SERVICE_VERSION="$(tr -d '[:space:]' <"${ROOT}/SERVICE_VERSION")"
+SANDBOX_VERSION="$(tr -d '[:space:]' <"${ROOT}/SANDBOX_VERSION")"
+SANDBOX_IMAGE_REPOSITORY="${SANDBOX_IMAGE_REPOSITORY:-n8nio/n8n-sandbox-service-sandbox}"
+SANDBOX_IMAGE_TAG="${SANDBOX_IMAGE_TAG:-${SANDBOX_VERSION}}"
+SANDBOX_IMAGE_REF="${SANDBOX_IMAGE_REF:-${SANDBOX_IMAGE_REPOSITORY}:${SANDBOX_IMAGE_TAG}}"
 GIT_SHA="$(git -C "$ROOT" rev-parse HEAD)"
 GIT_SHA_SHORT="$(git -C "$ROOT" rev-parse --short HEAD)"
 GIT_REF="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
@@ -57,6 +61,7 @@ fi
 
 FIRECRACKER_VERSION="${FIRECRACKER_VERSION:-v1.14.1}"
 GO_VERSION="${GO_VERSION:-1.25.0}"
+FIRECRACKER_ROOTFS_SIZE_MB="${FIRECRACKER_ROOTFS_SIZE_MB:-2048}"
 PACKAGED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
 WORKDIR="$(mktemp -d)"
@@ -81,6 +86,7 @@ cat >"${BUNDLE}/MANIFEST.json" <<EOF
 {
   "schema_version": 2,
   "service_version": "${SERVICE_VERSION}",
+  "sandbox_version": "${SANDBOX_VERSION}",
   "bundle_version": "${VERSION}",
   "git_sha": "${GIT_SHA}",
   "git_sha_short": "${GIT_SHA_SHORT}",
@@ -88,6 +94,12 @@ cat >"${BUNDLE}/MANIFEST.json" <<EOF
   "packaged_at": "${PACKAGED_AT}",
   "firecracker_version": "${FIRECRACKER_VERSION}",
   "go_version": "${GO_VERSION}",
+  "firecracker_rootfs_size_mb": ${FIRECRACKER_ROOTFS_SIZE_MB},
+  "sandbox_image": {
+    "repository": "${SANDBOX_IMAGE_REPOSITORY}",
+    "tag": "${SANDBOX_IMAGE_TAG}",
+    "ref": "${SANDBOX_IMAGE_REF}"
+  },
   "entrypoints": {
     "install_runner_host": "scripts/install-runner-host.sh",
     "firecracker_ci_assets": "scripts/firecracker-ci-assets.sh",

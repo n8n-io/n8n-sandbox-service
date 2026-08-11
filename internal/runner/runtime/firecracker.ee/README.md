@@ -98,8 +98,8 @@ snapshot and template `rootfs.ext4` are built:
 - **CPU and memory** — baked into the snapshot (`vcpu_count`, `mem_size_mib` in
   the golden-snapshot build; see `e2e/infra/scripts/create-golden-snapshot.sh`).
 - **Disk** — capped by the ext4 image size of the golden template
-  (`rootfs.ext4`; see `FIRECRACKER_E2E_ROOTFS_SIZE_MB` in
-  `e2e/infra/scripts/setup-firecracker-e2e-vm.sh` for the e2e default). Each
+  (`rootfs.ext4`; default `FIRECRACKER_ROOTFS_SIZE_MB=2048`, see
+  `build-rootfs-template.sh` / golden-build `MANIFEST.json`). Each
   sandbox gets a sparse copy of that image at create time. There is no
   `SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB` equivalent; ENOSPC occurs when the
   guest fills that ext4 device.

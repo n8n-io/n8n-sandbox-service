@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Builds the Firecracker rootfs template (rootfs.ext4 + vmlinux) from Firecracker
-# CI assets. Used by e2e VM setup and golden-build bundle consumers (infra runners).
+# Builds the Firecracker rootfs template (rootfs.ext4 + vmlinux) from a sandbox
+# OCI image (same userspace as Dockerfile.sandbox) plus a Firecracker CI kernel.
+# Used by e2e VM setup, golden-build bundle consumers, and gallery bake.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -8,24 +9,30 @@ FIRECRACKER_CI_ASSETS_BIN="${FIRECRACKER_CI_ASSETS_BIN:-${SCRIPT_DIR}/firecracke
 
 FIRECRACKER_CI_VERSION="${FIRECRACKER_CI_VERSION:-v1.14}"
 FIRECRACKER_CI_VMLINUX="${FIRECRACKER_CI_VMLINUX:-}"
-FIRECRACKER_CI_ROOTFS_SQUASHFS="${FIRECRACKER_CI_ROOTFS_SQUASHFS:-}"
 TEMPLATE_DIR="${TEMPLATE_DIR:-/srv/firecracker/template}"
-FIRECRACKER_ROOTFS_SIZE_MB="${FIRECRACKER_ROOTFS_SIZE_MB:-${FIRECRACKER_E2E_ROOTFS_SIZE_MB:-1024}}"
+FIRECRACKER_ROOTFS_SIZE_MB="${FIRECRACKER_ROOTFS_SIZE_MB:-${FIRECRACKER_E2E_ROOTFS_SIZE_MB:-2048}}"
+SANDBOX_IMAGE="${SANDBOX_IMAGE:-}"
+SANDBOX_ROOTFS_TAR="${SANDBOX_ROOTFS_TAR:-}"
 
 usage() {
 	cat >&2 <<EOF
 Usage: $0 [options]
 
-Builds rootfs.ext4 and installs vmlinux into TEMPLATE_DIR from Firecracker CI assets.
+Builds rootfs.ext4 from a sandbox OCI image (or pre-exported filesystem tar) and
+installs vmlinux into TEMPLATE_DIR.
 
 Options:
-  --kernel PATH       Kernel image (FIRECRACKER_CI_VMLINUX)
-  --squashfs PATH     Ubuntu squashfs (FIRECRACKER_CI_ROOTFS_SQUASHFS)
-  --template-dir DIR  Output directory (TEMPLATE_DIR)
-  -h, --help          Show this help
+  --kernel PATH           Kernel image (FIRECRACKER_CI_VMLINUX)
+  --sandbox-image REF     OCI image ref to unpack (SANDBOX_IMAGE)
+  --sandbox-rootfs-tar P  Pre-exported rootfs tar (SANDBOX_ROOTFS_TAR)
+  --template-dir DIR      Output directory (TEMPLATE_DIR)
+  -h, --help              Show this help
 
-When --kernel / --squashfs are omitted, downloads the latest matching assets from
-the public Firecracker CI S3 bucket using FIRECRACKER_CI_VERSION.
+Provide exactly one of --sandbox-image or --sandbox-rootfs-tar (or the matching
+env vars). When --kernel is omitted, downloads the Firecracker CI vmlinux using
+FIRECRACKER_CI_VERSION.
+
+Unpack requires crane or docker on PATH when using --sandbox-image.
 EOF
 }
 
@@ -60,14 +67,70 @@ verify_rootfs_resolv_conf() {
 	fi
 }
 
+seed_resolv_conf() {
+	local rootfs_dir=$1
+	# Container images often ship resolv.conf as a symlink (Docker DNS / systemd);
+	# tee would follow it and write outside the staged tree.
+	maybe_sudo rm -f "$rootfs_dir/etc/resolv.conf"
+	printf 'nameserver 8.8.8.8\nnameserver 1.1.1.1\n' | maybe_sudo tee "$rootfs_dir/etc/resolv.conf" >/dev/null
+}
+
+ensure_sandbox_user() {
+	local rootfs_dir=$1
+	if ! maybe_sudo grep -q '^user:' "$rootfs_dir/etc/group"; then
+		echo 'user:x:1000:' | maybe_sudo tee -a "$rootfs_dir/etc/group" >/dev/null
+	fi
+	if ! maybe_sudo grep -q '^user:' "$rootfs_dir/etc/passwd"; then
+		echo 'user:x:1000:1000:Sandbox User:/home/user:/bin/sh' | maybe_sudo tee -a "$rootfs_dir/etc/passwd" >/dev/null
+	fi
+	maybe_sudo install -d -m 0755 -o 1000 -g 1000 "$rootfs_dir/home/user"
+	maybe_sudo install -d -m 1777 -o root -g root "$rootfs_dir/tmp"
+}
+
+unpack_sandbox_image() {
+	local image=$1 dest=$2
+	local cid
+
+	mkdir -p "$dest"
+	if command -v crane >/dev/null 2>&1; then
+		echo "==> Exporting ${image} with crane..."
+		crane export "$image" - | tar -x -C "$dest"
+		return 0
+	fi
+	if command -v docker >/dev/null 2>&1; then
+		echo "==> Exporting ${image} with docker..."
+		cid="$(docker create "$image")"
+		if ! docker export "$cid" | tar -x -C "$dest"; then
+			docker rm -f "$cid" >/dev/null 2>&1 || true
+			echo "ERROR: docker export failed for ${image}" >&2
+			exit 1
+		fi
+		docker rm -f "$cid" >/dev/null
+		return 0
+	fi
+	echo "ERROR: unpacking SANDBOX_IMAGE requires crane or docker on PATH" >&2
+	exit 1
+}
+
+unpack_sandbox_rootfs_tar() {
+	local tar_path=$1 dest=$2
+	mkdir -p "$dest"
+	echo "==> Extracting sandbox rootfs tar ${tar_path}..."
+	tar -x -C "$dest" -f "$tar_path"
+}
+
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 	--kernel)
 		FIRECRACKER_CI_VMLINUX="$2"
 		shift 2
 		;;
-	--squashfs)
-		FIRECRACKER_CI_ROOTFS_SQUASHFS="$2"
+	--sandbox-image)
+		SANDBOX_IMAGE="$2"
+		shift 2
+		;;
+	--sandbox-rootfs-tar)
+		SANDBOX_ROOTFS_TAR="$2"
 		shift 2
 		;;
 	--template-dir)
@@ -91,6 +154,16 @@ if [[ "$(uname -m)" != "x86_64" ]]; then
 	exit 1
 fi
 
+if [[ -n "$SANDBOX_IMAGE" && -n "$SANDBOX_ROOTFS_TAR" ]]; then
+	echo "ERROR: provide only one of SANDBOX_IMAGE / SANDBOX_ROOTFS_TAR" >&2
+	exit 1
+fi
+if [[ -z "$SANDBOX_IMAGE" && -z "$SANDBOX_ROOTFS_TAR" ]]; then
+	echo "ERROR: set SANDBOX_IMAGE or SANDBOX_ROOTFS_TAR (sandbox OCI userspace source)" >&2
+	usage
+	exit 1
+fi
+
 work="$(mktemp -d)"
 rootfs_dir="${work}/rootfs"
 ext4_path="${work}/rootfs.ext4"
@@ -99,7 +172,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [[ -z "$FIRECRACKER_CI_VMLINUX" || -z "$FIRECRACKER_CI_ROOTFS_SQUASHFS" ]]; then
+if [[ -z "$FIRECRACKER_CI_VMLINUX" ]]; then
 	ci_assets_dir="${work}/ci-assets"
 	if [[ ! -x "$FIRECRACKER_CI_ASSETS_BIN" ]]; then
 		echo "ERROR: missing firecracker-ci-assets script: ${FIRECRACKER_CI_ASSETS_BIN}" >&2
@@ -115,28 +188,32 @@ if [[ ! -f "$FIRECRACKER_CI_VMLINUX" ]]; then
 	echo "ERROR: kernel not found: $FIRECRACKER_CI_VMLINUX" >&2
 	exit 1
 fi
-if [[ ! -f "$FIRECRACKER_CI_ROOTFS_SQUASHFS" ]]; then
-	echo "ERROR: squashfs not found: $FIRECRACKER_CI_ROOTFS_SQUASHFS" >&2
-	exit 1
-fi
 
 require_elf_kernel "$FIRECRACKER_CI_VMLINUX"
 
 echo "==> Building Firecracker rootfs template in ${TEMPLATE_DIR}..."
-unsquashfs -f -d "$rootfs_dir" "$FIRECRACKER_CI_ROOTFS_SQUASHFS" >/dev/null
+if [[ -n "$SANDBOX_ROOTFS_TAR" ]]; then
+	if [[ ! -f "$SANDBOX_ROOTFS_TAR" ]]; then
+		echo "ERROR: sandbox rootfs tar not found: $SANDBOX_ROOTFS_TAR" >&2
+		exit 1
+	fi
+	unpack_sandbox_rootfs_tar "$SANDBOX_ROOTFS_TAR" "$rootfs_dir"
+else
+	unpack_sandbox_image "$SANDBOX_IMAGE" "$rootfs_dir"
+fi
+
 maybe_sudo chown -R root:root "$rootfs_dir"
-if ! maybe_sudo grep -q '^user:' "$rootfs_dir/etc/group"; then
-	echo 'user:x:1000:' | maybe_sudo tee -a "$rootfs_dir/etc/group" >/dev/null
+ensure_sandbox_user "$rootfs_dir"
+seed_resolv_conf "$rootfs_dir"
+
+used_mb="$(maybe_sudo du -sm "$rootfs_dir" | awk '{print $1}')"
+if [[ "$used_mb" -ge "$FIRECRACKER_ROOTFS_SIZE_MB" ]]; then
+	echo "ERROR: staged rootfs is ${used_mb}MiB but FIRECRACKER_ROOTFS_SIZE_MB=${FIRECRACKER_ROOTFS_SIZE_MB}" >&2
+	echo "Increase FIRECRACKER_ROOTFS_SIZE_MB (used + runtime headroom)." >&2
+	exit 1
 fi
-if ! maybe_sudo grep -q '^user:' "$rootfs_dir/etc/passwd"; then
-	echo 'user:x:1000:1000:Sandbox User:/home/user:/bin/sh' | maybe_sudo tee -a "$rootfs_dir/etc/passwd" >/dev/null
-fi
-maybe_sudo install -d -m 0755 -o 1000 -g 1000 "$rootfs_dir/home/user"
-maybe_sudo install -d -m 1777 -o root -g root "$rootfs_dir/tmp"
-# Ubuntu squashfs ships resolv.conf as a symlink; tee follows it and writes
-# outside the staged rootfs unless we replace it with a regular file first.
-maybe_sudo rm -f "$rootfs_dir/etc/resolv.conf"
-printf 'nameserver 8.8.8.8\nnameserver 1.1.1.1\n' | maybe_sudo tee "$rootfs_dir/etc/resolv.conf" >/dev/null
+echo "==> Staged rootfs size: ${used_mb}MiB (image ${FIRECRACKER_ROOTFS_SIZE_MB}MiB)"
+
 truncate -s "${FIRECRACKER_ROOTFS_SIZE_MB}M" "$ext4_path"
 maybe_sudo mkfs.ext4 -d "$rootfs_dir" -F "$ext4_path" >/dev/null
 verify_rootfs_resolv_conf "$ext4_path"

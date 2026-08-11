@@ -35,7 +35,7 @@ forwarding, and NAT/FORWARD rules for sandbox netns egress.
 Options:
   --skip-packages           Skip apt package install
   --skip-firecracker        Skip Firecracker/jailer install
-  --download-ci-assets      Download Firecracker CI kernel/squashfs into DEST_DIR
+  --download-ci-assets      Download Firecracker CI vmlinux into DEST_DIR
   -h, --help                Show this help
 
 Environment:
@@ -90,7 +90,6 @@ install_host_packages() {
 		jq \
 		make \
 		openssl \
-		squashfs-tools \
 		sudo \
 		tar \
 		util-linux

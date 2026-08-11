@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Download Firecracker CI kernel and Ubuntu squashfs from the public spec.ccfc.min bucket.
+# Download Firecracker CI kernel (vmlinux) from the public spec.ccfc.min bucket.
+# Guest userspace comes from the sandbox OCI image (see build-rootfs-template.sh).
 set -euo pipefail
 
 FIRECRACKER_CI_S3_BASE="${FIRECRACKER_CI_S3_BASE:-https://s3.amazonaws.com/spec.ccfc.min}"
@@ -12,8 +13,8 @@ Usage:
   firecracker-ci-assets.sh download [DEST_DIR]
   firecracker-ci-assets.sh verify [DEST_DIR]
 
-Download Firecracker CI kernel and rootfs squashfs into DEST_DIR and write
-manifest.env for rootfs template / snapshot builds.
+Download Firecracker CI vmlinux into DEST_DIR and write manifest.env for rootfs
+template / snapshot builds. Ubuntu squashfs is no longer used for guest userspace.
 EOF
 }
 
@@ -49,7 +50,7 @@ firecracker_ci_assets_require_elf_kernel() {
 
 firecracker_ci_assets_download() {
 	local dest_dir=${1:-$FIRECRACKER_CI_ASSETS_DIR}
-	local arch ci_version kernel_key ubuntu_key ubuntu_version manifest
+	local arch ci_version kernel_key manifest
 
 	if [[ "$(uname -m)" != "x86_64" ]]; then
 		echo "ERROR: Firecracker CI assets support amd64/x86_64 only" >&2
@@ -65,23 +66,16 @@ firecracker_ci_assets_download() {
 	kernel_key="$(firecracker_ci_assets_s3_latest_key \
 		"firecracker-ci/${ci_version}/${arch}/vmlinux-" \
 		"firecracker-ci/${ci_version}/${arch}/vmlinux-[0-9]+\\.[0-9]+\\.[0-9]+$")"
-	ubuntu_key="$(firecracker_ci_assets_s3_latest_key \
-		"firecracker-ci/${ci_version}/${arch}/ubuntu-" \
-		"firecracker-ci/${ci_version}/${arch}/ubuntu-[0-9]+\\.[0-9]+\\.squashfs$")"
-	ubuntu_version="$(basename "$ubuntu_key" .squashfs | grep -oE '[0-9]+\.[0-9]+')"
 
-	echo "==> Downloading Firecracker CI ${ci_version} assets into ${dest_dir}..."
+	echo "==> Downloading Firecracker CI ${ci_version} vmlinux into ${dest_dir}..."
 	curl -fsSL "${FIRECRACKER_CI_S3_BASE}/${kernel_key}" -o "${dest_dir}/vmlinux"
-	curl -fsSL "${FIRECRACKER_CI_S3_BASE}/${ubuntu_key}" -o "${dest_dir}/ubuntu-${ubuntu_version}.squashfs"
 	firecracker_ci_assets_require_elf_kernel "${dest_dir}/vmlinux"
-	chmod 0644 "${dest_dir}/vmlinux" "${dest_dir}/ubuntu-${ubuntu_version}.squashfs"
+	chmod 0644 "${dest_dir}/vmlinux"
 
 	manifest="$(firecracker_ci_assets_manifest_path "$dest_dir")"
 	cat >"$manifest" <<EOF
 FIRECRACKER_CI_VERSION=${ci_version}
 FIRECRACKER_CI_VMLINUX=${dest_dir}/vmlinux
-FIRECRACKER_CI_ROOTFS_SQUASHFS=${dest_dir}/ubuntu-${ubuntu_version}.squashfs
-FIRECRACKER_CI_UBUNTU_VERSION=${ubuntu_version}
 EOF
 	chmod 0644 "$manifest"
 	echo "==> Wrote ${manifest}"
@@ -89,7 +83,7 @@ EOF
 
 firecracker_ci_assets_verify() {
 	local dest_dir=${1:-$FIRECRACKER_CI_ASSETS_DIR}
-	local manifest vmlinux squashfs
+	local manifest vmlinux
 
 	manifest="$(firecracker_ci_assets_manifest_path "$dest_dir")"
 	if [[ ! -f "$manifest" ]]; then
@@ -101,13 +95,12 @@ firecracker_ci_assets_verify() {
 	source "$manifest"
 
 	vmlinux="${FIRECRACKER_CI_VMLINUX:-}"
-	squashfs="${FIRECRACKER_CI_ROOTFS_SQUASHFS:-}"
-	if [[ -z "$vmlinux" || -z "$squashfs" ]]; then
-		echo "ERROR: manifest is missing asset paths: $manifest" >&2
+	if [[ -z "$vmlinux" ]]; then
+		echo "ERROR: manifest is missing FIRECRACKER_CI_VMLINUX: $manifest" >&2
 		return 1
 	fi
-	if [[ ! -f "$vmlinux" || ! -f "$squashfs" ]]; then
-		echo "ERROR: Firecracker CI assets are incomplete under ${dest_dir}" >&2
+	if [[ ! -f "$vmlinux" ]]; then
+		echo "ERROR: Firecracker CI kernel missing under ${dest_dir}" >&2
 		return 1
 	fi
 

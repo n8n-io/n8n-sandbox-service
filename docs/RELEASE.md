@@ -73,7 +73,7 @@ Each service release (and staging prerelease) includes
 `firecracker-golden-build-{version}.tar.gz` on the GitHub Release. The tarball
 (schema v2) contains `install-runner-host.sh`, `firecracker-ci-assets.sh`,
 `build-rootfs-template.sh`, `configure-host-nat.sh`, `create-golden-snapshot.sh`, a pre-built `bin/sandbox-daemon`, and a
-`MANIFEST.json` with entrypoints and pinned versions.
+`MANIFEST.json` with entrypoints, the pinned sandbox image (`sandbox_image`), and versions.
 
 Package locally:
 
@@ -95,9 +95,8 @@ Deploy sequence (per environment):
    commit: compare `git_sha` in `MANIFEST.json` against the runner image's SHA
    tag (every image is tagged with its full commit SHA).
 3. Rebuild the golden snapshot on every runner VM using the bundle entrypoints
-   (`build-rootfs-template.sh`, `configure-host-nat.sh`, and
-   `create-golden-snapshot.sh`) or the full e2e bootstrap
-   (`setup-firecracker-e2e-vm.sh`).
+   (`create-golden-snapshot.sh`; rootfs template is baked into the gallery image)
+   or the full e2e bootstrap (`setup-firecracker-e2e-vm.sh`).
 4. Roll the `runner-firecracker` image to `{version}` — after step 3, never before.
 5. Roll the API and dind images to `{version}`.
 6. Gate the rollout on `SMOKE_ENV={env} ./scripts/smoke-sandbox.sh`.

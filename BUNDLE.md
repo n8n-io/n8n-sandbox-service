@@ -30,19 +30,19 @@ container image's full-SHA tag.
 This repository owns (ship in the tarball and/or release docs):
 
 - Generic runner host install (`install-runner-host.sh`)
-- Firecracker CI asset download (`firecracker-ci-assets.sh`)
-- Rootfs template build (`build-rootfs-template.sh`)
+- Firecracker CI kernel download (`firecracker-ci-assets.sh`)
+- Rootfs template build from sandbox OCI image (`build-rootfs-template.sh`)
 - Golden snapshot creation (`create-golden-snapshot.sh`)
 - Host NAT / forwarding (`configure-host-nat.sh`)
 - Pre-built `bin/sandbox-daemon` at package time
-- `MANIFEST.json` with entrypoints, versions, and checksums
+- `MANIFEST.json` with entrypoints, sandbox image pin, versions, and checksums
 - E2e full bootstrap (`setup-firecracker-e2e-vm.sh`, shipped for reference)
 
 Infra repo owns (not in the bundle):
 
 - Azure Compute Gallery image build and publish
 - Cloud-init, Key Vault, TLS, systemd units
-- Baked Firecracker CI assets at gallery publish time (avoid S3 on first boot)
+- Baking `vmlinux` + `rootfs.ext4` at gallery publish time (crane export of pinned sandbox image)
 - Runner subnet / NAT Gateway / NSG / NIC IP forwarding
 - Pulling `runner-firecracker` from ACR for n8n staging (or building gallery images)
 
@@ -68,8 +68,8 @@ firecracker-golden-build/
 | Key | Script | Purpose |
 | --- | --- | --- |
 | `install_runner_host` | `scripts/install-runner-host.sh` | apt packages, Firecracker/jailer, dirs, sysctl, NAT |
-| `firecracker_ci_assets` | `scripts/firecracker-ci-assets.sh` | Download/verify CI kernel + squashfs |
-| `build_rootfs_template` | `scripts/build-rootfs-template.sh` | Build `rootfs.ext4` + install `vmlinux` |
+| `firecracker_ci_assets` | `scripts/firecracker-ci-assets.sh` | Download/verify CI `vmlinux` |
+| `build_rootfs_template` | `scripts/build-rootfs-template.sh` | Build `rootfs.ext4` from sandbox image + install `vmlinux` |
 | `create_snapshot` | `scripts/create-golden-snapshot.sh` | Host-local golden snapshot |
 | `configure_host_nat` | `scripts/configure-host-nat.sh` | iptables MASQUERADE + FORWARD for `fc-veth+` |
 
@@ -89,11 +89,16 @@ baked `runner-firecracker` binary.
 
 Inputs (flags or env):
 
-- `FIRECRACKER_CI_VMLINUX`, `FIRECRACKER_CI_ROOTFS_SQUASHFS`
+- `FIRECRACKER_CI_VMLINUX` (or download via `firecracker-ci-assets.sh`)
+- Exactly one of `SANDBOX_IMAGE` (OCI ref; needs crane or docker) or `SANDBOX_ROOTFS_TAR`
 - `TEMPLATE_DIR` (writes `rootfs.ext4`, installs `vmlinux`)
-- `FIRECRACKER_ROOTFS_SIZE_MB` (default `1024`)
+- `FIRECRACKER_ROOTFS_SIZE_MB` (default `2048`)
 
-Must seed `/etc/resolv.conf` (remove squashfs symlink first; write nameservers).
+Must seed `/etc/resolv.conf` (remove image symlink first; write `8.8.8.8` / `1.1.1.1`).
+
+Guest userspace comes from the sandbox image pinned in `MANIFEST.json`
+(`sandbox_image.ref`, from `SANDBOX_VERSION`). Snapshot create still injects the
+service bundle's `bin/sandbox-daemon` as `/sandbox-daemon` (PID 1).
 
 ### `configure-host-nat.sh`
 
@@ -137,7 +142,8 @@ entrypoints or fail loudly when they are missing.
 Rollout order on Firecracker runners:
 
 1. Install/replace bundle on the host (or bake into a new gallery image).
-2. Ensure the rootfs template exists (`build_rootfs_template` / first-boot).
+2. Ensure the rootfs template exists (`build_rootfs_template` at gallery bake;
+   first-boot skips when `/srv/firecracker/template/rootfs.ext4` is present).
 3. Set `SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT` (and
    `SANDBOX_RUNNER_FIRECRACKER_DAEMON_BIN`) so the runner creates the host-local
    golden snapshot on first `Prepare` when mem/state are missing.

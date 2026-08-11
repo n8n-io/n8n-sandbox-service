@@ -115,7 +115,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-            curl e2fsprogs squashfs-tools
+            curl e2fsprogs
 
       - name: Golden-build bundle self-test
         run: bash scripts/test-firecracker-golden-build-bundle.sh
