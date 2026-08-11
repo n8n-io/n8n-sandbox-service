@@ -139,10 +139,14 @@ API_ENV=(
 	SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_SERVER_NAME="localhost"
 )
 if [[ "${E2E_IDLE_TTL_SUITE:-}" == "1" ]]; then
+	# Firecracker stop (pause + per-sandbox snapshot) is much slower than Docker
+	# stop, especially with a multi-GiB rootfs. delete_after must stay well above
+	# stop latency or the sweeper deletes the row before status ever becomes
+	# "stopped" (see sandbox-idle-ttl.spec.ts).
 	API_ENV+=(
 		SANDBOX_API_IDLE_STOP_AFTER=3s
-		SANDBOX_API_IDLE_DELETE_AFTER=10s
-		SANDBOX_API_IDLE_DELETE_SAFETY_BUFFER=2s
+		SANDBOX_API_IDLE_DELETE_AFTER=90s
+		SANDBOX_API_IDLE_DELETE_SAFETY_BUFFER=5s
 		SANDBOX_API_IDLE_SWEEP_INTERVAL=1s
 	)
 fi
