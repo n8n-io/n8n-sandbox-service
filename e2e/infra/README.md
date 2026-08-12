@@ -7,12 +7,11 @@ In CI, the Sysbox workflow uses `e2e/infra/scripts/provision-e2e-vm.sh` and
 on manual dispatch and on PRs labeled `e2e-sysbox`.
 
 The same Terraform VM shape is also reused by the Firecracker e2e lane via
-`e2e/infra/scripts/provision-firecracker-e2e-vm.sh`. That path uses a
-Firecracker-specific setup script, runs a nested KVM capability preflight,
-installs Firecracker/jailer, builds the kernel/rootfs template from
-`Dockerfile.sandbox` plus Firecracker CI `vmlinux`, and creates the snapshot on
-the VM. The Firecracker workflow runs on manual dispatch and on PRs labeled
-`e2e-firecracker`.
+`e2e/infra/scripts/provision-firecracker-e2e-vm.sh`. That path runs
+`scripts/firecracker.ee/setup-firecracker-e2e-vm.sh` on the VM (nested KVM
+preflight, Firecracker/jailer, rootfs from `Dockerfile.sandbox` + CI `vmlinux`,
+golden snapshot). The Firecracker workflow runs on manual dispatch and on PRs
+labeled `e2e-firecracker`.
 
 ## Prerequisites
 

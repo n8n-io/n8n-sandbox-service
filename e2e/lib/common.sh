@@ -225,7 +225,7 @@ e2e_setup_firecracker_host() {
 	echo "==> [${label}] Running Firecracker VM setup..."
 	# shellcheck disable=SC2086
 	e2e_ssh_firecracker_host "$ssh_key" "$admin" "$ssh_host" "$jump_host" \
-		"${remote_env} bash ~/project/e2e/infra/scripts/setup-firecracker-e2e-vm.sh"
+		"${remote_env} bash ~/project/scripts/firecracker.ee/setup-firecracker-e2e-vm.sh"
 }
 
 # SSH to the peer VM over its private IP via the control VM jump host.

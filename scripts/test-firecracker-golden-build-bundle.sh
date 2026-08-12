@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BUILD_SCRIPT="${ROOT}/e2e/infra/scripts/build-rootfs-template.sh"
+BUILD_SCRIPT="${ROOT}/scripts/firecracker.ee/build-rootfs-template.sh"
 FIRECRACKER_CI_VERSION="${FIRECRACKER_CI_VERSION:-v1.14}"
 SANDBOX_IMAGE="${SANDBOX_IMAGE:-n8n-sandbox:golden-build-self-test}"
 FIRECRACKER_ROOTFS_SIZE_MB="${FIRECRACKER_ROOTFS_SIZE_MB:-2048}"
@@ -61,6 +61,12 @@ fi
 workspace="$(debugfs -R 'stat /home/user/workspace/package.json' "${template_dir}/rootfs.ext4" 2>/dev/null || true)"
 if [[ -z "$workspace" ]] || grep -qi 'No such file' <<<"$workspace"; then
 	echo "ERROR: rootfs.ext4 missing sandbox workspace package.json" >&2
+	printf '%s\n' "$workspace" >&2
+	exit 1
+fi
+# debugfs prints "User:  1000   Group:  1000" (spacing varies).
+if ! grep -Eq 'User:[[:space:]]*1000[[:space:]]+Group:[[:space:]]*1000' <<<"$workspace"; then
+	echo "ERROR: /home/user/workspace/package.json must be owned by 1000:1000 (daemon drops privileges)" >&2
 	printf '%s\n' "$workspace" >&2
 	exit 1
 fi

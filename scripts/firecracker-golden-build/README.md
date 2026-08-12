@@ -70,7 +70,8 @@ cloud-init. This bundle owns everything that must stay in sync with the
 sandbox-service release.
 
 For full e2e VM bootstrap (builds daemon from source), use
-`setup-firecracker-e2e-vm.sh` from a checkout of this repository.
+`scripts/firecracker.ee/setup-firecracker-e2e-vm.sh` from a checkout of this
+repository.
 
 See the Firecracker runner README in this repository at
 `internal/runner/runtime/firecracker.ee/README.md` for runtime configuration on

@@ -84,6 +84,9 @@ ensure_sandbox_user() {
 		echo 'user:x:1000:1000:Sandbox User:/home/user:/bin/sh' | maybe_sudo tee -a "$rootfs_dir/etc/passwd" >/dev/null
 	fi
 	maybe_sudo install -d -m 0755 -o 1000 -g 1000 "$rootfs_dir/home/user"
+	# Caller may chown the staged tree to root for a consistent rootfs; restore the
+	# sandbox home so daemon (drops to uid 1000) can write workspace/skills/etc.
+	maybe_sudo chown -R 1000:1000 "$rootfs_dir/home/user"
 	maybe_sudo install -d -m 1777 -o root -g root "$rootfs_dir/tmp"
 }
 
@@ -206,6 +209,8 @@ else
 	unpack_sandbox_image "$SANDBOX_IMAGE" "$rootfs_dir"
 fi
 
+# Keep non-home tree as root. ensure_sandbox_user restores /home/user to 1000:1000
+# afterward — the guest daemon drops to uid 1000 and must be able to write workspace.
 maybe_sudo chown -R root:root "$rootfs_dir"
 ensure_sandbox_user "$rootfs_dir"
 seed_resolv_conf "$rootfs_dir"

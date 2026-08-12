@@ -27,7 +27,8 @@ container image's full-SHA tag.
 
 ## Ownership split
 
-This repository owns (ship in the tarball and/or release docs):
+This repository owns (ship in the tarball and/or release docs; sources under
+`scripts/firecracker.ee/`):
 
 - Generic runner host install (`install-runner-host.sh`)
 - Firecracker CI kernel download (`firecracker-ci-assets.sh`)
@@ -98,7 +99,9 @@ Must seed `/etc/resolv.conf` (remove image symlink first; write `8.8.8.8` / `1.1
 
 Guest userspace comes from the sandbox image pinned in `MANIFEST.json`
 (`sandbox_image.ref`, from `SANDBOX_VERSION`). Snapshot create still injects the
-service bundle's `bin/sandbox-daemon` as `/sandbox-daemon` (PID 1).
+service bundle's `bin/sandbox-daemon` as `/sandbox-daemon` (PID 1). After the
+staged tree is normalized to `root:root`, `/home/user` is restored to `1000:1000`
+so the daemon (which drops privileges) can write the workspace.
 
 ### `configure-host-nat.sh`
 

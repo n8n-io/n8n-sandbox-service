@@ -141,7 +141,8 @@ ensure_docker_for_sandbox_image() {
 # Builds the local kernel/rootfs template from the sandbox OCI image + CI vmlinux.
 build_template_assets() {
 	local project_root
-	project_root="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+	# Repo layout: scripts/firecracker.ee → repo root (Dockerfile.sandbox).
+	project_root="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 	sudo rm -rf /srv/firecracker/snapshots
 	sudo mkdir -p /srv/firecracker/snapshots
@@ -241,7 +242,7 @@ echo "==> Creating Firecracker e2e snapshot on this VM..."
 sudo env \
 	MEM_MIB="$FIRECRACKER_E2E_SNAPSHOT_MEM_MIB" \
 	VCPUS="$FIRECRACKER_E2E_SNAPSHOT_VCPUS" \
-	bash e2e/infra/scripts/create-golden-snapshot.sh \
+	bash "${SCRIPT_DIR}/create-golden-snapshot.sh" \
 	--kernel /srv/firecracker/template/vmlinux \
 	--ext4 /srv/firecracker/template/rootfs.ext4 \
 	--daemon-bin ./bin/sandbox-daemon \

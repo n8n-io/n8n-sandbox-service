@@ -96,7 +96,7 @@ variables (unlike the Docker/sysbox backend). They are fixed when the golden
 snapshot and template `rootfs.ext4` are built:
 
 - **CPU and memory** — baked into the snapshot (`vcpu_count`, `mem_size_mib` in
-  the golden-snapshot build; see `e2e/infra/scripts/create-golden-snapshot.sh`).
+  the golden-snapshot build; see `scripts/firecracker.ee/create-golden-snapshot.sh`).
 - **Disk** — capped by the ext4 image size of the golden template
   (`rootfs.ext4`; default `FIRECRACKER_ROOTFS_SIZE_MB=2048`, see
   `build-rootfs-template.sh` / golden-build `MANIFEST.json`). Each
