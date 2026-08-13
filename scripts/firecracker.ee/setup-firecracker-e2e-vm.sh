@@ -162,12 +162,14 @@ build_template_assets() {
 
 	# Export via sudo: the e2e user cannot talk to docker.sock, but
 	# build-rootfs-template.sh only needs a filesystem tar (gallery bake path).
-	local cid rootfs_tar
-	rootfs_tar="/tmp/sandbox-rootfs-$$.tar"
+	local cid="" rootfs_tar="/tmp/sandbox-rootfs-$$.tar"
+	# EXIT (not RETURN): set -e aborts the script without running RETURN traps.
+	trap 'if [[ -n "${cid:-}" ]]; then sudo docker rm -f "$cid" >/dev/null 2>&1 || true; fi; sudo rm -f "$rootfs_tar"' EXIT
 	cid="$(sudo docker create "$SANDBOX_IMAGE")"
 	# Write as root into a new path (avoid mktemp + docker -o ownership quirks).
 	sudo docker export "$cid" | sudo tee "$rootfs_tar" >/dev/null
 	sudo docker rm -f "$cid" >/dev/null
+	cid=""
 	sudo chmod 0644 "$rootfs_tar"
 
 	FIRECRACKER_CI_VERSION="$FIRECRACKER_CI_VERSION" \
@@ -177,6 +179,7 @@ build_template_assets() {
 		TEMPLATE_DIR="/srv/firecracker/template" \
 		bash "${SCRIPT_DIR}/build-rootfs-template.sh"
 	sudo rm -f "$rootfs_tar"
+	trap - EXIT
 }
 
 # Writes a manifest describing exactly which host and asset inputs produced the

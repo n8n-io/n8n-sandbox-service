@@ -11,6 +11,10 @@ FIRECRACKER_CI_VERSION="${FIRECRACKER_CI_VERSION:-v1.14}"
 FIRECRACKER_CI_VMLINUX="${FIRECRACKER_CI_VMLINUX:-}"
 TEMPLATE_DIR="${TEMPLATE_DIR:-/srv/firecracker/template}"
 FIRECRACKER_ROOTFS_SIZE_MB="${FIRECRACKER_ROOTFS_SIZE_MB:-${FIRECRACKER_E2E_ROOTFS_SIZE_MB:-2048}}"
+# Guest uid 1000 cannot use mkfs reserved blocks. Format with -m 0 and require
+# this much free space after journal/inodes for /tmp, workspace, and the
+# snapshot-time sandbox-daemon install.
+ROOTFS_MIN_FREE_MB=128
 SANDBOX_IMAGE="${SANDBOX_IMAGE:-}"
 SANDBOX_ROOTFS_TAR="${SANDBOX_ROOTFS_TAR:-}"
 
@@ -126,6 +130,18 @@ unpack_sandbox_rootfs_tar() {
 	tar -x -C "$dest" -f "$tar_path"
 }
 
+ext4_free_mb() {
+	local info block_size free_blocks
+	info="$(maybe_sudo tune2fs -l "$1")"
+	block_size="$(awk -F: '/^Block size:/ {gsub(/[[:space:]]/, "", $2); print $2}' <<<"$info")"
+	free_blocks="$(awk -F: '/^Free blocks:/ {gsub(/[[:space:]]/, "", $2); print $2}' <<<"$info")"
+	if [[ -z "$block_size" || -z "$free_blocks" ]]; then
+		echo "ERROR: could not read ext4 free space from $1" >&2
+		exit 1
+	fi
+	echo $((free_blocks * block_size / 1024 / 1024))
+}
+
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 	--kernel)
@@ -216,15 +232,24 @@ ensure_sandbox_user "$rootfs_dir"
 seed_resolv_conf "$rootfs_dir"
 
 used_mb="$(maybe_sudo du -sm "$rootfs_dir" | awk '{print $1}')"
-if [[ "$used_mb" -ge "$FIRECRACKER_ROOTFS_SIZE_MB" ]]; then
-	echo "ERROR: staged rootfs is ${used_mb}MiB but FIRECRACKER_ROOTFS_SIZE_MB=${FIRECRACKER_ROOTFS_SIZE_MB}" >&2
-	echo "Increase FIRECRACKER_ROOTFS_SIZE_MB (used + runtime headroom)." >&2
+if [[ $((used_mb + ROOTFS_MIN_FREE_MB)) -gt "$FIRECRACKER_ROOTFS_SIZE_MB" ]]; then
+	echo "ERROR: staged rootfs is ${used_mb}MiB but FIRECRACKER_ROOTFS_SIZE_MB=${FIRECRACKER_ROOTFS_SIZE_MB} (need ${ROOTFS_MIN_FREE_MB}MiB free after ext4 metadata)" >&2
+	echo "Increase FIRECRACKER_ROOTFS_SIZE_MB." >&2
 	exit 1
 fi
 echo "==> Staged rootfs size: ${used_mb}MiB (image ${FIRECRACKER_ROOTFS_SIZE_MB}MiB)"
 
 truncate -s "${FIRECRACKER_ROOTFS_SIZE_MB}M" "$ext4_path"
-maybe_sudo mkfs.ext4 -d "$rootfs_dir" -F "$ext4_path" >/dev/null
+# -m 0: this image is a single-user sandbox; default 5% reserved blocks are
+# invisible to uid 1000 and make a "just fits" tree ENOSPC at guest boot.
+maybe_sudo mkfs.ext4 -m 0 -d "$rootfs_dir" -F "$ext4_path" >/dev/null
+free_mb="$(ext4_free_mb "$ext4_path")"
+if [[ "$free_mb" -lt "$ROOTFS_MIN_FREE_MB" ]]; then
+	echo "ERROR: rootfs.ext4 has ${free_mb}MiB free after mkfs (need ${ROOTFS_MIN_FREE_MB}MiB); staged ${used_mb}MiB into ${FIRECRACKER_ROOTFS_SIZE_MB}MiB" >&2
+	echo "Increase FIRECRACKER_ROOTFS_SIZE_MB." >&2
+	exit 1
+fi
+echo "==> rootfs.ext4 free space: ${free_mb}MiB"
 verify_rootfs_resolv_conf "$ext4_path"
 
 maybe_sudo rm -rf "$TEMPLATE_DIR"

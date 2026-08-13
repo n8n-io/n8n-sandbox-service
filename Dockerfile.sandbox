@@ -19,6 +19,9 @@ FROM debian:bookworm-slim
 
 ARG TARGETARCH
 ARG NODE_VERSION=22.16.0
+# From https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt
+ARG NODE_X64_SHA256=f4cb75bb036f0d0eddf6b79d9596df1aaab9ddccd6a20bf489be5abe9467e84e
+ARG NODE_ARM64_SHA256=eab80cb88f8fda1e65f5e8d0420c9809bdb320b03fd34976ab7161b6e703b910
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
@@ -38,12 +41,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
          esac; \
        fi \
     && case "$arch" in \
-         amd64) node_arch=x64 ;; \
-         arm64) node_arch=arm64 ;; \
+         amd64) node_arch=x64; node_sha="${NODE_X64_SHA256}" ;; \
+         arm64) node_arch=arm64; node_sha="${NODE_ARM64_SHA256}" ;; \
          *) echo "unsupported TARGETARCH=${arch}" >&2; exit 1 ;; \
        esac \
     && curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${node_arch}.tar.xz" \
-         | tar -xJ -C /usr/local --strip-components=1 \
+         -o /tmp/node.tar.xz \
+    && echo "${node_sha}  /tmp/node.tar.xz" | sha256sum -c - \
+    && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 \
+    && rm /tmp/node.tar.xz \
     && node -v && npm -v \
     && npm install -g typescript \
     && apt-get purge -y xz-utils \

@@ -39,7 +39,11 @@ asset alongside each service release (`service/v{version}`).
    `/srv/firecracker/ci-assets`.
 
 3. Build the rootfs template from the pinned sandbox image (see `sandbox_image.ref`
-   in `MANIFEST.json`) and baked/downloaded `vmlinux`:
+   in `MANIFEST.json`) and baked/downloaded `vmlinux`. Unpacking `SANDBOX_IMAGE`
+   requires `crane` or `docker` on PATH (`install-runner-host.sh` does not
+   install either). Production gallery bake exports the sandbox image with crane
+   on the operator machine and passes `SANDBOX_ROOTFS_TAR` so runner VMs never
+   need Docker.
 
    ```bash
    source /srv/firecracker/ci-assets/manifest.env
@@ -51,9 +55,6 @@ asset alongside each service release (`service/v{version}`).
      TEMPLATE_DIR=/srv/firecracker/template \
      ./scripts/build-rootfs-template.sh
    ```
-
-   Production gallery bake exports the sandbox image with crane on the operator
-   machine and passes `SANDBOX_ROOTFS_TAR` so runner VMs never need Docker.
 
 4. Create the golden snapshot (injects this bundle's `bin/sandbox-daemon` as PID 1):
 

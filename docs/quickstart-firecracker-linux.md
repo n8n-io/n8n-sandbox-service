@@ -8,6 +8,9 @@ Full tarball contract: [BUNDLE.md](../BUNDLE.md).
 ## Requirements
 
 - Ubuntu 22.04 or 24.04, amd64, `/dev/kvm`, root for the runner
+- `crane` or `docker` on PATH — section 1 unpacks the pinned sandbox OCI image
+  with whichever is present. Later sections use Docker to run the API and runner.
+  `install-runner-host.sh` does not install either.
 - Outbound HTTPS (GitHub Releases, Docker Hub, Firecracker CI on S3)
 - Go 1.25+ only if building the runner from source instead of pulling the Docker image
 

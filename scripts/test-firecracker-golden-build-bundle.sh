@@ -73,7 +73,8 @@ fi
 
 echo "==> Packaging golden-build bundle..."
 bundle_tar="${work}/bundle.tar.gz"
-bash "${ROOT}/scripts/package-firecracker-golden-build.sh" \
+FIRECRACKER_ROOTFS_SIZE_MB="$FIRECRACKER_ROOTFS_SIZE_MB" \
+	bash "${ROOT}/scripts/package-firecracker-golden-build.sh" \
 	--version "ci-self-test" \
 	--output "$bundle_tar"
 
@@ -86,12 +87,24 @@ if [[ "$(jq -r .schema_version "$manifest")" != "2" ]]; then
 	echo "ERROR: expected MANIFEST.json schema_version 2" >&2
 	exit 1
 fi
-if [[ "$(jq -r .sandbox_image.ref "$manifest")" == "null" || -z "$(jq -r .sandbox_image.ref "$manifest")" ]]; then
+sandbox_ref="$(jq -r .sandbox_image.ref "$manifest")"
+sandbox_repo="$(jq -r .sandbox_image.repository "$manifest")"
+sandbox_tag="$(jq -r .sandbox_image.tag "$manifest")"
+if [[ "$sandbox_ref" == "null" || -z "$sandbox_ref" ]]; then
 	echo "ERROR: MANIFEST.json missing sandbox_image.ref" >&2
 	exit 1
 fi
-if [[ "$(jq -r .firecracker_rootfs_size_mb "$manifest")" != "2048" ]]; then
-	echo "ERROR: expected firecracker_rootfs_size_mb 2048" >&2
+if [[ -n "$sandbox_tag" ]]; then
+	if [[ "$sandbox_ref" != "${sandbox_repo}:${sandbox_tag}" ]]; then
+		echo "ERROR: sandbox_image.ref does not match repository:tag (${sandbox_repo}:${sandbox_tag} vs ${sandbox_ref})" >&2
+		exit 1
+	fi
+elif [[ "$sandbox_ref" != "$sandbox_repo" && "$sandbox_ref" != "${sandbox_repo}@"* ]]; then
+	echo "ERROR: sandbox_image.ref does not match repository (${sandbox_repo} vs ${sandbox_ref})" >&2
+	exit 1
+fi
+if [[ "$(jq -r .firecracker_rootfs_size_mb "$manifest")" != "$FIRECRACKER_ROOTFS_SIZE_MB" ]]; then
+	echo "ERROR: expected firecracker_rootfs_size_mb ${FIRECRACKER_ROOTFS_SIZE_MB}" >&2
 	exit 1
 fi
 

@@ -17,6 +17,7 @@ FROM debian:bookworm-slim AS firecracker-binaries
 
 ARG TARGETARCH
 ARG FIRECRACKER_VERSION=v1.13.1
+# From https://github.com/firecracker-microvm/firecracker/releases/download/${FIRECRACKER_VERSION}/firecracker-${FIRECRACKER_VERSION}-x86_64.tgz.sha256.txt
 ARG FIRECRACKER_X86_64_SHA256=59450b9171ff2ebdf2f9a25be3a248a7ba79fb6371aec51a9d6d8eefca7b4faf
 
 RUN apt-get update \

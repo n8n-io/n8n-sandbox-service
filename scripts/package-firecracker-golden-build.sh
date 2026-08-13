@@ -52,6 +52,17 @@ SANDBOX_VERSION="$(tr -d '[:space:]' <"${ROOT}/SANDBOX_VERSION")"
 SANDBOX_IMAGE_REPOSITORY="${SANDBOX_IMAGE_REPOSITORY:-n8nio/n8n-sandbox-service-sandbox}"
 SANDBOX_IMAGE_TAG="${SANDBOX_IMAGE_TAG:-${SANDBOX_VERSION}}"
 SANDBOX_IMAGE_REF="${SANDBOX_IMAGE_REF:-${SANDBOX_IMAGE_REPOSITORY}:${SANDBOX_IMAGE_TAG}}"
+# Manifest repository/tag must describe the same image as ref (the pin consumers pull).
+if [[ "$SANDBOX_IMAGE_REF" == *@* ]]; then
+	SANDBOX_IMAGE_REPOSITORY="${SANDBOX_IMAGE_REF%@*}"
+	SANDBOX_IMAGE_TAG=""
+elif [[ "${SANDBOX_IMAGE_REF##*/}" == *:* ]]; then
+	SANDBOX_IMAGE_REPOSITORY="${SANDBOX_IMAGE_REF%:*}"
+	SANDBOX_IMAGE_TAG="${SANDBOX_IMAGE_REF##*:}"
+else
+	SANDBOX_IMAGE_REPOSITORY="$SANDBOX_IMAGE_REF"
+	SANDBOX_IMAGE_TAG=""
+fi
 GIT_SHA="$(git -C "$ROOT" rev-parse HEAD)"
 GIT_SHA_SHORT="$(git -C "$ROOT" rev-parse --short HEAD)"
 GIT_REF="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
@@ -95,7 +106,7 @@ cat >"${BUNDLE}/MANIFEST.json" <<EOF
   "packaged_at": "${PACKAGED_AT}",
   "firecracker_version": "${FIRECRACKER_VERSION}",
   "go_version": "${GO_VERSION}",
-  "firecracker_rootfs_size_mb": ${FIRECRACKER_ROOTFS_SIZE_MB},
+  "firecracker_rootfs_size_mb": "${FIRECRACKER_ROOTFS_SIZE_MB}",
   "sandbox_image": {
     "repository": "${SANDBOX_IMAGE_REPOSITORY}",
     "tag": "${SANDBOX_IMAGE_TAG}",

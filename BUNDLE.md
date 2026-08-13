@@ -93,7 +93,7 @@ Inputs (flags or env):
 - `FIRECRACKER_CI_VMLINUX` (or download via `firecracker-ci-assets.sh`)
 - Exactly one of `SANDBOX_IMAGE` (OCI ref; needs crane or docker) or `SANDBOX_ROOTFS_TAR`
 - `TEMPLATE_DIR` (writes `rootfs.ext4`, installs `vmlinux`)
-- `FIRECRACKER_ROOTFS_SIZE_MB` (default `2048`)
+- `FIRECRACKER_ROOTFS_SIZE_MB` (default `2048`; must leave ≥128MiB free after ext4 metadata for guest writes)
 
 Must seed `/etc/resolv.conf` (remove image symlink first; write `8.8.8.8` / `1.1.1.1`).
 
