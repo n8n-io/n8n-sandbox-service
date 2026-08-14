@@ -62,9 +62,6 @@ resolve_firecracker_tarball_sha256() {
 		return 0
 	fi
 	case "$FIRECRACKER_VERSION" in
-	v1.13.1)
-		FIRECRACKER_TARBALL_SHA256="59450b9171ff2ebdf2f9a25be3a248a7ba79fb6371aec51a9d6d8eefca7b4faf"
-		;;
 	v1.14.1)
 		FIRECRACKER_TARBALL_SHA256="ea66dc1fbdb2473bbb95a1e822ae7884cd575a891a8f801258723258d36b7c7c"
 		;;
