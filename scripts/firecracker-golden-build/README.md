@@ -4,11 +4,11 @@ This bundle ships the scripts used to build the Firecracker rootfs template and
 golden snapshot on a sandbox runner VM. It is published as a GitHub Release
 asset alongside each service release (`service/v{version}`).
 
-## Contents (schema v2)
+## Contents (schema v3)
 
 | Path | Purpose |
 |------|---------|
-| `MANIFEST.json` | Service/sandbox versions, sandbox image pin, entrypoints, checksums |
+| `MANIFEST.json` | Release version, sandbox image pin, entrypoints, checksums |
 | `scripts/install-runner-host.sh` | Generic host prerequisites (packages, Firecracker, NAT, dirs) |
 | `scripts/firecracker-ci-assets.sh` | Download/verify Firecracker CI `vmlinux` from S3 |
 | `scripts/build-rootfs-template.sh` | Build `rootfs.ext4` from sandbox OCI image + install `vmlinux` |

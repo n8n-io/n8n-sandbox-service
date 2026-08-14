@@ -5,7 +5,7 @@ on:
     inputs:
       version:
         description: >-
-          Release version label (default: {SERVICE_VERSION}-staging.{short_sha}).
+          Release version label (default: {VERSION}-staging.{short_sha}).
           Becomes tag service/v{version}.
         required: false
         type: string
@@ -33,7 +33,7 @@ jobs:
       - name: Resolve version
         id: meta
         run: |
-          BASE="$(tr -d '[:space:]' < SERVICE_VERSION)"
+          BASE="$(tr -d '[:space:]' < VERSION)"
           SHA="$(git rev-parse --short HEAD)"
           FULL_SHA="$(git rev-parse HEAD)"
           VERSION="${{ inputs.version }}"
@@ -53,11 +53,17 @@ jobs:
         if: inputs.run_tests
         uses: ./.github/actions/sandbox-service-test
 
+      # Staging pins the ACR sandbox candidate, not Docker Hub: the guest userspace
+      # must match the images this run publishes.
       - name: Package Firecracker golden build tarball
+        env:
+          ACR_NAME: ${{ secrets.AZURE_ACR_NAME }}
+          VERSION: ${{ steps.meta.outputs.version }}
         run: |
           chmod +x scripts/package-firecracker-golden-build.sh
-          ./scripts/package-firecracker-golden-build.sh \
-            --version "${{ steps.meta.outputs.version }}" \
+          SANDBOX_IMAGE_REF="${ACR_NAME}.azurecr.io/n8n-sandbox-service-sandbox:${VERSION}" \
+            ./scripts/package-firecracker-golden-build.sh \
+            --version "${VERSION}" \
             --output "${{ steps.meta.outputs.tarball }}"
 
       - name: Azure Service Principal login (OIDC)
@@ -97,6 +103,7 @@ jobs:
           build_push Dockerfile.api n8n-sandbox-service-api
           build_push Dockerfile.runner-dind n8n-sandbox-service-runner-dind
           build_push Dockerfile.ee.runner-firecracker n8n-sandbox-service-runner-firecracker linux/amd64
+          build_push Dockerfile.sandbox n8n-sandbox-service-sandbox
 
       - name: Create GitHub prerelease
         env:
@@ -119,8 +126,10 @@ jobs:
           - \`${REGISTRY}/n8n-sandbox-service-api:${VERSION}\`
           - \`${REGISTRY}/n8n-sandbox-service-runner-dind:${VERSION}\`
           - \`${REGISTRY}/n8n-sandbox-service-runner-firecracker:${VERSION}\`
+          - \`${REGISTRY}/n8n-sandbox-service-sandbox:${VERSION}\`
 
-          Each image is also tagged with the full commit SHA.
+          Each image is also tagged with the full commit SHA. The golden-build bundle
+          pins the sandbox image above, so deploy these candidates together.
 
           ### Firecracker golden build
 

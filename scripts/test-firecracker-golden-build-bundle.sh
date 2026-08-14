@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CI self-test for the Firecracker golden-build bundle v2 scripts.
+# CI self-test for the Firecracker golden-build bundle v3 scripts.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -83,8 +83,13 @@ mkdir -p "$(dirname "$bundle_dir")"
 tar -C "${work}/unpacked" -xzf "$bundle_tar"
 
 manifest="${bundle_dir}/MANIFEST.json"
-if [[ "$(jq -r .schema_version "$manifest")" != "2" ]]; then
-	echo "ERROR: expected MANIFEST.json schema_version 2" >&2
+if [[ "$(jq -r .schema_version "$manifest")" != "3" ]]; then
+	echo "ERROR: expected MANIFEST.json schema_version 3" >&2
+	exit 1
+fi
+release_version="$(tr -d '[:space:]' <"${ROOT}/VERSION")"
+if [[ "$(jq -r .version "$manifest")" != "$release_version" ]]; then
+	echo "ERROR: MANIFEST.json version does not match VERSION (${release_version})" >&2
 	exit 1
 fi
 sandbox_ref="$(jq -r .sandbox_image.ref "$manifest")"
@@ -95,6 +100,12 @@ if [[ "$sandbox_ref" == "null" || -z "$sandbox_ref" ]]; then
 	exit 1
 fi
 if [[ -n "$sandbox_tag" ]]; then
+	# Default pin: one version ties the images together, so the sandbox tag is the
+	# release version. Callers that pin another registry or a digest override the ref.
+	if [[ "$sandbox_tag" != "$release_version" ]]; then
+		echo "ERROR: sandbox_image.tag (${sandbox_tag}) must equal the release version (${release_version})" >&2
+		exit 1
+	fi
 	if [[ "$sandbox_ref" != "${sandbox_repo}:${sandbox_tag}" ]]; then
 		echo "ERROR: sandbox_image.ref does not match repository:tag (${sandbox_repo}:${sandbox_tag} vs ${sandbox_ref})" >&2
 		exit 1
@@ -122,4 +133,4 @@ for path in \
 	fi
 done
 
-echo "OK    golden-build bundle v2 self-test passed"
+echo "OK    golden-build bundle v3 self-test passed"

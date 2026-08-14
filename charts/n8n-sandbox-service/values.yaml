@@ -95,7 +95,8 @@ api:
 
   image:
     repository: n8nio/n8n-sandbox-service-api
-    tag: latest
+    # Defaults to the chart's appVersion, the version all images share.
+    tag: ""
     pullPolicy: IfNotPresent
 
   service:
@@ -153,12 +154,14 @@ sysboxRunner:
 
   image:
     repository: n8nio/n8n-sandbox-service-runner-dind
-    tag: latest
+    # Defaults to the chart's appVersion, the version all images share.
+    tag: ""
     pullPolicy: IfNotPresent
 
   sandboxImage:
     repository: n8nio/n8n-sandbox-service-sandbox
-    tag: latest
+    # Defaults to the chart's appVersion, the version all images share.
+    tag: ""
     pullPolicy: IfNotPresent
 
   dockerConfig:

@@ -24,7 +24,7 @@ jobs:
       - name: Read version
         id: version
         run: |
-          VERSION=$(cat SERVICE_VERSION)
+          VERSION=$(cat VERSION)
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Run tests
@@ -67,6 +67,18 @@ jobs:
           dockerhub-token: ${{ secrets.DOCKERHUB_TOKEN }}
           ghcr-token: ${{ github.token }}
 
+      - name: Publish sandbox image
+        uses: ./.github/actions/docker-publish
+        with:
+          image: n8nio/n8n-sandbox-service-sandbox
+          ghcr-image: ghcr.io/n8n-io/n8n-sandbox-service-sandbox
+          dockerfile: Dockerfile.sandbox
+          version: ${{ steps.version.outputs.version }}
+          extra-tags: stable
+          dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
+          dockerhub-token: ${{ secrets.DOCKERHUB_TOKEN }}
+          ghcr-token: ${{ github.token }}
+
       - name: Generate GitHub App Token
         id: generate-token
         uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
@@ -103,8 +115,11 @@ jobs:
           - \`n8nio/n8n-sandbox-service-api:${VERSION}\`
           - \`n8nio/n8n-sandbox-service-runner-dind:${VERSION}\`
           - \`n8nio/n8n-sandbox-service-runner-firecracker:${VERSION}\` (linux/amd64 only)
+          - \`n8nio/n8n-sandbox-service-sandbox:${VERSION}\`
 
-          Platforms: API and runner-dind — \`linux/amd64\`, \`linux/arm64\`. Firecracker runner — \`linux/amd64\` only.
+          All four images share this version and are only supported together.
+
+          Platforms: API, runner-dind, and sandbox — \`linux/amd64\`, \`linux/arm64\`. Firecracker runner — \`linux/amd64\` only.
 
           ## Firecracker golden build
 
@@ -118,13 +133,13 @@ jobs:
           GH_TOKEN: ${{ steps.generate-token.outputs.token }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          printf '%s' "${VERSION}" > SERVICE_VERSION
+          bash scripts/set-release-version.sh "${VERSION}"
           npm ci --prefix .github/scripts
           node .github/scripts/create-signed-commit-pr.mjs \
             --base main \
             --branch "service/post-release/${VERSION}" \
             --title "service: bump version to v${VERSION}" \
-            --body "Automated post-release PR to update SERVICE_VERSION on main after publishing v${VERSION}." \
+            --body "Automated post-release PR to update VERSION and the chart appVersion on main after publishing v${VERSION}." \
             --label "release/service" \
             --message "service: bump version to v${VERSION}" \
-            -- SERVICE_VERSION
+            -- VERSION charts/n8n-sandbox-service/Chart.yaml

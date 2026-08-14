@@ -58,5 +58,5 @@ app.kubernetes.io/component: {{ .component }}
 {{- end }}
 
 {{- define "n8n-sandbox-service.sandboxImage" -}}
-{{- printf "%s:%s" .Values.sysboxRunner.sandboxImage.repository .Values.sysboxRunner.sandboxImage.tag }}
+{{- printf "%s:%s" .Values.sysboxRunner.sandboxImage.repository (.Values.sysboxRunner.sandboxImage.tag | default .Chart.AppVersion) }}
 {{- end }}

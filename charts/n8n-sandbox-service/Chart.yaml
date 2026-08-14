@@ -2,5 +2,7 @@ apiVersion: v2
 name: n8n-sandbox-service
 description: n8n Sandbox Service control plane with optional sysbox/DinD runner
 type: application
-version: "0.2.4"
-appVersion: "0.1.0"
+version: "0.3.0"
+# The single release version shared by the API, runner, and sandbox images. Image
+# tags default to it, so this is the set that is supported together.
+appVersion: "1.1.0"

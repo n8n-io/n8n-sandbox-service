@@ -1,6 +1,22 @@
 # Release Process
 
-This repository has three independent release pipelines: service (API + runner), sandbox (sandbox image), and SDK.
+This repository has two release pipelines: the service release, which publishes
+every deployable image under one version, and the SDK.
+
+One version — tracked in `VERSION` and mirrored into the chart's `appVersion` —
+covers the API, both runners, and the sandbox image. Those four images are built
+from the same commit and are only supported together: the sandbox image embeds
+`cmd/daemon`, the runners speak an internal contract to that daemon, and the
+Firecracker guest rootfs is packed from the sandbox image pinned in the
+golden-build bundle. The SDK is versioned independently in `sdk/package.json`
+because it is a client library whose consumers do not deploy this service.
+
+> **Migration note.** Before unification the service and sandbox trains drifted, so
+> no released version has a complete image set: `runner-firecracker:1.1.0` and
+> `sandbox:1.1.1` were never published. The chart's `appVersion` is therefore pinned
+> to `1.1.0`, the newest version where every image the chart deploys exists, and
+> lags `VERSION` (`1.1.1`) until the first unified release. From that release on,
+> the two always match and CI enforces it. Delete this note then.
 
 ```mermaid
 flowchart TD
@@ -10,8 +26,8 @@ flowchart TD
         C --> D[Push to private registry\napi / runner-dind / runner-firecracker / sandbox\n:alpha + :sha]
     end
 
-    subgraph versioned ["Versioned Release (service or sandbox)"]
-        E[Manual: Run Release Prep] --> F[Bump version file\nCreate release branch + PR]
+    subgraph versioned ["Versioned Release (all deployable images)"]
+        E[Manual: Run Release Prep] --> F[Bump VERSION + chart appVersion\nCreate release branch + PR]
         F --> G[Release Validate CI]
         G --> H{Merge PR}
         H --> I[Run tests]
@@ -44,42 +60,61 @@ The Firecracker runner alpha image is published for `linux/amd64` only.
 
 ## Service Release (Docker Hub)
 
-Publishes the API and runner images to Docker Hub. Version tracked in `SERVICE_VERSION`.
+Publishes every deployable image to Docker Hub under the version in `VERSION`.
 
 Images:
 
 - `n8nio/n8n-sandbox-service-api`
 - `n8nio/n8n-sandbox-service-runner-dind`
 - `n8nio/n8n-sandbox-service-runner-firecracker` (linux/amd64 only; requires KVM on the host)
+- `n8nio/n8n-sandbox-service-sandbox`
 
 Tags: `{version}`, `latest`, `stable`
+
+Deploy the same `{version}` for all four. Mixing versions is unsupported — there is
+no compatibility matrix, because the runner/daemon contract can change on any
+commit.
 
 ### Steps
 
 1. Go to Actions → Service Release Prep and run the workflow, choosing `patch`, `minor`, or `major`.
-2. The workflow bumps `SERVICE_VERSION`, creates a release branch (`service/release/{version}`), and opens a PR.
-3. The `Service Release Validate` workflow runs CI on the PR.
+2. The workflow bumps `VERSION` and the chart's `appVersion` (via
+   `scripts/set-release-version.sh`), creates a release branch
+   (`service/release/{version}`), and opens a PR.
+3. The `Service Release Validate` workflow runs CI on the PR and fails if `VERSION`
+   and the chart `appVersion` disagree.
 4. Merge the PR. This triggers the `Service Publish` workflow, which:
    - Runs tests
-   - Builds and pushes multi-arch images to Docker Hub
+   - Builds and pushes multi-arch images to Docker Hub, sandbox image included
    - Packages `firecracker-golden-build-{version}.tar.gz` and attaches it to the release
    - Creates a git tag (`service/v{version}`) and GitHub Release
-   - Opens a post-release PR to sync `SERVICE_VERSION` back to `main`
-5. Merge the post-release PR.
+   - Opens a post-release PR to sync `VERSION` and the chart `appVersion` back to `main`
+5. Merge the post-release PR. The chart publish workflow then ships a chart whose
+   default image tags point at images that already exist.
 
 ### Firecracker golden build asset
 
 Each service release (and staging prerelease) includes
 `firecracker-golden-build-{version}.tar.gz` on the GitHub Release. The tarball
-(schema v2) contains `install-runner-host.sh`, `firecracker-ci-assets.sh`,
+(schema v3) contains `install-runner-host.sh`, `firecracker-ci-assets.sh`,
 `build-rootfs-template.sh`, `configure-host-nat.sh`, `create-golden-snapshot.sh`, a pre-built `bin/sandbox-daemon`, and a
 `MANIFEST.json` with entrypoints, the pinned sandbox image (`sandbox_image`), and versions.
+
+Schema v3 replaces the manifest's `service_version` and `sandbox_version` fields
+with a single `version`, matching the one version all images now share.
 
 Package locally:
 
 ```bash
-./scripts/package-firecracker-golden-build.sh --version "$(tr -d '[:space:]' < SERVICE_VERSION)"
+./scripts/package-firecracker-golden-build.sh --version "$(tr -d '[:space:]' < VERSION)"
 ```
+
+`sandbox_image.ref` defaults to `n8nio/n8n-sandbox-service-sandbox:{VERSION}`, so
+the bundle and the sandbox image always carry the same version. Set
+`SANDBOX_IMAGE_REF` to point elsewhere — a digest ref (`{repository}@sha256:...`)
+for a reproducible bundle, or another registry, which is what the staging workflow
+does to pin its ACR candidate. `repository` and `tag` in the manifest are derived
+from whatever `ref` you pass.
 
 #### Copy-on-release contract
 
@@ -95,10 +130,11 @@ Deploy sequence (per environment):
    commit: compare `git_sha` in `MANIFEST.json` against the runner image's SHA
    tag (every image is tagged with its full commit SHA).
 3. Rebuild the golden snapshot on every runner VM using the bundle entrypoints
-   (`create-golden-snapshot.sh`; rootfs template is baked into the gallery image)
+   (`create-golden-snapshot.sh`; rootfs template is baked into the gallery image —
+   rebake it first when `sandbox_image.ref` changed since the last bake)
    or the full e2e bootstrap (`setup-firecracker-e2e-vm.sh`).
 4. Roll the `runner-firecracker` image to `{version}` — after step 3, never before.
-5. Roll the API and dind images to `{version}`.
+5. Roll the API, dind, and sandbox images to the same `{version}`.
 6. Gate the rollout on `SMOKE_ENV={env} ./scripts/smoke-sandbox.sh`.
 
 ## Staging candidates (pre-merge)
@@ -107,10 +143,11 @@ Use Actions → Publish Service Staging on your feature branch before merging
 to `main`. The workflow:
 
 1. Optionally runs unit tests
-2. Builds and pushes API, runner-dind, and Firecracker runner images to the
-   private container registry tagged `{SERVICE_VERSION}-staging.{short_sha}`
+2. Builds and pushes the API, runner-dind, Firecracker runner, and sandbox images
+   to the private container registry tagged `{VERSION}-staging.{short_sha}`
    (override with the `version` input)
-3. Creates a GitHub prerelease (`service/v{version}`) with the golden-build tarball
+3. Creates a GitHub prerelease (`service/v{version}`) with the golden-build tarball,
+   which pins the ACR sandbox candidate
 
 After deploying those image tags to staging, run:
 
@@ -122,29 +159,28 @@ On Firecracker runner VMs, download the prerelease tarball and rebuild the
 golden snapshot before rolling out the new `runner-firecracker` image (see the
 copy-on-release contract above).
 
-## Sandbox Release (Docker Hub)
+## Sandbox image
 
-Publishes the sandbox image to Docker Hub. Version tracked in `SANDBOX_VERSION`.
+The sandbox image ships as part of the service release above; it has no separate
+version or workflow. It embeds `cmd/daemon` built from the same commit, which is
+why an independent version was never meaningful.
 
-Image: `n8nio/n8n-sandbox-service-sandbox`
+### Firecracker runners consume this image at build time, not at run time
 
-Tags: `{version}`, `latest`
+The Firecracker guest rootfs is built from `Dockerfile.sandbox`, so a release
+changes the Firecracker guest userspace too. Firecracker runners never pull the
+sandbox image; they boot `rootfs.ext4`, which was packed from the image pinned as
+`sandbox_image.ref` in the golden-build `MANIFEST.json`.
 
-### Steps
-
-1. Go to Actions → Sandbox Release Prep and run the workflow, choosing `patch`, `minor`, or `major`.
-2. The workflow bumps `SANDBOX_VERSION`, creates a release branch (`sandbox/release/{version}`), and opens a PR.
-3. The `Sandbox Release Validate` workflow runs CI on the PR.
-4. Merge the PR. This triggers the `Sandbox Publish` workflow, which:
-   - Runs tests
-   - Builds and pushes multi-arch images to Docker Hub
-   - Creates a git tag (`sandbox/v{version}`) and GitHub Release
-   - Opens a post-release PR to sync `SANDBOX_VERSION` back to `main`
-5. Merge the post-release PR.
+Shipping a new sandbox image to Firecracker hosts therefore requires a rootfs
+template rebake and golden snapshot rebuild on the runner VMs. Rolling the sandbox
+image tag alone only affects the Docker/sysbox runner.
 
 ## SDK Release (npm)
 
-Publishes `@n8n/sandbox-client` to npm. Version tracked in `sdk/package.json`.
+Publishes `@n8n/sandbox-client` to npm. Version tracked in `sdk/package.json`, and
+deliberately independent of `VERSION`: it is a client library whose version
+communicates HTTP API compatibility to consumers who do not deploy this service.
 
 ### Steps
 
@@ -154,6 +190,8 @@ Publishes `@n8n/sandbox-client` to npm. Version tracked in `sdk/package.json`.
 
 ## Git Tag Namespaces
 
-- Service: `service/v{version}` (e.g. `service/v1.0.0`)
-- Sandbox: `sandbox/v{version}` (e.g. `sandbox/v1.0.0`)
+- Service: `service/v{version}` (e.g. `service/v1.0.0`) — covers all four images
 - SDK: `sdk/v{version}` (e.g. `sdk/v0.0.4`)
+
+`sandbox/v{version}` tags exist for releases made before versions were unified and
+are not created anymore.

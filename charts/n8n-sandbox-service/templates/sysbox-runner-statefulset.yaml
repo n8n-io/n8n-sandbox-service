@@ -40,7 +40,7 @@ spec:
       {{- end }}
       containers:
         - name: runner
-          image: "{{ .Values.sysboxRunner.image.repository }}:{{ .Values.sysboxRunner.image.tag }}"
+          image: "{{ .Values.sysboxRunner.image.repository }}:{{ .Values.sysboxRunner.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.sysboxRunner.image.pullPolicy }}
           ports:
             - name: http

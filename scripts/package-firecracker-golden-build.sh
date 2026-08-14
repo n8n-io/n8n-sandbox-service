@@ -47,10 +47,9 @@ if [[ -z "$OUTPUT" ]]; then
 	OUTPUT="${ROOT}/dist/firecracker-golden-build-${VERSION}.tar.gz"
 fi
 
-SERVICE_VERSION="$(tr -d '[:space:]' <"${ROOT}/SERVICE_VERSION")"
-SANDBOX_VERSION="$(tr -d '[:space:]' <"${ROOT}/SANDBOX_VERSION")"
+RELEASE_VERSION="$(tr -d '[:space:]' <"${ROOT}/VERSION")"
 SANDBOX_IMAGE_REPOSITORY="${SANDBOX_IMAGE_REPOSITORY:-n8nio/n8n-sandbox-service-sandbox}"
-SANDBOX_IMAGE_TAG="${SANDBOX_IMAGE_TAG:-${SANDBOX_VERSION}}"
+SANDBOX_IMAGE_TAG="${SANDBOX_IMAGE_TAG:-${RELEASE_VERSION}}"
 SANDBOX_IMAGE_REF="${SANDBOX_IMAGE_REF:-${SANDBOX_IMAGE_REPOSITORY}:${SANDBOX_IMAGE_TAG}}"
 # Manifest repository/tag must describe the same image as ref (the pin consumers pull).
 if [[ "$SANDBOX_IMAGE_REF" == *@* ]]; then
@@ -96,9 +95,8 @@ DAEMON_SHA256="$(sha256sum "${BUNDLE}/bin/sandbox-daemon" | awk '{print $1}')"
 
 cat >"${BUNDLE}/MANIFEST.json" <<EOF
 {
-  "schema_version": 2,
-  "service_version": "${SERVICE_VERSION}",
-  "sandbox_version": "${SANDBOX_VERSION}",
+  "schema_version": 3,
+  "version": "${RELEASE_VERSION}",
   "bundle_version": "${VERSION}",
   "git_sha": "${GIT_SHA}",
   "git_sha_short": "${GIT_SHA_SHORT}",
