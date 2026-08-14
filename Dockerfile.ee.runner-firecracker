@@ -16,9 +16,12 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /out/runner ./cmd/runner-firecracker.ee
 FROM debian:bookworm-slim AS firecracker-binaries
 
 ARG TARGETARCH
-ARG FIRECRACKER_VERSION=v1.13.1
+# Must match the version installed by scripts/firecracker.ee/install-runner-host.sh:
+# the host creates the golden snapshot, this image restores it, and Firecracker
+# cannot restore a snapshot taken by a newer version.
+ARG FIRECRACKER_VERSION=v1.14.1
 # From https://github.com/firecracker-microvm/firecracker/releases/download/${FIRECRACKER_VERSION}/firecracker-${FIRECRACKER_VERSION}-x86_64.tgz.sha256.txt
-ARG FIRECRACKER_X86_64_SHA256=59450b9171ff2ebdf2f9a25be3a248a7ba79fb6371aec51a9d6d8eefca7b4faf
+ARG FIRECRACKER_X86_64_SHA256=ea66dc1fbdb2473bbb95a1e822ae7884cd575a891a8f801258723258d36b7c7c
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
