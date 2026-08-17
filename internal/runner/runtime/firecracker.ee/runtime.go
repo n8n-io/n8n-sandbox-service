@@ -78,6 +78,21 @@ func (s slotState) occupied() bool {
 	return s.sandboxID != ""
 }
 
+// sandboxTransition is the lifecycle operation currently in flight for a
+// sandbox. Stop, wake, and delete must be mutually exclusive: wake reassigns
+// slot, netns, socket, and daemon URL as it goes, so an overlapping delete could
+// read half of the old identity, skip teardown because the new process and proxy
+// are not published yet, and free a slot whose microVM is still coming up.
+type sandboxTransition uint8
+
+const (
+	transitionNone sandboxTransition = iota
+	transitionCreating
+	transitionStopping
+	transitionWaking
+	transitionDeleting
+)
+
 // sandboxState holds the host resources backing one live microVM sandbox.
 type sandboxState struct {
 	id                string
@@ -95,7 +110,7 @@ type sandboxState struct {
 	proxy             daemonProxy
 	running           bool
 	stopped           bool
-	stopping          bool
+	transition        sandboxTransition
 	stoppedAt         time.Time
 	deleting          bool
 }
@@ -267,6 +282,7 @@ func (r *Runtime) CreateSandbox(ctx context.Context, sandboxID string, _ *runner
 
 	r.mu.Lock()
 	state.running = true
+	state.transition = transitionNone
 	info := *state.info
 	r.mu.Unlock()
 	slog.Info("firecracker sandbox created", "sandbox_id", sandboxID, "vm_id", state.vmID, "slot", state.slot, "daemon_url", state.daemonURL)
@@ -288,7 +304,7 @@ func (r *Runtime) GetSandboxInfo(_ context.Context, sandboxID string) (*runnerru
 
 // DeleteSandbox tears down the microVM (if running), proxy, netns, jail state, and data dir.
 func (r *Runtime) DeleteSandbox(ctx context.Context, sandboxID string) error {
-	state, err := r.takeSandbox(sandboxID)
+	state, err := r.takeSandbox(ctx, sandboxID)
 	if err != nil {
 		return err
 	}
@@ -304,8 +320,9 @@ func (r *Runtime) DaemonURL(_ context.Context, sandboxID string) (string, error)
 	if !ok || state.deleting {
 		return "", runnerruntime.ErrSandboxNotFound
 	}
-	if state.stopping || state.stopped || !state.running {
-		// Reject proxies while stopping, stopped, or not yet running (create in progress).
+	if state.transition != transitionNone || state.stopped || !state.running {
+		// Reject proxies while a lifecycle transition is in flight, stopped, or not
+		// yet running (create in progress).
 		return "", runnerruntime.ErrSandboxNotRunning
 	}
 	if state.daemonURL == "" {
@@ -325,6 +342,9 @@ func (r *Runtime) Shutdown(ctx context.Context) {
 		states = append(states, state)
 		state.running = false
 		state.deleting = true
+		// Unlike DeleteSandbox this does not wait for an in-flight stop or wake:
+		// the process is exiting, and startup reconcile removes whatever leaks.
+		state.transition = transitionDeleting
 	}
 	r.mu.Unlock()
 
@@ -334,7 +354,9 @@ func (r *Runtime) Shutdown(ctx context.Context) {
 }
 
 // reserveSandbox assigns the sandbox to the first free slot and derives the
-// deterministic per-slot host resources used for the VM.
+// deterministic per-slot host resources used for the VM. The new sandbox starts
+// out claimed for creation so a delete arriving mid-create waits for the microVM
+// to be published instead of tearing down around it.
 func (r *Runtime) reserveSandbox(sandboxID string) (*sandboxState, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -363,6 +385,7 @@ func (r *Runtime) reserveSandbox(sandboxID string) (*sandboxState, error) {
 		rootfsPath:        sandboxRootfsPath(r.runnerConfig.DataDir, sandboxID),
 		snapshotMemPath:   sandboxSnapshotMemPath(dataDir),
 		snapshotStatePath: sandboxSnapshotStatePath(dataDir),
+		transition:        transitionCreating,
 		info: &runnerruntime.SandboxInfo{
 			ID:   sandboxID,
 			Name: vmID,
@@ -373,16 +396,19 @@ func (r *Runtime) reserveSandbox(sandboxID string) (*sandboxState, error) {
 	return state, nil
 }
 
-// takeSandbox marks the sandbox as deleting while keeping its slot reserved
-// until host cleanup finishes.
-func (r *Runtime) takeSandbox(sandboxID string) (*sandboxState, error) {
+// takeSandbox waits for any in-flight stop or wake to finish, then marks the
+// sandbox as deleting while keeping its slot reserved until host cleanup
+// finishes. Waiting is what guarantees teardown sees the microVM a concurrent
+// wake was bringing up instead of leaving it orphaned on a slot the runner has
+// already handed back.
+func (r *Runtime) takeSandbox(ctx context.Context, sandboxID string) (*sandboxState, error) {
+	state, err := r.beginTransition(ctx, sandboxID, transitionDeleting)
+	if err != nil {
+		return nil, err
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
-	state, ok := r.sandboxes[sandboxID]
-	if !ok || state.deleting {
-		return nil, runnerruntime.ErrSandboxNotFound
-	}
 	state.running = false
 	state.deleting = true
 	return state, nil
@@ -414,6 +440,7 @@ func (r *Runtime) deleteSandbox(ctx context.Context, state *sandboxState) error 
 		r.mu.Lock()
 		if current, ok := r.sandboxes[state.id]; ok && current == state {
 			state.deleting = false
+			state.transition = transitionNone
 		}
 		r.mu.Unlock()
 		return err

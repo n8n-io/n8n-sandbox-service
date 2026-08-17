@@ -336,6 +336,67 @@ func TestRuntimeDeleteHoldsSlotUntilCleanupCompletes(t *testing.T) {
 	}
 }
 
+func TestRuntimeDeleteSandboxWaitsForCreate(t *testing.T) {
+	rt := testRuntimeT(t, 1)
+	stubCreateDeps(rt)
+
+	proc := &fakeProcess{}
+	proxy := &fakeProxy{}
+	rt.deps.start = func(context.Context, string, ...string) (process, error) { return proc, nil }
+	rt.deps.newProxy = func(context.Context, string, string, string) (daemonProxy, error) { return proxy, nil }
+
+	createReachedSnapshot := make(chan struct{})
+	allowCreateSnapshot := make(chan struct{})
+	rt.deps.loadSnapshot = func(context.Context, string, Config) error {
+		close(createReachedSnapshot)
+		<-allowCreateSnapshot
+		return nil
+	}
+
+	const sandboxID = "sandbox-id-123456"
+	createDone := make(chan error, 1)
+	go func() {
+		_, err := rt.CreateSandbox(context.Background(), sandboxID, nil)
+		createDone <- err
+	}()
+
+	select {
+	case <-createReachedSnapshot:
+	case <-time.After(time.Second):
+		t.Fatal("create did not reach snapshot restore")
+	}
+
+	deleteDone := make(chan error, 1)
+	go func() {
+		deleteDone <- rt.DeleteSandbox(context.Background(), sandboxID)
+	}()
+
+	select {
+	case err := <-deleteDone:
+		t.Fatalf("DeleteSandbox returned while create was still restoring: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(allowCreateSnapshot)
+	if err := <-createDone; err != nil {
+		t.Fatalf("CreateSandbox() failed: %v", err)
+	}
+	if err := <-deleteDone; err != nil {
+		t.Fatalf("DeleteSandbox() failed: %v", err)
+	}
+
+	if !proc.killed || !proxy.stopped {
+		t.Fatalf("process killed = %v, proxy stopped = %v, want both true", proc.killed, proxy.stopped)
+	}
+	capacity, err := rt.Capacity(context.Background())
+	if err != nil {
+		t.Fatalf("Capacity() failed: %v", err)
+	}
+	if capacity.Used != 0 {
+		t.Fatalf("Capacity().Used = %d, want slot released after delete", capacity.Used)
+	}
+}
+
 func TestRuntimeReleaseSlotPanicsForInvalidSlot(t *testing.T) {
 	rt := testRuntime(1)
 	defer func() {

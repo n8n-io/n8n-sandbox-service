@@ -63,7 +63,16 @@ TAP, or proxy port.
 
 Slots are deliberately runner-local and ephemeral. They are not persisted, not
 part of the public API, and not a promise that the same sandbox ID will always
-get the same slot after restart.
+get the same slot after restart. A sandbox that stops releases its slot and may
+wake onto a different one.
+
+Because slot ownership moves like that, create, stop, wake, and delete are
+mutually exclusive per sandbox: each claims the sandbox for the duration of the
+transition and the others wait. Without that, a delete overlapping a create or
+wake would run before the microVM, proxy, and slot-derived fields were published,
+skip teardown, and leave an orphaned microVM holding host resources on a slot the
+runner had already handed back. `Shutdown` is the one exception — it does not wait,
+since the process is exiting and startup reconcile removes whatever leaks.
 
 Run **one Firecracker runner process per host**. Multiple runners on the same
 machine collide on Linux netns/veth names (`fc-sb-{n}`, `fc-veth-{n}`); use

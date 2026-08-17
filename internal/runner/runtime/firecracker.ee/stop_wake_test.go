@@ -115,6 +115,85 @@ func TestRuntimeEnsureSandboxRunningWaitsForStop(t *testing.T) {
 	}
 }
 
+func TestRuntimeDeleteSandboxWaitsForWake(t *testing.T) {
+	rt := testRuntimeT(t, 2)
+	stubCreateDeps(rt)
+
+	proc := &fakeProcess{}
+	proxy := &fakeProxy{}
+	rt.deps.start = func(context.Context, string, ...string) (process, error) { return proc, nil }
+	rt.deps.newProxy = func(context.Context, string, string, string) (daemonProxy, error) { return proxy, nil }
+
+	wakeReachedSnapshot := make(chan struct{})
+	allowWakeSnapshot := make(chan struct{})
+	var loadCount int
+	rt.deps.loadSnapshot = func(context.Context, string, Config) error {
+		loadCount++
+		if loadCount == 2 {
+			close(wakeReachedSnapshot)
+			<-allowWakeSnapshot
+		}
+		return nil
+	}
+
+	const sandboxID = "sandbox-id-123456"
+	if _, err := rt.CreateSandbox(context.Background(), sandboxID, nil); err != nil {
+		t.Fatalf("CreateSandbox() failed: %v", err)
+	}
+	if err := rt.StopSandbox(context.Background(), sandboxID); err != nil {
+		t.Fatalf("StopSandbox() failed: %v", err)
+	}
+
+	wakeDone := make(chan error, 1)
+	go func() {
+		wakeDone <- rt.EnsureSandboxRunning(context.Background(), sandboxID)
+	}()
+
+	select {
+	case <-wakeReachedSnapshot:
+	case <-time.After(time.Second):
+		t.Fatal("wake did not reach snapshot restore")
+	}
+
+	deleteDone := make(chan error, 1)
+	go func() {
+		deleteDone <- rt.DeleteSandbox(context.Background(), sandboxID)
+	}()
+
+	select {
+	case err := <-deleteDone:
+		t.Fatalf("DeleteSandbox returned while wake was still restoring: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(allowWakeSnapshot)
+	if err := <-wakeDone; err != nil {
+		t.Fatalf("EnsureSandboxRunning() failed: %v", err)
+	}
+	if err := <-deleteDone; err != nil {
+		t.Fatalf("DeleteSandbox() failed: %v", err)
+	}
+
+	// The microVM the wake brought up must be torn down, not orphaned on a slot
+	// the runner has already handed back.
+	if !proc.killed {
+		t.Fatal("expected woken microVM process to be killed by delete")
+	}
+	if !proxy.stopped {
+		t.Fatal("expected woken sandbox proxy to be stopped by delete")
+	}
+	capacity, err := rt.Capacity(context.Background())
+	if err != nil {
+		t.Fatalf("Capacity() failed: %v", err)
+	}
+	if capacity.Used != 0 || capacity.Stopped != 0 {
+		t.Fatalf("Capacity() = %+v, want no slots or stopped sandboxes left", capacity)
+	}
+	if _, err := rt.GetSandboxInfo(context.Background(), sandboxID); !errors.Is(err, runnerruntime.ErrSandboxNotFound) {
+		t.Fatalf("GetSandboxInfo() error = %v, want ErrSandboxNotFound", err)
+	}
+}
+
 func TestRuntimeCapacityReportsStoppedSeparatelyFromSlots(t *testing.T) {
 	rt := testRuntimeT(t, 3)
 	stubCreateDeps(rt)
