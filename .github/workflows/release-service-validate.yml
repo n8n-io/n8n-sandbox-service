@@ -36,3 +36,4 @@ jobs:
           make docker-api-amd64
           make docker-runner-amd64
           make docker-firecracker-runner-amd64
+          make docker-sandbox-amd64

@@ -12,11 +12,15 @@ golden-build bundle. The SDK is versioned independently in `sdk/package.json`
 because it is a client library whose consumers do not deploy this service.
 
 > **Migration note.** Before unification the service and sandbox trains drifted, so
-> no released version has a complete image set: `runner-firecracker:1.1.0` and
-> `sandbox:1.1.1` were never published. The chart's `appVersion` is therefore pinned
-> to `1.1.0`, the newest version where every image the chart deploys exists, and
-> lags `VERSION` (`1.1.1`) until the first unified release. From that release on,
-> the two always match and CI enforces it. Delete this note then.
+> no released version has a complete image set: the sandbox image stops at `1.1.0`
+> while the service went on to `1.1.1` and beyond, and `runner-firecracker:1.1.0`
+> was never published. The chart's `appVersion` is therefore pinned to `1.1.0` — the
+> newest version where every image the chart deploys (`api`, `runner-dind`,
+> `sandbox`) exists — and deliberately lags `VERSION` until the first unified
+> release, so that a default `helm install` cannot resolve a tag that was never
+> pushed. Release validate only compares the two on `service/release/**` PRs, where
+> `scripts/set-release-version.sh` has already written both. From the first unified
+> release on they always match; delete this note then.
 
 ```mermaid
 flowchart TD
@@ -147,7 +151,8 @@ to `main`. The workflow:
    to the private container registry tagged `{VERSION}-staging.{short_sha}`
    (override with the `version` input)
 3. Creates a GitHub prerelease (`service/v{version}`) with the golden-build tarball,
-   which pins the ACR sandbox candidate
+   which pins the ACR sandbox candidate by its commit-SHA tag (the `version` label is
+   caller-supplied and may be reused by a later run)
 
 After deploying those image tags to staging, run:
 

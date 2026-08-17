@@ -54,14 +54,17 @@ jobs:
         uses: ./.github/actions/sandbox-service-test
 
       # Staging pins the ACR sandbox candidate, not Docker Hub: the guest userspace
-      # must match the images this run publishes.
+      # must match the images this run publishes. Pin the commit-SHA tag rather than
+      # the version label, which is caller-supplied and can be reused by a later run
+      # from another commit — the rootfs would then drift from the manifest git_sha.
       - name: Package Firecracker golden build tarball
         env:
           ACR_NAME: ${{ secrets.AZURE_ACR_NAME }}
           VERSION: ${{ steps.meta.outputs.version }}
+          FULL_SHA: ${{ steps.meta.outputs.full_sha }}
         run: |
           chmod +x scripts/package-firecracker-golden-build.sh
-          SANDBOX_IMAGE_REF="${ACR_NAME}.azurecr.io/n8n-sandbox-service-sandbox:${VERSION}" \
+          SANDBOX_IMAGE_REF="${ACR_NAME}.azurecr.io/n8n-sandbox-service-sandbox:${FULL_SHA}" \
             ./scripts/package-firecracker-golden-build.sh \
             --version "${VERSION}" \
             --output "${{ steps.meta.outputs.tarball }}"
@@ -129,7 +132,7 @@ jobs:
           - \`${REGISTRY}/n8n-sandbox-service-sandbox:${VERSION}\`
 
           Each image is also tagged with the full commit SHA. The golden-build bundle
-          pins the sandbox image above, so deploy these candidates together.
+          pins the sandbox image by that SHA tag, so deploy these candidates together.
 
           ### Firecracker golden build
 

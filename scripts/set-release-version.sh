@@ -4,6 +4,13 @@
 set -euo pipefail
 
 VERSION="${1:?usage: set-release-version.sh <version>}"
+# Reject rather than normalize (e.g. strip a leading "v"): this string becomes the
+# published image tags and the chart's appVersion, and release validate accepts
+# exactly this shape.
+if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+	echo "ERROR: version must be x.y.z, got '${VERSION}'" >&2
+	exit 1
+fi
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CHART="${ROOT}/charts/n8n-sandbox-service/Chart.yaml"
 

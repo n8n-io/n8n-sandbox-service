@@ -101,9 +101,9 @@ if [[ "$sandbox_ref" == "null" || -z "$sandbox_ref" ]]; then
 fi
 if [[ -n "$sandbox_tag" ]]; then
 	# Default pin: one version ties the images together, so the sandbox tag is the
-	# release version. Callers that pin another registry or a digest override the ref.
+	# release version. Callers that pin another registry, tag, or digest override the ref.
 	if [[ "$sandbox_tag" != "$release_version" ]]; then
-		echo "ERROR: sandbox_image.tag (${sandbox_tag}) must equal the release version (${release_version})" >&2
+		echo "ERROR: default sandbox_image.tag (${sandbox_tag}) must equal the release version (${release_version})" >&2
 		exit 1
 	fi
 	if [[ "$sandbox_ref" != "${sandbox_repo}:${sandbox_tag}" ]]; then

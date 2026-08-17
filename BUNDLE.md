@@ -63,6 +63,19 @@ firecracker-golden-build/
     sandbox-daemon
 ```
 
+### Versions (`MANIFEST.json`)
+
+| Key | Meaning |
+| --- | --- |
+| `version` | Release version of the tree the bundle was built from (the `VERSION` file). On a service release this is the tag all four images carry. |
+| `bundle_version` | Label of this tarball. Equals `version` on a service release; on a staging prerelease it is the staging label (`{version}-staging.{sha}`). |
+| `git_sha` | Commit the bundle was built from. This, not `version`, is the pin to correlate with a container image's full-SHA tag. |
+| `sandbox_image.ref` | Authoritative pin for the guest rootfs. Staging pins the ACR commit-SHA tag, so it does not carry the release version. |
+
+Staging bundles are the case to be careful with: nothing is published at `version`
+during a staging run, so use `bundle_version`, `git_sha`, and `sandbox_image.ref`
+to identify what that candidate actually contains.
+
 ### Entrypoints (`MANIFEST.json`)
 
 | Key | Script | Purpose |
