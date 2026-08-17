@@ -152,3 +152,20 @@ To auto-format:
 ```bash
 make fmt
 ```
+
+After modifying shell scripts, always run:
+
+```bash
+make shell-fmt-check    # Check that all shell scripts are shfmt-formatted
+make shell-lint         # Run shellcheck on all shell scripts
+```
+
+To auto-format:
+
+```bash
+make shell-fmt
+```
+
+These need `shfmt` and `shellcheck` (`brew install shfmt shellcheck`). CI pins
+shfmt v3.13.1 and shellcheck v0.11.0; older shellcheck releases report findings
+that v0.11.0 has since dropped, so match the pinned version locally.

@@ -16,9 +16,10 @@ sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
 	-o /etc/apt/keyrings/docker.asc
 sudo chmod a+r /etc/apt/keyrings/docker.asc
 
+# shellcheck source=/dev/null  # /etc/os-release only exists on the target VM
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
-	https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
-	sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+	https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" |
+	sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
 
 sudo apt-get update -qq
 sudo apt-get install -y -qq \
@@ -41,7 +42,9 @@ echo "==> Installing Go 1.25.0..."
 curl -fsSL "https://go.dev/dl/go1.25.0.linux-amd64.tar.gz" -o /tmp/go.tar.gz
 sudo tar -C /usr/local -xzf /tmp/go.tar.gz
 rm /tmp/go.tar.gz
-echo 'export PATH=/usr/local/go/bin:$HOME/go/bin:$PATH' >> ~/.bashrc
+# Single quotes on purpose: $HOME must stay literal in .bashrc.
+# shellcheck disable=SC2016
+echo 'export PATH=/usr/local/go/bin:$HOME/go/bin:$PATH' >>~/.bashrc
 export PATH=/usr/local/go/bin:$HOME/go/bin:$PATH
 go version
 

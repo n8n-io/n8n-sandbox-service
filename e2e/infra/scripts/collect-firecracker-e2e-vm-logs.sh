@@ -8,12 +8,12 @@ set -euo pipefail
 : "${SSH_KEY_PATH:?SSH_KEY_PATH is required}"
 
 VM_ADMIN="azureuser"
-SSH_OPTS="-o StrictHostKeyChecking=no -o ConnectTimeout=10"
+SSH_OPTS=(-o StrictHostKeyChecking=no -o ConnectTimeout=10)
 ARTIFACT_DIR="/tmp/e2e-firecracker-artifacts"
 
 echo "==> Collecting Firecracker logs from ${VM_IP}..."
 
-ssh $SSH_OPTS -i "$SSH_KEY_PATH" "${VM_ADMIN}@${VM_IP}" bash -s << 'EOF'
+ssh "${SSH_OPTS[@]}" -i "$SSH_KEY_PATH" "${VM_ADMIN}@${VM_IP}" bash -s <<'EOF'
 set -x
 rm -rf /tmp/e2e-firecracker-artifacts
 mkdir -p /tmp/e2e-firecracker-artifacts
@@ -65,7 +65,7 @@ sudo chown -R "$(id -u):$(id -g)" /tmp/e2e-firecracker-artifacts
 EOF
 
 mkdir -p "$ARTIFACT_DIR"
-scp $SSH_OPTS -i "$SSH_KEY_PATH" \
+scp "${SSH_OPTS[@]}" -i "$SSH_KEY_PATH" \
 	"${VM_ADMIN}@${VM_IP}:/tmp/e2e-firecracker-artifacts/*" \
 	"${ARTIFACT_DIR}/" 2>/dev/null || true
 

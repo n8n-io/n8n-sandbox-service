@@ -19,9 +19,9 @@ if [[ -z "$default_iface" ]]; then
 	exit 1
 fi
 
-maybe_sudo iptables -t nat -C POSTROUTING -o "$default_iface" -j MASQUERADE 2>/dev/null \
-	|| maybe_sudo iptables -t nat -A POSTROUTING -o "$default_iface" -j MASQUERADE
-maybe_sudo iptables -C FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null \
-	|| maybe_sudo iptables -A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
-maybe_sudo iptables -C FORWARD -i fc-veth+ -j ACCEPT 2>/dev/null \
-	|| maybe_sudo iptables -A FORWARD -i fc-veth+ -j ACCEPT
+maybe_sudo iptables -t nat -C POSTROUTING -o "$default_iface" -j MASQUERADE 2>/dev/null ||
+	maybe_sudo iptables -t nat -A POSTROUTING -o "$default_iface" -j MASQUERADE
+maybe_sudo iptables -C FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null ||
+	maybe_sudo iptables -A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+maybe_sudo iptables -C FORWARD -i fc-veth+ -j ACCEPT 2>/dev/null ||
+	maybe_sudo iptables -A FORWARD -i fc-veth+ -j ACCEPT

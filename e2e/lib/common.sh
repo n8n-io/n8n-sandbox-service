@@ -12,10 +12,11 @@ e2e_docker_arch() {
 # otherwise falls back to --user host:host plus a bind-mounted data dir at
 # /var/lib/n8n-sandbox-api so that UID can write the SQLite file.
 # Sets globals API_DOCKER_USER and API_DATA_VOLUME_ARGS.
+# shellcheck disable=SC2034  # both globals are read by the run-*.sh callers
 e2e_setup_api_container() {
 	local tls_dir=$1 api_image=$2
 	local uid gid
-	read -r uid gid <<< "$(docker run --rm --entrypoint sh "$api_image" -c 'echo $(id -u) $(id -g)')"
+	read -r uid gid <<<"$(docker run --rm --entrypoint sh "$api_image" -c 'echo $(id -u) $(id -g)')"
 	if chown -R "$uid:$gid" "$tls_dir" 2>/dev/null; then
 		API_DOCKER_USER=()
 		API_DATA_VOLUME_ARGS=()
@@ -101,7 +102,7 @@ e2e_build_sdk_unless_skip() {
 
 e2e_install_playwright_deps_if_needed() {
 	local script_dir=$1
-	cd "$script_dir"
+	cd "$script_dir" || return 1
 	if [[ ! -d node_modules ]] || [[ ! -f node_modules/@n8n/sandbox-client/dist/index.js ]]; then
 		echo "Installing dependencies..."
 		pnpm install --frozen-lockfile
@@ -176,6 +177,8 @@ e2e_ssh_firecracker_host() {
 	if [[ -n "$jump_host" ]]; then
 		opts+=(-o "ProxyCommand=$(e2e_ssh_proxy_command "$ssh_key" "$admin" "$jump_host")")
 	fi
+	# Callers pass a remote command; expanding it locally is the intent.
+	# shellcheck disable=SC2029
 	ssh "${opts[@]}" "${admin}@${host}" "$@"
 }
 
@@ -322,6 +325,7 @@ e2e_configure_api_store() {
 
 	e2e_wait_for_postgres "$E2E_POSTGRES_CONTAINER"
 
+	# shellcheck disable=SC2034  # read by the run-*.sh callers
 	API_DATA_VOLUME_ARGS=()
 	API_STORE_ENV=(
 		-e "SANDBOX_API_STORE=postgres"

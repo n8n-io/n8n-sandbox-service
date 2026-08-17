@@ -203,7 +203,7 @@ if [[ -z "$FIRECRACKER_CI_VMLINUX" ]]; then
 	fi
 	FIRECRACKER_CI_VERSION="$FIRECRACKER_CI_VERSION" \
 		"$FIRECRACKER_CI_ASSETS_BIN" download "$ci_assets_dir"
-	# shellcheck disable=SC1090
+	# shellcheck source=/dev/null  # written by firecracker-ci-assets.sh at runtime
 	source "${ci_assets_dir}/manifest.env"
 fi
 

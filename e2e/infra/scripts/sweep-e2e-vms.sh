@@ -7,7 +7,8 @@ set -euo pipefail
 : "${RESOURCE_GROUP:?RESOURCE_GROUP is required}"
 
 TAG="purpose=sandbox-service-e2e"
-CUTOFF_EPOCH=$(python3 - <<'PY'
+CUTOFF_EPOCH=$(
+	python3 - <<'PY'
 import time
 
 print(int(time.time()) - 3600)

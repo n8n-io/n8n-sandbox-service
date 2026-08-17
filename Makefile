@@ -3,7 +3,9 @@ SHELL := /bin/bash
 MODULE  := github.com/n8n-io/sandbox-service
 BINDIR  := bin
 
-.PHONY: all daemon runner runner-docker runner-firecracker api test clean docker docker-local docker-arm64 docker-amd64 docker-api-arm64 docker-api-amd64 docker-runner-arm64 docker-runner-amd64 docker-firecracker-runner-amd64 docker-sandbox-arm64 docker-sandbox-amd64 fmt fmt-check vet playground up down smoke sdk sdk-install sdk-build sdk-typecheck sdk-test sdk-fmt sdk-fmt-check sdk-lint
+SHELL_FILES := $(shell git ls-files '*.sh')
+
+.PHONY: all daemon runner runner-docker runner-firecracker api test clean docker docker-local docker-arm64 docker-amd64 docker-api-arm64 docker-api-amd64 docker-runner-arm64 docker-runner-amd64 docker-firecracker-runner-amd64 docker-sandbox-arm64 docker-sandbox-amd64 fmt fmt-check vet shell-fmt shell-fmt-check shell-lint check-shell-files playground up down smoke sdk sdk-install sdk-build sdk-typecheck sdk-test sdk-fmt sdk-fmt-check sdk-lint
 
 all: daemon runner api
 
@@ -26,6 +28,22 @@ fmt-check:
 ## vet: Run go vet on all packages.
 vet:
 	go vet ./...
+
+## shell-fmt: Format all shell scripts with shfmt.
+shell-fmt: check-shell-files
+	shfmt -w $(SHELL_FILES)
+
+## shell-fmt-check: Check that all shell scripts are shfmt-formatted.
+shell-fmt-check: check-shell-files
+	shfmt -d $(SHELL_FILES)
+
+## shell-lint: Run shellcheck on all shell scripts.
+shell-lint: check-shell-files
+	shellcheck -x $(SHELL_FILES)
+
+# shfmt reads stdin when given no paths, so fail loudly instead of hanging.
+check-shell-files:
+	@test -n "$(SHELL_FILES)" || { echo "No shell files found; run from a git checkout."; exit 1; }
 
 ## daemon: Build the sandbox daemon (static, Linux).
 daemon:

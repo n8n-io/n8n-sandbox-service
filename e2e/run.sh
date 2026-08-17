@@ -34,13 +34,13 @@ API_TLS_DNS="${E2E_API_TLS_DNS:-sandbox-api-e2e-mtls}"
 RUNNER_CONTROL_ALIAS="runner-control"
 
 cleanup() {
-  local exit_code=$?
-  if [ $exit_code -ne 0 ]; then
-    echo "=== API container logs ==="
-    docker logs "$API_CONTAINER_NAME" 2>&1 || true
-    echo "=== Runner container logs ==="
-    docker logs "$RUNNER_CONTAINER_NAME" 2>&1 || true
-  fi
+	local exit_code=$?
+	if [ $exit_code -ne 0 ]; then
+		echo "=== API container logs ==="
+		docker logs "$API_CONTAINER_NAME" 2>&1 || true
+		echo "=== Runner container logs ==="
+		docker logs "$RUNNER_CONTAINER_NAME" 2>&1 || true
+	fi
 
 	echo "Stopping e2e resources..."
 	docker stop "$API_CONTAINER_NAME" >/dev/null 2>&1 || true

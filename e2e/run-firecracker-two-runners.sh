@@ -160,6 +160,9 @@ runner_env=(
 } >"$RUNNER1_ENV_FILE"
 
 echo "Starting Firecracker runner 1..."
+# The redirect runs as the calling user on purpose, so the harness can read the
+# log without sudo.
+# shellcheck disable=SC2024
 sudo env "${runner_env[@]}" "$PROJECT_DIR/bin/runner-firecracker" >"$RUNNER1_LOG" 2>&1 &
 RUNNER1_PID=$!
 echo "export E2E_RUNNER_PID=${RUNNER1_PID}" >>"$RUNNER1_ENV_FILE"

@@ -20,6 +20,9 @@ sudo rm -rf /srv/jailer/firecracker/sandbox-* >/dev/null 2>&1 || true
 for i in $(seq 0 63); do sudo ip link delete "fc-veth-${i}" >/dev/null 2>&1 || true; done
 sudo ip netns list | awk '{print $1}' | grep '^fc-sb-' | xargs -r -n1 sudo ip netns delete || true
 
+# The redirect runs as the calling user on purpose, so the harness can read the
+# log without sudo.
+# shellcheck disable=SC2024
 sudo env "${RUNNER_ENV[@]}" "${RUNNER_BIN}" >"$RUNNER_LOG" 2>&1 &
 E2E_RUNNER_PID=$!
 export E2E_RUNNER_PID

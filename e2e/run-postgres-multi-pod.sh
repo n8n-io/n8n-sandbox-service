@@ -65,6 +65,7 @@ fi
 
 e2e_bootstrap_mtls_maybe "$PROJECT_DIR" "$TLS_DIR_OWNED" "$TLS_DIR" "$API_TLS_DNS" "$RUNNER_CONTROL_ALIAS"
 API_DOCKER_USER=()
+# shellcheck disable=SC2034  # declared for the e2e_setup_api_container contract
 API_DATA_VOLUME_ARGS=()
 e2e_setup_api_container "$TLS_DIR" "$API_IMAGE"
 
