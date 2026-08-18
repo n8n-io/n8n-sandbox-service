@@ -12,6 +12,7 @@ import (
 
 	"github.com/n8n-io/sandbox-service/internal/api/grpc/pb"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
+	"github.com/n8n-io/sandbox-service/internal/obs"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 )
@@ -37,6 +38,20 @@ func toGRPCError(err error) error {
 		return status.Error(codes.DeadlineExceeded, context.DeadlineExceeded.Error())
 	}
 	return status.Errorf(codes.Internal, "%v", err)
+}
+
+// withTrace carries the API's trace context into the runtime call so the
+// lifecycle event the runner emits joins the API's event for the same request.
+// A missing or malformed header yields a fresh id, so events always correlate
+// internally even when the caller sends nothing.
+func withTrace(ctx context.Context) context.Context {
+	header := ""
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if v := md.Get(obs.HeaderTraceparent); len(v) > 0 {
+			header = v[0]
+		}
+	}
+	return obs.WithTraceparent(ctx, obs.EnsureTraceparent(header))
 }
 
 func (s *SandboxControlGRPC) checkAPIKey(ctx context.Context) error {
@@ -69,6 +84,7 @@ func (s *SandboxControlGRPC) CreateSandbox(ctx context.Context, req *pb.CreateSa
 	if !isValidID(sandboxID) {
 		return nil, status.Error(codes.InvalidArgument, "invalid sandbox id")
 	}
+	ctx = withTrace(ctx)
 	start := time.Now()
 	info, err := s.Runtime.CreateSandbox(ctx, sandboxID, &runnerruntime.CreateOptions{})
 	s.Rec.ObserveContainerOp(metrics.OpCreate, err == nil && info != nil, time.Since(start))
@@ -90,6 +106,7 @@ func (s *SandboxControlGRPC) StopSandbox(ctx context.Context, req *pb.StopSandbo
 	if !isValidID(sandboxID) {
 		return nil, status.Error(codes.InvalidArgument, "invalid sandbox id")
 	}
+	ctx = withTrace(ctx)
 	start := time.Now()
 	if err := s.Runtime.StopSandbox(ctx, sandboxID); err != nil {
 		if errors.Is(err, runnerruntime.ErrSandboxNotFound) {
@@ -112,6 +129,7 @@ func (s *SandboxControlGRPC) DeleteSandbox(ctx context.Context, req *pb.DeleteSa
 	if !isValidID(sandboxID) {
 		return nil, status.Error(codes.InvalidArgument, "invalid sandbox id")
 	}
+	ctx = withTrace(ctx)
 	start := time.Now()
 	err := s.Runtime.DeleteSandbox(ctx, sandboxID)
 	s.Rec.ObserveContainerOp(metrics.OpDelete, err == nil, time.Since(start))

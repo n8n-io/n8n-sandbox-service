@@ -12,6 +12,7 @@ import (
 
 	"github.com/n8n-io/sandbox-service/internal/api/grpc/pb"
 	"github.com/n8n-io/sandbox-service/internal/grpctls"
+	"github.com/n8n-io/sandbox-service/internal/obs"
 )
 
 // TLS holds required mTLS material for the API dialing a runner.
@@ -39,12 +40,17 @@ func dialOpts(target string, tlsCfg *TLS) ([]grpc.DialOption, error) {
 	return []grpc.DialOption{grpc.WithTransportCredentials(creds)}, nil
 }
 
-func withAPIKey(ctx context.Context, apiKey string) context.Context {
+// withCallMetadata attaches the runner API key and, when the caller is inside a
+// traced request, the trace context so the runner's events join ours.
+func withCallMetadata(ctx context.Context, apiKey string) context.Context {
 	apiKey = strings.TrimSpace(apiKey)
-	if apiKey == "" {
-		return ctx
+	if apiKey != "" {
+		ctx = metadata.AppendToOutgoingContext(ctx, "x-api-key", apiKey)
 	}
-	return metadata.AppendToOutgoingContext(ctx, "x-api-key", apiKey)
+	if tp := obs.Traceparent(ctx); tp != "" {
+		ctx = metadata.AppendToOutgoingContext(ctx, obs.HeaderTraceparent, tp)
+	}
+	return ctx
 }
 
 // CreateSandbox calls SandboxControl.CreateSandbox and closes the connection.
@@ -60,7 +66,7 @@ func CreateSandbox(ctx context.Context, target, apiKey string, tlsCfg *TLS, sand
 	defer conn.Close()
 
 	cli := pb.NewSandboxControlClient(conn)
-	return cli.CreateSandbox(withAPIKey(ctx, apiKey), &pb.CreateSandboxRequest{
+	return cli.CreateSandbox(withCallMetadata(ctx, apiKey), &pb.CreateSandboxRequest{
 		SandboxId:  sandboxID,
 		CreateJson: createJSON,
 	})
@@ -79,7 +85,7 @@ func StopSandbox(ctx context.Context, target, apiKey string, tlsCfg *TLS, sandbo
 	defer conn.Close()
 
 	cli := pb.NewSandboxControlClient(conn)
-	_, err = cli.StopSandbox(withAPIKey(ctx, apiKey), &pb.StopSandboxRequest{SandboxId: sandboxID})
+	_, err = cli.StopSandbox(withCallMetadata(ctx, apiKey), &pb.StopSandboxRequest{SandboxId: sandboxID})
 	return err
 }
 
@@ -96,6 +102,6 @@ func DeleteSandbox(ctx context.Context, target, apiKey string, tlsCfg *TLS, sand
 	defer conn.Close()
 
 	cli := pb.NewSandboxControlClient(conn)
-	_, err = cli.DeleteSandbox(withAPIKey(ctx, apiKey), &pb.DeleteSandboxRequest{SandboxId: sandboxID})
+	_, err = cli.DeleteSandbox(withCallMetadata(ctx, apiKey), &pb.DeleteSandboxRequest{SandboxId: sandboxID})
 	return err
 }

@@ -248,19 +248,24 @@ func (r *Runtime) CreateSandbox(ctx context.Context, sandboxID string, _ *runner
 		_ = r.deleteSandbox(ctx, state)
 	}
 
+	timer := newStepTimer(metrics.OpCreate, r.metrics)
 	templateRootfs := filepath.Join(r.config.TemplateDir, "rootfs.ext4")
 	slog.Debug("firecracker cloning rootfs", "sandbox_id", sandboxID, "template", templateRootfs, "dest", state.rootfsPath)
-	if err := r.deps.cloneRootfs(ctx, templateRootfs, state.rootfsPath); err != nil {
+	if err := timer.step(stepCloneRootfs, func() error {
+		return r.deps.cloneRootfs(ctx, templateRootfs, state.rootfsPath)
+	}); err != nil {
 		cleanupOnError()
 		return nil, fmt.Errorf("clone sandbox rootfs: %w", err)
 	}
 	slog.Debug("firecracker cloning golden snapshot", "sandbox_id", sandboxID, "data_dir", state.dataDir)
-	if err := r.deps.cloneGoldenSnapshot(ctx, r.config.SnapshotMemPath, r.config.SnapshotStatePath, state.dataDir); err != nil {
+	if err := timer.step(stepCloneSnapshot, func() error {
+		return r.deps.cloneGoldenSnapshot(ctx, r.config.SnapshotMemPath, r.config.SnapshotStatePath, state.dataDir)
+	}); err != nil {
 		cleanupOnError()
 		return nil, fmt.Errorf("clone sandbox snapshot assets: %w", err)
 	}
 
-	if err := r.activateSandboxVM(ctx, state); err != nil {
+	if err := r.activateSandboxVM(ctx, state, timer); err != nil {
 		cleanupOnError()
 		return nil, err
 	}
@@ -269,7 +274,13 @@ func (r *Runtime) CreateSandbox(ctx context.Context, sandboxID string, _ *runner
 	state.running = true
 	info := *state.info
 	r.mu.Unlock()
-	slog.Info("firecracker sandbox created", "sandbox_id", sandboxID, "vm_id", state.vmID, "slot", state.slot, "daemon_url", state.daemonURL)
+	slog.Info("firecracker sandbox created",
+		append([]any{
+			"sandbox_id", sandboxID,
+			"vm_id", state.vmID,
+			"slot", state.slot,
+			"daemon_url", state.daemonURL,
+		}, timer.attrsFor(ctx)...)...)
 	return &info, nil
 }
 

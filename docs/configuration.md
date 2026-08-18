@@ -162,6 +162,7 @@ Series exposed today:
 - `sandbox_http_requests_total{role,route,method,status}` and `sandbox_http_request_duration_seconds{role,route,method}` (both binaries).
 - API: `sandbox_sandbox_operations_total{operation,result}`, `sandbox_sandboxes_active`, `sandbox_runners_registered`.
 - Runner: `sandbox_container_operations_total{operation,result}`, `sandbox_container_operation_duration_seconds{operation}`, `sandbox_containers_active`.
+- Firecracker runner: `sandbox_lifecycle_step_duration_seconds{operation,step}`, the per-step breakdown of a create or wake. See [observability.md](observability.md).
 - Plus the standard `go_*` and `process_*` collectors.
 
 ## Disk quotas

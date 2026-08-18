@@ -111,6 +111,29 @@ func TestRunnerRecorderObservations(t *testing.T) {
 	}
 }
 
+func TestRunnerRecorderLifecycleSteps(t *testing.T) {
+	r := NewRunnerRecorder(true)
+
+	r.ObserveLifecycleStep(OpCreate, "clone_rootfs", 30*time.Millisecond)
+	r.ObserveLifecycleStep(OpCreate, "load_snapshot", 120*time.Millisecond)
+	r.ObserveLifecycleStep(OpEnsureRunning, "load_snapshot", 90*time.Millisecond)
+
+	if got := testutil.CollectAndCount(r.lifecycleSteps); got != 3 {
+		t.Errorf("lifecycle_step_duration_seconds series = %d, want 3", got)
+	}
+
+	body := scrape(t, r.Registry())
+	for _, want := range []string{
+		"sandbox_lifecycle_step_duration_seconds",
+		`operation="create",role="runner",step="clone_rootfs"`,
+		`operation="ensure_running",role="runner",step="load_snapshot"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("scrape body missing %q", want)
+		}
+	}
+}
+
 func TestRunnerRecorderDisabled(t *testing.T) {
 	r := NewRunnerRecorder(false)
 	if r.Enabled() {
@@ -118,6 +141,7 @@ func TestRunnerRecorderDisabled(t *testing.T) {
 	}
 	r.ObserveHTTP("/x", http.MethodGet, http.StatusOK, time.Millisecond)
 	r.ObserveContainerOp(OpCreate, true, time.Second)
+	r.ObserveLifecycleStep(OpCreate, "clone_rootfs", time.Millisecond)
 	r.SetActiveContainers(func() float64 { return 1 })
 }
 
