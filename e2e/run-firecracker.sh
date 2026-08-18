@@ -193,6 +193,9 @@ FC_RUNNER_ENV_FILE="${E2E_FIRECRACKER_RUNNER_ENV_FILE:-$SCRIPT_DIR/.fc-runner-en
 } >"$FC_RUNNER_ENV_FILE"
 export E2E_FIRECRACKER_RUNNER_ENV_FILE="$FC_RUNNER_ENV_FILE"
 
+# The redirect runs as the calling user on purpose, so the harness can read the
+# log without sudo.
+# shellcheck disable=SC2024
 sudo env "${RUNNER_ENV[@]}" "$RUNNER_BIN" >"$RUNNER_LOG" 2>&1 &
 RUNNER_PID=$!
 export E2E_RUNNER_PID="$RUNNER_PID"

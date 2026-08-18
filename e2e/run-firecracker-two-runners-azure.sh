@@ -14,7 +14,7 @@ source "$SCRIPT_DIR/lib/common.sh"
 : "${SSH_KEY_PATH:?SSH_KEY_PATH is required}"
 
 VM_ADMIN="${VM_ADMIN:-azureuser}"
-SSH_OPTS="-o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=6"
+SSH_OPTS=(-o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=6)
 TLS_DIR="$(mktemp -d)"
 REMOTE_TLS_DIR="/tmp/n8n-sandbox-e2e-tls-$$"
 RUNNER2_PID=""
@@ -31,16 +31,16 @@ bash "$PROJECT_DIR/scripts/bootstrap-mtls.sh" \
 	--control-sans "runner-control-a,runner-control-b,localhost"
 
 echo "Copying TLS material to VMs..."
-ssh $SSH_OPTS -i "$SSH_KEY_PATH" "${VM_ADMIN}@${VM_IP}" "rm -rf '$REMOTE_TLS_DIR' && mkdir -p '$REMOTE_TLS_DIR'"
+ssh "${SSH_OPTS[@]}" -i "$SSH_KEY_PATH" "${VM_ADMIN}@${VM_IP}" "rm -rf '$REMOTE_TLS_DIR' && mkdir -p '$REMOTE_TLS_DIR'"
 e2e_ssh_peer "$VM_IP" "$PEER_VM_PRIVATE_IP" "$SSH_KEY_PATH" "$VM_ADMIN" \
 	"rm -rf '$REMOTE_TLS_DIR' && mkdir -p '$REMOTE_TLS_DIR'"
-scp $SSH_OPTS -i "$SSH_KEY_PATH" -r "$TLS_DIR/." "${VM_ADMIN}@${VM_IP}:${REMOTE_TLS_DIR}/"
+scp "${SSH_OPTS[@]}" -i "$SSH_KEY_PATH" -r "$TLS_DIR/." "${VM_ADMIN}@${VM_IP}:${REMOTE_TLS_DIR}/"
 e2e_scp_dir_to_peer "$VM_IP" "$PEER_VM_PRIVATE_IP" "$SSH_KEY_PATH" "$VM_ADMIN" \
 	"$TLS_DIR/." "${REMOTE_TLS_DIR}/"
 
 echo "Installing SSH key on control VM for peer runner management..."
-scp $SSH_OPTS -i "$SSH_KEY_PATH" "$SSH_KEY_PATH" "${VM_ADMIN}@${VM_IP}:~/.ssh/e2e-peer-key"
-ssh $SSH_OPTS -i "$SSH_KEY_PATH" "${VM_ADMIN}@${VM_IP}" "chmod 600 ~/.ssh/e2e-peer-key"
+scp "${SSH_OPTS[@]}" -i "$SSH_KEY_PATH" "$SSH_KEY_PATH" "${VM_ADMIN}@${VM_IP}:~/.ssh/e2e-peer-key"
+ssh "${SSH_OPTS[@]}" -i "$SSH_KEY_PATH" "${VM_ADMIN}@${VM_IP}" "chmod 600 ~/.ssh/e2e-peer-key"
 
 echo "Starting peer Firecracker runner on ${PEER_VM_PRIVATE_IP}..."
 e2e_ssh_peer "$VM_IP" "$PEER_VM_PRIVATE_IP" "$SSH_KEY_PATH" "$VM_ADMIN" bash -s <<EOF
@@ -57,7 +57,10 @@ RUNNER2_PID=$(e2e_ssh_peer "$VM_IP" "$PEER_VM_PRIVATE_IP" "$SSH_KEY_PATH" "$VM_A
 	"cat ~/project/e2e/.fc-runner-b.pid")
 
 echo "Running two-runner tests on control VM ${VM_IP}..."
-ssh $SSH_OPTS -i "$SSH_KEY_PATH" "${VM_ADMIN}@${VM_IP}" bash -s -- "$@" <<EOF
+# Unquoted heredoc on purpose: the local values below are interpolated into the
+# script that runs on the VM.
+# shellcheck disable=SC2087
+ssh "${SSH_OPTS[@]}" -i "$SSH_KEY_PATH" "${VM_ADMIN}@${VM_IP}" bash -s -- "$@" <<EOF
 set -euo pipefail
 export PATH=/usr/local/go/bin:\$HOME/go/bin:\$PATH
 cd ~/project

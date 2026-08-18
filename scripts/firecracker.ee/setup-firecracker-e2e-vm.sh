@@ -174,7 +174,7 @@ build_template_assets() {
 
 	FIRECRACKER_CI_VERSION="$FIRECRACKER_CI_VERSION" \
 		FIRECRACKER_ROOTFS_SIZE_MB="$FIRECRACKER_E2E_ROOTFS_SIZE_MB" \
-		SANDBOX_IMAGE= \
+		SANDBOX_IMAGE='' \
 		SANDBOX_ROOTFS_TAR="$rootfs_tar" \
 		TEMPLATE_DIR="/srv/firecracker/template" \
 		bash "${SCRIPT_DIR}/build-rootfs-template.sh"
@@ -217,7 +217,9 @@ curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tar
 sudo rm -rf /usr/local/go
 sudo tar -C /usr/local -xzf /tmp/go.tar.gz
 rm /tmp/go.tar.gz
-echo 'export PATH=/usr/local/go/bin:$HOME/go/bin:$PATH' >> ~/.bashrc
+# Single quotes on purpose: $HOME must stay literal in .bashrc.
+# shellcheck disable=SC2016
+echo 'export PATH=/usr/local/go/bin:$HOME/go/bin:$PATH' >>~/.bashrc
 export PATH=/usr/local/go/bin:$HOME/go/bin:$PATH
 sudo ln -sf /usr/local/go/bin/go /usr/local/bin/go
 sudo ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt

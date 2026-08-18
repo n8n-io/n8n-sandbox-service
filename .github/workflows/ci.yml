@@ -22,6 +22,27 @@ jobs:
       - name: Vet
         run: make vet
 
+      # Both tools are pinned so CI and local runs agree. The runner image does
+      # preinstall shellcheck, but at a version that lags brew's and still reports
+      # findings v0.11.0 dropped (SC2015 on `A && B || true`).
+      - name: Install shfmt
+        run: go install mvdan.cc/sh/v3/cmd/shfmt@v3.13.1
+
+      - name: Install shellcheck
+        env:
+          SHELLCHECK_VERSION: v0.11.0
+        run: |
+          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" | tar -xJ
+          sudo install -m 0755 "shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+          rm -rf "shellcheck-${SHELLCHECK_VERSION}"
+          shellcheck --version
+
+      - name: Check shell formatting
+        run: make shell-fmt-check
+
+      - name: Lint shell scripts
+        run: make shell-lint
+
       - name: Build
         run: make all
 

@@ -51,6 +51,9 @@ E2E_PEER_VM_ENABLED=true GITHUB_OUTPUT="$OUTPUT_FILE" \
 	bash e2e/infra/scripts/provision-firecracker-e2e-vm.sh
 
 while IFS='=' read -r key value; do
+	# PEER_VM_PUBLIC_IP is parsed for symmetry with the provisioner's outputs; only
+	# the peer private IP is used from here.
+	# shellcheck disable=SC2034
 	case "$key" in
 	vm_ip) VM_IP="$value" ;;
 	vm_private_ip) VM_PRIVATE_IP="$value" ;;
@@ -66,9 +69,9 @@ if [[ -z "$VM_IP" || -z "$VM_PRIVATE_IP" || -z "$PEER_VM_PRIVATE_IP" || -z "$SSH
 fi
 
 echo "==> Running Firecracker e2e tests on control VM ${VM_IP}..."
-SSH_OPTS="-o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=6"
+SSH_OPTS=(-o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=6)
 TESTS_STARTED=1
-ssh $SSH_OPTS -i "$SSH_KEY_PATH" "azureuser@${VM_IP}" bash -s -- "$@" <<'EOF'
+ssh "${SSH_OPTS[@]}" -i "$SSH_KEY_PATH" "azureuser@${VM_IP}" bash -s -- "$@" <<'EOF'
 set -euxo pipefail
 export PATH=/usr/local/go/bin:$HOME/go/bin:$PATH
 

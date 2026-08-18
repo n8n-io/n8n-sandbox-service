@@ -19,50 +19,50 @@ set -euo pipefail
 
 usage() {
 	cat <<-'USAGE'
-	Usage: bootstrap-mtls.sh [OPTIONS]
+		Usage: bootstrap-mtls.sh [OPTIONS]
 
-	Generate mTLS certificates for n8n-sandbox-service API ↔ runner communication.
-	Certificates are organized into api/ and runner/ subdirectories.
+		Generate mTLS certificates for n8n-sandbox-service API ↔ runner communication.
+		Certificates are organized into api/ and runner/ subdirectories.
 
-	Options:
-	  -o, --out-dir DIR              Output directory (default: ./.tls, env: OUT_DIR)
-	  -n, --runners N                Number of runners; generates control SANs as
-	                                   PREFIX-1,...,PREFIX-N,localhost
-	                                   (default: 2, env: NUM_RUNNERS)
-	      --api-san NAME             DNS SAN for API server cert
-	                                   (default: n8n-sandbox-service-api-local,
-	                                   env: API_DNS)
-	      --client-san NAME          DNS SAN for runner client cert
-	                                   (default: sandbox-runner-mtls-client,
-	                                   env: CLIENT_DNS)
-	      --control-san-prefix PFX   Prefix for auto-generated runner control SANs;
-	                                   generates PFX-1,...,PFX-N,localhost
-	                                   (default: n8n-sandbox-service-runner-dind-local,
-	                                   env: CONTROL_SAN_PREFIX)
-	      --control-sans NAMES       Comma-separated DNS SANs for runner control server
-	                                   cert; overrides --runners and --control-san-prefix
-	                                   (env: CONTROL_SANS)
-	      --control-client-san NAME  DNS SAN for API control client cert
-	                                   (default: sandbox-api-control-mtls-client,
-	                                   env: CONTROL_API_CLIENT_DNS)
-	      --world-readable           Set key file permissions to 644 instead of 600
-	      --force                    Force regeneration even if certs exist
-	                                   (env: SANDBOX_TLS_REGEN=1)
-	  -h, --help                     Show this help
+		Options:
+		  -o, --out-dir DIR              Output directory (default: ./.tls, env: OUT_DIR)
+		  -n, --runners N                Number of runners; generates control SANs as
+		                                   PREFIX-1,...,PREFIX-N,localhost
+		                                   (default: 2, env: NUM_RUNNERS)
+		      --api-san NAME             DNS SAN for API server cert
+		                                   (default: n8n-sandbox-service-api-local,
+		                                   env: API_DNS)
+		      --client-san NAME          DNS SAN for runner client cert
+		                                   (default: sandbox-runner-mtls-client,
+		                                   env: CLIENT_DNS)
+		      --control-san-prefix PFX   Prefix for auto-generated runner control SANs;
+		                                   generates PFX-1,...,PFX-N,localhost
+		                                   (default: n8n-sandbox-service-runner-dind-local,
+		                                   env: CONTROL_SAN_PREFIX)
+		      --control-sans NAMES       Comma-separated DNS SANs for runner control server
+		                                   cert; overrides --runners and --control-san-prefix
+		                                   (env: CONTROL_SANS)
+		      --control-client-san NAME  DNS SAN for API control client cert
+		                                   (default: sandbox-api-control-mtls-client,
+		                                   env: CONTROL_API_CLIENT_DNS)
+		      --world-readable           Set key file permissions to 644 instead of 600
+		      --force                    Force regeneration even if certs exist
+		                                   (env: SANDBOX_TLS_REGEN=1)
+		  -h, --help                     Show this help
 
-	Examples:
-	  # Local development with defaults (2 runners)
-	  bootstrap-mtls.sh
+		Examples:
+		  # Local development with defaults (2 runners)
+		  bootstrap-mtls.sh
 
-	  # CI with explicit SANs
-	  bootstrap-mtls.sh -o /tmp/tls --api-san my-api --control-sans "runner-a,runner-b"
+		  # CI with explicit SANs
+		  bootstrap-mtls.sh -o /tmp/tls --api-san my-api --control-sans "runner-a,runner-b"
 
-	  # Production VM with 3 runners
-	  bootstrap-mtls.sh -o /etc/sandbox/tls --runners 3
+		  # Production VM with 3 runners
+		  bootstrap-mtls.sh -o /etc/sandbox/tls --runners 3
 
-	  # Docker Compose init container with prefix-based SANs
-	  bootstrap-mtls.sh --out-dir /tls --api-san my-api \
-	      --control-san-prefix my-runner --runners 2
+		  # Docker Compose init container with prefix-based SANs
+		  bootstrap-mtls.sh --out-dir /tls --api-san my-api \
+		      --control-san-prefix my-runner --runners 2
 	USAGE
 }
 
@@ -70,21 +70,51 @@ usage() {
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
-		-o|--out-dir)            OUT_DIR="$2";              shift 2 ;;
-		-n|--runners)            NUM_RUNNERS="$2";          shift 2 ;;
-		--api-san)               API_DNS="$2";              shift 2 ;;
-		--client-san)            CLIENT_DNS="$2";           shift 2 ;;
-		--control-san-prefix)    CONTROL_SAN_PREFIX="$2";   shift 2 ;;
-		--control-sans)          CONTROL_SANS="$2";         shift 2 ;;
-		--control-client-san)    CONTROL_API_CLIENT_DNS="$2"; shift 2 ;;
-		--world-readable)        WORLD_READABLE=1;          shift ;;
-		--force)                 FORCE=1;                   shift ;;
-		-h|--help)               usage; exit 0 ;;
-		*)
-			echo "Unknown option: $1" >&2
-			echo "Run with --help for usage." >&2
-			exit 1
-			;;
+	-o | --out-dir)
+		OUT_DIR="$2"
+		shift 2
+		;;
+	-n | --runners)
+		NUM_RUNNERS="$2"
+		shift 2
+		;;
+	--api-san)
+		API_DNS="$2"
+		shift 2
+		;;
+	--client-san)
+		CLIENT_DNS="$2"
+		shift 2
+		;;
+	--control-san-prefix)
+		CONTROL_SAN_PREFIX="$2"
+		shift 2
+		;;
+	--control-sans)
+		CONTROL_SANS="$2"
+		shift 2
+		;;
+	--control-client-san)
+		CONTROL_API_CLIENT_DNS="$2"
+		shift 2
+		;;
+	--world-readable)
+		WORLD_READABLE=1
+		shift
+		;;
+	--force)
+		FORCE=1
+		shift
+		;;
+	-h | --help)
+		usage
+		exit 0
+		;;
+	*)
+		echo "Unknown option: $1" >&2
+		echo "Run with --help for usage." >&2
+		exit 1
+		;;
 	esac
 done
 
@@ -118,12 +148,12 @@ fi
 # --- Idempotency: skip if all PEMs already exist ---
 
 tls_complete() {
-	[[ -f "$API_DIR/ca.crt" ]] \
-		&& [[ -f "$API_DIR/grpc-server.crt" ]] && [[ -f "$API_DIR/grpc-server.key" ]] \
-		&& [[ -f "$API_DIR/control-grpc-api-client.crt" ]] && [[ -f "$API_DIR/control-grpc-api-client.key" ]] \
-		&& [[ -f "$RUNNER_DIR/ca.crt" ]] \
-		&& [[ -f "$RUNNER_DIR/grpc-client.crt" ]] && [[ -f "$RUNNER_DIR/grpc-client.key" ]] \
-		&& [[ -f "$RUNNER_DIR/control-grpc-server.crt" ]] && [[ -f "$RUNNER_DIR/control-grpc-server.key" ]]
+	[[ -f "$API_DIR/ca.crt" ]] &&
+		[[ -f "$API_DIR/grpc-server.crt" ]] && [[ -f "$API_DIR/grpc-server.key" ]] &&
+		[[ -f "$API_DIR/control-grpc-api-client.crt" ]] && [[ -f "$API_DIR/control-grpc-api-client.key" ]] &&
+		[[ -f "$RUNNER_DIR/ca.crt" ]] &&
+		[[ -f "$RUNNER_DIR/grpc-client.crt" ]] && [[ -f "$RUNNER_DIR/grpc-client.key" ]] &&
+		[[ -f "$RUNNER_DIR/control-grpc-server.crt" ]] && [[ -f "$RUNNER_DIR/control-grpc-server.key" ]]
 }
 
 if [[ "$FORCE" != "1" ]] && tls_complete; then

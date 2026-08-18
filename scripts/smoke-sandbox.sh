@@ -17,9 +17,11 @@
 #   SMOKE_VERBOSE          — Set to 1 to print full exec NDJSON streams
 #   SMOKE_EXEC_TIMEOUT_MS  — Exec timeout in ms (default: 60000)
 #   SMOKE_EXTENDED         — Set to 1 to create a second sandbox (snapshot restore path)
+# `local` is not in POSIX, but every sh this runs under (dash, ash, bash) has it.
+# shellcheck disable=SC3043
 set -eu
 
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 
 if [ -n "${SMOKE_ENV:-}" ]; then
 	PRESET_FILE="${SCRIPT_DIR}/smoke-sandbox.${SMOKE_ENV}.env"
@@ -181,8 +183,8 @@ assert_exec() {
 	while [ "${attempt}" -lt 5 ]; do
 		attempt=$((attempt + 1))
 		if api_json -N -X POST "${BASE}/sandboxes/${target_sid}/executions" \
-			-d "{\"command\":$(jq -n --arg c "${command}" '$c'),\"timeout_ms\":${EXEC_TIMEOUT_MS}}" >"${out}" \
-			&& jq -se 'map(select(.type=="exit")) | length > 0' "${out}" >/dev/null 2>&1; then
+			-d "{\"command\":$(jq -n --arg c "${command}" '$c'),\"timeout_ms\":${EXEC_TIMEOUT_MS}}" >"${out}" &&
+			jq -se 'map(select(.type=="exit")) | length > 0' "${out}" >/dev/null 2>&1; then
 			got_exit="$(trim_output "$(exec_exit_code "${out}")")"
 			if [ "${got_exit}" = "${want_exit}" ]; then
 				break

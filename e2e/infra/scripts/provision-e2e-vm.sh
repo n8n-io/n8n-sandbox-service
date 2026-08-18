@@ -13,12 +13,12 @@ TF_DIR="e2e/infra"
 VM_NAME="e2e-sysbox-${GITHUB_RUN_ID:-$(date +%s)}"
 SSH_KEY_PATH="$HOME/.ssh/e2e-vm-key"
 VM_ADMIN="azureuser"
-SSH_OPTS="-o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=6"
+SSH_OPTS=(-o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=6)
 
 output() {
 	echo "$1=$2"
 	if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
-		echo "$1=$2" >> "$GITHUB_OUTPUT"
+		echo "$1=$2" >>"$GITHUB_OUTPUT"
 	fi
 }
 
@@ -30,7 +30,7 @@ else
 	echo "==> Using existing SSH keypair at ${SSH_KEY_PATH}"
 fi
 
-cat > "${TF_DIR}/e2e-vm.auto.tfvars.json" <<EOF
+cat >"${TF_DIR}/e2e-vm.auto.tfvars.json" <<EOF
 {
   "resource_group_name": "$RESOURCE_GROUP",
   "vm_name": "$VM_NAME",
@@ -72,13 +72,13 @@ COPYFILE_DISABLE=1 "$GNUTAR" czf /tmp/repo.tar.gz \
 	--exclude='e2e/infra/.terraform' \
 	--exclude='e2e/infra/*.tfstate*' \
 	-C "$(pwd)" .
-scp $SSH_OPTS -i "$SSH_KEY_PATH" /tmp/repo.tar.gz "${VM_ADMIN}@${VM_IP}:/tmp/repo.tar.gz"
-ssh $SSH_OPTS -i "$SSH_KEY_PATH" "${VM_ADMIN}@${VM_IP}" \
+scp "${SSH_OPTS[@]}" -i "$SSH_KEY_PATH" /tmp/repo.tar.gz "${VM_ADMIN}@${VM_IP}:/tmp/repo.tar.gz"
+ssh "${SSH_OPTS[@]}" -i "$SSH_KEY_PATH" "${VM_ADMIN}@${VM_IP}" \
 	"mkdir -p ~/project && tar xzf /tmp/repo.tar.gz -C ~/project && rm /tmp/repo.tar.gz"
 rm -f /tmp/repo.tar.gz
 
 echo "==> Setting up VM (Docker, sysbox, Go, Node, pnpm)..."
-ssh $SSH_OPTS -i "$SSH_KEY_PATH" "${VM_ADMIN}@${VM_IP}" "bash ~/project/e2e/infra/scripts/setup-e2e-vm.sh"
+ssh "${SSH_OPTS[@]}" -i "$SSH_KEY_PATH" "${VM_ADMIN}@${VM_IP}" "bash ~/project/e2e/infra/scripts/setup-e2e-vm.sh"
 
 output "vm_name" "$VM_NAME"
 output "vm_ip" "$VM_IP"

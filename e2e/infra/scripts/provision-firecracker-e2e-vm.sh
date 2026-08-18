@@ -22,7 +22,7 @@ VM_ADMIN="azureuser"
 output() {
 	echo "$1=$2"
 	if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
-		echo "$1=$2" >> "$GITHUB_OUTPUT"
+		echo "$1=$2" >>"$GITHUB_OUTPUT"
 	fi
 }
 
@@ -39,7 +39,7 @@ case "${E2E_PEER_VM_ENABLED:-false}" in
 1 | true | yes) peer_vm_tf=true ;;
 esac
 
-cat > "${TF_DIR}/e2e-vm.auto.tfvars.json" <<EOF
+cat >"${TF_DIR}/e2e-vm.auto.tfvars.json" <<EOF
 {
   "resource_group_name": "$RESOURCE_GROUP",
   "vm_name": "$VM_NAME",

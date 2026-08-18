@@ -8,12 +8,12 @@ set -euo pipefail
 : "${SSH_KEY_PATH:?SSH_KEY_PATH is required}"
 
 VM_ADMIN="azureuser"
-SSH_OPTS="-o StrictHostKeyChecking=no -o ConnectTimeout=10"
+SSH_OPTS=(-o StrictHostKeyChecking=no -o ConnectTimeout=10)
 ARTIFACT_DIR="/tmp/e2e-artifacts"
 
 echo "==> Collecting logs from ${VM_IP}..."
 
-ssh $SSH_OPTS -i "$SSH_KEY_PATH" "${VM_ADMIN}@${VM_IP}" bash -s << 'EOF'
+ssh "${SSH_OPTS[@]}" -i "$SSH_KEY_PATH" "${VM_ADMIN}@${VM_IP}" bash -s <<'EOF'
 set -x
 cd ~/project
 tar czf /tmp/e2e-results.tar.gz e2e/test-results/ 2>/dev/null || true
@@ -24,7 +24,7 @@ EOF
 
 mkdir -p "$ARTIFACT_DIR"
 for f in e2e-results.tar.gz docker-info.txt sysbox-status.txt sysbox-journal.txt; do
-	scp $SSH_OPTS -i "$SSH_KEY_PATH" "${VM_ADMIN}@${VM_IP}:/tmp/${f}" "${ARTIFACT_DIR}/" 2>/dev/null || true
+	scp "${SSH_OPTS[@]}" -i "$SSH_KEY_PATH" "${VM_ADMIN}@${VM_IP}:/tmp/${f}" "${ARTIFACT_DIR}/" 2>/dev/null || true
 done
 
 echo "==> Logs collected to ${ARTIFACT_DIR}"

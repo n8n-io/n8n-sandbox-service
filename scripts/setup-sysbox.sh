@@ -28,8 +28,8 @@ detect_arch() {
 	local arch
 	arch=$(uname -m | sed 's/aarch64/arm64/' | sed 's/x86_64/amd64/')
 	case "$arch" in
-		amd64|arm64) echo "$arch" ;;
-		*) err "Unsupported architecture: $(uname -m). Only amd64 and arm64 are supported." ;;
+	amd64 | arm64) echo "$arch" ;;
+	*) err "Unsupported architecture: $(uname -m). Only amd64 and arm64 are supported." ;;
 	esac
 }
 
@@ -44,19 +44,19 @@ check_distro() {
 	local major_version="${VERSION_ID%%.*}"
 
 	case "$ID" in
-		ubuntu)
-			case "$major_version" in
-				18|20|22|24) ;;
-				*) err "Unsupported Ubuntu version: ${VERSION_ID}. Supported: 18, 20, 22, 24." ;;
-			esac
-			;;
-		debian)
-			case "$major_version" in
-				10|11) ;;
-				*) err "Unsupported Debian version: ${VERSION_ID}. Supported: 10, 11." ;;
-			esac
-			;;
-		*) err "Unsupported distribution: ${ID}. Only Ubuntu and Debian are supported." ;;
+	ubuntu)
+		case "$major_version" in
+		18 | 20 | 22 | 24) ;;
+		*) err "Unsupported Ubuntu version: ${VERSION_ID}. Supported: 18, 20, 22, 24." ;;
+		esac
+		;;
+	debian)
+		case "$major_version" in
+		10 | 11) ;;
+		*) err "Unsupported Debian version: ${VERSION_ID}. Supported: 10, 11." ;;
+		esac
+		;;
+	*) err "Unsupported distribution: ${ID}. Only Ubuntu and Debian are supported." ;;
 	esac
 
 	echo "==> Distribution: ${ID} ${VERSION_ID}"
@@ -65,7 +65,7 @@ check_distro() {
 check_kernel() {
 	local kernel major minor
 	kernel=$(uname -r)
-	IFS='.-' read -r major minor _ <<< "$kernel"
+	IFS='.-' read -r major minor _ <<<"$kernel"
 
 	if [[ "$major" -lt 5 ]] || { [[ "$major" -eq 5 ]] && [[ "$minor" -le 19 ]]; }; then
 		err "Kernel version ${kernel} is too old. Sysbox requires kernel > 5.19."
@@ -130,8 +130,8 @@ download_sysbox() {
 	local expected_sha
 
 	case "$arch" in
-		amd64) expected_sha="$SHA256_AMD64" ;;
-		arm64) expected_sha="$SHA256_ARM64" ;;
+	amd64) expected_sha="$SHA256_AMD64" ;;
+	arm64) expected_sha="$SHA256_ARM64" ;;
 	esac
 
 	DL_DIR=$(mktemp -d)
@@ -196,8 +196,8 @@ verify_sysbox() {
 main() {
 	for arg in "$@"; do
 		case "$arg" in
-			--dry-run) DRY_RUN=1 ;;
-			*) err "Unknown argument: $arg" ;;
+		--dry-run) DRY_RUN=1 ;;
+		*) err "Unknown argument: $arg" ;;
 		esac
 	done
 
