@@ -17,9 +17,15 @@ const deleteDuration = new Trend("sandbox_delete_duration", true);
 
 // The baseline scenario measures one operation at a time, which is what
 // docs/performance.md records. The load scenario is the concurrent run.
+//
+// maxDuration is set explicitly because k6 would otherwise cut the run off
+// after 10 minutes and report fewer iterations than asked for, which is easy
+// to miss when WAKE_AFTER makes each iteration take the better part of a
+// minute.
 const baselineOptions = {
   vus: 1,
   iterations: ITERATIONS,
+  maxDuration: __ENV.MAX_DURATION || "30m",
   thresholds: {
     http_req_failed: ["rate<0.01"],
   },

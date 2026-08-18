@@ -10,7 +10,7 @@ The API establishes a [W3C trace context](https://www.w3.org/TR/trace-context/)
 for every request in its outermost middleware, then forwards it to the runner:
 
 | Hop | Carrier |
-|-----|---------|
+| --- | --- |
 | Client → API | `traceparent` HTTP header (optional, see [API.md](API.md#request-tracing)) |
 | API → runner (exec, files) | `traceparent` HTTP header on the proxied request |
 | API → runner (create, stop, delete) | `traceparent` gRPC metadata |
@@ -36,7 +36,7 @@ Rules:
 The API emits exactly one `request` event per request, whatever the outcome:
 
 | Field | Notes |
-|-------|-------|
+| --- | --- |
 | `trace_id` | Join key for every other event of this request |
 | `method`, `path`, `query`, `status`, `duration_ms` | Always present |
 | `tenant_id` | Present for tenant-authenticated requests |
@@ -51,7 +51,7 @@ The Firecracker runner emits `firecracker sandbox created` and
 `firecracker sandbox woke` with the full step breakdown:
 
 | Field | Notes |
-|-------|-------|
+| --- | --- |
 | `trace_id` | Matches the API event for the request that caused the operation |
 | `sandbox_id`, `vm_id`, `slot` | Identity of the sandbox and the slot it occupies |
 | `op` | `create` or `ensure_running`, matching the metric labels |
@@ -61,7 +61,7 @@ The Firecracker runner emits `firecracker sandbox created` and
 Steps, in order:
 
 | Step | Operation | What it covers |
-|------|-----------|----------------|
+| --- | --- | --- |
 | `clone_rootfs` | create | Copy the template rootfs for the new sandbox |
 | `clone_snapshot` | create | Copy the golden memory and state snapshot |
 | `prepare_jail` | create, wake | Jailer directory and device setup |
@@ -94,6 +94,10 @@ Full list in [configuration.md](configuration.md#metrics).
 Both binaries log JSON to stdout, so the examples below work on any log stream —
 `kubectl logs`, `journalctl -o cat`, or a log file from the e2e scripts.
 
+A runner's journal is not pure JSON: the runtime shells out through `sudo` for
+jail and network setup, and those lines land in the same unit. Select the events
+you want with `grep` before handing anything to `jq`.
+
 Everything one request touched, across both processes:
 
 ```sh
@@ -103,15 +107,22 @@ cat api.log runner.log | jq 'select(.trace_id == "4bf92f3577b34da6a3ce929d0e0e47
 The ten slowest wakes, with their step breakdown:
 
 ```sh
-jq -c 'select(.msg == "firecracker sandbox woke")' runner.log \
+grep -a '"firecracker sandbox woke"' runner.log \
   | jq -s 'sort_by(-.total_ms) | .[:10]'
 ```
 
-Which step dominates wakes:
+Percentiles for every step of an operation, which is what a baseline entry
+needs. This runs on a stream of any size and prints a summary small enough to
+come back through `az vmss run-command`:
 
 ```sh
-jq -s '[.[] | select(.msg == "firecracker sandbox woke")]
-       | (map(.load_snapshot_ms) | add / length) as $snapshot
-       | (map(.total_ms) | add / length) as $total
-       | {mean_total_ms: $total, mean_load_snapshot_ms: $snapshot}' runner.log
+grep -a '"firecracker sandbox created"' runner.log | jq -s '
+  . as $e
+  | (map(keys[] | select(endswith("_ms"))) | unique) as $steps
+  | {n: length,
+     steps: [$steps[] | . as $s
+       | {key: $s, value: (($e | map(.[$s]) | sort) as $v
+           | {p50: $v[(($v|length-1) * 0.5) | floor],
+              p95: $v[(($v|length-1) * 0.95) | round],
+              max: ($v | max)})}] | from_entries}'
 ```
