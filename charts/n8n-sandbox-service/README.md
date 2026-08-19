@@ -148,7 +148,7 @@ runner:
 
 The mount does not bound the image, so the image needs a bounded volume of its own. When the chart owns a Docker data root volume (`runner.dockerDataRoot.persistence.enabled`, or the `emptyDir` of privileged isolation), it mounts that volume at `/var/lib/docker-pool` instead and puts the image there. Without this, the image lands on the container filesystem and can fill the node disk.
 
-The chart therefore requires an explicit pool size that fits the volume:
+The chart therefore requires an explicit pool size that fits the volume. With the default `sysbox` isolation, enable persistence so the volume exists:
 
 ```yaml
 runner:
@@ -156,9 +156,26 @@ runner:
     defaultDiskQuotaMb: "2048"
     diskQuotaPoolSizeGb: "60"
   dockerDataRoot:
+    persistence:
+      enabled: true
+      size: 64Gi
+```
+
+With `runner.isolation: privileged` and persistence disabled, the `emptyDir` holds the pool image instead. Set `runner.dockerDataRoot.emptyDir.sizeLimit` to at least `diskQuotaPoolSizeGb`:
+
+```yaml
+runner:
+  isolation: privileged
+  acknowledgePrivileged: true
+  config:
+    defaultDiskQuotaMb: "2048"
+    diskQuotaPoolSizeGb: "60"
+  dockerDataRoot:
     emptyDir:
       sizeLimit: 64Gi
 ```
+
+When `runner.config.diskQuotaPoolPath` points at a volume you mount yourself (for example through `runner.extraVolumes`), the chart skips the size comparison. You own the fit between the pool and that volume.
 
 The render fails if `runner.config.diskQuotaPoolSizeGb` is empty or larger than the volume. The default pool size is derived from `runner.config.capacityTotal` and is much larger than a normal volume, which is why the chart does not fall back to it.
 

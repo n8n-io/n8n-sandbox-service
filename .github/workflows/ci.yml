@@ -134,24 +134,72 @@ jobs:
 
       - name: Check the quota pool image lands on the bounded volume
         run: |
-          manifests=$(helm template n8n-sandbox-service charts/n8n-sandbox-service \
-            --set auth.existingSecret=n8n-sandbox-auth \
-            --set runner.isolation=privileged \
-            --set runner.acknowledgePrivileged=true \
+          render() {
+            helm template n8n-sandbox-service charts/n8n-sandbox-service \
+              --set auth.existingSecret=n8n-sandbox-auth "$@"
+          }
+          must_fail() {
+            message=$1
+            shift
+            if out=$(render "$@" 2>&1); then
+              echo "expected the render to fail: $*" >&2
+              exit 1
+            fi
+            if ! printf '%s' "$out" | grep -q "$message"; then
+              echo "expected failure message [$message] for: $*" >&2
+              printf '%s\n' "$out" >&2
+              exit 1
+            fi
+          }
+          privileged="--set runner.isolation=privileged --set runner.acknowledgePrivileged=true"
+
+          # Privileged isolation: the pool lands on the bounded emptyDir.
+          manifests=$(render $privileged \
             --set runner.config.defaultDiskQuotaMb=2048 \
             --set runner.config.diskQuotaPoolSizeGb=60)
           echo "$manifests" | grep -q 'mountPath: "/var/lib/docker-pool"'
           echo "$manifests" | grep -q 'SANDBOX_RUNNER_DISK_QUOTA_POOL_PATH: "/var/lib/docker-pool/docker.img"'
-          # A pool larger than the volume must fail the render.
-          if helm template n8n-sandbox-service charts/n8n-sandbox-service \
-            --set auth.existingSecret=n8n-sandbox-auth \
-            --set runner.isolation=privileged \
-            --set runner.acknowledgePrivileged=true \
+
+          # Sysbox isolation: the README example with persistence works the same.
+          manifests=$(render \
             --set runner.config.defaultDiskQuotaMb=2048 \
-            --set runner.config.diskQuotaPoolSizeGb=100 >/dev/null 2>&1; then
-            echo "expected the render to fail for a pool larger than the volume" >&2
-            exit 1
-          fi
+            --set runner.config.diskQuotaPoolSizeGb=60 \
+            --set runner.dockerDataRoot.persistence.enabled=true \
+            --set runner.dockerDataRoot.persistence.size=64Gi)
+          echo "$manifests" | grep -q 'mountPath: "/var/lib/docker-pool"'
+          echo "$manifests" | grep -q 'SANDBOX_RUNNER_DISK_QUOTA_POOL_PATH: "/var/lib/docker-pool/docker.img"'
+
+          # A pool larger than the volume must fail the render.
+          must_fail "must not exceed the docker data root size" $privileged \
+            --set runner.config.defaultDiskQuotaMb=2048 \
+            --set runner.config.diskQuotaPoolSizeGb=100
+
+          # The pool size must be a positive integer.
+          must_fail "positive whole number" $privileged \
+            --set runner.config.defaultDiskQuotaMb=2048 \
+            --set runner.config.diskQuotaPoolSizeGb=0
+          must_fail "positive whole number" $privileged \
+            --set runner.config.defaultDiskQuotaMb=2048 \
+            --set runner.config.diskQuotaPoolSizeGb=-5
+          must_fail "positive whole number" $privileged \
+            --set runner.config.defaultDiskQuotaMb=2048
+
+          # A missing or unsupported volume size must fail, not skip the guard.
+          must_fail "whole number of G or Gi" $privileged \
+            --set runner.config.defaultDiskQuotaMb=2048 \
+            --set runner.config.diskQuotaPoolSizeGb=60 \
+            --set runner.dockerDataRoot.emptyDir.sizeLimit=null
+          must_fail "whole number of G or Gi" $privileged \
+            --set runner.config.defaultDiskQuotaMb=2048 \
+            --set runner.config.diskQuotaPoolSizeGb=60 \
+            --set runner.dockerDataRoot.emptyDir.sizeLimit=500Mi
+
+          # An explicit pool path owns its own volume; skip the size comparison.
+          manifests=$(render $privileged \
+            --set runner.config.defaultDiskQuotaMb=2048 \
+            --set runner.config.diskQuotaPoolSizeGb=100 \
+            --set runner.config.diskQuotaPoolPath=/mnt/pool/docker.img)
+          echo "$manifests" | grep -q 'SANDBOX_RUNNER_DISK_QUOTA_POOL_PATH: "/mnt/pool/docker.img"'
 
       - name: Check long runner names stay isolation-specific and unique
         run: |
