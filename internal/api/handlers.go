@@ -18,6 +18,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/runnerctl"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
+	"github.com/n8n-io/sandbox-service/internal/obs"
 	"github.com/n8n-io/sandbox-service/internal/sandboxproxy"
 )
 
@@ -72,8 +73,15 @@ func sandboxProxyHandler(s store.SandboxStore, cfg *config.APIConfig) func(bool)
 			_ = s.UpdateLastActive(id)
 			_ = s.UpdateStatus(id, "running")
 
+			fields := obs.FieldsFrom(r.Context())
+			fields.Add("sandbox_id", id, "runner_id", rec.RunnerID)
+
 			u, _ := url.Parse(strings.TrimRight(rec.RunnerHTTPBase, "/"))
+			upstreamStart := time.Now()
 			proxy := newRunnerReverseProxy(u, cfg.RunnerAPIKey, func(resp *http.Response) {
+				// Response headers are in, so for a streamed exec this is the
+				// time to first byte rather than the full round trip.
+				fields.Add("ttfb_ms", time.Since(upstreamStart).Milliseconds())
 				reapSandboxIfRunnerGone(s, id, resp)
 			})
 			if limitBody {
@@ -274,10 +282,10 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 		run, err := reg.PickLowestUsed()
 		if err != nil {
 			if errors.Is(err, registry.ErrNoRunners) {
-				slog.Warn("create sandbox failed: no eligible runners")
+				slog.WarnContext(r.Context(), "create sandbox failed: no eligible runners")
 				writeError(w, http.StatusServiceUnavailable, err.Error())
 			} else {
-				slog.Error("create sandbox failed: pick runner", "error", err)
+				slog.ErrorContext(r.Context(), "create sandbox failed: pick runner", "error", err)
 				writeError(w, http.StatusInternalServerError, err.Error())
 			}
 			return
@@ -286,8 +294,12 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 		controlAddr := run.ControlGRPCAddr
 		tlsCfg := runnerControlTLS(cfg)
 
+		fields := obs.FieldsFrom(r.Context())
+		fields.Add("sandbox_id", sandboxID, "runner_id", run.ID)
+
 		now := time.Now().Unix()
-		slog.Info(
+		slog.InfoContext(
+			r.Context(),
 			"create sandbox: runner selected",
 			"sandbox_id", sandboxID,
 			"runner_id", run.ID,
@@ -301,7 +313,8 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 		)
 		gresp, err := runnerctl.CreateSandbox(r.Context(), controlAddr, cfg.RunnerAPIKey, tlsCfg, sandboxID, "{}")
 		if err != nil {
-			slog.Error(
+			slog.ErrorContext(
+				r.Context(),
 				"create sandbox failed: runner control create",
 				"sandbox_id", sandboxID,
 				"runner_id", run.ID,
@@ -336,7 +349,8 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 				writeError(w, http.StatusConflict, "sandbox id unavailable")
 				return
 			}
-			slog.Error(
+			slog.ErrorContext(
+				r.Context(),
 				"create sandbox failed: store record",
 				"sandbox_id", sandboxID,
 				"runner_id", run.ID,
@@ -350,7 +364,8 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 			writeError(w, http.StatusInternalServerError, "failed to store sandbox: "+err.Error())
 			return
 		}
-		slog.Info(
+		slog.InfoContext(
+			r.Context(),
 			"create sandbox succeeded",
 			"sandbox_id", sandboxID,
 			"runner_id", run.ID,
@@ -435,6 +450,13 @@ func newRunnerReverseProxy(runnerURL *url.URL, runnerAPIKey string, onResponse f
 				pr.Out.Header.Set("X-Api-Key", runnerAPIKey)
 			} else {
 				pr.Out.Header.Del("X-Api-Key")
+			}
+			// Forward the trace context we established, never the caller's raw
+			// header, which LoggingMiddleware has already validated or replaced.
+			if tp := obs.Traceparent(pr.In.Context()); tp != "" {
+				pr.Out.Header.Set(obs.HeaderTraceparent, tp)
+			} else {
+				pr.Out.Header.Del(obs.HeaderTraceparent)
 			}
 		},
 		ModifyResponse: func(resp *http.Response) error {

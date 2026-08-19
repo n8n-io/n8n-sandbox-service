@@ -4,25 +4,39 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/n8n-io/sandbox-service/internal/obs"
 )
 
-// LoggingMiddleware logs request method, path, status, and duration.
+// LoggingMiddleware establishes the request's trace context and emits one
+// canonical event per request when it finishes.
+//
+// It runs outermost so that rejected requests are logged too, which means the
+// contexts that later middleware and handlers derive are invisible here. They
+// contribute fields through the *obs.Fields pointer instead.
 func LoggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/healthz" || r.URL.Path == "/metrics" {
 			next.ServeHTTP(w, r)
 			return
 		}
+		traceparent := obs.EnsureTraceparent(r.Header.Get(obs.HeaderTraceparent))
+		ctx, fields := obs.WithFields(obs.WithTraceparent(r.Context(), traceparent))
+		r = r.WithContext(ctx)
+
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w, status: 200}
 		next.ServeHTTP(sw, r)
-		slog.Info("request",
+
+		attrs := []any{
+			"trace_id", obs.TraceIDOf(traceparent),
 			"method", r.Method,
 			"path", r.URL.Path,
 			"query", r.URL.RawQuery,
 			"status", sw.status,
 			"duration_ms", time.Since(start).Milliseconds(),
-		)
+		}
+		slog.Info("request", append(attrs, fields.Attrs()...)...)
 	})
 }
 

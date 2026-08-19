@@ -10,6 +10,22 @@ A tenant key may only create sandboxes for that tenant and may only list/get/del
 
 Tenant keys are returned in plaintext once on create; only a hash is stored.
 
+### Request tracing
+
+Every request carries a trace id through the API, the runner, and the runner's
+sandbox lifecycle events. Clients may send a [W3C `traceparent`](https://www.w3.org/TR/trace-context/#traceparent-header)
+header to join their own trace:
+
+```
+traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
+```
+
+The header is optional. A missing or malformed value is replaced with a freshly
+generated trace context, and a value from a later spec version is reduced to the
+fields above, so a caller cannot make the service log or relay content of their
+choosing. The trace id is not returned in responses; it appears in the service's
+log events. See [observability.md](observability.md).
+
 ---
 
 ## Error Response Format

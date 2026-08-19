@@ -43,6 +43,32 @@ func postCreateSandbox(t *testing.T, router http.Handler, apiKey, body string) *
 	return rr
 }
 
+// A failed create must be diagnosable from the canonical event: the step that
+// failed carries the same trace id, so both lines come back from one query.
+func TestCreateSandboxFailureIsTraceCorrelated(t *testing.T) {
+	logs := captureLogs(t)
+	router, _ := newTestGateway(t, "admin-key")
+
+	// No runner ever registered, so the create fails at runner selection.
+	if rr := postCreateSandbox(t, router, "admin-key", ""); rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("create without runners: expected %d, got %d body=%s", http.StatusServiceUnavailable, rr.Code, rr.Body.String())
+	}
+
+	traceIDs := map[string]string{}
+	for _, event := range logs() {
+		msg, _ := event["msg"].(string)
+		traceIDs[msg], _ = event["trace_id"].(string)
+	}
+
+	failure := traceIDs["create sandbox failed: no eligible runners"]
+	if len(failure) != 32 {
+		t.Fatalf("failure event trace_id = %q, want a 32 hex character id", failure)
+	}
+	if request := traceIDs["request"]; request != failure {
+		t.Fatalf("request event trace_id = %q, want the failure event's %q", request, failure)
+	}
+}
+
 func TestCreateSandboxClientIDCrossTenantConflict(t *testing.T) {
 	router, s := newTestGateway(t, "admin-key")
 	a := mintTenantKey(t, router, `{"name":"a"}`)
