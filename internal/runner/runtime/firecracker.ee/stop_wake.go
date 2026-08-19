@@ -85,7 +85,11 @@ func (r *Runtime) EnsureSandboxRunning(ctx context.Context, sandboxID string) er
 		return err
 	}
 	_, err, _ := r.wakeGroup.Do(sandboxID, func() (interface{}, error) {
-		wakeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		// The wake outlives the request that triggered it, so it runs on a
+		// detached context. WithoutCancel keeps the trace context, which the
+		// wake event needs. Concurrent callers share one wake, so the event
+		// carries the trace id of whichever caller started it.
+		wakeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 		defer cancel()
 		return nil, r.ensureSandboxRunningOnce(wakeCtx, sandboxID)
 	})
@@ -116,7 +120,8 @@ func (r *Runtime) ensureSandboxRunningOnce(ctx context.Context, sandboxID string
 	state.socketPath = socketPath
 	state.daemonURL = daemonURL
 
-	if err := r.activateSandboxVM(ctx, state); err != nil {
+	timer := newStepTimer(metrics.OpEnsureRunning, r.metrics)
+	if err := r.activateSandboxVM(ctx, state, timer); err != nil {
 		_ = r.teardownRunningVM(ctx, state)
 		r.mu.Lock()
 		state.running = false
@@ -135,37 +140,51 @@ func (r *Runtime) ensureSandboxRunningOnce(ctx context.Context, sandboxID string
 	state.running = true
 	state.stopped = false
 	r.mu.Unlock()
-	slog.Info("firecracker sandbox woke", "sandbox_id", sandboxID, "vm_id", state.vmID, "slot", slot)
+	slog.Info("firecracker sandbox woke",
+		append([]any{"sandbox_id", sandboxID, "vm_id", state.vmID, "slot", slot}, timer.attrsFor(ctx)...)...)
 	return nil
 }
 
 // activateSandboxVM prepares jail/netns, starts Firecracker, loads snapshot, and
-// exposes the guest daemon through the host proxy.
-func (r *Runtime) activateSandboxVM(ctx context.Context, state *sandboxState) error {
-	if err := r.prepareJail(ctx, state); err != nil {
+// exposes the guest daemon through the host proxy. Each phase is timed through
+// t, which the caller emits once the operation finishes.
+func (r *Runtime) activateSandboxVM(ctx context.Context, state *sandboxState, t *stepTimer) error {
+	if err := t.step(stepPrepareJail, func() error { return r.prepareJail(ctx, state) }); err != nil {
 		return fmt.Errorf("prepare firecracker jail: %w", err)
 	}
-	if err := r.setupNetwork(ctx, state); err != nil {
+	if err := t.step(stepSetupNetwork, func() error { return r.setupNetwork(ctx, state) }); err != nil {
 		return fmt.Errorf("setup firecracker network: %w", err)
 	}
-	process, err := r.startJailer(ctx, state)
+	var process process
+	err := t.step(stepStartJailer, func() error {
+		var startErr error
+		process, startErr = r.startJailer(ctx, state)
+		return startErr
+	})
 	if err != nil {
 		return fmt.Errorf("start firecracker jailer: %w", err)
 	}
 	state.process = process
-	if err := r.waitForSocket(ctx, state.socketPath); err != nil {
+	if err := t.step(stepWaitSocket, func() error { return r.waitForSocket(ctx, state.socketPath) }); err != nil {
 		return fmt.Errorf("wait for firecracker socket: %w", err)
 	}
-	if err := r.deps.loadSnapshot(ctx, state.socketPath, r.config); err != nil {
+	if err := t.step(stepLoadSnapshot, func() error {
+		return r.deps.loadSnapshot(ctx, state.socketPath, r.config)
+	}); err != nil {
 		return fmt.Errorf("load firecracker snapshot: %w", err)
 	}
 	guestAddr := net.JoinHostPort(r.config.GuestIP, fmt.Sprintf("%d", r.config.DaemonPort))
-	proxy, err := r.deps.newProxy(ctx, state.daemonURLAddr(), state.netnsName, guestAddr)
+	var proxy daemonProxy
+	err = t.step(stepStartProxy, func() error {
+		var proxyErr error
+		proxy, proxyErr = r.deps.newProxy(ctx, state.daemonURLAddr(), state.netnsName, guestAddr)
+		return proxyErr
+	})
 	if err != nil {
 		return fmt.Errorf("start firecracker daemon proxy: %w", err)
 	}
 	state.proxy = proxy
-	if err := r.deps.probeDaemon(ctx, state.daemonURL); err != nil {
+	if err := t.step(stepProbeDaemon, func() error { return r.deps.probeDaemon(ctx, state.daemonURL) }); err != nil {
 		return fmt.Errorf("connect to firecracker daemon: %w", err)
 	}
 	return nil

@@ -20,13 +20,14 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/store"
 	"github.com/n8n-io/sandbox-service/internal/grpctls"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
+	"github.com/n8n-io/sandbox-service/internal/obs"
 	"google.golang.org/grpc"
 )
 
 func main() {
 	var logLevel slog.LevelVar
 	logLevel.Set(slog.LevelInfo)
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: &logLevel}))
+	logger := slog.New(obs.TraceHandler(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: &logLevel})))
 	slog.SetDefault(logger)
 
 	cfg, err := config.LoadAPI()

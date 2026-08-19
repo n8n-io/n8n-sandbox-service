@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/n8n-io/sandbox-service/internal/api/store"
+	"github.com/n8n-io/sandbox-service/internal/obs"
 )
 
 type authRole string
@@ -80,6 +81,7 @@ func AuthMiddleware(adminKeys map[string]struct{}, s store.SandboxStore) func(ht
 			wantHash := hashAPIKey(key)
 			for _, c := range candidates {
 				if subtle.ConstantTimeCompare([]byte(c.KeyHash), []byte(wantHash)) == 1 {
+					obs.FieldsFrom(r.Context()).Add("tenant_id", c.TenantID)
 					next.ServeHTTP(w, r.WithContext(withAuthIdentity(r.Context(), authIdentity{
 						Role:     roleTenant,
 						TenantID: c.TenantID,

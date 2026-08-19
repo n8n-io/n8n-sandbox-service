@@ -28,5 +28,7 @@ The n8n Sandbox Service provides isolated execution environments via a REST API.
 
 ## Operations
 
+- [Observability](observability.md) — trace ids, the per-request and per-lifecycle events, and how to query them
+- [Performance baseline](performance.md) — recorded numbers and how to reproduce them
 - [Debugging gRPC with grpcurl](grpcurl-debug.md)
 - [cert-manager on Kubernetes](cert-manager-k8s.md)

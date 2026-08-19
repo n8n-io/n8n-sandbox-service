@@ -1,15 +1,37 @@
 import http from "k6/http";
-import { check, fail } from "k6";
+import { check, fail, sleep } from "k6";
 import { Trend } from "k6/metrics";
 
 const BASE_URL = __ENV.BASE_URL || "http://127.0.0.1:8080";
 const API_KEY = __ENV.API_KEY || "test";
+const SCENARIO = __ENV.SCENARIO || "load";
+const ITERATIONS = Number(__ENV.ITERATIONS || 30);
+// Seconds to idle after the first exec so the API's idle sweeper stops the
+// sandbox, which makes the second exec a wake. 0 skips the wake step.
+const WAKE_AFTER = Number(__ENV.WAKE_AFTER || 0);
 
 const createDuration = new Trend("sandbox_create_duration", true);
 const execDuration = new Trend("sandbox_exec_duration", true);
+const wakeExecDuration = new Trend("sandbox_wake_exec_duration", true);
 const deleteDuration = new Trend("sandbox_delete_duration", true);
 
-export const options = {
+// The baseline scenario measures one operation at a time, which is what
+// docs/performance.md records. The load scenario is the concurrent run.
+//
+// maxDuration is set explicitly because k6 would otherwise cut the run off
+// after 10 minutes and report fewer iterations than asked for, which is easy
+// to miss when WAKE_AFTER makes each iteration take the better part of a
+// minute.
+const baselineOptions = {
+  vus: 1,
+  iterations: ITERATIONS,
+  maxDuration: __ENV.MAX_DURATION || "30m",
+  thresholds: {
+    http_req_failed: ["rate<0.01"],
+  },
+};
+
+const loadOptions = {
   stages: [
     { duration: "30s", target: 50 },
     { duration: "1m", target: 50 },
@@ -21,10 +43,35 @@ export const options = {
   },
 };
 
+export const options = SCENARIO === "baseline" ? baselineOptions : loadOptions;
+
 const headers = {
   "Content-Type": "application/json",
   "X-Api-Key": API_KEY,
 };
+
+function exec(sandboxId) {
+  const payload = JSON.stringify({ command: "echo 'hello'" });
+  const res = http.post(
+    `${BASE_URL}/sandboxes/${sandboxId}/executions`,
+    payload,
+    { headers },
+  );
+
+  if (
+    !check(res, {
+      "exec status is 200": (r) => r.status === 200,
+      "exec completed successfully": (r) => {
+        const lines = r.body.trim().split("\n");
+        const last = JSON.parse(lines[lines.length - 1]);
+        return last.type === "exit" && last.exit_code === 0;
+      },
+    })
+  ) {
+    fail(`exec failed: ${res.status} ${res.body}`);
+  }
+  return res;
+}
 
 export default function () {
   // 1. Create sandbox
@@ -41,29 +88,16 @@ export default function () {
 
   const sandboxId = createRes.json().id;
 
-  // 2. Execute echo 'hello'
-  const execPayload = JSON.stringify({ command: "echo 'hello'" });
-  const execRes = http.post(
-    `${BASE_URL}/sandboxes/${sandboxId}/executions`,
-    execPayload,
-    { headers },
-  );
-  execDuration.add(execRes.timings.duration);
+  // 2. Execute echo 'hello' on the running sandbox
+  execDuration.add(exec(sandboxId).timings.duration);
 
-  if (
-    !check(execRes, {
-      "exec status is 200": (r) => r.status === 200,
-      "exec completed successfully": (r) => {
-        const lines = r.body.trim().split("\n");
-        const last = JSON.parse(lines[lines.length - 1]);
-        return last.type === "exit" && last.exit_code === 0;
-      },
-    })
-  ) {
-    fail(`exec failed: ${execRes.status} ${execRes.body}`);
+  // 3. Optionally let the sandbox go idle, then exec again to measure a wake
+  if (WAKE_AFTER > 0) {
+    sleep(WAKE_AFTER);
+    wakeExecDuration.add(exec(sandboxId).timings.duration);
   }
 
-  // 3. Delete sandbox
+  // 4. Delete sandbox
   const deleteRes = http.del(`${BASE_URL}/sandboxes/${sandboxId}`, null, {
     headers,
   });

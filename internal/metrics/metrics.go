@@ -172,8 +172,15 @@ func (r *APIRecorder) SetRunnersRegistered(f func() float64) {
 
 // containerOpBuckets sizes the runner's container-op latency histogram for the
 // observed range: container creation is slow (image pull, dind warm-up) and
-// can take tens of seconds in cold cases, so the upper bound runs to 120s.
-var containerOpBuckets = []float64{0.5, 1, 2, 5, 10, 30, 60, 120}
+// can take tens of seconds in cold cases, so the upper bound runs to 120s. The
+// lower bound has to stay well under a second because Firecracker create and
+// wake are sub-second and would otherwise all land in the first bucket.
+var containerOpBuckets = []float64{0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60, 120}
+
+// lifecycleStepBuckets sizes the per-step histogram. Individual create/wake
+// steps run from a few milliseconds (jail setup) to a couple of seconds
+// (snapshot load on a cold page cache), far below the container-op range.
+var lifecycleStepBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5}
 
 // RunnerRecorder owns the metric instruments emitted by the runner binary.
 type RunnerRecorder struct {
@@ -182,6 +189,7 @@ type RunnerRecorder struct {
 	httpDuration        *prometheus.HistogramVec
 	containerOps        *prometheus.CounterVec
 	containerOpDuration *prometheus.HistogramVec
+	lifecycleSteps      *prometheus.HistogramVec
 }
 
 // NewRunnerRecorder builds the runner recorder. If enabled is false, the
@@ -211,13 +219,24 @@ func NewRunnerRecorder(enabled bool) *RunnerRecorder {
 		},
 		[]string{"operation"},
 	)
-	reg.MustRegister(containerOps, containerOpDuration)
+	lifecycleSteps := prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace:   Namespace,
+			Name:        "lifecycle_step_duration_seconds",
+			Help:        "Duration of the individual steps of a sandbox create or wake, labeled by operation and step.",
+			Buckets:     lifecycleStepBuckets,
+			ConstLabels: prometheus.Labels{"role": RoleRunner},
+		},
+		[]string{"operation", "step"},
+	)
+	reg.MustRegister(containerOps, containerOpDuration, lifecycleSteps)
 	return &RunnerRecorder{
 		reg:                 reg,
 		httpRequests:        httpReq,
 		httpDuration:        httpDur,
 		containerOps:        containerOps,
 		containerOpDuration: containerOpDuration,
+		lifecycleSteps:      lifecycleSteps,
 	}
 }
 
@@ -244,6 +263,16 @@ func (r *RunnerRecorder) ObserveContainerOp(operation string, success bool, dur 
 	}
 	r.containerOps.WithLabelValues(operation, resultLabel(success)).Inc()
 	r.containerOpDuration.WithLabelValues(operation).Observe(dur.Seconds())
+}
+
+// ObserveLifecycleStep records how long one step of a create or wake took.
+// Operation matches the container-op labels (OpCreate, OpEnsureRunning) so the
+// steps join the totals; step is a fixed name such as "load_snapshot".
+func (r *RunnerRecorder) ObserveLifecycleStep(operation, step string, dur time.Duration) {
+	if r == nil || r.reg == nil {
+		return
+	}
+	r.lifecycleSteps.WithLabelValues(operation, step).Observe(dur.Seconds())
 }
 
 // SetActiveContainers registers a scrape-time gauge that calls f to read the
