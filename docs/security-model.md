@@ -79,13 +79,17 @@ each namespace, which also covers the uplink addresses of other slots and the
 runner's own addresses. Guest kernels boot with IPv6 disabled.
 
 The Sysbox runtime puts sandboxes on a shared Docker bridge created with
-inter-container communication disabled, and adds per-container chains in
-`DOCKER-USER`: an egress chain dropping the same ranges, and an ingress chain
-that only permits the bridge gateway to reach the sandbox daemon port. A third
-chain in `INPUT` drops connections the container opens to the runner host itself,
-which the egress chain cannot cover because `DOCKER-USER` is only consulted for
-forwarded packets, while anything addressed to a host-local address is delivered
-locally. Containers are created with IPv6 disabled.
+inter-container communication disabled, and adds two chains covering every
+container on that bridge: an egress chain in `DOCKER-USER` dropping the same
+ranges, and a chain in `INPUT` dropping the connections a container opens to the
+runner host itself. The second is needed because `DOCKER-USER` is only consulted
+for forwarded packets, while anything addressed to a host-local address is
+delivered locally and never reaches the egress chain. Both match on the bridge
+interface rather than on the address the runner assigned, because a sandbox can
+add addresses to its own interface and would otherwise only have to send from a
+different one. A per-container chain, keyed on the container's address as a
+destination, permits only the bridge gateway to reach its daemon port.
+Containers are created with IPv6 disabled.
 
 Within a sandbox, the daemon runs as a non-root user, and file operations are
 path-validated to keep them inside the sandbox.
@@ -104,7 +108,7 @@ planned, not implemented.
 holding a runner API key with network access to a runner's HTTP listener can
 operate on any sandbox that runner hosts. Sandboxes themselves cannot reach that
 listener: on Firecracker its addresses sit inside the blocked ranges, and on
-Sysbox the per-container `INPUT` chain drops connections to the host. Runner
+Sysbox the bridge's `INPUT` chain drops connections to the host. Runner
 credentials are shared across the fleet rather than issued per runner or per
 tenant, and the HTTP listener uses the API key alone, without mTLS. Deployments
 are expected to keep runner listeners reachable only from the API.
