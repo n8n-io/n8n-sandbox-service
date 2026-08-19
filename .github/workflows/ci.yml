@@ -132,6 +132,19 @@ jobs:
             --set runner.acknowledgePrivileged=true \
             --set networkPolicy.enabled=true
 
+      - name: Check long runner names remain isolation-specific
+        run: |
+          release_name=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          sysbox_name=$(helm template "$release_name" charts/n8n-sandbox-service \
+            --set auth.existingSecret=n8n-sandbox-auth \
+            --show-only templates/runner-statefulset.yaml | awk '/^  name:/{print $2; exit}')
+          privileged_name=$(helm template "$release_name" charts/n8n-sandbox-service \
+            --set auth.existingSecret=n8n-sandbox-auth \
+            --set runner.isolation=privileged \
+            --set runner.acknowledgePrivileged=true \
+            --show-only templates/runner-statefulset.yaml | awk '/^  name:/{print $2; exit}')
+          test "$sysbox_name" != "$privileged_name"
+
   golden-build:
     runs-on: ubuntu-latest
     steps:

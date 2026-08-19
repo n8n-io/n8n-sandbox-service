@@ -43,7 +43,22 @@ recreates the runner resources under the other name.
 {{- end }}
 
 {{- define "n8n-sandbox-service.runnerName" -}}
-{{- printf "%s-%s" (include "n8n-sandbox-service.fullname" .) (include "n8n-sandbox-service.runnerComponent" .) | trunc 63 | trimSuffix "-" }}
+{{- $fullname := include "n8n-sandbox-service.fullname" . -}}
+{{- $sysboxName := printf "%s-sysbox-runner" $fullname | trunc 63 | trimSuffix "-" -}}
+{{- if eq .Values.runner.isolation "privileged" -}}
+{{- $suffix := "-privileged-runner" -}}
+{{- $baseLength := sub 63 (len $suffix) | int -}}
+{{- $privilegedName := printf "%s%s" ($fullname | trunc $baseLength | trimSuffix "-") $suffix -}}
+{{- if eq $privilegedName $sysboxName -}}
+{{- $suffix = "-privileged-runner-p" -}}
+{{- $baseLength = sub 63 (len $suffix) | int -}}
+{{- printf "%s%s" ($fullname | trunc $baseLength | trimSuffix "-") $suffix -}}
+{{- else -}}
+{{- $privilegedName -}}
+{{- end -}}
+{{- else -}}
+{{- $sysboxName -}}
+{{- end -}}
 {{- end }}
 
 {{- define "n8n-sandbox-service.authSecretName" -}}
