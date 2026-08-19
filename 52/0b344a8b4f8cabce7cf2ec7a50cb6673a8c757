@@ -1,0 +1,30 @@
+charts/n8n-sandbox-service/templates/cert-manager.yaml
+  s_1a1689520df992::t_6092912c86c9ba 71-72
+charts/n8n-sandbox-service/templates/_helpers.tpl
+  s_1a1689520df992::t_796ef5c1bf3d69 45-50,56-57,59-61,64
+charts/n8n-sandbox-service/templates/validation.yaml
+  s_1a1689520df992::t_2f7a3a7a5e9597 2-5
+.github/workflows/ci.yml
+  s_1a1689520df992::t_ea1f0fc0d51505 135,138,147-151,153
+charts/n8n-sandbox-service/README.md
+  s_1a1689520df992::t_be791383970cd0 43
+  s_1a1689520df992::t_b193f26f60793f 100-105,108
+docs/quickstart-k8s.md
+  s_1a1689520df992::t_ff9043167495fc 145,151-159
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "520b344a8b4f8cabce7cf2ec7a50cb6673a8c757",
+  "prompts": {},
+  "sessions": {
+    "s_1a1689520df992": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "47365ff0-051b-4d19-95b2-acbd1bab130c",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
