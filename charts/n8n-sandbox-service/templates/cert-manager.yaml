@@ -68,7 +68,8 @@ spec:
   secretName: {{ $runnerRegistration.secretName }}
   duration: {{ $certManager.duration }}
   renewBefore: {{ $certManager.renewBefore }}
-  commonName: {{ $runnerName }}-registration-client
+  {{- $runnerRegistrationCn := "-registration-client" }}
+  commonName: {{ printf "%s%s" ($runnerName | trunc (int (sub 64 (len $runnerRegistrationCn))) | trimSuffix "-") $runnerRegistrationCn }}
   privateKey:
     rotationPolicy: {{ $certManager.privateKey.rotationPolicy | quote }}
   usages:

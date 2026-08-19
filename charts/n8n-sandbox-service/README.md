@@ -40,7 +40,7 @@ kubectl -n n8n-sandbox describe statefulset -l app.kubernetes.io/name=n8n-sandbo
 
 The isolation-specific settings (`runtime` and `scheduling`) live in the `runner.sysbox` and `runner.privileged` subblocks. The chart reads only the subblock that matches `runner.isolation`; values in the other subblock are ignored. All other `runner.*` keys are shared between isolations.
 
-The runner resource names follow the isolation (`<release>-sysbox-runner`, `<release>-privileged-runner`). Switching isolation therefore recreates the runner StatefulSet under the other name; this is required because StatefulSet selectors are immutable.
+The runner resource names follow the isolation (`<release>-sysbox-runner`, `<release>-privileged-runner`). Switching isolation therefore recreates the runner StatefulSet under the other name; this is required because StatefulSet selectors are immutable. A release name that is too long for the 63-character limit gets a short hash in the privileged name, so two long release names stay unique.
 
 ## Privileged Isolation
 
@@ -97,9 +97,15 @@ runner:
       hostUsers: false
     scheduling:
       nodeSelector:
-        sysbox-runtime: running
-      tolerations: []
+        sysbox-install: "yes"
+      tolerations:
+      - key: sysbox-runtime
+        operator: Equal
+        value: not-running
+        effect: NoSchedule
 ```
+
+The Sysbox installer labels the nodes `sysbox-install=yes` and taints them `sysbox-runtime=not-running:NoSchedule` until the runtime is ready. The default selector and toleration match that convention.
 
 `hostUsers: false` asks Kubernetes to run the pod in a user namespace rather than the host user namespace. This is required by some Kubernetes/Sysbox setups for the runner pod to start. If your cluster does not support this field, set `runner.sysbox.runtime.hostUsers: null` to omit it.
 

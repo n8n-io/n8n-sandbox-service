@@ -1,4 +1,8 @@
 {{- if hasKey .Values "sysboxRunner" -}}
+{{- $old := .Values.sysboxRunner -}}
+{{- if and (kindIs "map" $old) (hasKey $old "enabled") (not $old.enabled) -}}
+{{- fail "sysboxRunner.enabled=false was replaced: set dataPlane.mode=external to disable the in-cluster runner. See the chart README section 'Migrating from 0.3.x'" -}}
+{{- end -}}
 {{- fail "sysboxRunner was replaced by the runner block: shared keys keep their names under runner.*; runtime and scheduling moved to runner.sysbox.*. See the chart README section 'Migrating from 0.3.x'" -}}
 {{- end -}}
 {{- if hasKey .Values "dindRunner" -}}

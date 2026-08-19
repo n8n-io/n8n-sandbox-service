@@ -142,13 +142,21 @@ Two hardening options, both described in the chart [README](../charts/n8n-sandbo
 
 ## Troubleshooting
 
-**Install succeeds but no runner pod appears.** The failure is on the StatefulSet, not on a pod, so `kubectl get pods` shows nothing. Inspect the StatefulSet events:
+**Install succeeds but no runner pod appears.** Admission denied the pod, so `kubectl get pods` shows nothing and the error lands on the StatefulSet. Inspect the StatefulSet events:
 
 ```bash
 kubectl -n <namespace> describe statefulset
 ```
 
-Common causes: `RuntimeClass "sysbox-runc" not found` (sysbox is not installed on the cluster — see the note about immutable-rootfs distributions above), no node matches the `sysbox-install: "yes"` node selector, or Pod Security Admission rejects the privileged runner.
+Two causes end up here: `RuntimeClass "sysbox-runc" not found` (sysbox is not installed on the cluster — see the note about immutable-rootfs distributions above), or Pod Security Admission rejects the privileged runner.
+
+**The runner pod stays in `Pending`.** The scheduler found no node for it. Read the pod events:
+
+```bash
+kubectl -n <namespace> describe pod -l app.kubernetes.io/component=sysbox-runner
+```
+
+Use `app.kubernetes.io/component=privileged-runner` for privileged isolation. A `0/N nodes are available` message means no node matches the `sysbox-install: "yes"` node selector, or the nodes carry a taint the pod does not tolerate. Label the sysbox nodes, or override `runner.sysbox.scheduling`.
 
 For `mount through procfd: operation not permitted`, first check the user-namespace configuration:
 
