@@ -1,0 +1,21 @@
+.github/workflows/ci.yml
+  s_6d2175eb83190f::t_946eb7ae9e3e7e 135-147
+charts/n8n-sandbox-service/templates/_helpers.tpl
+  s_6d2175eb83190f::t_946eb7ae9e3e7e 46-61
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "7884af086e67f61a535b868d8074494d103cccdc",
+  "prompts": {},
+  "sessions": {
+    "s_6d2175eb83190f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a018f3-1ebe-7201-bbdf-ebcc1afb9c5e",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
