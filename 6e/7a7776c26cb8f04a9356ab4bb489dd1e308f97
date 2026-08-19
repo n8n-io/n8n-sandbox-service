@@ -1,0 +1,37 @@
+charts/n8n-sandbox-service/templates/_helpers.tpl
+  s_1a1689520df992::t_ba41a862302d80 68-79
+charts/n8n-sandbox-service/templates/configmap.yaml
+  s_1a1689520df992::t_5db7b1bb06b83a 53,56-57
+docs/configuration.md
+  s_1a1689520df992::t_940eb913b819d1 171-172
+charts/n8n-sandbox-service/README.md
+  s_1a1689520df992::t_42c71fdeb1797b 65
+  s_1a1689520df992::t_904abfa356bf9c 169-170
+  s_1a1689520df992::t_e8e19e6a9bb752 145-168
+  s_1a1689520df992::t_9c3aab6db757ec 128
+charts/n8n-sandbox-service/templates/validation.yaml
+  s_1a1689520df992::t_2b19a4a28e0af8 51-65
+charts/n8n-sandbox-service/values.yaml
+  s_1a1689520df992::t_de0b4db45a5d21 257-259,261-262
+  s_1a1689520df992::t_e85f4f4ac575e6 193-196
+.github/workflows/ci.yml
+  s_1a1689520df992::t_614f8117599ee1 135-155
+charts/n8n-sandbox-service/templates/runner-statefulset.yaml
+  s_1a1689520df992::t_4eaa51fe5c91f5 142
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "6e7a7776c26cb8f04a9356ab4bb489dd1e308f97",
+  "prompts": {},
+  "sessions": {
+    "s_1a1689520df992": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "47365ff0-051b-4d19-95b2-acbd1bab130c",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
