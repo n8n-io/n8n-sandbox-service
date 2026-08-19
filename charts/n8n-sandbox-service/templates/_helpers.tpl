@@ -65,6 +65,20 @@ truncation for upgrade compatibility.
 {{- end -}}
 {{- end }}
 
+{{/*
+Mount path of the inner Docker data root volume. With disk quotas the runner
+mounts a loopback xfs image at /var/lib/docker, so the volume has to hold that
+image one level up instead. Otherwise the image lands on the container
+filesystem, where no volume limit bounds it.
+*/}}
+{{- define "n8n-sandbox-service.runnerDockerDataMountPath" -}}
+{{- if gt (int .Values.runner.config.defaultDiskQuotaMb) 0 -}}
+/var/lib/docker-pool
+{{- else -}}
+/var/lib/docker
+{{- end -}}
+{{- end }}
+
 {{- define "n8n-sandbox-service.authSecretName" -}}
 {{- default (printf "%s-auth" (include "n8n-sandbox-service.fullname" .)) .Values.auth.existingSecret | trunc 63 | trimSuffix "-" }}
 {{- end }}

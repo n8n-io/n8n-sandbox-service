@@ -190,6 +190,10 @@ runner:
     configKey: .dockerconfigjson
     mountPath: /root/.docker
 
+  # Volume for the inner Docker data root. Mounted at /var/lib/docker, or at
+  # /var/lib/docker-pool when config.defaultDiskQuotaMb is above 0, because the
+  # quota pool image needs the bounded volume then. See the chart README
+  # section 'Disk Quotas'.
   dockerDataRoot:
     persistence:
       enabled: false
@@ -250,7 +254,12 @@ runner:
     defaultCpuPercent: "100"
     defaultPidsMax: "256"
     defaultDiskQuotaMb: "0"
+    # Required when defaultDiskQuotaMb is above 0 and the chart owns a
+    # dockerDataRoot volume. Must fit that volume, because the quota pool image
+    # lives on it. The derived default scales with capacityTotal instead.
     diskQuotaPoolSizeGb: ""
+    # Overrides the quota pool image path. Keep it on a volume with a size
+    # limit; the mount the image backs does not bound the image.
     diskQuotaPoolPath: ""
     enableCgroups: "true"
     dockerStorageDriver: ""

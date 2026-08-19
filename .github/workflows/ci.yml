@@ -132,6 +132,27 @@ jobs:
             --set runner.acknowledgePrivileged=true \
             --set networkPolicy.enabled=true
 
+      - name: Check the quota pool image lands on the bounded volume
+        run: |
+          manifests=$(helm template n8n-sandbox-service charts/n8n-sandbox-service \
+            --set auth.existingSecret=n8n-sandbox-auth \
+            --set runner.isolation=privileged \
+            --set runner.acknowledgePrivileged=true \
+            --set runner.config.defaultDiskQuotaMb=2048 \
+            --set runner.config.diskQuotaPoolSizeGb=60)
+          echo "$manifests" | grep -q 'mountPath: "/var/lib/docker-pool"'
+          echo "$manifests" | grep -q 'SANDBOX_RUNNER_DISK_QUOTA_POOL_PATH: "/var/lib/docker-pool/docker.img"'
+          # A pool larger than the volume must fail the render.
+          if helm template n8n-sandbox-service charts/n8n-sandbox-service \
+            --set auth.existingSecret=n8n-sandbox-auth \
+            --set runner.isolation=privileged \
+            --set runner.acknowledgePrivileged=true \
+            --set runner.config.defaultDiskQuotaMb=2048 \
+            --set runner.config.diskQuotaPoolSizeGb=100 >/dev/null 2>&1; then
+            echo "expected the render to fail for a pool larger than the volume" >&2
+            exit 1
+          fi
+
       - name: Check long runner names stay isolation-specific and unique
         run: |
           release_name=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa

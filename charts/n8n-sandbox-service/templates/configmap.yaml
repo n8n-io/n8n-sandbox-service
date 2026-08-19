@@ -50,8 +50,11 @@ data:
   {{- if $runner.config.diskQuotaPoolSizeGb }}
   SANDBOX_RUNNER_DISK_QUOTA_POOL_SIZE_GB: {{ $runner.config.diskQuotaPoolSizeGb | quote }}
   {{- end }}
+  {{- $quotaVolume := and (gt (int $runner.config.defaultDiskQuotaMb) 0) (or $runner.dockerDataRoot.persistence.enabled (eq $runner.isolation "privileged")) }}
   {{- if $runner.config.diskQuotaPoolPath }}
   SANDBOX_RUNNER_DISK_QUOTA_POOL_PATH: {{ $runner.config.diskQuotaPoolPath | quote }}
+  {{- else if $quotaVolume }}
+  SANDBOX_RUNNER_DISK_QUOTA_POOL_PATH: {{ printf "%s/docker.img" (include "n8n-sandbox-service.runnerDockerDataMountPath" .) | quote }}
   {{- end }}
   {{- if $runner.config.dockerInsecureRegistries }}
   SANDBOX_RUNNER_DOCKER_INSECURE_REGISTRIES: {{ $runner.config.dockerInsecureRegistries | quote }}

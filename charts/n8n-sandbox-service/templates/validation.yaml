@@ -48,6 +48,21 @@
 {{- fail "runner.config.controlGrpcListenAddr port must match runner.service.controlGrpcPort" -}}
 {{- end -}}
 {{- end -}}
+{{- if and (eq .Values.dataPlane.mode "in-cluster") (gt (int .Values.runner.config.defaultDiskQuotaMb) 0) -}}
+{{- $dockerDataRoot := .Values.runner.dockerDataRoot -}}
+{{- if or $dockerDataRoot.persistence.enabled (eq .Values.runner.isolation "privileged") -}}
+{{- if not .Values.runner.config.diskQuotaPoolSizeGb -}}
+{{- fail "runner.config.diskQuotaPoolSizeGb must be set when runner.config.defaultDiskQuotaMb is above 0: the derived pool size scales with runner.config.capacityTotal and can outgrow the docker data root volume. See the chart README section 'Disk Quotas'" -}}
+{{- end -}}
+{{- $volumeSize := ternary $dockerDataRoot.persistence.size ((.Values.runner.dockerDataRoot.emptyDir | default dict).sizeLimit | default "") $dockerDataRoot.persistence.enabled | toString -}}
+{{- if regexMatch "^[0-9]+Gi?$" $volumeSize -}}
+{{- $volumeSizeGb := trimSuffix "G" (trimSuffix "Gi" $volumeSize) | int -}}
+{{- if gt (int .Values.runner.config.diskQuotaPoolSizeGb) $volumeSizeGb -}}
+{{- fail (printf "runner.config.diskQuotaPoolSizeGb (%v) must not exceed the docker data root size (%s): the quota pool image lives on that volume" .Values.runner.config.diskQuotaPoolSizeGb $volumeSize) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- if not .Values.auth.existingSecret -}}
 {{- range $key := list "apiKeys" "runnerRegistrationToken" "runnerApiKey" "runnerApiKeys" -}}
 {{- $stringValue := default "" (index $.Values.auth.generated $key) | toString | trim -}}

@@ -139,7 +139,7 @@ spec:
             {{- end }}
             {{- if or $runner.dockerDataRoot.persistence.enabled $dockerEmptyDir }}
             - name: docker-data
-              mountPath: /var/lib/docker
+              mountPath: {{ include "n8n-sandbox-service.runnerDockerDataMountPath" . | quote }}
             {{- end }}
             {{- with $runner.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
