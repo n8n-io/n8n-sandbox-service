@@ -1,6 +1,6 @@
 # n8n Sandbox Service Helm Chart
 
-This chart deploys the n8n Sandbox Service API and, optionally, the in-cluster sysbox/Docker-in-Docker runner.
+This chart deploys the n8n Sandbox Service API and, optionally, an in-cluster Docker-in-Docker runner.
 
 ## Install
 
@@ -8,7 +8,7 @@ Create or provide:
 
 - An auth Secret with API keys and runner registration tokens, or set `auth.*` values and let the chart create one.
 - TLS Secrets for the API registration server, API control client, runner registration client, and runner control server, or set `tls.mode=certManager`.
-- A Sysbox-ready node pool if `sysboxRunner.enabled=true`.
+- A Sysbox-ready node pool for `runner.isolation=sysbox` (the default). Use `runner.isolation=privileged` on clusters that cannot install sysbox.
 
 ```sh
 helm upgrade --install n8n-sandbox-service ./charts/n8n-sandbox-service \
@@ -18,35 +18,97 @@ helm upgrade --install n8n-sandbox-service ./charts/n8n-sandbox-service \
 
 ## Data Plane Mode
 
-Use `dataPlane.mode: sysbox` for the in-cluster sysbox/DinD runner. Use `dataPlane.mode: external` when runners live outside Kubernetes. In external mode, the chart renders the API resources but does not render the sysbox runner StatefulSet.
+`dataPlane.mode` selects where the data plane runs:
 
-The chart renders the Docker/sysbox runner image. The Firecracker runner is a
-separate image/entrypoint for external host deployments and is not charted here
-yet.
+- `in-cluster` — the chart renders a Docker-in-Docker runner StatefulSet. `runner.isolation` selects how the runner gets its privileges.
+- `external` — runners live outside Kubernetes. The chart renders only the API resources.
+
+The Firecracker runner is a separate image/entrypoint for external host deployments and is not charted here yet.
+
+After install, if no runner pod appears, inspect the StatefulSet events. RuntimeClass and Pod Security Admission rejections land there, not on a pod:
+
+```sh
+kubectl -n n8n-sandbox describe statefulset -l app.kubernetes.io/name=n8n-sandbox-service
+```
+
+## Runner Isolation
+
+`runner.isolation` selects the source of privilege for the in-cluster runner. Both isolations run the same runner image.
+
+- `sysbox` (default) — run under the `sysbox-runc` RuntimeClass. Needs sysbox installed on the nodes. Recommended.
+- `privileged` — run with `privileged: true`. Any node can run it. See below.
+
+The isolation-specific settings (`runtime` and `scheduling`) live in the `runner.sysbox` and `runner.privileged` subblocks. The chart reads only the subblock that matches `runner.isolation`; values in the other subblock are ignored. All other `runner.*` keys are shared between isolations.
+
+The runner resource names follow the isolation (`<release>-sysbox-runner`, `<release>-privileged-runner`). Switching isolation therefore recreates the runner StatefulSet under the other name; this is required because StatefulSet selectors are immutable.
+
+## Privileged Isolation
+
+Use `runner.isolation: privileged` on clusters that cannot install sysbox. This includes immutable-rootfs distributions such as Talos, Bottlerocket, Flatcar, and Fedora CoreOS, where sysbox cannot modify the node filesystem or the containerd configuration.
+
+The security boundary is weaker than sysbox. The runner container runs with `privileged: true` in the host user namespace. An escape from the runner container reaches the node. Because of this, the chart refuses to render until you acknowledge the trade-off:
+
+```yaml
+dataPlane:
+  mode: in-cluster
+runner:
+  isolation: privileged
+  acknowledgePrivileged: true
+```
+
+Requirements and recommendations:
+
+- The namespace needs Pod Security Admission level `privileged`: `kubectl label namespace n8n-sandbox pod-security.kubernetes.io/enforce=privileged`. A PSA denial surfaces as an event on the StatefulSet, not as a failing pod.
+- Prefer a dedicated node pool for the runner via `runner.privileged.scheduling`.
+- Platforms that block privileged containers outright (for example GKE Autopilot) cannot use this isolation; use `dataPlane.mode: external` there.
+
+When `runner.dockerDataRoot.persistence` is disabled, the chart mounts an `emptyDir` with `runner.dockerDataRoot.emptyDir.sizeLimit` at `/var/lib/docker`, so the inner Docker daemon's layers are bounded.
+
+Two hardening options:
+
+- **Kubernetes user namespaces.** On Kubernetes ≥ 1.33 with containerd ≥ 2.0, set `runner.privileged.runtime.hostUsers: false`. Container root then maps to an unprivileged host UID, and the privileged capabilities are scoped to the pod's user namespace. Verify that sandbox creation and resource limits work on your platform before you rely on it; inner-Docker cgroup management inside a user namespace depends on the node's kernel and runtime versions. Disk quotas (`defaultDiskQuotaMb`) do not work inside a user namespace.
+- **VM-based RuntimeClass.** Set `runner.privileged.runtime.runtimeClassName` to a VM runtime such as Kata Containers. `privileged: true` then applies inside the guest VM, not on the node. Talos ships an official kata-containers system extension. This needs bare-metal nodes or nested virtualization.
+
+Do not set `runner.privileged.runtime.runtimeClassName: sysbox-runc`; the chart fails the render and points you to `runner.isolation: sysbox`.
+
+## Migrating from 0.3.x
+
+Chart 0.4.0 restructured the data-plane values. The render fails with a message that names the new key if you still set an old key. Existing `sysbox` releases upgrade without workload changes: the runner resource names and labels are unchanged, so the StatefulSet is untouched.
+
+| Old key | New key |
+| --- | --- |
+| `dataPlane.mode: sysbox` | `dataPlane.mode: in-cluster` (sysbox is the default isolation) |
+| `sysboxRunner.enabled: false` | `dataPlane.mode: external` |
+| `sysboxRunner.runtime.*` | `runner.sysbox.runtime.*` |
+| `sysboxRunner.scheduling.*` | `runner.sysbox.scheduling.*` |
+| `sysboxRunner.*` (all other keys) | `runner.*` (same key names) |
+| `networkPolicy.sysboxRunner` | `networkPolicy.runner` |
+| `monitoring.serviceMonitor.sysboxRunner` | `monitoring.serviceMonitor.runner` |
 
 ## Sysbox Scheduling Defaults
 
 The default runner scheduling follows the Sysbox Kubernetes convention:
 
 ```yaml
-sysboxRunner:
-  runtime:
-    runtimeClassName: sysbox-runc
-    hostUsers: false
-  scheduling:
-    nodeSelector:
-      sysbox-runtime: running
-    tolerations: []
+runner:
+  sysbox:
+    runtime:
+      runtimeClassName: sysbox-runc
+      hostUsers: false
+    scheduling:
+      nodeSelector:
+        sysbox-runtime: running
+      tolerations: []
 ```
 
-`hostUsers: false` asks Kubernetes to run the pod in a user namespace rather than the host user namespace. This is required by some Kubernetes/Sysbox setups for the runner pod to start. If your cluster does not support this field, set `sysboxRunner.runtime.hostUsers: null` to omit it.
+`hostUsers: false` asks Kubernetes to run the pod in a user namespace rather than the host user namespace. This is required by some Kubernetes/Sysbox setups for the runner pod to start. If your cluster does not support this field, set `runner.sysbox.runtime.hostUsers: null` to omit it.
 
-If inner Docker cannot use `overlay2` in that environment, set `sysboxRunner.config.dockerStorageDriver` to another dockerd storage driver such as `vfs`. This is slower than `overlay2`, but avoids nested overlayfs mounts.
+If inner Docker cannot use `overlay2` in that environment, set `runner.config.dockerStorageDriver` to another dockerd storage driver such as `vfs`. This is slower than `overlay2`, but avoids nested overlayfs mounts.
 
 For `overlay2`, prefer mounting a dedicated per-runner volume at the inner Docker data root so dockerd does not place its graph on the runner container filesystem:
 
 ```yaml
-sysboxRunner:
+runner:
   config:
     dockerStorageDriver: overlay2
   dockerDataRoot:
@@ -62,15 +124,16 @@ The chart renders this as a StatefulSet `volumeClaimTemplates` entry mounted at 
 If your cluster uses a dedicated node pool with custom labels and taints, override them through values:
 
 ```yaml
-sysboxRunner:
-  scheduling:
-    nodeSelector:
-      nodetype: sysbox
-    tolerations:
-      - key: dedicated
-        operator: Equal
-        value: sysbox
-        effect: NoSchedule
+runner:
+  sysbox:
+    scheduling:
+      nodeSelector:
+        nodetype: sysbox
+      tolerations:
+        - key: dedicated
+          operator: Equal
+          value: sysbox
+          effect: NoSchedule
 ```
 
 ## Existing Auth Secret
@@ -192,11 +255,11 @@ The Ingress exposes only the public HTTP API port. The private runner registrati
 
 `networkPolicy.enabled` is disabled by default because many clusters use provider-specific policy CRDs or manage network policy outside application charts.
 
-When enabled, the chart renders Kubernetes `NetworkPolicy` resources for the API and in-cluster sysbox runner:
+When enabled, the chart renders Kubernetes `NetworkPolicy` resources for the API and the in-cluster runner:
 
 - API HTTP remains reachable from all sources by default so an existing ingress controller continues to work. Set `networkPolicy.api.httpIngressFrom` to restrict it to your ingress controller.
-- API registration gRPC is reachable from the in-chart sysbox runner by default. In external data-plane mode it is denied unless peers are added through `networkPolicy.api.grpcIngressFrom`.
-- Runner HTTP/control ports are reachable from the in-chart API by default. Add peers through `networkPolicy.sysboxRunner.ingressFrom` only if another component needs direct runner access.
+- API registration gRPC is reachable from the in-chart runner by default. In external data-plane mode it is denied unless peers are added through `networkPolicy.api.grpcIngressFrom`.
+- Runner HTTP/control ports are reachable from the in-chart API by default. Add peers through `networkPolicy.runner.ingressFrom` only if another component needs direct runner access.
 
 Example restricting public API traffic to an ingress controller namespace:
 
@@ -212,7 +275,7 @@ networkPolicy:
 
 ## Prometheus Metrics
 
-The API and sysbox runner expose Prometheus metrics on their HTTP port at `/metrics`. If your cluster uses Prometheus Operator, enable `ServiceMonitor` resources:
+The API and the in-cluster runner expose Prometheus metrics on their HTTP port at `/metrics`. If your cluster uses Prometheus Operator, enable `ServiceMonitor` resources:
 
 ```yaml
 monitoring:
@@ -222,11 +285,11 @@ monitoring:
       release: kube-prometheus-stack
 ```
 
-This renders one `ServiceMonitor` for the API Service and, when the in-chart sysbox runner is enabled, one for the runner headless Service. It also enables the matching `/metrics` handlers in the API and runner containers. Use `monitoring.serviceMonitor.api.enabled` or `monitoring.serviceMonitor.sysboxRunner.enabled` to disable either scrape target.
+This renders one `ServiceMonitor` for the API Service and, when the in-chart runner is enabled, one for the runner headless Service. It also enables the matching `/metrics` handlers in the API and runner containers. Use `monitoring.serviceMonitor.api.enabled` or `monitoring.serviceMonitor.runner.enabled` to disable either scrape target.
 
 ## Runner Identity
 
-The sysbox runner is deployed as a StatefulSet with a headless Service so each runner pod has direct, DNS-based addressability from the API:
+The in-cluster runner is deployed as a StatefulSet with a headless Service so each runner pod has direct, DNS-based addressability from the API:
 
 ```text
 http://<pod>.<runner-service>.<namespace>.svc.cluster.local:8080

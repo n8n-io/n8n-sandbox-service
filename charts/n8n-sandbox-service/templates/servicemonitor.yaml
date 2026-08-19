@@ -26,15 +26,16 @@ spec:
       scrapeTimeout: {{ .Values.monitoring.serviceMonitor.scrapeTimeout | quote }}
       {{- end }}
 {{- end }}
-{{- if and .Values.monitoring.serviceMonitor.enabled .Values.monitoring.serviceMonitor.sysboxRunner.enabled .Values.sysboxRunner.enabled (eq .Values.dataPlane.mode "sysbox") }}
+{{- $component := include "n8n-sandbox-service.runnerComponent" . }}
+{{- if and .Values.monitoring.serviceMonitor.enabled .Values.monitoring.serviceMonitor.runner.enabled (eq .Values.dataPlane.mode "in-cluster") }}
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
-  name: {{ include "n8n-sandbox-service.sysboxRunnerName" . }}
+  name: {{ include "n8n-sandbox-service.runnerName" . }}
   labels:
     {{- include "n8n-sandbox-service.labels" . | nindent 4 }}
-    app.kubernetes.io/component: sysbox-runner
+    app.kubernetes.io/component: {{ $component }}
     {{- with .Values.monitoring.serviceMonitor.labels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
@@ -45,7 +46,7 @@ metadata:
 spec:
   selector:
     matchLabels:
-      {{- include "n8n-sandbox-service.selectorLabels" (dict "Release" .Release "Chart" .Chart "Values" .Values "component" "sysbox-runner") | nindent 6 }}
+      {{- include "n8n-sandbox-service.selectorLabels" (dict "Release" .Release "Chart" .Chart "Values" .Values "component" $component) | nindent 6 }}
   endpoints:
     - port: http
       path: {{ .Values.monitoring.serviceMonitor.path | quote }}

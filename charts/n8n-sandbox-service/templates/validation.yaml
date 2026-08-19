@@ -1,15 +1,47 @@
-{{- if not (has .Values.dataPlane.mode (list "sysbox" "external")) -}}
-{{- fail "dataPlane.mode must be one of: sysbox, external" -}}
+{{- if hasKey .Values "sysboxRunner" -}}
+{{- fail "sysboxRunner was replaced by the runner block: shared keys keep their names under runner.*; runtime and scheduling moved to runner.sysbox.*. See the chart README section 'Migrating from 0.3.x'" -}}
+{{- end -}}
+{{- if hasKey .Values "dindRunner" -}}
+{{- fail "dindRunner is not a chart value: use the runner block with runner.isolation=privileged. See the chart README section 'Migrating from 0.3.x'" -}}
+{{- end -}}
+{{- if eq .Values.dataPlane.mode "sysbox" -}}
+{{- fail "dataPlane.mode=sysbox was renamed: set dataPlane.mode=in-cluster. sysbox is the default runner.isolation. See the chart README section 'Migrating from 0.3.x'" -}}
+{{- end -}}
+{{- if eq .Values.dataPlane.mode "dind" -}}
+{{- fail "dataPlane.mode=dind was renamed: set dataPlane.mode=in-cluster and runner.isolation=privileged. See the chart README section 'Migrating from 0.3.x'" -}}
+{{- end -}}
+{{- if not (has .Values.dataPlane.mode (list "in-cluster" "external")) -}}
+{{- fail "dataPlane.mode must be one of: in-cluster, external" -}}
 {{- end -}}
 {{- if not (has .Values.tls.mode (list "existingSecret" "certManager")) -}}
 {{- fail "tls.mode must be one of: existingSecret, certManager" -}}
 {{- end -}}
-{{- if and .Values.sysboxRunner.enabled (eq .Values.dataPlane.mode "sysbox") -}}
-{{- if not (hasSuffix (printf ":%v" .Values.sysboxRunner.service.httpPort) .Values.sysboxRunner.config.listenAddr) -}}
-{{- fail "sysboxRunner.config.listenAddr port must match sysboxRunner.service.httpPort" -}}
+{{- if hasKey .Values.runner "enabled" -}}
+{{- fail "runner.enabled was removed: set dataPlane.mode=external to disable the in-cluster runner" -}}
 {{- end -}}
-{{- if not (hasSuffix (printf ":%v" .Values.sysboxRunner.service.controlGrpcPort) .Values.sysboxRunner.config.controlGrpcListenAddr) -}}
-{{- fail "sysboxRunner.config.controlGrpcListenAddr port must match sysboxRunner.service.controlGrpcPort" -}}
+{{- if hasKey .Values.networkPolicy "sysboxRunner" -}}
+{{- fail "networkPolicy.sysboxRunner was renamed: set networkPolicy.runner instead" -}}
+{{- end -}}
+{{- if hasKey .Values.monitoring.serviceMonitor "sysboxRunner" -}}
+{{- fail "monitoring.serviceMonitor.sysboxRunner was renamed: set monitoring.serviceMonitor.runner instead" -}}
+{{- end -}}
+{{- if not (has .Values.runner.isolation (list "sysbox" "privileged")) -}}
+{{- fail "runner.isolation must be one of: sysbox, privileged" -}}
+{{- end -}}
+{{- if eq .Values.runner.isolation "privileged" -}}
+{{- if ne .Values.runner.acknowledgePrivileged true -}}
+{{- fail "runner.isolation=privileged runs the runner container with privileged: true. An escape from the runner container reaches the node. The namespace needs Pod Security Admission level `privileged`. Set runner.acknowledgePrivileged=true to accept this trade-off, or use runner.isolation=sysbox on nodes that support sysbox." -}}
+{{- end -}}
+{{- if eq .Values.runner.privileged.runtime.runtimeClassName "sysbox-runc" -}}
+{{- fail "runner.privileged.runtime.runtimeClassName=sysbox-runc conflicts with runner.isolation=privileged: use runner.isolation=sysbox for sysbox nodes" -}}
+{{- end -}}
+{{- end -}}
+{{- if eq .Values.dataPlane.mode "in-cluster" -}}
+{{- if not (hasSuffix (printf ":%v" .Values.runner.service.httpPort) .Values.runner.config.listenAddr) -}}
+{{- fail "runner.config.listenAddr port must match runner.service.httpPort" -}}
+{{- end -}}
+{{- if not (hasSuffix (printf ":%v" .Values.runner.service.controlGrpcPort) .Values.runner.config.controlGrpcListenAddr) -}}
+{{- fail "runner.config.controlGrpcListenAddr port must match runner.service.controlGrpcPort" -}}
 {{- end -}}
 {{- end -}}
 {{- if not .Values.auth.existingSecret -}}

@@ -1,5 +1,6 @@
 {{- if .Values.networkPolicy.enabled }}
-{{- $sysboxRunnerEnabled := and .Values.sysboxRunner.enabled (eq .Values.dataPlane.mode "sysbox") -}}
+{{- $component := include "n8n-sandbox-service.runnerComponent" . -}}
+{{- $runnerEnabled := eq .Values.dataPlane.mode "in-cluster" -}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -21,33 +22,33 @@ spec:
       from:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-    {{- if or $sysboxRunnerEnabled .Values.networkPolicy.api.grpcIngressFrom }}
+    {{- if or $runnerEnabled .Values.networkPolicy.api.grpcIngressFrom }}
     - ports:
         - port: grpc
           protocol: TCP
       from:
-        {{- if $sysboxRunnerEnabled }}
+        {{- if $runnerEnabled }}
         - podSelector:
             matchLabels:
-              {{- include "n8n-sandbox-service.selectorLabels" (dict "Release" .Release "Chart" .Chart "Values" .Values "component" "sysbox-runner") | nindent 14 }}
+              {{- include "n8n-sandbox-service.selectorLabels" (dict "Release" .Release "Chart" .Chart "Values" .Values "component" $component) | nindent 14 }}
         {{- end }}
         {{- with .Values.networkPolicy.api.grpcIngressFrom }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
     {{- end }}
-{{- if $sysboxRunnerEnabled }}
+{{- if $runnerEnabled }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "n8n-sandbox-service.sysboxRunnerName" . }}
+  name: {{ include "n8n-sandbox-service.runnerName" . }}
   labels:
     {{- include "n8n-sandbox-service.labels" . | nindent 4 }}
-    app.kubernetes.io/component: sysbox-runner
+    app.kubernetes.io/component: {{ $component }}
 spec:
   podSelector:
     matchLabels:
-      {{- include "n8n-sandbox-service.selectorLabels" (dict "Release" .Release "Chart" .Chart "Values" .Values "component" "sysbox-runner") | nindent 6 }}
+      {{- include "n8n-sandbox-service.selectorLabels" (dict "Release" .Release "Chart" .Chart "Values" .Values "component" $component) | nindent 6 }}
   policyTypes:
     - Ingress
   ingress:
@@ -60,7 +61,7 @@ spec:
         - podSelector:
             matchLabels:
               {{- include "n8n-sandbox-service.selectorLabels" (dict "Release" .Release "Chart" .Chart "Values" .Values "component" "api") | nindent 14 }}
-        {{- with .Values.networkPolicy.sysboxRunner.ingressFrom }}
+        {{- with .Values.networkPolicy.runner.ingressFrom }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
 {{- end }}

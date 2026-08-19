@@ -32,8 +32,18 @@ Chart name and version label.
 {{- printf "%s-api" (include "n8n-sandbox-service.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
-{{- define "n8n-sandbox-service.sysboxRunnerName" -}}
-{{- printf "%s-sysbox-runner" (include "n8n-sandbox-service.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{/*
+Component label and resource name for the in-cluster runner. Both follow
+runner.isolation on purpose: StatefulSet selectors are immutable, so a shared
+name would break existing sysbox releases on upgrade. Switching isolation
+recreates the runner resources under the other name.
+*/}}
+{{- define "n8n-sandbox-service.runnerComponent" -}}
+{{- if eq .Values.runner.isolation "privileged" -}}privileged-runner{{- else -}}sysbox-runner{{- end -}}
+{{- end }}
+
+{{- define "n8n-sandbox-service.runnerName" -}}
+{{- printf "%s-%s" (include "n8n-sandbox-service.fullname" .) (include "n8n-sandbox-service.runnerComponent" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{- define "n8n-sandbox-service.authSecretName" -}}
@@ -58,5 +68,5 @@ app.kubernetes.io/component: {{ .component }}
 {{- end }}
 
 {{- define "n8n-sandbox-service.sandboxImage" -}}
-{{- printf "%s:%s" .Values.sysboxRunner.sandboxImage.repository (.Values.sysboxRunner.sandboxImage.tag | default .Chart.AppVersion) }}
+{{- printf "%s:%s" .Values.runner.sandboxImage.repository (.Values.runner.sandboxImage.tag | default .Chart.AppVersion) }}
 {{- end }}

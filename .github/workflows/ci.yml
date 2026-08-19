@@ -122,6 +122,15 @@ jobs:
             --set auth.existingSecret=n8n-sandbox-auth \
             --set dataPlane.mode=external \
             --set networkPolicy.enabled=true
+          helm template n8n-sandbox-service charts/n8n-sandbox-service \
+            --set auth.existingSecret=n8n-sandbox-auth \
+            --set runner.isolation=privileged \
+            --set runner.acknowledgePrivileged=true
+          helm template n8n-sandbox-service charts/n8n-sandbox-service \
+            --set auth.existingSecret=n8n-sandbox-auth \
+            --set runner.isolation=privileged \
+            --set runner.acknowledgePrivileged=true \
+            --set networkPolicy.enabled=true
 
   golden-build:
     runs-on: ubuntu-latest
