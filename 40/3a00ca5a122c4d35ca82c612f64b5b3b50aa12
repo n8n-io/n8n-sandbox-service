@@ -1,0 +1,25 @@
+charts/n8n-sandbox-service/README.md
+  s_481bc40a129b75::t_204e4068dcadc8 151,155-169,178
+.github/workflows/ci.yml
+  s_481bc40a129b75::t_544b2dd509d1c7 137-157,162-171,173-198,200-202
+charts/n8n-sandbox-service/templates/validation.yaml
+  s_481bc40a129b75::t_f3f507cd61ec20 54-61
+charts/n8n-sandbox-service/values.yaml
+  s_481bc40a129b75::t_a19ac0e9002276 258-260,263-264
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "403a00ca5a122c4d35ca82c612f64b5b3b50aa12",
+  "prompts": {},
+  "sessions": {
+    "s_481bc40a129b75": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5b5f0eab-0488-4850-9286-aa3df94ed136",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
