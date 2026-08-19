@@ -44,9 +44,7 @@ Registration vs lifecycle: Runners dial the API over gRPC for registration. Sand
 
 Debugging gRPC: See [`docs/grpcurl-debug.md`](docs/grpcurl-debug.md).
 
-Security FAQ (draft): See [`docs/security-faq.md`](docs/security-faq.md).
-
-Weak points + hardening plan (draft): See [`docs/security-weak-points-and-hardening.md`](docs/security-weak-points-and-hardening.md).
+Trust boundaries and non-guarantees: See [`docs/security-model.md`](docs/security-model.md).
 
 Bearer token: Still required in metadata (`Authorization: Bearer …`) in addition to mTLS for registration.
 

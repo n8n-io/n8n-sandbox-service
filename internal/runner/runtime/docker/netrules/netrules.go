@@ -27,8 +27,12 @@ func ingressChainName(containerID string) string {
 	return ChainName(containerID) + "-IN"
 }
 
-// ApplyPolicy configures per-sandbox egress rules plus ingress protection for
-// the daemon port.
+func hostChainName(containerID string) string {
+	return ChainName(containerID) + "-HOST"
+}
+
+// ApplyPolicy configures per-sandbox egress rules, ingress protection for the
+// daemon port, and a block on reaching the runner host itself.
 func ApplyPolicy(containerID, sourceIP, gatewayIP string, daemonPort int) error {
 	if containerID == "" {
 		return fmt.Errorf("container id is required")
@@ -85,6 +89,28 @@ func ApplyPolicy(containerID, sourceIP, gatewayIP string, daemonPort int) error 
 		return fmt.Errorf("append ingress drop: %w", err)
 	}
 
+	// The egress chain cannot protect the runner host. DOCKER-USER is only
+	// consulted for forwarded packets, and anything addressed to a host-local
+	// address (the bridge gateway, the host's own private IP) is delivered via
+	// INPUT instead, so the private-range drops above never see it. Everything
+	// reaching INPUT is locally destined by definition, so dropping this
+	// container's new connections there covers every host address at once.
+	// Established traffic is exempt: the runner dials the sandbox daemon, and
+	// the replies arrive here.
+	hostChain := hostChainName(containerID)
+	if err := run("iptables", "-N", hostChain); err != nil {
+		return fmt.Errorf("create host chain: %w", err)
+	}
+	if err := run("iptables", "-I", "INPUT", "1", "-s", sourceIP+"/32", "-j", hostChain); err != nil {
+		return fmt.Errorf("insert host jump: %w", err)
+	}
+	if err := run("iptables", "-A", hostChain, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"); err != nil {
+		return fmt.Errorf("allow established host traffic: %w", err)
+	}
+	if err := run("iptables", "-A", hostChain, "-j", "DROP"); err != nil {
+		return fmt.Errorf("append host drop: %w", err)
+	}
+
 	return nil
 }
 
@@ -100,14 +126,17 @@ func teardownLocked(containerID string) error {
 		return nil
 	}
 
-	if err := removeJumpReferences(ChainName(containerID)); err != nil {
+	if err := removeJumpReferences("DOCKER-USER", ChainName(containerID)); err != nil {
 		return err
 	}
-	if err := removeJumpReferences(ingressChainName(containerID)); err != nil {
+	if err := removeJumpReferences("DOCKER-USER", ingressChainName(containerID)); err != nil {
+		return err
+	}
+	if err := removeJumpReferences("INPUT", hostChainName(containerID)); err != nil {
 		return err
 	}
 
-	for _, chain := range []string{ChainName(containerID), ingressChainName(containerID)} {
+	for _, chain := range []string{ChainName(containerID), ingressChainName(containerID), hostChainName(containerID)} {
 		_ = run("iptables", "-F", chain)
 		_ = run("iptables", "-X", chain)
 	}
@@ -122,8 +151,8 @@ func ensureDockerUserChain() error {
 	return nil
 }
 
-func removeJumpReferences(chain string) error {
-	out, err := output("iptables", "-S", "DOCKER-USER")
+func removeJumpReferences(parent, chain string) error {
+	out, err := output("iptables", "-S", parent)
 	if err != nil {
 		msg := strings.ToLower(err.Error())
 		if strings.Contains(msg, "no chain/target/match by that name") {
@@ -132,17 +161,18 @@ func removeJumpReferences(chain string) error {
 		return err
 	}
 
+	prefix := "-A " + parent + " "
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		if !strings.Contains(line, "-j "+chain) {
 			continue
 		}
 
 		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "-A DOCKER-USER ") {
+		if !strings.HasPrefix(trimmed, prefix) {
 			continue
 		}
-		args := strings.Fields(strings.TrimPrefix(trimmed, "-A DOCKER-USER "))
-		args = append([]string{"-D", "DOCKER-USER"}, args...)
+		args := strings.Fields(strings.TrimPrefix(trimmed, prefix))
+		args = append([]string{"-D", parent}, args...)
 		_ = run("iptables", args...)
 	}
 	return nil
