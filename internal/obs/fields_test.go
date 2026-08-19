@@ -25,6 +25,23 @@ func TestFieldsCollectedThroughContext(t *testing.T) {
 	}
 }
 
+func TestFieldsAddManyPairsAtOnce(t *testing.T) {
+	_, fields := WithFields(context.Background())
+
+	fields.Add("sandbox_id", "abc", "runner_id", "runner-1")
+
+	got := fields.Attrs()
+	want := []any{"sandbox_id", "abc", "runner_id", "runner-1"}
+	if len(got) != len(want) {
+		t.Fatalf("Attrs() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("Attrs()[%d] = %v, want %v", i, got[i], want[i])
+		}
+	}
+}
+
 func TestFieldsWithoutContextIsNoOp(t *testing.T) {
 	FieldsFrom(context.Background()).Add("sandbox_id", "abc")
 	if got := FieldsFrom(context.Background()).Attrs(); got != nil {

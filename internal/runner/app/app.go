@@ -15,6 +15,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/grpc/pb"
 	"github.com/n8n-io/sandbox-service/internal/grpctls"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
+	"github.com/n8n-io/sandbox-service/internal/obs"
 	"github.com/n8n-io/sandbox-service/internal/runner"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 	"github.com/n8n-io/sandbox-service/internal/runner/register"
@@ -28,7 +29,7 @@ type RuntimeFactory func(*config.Config) (runnerruntime.Runtime, error)
 func Main(runtimeName string, factory RuntimeFactory) {
 	var logLevel slog.LevelVar
 	logLevel.Set(slog.LevelInfo)
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: &logLevel}))
+	logger := slog.New(obs.TraceHandler(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: &logLevel})))
 	slog.SetDefault(logger)
 
 	cfg, err := config.Load()

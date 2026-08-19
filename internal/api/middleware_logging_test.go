@@ -12,12 +12,14 @@ import (
 )
 
 // captureLogs redirects the default logger into a buffer for the duration of
-// the test and returns the events it recorded.
+// the test and returns the events it recorded. The handler is wrapped the same
+// way cmd/api/main.go wraps it, so events logged with a request context are
+// traced here as they are in production.
 func captureLogs(t *testing.T) func() []map[string]any {
 	t.Helper()
 	var buf bytes.Buffer
 	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	slog.SetDefault(slog.New(obs.TraceHandler(slog.NewJSONHandler(&buf, nil))))
 	t.Cleanup(func() { slog.SetDefault(previous) })
 
 	return func() []map[string]any {

@@ -31,6 +31,33 @@ Rules:
 
 ## Events
 
+Four log messages are canonical events: one line that explains one operation,
+and what the queries below select on.
+
+| Event | Emitter | Emitted when |
+| --- | --- | --- |
+| `request` | API | A request finishes, including one rejected by middleware |
+| `request` | Runner | A request proxied from the API (exec, files) finishes |
+| `firecracker sandbox created` | Runner | A sandbox is created and its guest daemon answers |
+| `firecracker sandbox woke` | Runner | A stopped sandbox is restored and its guest daemon answers |
+
+The runner's `request` event only records `trace_id`, `method`, `path`, and
+`duration_ms`; the API's is the wide one, and the runner's lifecycle events hold
+the detail of what happened underneath. Health and metrics routes are logged on
+neither binary.
+
+Diagnostics are the other lines the two binaries log. They are not part of this
+contract — no guarantee of one per operation, and their fields change with the
+code that emits them — but a diagnostic logged with a request's context also
+carries that request's `trace_id`, so the step a failed create died on comes
+back alongside its canonical event. The create path does this for runner
+selection, the gRPC create, and the store write.
+
+To get it in new code, log through `slog`'s context-taking functions
+(`InfoContext`, `ErrorContext`, and so on): the handler both binaries install
+adds the trace id whenever the context has one. Background work such as the
+idle sweeper has no request context and so no trace id.
+
 ### API: one event per request
 
 The API emits exactly one `request` event per request, whatever the outcome:
@@ -42,8 +69,6 @@ The API emits exactly one `request` event per request, whatever the outcome:
 | `tenant_id` | Present for tenant-authenticated requests |
 | `sandbox_id`, `runner_id` | Present on create and on proxied sandbox routes |
 | `ttfb_ms` | Proxied routes: time until the runner's response headers arrived. For a streamed exec this is time to first byte, not the full response |
-
-`/healthz` and `/metrics` are not logged.
 
 ### Runner: one event per sandbox lifecycle operation
 

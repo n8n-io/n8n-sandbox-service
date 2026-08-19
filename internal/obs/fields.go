@@ -33,14 +33,19 @@ func FieldsFrom(ctx context.Context) *Fields {
 	return f
 }
 
-// Add records one key/value pair for the request's event.
-func (f *Fields) Add(key string, value any) {
+// Add records a key/value pair for the request's event, plus any further pairs
+// passed as trailing arguments: Add("sandbox_id", id, "runner_id", run.ID).
+//
+// A trailing list that does not pair up is left for slog to report, the same as
+// any other malformed argument list handed to it.
+func (f *Fields) Add(key string, value any, more ...any) {
 	if f == nil {
 		return
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.kv = append(f.kv, key, value)
+	f.kv = append(f.kv, more...)
 }
 
 // Attrs returns the collected pairs as a slog-style variadic argument list.

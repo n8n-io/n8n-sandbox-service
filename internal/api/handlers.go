@@ -74,8 +74,7 @@ func sandboxProxyHandler(s store.SandboxStore, cfg *config.APIConfig) func(bool)
 			_ = s.UpdateStatus(id, "running")
 
 			fields := obs.FieldsFrom(r.Context())
-			fields.Add("sandbox_id", id)
-			fields.Add("runner_id", rec.RunnerID)
+			fields.Add("sandbox_id", id, "runner_id", rec.RunnerID)
 
 			u, _ := url.Parse(strings.TrimRight(rec.RunnerHTTPBase, "/"))
 			upstreamStart := time.Now()
@@ -283,10 +282,10 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 		run, err := reg.PickLowestUsed()
 		if err != nil {
 			if errors.Is(err, registry.ErrNoRunners) {
-				slog.Warn("create sandbox failed: no eligible runners")
+				slog.WarnContext(r.Context(), "create sandbox failed: no eligible runners")
 				writeError(w, http.StatusServiceUnavailable, err.Error())
 			} else {
-				slog.Error("create sandbox failed: pick runner", "error", err)
+				slog.ErrorContext(r.Context(), "create sandbox failed: pick runner", "error", err)
 				writeError(w, http.StatusInternalServerError, err.Error())
 			}
 			return
@@ -296,11 +295,11 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 		tlsCfg := runnerControlTLS(cfg)
 
 		fields := obs.FieldsFrom(r.Context())
-		fields.Add("sandbox_id", sandboxID)
-		fields.Add("runner_id", run.ID)
+		fields.Add("sandbox_id", sandboxID, "runner_id", run.ID)
 
 		now := time.Now().Unix()
-		slog.Info(
+		slog.InfoContext(
+			r.Context(),
 			"create sandbox: runner selected",
 			"sandbox_id", sandboxID,
 			"runner_id", run.ID,
@@ -314,7 +313,8 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 		)
 		gresp, err := runnerctl.CreateSandbox(r.Context(), controlAddr, cfg.RunnerAPIKey, tlsCfg, sandboxID, "{}")
 		if err != nil {
-			slog.Error(
+			slog.ErrorContext(
+				r.Context(),
 				"create sandbox failed: runner control create",
 				"sandbox_id", sandboxID,
 				"runner_id", run.ID,
@@ -349,7 +349,8 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 				writeError(w, http.StatusConflict, "sandbox id unavailable")
 				return
 			}
-			slog.Error(
+			slog.ErrorContext(
+				r.Context(),
 				"create sandbox failed: store record",
 				"sandbox_id", sandboxID,
 				"runner_id", run.ID,
@@ -363,7 +364,8 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 			writeError(w, http.StatusInternalServerError, "failed to store sandbox: "+err.Error())
 			return
 		}
-		slog.Info(
+		slog.InfoContext(
+			r.Context(),
 			"create sandbox succeeded",
 			"sandbox_id", sandboxID,
 			"runner_id", run.ID,
