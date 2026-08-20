@@ -171,7 +171,7 @@ curl -X POST http://localhost:8080/sandboxes \
 
 Get sandbox details.
 
-This is a read-only status check: it does not update `last_active_at` or extend idle timers. Only traffic that reaches the runner (exec, files, etc.) counts as activity.
+This is a read-only status check: it does not update `last_active_at` or extend idle timers. Only proxied traffic (exec, files, etc.) counts as activity, and only when the sandbox actually serves it — a request that fails with **502** or **503** leaves `last_active_at` and `status` untouched, so retrying against a broken sandbox cannot hold it open past its idle timers. A **4xx** still counts, since the sandbox was reachable and rejected the request.
 
 **Path Parameters:**
 - `id` — Sandbox UUID
@@ -290,6 +290,18 @@ The runner automatically retries mid-stream disconnects from the daemon: if the 
 connection drops before the terminal event, the runner resumes via the daemon's
 `GET /executions/{exec_id}?follow=true&after=<seq>` endpoint (up to 3 retries with
 exponential backoff starting at 50 ms). The client sees a seamless NDJSON stream.
+
+If those retries are exhausted, the runner gives up and the response body simply ends.
+The status line was already sent as `200 OK`, so **a stream that ends without an `exit`
+or `error` event has not completed** — treat it as a failure rather than as an empty
+result. The same applies if the connection between the client and the API drops
+mid-stream, which no server-side signal can cover.
+
+Recovery is the client's job, and the execution outlives the stream: reconnect with
+`GET /sandboxes/{id}/executions/{exec_id}?after=<last seq>&follow=true` to pick up where
+the stream stopped. The command is very likely still running. The SDK does this
+automatically (up to 10 attempts, 250 ms apart) and throws `SandboxServiceError` if the
+execution still has not produced an `exit` event.
 
 The execution stores events in a bounded buffer (up to 16 MiB). Clients can reconnect
 via `GET /sandboxes/{id}/executions/{exec_id}?after=<seq>&follow=true`. Completed executions
