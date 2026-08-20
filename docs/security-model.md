@@ -92,7 +92,11 @@ destination, drops connections to its daemon port. The runner's own connections
 are unaffected, being locally generated and so never subject to a chain that
 only sees forwarded packets; the exception for the gateway address applies only
 to packets that did not arrive on the bridge, for the same reason the rules
-above avoid matching on addresses. Containers are created with IPv6 disabled.
+above avoid matching on addresses. The two shared chains are rebuilt from empty
+at runner startup, after stale containers are removed and before any sandbox can
+be created, so an upgraded runner replacing the rules of an earlier version
+never does so with a container on the bridge. Containers are created with IPv6
+disabled.
 
 Within a sandbox, the daemon runs as a non-root user, and file operations are
 path-validated to keep them inside the sandbox. The daemon authenticates

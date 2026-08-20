@@ -43,6 +43,21 @@ func hostChainName(containerID string) string {
 	return ChainName(containerID) + "-HOST"
 }
 
+// EnsureBridgePolicy builds the chains shared by every container on the runner
+// bridge. Call it at runner startup, before the first sandbox exists: the
+// initial build flushes those chains (see resetSharedChains), and a flush while
+// containers are on the bridge would leave them unfiltered until the
+// replacement rules are back.
+func EnsureBridgePolicy(bridgeIface string) error {
+	mu.Lock()
+	defer mu.Unlock()
+
+	if err := ensureDockerUserChain(); err != nil {
+		return err
+	}
+	return ensureBridgePolicy(bridgeIface)
+}
+
 // ApplyPolicy configures the policy shared by every container on the runner
 // bridge plus ingress protection for this container's daemon port.
 func ApplyPolicy(bridgeIface, containerID, sourceIP, gatewayIP string, daemonPort int) error {
@@ -208,8 +223,10 @@ func ensureChain(chain string) error {
 // builds them, so their contents are always the ones this binary appended.
 // ensureRule only adds, so a chain inherited from an earlier binary could keep
 // rules the current policy has dropped, or place new ones after the terminal
-// ACCEPT, where they never match. Nothing runs under the policy at this point:
-// the runtime removes every managed container before it creates a sandbox.
+// ACCEPT, where they never match. Nothing is on the bridge while the chains are
+// empty: the runtime calls EnsureBridgePolicy at startup, after it has removed
+// every managed container and before it can create one, which leaves the
+// rebuild from ApplyPolicy with nothing left to flush.
 // Callers hold mu.
 func resetSharedChains() error {
 	if sharedChainsReset {
