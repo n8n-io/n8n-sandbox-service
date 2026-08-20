@@ -43,16 +43,23 @@ recreates the runner resources under the other name.
 {{- end }}
 
 {{/*
-Runner resource name. The privileged name keeps the suffix whole and adds a
-hash of the full name when the base must be truncated, so two long release
-names cannot produce the same runner. The sysbox name keeps its old
-truncation for upgrade compatibility.
+Runner resource name. The name caps at 61 characters, not 63: the StatefulSet
+appends "-<ordinal>" to build each pod name, and the controller copies that
+pod name into the pod's hostname, which Kubernetes limits to 63 characters. A
+63-character runner name therefore renders a StatefulSet that can never create
+a pod. 61 leaves room for ordinals 0-9. Use fullnameOverride to shorten the
+name further if you run more than 10 runner replicas.
+
+The privileged name keeps the suffix whole and adds a hash of the full name
+when the base must be truncated, so two long release names cannot produce the
+same runner.
 */}}
 {{- define "n8n-sandbox-service.runnerName" -}}
 {{- $fullname := include "n8n-sandbox-service.fullname" . -}}
+{{- $maxLength := 61 -}}
 {{- if eq .Values.runner.isolation "privileged" -}}
 {{- $suffix := "-privileged-runner" -}}
-{{- $baseLength := sub 63 (len $suffix) | int -}}
+{{- $baseLength := sub $maxLength (len $suffix) | int -}}
 {{- if le (len $fullname) $baseLength -}}
 {{- printf "%s%s" $fullname $suffix -}}
 {{- else -}}
@@ -61,7 +68,7 @@ truncation for upgrade compatibility.
 {{- printf "%s-%s%s" $base $hash $suffix -}}
 {{- end -}}
 {{- else -}}
-{{- printf "%s-sysbox-runner" $fullname | trunc 63 | trimSuffix "-" -}}
+{{- printf "%s-sysbox-runner" $fullname | trunc $maxLength | trimSuffix "-" -}}
 {{- end -}}
 {{- end }}
 

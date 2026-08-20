@@ -50,11 +50,14 @@
 {{- end -}}
 {{- if and (eq .Values.dataPlane.mode "in-cluster") (gt (int .Values.runner.config.defaultDiskQuotaMb) 0) -}}
 {{- $dockerDataRoot := .Values.runner.dockerDataRoot -}}
-{{- if or $dockerDataRoot.persistence.enabled (eq .Values.runner.isolation "privileged") -}}
-{{- if not (regexMatch "^[1-9][0-9]*$" (toString .Values.runner.config.diskQuotaPoolSizeGb)) -}}
-{{- fail (printf "runner.config.diskQuotaPoolSizeGb must be a positive whole number of GB when runner.config.defaultDiskQuotaMb is above 0 (got %q): the derived pool size scales with runner.config.capacityTotal and can outgrow the docker data root volume. See the chart README section 'Disk Quotas'" (toString .Values.runner.config.diskQuotaPoolSizeGb)) -}}
+{{- $chartVolume := or $dockerDataRoot.persistence.enabled (eq .Values.runner.isolation "privileged") -}}
+{{- if and (not $chartVolume) (not .Values.runner.config.diskQuotaPoolPath) -}}
+{{- fail "runner.config.defaultDiskQuotaMb above 0 needs a bounded volume for the disk-quota pool image, and this configuration has none. The image would land on the container filesystem and could fill the node disk. Set runner.dockerDataRoot.persistence.enabled=true, or set runner.config.diskQuotaPoolPath to a path on a volume you supply through runner.extraVolumes. See the chart README section 'Disk Quotas'" -}}
 {{- end -}}
-{{- if not .Values.runner.config.diskQuotaPoolPath -}}
+{{- if not (regexMatch "^[1-9][0-9]*$" (toString .Values.runner.config.diskQuotaPoolSizeGb)) -}}
+{{- fail (printf "runner.config.diskQuotaPoolSizeGb must be a positive whole number of GB when runner.config.defaultDiskQuotaMb is above 0 (got %q): the derived pool size scales with runner.config.capacityTotal and can outgrow the volume that holds the pool image. See the chart README section 'Disk Quotas'" (toString .Values.runner.config.diskQuotaPoolSizeGb)) -}}
+{{- end -}}
+{{- if and $chartVolume (not .Values.runner.config.diskQuotaPoolPath) -}}
 {{- $volumeSize := ternary $dockerDataRoot.persistence.size (($dockerDataRoot.emptyDir | default dict).sizeLimit | default "") $dockerDataRoot.persistence.enabled | toString -}}
 {{- $volumeKey := ternary "runner.dockerDataRoot.persistence.size" "runner.dockerDataRoot.emptyDir.sizeLimit" $dockerDataRoot.persistence.enabled -}}
 {{- if not (regexMatch "^[0-9]+Gi?$" $volumeSize) -}}
@@ -63,7 +66,6 @@
 {{- $volumeSizeGb := trimSuffix "G" (trimSuffix "Gi" $volumeSize) | int -}}
 {{- if gt (int .Values.runner.config.diskQuotaPoolSizeGb) $volumeSizeGb -}}
 {{- fail (printf "runner.config.diskQuotaPoolSizeGb (%v) must not exceed the docker data root size (%s): the quota pool image lives on that volume" .Values.runner.config.diskQuotaPoolSizeGb $volumeSize) -}}
-{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

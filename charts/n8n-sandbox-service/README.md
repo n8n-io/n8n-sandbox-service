@@ -40,7 +40,9 @@ kubectl -n n8n-sandbox describe statefulset -l app.kubernetes.io/name=n8n-sandbo
 
 The isolation-specific settings (`runtime` and `scheduling`) live in the `runner.sysbox` and `runner.privileged` subblocks. The chart reads only the subblock that matches `runner.isolation`; values in the other subblock are ignored. All other `runner.*` keys are shared between isolations.
 
-The runner resource names follow the isolation (`<release>-sysbox-runner`, `<release>-privileged-runner`). Switching isolation therefore recreates the runner StatefulSet under the other name; this is required because StatefulSet selectors are immutable. A release name that is too long for the 63-character limit gets a short hash in the privileged name, so two long release names stay unique.
+The runner resource names follow the isolation (`<release>-sysbox-runner`, `<release>-privileged-runner`). Switching isolation therefore recreates the runner StatefulSet under the other name; this is required because StatefulSet selectors are immutable.
+
+The runner name caps at 61 characters. The StatefulSet appends `-<ordinal>` to build each pod name, and Kubernetes limits the resulting pod hostname to 63 characters. The cap keeps room for ordinals 0-9. Set `fullnameOverride` to a shorter name if you run more than 10 runner replicas. A release name that is too long for the cap gets a short hash in the privileged name, so two long release names stay unique.
 
 ## Privileged Isolation
 
@@ -146,7 +148,7 @@ runner:
 
 `runner.config.defaultDiskQuotaMb` above 0 caps the writable layer of each sandbox. To enforce the cap, the runner allocates a loopback xfs image, mounts it with `prjquota` at `/var/lib/docker`, and runs the inner Docker daemon against that mount.
 
-The mount does not bound the image, so the image needs a bounded volume of its own. When the chart owns a Docker data root volume (`runner.dockerDataRoot.persistence.enabled`, or the `emptyDir` of privileged isolation), it mounts that volume at `/var/lib/docker-pool` instead and puts the image there. Without this, the image lands on the container filesystem and can fill the node disk.
+The mount does not bound the image, so the image needs a bounded volume of its own. When the chart owns a Docker data root volume (`runner.dockerDataRoot.persistence.enabled`, or the `emptyDir` of privileged isolation), it mounts that volume at `/var/lib/docker-pool` instead and puts the image there. Without such a volume the image would land on the container filesystem and could fill the node disk, so the render fails.
 
 The chart therefore requires an explicit pool size that fits the volume. With the default `sysbox` isolation, enable persistence so the volume exists:
 
@@ -175,13 +177,13 @@ runner:
       sizeLimit: 64Gi
 ```
 
-When `runner.config.diskQuotaPoolPath` points at a volume you mount yourself (for example through `runner.extraVolumes`), the chart skips the size comparison. You own the fit between the pool and that volume.
+`runner.config.diskQuotaPoolPath` overrides the image path. When it points at a volume you mount yourself (for example through `runner.extraVolumes`), the chart skips the size comparison. You then own the fit between the pool and that volume. Keep the override on a volume with a size limit; the mount that the image backs does not bound the image.
 
-The render fails if `runner.config.diskQuotaPoolSizeGb` is empty or larger than the volume. The default pool size is derived from `runner.config.capacityTotal` and is much larger than a normal volume, which is why the chart does not fall back to it.
+The render fails in three cases:
 
-`runner.config.diskQuotaPoolPath` overrides the image path. Keep the override on a volume with a size limit, for example one you add through `runner.extraVolumes`.
-
-Sysbox isolation without `persistence` has no Docker data root volume, so the image stays on the runner container filesystem. Enable `persistence` to bound it.
+- No volume holds the pool image. This happens when `runner.dockerDataRoot.persistence` is disabled, isolation is `sysbox`, and `diskQuotaPoolPath` is empty. It is the default configuration, so enable persistence or set an explicit path.
+- `runner.config.diskQuotaPoolSizeGb` is not a positive whole number of GB. The chart never falls back to the derived pool size, because that size scales with `runner.config.capacityTotal`. A 2048 MB per-sandbox quota and the default `capacityTotal` of 1000 derive a 2400 GB pool.
+- `runner.config.diskQuotaPoolSizeGb` is larger than the chart-owned volume.
 
 If the node kernel lacks xfs quota support, the pool mount fails. The runner then logs `disk quota enforcement: DISABLED`, the inner Docker daemon uses the container filesystem, and the volume stays unused. Watch that log line after you enable quotas.
 

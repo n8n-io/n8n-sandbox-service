@@ -97,6 +97,23 @@ manifests=$(render "${privileged[@]}" \
 	--set runner.config.diskQuotaPoolPath=/mnt/pool/docker.img)
 echo "$manifests" | grep -q 'SANDBOX_RUNNER_DISK_QUOTA_POOL_PATH: "/mnt/pool/docker.img"'
 
+# Default sysbox isolation has no volume for the pool image. Quotas must not
+# render, because the runner would put a pool sized from capacityTotal on the
+# container filesystem.
+must_fail "needs a bounded volume" \
+	--set runner.config.defaultDiskQuotaMb=2048 \
+	--set runner.config.diskQuotaPoolSizeGb=60
+must_fail "needs a bounded volume" \
+	--set runner.config.defaultDiskQuotaMb=2048
+
+# An explicit pool path covers that case: the operator owns the volume.
+manifests=$(render \
+	--set runner.config.defaultDiskQuotaMb=2048 \
+	--set runner.config.diskQuotaPoolSizeGb=60 \
+	--set runner.config.diskQuotaPoolPath=/mnt/pool/docker.img)
+echo "$manifests" | grep -q 'SANDBOX_RUNNER_DISK_QUOTA_POOL_PATH: "/mnt/pool/docker.img"'
+echo "$manifests" | grep -q 'SANDBOX_RUNNER_DISK_QUOTA_POOL_SIZE_GB: "60"'
+
 echo "==> long runner names stay isolation-specific and unique"
 statefulset_name() {
 	local release_name=$1
@@ -113,5 +130,24 @@ privileged_name=$(statefulset_name "$release_name" "${privileged[@]}")
 other_privileged_name=$(statefulset_name "$other_release_name" "${privileged[@]}")
 test "$sysbox_name" != "$privileged_name"
 test "$privileged_name" != "$other_privileged_name"
+
+echo "==> runner names leave room for the StatefulSet ordinal"
+# The StatefulSet controller copies the pod name "<runner>-<ordinal>" into the
+# pod hostname, and Kubernetes limits a hostname to 63 characters. A runner
+# name above 61 characters therefore renders a StatefulSet whose pods the API
+# server always rejects. Helm limits a release name to 53 characters.
+for length in 1 20 40 41 42 43 44 45 46 47 48 49 50 53; do
+	long_release=$(printf 'a%.0s' $(seq "$length"))
+	for isolation in sysbox privileged; do
+		name=$(statefulset_name "$long_release" \
+			--set runner.isolation="$isolation" \
+			--set runner.acknowledgePrivileged=true)
+		if test "${#name}" -gt 61; then
+			echo "runner name leaves no room for the ordinal:" >&2
+			echo "  isolation=$isolation release length=$length name=$name (${#name})" >&2
+			exit 1
+		fi
+	done
+done
 
 echo "render tests passed"
