@@ -15,6 +15,7 @@ import (
 
 const (
 	runnerBridgeNetwork      = "runner-bridge"
+	bridgeNameOption         = "com.docker.network.bridge.name"
 	containerLabelManaged    = "sandbox-service.managed"
 	containerLabelManagedVal = "true"
 	containerLabelSandboxID  = "sandbox-service.id"
@@ -43,6 +44,7 @@ type containerState struct {
 }
 
 type networkInspect struct {
+	ID      string            `json:"Id"`
 	Name    string            `json:"Name"`
 	Options map[string]string `json:"Options"`
 	IPAM    struct {
@@ -237,6 +239,23 @@ func (dc *dockerClient) pullImage(ctx context.Context, image string) error {
 func firstGateway(inspect *networkInspect) string {
 	if inspect != nil && len(inspect.IPAM.Config) > 0 {
 		return inspect.IPAM.Config[0].Gateway
+	}
+	return ""
+}
+
+// bridgeInterface returns the host interface backing a Docker bridge network.
+// Networks this runner creates carry the name as an option; ones created by an
+// earlier version do not, and Docker then derives the device from the network
+// ID. netrules verifies the result exists before it builds rules on it.
+func bridgeInterface(inspect *networkInspect) string {
+	if inspect == nil {
+		return ""
+	}
+	if name := inspect.Options[bridgeNameOption]; name != "" {
+		return name
+	}
+	if len(inspect.ID) >= 12 {
+		return "br-" + inspect.ID[:12]
 	}
 	return ""
 }

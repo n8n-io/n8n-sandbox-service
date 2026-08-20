@@ -48,9 +48,10 @@ type Runtime struct {
 	runnerConfig  *config.Config
 	config        Config
 	gatewayIP     string
+	bridgeIface   string
 	wakeGroup     singleflight.Group
 	docker        dockerBackend
-	applyPolicy   func(containerID, sourceIP, gatewayIP string, daemonPort int) error
+	applyPolicy   func(bridgeIface, containerID, sourceIP, gatewayIP string, daemonPort int) error
 	teardownRules func(containerID string) error
 	waitForDaemon func(ctx context.Context, baseURL string) error
 	imageReady    atomic.Bool
@@ -71,11 +72,15 @@ func New(runnerConfig *config.Config, cfg Config) (*Runtime, error) {
 		return nil, fmt.Errorf("reconcile managed containers: %w", err)
 	}
 
-	gatewayIP, err := m.ensureRunnerBridge(ctx)
+	bridge, err := m.ensureRunnerBridge(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("ensure runner bridge: %w", err)
 	}
-	m.gatewayIP = gatewayIP
+	m.gatewayIP = firstGateway(bridge)
+	m.bridgeIface = bridgeInterface(bridge)
+	if m.bridgeIface == "" {
+		return nil, fmt.Errorf("cannot determine host interface for network %s", runnerBridgeNetwork)
+	}
 
 	return m, nil
 }
@@ -230,7 +235,7 @@ func (m *Runtime) CreateContainer(ctx context.Context, sandboxID string, opts *C
 		return nil, fmt.Errorf("inspect container ip: %w", err)
 	}
 
-	if err := m.applyPolicy(containerID, containerIP, m.gatewayIP, daemonPort); err != nil {
+	if err := m.applyPolicy(m.bridgeIface, containerID, containerIP, m.gatewayIP, daemonPort); err != nil {
 		cleanupOnError()
 		return nil, fmt.Errorf("apply network rules: %w", err)
 	}
@@ -321,7 +326,7 @@ func (m *Runtime) ensureSandboxRunningOnce(ctx context.Context, sandboxID string
 		m.cleanupWakeFailure(containerID)
 		return err
 	}
-	if err := m.applyPolicy(containerID, containerIP, m.gatewayIP, daemonPort); err != nil {
+	if err := m.applyPolicy(m.bridgeIface, containerID, containerIP, m.gatewayIP, daemonPort); err != nil {
 		m.cleanupWakeFailure(containerID)
 		return fmt.Errorf("apply network rules: %w", err)
 	}
@@ -536,27 +541,26 @@ func (m *Runtime) reconcileContainers(ctx context.Context) error {
 	return nil
 }
 
-func (m *Runtime) ensureRunnerBridge(ctx context.Context) (string, error) {
+func (m *Runtime) ensureRunnerBridge(ctx context.Context) (*networkInspect, error) {
 	inspect, err := m.docker.inspectNetwork(ctx, runnerBridgeNetwork)
 	if err != nil {
 		if !isDockerNotFound(err) {
-			return "", err
+			return nil, err
 		}
 		return m.createRunnerBridge(ctx)
 	}
 
-	return firstGateway(inspect), nil
+	return inspect, nil
 }
 
-func (m *Runtime) createRunnerBridge(ctx context.Context) (string, error) {
-	if _, err := m.docker.run(ctx, "network", "create", "--driver", "bridge", "--opt", "com.docker.network.bridge.enable_icc=false", runnerBridgeNetwork); err != nil {
-		return "", err
+func (m *Runtime) createRunnerBridge(ctx context.Context) (*networkInspect, error) {
+	if _, err := m.docker.run(ctx, "network", "create", "--driver", "bridge",
+		"--opt", "com.docker.network.bridge.enable_icc=false",
+		"--opt", bridgeNameOption+"="+runnerBridgeNetwork,
+		runnerBridgeNetwork); err != nil {
+		return nil, err
 	}
-	inspect, err := m.docker.inspectNetwork(ctx, runnerBridgeNetwork)
-	if err != nil {
-		return "", err
-	}
-	return firstGateway(inspect), nil
+	return m.docker.inspectNetwork(ctx, runnerBridgeNetwork)
 }
 
 // ManagedContainerCount returns how many sandbox containers this runner is managing.

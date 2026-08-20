@@ -242,7 +242,7 @@ func TestEnsureSandboxRunningCleansUpStartedContainerOnWakeFailures(t *testing.T
 				ip:             tc.containerIP,
 				containerIPErr: tc.ipErr,
 			})
-			m.applyPolicy = func(gotID, sourceIP, gatewayIP string, port int) error {
+			m.applyPolicy = func(bridgeIface, gotID, sourceIP, gatewayIP string, port int) error {
 				events = append(events, "applyPolicy")
 				if gotID != containerID {
 					t.Fatalf("applyPolicy containerID = %q, want %q", gotID, containerID)
@@ -288,7 +288,7 @@ func TestEnsureSandboxRunningFailedWakeAfterNetworkDetachStopsContainerAndRemove
 			runnerBridgeNetwork,
 		),
 	})
-	m.applyPolicy = func(string, string, string, int) error {
+	m.applyPolicy = func(string, string, string, string, int) error {
 		return fmt.Errorf("unexpected applyPolicy")
 	}
 	m.teardownRules = func(gotID string) error {
@@ -344,7 +344,7 @@ func TestEnsureSandboxRunningDoesNotCleanUpAfterSuccessfulWake(t *testing.T) {
 		containerID: containerID,
 		ip:          "172.18.0.2",
 	})
-	m.applyPolicy = func(string, string, string, int) error {
+	m.applyPolicy = func(string, string, string, string, int) error {
 		events = append(events, "applyPolicy")
 		return nil
 	}

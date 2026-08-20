@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 
 /** Admin key from env (SANDBOX_API_KEYS). Used to mint tenant keys. */
 export const ADMIN_API_KEY = process.env.SANDBOX_API_KEY || 'test';
-const BASE_URL = process.env.BASE_URL || process.env.BASE_URL_A || 'http://localhost:8080';
+export const BASE_URL = process.env.BASE_URL || process.env.BASE_URL_A || 'http://localhost:8080';
 
 let tenantApiKey: string | null = null;
 let tenantMintPromise: Promise<string> | null = null;

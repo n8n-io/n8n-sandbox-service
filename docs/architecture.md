@@ -181,6 +181,8 @@ File read, write, list, stat, copy, move, and delete follow the same two-hop rev
 
 ## Security Model
 
+See [security-model.md](security-model.md) for the trust boundaries behind these mechanisms and the non-guarantees that come with them.
+
 | Layer | Mechanism | Purpose |
 | --- | --- | --- |
 | Client → API | `X-Api-Key` (admin env keys or hashed tenant keys) | Authenticate and authorize API consumers |
