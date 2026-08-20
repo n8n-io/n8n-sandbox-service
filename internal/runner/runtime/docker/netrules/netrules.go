@@ -19,7 +19,12 @@ const (
 	bridgeHostChain   = chainPrefix + "BR-HOST"
 )
 
-var mu sync.Mutex
+var (
+	mu sync.Mutex
+	// Whether this process has already rebuilt the shared chains from empty.
+	// Guarded by mu.
+	sharedChainsReset bool
+)
 
 // ChainName returns the base name for a sandbox's own chains.
 func ChainName(containerID string) string {
@@ -72,7 +77,12 @@ func ApplyPolicy(bridgeIface, containerID, sourceIP, gatewayIP string, daemonPor
 		return fmt.Errorf("insert ingress jump: %w", err)
 	}
 	if gatewayIP != "" {
-		if err := run("iptables", "-A", ingressChain, "-s", gatewayIP+"/32", "-j", "ACCEPT"); err != nil {
+		// Excluding the bridge, because a sandbox picks its own source address
+		// and would otherwise reach another sandbox's daemon port by sending
+		// from the gateway's. The runner dials the daemon from the host side,
+		// where the packet is locally generated and never reaches a FORWARD
+		// chain at all, so nothing legitimate arrives here on the bridge.
+		if err := run("iptables", "-A", ingressChain, "!", "-i", bridgeIface, "-s", gatewayIP+"/32", "-j", "ACCEPT"); err != nil {
 			return fmt.Errorf("allow daemon ingress from gateway: %w", err)
 		}
 	}
@@ -119,6 +129,13 @@ func ensureBridgePolicy(bridgeIface string) error {
 	if err := ensureChain(bridgeEgressChain); err != nil {
 		return err
 	}
+	if err := ensureChain(bridgeHostChain); err != nil {
+		return err
+	}
+	if err := resetSharedChains(); err != nil {
+		return err
+	}
+
 	if err := ensureJump("DOCKER-USER", "-i", bridgeIface, "-j", bridgeEgressChain); err != nil {
 		return err
 	}
@@ -134,9 +151,6 @@ func ensureBridgePolicy(bridgeIface string) error {
 		return err
 	}
 
-	if err := ensureChain(bridgeHostChain); err != nil {
-		return err
-	}
 	if err := ensureJump("INPUT", "-i", bridgeIface, "-j", bridgeHostChain); err != nil {
 		return err
 	}
@@ -190,9 +204,30 @@ func ensureChain(chain string) error {
 	return nil
 }
 
+// resetSharedChains empties the shared chains the first time this process
+// builds them, so their contents are always the ones this binary appended.
+// ensureRule only adds, so a chain inherited from an earlier binary could keep
+// rules the current policy has dropped, or place new ones after the terminal
+// ACCEPT, where they never match. Nothing runs under the policy at this point:
+// the runtime removes every managed container before it creates a sandbox.
+// Callers hold mu.
+func resetSharedChains() error {
+	if sharedChainsReset {
+		return nil
+	}
+	for _, chain := range []string{bridgeEgressChain, bridgeHostChain} {
+		if err := run("iptables", "-F", chain); err != nil {
+			return fmt.Errorf("flush shared chain %s: %w", chain, err)
+		}
+	}
+	sharedChainsReset = true
+	return nil
+}
+
 // ensureRule appends a rule unless an identical one is already present, so that
 // rebuilding the shared policy never leaves a window in which it is absent for
-// the sandboxes already running under it.
+// the sandboxes already running under it. Appending is only in order because
+// the chain started empty; see resetSharedChains.
 func ensureRule(chain string, rule ...string) error {
 	if err := run("iptables", append([]string{"-C", chain}, rule...)...); err == nil {
 		return nil
