@@ -1,0 +1,23 @@
+charts/n8n-sandbox-service/render-tests.sh
+  s_481bc40a129b75::t_5ca859ebe98fb0 1-117
+charts/n8n-sandbox-service/.helmignore
+  s_481bc40a129b75::t_36d67eb4d47b0b 7
+.github/workflows/ci.yml
+  s_481bc40a129b75::t_c0de00df803ea6 100-101
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "a62099c53b945280618381e1c05fdcf8be1c202c",
+  "prompts": {},
+  "sessions": {
+    "s_481bc40a129b75": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5b5f0eab-0488-4850-9286-aa3df94ed136",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
