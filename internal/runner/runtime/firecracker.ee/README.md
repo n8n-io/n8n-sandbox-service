@@ -17,8 +17,9 @@ On startup `Prepare` gates the runner before heartbeats report healthy:
 
 1. Host NAT — enable IPv4 forwarding and idempotent MASQUERADE/FORWARD rules. Transient failures are retried with admission backoff (success is cached; failures are not).
 2. Pin guest assets — jailer, firecracker, `template/rootfs.ext4`, `template/vmlinux`, and optional `MANIFEST.json` / expected `git_sha` / daemon checksum.
-3. Ensure golden snapshot — if mem/state are missing and `SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT` is set, run `create-golden-snapshot.sh` on this host (snapshots are not portable across CPU gens). Production Firecracker VM images set this so the runner owns snapshot creation after first-boot builds the rootfs template.
-4. Admission canary — create a throwaway sandbox (`admission-canary-*`), probe `/healthz`, a tiny `POST /executions`, and a files put/get round-trip, then delete it. Canary deletion must fully release its slot; cleanup failure fails admission (and retries purge leftover canaries) so capacity-1 runners are never marked healthy with a permanently consumed slot.
+3. Ensure golden snapshot — if `snapshot_mem`, `snapshot_state` or `boot.json` is missing and `SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT` is set, run `create-golden-snapshot.sh` on this host (snapshots are not portable across CPU gens). Production Firecracker VM images set this so the runner owns snapshot creation after first-boot builds the rootfs template.
+4. Pin snapshot assets — mem/state exist, and `boot.json` parses and agrees with the runner on `guest_ip`, `host_tap_device_name` and `daemon_port` (see [Boot parameters](#boot-parameters-bootjson)).
+5. Admission canary — create a throwaway sandbox (`admission-canary-*`), probe `/healthz`, a tiny `POST /executions`, and a files put/get round-trip, then delete it. Canary deletion must fully release its slot; cleanup failure fails admission (and retries purge leftover canaries) so capacity-1 runners are never marked healthy with a permanently consumed slot.
 
 Until admission succeeds, `Ready()` fails, `/readyz` is not ready, and registration heartbeats send `Healthy=false`. Failed admission retries with backoff while the process runs.
 
@@ -106,6 +107,49 @@ snapshot and template `rootfs.ext4` are built:
 
 To change limits in production, rebuild the golden snapshot/rootfs on the host
 rather than tuning runner env vars.
+
+## Boot parameters (`boot.json`)
+
+`create-golden-snapshot.sh` writes `boot.json` into its `--out` directory next to
+`snapshot_mem` and `snapshot_state`, recording what it actually sent to the
+Firecracker API:
+
+```json
+{
+  "schema_version": 1,
+  "vcpu_count": 1,
+  "mem_size_mib": 512,
+  "kernel_image_path": "/vmlinux",
+  "boot_args": "console=ttyS0 reboot=k panic=1 pci=off ipv6.disable=1 init=/sandbox-daemon ip=172.16.0.10::172.16.0.1:255.255.255.0::eth0:off",
+  "rootfs_drive_path": "/rootfs.ext4",
+  "guest_mac": "AA:FC:00:00:00:01",
+  "guest_ip": "172.16.0.10",
+  "host_tap_device_name": "fc-tap-0",
+  "daemon_port": 8081,
+  "created_at": "2026-08-20T11:35:58Z"
+}
+```
+
+Paths are as Firecracker sees them inside the jail. Most of these values exist
+nowhere else on the runner: `vcpu_count` and `mem_size_mib` come from the create
+script's `VCPUS`/`MEM_MIB` environment variables and have no `Config` field, and
+`boot_args` is assembled by the script. That is harmless while the runner only
+restores the snapshot, but a runner that has to boot a replacement VM for a dead
+guest would otherwise have to invent them. Recording them at build time keeps
+that boot faithful to how the snapshot was built, and keeps each sandbox pinned
+to its own snapshot lineage once a host serves more than one flavour.
+
+Admission rejects a snapshot whose `guest_ip`, `host_tap_device_name` or
+`daemon_port` contradicts the runner: those are baked into the guest or the
+restored device model, so a mismatch yields sandboxes that never answer instead
+of ones that fail visibly.
+
+A missing `boot.json` means an incomplete snapshot, not a sidecar to reconstruct
+from current config — the three files have to describe one build. Admission
+rebuilds the whole set when `SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT`
+is set, and otherwise fails naming the script to re-run. Bump `schema_version`
+when the layout changes; the runner rejects versions it does not know rather
+than guessing.
 
 ## Current Limitations
 

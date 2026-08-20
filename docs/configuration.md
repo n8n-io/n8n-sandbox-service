@@ -126,10 +126,20 @@ Slots give the host-side Firecracker resources stable names without exposing tho
 | `SANDBOX_RUNNER_FIRECRACKER_DAEMON_WAIT_TIMEOUT` | `60s` | Maximum time to wait for guest daemon health after snapshot restore |
 | `SANDBOX_RUNNER_FIRECRACKER_MANIFEST_PATH` | _(empty)_ | Optional absolute path to release `MANIFEST.json` for git_sha / daemon checksum pinning |
 | `SANDBOX_RUNNER_FIRECRACKER_EXPECTED_GIT_SHA` | _(empty)_ | When set, must match `git_sha` in the manifest (requires `MANIFEST_PATH`) |
-| `SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT` | _(empty)_ | Absolute path to `create-golden-snapshot.sh`. When set and mem/state are missing, Prepare runs it (mem/state paths must share a directory). Production Firecracker hosts set this so the runner owns host-local snapshot creation. Empty = do not auto-create |
+| `SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT` | _(empty)_ | Absolute path to `create-golden-snapshot.sh`. When set and any of `snapshot_mem`, `snapshot_state` or `boot.json` is missing, Prepare runs it (mem/state paths must share a directory). Production Firecracker hosts set this so the runner owns host-local snapshot creation. Empty = do not auto-create |
 | `SANDBOX_RUNNER_FIRECRACKER_DAEMON_BIN` | `/srv/firecracker/bin/sandbox-daemon` | Host path to `sandbox-daemon` used for golden snapshot create and optional manifest checksum |
 
 On startup, `Prepare` configures host NAT (retried on transient failure), pins guest assets (binaries, `rootfs.ext4`, `vmlinux`, optional manifest), ensures the host-local golden snapshot exists (create via script when configured), runs an admission canary (restore + `/healthz` + exec + files + successful canary delete), then marks the runner healthy. Until that succeeds, heartbeats report `Healthy=false` and `/readyz` fails.
+
+#### Golden snapshot boot parameters (`boot.json`)
+
+`create-golden-snapshot.sh` writes `boot.json` into its `--out` directory alongside `snapshot_mem` and `snapshot_state`, recording the exact values it sent to the Firecracker API: `vcpu_count`, `mem_size_mib`, `kernel_image_path`, the verbatim `boot_args`, `rootfs_drive_path`, `guest_mac`, `guest_ip`, `host_tap_device_name` and `daemon_port`. Paths are as Firecracker sees them inside the jail.
+
+The sidecar exists because most of these have no equivalent in the runner's own configuration. Memory and vCPU count in particular are chosen by the create script (via its `MEM_MIB` and `VCPUS` environment variables) and the runner never learns them, which is fine while it only ever restores the snapshot but not once it has to boot a replacement VM for a guest that died. Recording them at build time keeps recovery pinned to how the snapshot was actually built rather than to whatever the runner's configuration happens to say later, which also lets a host serve several snapshot flavours.
+
+Admission fails if `boot.json` contradicts the runner on `guest_ip`, `host_tap_device_name` or `daemon_port`. Each of those is baked into the guest or the restored device model, so a mismatch produces sandboxes that never answer rather than ones that fail visibly; failing at startup turns that into one clear error.
+
+**Upgrading a host whose snapshot predates the sidecar:** the three files must describe the same build, so a missing `boot.json` is treated as an incomplete snapshot rather than something to reconstruct from current configuration. Where `SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT` is set, `Prepare` rebuilds the whole set automatically on first admission. Where it is not, admission fails with an error naming the script and `--out` directory to re-run by hand.
 
 #### Resource limits
 

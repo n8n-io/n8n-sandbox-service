@@ -140,7 +140,7 @@ func TestEnsureGoldenSnapshotRunsScriptAndSymlinks(t *testing.T) {
 			return err == nil
 		case script, daemon:
 			return true
-		case filepath.Join(outDir, "snapshot_mem"), filepath.Join(outDir, "snapshot_state"):
+		case filepath.Join(outDir, "snapshot_mem"), filepath.Join(outDir, "snapshot_state"), bootParamsPath(rt.config):
 			_, err := os.Stat(path)
 			return err == nil
 		default:
@@ -157,6 +157,7 @@ func TestEnsureGoldenSnapshotRunsScriptAndSymlinks(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(outDir, "snapshot_state"), []byte{1}, 0o644); err != nil {
 			return err
 		}
+		writeBootParams(t, bootParamsPath(rt.config), testBootParams(rt.config))
 		return nil
 	}
 
@@ -461,6 +462,7 @@ func TestPrepareSucceedsViaAdmitOnce(t *testing.T) {
 	rt := testRuntimeT(t, 1)
 	rt.config.ProxyPortStart = port
 	stubCreateDeps(rt)
+	useTestGoldenSnapshotDir(t, rt)
 
 	select {
 	case <-rt.ReadyCh():
@@ -468,7 +470,15 @@ func TestPrepareSucceedsViaAdmitOnce(t *testing.T) {
 	default:
 	}
 
-	rt.Prepare(context.Background())
+	// Prepare retries admission until it succeeds or the context ends. Bounding
+	// it turns a failure into a test failure with the admission error in the log
+	// rather than a hang that only surfaces as a package-wide timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	rt.Prepare(ctx)
+	if ctx.Err() != nil {
+		t.Fatal("Prepare gave up on admission; see the logged admission error")
+	}
 
 	select {
 	case <-rt.ReadyCh():

@@ -49,6 +49,8 @@ sudo ln -sf snapshot_state /srv/firecracker/snapshots/state
 export GIT_SHA="$(jq -r .git_sha MANIFEST.json)"
 ```
 
+The create script also writes `boot.json` next to `snapshot_mem`/`snapshot_state`, recording the vCPU count, memory and kernel command line the snapshot was built with. It needs no symlink — the runner resolves it from the snapshot directory — but it does have to stay next to the snapshot it describes, and the runner refuses to start without it.
+
 Rebuild the snapshot on each physical runner host (Firecracker snapshots are not portable).
 
 Alternatively, leave mem/state unset and point the runner at the bundle script via

@@ -129,6 +129,21 @@ func (r *Runtime) pinSnapshotAssets() error {
 			return fmt.Errorf("firecracker %s path does not exist: %s", label, path)
 		}
 	}
+
+	params, err := loadBootParams(bootParamsPath(r.config))
+	if err != nil {
+		return err
+	}
+	if err := params.matchesConfig(r.config); err != nil {
+		return err
+	}
+	slog.Info("firecracker golden snapshot boot parameters",
+		"vcpu_count", params.VCPUCount,
+		"mem_size_mib", params.MemSizeMiB,
+		"kernel_image_path", params.KernelImagePath,
+		"boot_args", params.BootArgs,
+		"guest_ip", params.GuestIP,
+	)
 	return nil
 }
 
@@ -181,15 +196,20 @@ func fileSHA256(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// ensureGoldenSnapshot creates host-local mem/state when missing, using the
-// bundled create-golden-snapshot.sh when configured.
+// ensureGoldenSnapshot creates host-local mem/state/boot.json when any is
+// missing, using the bundled create-golden-snapshot.sh when configured. The
+// boot parameter sidecar counts as part of the snapshot: a runner upgraded onto
+// a host whose snapshot predates it has mem and state but no boot.json, and the
+// three have to describe the same build, so the whole set is rewritten rather
+// than the sidecar reconstructed from current config.
 func (r *Runtime) ensureGoldenSnapshot(ctx context.Context) error {
-	if r.deps.pathExists(r.config.SnapshotMemPath) && r.deps.pathExists(r.config.SnapshotStatePath) {
+	bootPath := bootParamsPath(r.config)
+	if r.deps.pathExists(r.config.SnapshotMemPath) && r.deps.pathExists(r.config.SnapshotStatePath) && r.deps.pathExists(bootPath) {
 		return nil
 	}
 	if strings.TrimSpace(r.config.CreateSnapshotScript) == "" {
-		return fmt.Errorf("golden snapshot missing at %s / %s and create script is not configured",
-			r.config.SnapshotMemPath, r.config.SnapshotStatePath)
+		return fmt.Errorf("golden snapshot incomplete (need %s, %s and %s) and create script is not configured; re-run create-golden-snapshot.sh with --out %s",
+			r.config.SnapshotMemPath, r.config.SnapshotStatePath, bootPath, filepath.Dir(r.config.SnapshotMemPath))
 	}
 	if !r.deps.pathExists(r.config.CreateSnapshotScript) {
 		return fmt.Errorf("create snapshot script does not exist: %s", r.config.CreateSnapshotScript)
@@ -210,6 +230,7 @@ func (r *Runtime) ensureGoldenSnapshot(ctx context.Context) error {
 		"out", outDir,
 		"kernel", kernel,
 		"ext4", ext4,
+		"boot_params_missing", !r.deps.pathExists(bootPath),
 	)
 	if err := r.deps.run(ctx, "sudo", r.config.CreateSnapshotScript,
 		"--kernel", kernel,
@@ -222,9 +243,9 @@ func (r *Runtime) ensureGoldenSnapshot(ctx context.Context) error {
 	if err := ensureSnapshotSymlinks(outDir, r.config.SnapshotMemPath, r.config.SnapshotStatePath, r.deps.pathExists); err != nil {
 		return err
 	}
-	if !r.deps.pathExists(r.config.SnapshotMemPath) || !r.deps.pathExists(r.config.SnapshotStatePath) {
-		return fmt.Errorf("golden snapshot still missing after create at %s / %s",
-			r.config.SnapshotMemPath, r.config.SnapshotStatePath)
+	if !r.deps.pathExists(r.config.SnapshotMemPath) || !r.deps.pathExists(r.config.SnapshotStatePath) || !r.deps.pathExists(bootPath) {
+		return fmt.Errorf("golden snapshot still missing after create at %s / %s / %s",
+			r.config.SnapshotMemPath, r.config.SnapshotStatePath, bootPath)
 	}
 	return nil
 }

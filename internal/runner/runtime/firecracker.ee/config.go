@@ -299,7 +299,7 @@ func validateConfig(cfg Config, capacityTotal int32) error {
 		return fmt.Errorf("SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT must be an absolute path, got %q", cfg.CreateSnapshotScript)
 	}
 	if cfg.CreateSnapshotScript != "" && !snapshotDirsMatch(cfg.SnapshotMemPath, cfg.SnapshotStatePath) {
-		return fmt.Errorf("SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_MEM_PATH (%q) and SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_STATE_PATH (%q) must be in the same directory when SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT is set; create-golden-snapshot.sh writes snapshot_mem and snapshot_state into a single --out directory",
+		return fmt.Errorf("SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_MEM_PATH (%q) and SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_STATE_PATH (%q) must be in the same directory when SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT is set; create-golden-snapshot.sh writes snapshot_mem, snapshot_state and boot.json into a single --out directory",
 			cfg.SnapshotMemPath, cfg.SnapshotStatePath)
 	}
 	if cfg.DaemonBin != "" && !strings.HasPrefix(cfg.DaemonBin, "/") {
