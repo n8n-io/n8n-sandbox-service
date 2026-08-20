@@ -481,15 +481,18 @@ func newRunnerReverseProxy(runnerURL *url.URL, runnerAPIKey string, onResponse f
 	}
 }
 
-// reapSandboxIfRunnerGone reports whether the record was dropped because the
-// runner no longer knows the sandbox.
+// reapSandboxIfRunnerGone drops the record when the runner no longer knows the
+// sandbox, and reports whether the runner said so. A failed delete still
+// reports true: the response is not evidence of a working sandbox, so treating
+// it as activity would let a retrying client refresh last_active_at and keep
+// the sweeper from ever reclaiming the row.
 func reapSandboxIfRunnerGone(s store.SandboxStore, sandboxID string, resp *http.Response) bool {
 	if !sandboxproxy.RunnerReportsSandboxGone(resp) {
 		return false
 	}
 	if err := s.Delete(sandboxID); err != nil {
 		slog.Error("remove sandbox after runner not-found", "sandbox_id", sandboxID, "err", err)
-		return false
+		return true
 	}
 	slog.Info("removed sandbox record after runner not-found", "sandbox_id", sandboxID)
 	return true

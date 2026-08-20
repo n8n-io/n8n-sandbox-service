@@ -171,7 +171,7 @@ curl -X POST http://localhost:8080/sandboxes \
 
 Get sandbox details.
 
-This is a read-only status check: it does not update `last_active_at` or extend idle timers. Only proxied traffic (exec, files, etc.) counts as activity, and only when the sandbox actually serves it — a request that fails with **502** or **503** leaves `last_active_at` and `status` untouched, so retrying against a broken sandbox cannot hold it open past its idle timers. A **4xx** still counts, since the sandbox was reachable and rejected the request.
+This is a read-only status check: it does not update `last_active_at` or extend idle timers. Only proxied traffic (exec, files, etc.) counts as activity, and only when the sandbox actually serves it — a request that fails with **502** or **503** leaves `last_active_at` and `status` untouched, so retrying against a broken sandbox cannot hold it open past its idle timers. A **4xx** still counts, since the sandbox was reachable and rejected the request — except a runner sandbox-gone **404**, which never counts as activity even if removing the store row fails.
 
 **Path Parameters:**
 - `id` — Sandbox UUID
