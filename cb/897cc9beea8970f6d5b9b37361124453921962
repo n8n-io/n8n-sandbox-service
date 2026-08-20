@@ -1,0 +1,30 @@
+charts/n8n-sandbox-service/templates/_helpers.tpl
+  s_656b73244211bf::t_6e2766486631ea 46-55,59,62,71
+charts/n8n-sandbox-service/templates/validation.yaml
+  s_656b73244211bf::t_22a66c7923482e 53-56,58,60
+charts/n8n-sandbox-service/values.yaml
+  s_656b73244211bf::t_095c14f33cccbd 257-259,264-265
+charts/n8n-sandbox-service/README.md
+  s_656b73244211bf::t_0086f54eb04a76 180,182,184-186
+  s_656b73244211bf::t_d6e9e0bce94870 151
+  s_656b73244211bf::t_44896851102f66 43-45
+charts/n8n-sandbox-service/render-tests.sh
+  s_656b73244211bf::t_970f4e76b081d3 134-152
+  s_656b73244211bf::t_c68de162b4dca8 100-116
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "cb897cc9beea8970f6d5b9b37361124453921962",
+  "prompts": {},
+  "sessions": {
+    "s_656b73244211bf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f8848dba-2336-4397-9953-81886d68abd9",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
