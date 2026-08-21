@@ -70,9 +70,6 @@ func sandboxProxyHandler(s store.SandboxStore, cfg *config.APIConfig) func(bool)
 				return
 			}
 
-			_ = s.UpdateLastActive(id)
-			_ = s.UpdateStatus(id, "running")
-
 			fields := obs.FieldsFrom(r.Context())
 			fields.Add("sandbox_id", id, "runner_id", rec.RunnerID)
 
@@ -82,7 +79,10 @@ func sandboxProxyHandler(s store.SandboxStore, cfg *config.APIConfig) func(bool)
 				// Response headers are in, so for a streamed exec this is the
 				// time to first byte rather than the full round trip.
 				fields.Add("ttfb_ms", time.Since(upstreamStart).Milliseconds())
-				reapSandboxIfRunnerGone(s, id, resp)
+				if reapSandboxIfRunnerGone(s, id, resp) {
+					return
+				}
+				markSandboxActive(s, id, resp.StatusCode)
 			})
 			if limitBody {
 				r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxFileBytes)
@@ -481,13 +481,37 @@ func newRunnerReverseProxy(runnerURL *url.URL, runnerAPIKey string, onResponse f
 	}
 }
 
-func reapSandboxIfRunnerGone(s store.SandboxStore, sandboxID string, resp *http.Response) {
+// reapSandboxIfRunnerGone deletes the store record when the runner's response
+// says it no longer knows the sandbox.
+//
+// It returns the runner's verdict, not the outcome of the delete: true means
+// "the runner says this sandbox is gone", so a failed delete still returns
+// true. Callers use that to skip markSandboxActive, because a gone response is
+// never evidence of a working sandbox — counting it as activity would let a
+// retrying client refresh last_active_at and keep the idle sweeper from ever
+// reclaiming the row left behind.
+func reapSandboxIfRunnerGone(s store.SandboxStore, sandboxID string, resp *http.Response) bool {
 	if !sandboxproxy.RunnerReportsSandboxGone(resp) {
-		return
+		return false
 	}
 	if err := s.Delete(sandboxID); err != nil {
 		slog.Error("remove sandbox after runner not-found", "sandbox_id", sandboxID, "err", err)
-		return
+		return true
 	}
 	slog.Info("removed sandbox record after runner not-found", "sandbox_id", sandboxID)
+	return true
+}
+
+// markSandboxActive records that a proxied request reached a working sandbox.
+// Server errors deliberately do not count. The idle sweeper only stops a
+// sandbox once last_active_at has gone stale, and only deletes one it has
+// already stopped, so a client retrying a broken sandbox must not be able to
+// refresh last_active_at or flip the status back to running — either would
+// keep the sweeper from ever reclaiming it.
+func markSandboxActive(s store.SandboxStore, sandboxID string, statusCode int) {
+	if statusCode >= http.StatusInternalServerError {
+		return
+	}
+	_ = s.UpdateLastActive(sandboxID)
+	_ = s.UpdateStatus(sandboxID, "running")
 }

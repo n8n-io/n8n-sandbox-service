@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -74,6 +75,77 @@ func TestSandboxProxyReapsStoreOnRunnerSandboxGone(t *testing.T) {
 	router.ServeHTTP(getRR, getReq)
 	if getRR.Code != http.StatusNotFound {
 		t.Fatalf("GET status = %d, want 404 after reap", getRR.Code)
+	}
+}
+
+// deleteFailingStore makes reaping fail while leaving every other store
+// operation intact.
+type deleteFailingStore struct {
+	store.SandboxStore
+}
+
+func (deleteFailingStore) Delete(string) error {
+	return errors.New("delete unavailable")
+}
+
+func TestSandboxProxyDoesNotMarkActiveWhenReapDeleteFails(t *testing.T) {
+	runner := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sandboxproxy.MarkSandboxGone(w.Header())
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"` + runnerruntime.ErrSandboxNotFound.Error() + `"}`))
+	}))
+	defer runner.Close()
+
+	s, err := store.New(":memory:")
+	if err != nil {
+		t.Fatalf("create store: %v", err)
+	}
+	defer s.Close()
+
+	sandboxID := "44444444-4444-4444-8444-444444444444"
+	lastActive := time.Now().Unix() - 3600
+	if err := s.Create(&store.SandboxRecord{
+		ID:             sandboxID,
+		Status:         "stopped",
+		CreatedAt:      lastActive,
+		LastActiveAt:   lastActive,
+		RunnerHTTPBase: runner.URL,
+	}); err != nil {
+		t.Fatalf("Create() failed: %v", err)
+	}
+
+	router, err := NewGatewayRouter(deleteFailingStore{s}, &config.APIConfig{
+		APIKeys:      map[string]struct{}{"public-key": {}},
+		RunnerAPIKey: "runner-key",
+		MaxFileBytes: 1024,
+	}, registry.New(45*time.Second), metrics.NewAPIRecorder(false))
+	if err != nil {
+		t.Fatalf("create gateway router: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/sandboxes/"+sandboxID+"/executions", strings.NewReader(`{"command":"echo hi"}`))
+	req.Header.Set("X-Api-Key", "public-key")
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("exec status = %d, want 404", rr.Code)
+	}
+
+	rec, err := s.Get(sandboxID)
+	if err != nil {
+		t.Fatalf("Get() failed: %v", err)
+	}
+	if rec == nil {
+		t.Fatal("expected sandbox record to survive the failed delete")
+	}
+	if rec.LastActiveAt != lastActive {
+		t.Fatalf("LastActiveAt = %d, want %d unchanged: runner not-found must not count as activity", rec.LastActiveAt, lastActive)
+	}
+	if rec.Status != "stopped" {
+		t.Fatalf("Status = %q, want %q: runner not-found must not revive the sandbox", rec.Status, "stopped")
 	}
 }
 
