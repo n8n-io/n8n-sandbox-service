@@ -1,15 +1,72 @@
-{{- if not (has .Values.dataPlane.mode (list "sysbox" "external")) -}}
-{{- fail "dataPlane.mode must be one of: sysbox, external" -}}
+{{- if hasKey .Values "sysboxRunner" -}}
+{{- $old := .Values.sysboxRunner -}}
+{{- if and (kindIs "map" $old) (hasKey $old "enabled") (not $old.enabled) -}}
+{{- fail "sysboxRunner.enabled=false was replaced: set dataPlane.mode=external to disable the in-cluster runner. See the chart README section 'Migrating from 0.3.x'" -}}
+{{- end -}}
+{{- fail "sysboxRunner was replaced by the runner block: shared keys keep their names under runner.*; runtime and scheduling moved to runner.sysbox.*. See the chart README section 'Migrating from 0.3.x'" -}}
+{{- end -}}
+{{- if hasKey .Values "dindRunner" -}}
+{{- fail "dindRunner is not a chart value: use the runner block with runner.isolation=privileged. See the chart README section 'Migrating from 0.3.x'" -}}
+{{- end -}}
+{{- if eq .Values.dataPlane.mode "sysbox" -}}
+{{- fail "dataPlane.mode=sysbox was renamed: set dataPlane.mode=in-cluster. sysbox is the default runner.isolation. See the chart README section 'Migrating from 0.3.x'" -}}
+{{- end -}}
+{{- if eq .Values.dataPlane.mode "dind" -}}
+{{- fail "dataPlane.mode=dind was renamed: set dataPlane.mode=in-cluster and runner.isolation=privileged. See the chart README section 'Migrating from 0.3.x'" -}}
+{{- end -}}
+{{- if not (has .Values.dataPlane.mode (list "in-cluster" "external")) -}}
+{{- fail "dataPlane.mode must be one of: in-cluster, external" -}}
 {{- end -}}
 {{- if not (has .Values.tls.mode (list "existingSecret" "certManager")) -}}
 {{- fail "tls.mode must be one of: existingSecret, certManager" -}}
 {{- end -}}
-{{- if and .Values.sysboxRunner.enabled (eq .Values.dataPlane.mode "sysbox") -}}
-{{- if not (hasSuffix (printf ":%v" .Values.sysboxRunner.service.httpPort) .Values.sysboxRunner.config.listenAddr) -}}
-{{- fail "sysboxRunner.config.listenAddr port must match sysboxRunner.service.httpPort" -}}
+{{- if hasKey .Values.runner "enabled" -}}
+{{- fail "runner.enabled was removed: set dataPlane.mode=external to disable the in-cluster runner" -}}
 {{- end -}}
-{{- if not (hasSuffix (printf ":%v" .Values.sysboxRunner.service.controlGrpcPort) .Values.sysboxRunner.config.controlGrpcListenAddr) -}}
-{{- fail "sysboxRunner.config.controlGrpcListenAddr port must match sysboxRunner.service.controlGrpcPort" -}}
+{{- if hasKey .Values.networkPolicy "sysboxRunner" -}}
+{{- fail "networkPolicy.sysboxRunner was renamed: set networkPolicy.runner instead" -}}
+{{- end -}}
+{{- if hasKey .Values.monitoring.serviceMonitor "sysboxRunner" -}}
+{{- fail "monitoring.serviceMonitor.sysboxRunner was renamed: set monitoring.serviceMonitor.runner instead" -}}
+{{- end -}}
+{{- if not (has .Values.runner.isolation (list "sysbox" "privileged")) -}}
+{{- fail "runner.isolation must be one of: sysbox, privileged" -}}
+{{- end -}}
+{{- if eq .Values.runner.isolation "privileged" -}}
+{{- if ne .Values.runner.acknowledgePrivileged true -}}
+{{- fail "runner.isolation=privileged runs the runner container with privileged: true. An escape from the runner container reaches the node. The namespace needs Pod Security Admission level `privileged`. Set runner.acknowledgePrivileged=true to accept this trade-off, or use runner.isolation=sysbox on nodes that support sysbox." -}}
+{{- end -}}
+{{- if eq .Values.runner.privileged.runtime.runtimeClassName "sysbox-runc" -}}
+{{- fail "runner.privileged.runtime.runtimeClassName=sysbox-runc conflicts with runner.isolation=privileged: use runner.isolation=sysbox for sysbox nodes" -}}
+{{- end -}}
+{{- end -}}
+{{- if eq .Values.dataPlane.mode "in-cluster" -}}
+{{- if not (hasSuffix (printf ":%v" .Values.runner.service.httpPort) .Values.runner.config.listenAddr) -}}
+{{- fail "runner.config.listenAddr port must match runner.service.httpPort" -}}
+{{- end -}}
+{{- if not (hasSuffix (printf ":%v" .Values.runner.service.controlGrpcPort) .Values.runner.config.controlGrpcListenAddr) -}}
+{{- fail "runner.config.controlGrpcListenAddr port must match runner.service.controlGrpcPort" -}}
+{{- end -}}
+{{- end -}}
+{{- if and (eq .Values.dataPlane.mode "in-cluster") (gt (int .Values.runner.config.defaultDiskQuotaMb) 0) -}}
+{{- $dockerDataRoot := .Values.runner.dockerDataRoot -}}
+{{- $chartVolume := or $dockerDataRoot.persistence.enabled (eq .Values.runner.isolation "privileged") -}}
+{{- if and (not $chartVolume) (not .Values.runner.config.diskQuotaPoolPath) -}}
+{{- fail "runner.config.defaultDiskQuotaMb above 0 needs a bounded volume for the disk-quota pool image, and this configuration has none. The image would land on the container filesystem and could fill the node disk. Set runner.dockerDataRoot.persistence.enabled=true, or set runner.config.diskQuotaPoolPath to a path on a volume you supply through runner.extraVolumes. See the chart README section 'Disk Quotas'" -}}
+{{- end -}}
+{{- if not (regexMatch "^[1-9][0-9]*$" (toString .Values.runner.config.diskQuotaPoolSizeGb)) -}}
+{{- fail (printf "runner.config.diskQuotaPoolSizeGb must be a positive whole number of GB when runner.config.defaultDiskQuotaMb is above 0 (got %q): the derived pool size scales with runner.config.capacityTotal and can outgrow the volume that holds the pool image. See the chart README section 'Disk Quotas'" (toString .Values.runner.config.diskQuotaPoolSizeGb)) -}}
+{{- end -}}
+{{- if and $chartVolume (not .Values.runner.config.diskQuotaPoolPath) -}}
+{{- $volumeSize := ternary $dockerDataRoot.persistence.size (($dockerDataRoot.emptyDir | default dict).sizeLimit | default "") $dockerDataRoot.persistence.enabled | toString -}}
+{{- $volumeKey := ternary "runner.dockerDataRoot.persistence.size" "runner.dockerDataRoot.emptyDir.sizeLimit" $dockerDataRoot.persistence.enabled -}}
+{{- if not (regexMatch "^[0-9]+Gi?$" $volumeSize) -}}
+{{- fail (printf "%s must be a whole number of G or Gi (got %q): the disk-quota pool image lives on that volume, and the chart checks that runner.config.diskQuotaPoolSizeGb fits it" $volumeKey $volumeSize) -}}
+{{- end -}}
+{{- $volumeSizeGb := trimSuffix "G" (trimSuffix "Gi" $volumeSize) | int -}}
+{{- if gt (int .Values.runner.config.diskQuotaPoolSizeGb) $volumeSizeGb -}}
+{{- fail (printf "runner.config.diskQuotaPoolSizeGb (%v) must not exceed the docker data root size (%s): the quota pool image lives on that volume" .Values.runner.config.diskQuotaPoolSizeGb $volumeSize) -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- if not .Values.auth.existingSecret -}}
