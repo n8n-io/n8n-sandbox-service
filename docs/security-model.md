@@ -88,11 +88,20 @@ delivered locally and never reaches the egress chain. Both match on the bridge
 interface rather than on the address the runner assigned, because a sandbox can
 add addresses to its own interface and would otherwise only have to send from a
 different one. A per-container chain, keyed on the container's address as a
-destination, permits only the bridge gateway to reach its daemon port.
-Containers are created with IPv6 disabled.
+destination, drops connections to its daemon port. The runner's own connections
+are unaffected, being locally generated and so never subject to a chain that
+only sees forwarded packets; the exception for the gateway address applies only
+to packets that did not arrive on the bridge, for the same reason the rules
+above avoid matching on addresses. The two shared chains are rebuilt from empty
+at runner startup, after stale containers are removed and before any sandbox can
+be created, so an upgraded runner replacing the rules of an earlier version
+never does so with a container on the bridge. Containers are created with IPv6
+disabled.
 
 Within a sandbox, the daemon runs as a non-root user, and file operations are
-path-validated to keep them inside the sandbox.
+path-validated to keep them inside the sandbox. The daemon authenticates
+nobody, so reachability is the whole boundary in front of its exec and file
+APIs, on both runtimes.
 
 ## Non-guarantees
 

@@ -82,6 +82,14 @@ func New(runnerConfig *config.Config, cfg Config) (*Runtime, error) {
 		return nil, fmt.Errorf("cannot determine host interface for network %s", runnerBridgeNetwork)
 	}
 
+	// Here, and not on the first sandbox: building the shared chains starts by
+	// flushing whatever an earlier runner process left in them, which must
+	// happen while the bridge has no container on it. reconcileContainers above
+	// has just removed them all, and none can be created before New returns.
+	if err := netrules.EnsureBridgePolicy(m.bridgeIface); err != nil {
+		return nil, fmt.Errorf("ensure bridge policy: %w", err)
+	}
+
 	return m, nil
 }
 
