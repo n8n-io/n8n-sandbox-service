@@ -139,10 +139,15 @@ guest would otherwise have to invent them. Recording them at build time keeps
 that boot faithful to how the snapshot was built, and keeps each sandbox pinned
 to its own snapshot lineage once a host serves more than one flavour.
 
-Admission rejects a snapshot whose `guest_ip`, `host_tap_device_name` or
-`daemon_port` contradicts the runner: those are baked into the guest or the
-restored device model, so a mismatch yields sandboxes that never answer instead
-of ones that fail visibly.
+Admission rejects a snapshot whose `guest_ip`, `host_tap_device_name`,
+`daemon_port` or `boot_args` gateway contradicts the runner: those are baked into
+the guest or the restored device model, so a mismatch yields sandboxes that never
+answer instead of ones that fail visibly. The gateway is the third field of the
+kernel `ip=` parameter and must equal the host address in
+`SANDBOX_RUNNER_FIRECRACKER_HOST_TAP_IP_CIDR`. The guest applied it at boot, so
+it is part of the snapshotted routing table; a tap address in the same subnet
+still passes the admission canary while leaving every sandbox without a route off
+the tap.
 
 A missing `boot.json` means an incomplete snapshot, not a sidecar to reconstruct
 from current config — the three files have to describe one build. Admission

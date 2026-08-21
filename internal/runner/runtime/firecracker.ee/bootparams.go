@@ -78,6 +78,9 @@ func (p *bootParams) validate() error {
 	if strings.TrimSpace(p.BootArgs) == "" {
 		return fmt.Errorf("boot_args must not be empty")
 	}
+	if _, err := p.guestGateway(); err != nil {
+		return err
+	}
 	if net.ParseIP(p.GuestIP) == nil {
 		return fmt.Errorf("guest_ip must be an IP address, got %q", p.GuestIP)
 	}
@@ -93,16 +96,57 @@ func (p *bootParams) validate() error {
 	return nil
 }
 
+// guestGateway returns the default gateway the guest was booted with, taken
+// from the kernel ip= parameter
+// (ip=<client>:<server>:<gateway>:<netmask>:<hostname>:<device>:<autoconf>).
+// The guest applied it while booting, so it is part of the snapshotted routing
+// table and cannot be re-pointed at restore.
+func (p *bootParams) guestGateway() (net.IP, error) {
+	for _, arg := range strings.Fields(p.BootArgs) {
+		spec, found := strings.CutPrefix(arg, "ip=")
+		if !found {
+			continue
+		}
+		fields := strings.Split(spec, ":")
+		if len(fields) < 3 {
+			return nil, fmt.Errorf("boot_args %q has no gateway field", arg)
+		}
+		gateway := net.ParseIP(fields[2])
+		if gateway == nil {
+			return nil, fmt.Errorf("boot_args gateway must be an IP address, got %q", fields[2])
+		}
+		return gateway, nil
+	}
+	return nil, fmt.Errorf("boot_args must configure the guest network with an ip= parameter, got %q", p.BootArgs)
+}
+
 // matchesConfig rejects runner settings the snapshot cannot honour. Each of
 // these is baked into the guest or its restored device model, so a mismatch is
 // not a degraded sandbox but one that never answers: the host proxy dials an
 // address or port nothing listens on, or Firecracker cannot attach the NIC the
 // snapshot expects. Failing admission turns that into one clear startup error
 // instead of every sandbox on the runner timing out.
+//
+// The gateway is the quietest of the four. A tap address in the snapshot's
+// subnet still lets the proxy reach the guest, so the admission canary passes,
+// but the guest routes egress to a host address nobody answers for and every
+// sandbox on the runner comes up without a route off the tap.
 func (p *bootParams) matchesConfig(cfg Config) error {
-	mismatches := make([]string, 0, 3)
+	gateway, err := p.guestGateway()
+	if err != nil {
+		return err
+	}
+	hostTapIP, _, err := net.ParseCIDR(cfg.HostTapIPCIDR)
+	if err != nil {
+		return fmt.Errorf("SANDBOX_RUNNER_FIRECRACKER_HOST_TAP_IP_CIDR must be CIDR notation, got %q: %w", cfg.HostTapIPCIDR, err)
+	}
+
+	mismatches := make([]string, 0, 4)
 	if p.GuestIP != cfg.GuestIP {
 		mismatches = append(mismatches, fmt.Sprintf("guest_ip %q != SANDBOX_RUNNER_FIRECRACKER_GUEST_IP %q", p.GuestIP, cfg.GuestIP))
+	}
+	if !gateway.Equal(hostTapIP) {
+		mismatches = append(mismatches, fmt.Sprintf("boot_args gateway %s != host address in SANDBOX_RUNNER_FIRECRACKER_HOST_TAP_IP_CIDR %q", gateway, cfg.HostTapIPCIDR))
 	}
 	if p.HostTapDeviceName != cfg.HostTapDeviceName {
 		mismatches = append(mismatches, fmt.Sprintf("host_tap_device_name %q != SANDBOX_RUNNER_FIRECRACKER_HOST_TAP_DEVICE_NAME %q", p.HostTapDeviceName, cfg.HostTapDeviceName))

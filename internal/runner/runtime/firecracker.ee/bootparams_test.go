@@ -88,6 +88,9 @@ func TestLoadBootParamsRejectsUnusableSidecars(t *testing.T) {
 		{"relative kernel", func(p *bootParams) { p.KernelImagePath = "vmlinux" }, "kernel_image_path"},
 		{"relative rootfs", func(p *bootParams) { p.RootfsDrivePath = "rootfs.ext4" }, "rootfs_drive_path"},
 		{"empty boot args", func(p *bootParams) { p.BootArgs = "  " }, "boot_args"},
+		{"boot args without guest network", func(p *bootParams) { p.BootArgs = "console=ttyS0 init=/sandbox-daemon" }, "ip="},
+		{"boot args without gateway", func(p *bootParams) { p.BootArgs = "console=ttyS0 ip=172.16.0.10" }, "gateway"},
+		{"bad boot args gateway", func(p *bootParams) { p.BootArgs = "console=ttyS0 ip=172.16.0.10::not-an-ip:255.255.255.0::eth0:off" }, "gateway"},
 		{"bad guest ip", func(p *bootParams) { p.GuestIP = "not-an-ip" }, "guest_ip"},
 		{"bad guest mac", func(p *bootParams) { p.GuestMAC = "zz" }, "guest_mac"},
 		{"no tap device", func(p *bootParams) { p.HostTapDeviceName = "" }, "host_tap_device_name"},
@@ -137,6 +140,11 @@ func TestBootParamsMatchesConfigRejectsContradictions(t *testing.T) {
 		wantErr string
 	}{
 		{"guest ip", func(p *bootParams) { p.GuestIP = "10.0.0.5" }, "guest_ip"},
+		// Same subnet as the runner's tap, so the admission canary would still
+		// reach the guest while its egress route pointed at nothing.
+		{"tap gateway", func(p *bootParams) {
+			p.BootArgs = "console=ttyS0 init=/sandbox-daemon ip=172.16.0.10::172.16.0.2:255.255.255.0::eth0:off"
+		}, "gateway"},
 		{"tap device", func(p *bootParams) { p.HostTapDeviceName = "fc-tap-9" }, "host_tap_device_name"},
 		{"daemon port", func(p *bootParams) { p.DaemonPort = 9999 }, "daemon_port"},
 	}
