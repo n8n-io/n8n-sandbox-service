@@ -23,32 +23,29 @@ import (
 // only barely equals the existing snapshot size.
 const stoppedSnapshotHeadroomBytes = 64 << 20 // 64 MiB
 
+// transitionPollInterval paces waiting for another lifecycle transition on the
+// same sandbox to finish.
+const transitionPollInterval = 50 * time.Millisecond
+
 // StopSandbox pauses the microVM, writes a per-sandbox snapshot, tears down host
 // VM resources, and frees the runner slot.
 func (r *Runtime) StopSandbox(ctx context.Context, sandboxID string) error {
-	state, err := r.sandboxForLifecycle(sandboxID)
+	state, ctx, cancel, err := r.beginTransition(ctx, sandboxID, transitionStopping)
 	if err != nil {
 		return err
 	}
-	if state.stopped {
-		return nil
-	}
-	if !state.running {
-		return runnerruntime.ErrSandboxNotRunning
-	}
+	defer cancel()
+	defer r.endTransition(state)
 
 	r.mu.Lock()
-	if state.stopping {
-		r.mu.Unlock()
+	stopped, running := state.stopped, state.running
+	r.mu.Unlock()
+	if stopped {
 		return nil
 	}
-	state.stopping = true
-	r.mu.Unlock()
-	defer func() {
-		r.mu.Lock()
-		state.stopping = false
-		r.mu.Unlock()
-	}()
+	if !running {
+		return runnerruntime.ErrSandboxNotRunning
+	}
 
 	if err := r.ensureDiskSpaceForSnapshot(ctx, state); err != nil {
 		return err
@@ -85,44 +82,45 @@ func (r *Runtime) EnsureSandboxRunning(ctx context.Context, sandboxID string) er
 		return err
 	}
 	_, err, _ := r.wakeGroup.Do(sandboxID, func() (interface{}, error) {
-		// The wake outlives the request that triggered it, so it runs on a
-		// detached context. WithoutCancel keeps the trace context, which the
-		// wake event needs. Concurrent callers share one wake, so the event
-		// carries the trace id of whichever caller started it.
-		wakeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
-		defer cancel()
-		return nil, r.ensureSandboxRunningOnce(wakeCtx, sandboxID)
+		// beginTransition detaches the wake from the request that triggered it, so
+		// the wake outlives that request. Concurrent callers share one wake, so the
+		// wake event carries the trace id of whichever caller started it.
+		return nil, r.ensureSandboxRunningOnce(ctx, sandboxID)
 	})
 	return err
 }
 
 func (r *Runtime) ensureSandboxRunningOnce(ctx context.Context, sandboxID string) error {
-	if err := r.waitWhileStopping(ctx, sandboxID); err != nil {
-		return err
-	}
-	state, err := r.sandboxForLifecycle(sandboxID)
+	state, ctx, cancel, err := r.beginTransition(ctx, sandboxID, transitionWaking)
 	if err != nil {
 		return err
 	}
-	if state.running {
+	defer cancel()
+	defer r.endTransition(state)
+
+	r.mu.Lock()
+	running, stopped := state.running, state.stopped
+	r.mu.Unlock()
+	if running {
 		return nil
 	}
-	if !state.stopped {
+	if !stopped {
 		return runnerruntime.ErrSandboxNotRunning
 	}
 
-	slot, netnsName, socketPath, daemonURL, err := r.reserveWakeSlotLocked(sandboxID)
-	if err != nil {
+	if err := r.reserveWakeSlot(state); err != nil {
 		return err
 	}
-	state.slot = slot
-	state.netnsName = netnsName
-	state.socketPath = socketPath
-	state.daemonURL = daemonURL
 
 	timer := newStepTimer(metrics.OpEnsureRunning, r.metrics)
 	if err := r.activateSandboxVM(ctx, state, timer); err != nil {
-		_ = r.teardownRunningVM(ctx, state)
+		// The activation may have failed because the wake ran out of budget, so
+		// teardown needs a context of its own; the slot is released below either
+		// way, and reusing an expired one would hand it back with this sandbox's
+		// jail mounts and netns still on it.
+		cleanupCtx, cancelCleanup := withCleanupBudget(ctx)
+		_ = r.teardownRunningVM(cleanupCtx, state)
+		cancelCleanup()
 		r.mu.Lock()
 		state.running = false
 		state.stopped = true
@@ -139,6 +137,7 @@ func (r *Runtime) ensureSandboxRunningOnce(ctx context.Context, sandboxID string
 	r.mu.Lock()
 	state.running = true
 	state.stopped = false
+	slot := state.slot
 	r.mu.Unlock()
 	slog.Info("firecracker sandbox woke",
 		append([]any{"sandbox_id", sandboxID, "vm_id", state.vmID, "slot", slot}, timer.attrsFor(ctx)...)...)
@@ -211,60 +210,69 @@ func (r *Runtime) teardownRunningVM(ctx context.Context, state *sandboxState) er
 	return joinErrors(errs)
 }
 
-func (r *Runtime) sandboxForLifecycle(sandboxID string) (*sandboxState, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+// beginTransition waits until no other stop, wake, or delete is in flight for the
+// sandbox, then claims it for the caller. Callers must release the claim with
+// endTransition unless the transition is terminal (delete). The claim is taken
+// under a single r.mu hold so exactly one caller can win it, while the poll loop
+// keeps waiters off r.mu during the host commands the winner then runs.
+//
+// It returns the context the operation must run under: transitionBudget applied to
+// the caller's, starting once the claim is won so that waiting cannot eat the time
+// the operation needs for its host work. Handing the budget back with the claim is
+// what keeps the two inseparable, so a new lifecycle operation cannot forget to
+// bound itself and strand the sandbox. The wait itself is bounded separately by
+// transitionWaitBudget. The returned cancel is nil when an error is returned.
+func (r *Runtime) beginTransition(ctx context.Context, sandboxID string, want sandboxTransition) (*sandboxState, context.Context, context.CancelFunc, error) {
+	waitCtx, cancelWait := withLifecycleBudget(ctx, transitionWaitBudget())
+	defer cancelWait()
 
-	state, ok := r.sandboxes[sandboxID]
-	if !ok || state.deleting {
-		return nil, runnerruntime.ErrSandboxNotFound
-	}
-	return state, nil
-}
-
-// waitWhileStopping blocks until StopSandbox finishes for the sandbox.
-func (r *Runtime) waitWhileStopping(ctx context.Context, sandboxID string) error {
-	ticker := time.NewTicker(50 * time.Millisecond)
+	ticker := time.NewTicker(transitionPollInterval)
 	defer ticker.Stop()
 	for {
 		r.mu.Lock()
 		state, ok := r.sandboxes[sandboxID]
-		stopping := ok && !state.deleting && state.stopping
+		if !ok || state.deleting() {
+			r.mu.Unlock()
+			return nil, nil, nil, runnerruntime.ErrSandboxNotFound
+		}
+		if state.transition == transitionNone {
+			state.transition = want
+			r.mu.Unlock()
+			opCtx, cancel := withLifecycleBudget(ctx, transitionBudget)
+			return state, opCtx, cancel, nil
+		}
 		r.mu.Unlock()
-		if !ok {
-			return runnerruntime.ErrSandboxNotFound
-		}
-		if !stopping {
-			return nil
-		}
+
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-waitCtx.Done():
+			return nil, nil, nil, waitCtx.Err()
 		case <-ticker.C:
 		}
 	}
 }
 
-// reserveWakeSlotLocked assigns a free slot to a stopped sandbox. r.mu must be held.
-func (r *Runtime) reserveWakeSlotLocked(sandboxID string) (slot int, netnsName, socketPath, daemonURL string, err error) {
+// endTransition releases a claim taken by beginTransition.
+func (r *Runtime) endTransition(state *sandboxState) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	state.transition = transitionNone
+}
+
+// reserveWakeSlot assigns a free slot to a stopped sandbox and publishes the host
+// resources derived from it. The caller must hold the sandbox's wake transition.
+func (r *Runtime) reserveWakeSlot(state *sandboxState) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	state, ok := r.sandboxes[sandboxID]
-	if !ok || state.deleting {
-		return 0, "", "", "", runnerruntime.ErrSandboxNotFound
-	}
-	if state.running {
-		return 0, "", "", "", nil
-	}
-	slot = r.reserveSlotLocked(sandboxID)
+	slot := r.reserveSlotLocked(state.id)
 	if slot < 0 {
-		return 0, "", "", "", fmt.Errorf("firecracker runner capacity exhausted")
+		return fmt.Errorf("firecracker runner capacity exhausted")
 	}
-	netnsName = fmt.Sprintf("fc-sb-%d", slot)
-	socketPath = filepath.Join(r.config.JailerBaseDir, "firecracker", state.vmID, "root", "firecracker.socket")
-	daemonURL = fmt.Sprintf("http://%s", net.JoinHostPort(r.config.ProxyListenIP, fmt.Sprintf("%d", r.config.ProxyPortStart+slot)))
-	return slot, netnsName, socketPath, daemonURL, nil
+	state.slot = slot
+	state.netnsName = fmt.Sprintf("fc-sb-%d", slot)
+	state.socketPath = filepath.Join(r.config.JailerBaseDir, "firecracker", state.vmID, "root", "firecracker.socket")
+	state.daemonURL = fmt.Sprintf("http://%s", net.JoinHostPort(r.config.ProxyListenIP, fmt.Sprintf("%d", r.config.ProxyPortStart+slot)))
+	return nil
 }
 
 func (r *Runtime) ensureDiskSpaceForSnapshot(ctx context.Context, state *sandboxState) error {
@@ -274,7 +282,11 @@ func (r *Runtime) ensureDiskSpaceForSnapshot(ctx context.Context, state *sandbox
 	}
 	needed += stoppedSnapshotHeadroomBytes
 
-	for attempt := 0; attempt < len(r.sandboxes)+1; attempt++ {
+	r.mu.Lock()
+	attempts := len(r.sandboxes) + 1
+	r.mu.Unlock()
+
+	for attempt := 0; attempt < attempts; attempt++ {
 		free, err := r.deps.freeBytesInDir(r.runnerConfig.DataDir)
 		if err != nil {
 			return err
@@ -293,7 +305,13 @@ func (r *Runtime) evictOldestStoppedSandbox(ctx context.Context) bool {
 	r.mu.Lock()
 	var candidates []*sandboxState
 	for _, state := range r.sandboxes {
-		if state.deleting || !state.stopped || state.running {
+		if !state.stopped || state.running {
+			continue
+		}
+		// A waking sandbox is still flagged stopped until its microVM is up.
+		// Evicting it here would delete its data dir out from under the wake.
+		// This also skips sandboxes already claimed for delete.
+		if state.transition != transitionNone {
 			continue
 		}
 		candidates = append(candidates, state)
@@ -306,7 +324,7 @@ func (r *Runtime) evictOldestStoppedSandbox(ctx context.Context) bool {
 		return candidates[i].stoppedAt.Before(candidates[j].stoppedAt)
 	})
 	oldest := candidates[0]
-	oldest.deleting = true
+	oldest.transition = transitionDeleting
 	r.mu.Unlock()
 
 	slog.Warn(

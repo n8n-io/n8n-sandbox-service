@@ -68,9 +68,9 @@ api:
 playground: sdk-install sdk-build
 	cd playground && npm install && npm start
 
-## test: Run all tests.
+## test: Run all tests with the race detector.
 test:
-	go test ./...
+	go test -race ./...
 
 ## clean: Remove compiled binaries.
 clean:
