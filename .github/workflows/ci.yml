@@ -97,31 +97,9 @@ jobs:
       - name: Lint chart
         run: helm lint charts/n8n-sandbox-service --set auth.existingSecret=n8n-sandbox-auth
 
-      - name: Render chart variants
-        run: |
-          helm template n8n-sandbox-service charts/n8n-sandbox-service \
-            --set auth.existingSecret=n8n-sandbox-auth
-          helm template n8n-sandbox-service charts/n8n-sandbox-service \
-            --set auth.existingSecret=n8n-sandbox-auth \
-            --set dataPlane.mode=external
-          helm template n8n-sandbox-service charts/n8n-sandbox-service \
-            --set auth.existingSecret=n8n-sandbox-auth \
-            --set tls.mode=certManager \
-            --set tls.certManager.issuerRef.name=sandbox-ca \
-            --set tls.certManager.issuerRef.kind=ClusterIssuer
-          helm template n8n-sandbox-service charts/n8n-sandbox-service \
-            --set auth.existingSecret=n8n-sandbox-auth \
-            --set api.ingress.enabled=true \
-            --set 'api.ingress.hosts[0].host=sandbox.example.com' \
-            --set 'api.ingress.tls[0].secretName=sandbox-api-public-tls' \
-            --set 'api.ingress.tls[0].hosts[0]=sandbox.example.com'
-          helm template n8n-sandbox-service charts/n8n-sandbox-service \
-            --set auth.existingSecret=n8n-sandbox-auth \
-            --set networkPolicy.enabled=true
-          helm template n8n-sandbox-service charts/n8n-sandbox-service \
-            --set auth.existingSecret=n8n-sandbox-auth \
-            --set dataPlane.mode=external \
-            --set networkPolicy.enabled=true
+      - name: Run chart render tests
+        run: charts/n8n-sandbox-service/render-tests.sh
+
 
   golden-build:
     runs-on: ubuntu-latest
