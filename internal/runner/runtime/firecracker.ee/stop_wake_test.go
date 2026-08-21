@@ -194,6 +194,92 @@ func TestRuntimeDeleteSandboxWaitsForWake(t *testing.T) {
 	}
 }
 
+// A delete claim must be visible the moment beginTransition grants it, otherwise
+// Shutdown sweeps a sandbox whose DeleteSandbox is already tearing it down and
+// both goroutines kill the VM, clean the host, and drop the data dir twice.
+func TestRuntimeShutdownSkipsSandboxClaimedForDelete(t *testing.T) {
+	rt := testRuntimeT(t, 2)
+	stubCreateDeps(rt)
+
+	proc := &fakeProcess{}
+	proxy := &fakeProxy{}
+	rt.deps.start = func(context.Context, string, ...string) (process, error) { return proc, nil }
+	rt.deps.newProxy = func(context.Context, string, string, string) (daemonProxy, error) { return proxy, nil }
+
+	const sandboxID = "sandbox-id-123456"
+	if _, err := rt.CreateSandbox(context.Background(), sandboxID, nil); err != nil {
+		t.Fatalf("CreateSandbox() failed: %v", err)
+	}
+
+	// Stands in for a DeleteSandbox that has won the claim but has not started
+	// teardown yet.
+	if _, _, _, err := rt.beginTransition(context.Background(), sandboxID, transitionDeleting); err != nil {
+		t.Fatalf("beginTransition(delete) failed: %v", err)
+	}
+
+	rt.Shutdown(context.Background())
+
+	if proc.killed || proxy.stopped {
+		t.Fatal("Shutdown tore down a sandbox already claimed by an in-flight delete")
+	}
+}
+
+// Teardown must not follow the caller: a client that disconnects mid-delete
+// would otherwise leave the microVM running on a slot the runner still tracks.
+func TestRuntimeDeleteSandboxCompletesAfterCallerContextCanceled(t *testing.T) {
+	rt := testRuntimeT(t, 2)
+	stubCreateDeps(rt)
+
+	proc := &fakeProcess{}
+	proxy := &fakeProxy{}
+	rt.deps.start = func(context.Context, string, ...string) (process, error) { return proc, nil }
+	rt.deps.newProxy = func(context.Context, string, string, string) (daemonProxy, error) { return proxy, nil }
+
+	const sandboxID = "sandbox-id-123456"
+	if _, err := rt.CreateSandbox(context.Background(), sandboxID, nil); err != nil {
+		t.Fatalf("CreateSandbox() failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := rt.DeleteSandbox(ctx, sandboxID); err != nil {
+		t.Fatalf("DeleteSandbox() with canceled caller context failed: %v", err)
+	}
+	if !proc.killed || !proxy.stopped {
+		t.Fatal("expected microVM and proxy to be torn down despite canceled caller context")
+	}
+	if _, err := rt.GetSandboxInfo(context.Background(), sandboxID); !errors.Is(err, runnerruntime.ErrSandboxNotFound) {
+		t.Fatalf("GetSandboxInfo() error = %v, want ErrSandboxNotFound", err)
+	}
+}
+
+// A caller without a deadline must not be able to wait forever on a claim that
+// another operation is holding, since the control-plane RPCs have no deadline.
+func TestRuntimeStopSandboxBoundsWaitForHeldTransition(t *testing.T) {
+	rt := testRuntimeT(t, 2)
+	stubCreateDeps(rt)
+
+	const sandboxID = "sandbox-id-123456"
+	if _, err := rt.CreateSandbox(context.Background(), sandboxID, nil); err != nil {
+		t.Fatalf("CreateSandbox() failed: %v", err)
+	}
+
+	// Stands in for a wake that has claimed the sandbox and never finishes.
+	if _, _, _, err := rt.beginTransition(context.Background(), sandboxID, transitionWaking); err != nil {
+		t.Fatalf("beginTransition(wake) failed: %v", err)
+	}
+
+	prev := transitionBudget
+	transitionBudget = 100 * time.Millisecond
+	t.Cleanup(func() { transitionBudget = prev })
+
+	err := rt.StopSandbox(context.Background(), sandboxID)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("StopSandbox() error = %v, want context.DeadlineExceeded", err)
+	}
+}
+
 func TestRuntimeCapacityReportsStoppedSeparatelyFromSlots(t *testing.T) {
 	rt := testRuntimeT(t, 3)
 	stubCreateDeps(rt)

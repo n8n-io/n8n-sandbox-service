@@ -297,7 +297,7 @@ func (r *Runtime) cleanupLeftoverAdmissionCanaries(ctx context.Context) error {
 	r.mu.Lock()
 	ids := make([]string, 0)
 	for id, state := range r.sandboxes {
-		if state.deleting {
+		if state.deleting() {
 			continue
 		}
 		if strings.HasPrefix(id, admissionCanaryIDPrefix) {

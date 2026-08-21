@@ -83,6 +83,10 @@ func (s slotState) occupied() bool {
 // slot, netns, socket, and daemon URL as it goes, so an overlapping delete could
 // read half of the old identity, skip teardown because the new process and proxy
 // are not published yet, and free a slot whose microVM is still coming up.
+//
+// transitionDeleting is terminal: it is never released back to transitionNone
+// except when a failed delete leaves the sandbox tracked, so it doubles as the
+// tombstone that hides the sandbox from lookups while teardown runs.
 type sandboxTransition uint8
 
 const (
@@ -92,6 +96,43 @@ const (
 	transitionWaking
 	transitionDeleting
 )
+
+// Lifecycle budgets bound how long an operation may hold a sandbox's transition
+// claim, including the wait to acquire it. Nothing else caps them: the host
+// commands and Firecracker API calls these operations run inherit their context,
+// and the callers that drive them have no deadline of their own (the control-plane
+// RPCs carry the API request context, the idle sweeper's context lives until the
+// API exits), so a wedged host command would otherwise hold the claim forever and
+// fail every later operation on that sandbox.
+//
+// beginTransition applies transitionBudget to stop, wake, and delete. Create has
+// its own, larger budget because it clones the rootfs and snapshot before booting,
+// and it claims the sandbox in reserveSandbox rather than through beginTransition.
+// Vars rather than consts so tests can shrink them.
+var (
+	createBudget     = 3 * time.Minute
+	transitionBudget = 2 * time.Minute
+)
+
+// withLifecycleBudget detaches a lifecycle operation from its caller's
+// cancellation and caps how long it may run. Detaching is what stops a client
+// disconnect from abandoning a sandbox with its host resources half torn down,
+// and the cap is what eventually frees the claim, since exec.CommandContext kills
+// a stuck host command once the context expires. Context values survive, so the
+// trace id follows the operation.
+//
+// The budget is a ceiling, not a replacement: a caller that asked for less time
+// keeps its own deadline (the admission canary bounds its cleanup deliberately so
+// a stuck umount cannot stall startup). Strip the deadline with
+// context.WithoutCancel before calling to opt out of that.
+func withLifecycleBudget(ctx context.Context, budget time.Duration) (context.Context, context.CancelFunc) {
+	if deadline, ok := ctx.Deadline(); ok {
+		if remaining := time.Until(deadline); remaining < budget {
+			budget = remaining
+		}
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), budget)
+}
 
 // sandboxState holds the host resources backing one live microVM sandbox.
 type sandboxState struct {
@@ -112,7 +153,12 @@ type sandboxState struct {
 	stopped           bool
 	transition        sandboxTransition
 	stoppedAt         time.Time
-	deleting          bool
+}
+
+// deleting reports whether the sandbox has been claimed for teardown. r.mu must
+// be held by the caller.
+func (s *sandboxState) deleting() bool {
+	return s.transition == transitionDeleting
 }
 
 // process is the minimum process handle needed for sandbox cleanup.
@@ -229,7 +275,7 @@ func (r *Runtime) Capacity(context.Context) (runnerruntime.Capacity, error) {
 
 	stopped := 0
 	for _, state := range r.sandboxes {
-		if !state.deleting && state.stopped {
+		if !state.deleting() && state.stopped {
 			stopped++
 		}
 	}
@@ -247,6 +293,9 @@ func (r *Runtime) CreateSandbox(ctx context.Context, sandboxID string, _ *runner
 		return nil, fmt.Errorf("sandbox ID must be at least 12 characters, got %d", len(sandboxID))
 	}
 
+	ctx, cancel := withLifecycleBudget(ctx, createBudget)
+	defer cancel()
+
 	state, err := r.reserveSandbox(sandboxID)
 	if err != nil {
 		return nil, err
@@ -260,7 +309,12 @@ func (r *Runtime) CreateSandbox(ctx context.Context, sandboxID string, _ *runner
 		"daemon_url", state.daemonURL,
 	)
 	cleanupOnError := func() {
-		_ = r.deleteSandbox(ctx, state)
+		// Cleanup drops the create context's deadline as well as its cancellation:
+		// a create that failed *because* it ran out of budget must still tear down,
+		// or the slot and the sandbox's host state are stranded.
+		cleanupCtx, cancelCleanup := withLifecycleBudget(context.WithoutCancel(ctx), transitionBudget)
+		defer cancelCleanup()
+		_ = r.deleteSandbox(cleanupCtx, state)
 	}
 
 	timer := newStepTimer(metrics.OpCreate, r.metrics)
@@ -306,7 +360,7 @@ func (r *Runtime) GetSandboxInfo(_ context.Context, sandboxID string) (*runnerru
 	defer r.mu.Unlock()
 
 	state, ok := r.sandboxes[sandboxID]
-	if !ok || state.deleting {
+	if !ok || state.deleting() {
 		return nil, runnerruntime.ErrSandboxNotFound
 	}
 	info := *state.info
@@ -314,11 +368,15 @@ func (r *Runtime) GetSandboxInfo(_ context.Context, sandboxID string) (*runnerru
 }
 
 // DeleteSandbox tears down the microVM (if running), proxy, netns, jail state, and data dir.
+// It waits for any in-flight stop or wake to finish first, which is what
+// guarantees teardown sees the microVM a concurrent wake was bringing up instead
+// of leaving it orphaned on a slot the runner has already handed back.
 func (r *Runtime) DeleteSandbox(ctx context.Context, sandboxID string) error {
-	state, err := r.takeSandbox(ctx, sandboxID)
+	state, ctx, cancel, err := r.beginTransition(ctx, sandboxID, transitionDeleting)
 	if err != nil {
 		return err
 	}
+	defer cancel()
 	return r.deleteSandbox(ctx, state)
 }
 
@@ -328,7 +386,7 @@ func (r *Runtime) DaemonURL(_ context.Context, sandboxID string) (string, error)
 	defer r.mu.Unlock()
 
 	state, ok := r.sandboxes[sandboxID]
-	if !ok || state.deleting {
+	if !ok || state.deleting() {
 		return "", runnerruntime.ErrSandboxNotFound
 	}
 	if state.transition != transitionNone || state.stopped || !state.running {
@@ -347,14 +405,15 @@ func (r *Runtime) Shutdown(ctx context.Context) {
 	r.mu.Lock()
 	states := make([]*sandboxState, 0, len(r.sandboxes))
 	for _, state := range r.sandboxes {
-		if state.deleting {
+		// A sandbox already claimed for delete is skipped so its teardown does not
+		// run twice. Unlike DeleteSandbox this does not wait for an in-flight stop
+		// or wake: the process is exiting, and startup reconcile removes whatever
+		// leaks.
+		if state.deleting() {
 			continue
 		}
 		states = append(states, state)
 		state.running = false
-		state.deleting = true
-		// Unlike DeleteSandbox this does not wait for an in-flight stop or wake:
-		// the process is exiting, and startup reconcile removes whatever leaks.
 		state.transition = transitionDeleting
 	}
 	r.mu.Unlock()
@@ -407,31 +466,16 @@ func (r *Runtime) reserveSandbox(sandboxID string) (*sandboxState, error) {
 	return state, nil
 }
 
-// takeSandbox waits for any in-flight stop or wake to finish, then marks the
-// sandbox as deleting while keeping its slot reserved until host cleanup
-// finishes. Waiting is what guarantees teardown sees the microVM a concurrent
-// wake was bringing up instead of leaving it orphaned on a slot the runner has
-// already handed back.
-func (r *Runtime) takeSandbox(ctx context.Context, sandboxID string) (*sandboxState, error) {
-	state, err := r.beginTransition(ctx, sandboxID, transitionDeleting)
-	if err != nil {
-		return nil, err
-	}
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	state.running = false
-	state.deleting = true
-	return state, nil
-}
-
-// deleteSandbox stops host-side resources for one sandbox before releasing its slot.
+// deleteSandbox stops host-side resources for one sandbox before releasing its
+// slot. The caller must already hold the sandbox's transition claim; the claim
+// is upgraded to transitionDeleting here for the create-cleanup path, which
+// deletes under its own creation claim.
 func (r *Runtime) deleteSandbox(ctx context.Context, state *sandboxState) error {
 	slog.Debug("firecracker sandbox cleanup started", "sandbox_id", state.id, "vm_id", state.vmID, "slot", state.slot)
 	r.mu.Lock()
 	if current, ok := r.sandboxes[state.id]; ok && current == state {
 		state.running = false
-		state.deleting = true
+		state.transition = transitionDeleting
 	}
 	r.mu.Unlock()
 
@@ -450,7 +494,6 @@ func (r *Runtime) deleteSandbox(ctx context.Context, state *sandboxState) error 
 	if err := joinErrors(errs); err != nil {
 		r.mu.Lock()
 		if current, ok := r.sandboxes[state.id]; ok && current == state {
-			state.deleting = false
 			state.transition = transitionNone
 		}
 		r.mu.Unlock()

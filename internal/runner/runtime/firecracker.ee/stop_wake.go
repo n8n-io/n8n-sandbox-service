@@ -30,10 +30,11 @@ const transitionPollInterval = 50 * time.Millisecond
 // StopSandbox pauses the microVM, writes a per-sandbox snapshot, tears down host
 // VM resources, and frees the runner slot.
 func (r *Runtime) StopSandbox(ctx context.Context, sandboxID string) error {
-	state, err := r.beginTransition(ctx, sandboxID, transitionStopping)
+	state, ctx, cancel, err := r.beginTransition(ctx, sandboxID, transitionStopping)
 	if err != nil {
 		return err
 	}
+	defer cancel()
 	defer r.endTransition(state)
 
 	r.mu.Lock()
@@ -81,22 +82,20 @@ func (r *Runtime) EnsureSandboxRunning(ctx context.Context, sandboxID string) er
 		return err
 	}
 	_, err, _ := r.wakeGroup.Do(sandboxID, func() (interface{}, error) {
-		// The wake outlives the request that triggered it, so it runs on a
-		// detached context. WithoutCancel keeps the trace context, which the
-		// wake event needs. Concurrent callers share one wake, so the event
-		// carries the trace id of whichever caller started it.
-		wakeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
-		defer cancel()
-		return nil, r.ensureSandboxRunningOnce(wakeCtx, sandboxID)
+		// beginTransition detaches the wake from the request that triggered it, so
+		// the wake outlives that request. Concurrent callers share one wake, so the
+		// wake event carries the trace id of whichever caller started it.
+		return nil, r.ensureSandboxRunningOnce(ctx, sandboxID)
 	})
 	return err
 }
 
 func (r *Runtime) ensureSandboxRunningOnce(ctx context.Context, sandboxID string) error {
-	state, err := r.beginTransition(ctx, sandboxID, transitionWaking)
+	state, ctx, cancel, err := r.beginTransition(ctx, sandboxID, transitionWaking)
 	if err != nil {
 		return err
 	}
+	defer cancel()
 	defer r.endTransition(state)
 
 	r.mu.Lock()
@@ -207,28 +206,40 @@ func (r *Runtime) teardownRunningVM(ctx context.Context, state *sandboxState) er
 
 // beginTransition waits until no other stop, wake, or delete is in flight for the
 // sandbox, then claims it for the caller. Callers must release the claim with
-// endTransition unless the transition is terminal (delete). The poll loop keeps
-// waiters off r.mu while a transition runs host commands.
-func (r *Runtime) beginTransition(ctx context.Context, sandboxID string, want sandboxTransition) (*sandboxState, error) {
+// endTransition unless the transition is terminal (delete). The claim is taken
+// under a single r.mu hold so exactly one caller can win it, while the poll loop
+// keeps waiters off r.mu during the host commands the winner then runs.
+//
+// It returns the context the operation must run under: transitionBudget applied to
+// the caller's, covering both this wait and everything the winner does while
+// holding the claim. Handing the budget back with the claim is what keeps the two
+// inseparable, so a new lifecycle operation cannot forget to bound itself and
+// strand the sandbox. The returned cancel is nil when an error is returned.
+func (r *Runtime) beginTransition(ctx context.Context, sandboxID string, want sandboxTransition) (*sandboxState, context.Context, context.CancelFunc, error) {
+	ctx, cancel := withLifecycleBudget(ctx, transitionBudget)
+
 	ticker := time.NewTicker(transitionPollInterval)
 	defer ticker.Stop()
 	for {
 		r.mu.Lock()
 		state, ok := r.sandboxes[sandboxID]
-		if !ok || state.deleting {
+		if !ok || state.deleting() {
 			r.mu.Unlock()
-			return nil, runnerruntime.ErrSandboxNotFound
+			cancel()
+			return nil, nil, nil, runnerruntime.ErrSandboxNotFound
 		}
 		if state.transition == transitionNone {
 			state.transition = want
 			r.mu.Unlock()
-			return state, nil
+			return state, ctx, cancel, nil
 		}
 		r.mu.Unlock()
 
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			err := ctx.Err()
+			cancel()
+			return nil, nil, nil, err
 		case <-ticker.C:
 		}
 	}
@@ -288,11 +299,12 @@ func (r *Runtime) evictOldestStoppedSandbox(ctx context.Context) bool {
 	r.mu.Lock()
 	var candidates []*sandboxState
 	for _, state := range r.sandboxes {
-		if state.deleting || !state.stopped || state.running {
+		if !state.stopped || state.running {
 			continue
 		}
 		// A waking sandbox is still flagged stopped until its microVM is up.
 		// Evicting it here would delete its data dir out from under the wake.
+		// This also skips sandboxes already claimed for delete.
 		if state.transition != transitionNone {
 			continue
 		}
@@ -306,7 +318,6 @@ func (r *Runtime) evictOldestStoppedSandbox(ctx context.Context) bool {
 		return candidates[i].stoppedAt.Before(candidates[j].stoppedAt)
 	})
 	oldest := candidates[0]
-	oldest.deleting = true
 	oldest.transition = transitionDeleting
 	r.mu.Unlock()
 

@@ -71,8 +71,32 @@ mutually exclusive per sandbox: each claims the sandbox for the duration of the
 transition and the others wait. Without that, a delete overlapping a create or
 wake would run before the microVM, proxy, and slot-derived fields were published,
 skip teardown, and leave an orphaned microVM holding host resources on a slot the
-runner had already handed back. `Shutdown` is the one exception — it does not wait,
-since the process is exiting and startup reconcile removes whatever leaks.
+runner had already handed back. The delete claim is terminal and doubles as the
+tombstone that hides the sandbox from lookups, so a single flag decides both
+mutual exclusion and visibility. `Shutdown` is the one exception to waiting — it
+sweeps sandboxes mid-stop or mid-wake, since the process is exiting and startup
+reconcile removes whatever leaks, but it still skips sandboxes a delete already
+claimed so teardown never runs twice.
+
+A claim comes with a budget: `beginTransition` returns the context its operation
+must run under, which is the caller's detached from cancellation and capped at two
+minutes (create claims in `reserveSandbox` instead and gets three, since it clones
+the rootfs and snapshot before booting). Returning the two together is deliberate —
+a new lifecycle operation cannot acquire a claim without also bounding it.
+
+Detaching from cancellation means a client that disconnects mid-delete cannot
+abandon a sandbox with its host resources half torn down. The cap is what
+guarantees the claim is eventually released: the host commands and Firecracker API
+calls inherit that context, so `exec.CommandContext` kills a wedged command when it
+expires. Without it a single stuck `umount` would hold the sandbox forever, because
+the callers that drive these operations have no deadline of their own — the
+control-plane RPCs carry the API request context and the idle sweeper's context
+lives until the API process exits.
+
+The budget is a ceiling rather than a replacement, so a caller that asks for less
+time keeps its own deadline; the admission canary relies on that to bound its
+cleanup. The budgets are compile-time values rather than environment variables:
+they exist to cap pathological cases, not as tuning knobs.
 
 Run **one Firecracker runner process per host**. Multiple runners on the same
 machine collide on Linux netns/veth names (`fc-sb-{n}`, `fc-veth-{n}`); use
