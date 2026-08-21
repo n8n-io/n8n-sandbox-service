@@ -114,6 +114,16 @@ var (
 	transitionBudget = 2 * time.Minute
 )
 
+// transitionWaitBudget bounds how long an operation waits for another one to
+// release the sandbox. It is separate from, and longer than, the budget the winner
+// then runs under, for two reasons: waiting must not eat the time the operation
+// needs for its own host work, and a waiter must not give up on a claim that is
+// still guaranteed to be released. The longest possible hold is a create that
+// exhausts createBudget and then runs its cleanup, hence the sum.
+func transitionWaitBudget() time.Duration {
+	return createBudget + transitionBudget
+}
+
 // withLifecycleBudget detaches a lifecycle operation from its caller's
 // cancellation and caps how long it may run. Detaching is what stops a client
 // disconnect from abandoning a sandbox with its host resources half torn down,
@@ -132,6 +142,15 @@ func withLifecycleBudget(ctx context.Context, budget time.Duration) (context.Con
 		}
 	}
 	return context.WithTimeout(context.WithoutCancel(ctx), budget)
+}
+
+// withCleanupBudget derives a context for teardown that has to run even when the
+// operation's own budget is what expired. Dropping the caller's deadline is the
+// point: reusing an exhausted context would skip the host commands and leave the
+// sandbox's jail mounts, netns, and data dir behind while its slot goes back into
+// circulation.
+func withCleanupBudget(ctx context.Context) (context.Context, context.CancelFunc) {
+	return withLifecycleBudget(context.WithoutCancel(ctx), transitionBudget)
 }
 
 // sandboxState holds the host resources backing one live microVM sandbox.
@@ -309,10 +328,7 @@ func (r *Runtime) CreateSandbox(ctx context.Context, sandboxID string, _ *runner
 		"daemon_url", state.daemonURL,
 	)
 	cleanupOnError := func() {
-		// Cleanup drops the create context's deadline as well as its cancellation:
-		// a create that failed *because* it ran out of budget must still tear down,
-		// or the slot and the sandbox's host state are stranded.
-		cleanupCtx, cancelCleanup := withLifecycleBudget(context.WithoutCancel(ctx), transitionBudget)
+		cleanupCtx, cancelCleanup := withCleanupBudget(ctx)
 		defer cancelCleanup()
 		_ = r.deleteSandbox(cleanupCtx, state)
 	}

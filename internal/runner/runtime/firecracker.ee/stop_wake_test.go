@@ -3,6 +3,8 @@ package firecracker
 import (
 	"context"
 	"errors"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -270,14 +272,123 @@ func TestRuntimeStopSandboxBoundsWaitForHeldTransition(t *testing.T) {
 		t.Fatalf("beginTransition(wake) failed: %v", err)
 	}
 
-	prev := transitionBudget
-	transitionBudget = 100 * time.Millisecond
-	t.Cleanup(func() { transitionBudget = prev })
+	shrinkBudgets(t, 50*time.Millisecond, 50*time.Millisecond)
 
 	err := rt.StopSandbox(context.Background(), sandboxID)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("StopSandbox() error = %v, want context.DeadlineExceeded", err)
 	}
+}
+
+// Waiting for a claim must not consume the waiter's own budget, and must outlast
+// the longest hold: a create may legitimately hold the sandbox for longer than one
+// transition budget, and a delete that gives up early leaves the sandbox tracked.
+func TestRuntimeDeleteWaitsOutCreateHoldingLongerThanTransitionBudget(t *testing.T) {
+	rt := testRuntimeT(t, 2)
+	stubCreateDeps(rt)
+	shrinkBudgets(t, 3*time.Second, time.Second)
+
+	createReachedSnapshot := make(chan struct{})
+	allowCreateSnapshot := make(chan struct{})
+	rt.deps.loadSnapshot = func(context.Context, string, Config) error {
+		close(createReachedSnapshot)
+		<-allowCreateSnapshot
+		return nil
+	}
+
+	const sandboxID = "sandbox-id-123456"
+	createDone := make(chan error, 1)
+	go func() {
+		_, err := rt.CreateSandbox(context.Background(), sandboxID, nil)
+		createDone <- err
+	}()
+
+	select {
+	case <-createReachedSnapshot:
+	case <-time.After(2 * time.Second):
+		t.Fatal("create did not reach snapshot restore")
+	}
+
+	deleteDone := make(chan error, 1)
+	go func() {
+		deleteDone <- rt.DeleteSandbox(context.Background(), sandboxID)
+	}()
+
+	// Hold the create claim past one transition budget, which is what a delete
+	// used to time out on.
+	select {
+	case err := <-deleteDone:
+		t.Fatalf("DeleteSandbox returned while create still held the sandbox: %v", err)
+	case <-time.After(1500 * time.Millisecond):
+	}
+
+	close(allowCreateSnapshot)
+	if err := <-createDone; err != nil {
+		t.Fatalf("CreateSandbox() failed: %v", err)
+	}
+	if err := <-deleteDone; err != nil {
+		t.Fatalf("DeleteSandbox() failed after waiting for create: %v", err)
+	}
+	if _, err := rt.GetSandboxInfo(context.Background(), sandboxID); !errors.Is(err, runnerruntime.ErrSandboxNotFound) {
+		t.Fatalf("GetSandboxInfo() error = %v, want ErrSandboxNotFound", err)
+	}
+}
+
+// A wake that fails because it ran out of budget must still clean up the host
+// state it created, since the slot is handed back either way.
+func TestRuntimeWakeFailureCleansHostAfterBudgetExpires(t *testing.T) {
+	rt := testRuntimeT(t, 2)
+	stubCreateDeps(rt)
+
+	const sandboxID = "sandbox-id-123456"
+	if _, err := rt.CreateSandbox(context.Background(), sandboxID, nil); err != nil {
+		t.Fatalf("CreateSandbox() failed: %v", err)
+	}
+	if err := rt.StopSandbox(context.Background(), sandboxID); err != nil {
+		t.Fatalf("StopSandbox() failed: %v", err)
+	}
+
+	var mu sync.Mutex
+	cleanupRan := false
+	// Mimics exec.CommandContext: a host command fails immediately once its
+	// context is done.
+	rt.deps.run = func(ctx context.Context, _ string, args ...string) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		for _, a := range args {
+			if strings.Contains(a, "umount") {
+				mu.Lock()
+				cleanupRan = true
+				mu.Unlock()
+			}
+		}
+		return nil
+	}
+	rt.deps.loadSnapshot = func(ctx context.Context, _ string, _ Config) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	shrinkBudgets(t, 3*time.Second, 200*time.Millisecond)
+
+	if err := rt.EnsureSandboxRunning(context.Background(), sandboxID); err == nil {
+		t.Fatal("expected wake to fail once its budget expired")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !cleanupRan {
+		t.Fatal("expected wake failure to clean up host state on a fresh context")
+	}
+}
+
+// shrinkBudgets scales the lifecycle budgets down for tests that would otherwise
+// wait minutes. Both matter: the wait budget is derived from them.
+func shrinkBudgets(t *testing.T, create, transition time.Duration) {
+	t.Helper()
+	prevCreate, prevTransition := createBudget, transitionBudget
+	createBudget, transitionBudget = create, transition
+	t.Cleanup(func() { createBudget, transitionBudget = prevCreate, prevTransition })
 }
 
 func TestRuntimeCapacityReportsStoppedSeparatelyFromSlots(t *testing.T) {

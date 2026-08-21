@@ -114,7 +114,13 @@ func (r *Runtime) ensureSandboxRunningOnce(ctx context.Context, sandboxID string
 
 	timer := newStepTimer(metrics.OpEnsureRunning, r.metrics)
 	if err := r.activateSandboxVM(ctx, state, timer); err != nil {
-		_ = r.teardownRunningVM(ctx, state)
+		// The activation may have failed because the wake ran out of budget, so
+		// teardown needs a context of its own; the slot is released below either
+		// way, and reusing an expired one would hand it back with this sandbox's
+		// jail mounts and netns still on it.
+		cleanupCtx, cancelCleanup := withCleanupBudget(ctx)
+		_ = r.teardownRunningVM(cleanupCtx, state)
+		cancelCleanup()
 		r.mu.Lock()
 		state.running = false
 		state.stopped = true
@@ -211,12 +217,14 @@ func (r *Runtime) teardownRunningVM(ctx context.Context, state *sandboxState) er
 // keeps waiters off r.mu during the host commands the winner then runs.
 //
 // It returns the context the operation must run under: transitionBudget applied to
-// the caller's, covering both this wait and everything the winner does while
-// holding the claim. Handing the budget back with the claim is what keeps the two
-// inseparable, so a new lifecycle operation cannot forget to bound itself and
-// strand the sandbox. The returned cancel is nil when an error is returned.
+// the caller's, starting once the claim is won so that waiting cannot eat the time
+// the operation needs for its host work. Handing the budget back with the claim is
+// what keeps the two inseparable, so a new lifecycle operation cannot forget to
+// bound itself and strand the sandbox. The wait itself is bounded separately by
+// transitionWaitBudget. The returned cancel is nil when an error is returned.
 func (r *Runtime) beginTransition(ctx context.Context, sandboxID string, want sandboxTransition) (*sandboxState, context.Context, context.CancelFunc, error) {
-	ctx, cancel := withLifecycleBudget(ctx, transitionBudget)
+	waitCtx, cancelWait := withLifecycleBudget(ctx, transitionWaitBudget())
+	defer cancelWait()
 
 	ticker := time.NewTicker(transitionPollInterval)
 	defer ticker.Stop()
@@ -225,21 +233,19 @@ func (r *Runtime) beginTransition(ctx context.Context, sandboxID string, want sa
 		state, ok := r.sandboxes[sandboxID]
 		if !ok || state.deleting() {
 			r.mu.Unlock()
-			cancel()
 			return nil, nil, nil, runnerruntime.ErrSandboxNotFound
 		}
 		if state.transition == transitionNone {
 			state.transition = want
 			r.mu.Unlock()
-			return state, ctx, cancel, nil
+			opCtx, cancel := withLifecycleBudget(ctx, transitionBudget)
+			return state, opCtx, cancel, nil
 		}
 		r.mu.Unlock()
 
 		select {
-		case <-ctx.Done():
-			err := ctx.Err()
-			cancel()
-			return nil, nil, nil, err
+		case <-waitCtx.Done():
+			return nil, nil, nil, waitCtx.Err()
 		case <-ticker.C:
 		}
 	}

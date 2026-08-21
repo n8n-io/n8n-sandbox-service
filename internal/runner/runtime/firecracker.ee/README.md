@@ -84,6 +84,11 @@ minutes (create claims in `reserveSandbox` instead and gets three, since it clon
 the rootfs and snapshot before booting). Returning the two together is deliberate —
 a new lifecycle operation cannot acquire a claim without also bounding it.
 
+That budget starts when the claim is won. Waiting for another operation to finish
+is bounded separately and more generously, by `transitionWaitBudget`, so that
+queueing behind a slow create neither eats the time the waiter needs for its own
+host work nor makes it give up on a claim that is still guaranteed to be released.
+
 Detaching from cancellation means a client that disconnects mid-delete cannot
 abandon a sandbox with its host resources half torn down. The cap is what
 guarantees the claim is eventually released: the host commands and Firecracker API
