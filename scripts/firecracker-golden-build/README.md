@@ -66,6 +66,13 @@ asset alongside each service release (`service/v{version}`).
      --out /srv/firecracker/snapshots
    ```
 
+   This writes three files into `--out`: `snapshot_mem`, `snapshot_state`, and
+   `boot.json` recording the vCPU count, memory, kernel command line and guest
+   network identity the snapshot was built with. All three belong to one build —
+   keep them together, and rebuild the set rather than editing `boot.json` by
+   hand. The runner reads it at startup to validate the snapshot against its own
+   configuration.
+
 Infra owns gallery publish, registry pulls for staging/alpha, Key Vault, systemd units, and
 cloud-init. This bundle owns everything that must stay in sync with the
 sandbox-service release.
