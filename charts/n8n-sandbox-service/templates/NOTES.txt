@@ -1,0 +1,25 @@
+API service: {{ include "n8n-sandbox-service.apiName" . }} (namespace {{ .Release.Namespace }})
+{{- if eq .Values.dataPlane.mode "in-cluster" }}
+
+In-cluster runner ({{ .Values.runner.isolation }} isolation): StatefulSet {{ include "n8n-sandbox-service.runnerName" . }}
+
+If no runner pod appears, inspect the StatefulSet events:
+
+  kubectl -n {{ .Release.Namespace }} describe statefulset {{ include "n8n-sandbox-service.runnerName" . }}
+
+RuntimeClass and Pod Security Admission rejections land on the StatefulSet
+events, not on a pod.
+{{- if eq .Values.runner.isolation "sysbox" }}
+
+This isolation needs the sysbox-runc RuntimeClass and labeled nodes.
+Immutable-rootfs distributions (for example Talos or Bottlerocket) cannot
+install sysbox; use runner.isolation=privileged there.
+{{- end }}
+{{- if eq .Values.runner.isolation "privileged" }}
+
+The runner container runs with privileged: true. The namespace needs Pod
+Security Admission level `privileged`:
+
+  kubectl label namespace {{ .Release.Namespace }} pod-security.kubernetes.io/enforce=privileged
+{{- end }}
+{{- end }}

@@ -2,6 +2,8 @@
 
 This guide covers running the n8n Sandbox Service with an in-cluster Sysbox runner.
 
+Sysbox must install a runtime binary on the node and change the node's containerd configuration. Immutable-rootfs distributions such as Talos, Bottlerocket, Flatcar, and Fedora CoreOS do not permit that. On those clusters, skip to [Immutable-rootfs distributions](#immutable-rootfs-distributions-privileged-isolation).
+
 ## 1. Create a Sysbox node pool
 
 Use a dedicated Linux node pool for Sysbox workloads. Sysbox changes the node runtime setup, so keep these nodes separate from regular application nodes.
@@ -51,21 +53,24 @@ For a containerd setup with [Kubernetes user namespaces](https://kubernetes.io/d
 
 ```yaml
 dataPlane:
-  mode: sysbox
+  mode: in-cluster
 
-sysboxRunner:
-  runtime:
-    runtimeClassName: sysbox-runc
-    hostUsers: false
+runner:
+  isolation: sysbox
+  sysbox:
+    runtime:
+      runtimeClassName: sysbox-runc
+      hostUsers: false
 ```
 
 If your Sysbox nodes use CRI-O for user namespaces, omit `hostUsers` and add the CRI-O annotation documented by Sysbox:
 
 ```yaml
-sysboxRunner:
-  runtime:
-    runtimeClassName: sysbox-runc
-    hostUsers: null
+runner:
+  sysbox:
+    runtime:
+      runtimeClassName: sysbox-runc
+      hostUsers: null
   podAnnotations:
     io.kubernetes.cri-o.userns-mode: "auto:size=65536"
 ```
@@ -73,16 +78,17 @@ sysboxRunner:
 If your node pool uses custom labels or taints, override the runner scheduling values:
 
 ```yaml
-sysboxRunner:
-  scheduling:
-    nodeSelector:
-      sysbox-install: null
-      nodetype: sysbox
-    tolerations:
-      - key: dedicated
-        operator: Equal
-        value: sysbox
-        effect: NoSchedule
+runner:
+  sysbox:
+    scheduling:
+      nodeSelector:
+        sysbox-install: null
+        nodetype: sysbox
+      tolerations:
+        - key: dedicated
+          operator: Equal
+          value: sysbox
+          effect: NoSchedule
 ```
 
 Setting a default selector key to `null` removes it from the rendered pod selector.
@@ -106,7 +112,51 @@ monitoring:
     enabled: true
 ```
 
+## Immutable-rootfs distributions (privileged isolation)
+
+Sysbox cannot install on distributions with a read-only root filesystem and machine-managed containerd configuration. Verified on Talos; the same constraint applies to Bottlerocket, Flatcar, and Fedora CoreOS. Use `runner.isolation: privileged` there. It runs the same Docker-in-Docker runner with `privileged: true` instead of the sysbox runtime, so any node can run it.
+
+The security boundary is weaker than sysbox: an escape from the runner container reaches the node. The chart refuses to render until you acknowledge this:
+
+```yaml
+dataPlane:
+  mode: in-cluster
+
+runner:
+  isolation: privileged
+  acknowledgePrivileged: true
+```
+
+The namespace needs Pod Security Admission level `privileged`:
+
+```bash
+kubectl label namespace <namespace> pod-security.kubernetes.io/enforce=privileged
+```
+
+Prefer a dedicated node pool via `runner.privileged.scheduling`, and keep NetworkPolicy enabled. Platforms that block privileged containers (for example GKE Autopilot) cannot use this isolation.
+
+Two hardening options, both described in the chart [README](../charts/n8n-sandbox-service/README.md#privileged-isolation):
+
+- `runner.privileged.runtime.hostUsers: false` on Kubernetes ≥ 1.33 with containerd ≥ 2.0. This scopes the privileged capabilities to a pod user namespace. Verify sandbox creation and resource limits on your platform first.
+- `runner.privileged.runtime.runtimeClassName` set to a VM runtime such as Kata Containers, so `privileged: true` applies inside a guest VM. Talos ships an official kata-containers system extension.
+
 ## Troubleshooting
+
+**Install succeeds but no runner pod appears.** Admission denied the pod, so `kubectl get pods` shows nothing and the error lands on the StatefulSet. Inspect the StatefulSet events:
+
+```bash
+kubectl -n <namespace> describe statefulset
+```
+
+Two causes end up here: `RuntimeClass "sysbox-runc" not found` (sysbox is not installed on the cluster — see the note about immutable-rootfs distributions above), or Pod Security Admission rejects the privileged runner.
+
+**The runner pod stays in `Pending`.** The scheduler found no node for it. Read the pod events:
+
+```bash
+kubectl -n <namespace> describe pod -l app.kubernetes.io/component=sysbox-runner
+```
+
+Use `app.kubernetes.io/component=privileged-runner` for privileged isolation. A `0/N nodes are available` message means no node matches the `sysbox-install: "yes"` node selector, or the nodes carry a taint the pod does not tolerate. Label the sysbox nodes, or override `runner.sysbox.scheduling`.
 
 For `mount through procfd: operation not permitted`, first check the user-namespace configuration:
 

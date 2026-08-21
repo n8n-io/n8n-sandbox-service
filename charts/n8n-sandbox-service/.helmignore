@@ -4,3 +4,4 @@
 .helmignore
 *.swp
 *.tmp
+render-tests.sh

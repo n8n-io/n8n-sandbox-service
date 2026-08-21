@@ -20,7 +20,12 @@ auth:
     runnerApiKeys: changeme
 
 dataPlane:
-  mode: sysbox
+  # Where the data plane runs:
+  # - in-cluster: the chart renders a Docker-in-Docker runner StatefulSet.
+  #   runner.isolation selects how the runner gets its privileges.
+  # - external: runners live outside Kubernetes; the chart renders only the
+  #   API resources.
+  mode: in-cluster
 
 networkPolicy:
   enabled: false
@@ -29,9 +34,9 @@ networkPolicy:
     # When empty, all sources are allowed so an existing ingress controller keeps working.
     httpIngressFrom: []
     # Additional peers allowed to reach the runner registration gRPC port.
-    # The in-chart sysbox runner is allowed automatically when enabled.
+    # The in-cluster runner is allowed automatically.
     grpcIngressFrom: []
-  sysboxRunner:
+  runner:
     # Additional peers allowed to reach runner HTTP/control ports.
     # The in-chart API is allowed automatically.
     ingressFrom: []
@@ -45,7 +50,7 @@ monitoring:
     scheme: http
     api:
       enabled: true
-    sysboxRunner:
+    runner:
       enabled: true
 
 tls:
@@ -148,8 +153,24 @@ api:
   extraVolumes: []
   extraVolumeMounts: []
 
-sysboxRunner:
-  enabled: true
+# The in-cluster Docker-in-Docker runner, rendered when
+# dataPlane.mode=in-cluster. Both isolations run the same runner image; they
+# differ only in the source of privilege. Only the subblock that matches
+# runner.isolation is read; values in the other subblock are ignored.
+runner:
+  # How the runner gets the privileges Docker-in-Docker needs:
+  # - sysbox: run under the sysbox-runc RuntimeClass. Needs sysbox installed
+  #   on the nodes. Recommended.
+  # - privileged: run with privileged: true. Any node can run it, including
+  #   immutable-rootfs distributions such as Talos, Bottlerocket, Flatcar,
+  #   and Fedora CoreOS. Weaker isolation; requires acknowledgePrivileged.
+  isolation: sysbox
+  # runner.isolation=privileged runs the runner container with
+  # privileged: true. An escape from the runner container reaches the node.
+  # The namespace needs Pod Security Admission level `privileged`. The render
+  # fails until you set this to true.
+  acknowledgePrivileged: false
+
   replicaCount: 1
 
   image:
@@ -169,6 +190,10 @@ sysboxRunner:
     configKey: .dockerconfigjson
     mountPath: /root/.docker
 
+  # Volume for the inner Docker data root. Mounted at /var/lib/docker, or at
+  # /var/lib/docker-pool when config.defaultDiskQuotaMb is above 0, because the
+  # quota pool image needs the bounded volume then. See the chart README
+  # section 'Disk Quotas'.
   dockerDataRoot:
     persistence:
       enabled: false
@@ -176,25 +201,46 @@ sysboxRunner:
       storageClass: ""
       accessModes:
         - ReadWriteOnce
+    # Used only with isolation=privileged when persistence is disabled.
+    # Bounds the inner Docker daemon's image layers and sandbox filesystems.
+    emptyDir:
+      sizeLimit: 64Gi
 
   service:
     annotations: {}
     httpPort: 8080
     controlGrpcPort: 9091
 
-  runtime:
-    runtimeClassName: sysbox-runc
-    hostUsers: false
+  # Read only when isolation=sysbox.
+  sysbox:
+    runtime:
+      runtimeClassName: sysbox-runc
+      # Set to null to omit the field, for example on CRI-O nodes.
+      hostUsers: false
+    scheduling:
+      nodeSelector:
+        sysbox-install: "yes"
+      tolerations:
+      - key: sysbox-runtime
+        operator: Equal
+        value: not-running
+        effect: NoSchedule
+      affinity: {}
 
-  scheduling:
-    nodeSelector:
-      sysbox-install: "yes"
-    tolerations:
-    - key: sysbox-runtime
-      operator: Equal
-      value: not-running
-      effect: NoSchedule
-    affinity: {}
+  # Read only when isolation=privileged.
+  privileged:
+    runtime:
+      # Optional RuntimeClass for VM-based runtimes such as Kata Containers.
+      # Do not set sysbox-runc here; use isolation=sysbox for that.
+      runtimeClassName: ""
+      # Kubernetes user namespaces (Kubernetes >= 1.33 with containerd >= 2.0).
+      # hostUsers: false maps container root to an unprivileged host UID and
+      # scopes the privileged capabilities to the pod's user namespace.
+      hostUsers: null
+    scheduling:
+      nodeSelector: {}
+      tolerations: []
+      affinity: {}
 
   config:
     listenAddr: ":8080"
@@ -208,7 +254,15 @@ sysboxRunner:
     defaultCpuPercent: "100"
     defaultPidsMax: "256"
     defaultDiskQuotaMb: "0"
+    # Required when defaultDiskQuotaMb is above 0. A positive whole number of
+    # GB that fits the volume that holds the quota pool image. The derived
+    # default scales with capacityTotal instead, so it can outgrow that volume.
     diskQuotaPoolSizeGb: ""
+    # Overrides the quota pool image path. Keep it on a volume with a size
+    # limit; the mount the image backs does not bound the image. With an
+    # explicit path the chart skips the size check against dockerDataRoot.
+    # Set this to use quotas without a chart-owned dockerDataRoot volume, and
+    # mount the volume yourself through runner.extraVolumes.
     diskQuotaPoolPath: ""
     enableCgroups: "true"
     dockerStorageDriver: ""
