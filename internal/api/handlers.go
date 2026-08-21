@@ -481,11 +481,15 @@ func newRunnerReverseProxy(runnerURL *url.URL, runnerAPIKey string, onResponse f
 	}
 }
 
-// reapSandboxIfRunnerGone drops the record when the runner no longer knows the
-// sandbox, and reports whether the runner said so. A failed delete still
-// reports true: the response is not evidence of a working sandbox, so treating
-// it as activity would let a retrying client refresh last_active_at and keep
-// the sweeper from ever reclaiming the row.
+// reapSandboxIfRunnerGone deletes the store record when the runner's response
+// says it no longer knows the sandbox.
+//
+// It returns the runner's verdict, not the outcome of the delete: true means
+// "the runner says this sandbox is gone", so a failed delete still returns
+// true. Callers use that to skip markSandboxActive, because a gone response is
+// never evidence of a working sandbox — counting it as activity would let a
+// retrying client refresh last_active_at and keep the idle sweeper from ever
+// reclaiming the row left behind.
 func reapSandboxIfRunnerGone(s store.SandboxStore, sandboxID string, resp *http.Response) bool {
 	if !sandboxproxy.RunnerReportsSandboxGone(resp) {
 		return false
