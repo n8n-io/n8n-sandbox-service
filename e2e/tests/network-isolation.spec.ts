@@ -6,9 +6,11 @@ import {
   apiClient,
   createSandbox,
   deleteSandbox,
+  docker,
   exec,
   execWithTransientRetry,
 } from './helpers';
+import { DOCKER_ONLY } from './tags';
 import type { SandboxClient } from '@n8n/sandbox-client';
 
 const tcpConnect = (ip: string, port: number = 80, timeout: number = 3) =>
@@ -296,6 +298,72 @@ test.describe('Network isolation', () => {
       expect(result).toHaveSucceeded();
       // Should resolve to an IP address
       expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
+    } finally {
+      await deleteSandbox(id);
+    }
+  });
+});
+
+// These assert the installed rules rather than connectivity, which the tests
+// above cannot cover. A sandbox dialling another sandbox's daemon port from the
+// gateway address fails from the outside either way: the reply goes to the real
+// gateway, where the runner resets it, unless the attacker also poisons the
+// victim's ARP entry. So a curl proves nothing about whether the rule accepted
+// the packet, while the ruleset says so exactly.
+test.describe('Runner bridge policy', DOCKER_ONLY, () => {
+  const ruleChain = (rule: string) => rule.split(' ')[1];
+
+  test('policy leaves no address-matched way onto the bridge', async () => {
+    test.skip(
+      !process.env.E2E_RUNNER_CONTAINER_NAME,
+      'needs E2E_RUNNER_CONTAINER_NAME (from e2e/run.sh)',
+    );
+    const runnerContainer = process.env.E2E_RUNNER_CONTAINER_NAME!;
+
+    const id = await createSandbox();
+    try {
+      const rules = docker(['exec', runnerContainer, 'iptables', '-S'])
+        .split('\n')
+        .map((line) => line.trim());
+
+      // The interface the shared policy is keyed on, taken from the ruleset so
+      // the test does not depend on how Docker named this bridge.
+      const egressJump = rules
+        .map((line) => /^-A DOCKER-USER -i (\S+) -j N8N-SB-BR-EGRESS$/.exec(line))
+        .find((match) => match !== null);
+      expect(egressJump, 'expected the shared egress jump on the runner bridge').toBeTruthy();
+      const bridgeIface = egressJump![1];
+
+      // Every accept in a daemon ingress chain must exclude the bridge:
+      // a sandbox picks its own source address, so an accept matched on one is
+      // an accept it can claim.
+      const ingressRules = rules.filter((line) => /^-A N8N-SB-\w+-IN /.test(line));
+      expect(ingressRules.length, 'expected a daemon ingress chain for the sandbox').toBeGreaterThan(
+        0,
+      );
+      for (const rule of ingressRules.filter((line) => line.endsWith('-j ACCEPT'))) {
+        expect(rule, `expected the accept to exclude traffic arriving on ${bridgeIface}`).toContain(
+          `! -i ${bridgeIface}`,
+        );
+      }
+
+      for (const chain of new Set(ingressRules.map(ruleChain))) {
+        const chainRules = ingressRules.filter((rule) => ruleChain(rule) === chain);
+        expect(chainRules[chainRules.length - 1], `expected ${chain} to end in a drop`).toBe(
+          `-A ${chain} -j DROP`,
+        );
+      }
+
+      // The shared egress chain ends in its terminal accept, so nothing the
+      // policy blocks can have been appended behind it.
+      const egressRules = rules.filter((line) => line.startsWith('-A N8N-SB-BR-EGRESS '));
+      expect(egressRules, 'expected the blocked ranges to sit before the terminal accept').toContain(
+        '-A N8N-SB-BR-EGRESS -d 169.254.0.0/16 -j DROP',
+      );
+      expect(
+        egressRules[egressRules.length - 1],
+        'expected the terminal accept to be the last rule',
+      ).toBe('-A N8N-SB-BR-EGRESS -j ACCEPT');
     } finally {
       await deleteSandbox(id);
     }
