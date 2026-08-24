@@ -77,6 +77,7 @@ OUT_DIR="$(realpath "$OUT_DIR")"
 SNAPSHOT_MEM="${OUT_DIR}/snapshot_mem"
 SNAPSHOT_STATE="${OUT_DIR}/snapshot_state"
 BOOT_PARAMS="${OUT_DIR}/boot.json"
+BOOT_PARAMS_TMP="${BOOT_PARAMS}.tmp"
 
 # Sends a PUT request to the Firecracker API socket in the jail. Firecracker uses
 # REST over a Unix socket for machine configuration and lifecycle actions.
@@ -121,6 +122,7 @@ cleanup() {
 	fi
 	ip netns delete "$NETNS" >/dev/null 2>&1
 	rm -rf "${JAILER_BASE_DIR}/firecracker/${VM_ID}" >/dev/null 2>&1
+	rm -f "$BOOT_PARAMS_TMP" >/dev/null 2>&1
 	exit "$exit_code"
 }
 trap cleanup EXIT
@@ -166,7 +168,7 @@ if [[ ! -S "${JAIL_ROOT}/firecracker.socket" ]]; then
 fi
 
 mkdir -p "$OUT_DIR"
-rm -f "$SNAPSHOT_MEM" "$SNAPSHOT_STATE" "$BOOT_PARAMS"
+rm -f "$SNAPSHOT_MEM" "$SNAPSHOT_STATE" "$BOOT_PARAMS" "$BOOT_PARAMS_TMP"
 touch "$SNAPSHOT_MEM" "$SNAPSHOT_STATE"
 # Jailer runs Firecracker as uid/gid 1000; virtio block needs RW on rootfs.
 chown 1000:1000 "$KERNEL" "$ROOTFS" "$SNAPSHOT_MEM" "$SNAPSHOT_STATE"
@@ -207,8 +209,13 @@ chmod 0644 "$SNAPSHOT_MEM" "$SNAPSHOT_STATE"
 # build. The runner replays these values verbatim when it has to cold boot a
 # sandbox whose VM died: memory, vCPUs and the kernel command line are chosen
 # here and exist nowhere in the runner's own configuration.
+#
+# Staged in a temporary file and renamed into place: the runner treats the
+# presence of boot.json as proof the snapshot set is complete and skips
+# rebuilding, so a half-written sidecar left behind by an interrupted run would
+# fail admission on every subsequent startup.
 echo "==> Recording boot parameters at ${BOOT_PARAMS}..."
-cat >"$BOOT_PARAMS" <<EOF
+cat >"$BOOT_PARAMS_TMP" <<EOF
 {
   "schema_version": 1,
   "vcpu_count": ${VCPUS},
@@ -223,6 +230,7 @@ cat >"$BOOT_PARAMS" <<EOF
   "created_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 }
 EOF
-chmod 0644 "$BOOT_PARAMS"
+chmod 0644 "$BOOT_PARAMS_TMP"
+mv "$BOOT_PARAMS_TMP" "$BOOT_PARAMS"
 
 echo "==> Firecracker snapshot created at ${OUT_DIR}"

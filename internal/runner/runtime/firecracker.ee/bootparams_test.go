@@ -251,6 +251,92 @@ func TestEnsureGoldenSnapshotRebuildsWhenOnlyBootParamsMissing(t *testing.T) {
 	}
 }
 
+// create-golden-snapshot.sh defaults to the same network settings as the runner,
+// so a runner configured off those defaults has to tell the script what it is
+// configured for. Otherwise the snapshot records the defaults, matchesConfig
+// rejects it, and a runner that auto-creates its own snapshot never gets healthy.
+func TestCreateSnapshotCommandCarriesRunnerNetworkSettings(t *testing.T) {
+	cfg := testConfig()
+	cfg.CreateSnapshotScript = "/srv/firecracker/scripts/create-golden-snapshot.sh"
+	cfg.DaemonBin = "/srv/firecracker/bin/sandbox-daemon"
+	cfg.GuestIP = "10.7.0.10"
+	cfg.HostTapIPCIDR = "10.7.0.1/24"
+	cfg.HostTapDeviceName = "fc-tap-9"
+	cfg.DaemonPort = 9099
+
+	cmd := createSnapshotCommand(cfg, "/srv/firecracker/snapshots", "/srv/firecracker/template/vmlinux", "/srv/firecracker/template/rootfs.ext4")
+	for _, want := range []string{
+		"GUEST_IP='10.7.0.10'",
+		"HOST_TAP_IP_CIDR='10.7.0.1/24'",
+		"HOST_TAP_DEVICE_NAME='fc-tap-9'",
+		"DAEMON_PORT='9099'",
+		"--daemon-bin '/srv/firecracker/bin/sandbox-daemon'",
+		"--out '/srv/firecracker/snapshots'",
+	} {
+		if !strings.Contains(cmd, want) {
+			t.Fatalf("createSnapshotCommand() = %q, want it to contain %q", cmd, want)
+		}
+	}
+}
+
+// Regeneration only replaces snapshot_mem/snapshot_state in the out directory.
+// A configured path that is a copy of an older snapshot rather than a symlink to
+// the generated file survives it, so the runner would restore that older
+// snapshot while the fresh boot.json describes the new one.
+func TestEnsureGoldenSnapshotRejectsSnapshotPathsThatSurviveRegeneration(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "create.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	daemon := filepath.Join(dir, "sandbox-daemon")
+	if err := os.WriteFile(daemon, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outDir := filepath.Join(dir, "snapshots")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	rt := testRuntime(1)
+	rt.config.CreateSnapshotScript = script
+	rt.config.DaemonBin = daemon
+	rt.config.SnapshotMemPath = filepath.Join(outDir, "mem")
+	rt.config.SnapshotStatePath = filepath.Join(outDir, "state")
+
+	// Copies of a previous build, so the create script cannot repoint them.
+	for _, path := range []string{rt.config.SnapshotMemPath, rt.config.SnapshotStatePath} {
+		if err := os.WriteFile(path, []byte("stale"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rt.deps.pathExists = func(path string) bool {
+		if path == script || path == daemon {
+			return true
+		}
+		_, err := os.Stat(path)
+		return err == nil
+	}
+	rt.deps.run = func(context.Context, string, ...string) error {
+		for _, name := range []string{"snapshot_mem", "snapshot_state"} {
+			if err := os.WriteFile(filepath.Join(outDir, name), []byte("fresh"), 0o644); err != nil {
+				return err
+			}
+		}
+		writeBootParams(t, bootParamsPath(rt.config), testBootParams(rt.config))
+		return nil
+	}
+
+	err := rt.ensureGoldenSnapshot(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "snapshot_mem") {
+		t.Fatalf("ensureGoldenSnapshot() error = %v, want it to name the generated snapshot_mem", err)
+	}
+	if !strings.Contains(err.Error(), rt.config.SnapshotMemPath) {
+		t.Fatalf("ensureGoldenSnapshot() error = %v, want it to name the configured mem path", err)
+	}
+}
+
 func TestEnsureGoldenSnapshotWithoutScriptNamesTheSidecar(t *testing.T) {
 	rt := testRuntime(1)
 	rt.config.CreateSnapshotScript = ""

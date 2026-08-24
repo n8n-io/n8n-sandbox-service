@@ -148,7 +148,7 @@ func TestEnsureGoldenSnapshotRunsScriptAndSymlinks(t *testing.T) {
 		}
 	}
 	rt.deps.run = func(_ context.Context, name string, args ...string) error {
-		if name != "sudo" || args[0] != script {
+		if name != "sudo" || !strings.Contains(strings.Join(args, " "), script) {
 			t.Fatalf("unexpected command %s %v", name, args)
 		}
 		if err := os.WriteFile(filepath.Join(outDir, "snapshot_mem"), []byte{1}, 0o644); err != nil {
