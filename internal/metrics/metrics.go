@@ -33,6 +33,11 @@ const (
 	OpEvict         = "evict"
 )
 
+// Backend label values used with ObserveGuestDeath. Which runtime a runner is
+// built on is not visible in any other series, and the two detect a dead guest
+// by different means, so a crash rate has to be readable per backend.
+const BackendFirecracker = "firecracker"
+
 // Handler returns the http.Handler that serves the registry's metrics in
 // Prometheus exposition format.
 func Handler(reg *prometheus.Registry) http.Handler {
@@ -190,6 +195,7 @@ type RunnerRecorder struct {
 	containerOps        *prometheus.CounterVec
 	containerOpDuration *prometheus.HistogramVec
 	lifecycleSteps      *prometheus.HistogramVec
+	guestDeaths         *prometheus.CounterVec
 }
 
 // NewRunnerRecorder builds the runner recorder. If enabled is false, the
@@ -229,7 +235,16 @@ func NewRunnerRecorder(enabled bool) *RunnerRecorder {
 		},
 		[]string{"operation", "step"},
 	)
-	reg.MustRegister(containerOps, containerOpDuration, lifecycleSteps)
+	guestDeaths := prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   Namespace,
+			Name:        "guest_deaths_total",
+			Help:        "Sandbox guests that died without the runner stopping them, labeled by backend.",
+			ConstLabels: prometheus.Labels{"role": RoleRunner},
+		},
+		[]string{"backend"},
+	)
+	reg.MustRegister(containerOps, containerOpDuration, lifecycleSteps, guestDeaths)
 	return &RunnerRecorder{
 		reg:                 reg,
 		httpRequests:        httpReq,
@@ -237,6 +252,7 @@ func NewRunnerRecorder(enabled bool) *RunnerRecorder {
 		containerOps:        containerOps,
 		containerOpDuration: containerOpDuration,
 		lifecycleSteps:      lifecycleSteps,
+		guestDeaths:         guestDeaths,
 	}
 }
 
@@ -273,6 +289,16 @@ func (r *RunnerRecorder) ObserveLifecycleStep(operation, step string, dur time.D
 		return
 	}
 	r.lifecycleSteps.WithLabelValues(operation, step).Observe(dur.Seconds())
+}
+
+// ObserveGuestDeath records a sandbox guest that exited without the runner
+// stopping it. There is no result label: a death has no outcome of its own, and
+// what became of the sandbox afterwards is a separate series.
+func (r *RunnerRecorder) ObserveGuestDeath(backend string) {
+	if r == nil || r.reg == nil {
+		return
+	}
+	r.guestDeaths.WithLabelValues(backend).Inc()
 }
 
 // SetActiveContainers registers a scrape-time gauge that calls f to read the
@@ -315,6 +341,15 @@ func (r *RunnerRecorder) ContainerOpCount(operation string, success bool) float6
 		return 0
 	}
 	return testutil.ToFloat64(r.containerOps.WithLabelValues(operation, resultLabel(success)))
+}
+
+// GuestDeathCount returns the counter value for guest deaths on a backend.
+// Intended for tests in other packages.
+func (r *RunnerRecorder) GuestDeathCount(backend string) float64 {
+	if r.reg == nil {
+		return 0
+	}
+	return testutil.ToFloat64(r.guestDeaths.WithLabelValues(backend))
 }
 
 func resultLabel(success bool) string {

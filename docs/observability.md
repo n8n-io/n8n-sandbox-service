@@ -40,6 +40,7 @@ and what the queries below select on.
 | `request` | Runner | A request proxied from the API (exec, files) finishes |
 | `firecracker sandbox created` | Runner | A sandbox is created and its guest daemon answers |
 | `firecracker sandbox woke` | Runner | A stopped sandbox is restored and its guest daemon answers |
+| `firecracker guest died` | Runner | A microVM exited without the runner stopping it |
 
 The runner's `request` event only records `trace_id`, `method`, `path`, and
 `duration_ms`; the API's is the wide one, and the runner's lifecycle events hold
@@ -99,6 +100,22 @@ Steps, in order:
 
 A wake skips the two clone steps, since the sandbox's disk already exists.
 
+### Runner: guest deaths
+
+`firecracker guest died` is emitted once when a microVM's process exits without
+the runner having killed it — a guest kernel panic, a host `SIGKILL` of the VMM,
+or a reboot from inside the guest. It has no `trace_id`: nothing requested it.
+
+| Field | Notes |
+| --- | --- |
+| `sandbox_id`, `vm_id`, `slot` | Identity of the sandbox and the slot it was on |
+| `err` | The wait error of the exited process, or null on a clean exit |
+
+The runner then tears the dead microVM down and hands its slot back, so the
+sandbox goes on to report as stopped with its files intact. It is not restored
+from its snapshot afterwards: the guest kept writing to the rootfs past the point
+that snapshot was taken. A request for it fails, and the sandbox stays deletable.
+
 ## Metrics
 
 The step timings also go to `sandbox_lifecycle_step_duration_seconds{operation,step}`
@@ -107,6 +124,9 @@ single slow operation, the histogram to see whether it is representative.
 
 Related series:
 
+- `sandbox_guest_deaths_total{backend}` — one increment per
+  `firecracker guest died` event, for alerting on a crash rate the events alone
+  would not surface.
 - `sandbox_container_operation_duration_seconds{operation}` — the totals the
   steps add up to.
 - `sandbox_http_request_duration_seconds{role,route,method}` — end-to-end per

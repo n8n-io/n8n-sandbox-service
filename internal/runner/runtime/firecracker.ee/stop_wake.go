@@ -99,13 +99,16 @@ func (r *Runtime) ensureSandboxRunningOnce(ctx context.Context, sandboxID string
 	defer r.endTransition(state)
 
 	r.mu.Lock()
-	running, stopped := state.running, state.stopped
+	running, stopped, mustColdBoot := state.running, state.stopped, state.mustColdBoot
 	r.mu.Unlock()
 	if running {
 		return nil
 	}
 	if !stopped {
 		return runnerruntime.ErrSandboxNotRunning
+	}
+	if mustColdBoot {
+		return errGuestCrashed
 	}
 
 	if err := r.reserveWakeSlot(state); err != nil {
@@ -154,10 +157,15 @@ func (r *Runtime) activateSandboxVM(ctx context.Context, state *sandboxState, t 
 	if err := t.step(stepSetupNetwork, func() error { return r.setupNetwork(ctx, state) }); err != nil {
 		return fmt.Errorf("setup firecracker network: %w", err)
 	}
+	r.mu.Lock()
+	generation := state.generation
+	r.mu.Unlock()
 	var process process
 	err := t.step(stepStartJailer, func() error {
 		var startErr error
-		process, startErr = r.startJailer(ctx, state)
+		process, startErr = r.startJailer(ctx, state, func(waitErr error) {
+			r.handleGuestDeath(state, generation, waitErr)
+		})
 		return startErr
 	})
 	if err != nil {
@@ -190,7 +198,15 @@ func (r *Runtime) activateSandboxVM(ctx context.Context, state *sandboxState, t 
 }
 
 // teardownRunningVM stops proxy, jailer, and jail state without deleting sandbox data.
+//
+// The generation bump has to come before the kill: it is what tells the exit
+// callback of the process being killed here that the runner asked for this exit,
+// so an ordinary stop, delete or wake rollback is not reported as a crash.
 func (r *Runtime) teardownRunningVM(ctx context.Context, state *sandboxState) error {
+	r.mu.Lock()
+	state.generation++
+	r.mu.Unlock()
+
 	var errs []error
 	if state.proxy != nil {
 		if err := state.proxy.Stop(); err != nil {

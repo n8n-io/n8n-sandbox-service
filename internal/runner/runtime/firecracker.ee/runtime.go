@@ -172,6 +172,20 @@ type sandboxState struct {
 	stopped           bool
 	transition        sandboxTransition
 	stoppedAt         time.Time
+
+	// generation counts the microVM incarnations this sandbox has had. It is
+	// bumped in teardownRunningVM, before the process is killed, and captured by
+	// the exit callback of the process being started, so an exit the runner
+	// caused is told apart from a guest that died on its own. One counter covers
+	// stop, delete, wake rollback and shutdown, and it also stops a dying old
+	// incarnation from marking a freshly started one dead.
+	generation uint64
+
+	// mustColdBoot pins a crashed sandbox away from its snapshot. The guest kept
+	// writing to the rootfs after that snapshot was taken, and restoring a memory
+	// image whose cached filesystem metadata no longer matches the disk corrupts
+	// it silently, with nothing to detect the mismatch.
+	mustColdBoot bool
 }
 
 // deleting reports whether the sandbox has been claimed for teardown. r.mu must
@@ -208,7 +222,7 @@ type daemonProxy interface {
 // dependencies groups host operations so tests can replace shell, process, and network calls.
 type dependencies struct {
 	run                 func(ctx context.Context, name string, args ...string) error
-	start               func(ctx context.Context, name string, args ...string) (process, error)
+	start               func(ctx context.Context, onExit func(error), name string, args ...string) (process, error)
 	pathExists          func(path string) bool
 	cloneRootfs         func(ctx context.Context, templatePath, destPath string) error
 	cloneGoldenSnapshot func(ctx context.Context, goldenMemPath, goldenStatePath, dataDir string) error
@@ -603,11 +617,14 @@ func (r *Runtime) setupNetwork(ctx context.Context, state *sandboxState) error {
 }
 
 // startJailer starts Firecracker through jailer inside the sandbox netns.
-func (r *Runtime) startJailer(ctx context.Context, state *sandboxState) (process, error) {
+// onExit fires once the microVM is gone: jailer execs Firecracker in place, so
+// the process started here lives exactly as long as the guest does.
+func (r *Runtime) startJailer(ctx context.Context, state *sandboxState, onExit func(error)) (process, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	return r.deps.start(ctx,
+		onExit,
 		"sudo",
 		r.config.JailerBin,
 		"--id", state.vmID,
@@ -667,8 +684,10 @@ func runCommand(ctx context.Context, name string, args ...string) error {
 	return nil
 }
 
-// startCommand starts a long-running host process without waiting for it.
-func startCommand(ctx context.Context, name string, args ...string) (process, error) {
+// startCommand starts a long-running host process without waiting for it, and
+// reports its exit to onExit. The wait has to happen regardless, to reap the
+// child; handing its error to the caller is what turns it into crash detection.
+func startCommand(ctx context.Context, onExit func(error), name string, args ...string) (process, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -680,7 +699,10 @@ func startCommand(ctx context.Context, name string, args ...string) (process, er
 		return nil, fmt.Errorf("%s failed: %w", commandString(name, args), err)
 	}
 	go func() {
-		_ = cmd.Wait()
+		err := cmd.Wait()
+		if onExit != nil {
+			onExit(err)
+		}
 	}()
 	return &processGroup{process: cmd.Process}, nil
 }

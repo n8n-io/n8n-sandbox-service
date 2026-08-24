@@ -49,7 +49,9 @@ func testRunnerConfig(capacity int32) *config.Config {
 
 func stubCreateDeps(rt *Runtime) {
 	rt.deps.run = func(context.Context, string, ...string) error { return nil }
-	rt.deps.start = func(context.Context, string, ...string) (process, error) { return &fakeProcess{}, nil }
+	rt.deps.start = func(context.Context, func(error), string, ...string) (process, error) {
+		return &fakeProcess{}, nil
+	}
 	rt.deps.pathExists = func(string) bool { return true }
 	rt.deps.cloneRootfs = func(context.Context, string, string) error { return nil }
 	rt.deps.cloneGoldenSnapshot = func(_ context.Context, _, _, dataDir string) error {
@@ -163,7 +165,7 @@ func TestRuntimeCreateSandboxStartsFirecrackerAndProxy(t *testing.T) {
 		commands = append(commands, recordedCommand{name: name, args: args})
 		return nil
 	}
-	rt.deps.start = func(_ context.Context, name string, args ...string) (process, error) {
+	rt.deps.start = func(_ context.Context, _ func(error), name string, args ...string) (process, error) {
 		started = append(started, recordedCommand{name: name, args: args})
 		return proc, nil
 	}
@@ -294,7 +296,7 @@ func TestRuntimeDeleteHoldsSlotUntilCleanupCompletes(t *testing.T) {
 		}
 		return nil
 	}
-	rt.deps.start = func(context.Context, string, ...string) (process, error) { return proc, nil }
+	rt.deps.start = func(context.Context, func(error), string, ...string) (process, error) { return proc, nil }
 	rt.deps.pathExists = func(string) bool { return true }
 	rt.deps.cloneRootfs = func(context.Context, string, string) error { return nil }
 	rt.deps.cloneGoldenSnapshot = func(context.Context, string, string, string) error { return nil }
@@ -342,7 +344,7 @@ func TestRuntimeDeleteSandboxWaitsForCreate(t *testing.T) {
 
 	proc := &fakeProcess{}
 	proxy := &fakeProxy{}
-	rt.deps.start = func(context.Context, string, ...string) (process, error) { return proc, nil }
+	rt.deps.start = func(context.Context, func(error), string, ...string) (process, error) { return proc, nil }
 	rt.deps.newProxy = func(context.Context, string, string, string) (daemonProxy, error) { return proxy, nil }
 
 	createReachedSnapshot := make(chan struct{})
@@ -442,7 +444,7 @@ func TestRuntimeCreateSandboxCleansUpOnFailure(t *testing.T) {
 		runCount++
 		return nil
 	}
-	rt.deps.start = func(context.Context, string, ...string) (process, error) { return proc, nil }
+	rt.deps.start = func(context.Context, func(error), string, ...string) (process, error) { return proc, nil }
 	rt.deps.pathExists = func(string) bool { return true }
 	rt.deps.cloneRootfs = func(context.Context, string, string) error { return nil }
 	rt.deps.cloneGoldenSnapshot = func(context.Context, string, string, string) error { return nil }
@@ -489,7 +491,7 @@ func TestProbeDaemonRejectsUnhealthyStatus(t *testing.T) {
 }
 
 func TestStartCommandRunsInOwnProcessGroup(t *testing.T) {
-	proc, err := startCommand(context.Background(), "sh", "-c", "sleep 10")
+	proc, err := startCommand(context.Background(), nil, "sh", "-c", "sleep 10")
 	if err != nil {
 		t.Fatalf("startCommand() failed: %v", err)
 	}

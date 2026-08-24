@@ -194,6 +194,39 @@ is set, and otherwise fails naming the script to re-run. Bump `schema_version`
 when the layout changes; the runner rejects versions it does not know rather
 than guessing.
 
+## Guest death
+
+A microVM can die on its own: the guest daemon runs as PID 1 with `panic=1
+reboot=k` in the boot args, so killing it panics the kernel, which resets the CPU
+and exits the VMM. A host `SIGKILL` of the VMM and a `reboot` from inside the
+guest end the same way. Because jailer execs Firecracker in place, the process
+the runner starts lives exactly as long as the guest, so waiting on it is the
+detection: `startCommand` reports the exit and `handleGuestDeath` reacts.
+
+Telling that apart from the runner's own kills is what `sandboxState.generation`
+is for. `teardownRunningVM` bumps it before killing the process, and each exit
+callback carries the generation of the microVM it was registered for, so a stop,
+delete, wake rollback or shutdown is not read as a crash — and an old
+incarnation's exit arriving late cannot mark a freshly woken one dead. The
+handler takes the sandbox's transition claim like any other lifecycle operation,
+so a stop already in flight finishes first and then invalidates it.
+
+A dead guest is torn down immediately and **hands its slot back**, which is what
+bounds the damage: a crashed sandbox costs disk and nothing else, so a client
+retrying cannot accumulate slots. What is left behind is what an idle stop leaves
+behind, minus a usable snapshot — stopped, no slot, files intact — so the
+existing paths need no special case: `StopSandbox` is idempotent instead of
+looping on a dead API socket, the idle sweeper can delete it, and `DaemonURL`
+reports it not running.
+
+It is **not** restored from its snapshot afterwards. The guest kept writing to
+the rootfs after that snapshot was taken, and restoring a memory image whose
+cached filesystem metadata no longer matches the disk corrupts it silently —
+nothing detects the mismatch. So the sandbox is pinned (`mustColdBoot`) and
+`EnsureSandboxRunning` refuses it. Bringing it back needs a boot of its existing
+rootfs, which this runtime does not do yet; until then a request for a crashed
+sandbox fails and the sandbox stays deletable.
+
 ## Current Limitations
 
 - Slots are allocated in memory and are not pre-created or persisted.

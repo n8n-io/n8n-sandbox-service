@@ -123,7 +123,7 @@ func TestRuntimeDeleteSandboxWaitsForWake(t *testing.T) {
 
 	proc := &fakeProcess{}
 	proxy := &fakeProxy{}
-	rt.deps.start = func(context.Context, string, ...string) (process, error) { return proc, nil }
+	rt.deps.start = func(context.Context, func(error), string, ...string) (process, error) { return proc, nil }
 	rt.deps.newProxy = func(context.Context, string, string, string) (daemonProxy, error) { return proxy, nil }
 
 	wakeReachedSnapshot := make(chan struct{})
@@ -205,7 +205,7 @@ func TestRuntimeShutdownSkipsSandboxClaimedForDelete(t *testing.T) {
 
 	proc := &fakeProcess{}
 	proxy := &fakeProxy{}
-	rt.deps.start = func(context.Context, string, ...string) (process, error) { return proc, nil }
+	rt.deps.start = func(context.Context, func(error), string, ...string) (process, error) { return proc, nil }
 	rt.deps.newProxy = func(context.Context, string, string, string) (daemonProxy, error) { return proxy, nil }
 
 	const sandboxID = "sandbox-id-123456"
@@ -234,7 +234,7 @@ func TestRuntimeDeleteSandboxCompletesAfterCallerContextCanceled(t *testing.T) {
 
 	proc := &fakeProcess{}
 	proxy := &fakeProxy{}
-	rt.deps.start = func(context.Context, string, ...string) (process, error) { return proc, nil }
+	rt.deps.start = func(context.Context, func(error), string, ...string) (process, error) { return proc, nil }
 	rt.deps.newProxy = func(context.Context, string, string, string) (daemonProxy, error) { return proxy, nil }
 
 	const sandboxID = "sandbox-id-123456"
