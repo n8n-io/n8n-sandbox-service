@@ -231,6 +231,11 @@ cat >"$BOOT_PARAMS_TMP" <<EOF
 }
 EOF
 chmod 0644 "$BOOT_PARAMS_TMP"
+# The snapshot files and the staged sidecar have to reach disk before the rename
+# publishes them, and the rename itself has to reach disk after it: a rename left
+# in the page cache is lost by an unclean host shutdown, which would leave mem
+# and state without the boot.json the runner needs to cold boot.
 sync
 mv "$BOOT_PARAMS_TMP" "$BOOT_PARAMS"
+sync
 echo "==> Firecracker snapshot created at ${OUT_DIR}"
