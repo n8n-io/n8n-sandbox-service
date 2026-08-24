@@ -190,6 +190,31 @@ export async function execWithTransientRetry(
   throw new Error(`exec did not recover within ${deadlineMs}ms: ${String(lastErr)}`);
 }
 
+/**
+ * Kills a sandbox's guest from the inside, with no host access.
+ *
+ * `kill -9 1` does not work and fails silently: the kernel drops any signal that
+ * init has installed no handler for, and SIGKILL can never be handled, so the
+ * signal is discarded and the killer still exits 0. SIGTERM is the opposite —
+ * the daemon calls `signal.Notify` for it, so it is delivered, the daemon shuts
+ * down and returns from `main`, and a PID 1 that exits panics the kernel. The
+ * golden boot args carry `panic=1 reboot=k`, so the panic resets the CPU about a
+ * second later and the VM is gone. Signalling PID 1 is permitted because the
+ * daemon drops to uid 1000 at startup and runs execs as that same user.
+ *
+ * On Firecracker the VMM process exits, which is what the runner detects. On
+ * Docker the container exits and its restart policy brings it back.
+ */
+export async function crashGuest(id: string): Promise<void> {
+  await ensureTenantAuth();
+  try {
+    await exec(id, 'kill -TERM 1');
+  } catch {
+    // Shutdown is graceful, so this call normally returns before the guest goes
+    // down — but a dropped connection is the requested outcome, not a failure.
+  }
+}
+
 export async function uploadFile(
   id: string,
   path: string,
