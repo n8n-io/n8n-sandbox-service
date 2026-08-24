@@ -137,17 +137,17 @@ func TestRunnerRecorderLifecycleSteps(t *testing.T) {
 func TestRunnerRecorderGuestDeaths(t *testing.T) {
 	r := NewRunnerRecorder(true)
 
-	r.ObserveGuestDeath(BackendFirecracker)
-	r.ObserveGuestDeath(BackendFirecracker)
+	r.ObserveGuestDeath()
+	r.ObserveGuestDeath()
 
-	if got := r.GuestDeathCount(BackendFirecracker); got != 2 {
-		t.Errorf("guest_deaths_total{firecracker} = %v, want 2", got)
+	if got := r.GuestDeathCount(); got != 2 {
+		t.Errorf("guest_deaths_total = %v, want 2", got)
 	}
 
 	body := scrape(t, r.Registry())
 	for _, want := range []string{
 		"sandbox_guest_deaths_total",
-		`backend="firecracker",role="runner"`,
+		`role="runner"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("scrape body missing %q", want)
@@ -163,7 +163,7 @@ func TestRunnerRecorderDisabled(t *testing.T) {
 	r.ObserveHTTP("/x", http.MethodGet, http.StatusOK, time.Millisecond)
 	r.ObserveContainerOp(OpCreate, true, time.Second)
 	r.ObserveLifecycleStep(OpCreate, "clone_rootfs", time.Millisecond)
-	r.ObserveGuestDeath(BackendFirecracker)
+	r.ObserveGuestDeath()
 	r.SetActiveContainers(func() float64 { return 1 })
 }
 

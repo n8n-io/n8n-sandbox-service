@@ -124,9 +124,8 @@ single slow operation, the histogram to see whether it is representative.
 
 Related series:
 
-- `sandbox_guest_deaths_total{backend}` — one increment per
-  `firecracker guest died` event, for alerting on a crash rate the events alone
-  would not surface.
+- `sandbox_guest_deaths_total` — one increment per `firecracker guest died`
+  event, for alerting on a crash rate the events alone would not surface.
 - `sandbox_container_operation_duration_seconds{operation}` — the totals the
   steps add up to.
 - `sandbox_http_request_duration_seconds{role,route,method}` — end-to-end per

@@ -5,8 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"time"
-
-	"github.com/n8n-io/sandbox-service/internal/metrics"
 )
 
 // errGuestCrashed is what the wake path returns for a sandbox pinned to cold
@@ -58,7 +56,7 @@ func (r *Runtime) handleGuestDeath(died *sandboxState, generation uint64, waitEr
 		"slot", slot,
 		"err", waitErr,
 	)
-	r.metrics.ObserveGuestDeath(metrics.BackendFirecracker)
+	r.metrics.ObserveGuestDeath()
 
 	if err := r.teardownRunningVM(ctx, state); err != nil {
 		// Reported, not returned: the slot has to go back even when host cleanup

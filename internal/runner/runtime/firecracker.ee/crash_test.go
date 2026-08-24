@@ -84,7 +84,7 @@ func TestGuestDeathFreesSlotAndPinsSandboxToColdBoot(t *testing.T) {
 	if !proxy.stopped {
 		t.Fatal("crashed sandbox left its daemon proxy running")
 	}
-	if got := rec.GuestDeathCount(metrics.BackendFirecracker); got != 1 {
+	if got := rec.GuestDeathCount(); got != 1 {
 		t.Fatalf("guest death metric = %v, want 1", got)
 	}
 
@@ -133,7 +133,7 @@ func TestIntentionalStopIsNotReportedAsGuestDeath(t *testing.T) {
 	// that for a crash would pin every idle-stopped sandbox to cold boot.
 	exits.fire(t, 0)
 
-	if got := rec.GuestDeathCount(metrics.BackendFirecracker); got != 0 {
+	if got := rec.GuestDeathCount(); got != 0 {
 		t.Fatalf("guest death metric = %v, want 0 after an intentional stop", got)
 	}
 	if err := rt.EnsureSandboxRunning(context.Background(), sandboxID); err != nil {
@@ -171,14 +171,14 @@ func TestStaleGuestExitDoesNotCrashTheCurrentMicroVM(t *testing.T) {
 	if _, err := rt.DaemonURL(context.Background(), sandboxID); err != nil {
 		t.Fatalf("DaemonURL() after stale exit failed: %v", err)
 	}
-	if got := rec.GuestDeathCount(metrics.BackendFirecracker); got != 0 {
+	if got := rec.GuestDeathCount(); got != 0 {
 		t.Fatalf("guest death metric = %v, want 0 for a stale exit", got)
 	}
 
 	// The incarnation that is actually running still gets detected.
 	exits.fire(t, 1)
 
-	if got := rec.GuestDeathCount(metrics.BackendFirecracker); got != 1 {
+	if got := rec.GuestDeathCount(); got != 1 {
 		t.Fatalf("guest death metric = %v, want 1 after the current microVM died", got)
 	}
 	if err := rt.EnsureSandboxRunning(context.Background(), sandboxID); !errors.Is(err, errGuestCrashed) {
