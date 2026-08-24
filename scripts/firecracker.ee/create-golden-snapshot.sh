@@ -231,6 +231,6 @@ cat >"$BOOT_PARAMS_TMP" <<EOF
 }
 EOF
 chmod 0644 "$BOOT_PARAMS_TMP"
+sync
 mv "$BOOT_PARAMS_TMP" "$BOOT_PARAMS"
-
 echo "==> Firecracker snapshot created at ${OUT_DIR}"
