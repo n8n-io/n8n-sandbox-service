@@ -14,6 +14,7 @@ import (
 
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
+	fcnetwork "github.com/n8n-io/sandbox-service/internal/runner/runtime/firecracker.ee/network"
 )
 
 // stoppedSnapshotHeadroomBytes is extra free-space reserved on top of the
@@ -231,19 +232,28 @@ func (r *Runtime) activateSandboxVM(ctx context.Context, state *sandboxState, t 
 	if err := t.step(stepWaitSocket, func() error { return r.waitForSocket(ctx, state.socketPath) }); err != nil {
 		return fmt.Errorf("wait for firecracker socket: %w", err)
 	}
+	// Pinned before the request that would earn it, not after, because that request
+	// resumes the guest as it restores: one call both loads the snapshot and lets the
+	// guest start writing to a rootfs the snapshot no longer describes. A load that
+	// resumes the guest and then fails to report it — a deadline that expires while
+	// the response is read, a dropped connection — would otherwise roll back with the
+	// pin unset, and the next wake would restore that same snapshot onto the changed
+	// rootfs and corrupt it silently, which is the one outcome nothing downstream can
+	// detect. So the ambiguous case is resolved as if the guest ran.
+	//
+	// The cost is a load that failed without resuming anything being pinned too,
+	// which cold-boot recovery turns into a boot of the sandbox's own rootfs instead
+	// of a restore. Pinning here rather than earlier is what keeps that cost small:
+	// every step before this one fails unambiguously, with no guest having run, so
+	// those failures still leave the sandbox wakeable.
+	r.mu.Lock()
+	state.mustColdBoot = true
+	r.mu.Unlock()
 	if err := t.step(stepLoadSnapshot, func() error {
 		return r.deps.loadSnapshot(ctx, state.socketPath, r.config)
 	}); err != nil {
 		return fmt.Errorf("load firecracker snapshot: %w", err)
 	}
-	// The restore resumes the guest, so from here on it writes to a rootfs the
-	// snapshot it came from no longer describes. Pinning at the restore rather
-	// than when a guest death is detected is what makes the pin reliable: it holds
-	// however the microVM ends, including for the deaths that arrive too late to
-	// be told apart from an exit the runner asked for.
-	r.mu.Lock()
-	state.mustColdBoot = true
-	r.mu.Unlock()
 	guestAddr := net.JoinHostPort(r.config.GuestIP, fmt.Sprintf("%d", r.config.DaemonPort))
 	var proxy daemonProxy
 	err = t.step(stepStartProxy, func() error {
@@ -363,6 +373,7 @@ func (r *Runtime) reserveWakeSlot(state *sandboxState) error {
 	}
 	state.slot = slot
 	state.netnsName = fmt.Sprintf("fc-sb-%d", slot)
+	state.hostVeth = fcnetwork.HostVethName(slot)
 	state.socketPath = filepath.Join(r.config.JailerBaseDir, "firecracker", state.vmID, "root", "firecracker.socket")
 	state.daemonURL = fmt.Sprintf("http://%s", net.JoinHostPort(r.config.ProxyListenIP, fmt.Sprintf("%d", r.config.ProxyPortStart+slot)))
 	return nil

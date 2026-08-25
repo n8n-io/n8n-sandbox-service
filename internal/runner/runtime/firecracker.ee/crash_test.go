@@ -358,6 +358,43 @@ func TestWakeFailureAfterRestorePinsSandboxToColdBoot(t *testing.T) {
 	}
 }
 
+// The ambiguous case, and the reason the pin is set before the restore is asked for
+// rather than after it reports success: one request both loads the snapshot and
+// resumes the guest, so a load that fails may still have let the guest write to the
+// rootfs. Restoring the same snapshot again would corrupt it with nothing able to
+// tell.
+func TestWakeFailureAtRestorePinsSandboxToColdBoot(t *testing.T) {
+	rt := testRuntimeT(t, 1)
+	stubCreateDeps(rt)
+
+	const sandboxID = "sandbox-id-123456"
+	if _, err := rt.CreateSandbox(context.Background(), sandboxID, nil); err != nil {
+		t.Fatalf("CreateSandbox() failed: %v", err)
+	}
+	if err := rt.StopSandbox(context.Background(), sandboxID); err != nil {
+		t.Fatalf("StopSandbox() failed: %v", err)
+	}
+
+	rt.deps.loadSnapshot = func(context.Context, string, Config) error {
+		return errors.New("context deadline exceeded awaiting response headers")
+	}
+	if err := rt.EnsureSandboxRunning(context.Background(), sandboxID); err == nil {
+		t.Fatal("EnsureSandboxRunning() succeeded, want the load failure")
+	}
+
+	restores := 0
+	rt.deps.loadSnapshot = func(context.Context, string, Config) error {
+		restores++
+		return nil
+	}
+	if err := rt.EnsureSandboxRunning(context.Background(), sandboxID); !errors.Is(err, errGuestCrashed) {
+		t.Fatalf("EnsureSandboxRunning() error = %v, want errGuestCrashed", err)
+	}
+	if restores != 0 {
+		t.Fatalf("wake after an ambiguous load restored the snapshot %d times", restores)
+	}
+}
+
 // The other side of that invariant: a wake that never got as far as restoring left
 // the snapshot matching the rootfs, so it has to stay wakeable.
 func TestWakeFailureBeforeRestoreLeavesSandboxWakeable(t *testing.T) {

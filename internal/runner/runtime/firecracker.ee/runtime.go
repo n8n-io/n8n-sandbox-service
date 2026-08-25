@@ -160,6 +160,7 @@ type sandboxState struct {
 	slot              int
 	info              *runnerruntime.SandboxInfo
 	netnsName         string
+	hostVeth          string
 	socketPath        string
 	daemonURL         string
 	dataDir           string
@@ -205,9 +206,20 @@ type process interface {
 // processGroup kills Firecracker and any children started in its process group.
 type processGroup struct {
 	process *os.Process
+	// reaped is set once wait has collected the process, after which its pid is no
+	// longer ours to signal.
+	reaped atomic.Bool
 }
 
 func (p *processGroup) Kill() error {
+	// The pid identifies this process group only until it is reaped; the kernel is
+	// then free to hand it to something else, and signalling a whole group by a
+	// recycled id could kill unrelated processes. Crash handling reaches here after
+	// the exit it reacts to, having waited for the sandbox's claim, so this is the
+	// ordinary case rather than a corner of one.
+	if p.reaped.Load() {
+		return os.ErrProcessDone
+	}
 	if err := syscall.Kill(-p.process.Pid, syscall.SIGKILL); err != nil {
 		if err == syscall.ESRCH {
 			return os.ErrProcessDone
@@ -500,6 +512,7 @@ func (r *Runtime) reserveSandbox(sandboxID string) (*sandboxState, error) {
 		vmID:              vmID,
 		slot:              slot,
 		netnsName:         netnsName,
+		hostVeth:          fcnetwork.HostVethName(slot),
 		socketPath:        socketPath,
 		daemonURL:         daemonURL,
 		dataDir:           dataDir,
@@ -529,19 +542,24 @@ func (r *Runtime) deleteSandbox(ctx context.Context, state *sandboxState) error 
 	}
 	// Read under the lock, once, and used for the rest of this call: on the Shutdown
 	// path this delete may not hold the sandbox's claim, so another teardown can be
-	// clearing the handles and releasing the slot while it runs.
-	hasVM := state.process != nil || state.proxy != nil
+	// releasing the slot while it runs.
 	slot := state.slot
 	r.mu.Unlock()
 
 	slog.Debug("firecracker sandbox cleanup started", "sandbox_id", state.id, "vm_id", state.vmID, "slot", slot)
 
 	var errs []error
-	if hasVM {
-		if err := r.teardownRunningVM(ctx, state); err != nil {
-			slog.Warn("firecracker host cleanup failed", "sandbox_id", state.id, "err", err)
-			errs = append(errs, err)
-		}
+	// Run unconditionally, including for a sandbox whose handles are already gone. A
+	// stop or crash whose host cleanup failed still marks the sandbox stopped and
+	// drops those handles, so skipping cleanup here on the strength of them would
+	// leave the jail's bind mounts in place and the data dir removed below out from
+	// under them — the snapshot files stay allocated, unreclaimable, and startup
+	// reconcile cannot free them either, because its rm -rf fails on a directory
+	// holding an active mount. Repeating cleanup is safe: every step is guarded, and
+	// what it removes is keyed to this vmID.
+	if err := r.teardownRunningVM(ctx, state); err != nil {
+		slog.Warn("firecracker host cleanup failed", "sandbox_id", state.id, "err", err)
+		errs = append(errs, err)
 	}
 	if err := removeSandboxDataDir(ctx, state.dataDir); err != nil {
 		slog.Warn("firecracker sandbox data cleanup failed", "sandbox_id", state.id, "data_dir", state.dataDir, "err", err)
@@ -694,6 +712,12 @@ func (r *Runtime) waitForSocket(ctx context.Context, socketPath string) error {
 
 // cleanupHost removes the bind mounts, network namespace, and jail directory
 // created for a sandbox. It is intentionally best-effort at the shell level.
+//
+// Every name it needs is one the slot reservation wrote and no teardown touches,
+// which is why hostVeth is carried on the state rather than derived from the slot
+// here: two teardowns can run this concurrently — a guest death racing shutdown —
+// and the one that arrives second would otherwise read a slot the first has already
+// released and set to -1, naming a device that does not exist.
 func (r *Runtime) cleanupHost(ctx context.Context, state *sandboxState) error {
 	jailDir := filepath.Join(r.config.JailerBaseDir, "firecracker", state.vmID)
 	rootfsTarget := filepath.Join(jailDir, "root", strings.TrimPrefix(r.config.SnapshotVirtioBlockPath, "/"))
@@ -705,7 +729,7 @@ umount -l %[3]s 2>/dev/null || true
 %[4]s
 rm -rf %[1]s
 `, shellquote.Quote(jailDir), shellquote.Quote(state.netnsName), shellquote.Quote(rootfsTarget),
-		strings.TrimSpace(fcnetwork.CleanupScript(state.netnsName, fcnetwork.HostVethName(state.slot))))
+		strings.TrimSpace(fcnetwork.CleanupScript(state.netnsName, state.hostVeth)))
 	return r.deps.run(ctx, "sudo", "/bin/sh", "-c", script)
 }
 
@@ -734,13 +758,17 @@ func startCommand(ctx context.Context, onExit func(error), name string, args ...
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("%s failed: %w", commandString(name, args), err)
 	}
+	group := &processGroup{process: cmd.Process}
 	go func() {
 		err := cmd.Wait()
+		// Marked before the exit is reported, so the crash handling that follows
+		// cannot signal a pid the kernel has already taken back.
+		group.reaped.Store(true)
 		if onExit != nil {
 			onExit(err)
 		}
 	}()
-	return &processGroup{process: cmd.Process}, nil
+	return group, nil
 }
 
 func pathExists(path string) bool {

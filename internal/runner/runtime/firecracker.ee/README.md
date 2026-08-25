@@ -98,8 +98,18 @@ it removes last — an expired context, a `sudo` that never ran — leaves it un
 whether the netns is really gone. Delete can afford that caution where stop cannot,
 because a delete retry does arrive: the API keeps the sandbox row when the runner
 reports a delete failure, and the idle sweeper retries every sweep interval. The
-retry skips the teardown it no longer has handles for, removes the data directory,
-and releases the slot. The admission canary is built on this — a canary whose
+retry repeats host cleanup, removes the data directory, and releases the slot.
+
+Host cleanup on delete runs whether or not the sandbox still has process and proxy
+handles, which matters because a stop or crash whose cleanup failed marks the sandbox
+stopped and drops those handles anyway. Skipping cleanup on the strength of them
+would leave the jail's bind mounts in place while the delete removes the data
+directory beneath them, so the snapshot files would stay allocated with no way left
+to reclaim them: startup reconcile cannot help either, since its `rm -rf` fails on a
+directory holding an active mount. Repeating cleanup is safe because every step is
+guarded and what it removes is keyed to the `vmID`.
+
+The admission canary is built on this — a canary whose
 cleanup fails keeps its slot and fails admission, so a capacity-1 runner is never
 marked healthy while one of its slots is unaccounted for.
 
@@ -297,14 +307,24 @@ nothing detects the mismatch. So `EnsureSandboxRunning` refuses a pinned
 which this runtime does not do yet; until then a request for a crashed sandbox
 fails and the sandbox stays deletable.
 
-The pin is set by the restore, not by the death: `snapshot/load` resumes the guest,
-so the mismatch begins the moment a wake or create succeeds at that step, and only
-the snapshot `StopSandbox` takes of the paused guest clears it. Tying it to the
-restore is what makes it hold for a guest that dies mid-wake, where the death
-cannot be told apart from the rollback's own kill. It also covers a wake that
-failed after the restore for a reason of its own: that guest ran too, so its
-snapshot is just as stale. Such a sandbox is refused until cold boot exists, which
-is the deliberate trade — a loud failure instead of a silently corrupted disk.
+The pin is set by the restore, not by the death, and specifically *before* the
+restore is asked for rather than after it reports success. `snapshot/load` carries
+`resume_vm: true`, so one request both loads the snapshot and lets the guest start
+writing to a rootfs that snapshot no longer describes. Its failures are therefore
+ambiguous — a deadline that expires while the response is read leaves no way to know
+whether the guest ran — and the ambiguous case is resolved as if it did. Only the
+snapshot `StopSandbox` takes of the paused guest clears the pin.
+
+Tying it to the restore is what makes it hold for a guest that dies mid-wake, where
+the death cannot be told apart from the rollback's own kill, and for a wake that
+failed after the restore for a reason of its own: that guest ran too, so its snapshot
+is just as stale. The cost of pinning first is that a load which failed without
+resuming anything is pinned as well, which costs a cold boot instead of a restore.
+Placing the pin immediately before the request rather than earlier is what keeps that
+cost small — every step ahead of it fails unambiguously with no guest having run, so
+those failures leave the sandbox wakeable. Until cold boot exists a pinned sandbox is
+refused, which is the deliberate trade: a loud failure instead of a silently
+corrupted disk.
 
 ## Current Limitations
 

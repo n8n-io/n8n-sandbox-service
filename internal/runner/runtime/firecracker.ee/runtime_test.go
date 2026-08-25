@@ -518,6 +518,66 @@ func TestRuntimeCreateSandboxReleasesSlotWhenCleanupFails(t *testing.T) {
 	}
 }
 
+// A stop whose host cleanup failed still marks the sandbox stopped and drops its
+// process and proxy handles. The delete that follows has to clean up regardless, or
+// the jail's bind mounts go on pinning the snapshot files the delete removes, with
+// nothing left able to free them.
+func TestRuntimeDeleteRunsHostCleanupForAStoppedSandbox(t *testing.T) {
+	rt := testRuntimeT(t, 1)
+	stubCreateDeps(rt)
+
+	const sandboxID = "sandbox-id-123456"
+	if _, err := rt.CreateSandbox(context.Background(), sandboxID, nil); err != nil {
+		t.Fatalf("CreateSandbox() failed: %v", err)
+	}
+	if err := rt.StopSandbox(context.Background(), sandboxID); err != nil {
+		t.Fatalf("StopSandbox() failed: %v", err)
+	}
+
+	unmounts := 0
+	rt.deps.run = func(_ context.Context, _ string, args ...string) error {
+		if len(args) > 0 && strings.Contains(args[len(args)-1], "umount") {
+			unmounts++
+		}
+		return nil
+	}
+	if err := rt.DeleteSandbox(context.Background(), sandboxID); err != nil {
+		t.Fatalf("DeleteSandbox() failed: %v", err)
+	}
+	if unmounts == 0 {
+		t.Error("delete skipped host cleanup, so the jail mounts still pin the deleted snapshot files")
+	}
+}
+
+// Once a process has been reaped its pid is the kernel's to reuse, and signalling a
+// whole process group by a recycled id would kill unrelated processes. A live group
+// stands in for that here: if Kill signalled despite the reap, it would die.
+func TestProcessGroupKillSkipsAReapedPid(t *testing.T) {
+	exited := make(chan struct{})
+	proc, err := startCommand(context.Background(), func(error) { close(exited) }, "sh", "-c", "sleep 30")
+	if err != nil {
+		t.Fatalf("startCommand() failed: %v", err)
+	}
+	group, ok := proc.(*processGroup)
+	if !ok {
+		t.Fatalf("startCommand() returned %T, want *processGroup", proc)
+	}
+	t.Cleanup(func() {
+		group.reaped.Store(false)
+		_ = group.Kill()
+	})
+
+	group.reaped.Store(true)
+	if err := group.Kill(); !errors.Is(err, os.ErrProcessDone) {
+		t.Errorf("Kill() = %v, want os.ErrProcessDone", err)
+	}
+	select {
+	case <-exited:
+		t.Error("Kill signalled a process group it had already recorded as reaped")
+	case <-time.After(500 * time.Millisecond):
+	}
+}
+
 func TestProbeDaemonRejectsUnhealthyStatus(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.NotFound(w, nil)
