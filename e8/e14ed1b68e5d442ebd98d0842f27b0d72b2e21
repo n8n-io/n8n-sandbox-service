@@ -1,0 +1,39 @@
+e2e/tests/helpers.ts
+  s_0eabae2e1496b8::t_103ea16d9da06f 196-197
+  s_0eabae2e1496b8::t_2138daef0fc00a 193-195,198-207
+internal/runner/runtime/docker/README.md
+  s_0eabae2e1496b8::t_d0c1537dda7e82 27-30
+e2e/tests/network-isolation.spec.ts
+  s_0eabae2e1496b8::t_103ea16d9da06f 6,13
+e2e/tests/sandbox-capabilities.spec.ts
+  s_0eabae2e1496b8::t_ac337907a77748 3-10,13-15,17-18,24,33-36,43-48,51-56,58,61-62
+  s_b09a4ed3b9b048::t_49fad42bf8b58e 77-82,85-89
+docs/security-model.md
+  s_0eabae2e1496b8::t_d0c1537dda7e82 102-114
+internal/runner/runtime/docker/docker_client.go
+  s_0eabae2e1496b8::t_d0c1537dda7e82 150-152
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "e8e14ed1b68e5d442ebd98d0842f27b0d72b2e21",
+  "prompts": {},
+  "sessions": {
+    "s_0eabae2e1496b8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "875955f6-25b4-4bce-a497-950df056ca84",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    },
+    "s_b09a4ed3b9b048": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5d7883f9-b262-4c9f-977c-586cfbb58f25",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
