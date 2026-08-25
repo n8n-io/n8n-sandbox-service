@@ -347,7 +347,19 @@ func (r *Runtime) CreateSandbox(ctx context.Context, sandboxID string, _ *runner
 	cleanupOnError := func() {
 		cleanupCtx, cancelCleanup := withCleanupBudget(ctx)
 		defer cancelCleanup()
-		_ = r.deleteSandbox(cleanupCtx, state)
+		if err := r.deleteSandbox(cleanupCtx, state); err != nil {
+			// A delete that fails normally keeps its slot because a retry arrives to
+			// reclaim it, but no retry can arrive here: this create is about to return
+			// an error, so the API stores no record for the sandbox and neither an
+			// explicit delete nor the idle sweeper can name it again. Holding the slot
+			// would strand runner capacity until the process restarts. So it goes back
+			// on the same terms a failed stop hands its slot back: the next sandbox
+			// here recreates the netns, the rest of the leftovers are keyed to this
+			// vmID, and startup reconcile removes them.
+			slog.Warn("firecracker create cleanup failed, releasing slot anyway",
+				"sandbox_id", sandboxID, "vm_id", state.vmID, "slot", state.slot, "err", err)
+			r.untrackSandbox(state)
+		}
 	}
 
 	timer := newStepTimer(metrics.OpCreate, r.metrics)
@@ -539,15 +551,24 @@ func (r *Runtime) deleteSandbox(ctx context.Context, state *sandboxState) error 
 		return err
 	}
 
-	r.mu.Lock()
-	if current, ok := r.sandboxes[state.id]; ok && current == state {
-		delete(r.sandboxes, state.id)
-		if state.slot >= 0 && r.slotOwnedByLocked(state.slot, state.id) {
-			r.releaseSlotLocked(state.slot)
-		}
-	}
-	r.mu.Unlock()
+	r.untrackSandbox(state)
 	return nil
+}
+
+// untrackSandbox drops the sandbox from the runner and hands its slot back. It is
+// a no-op once another state has taken over the id or the slot, so it cannot
+// reclaim capacity a later sandbox is already using.
+func (r *Runtime) untrackSandbox(state *sandboxState) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if current, ok := r.sandboxes[state.id]; !ok || current != state {
+		return
+	}
+	delete(r.sandboxes, state.id)
+	if state.slot >= 0 && r.slotOwnedByLocked(state.slot, state.id) {
+		r.releaseSlotLocked(state.slot)
+	}
 }
 
 // reserveSlotLocked marks the first free Firecracker slot as occupied. r.mu

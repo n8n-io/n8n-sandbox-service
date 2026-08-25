@@ -477,6 +477,47 @@ func TestRuntimeCreateSandboxCleansUpOnFailure(t *testing.T) {
 	}
 }
 
+// A failed delete normally keeps its slot so a delete retry can reclaim it, but a
+// failed create is the one caller with no retry behind it: it returns an error, so
+// the API stores no record and nothing can name the sandbox again. Its slot has to
+// come back here or it is stranded until the runner restarts.
+func TestRuntimeCreateSandboxReleasesSlotWhenCleanupFails(t *testing.T) {
+	rt := testRuntimeT(t, 1)
+	stubCreateDeps(rt)
+
+	// cleanupHost is the only script that removes the jail directory, so a busy
+	// mount under it fails the create's cleanup and nothing else.
+	rt.deps.run = func(_ context.Context, _ string, args ...string) error {
+		if len(args) > 0 && strings.Contains(args[len(args)-1], "rm -rf") {
+			return errors.New("rm: cannot remove jail dir: Device or resource busy")
+		}
+		return nil
+	}
+	rt.deps.probeDaemon = func(context.Context, string) error { return errors.New("daemon down") }
+
+	const sandboxID = "sandbox-id-123456"
+	if _, err := rt.CreateSandbox(context.Background(), sandboxID, nil); err == nil {
+		t.Fatal("expected CreateSandbox() failure")
+	}
+
+	capacity, err := rt.Capacity(context.Background())
+	if err != nil {
+		t.Fatalf("Capacity() failed: %v", err)
+	}
+	if capacity.Used != 0 {
+		t.Fatalf("Capacity().Used = %d, want the slot back even though cleanup failed", capacity.Used)
+	}
+	if _, err := rt.GetSandboxInfo(context.Background(), sandboxID); !errors.Is(err, runnerruntime.ErrSandboxNotFound) {
+		t.Fatalf("GetSandboxInfo() error = %v, want ErrSandboxNotFound", err)
+	}
+	// The id has to be free too, or a retry of the same create is refused forever.
+	if _, err := rt.CreateSandbox(context.Background(), sandboxID, nil); err == nil {
+		t.Fatal("expected CreateSandbox() failure")
+	} else if strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("CreateSandbox() error = %v, want the id to be reusable", err)
+	}
+}
+
 func TestProbeDaemonRejectsUnhealthyStatus(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.NotFound(w, nil)

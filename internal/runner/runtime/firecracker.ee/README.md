@@ -90,6 +90,13 @@ and releases the slot. The admission canary is built on this — a canary whose
 cleanup fails keeps its slot and fails admission, so a capacity-1 runner is never
 marked healthy while one of its slots is unaccounted for.
 
+The cleanup a **failed create** runs is the exception to that: it releases the slot,
+because it is the one delete with nothing behind it. The create returns an error, so
+the API stores no record for the sandbox, and without a record neither an explicit
+delete nor the idle sweeper can ever name it again. Keeping the slot would strand
+runner capacity until the process restarts, so this path follows stop rather than
+delete and hands it back.
+
 Because slot ownership moves like that, create, stop, wake, and delete are
 mutually exclusive per sandbox: each claims the sandbox for the duration of the
 transition and the others wait. Without that, a delete overlapping a create or
