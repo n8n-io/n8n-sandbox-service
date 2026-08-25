@@ -99,15 +99,19 @@ sandbox can be created, so an upgraded runner replacing the rules of an earlier
 version never does so with a container on the bridge. Containers are created
 with IPv6 disabled.
 
-Every Docker-backed sandbox, including privileged local DinD, is created with
-all Linux capabilities dropped and only `CAP_AUDIT_WRITE`, `CAP_CHOWN`,
-`CAP_DAC_OVERRIDE`, `CAP_FOWNER`, `CAP_SETGID`, and `CAP_SETUID` restored. This
-allowlist is sufficient for passwordless `sudo` and common `apt-get` package
-installation, while excluding capabilities for network administration, raw
-sockets, mounts, tracing, device creation, and other privileged operations.
-`CAP_AUDIT_WRITE` avoids audit warnings from successful `sudo` commands.
-`no-new-privileges` is not enabled because it would prevent the supported sudo
-workflow.
+The runner creates every sandbox container with all Linux capabilities dropped.
+It then restores only `CAP_AUDIT_WRITE`, `CAP_CHOWN`, `CAP_DAC_OVERRIDE`,
+`CAP_FOWNER`, `CAP_SETGID`, and `CAP_SETUID`. This allowlist is sufficient for
+passwordless `sudo` and common `apt-get` package installation, while excluding
+capabilities for network administration, raw sockets, mounts, tracing, device
+creation, and other privileged operations. `CAP_AUDIT_WRITE` avoids audit
+warnings from successful `sudo` commands. `no-new-privileges` is not enabled
+because it would prevent the supported sudo workflow.
+
+The allowlist holds in every environment. Sysbox isolation and privileged local
+DinD apply to the runner container, not to the sandbox container. A sandbox
+container is never privileged, because Docker ignores `--cap-drop` for a
+privileged container and the allowlist would then have no effect.
 
 Within a sandbox, the daemon runs as a non-root user, and file operations are
 path-validated to keep them inside the sandbox. The daemon authenticates

@@ -147,6 +147,9 @@ func dockerContainerCreateArgs(sandboxID, containerName, image string, limits *R
 // dockerSandboxCapabilityArgs is the single capability policy for every
 // Docker-backed sandbox. Keep the allowlist minimal while preserving
 // passwordless sudo for common package installation workflows.
+//
+// Never create a sandbox container with --privileged. Docker ignores --cap-drop
+// for a privileged container, so that flag would void this policy silently.
 func dockerSandboxCapabilityArgs() []string {
 	return []string{
 		"--cap-drop", "ALL",

@@ -24,8 +24,10 @@ containers direct access to the host Docker daemon.
   `CAP_CHOWN`, `CAP_DAC_OVERRIDE`, `CAP_FOWNER`, `CAP_SETGID`, and `CAP_SETUID`.
   This keeps passwordless `sudo` usable for common package installation while
   preventing network administration, mounts, tracing, device creation, raw
-  sockets, and other privileged operations. The policy applies to every Docker
-  sandbox in both Sysbox and privileged local DinD environments.
+  sockets, and other privileged operations. Sysbox isolation and privileged
+  local DinD apply to the runner container, so every sandbox container gets the
+  same policy. Never create a sandbox container with `--privileged`: Docker then
+  ignores `--cap-drop` and the allowlist has no effect.
 - Applies Docker-specific network isolation rules through `netrules`.
 - Waits for daemon `/healthz` and a tiny `/executions` round trip before
   returning a sandbox as ready.

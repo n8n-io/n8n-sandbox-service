@@ -190,6 +190,21 @@ export async function execWithTransientRetry(
   throw new Error(`exec did not recover within ${deadlineMs}ms: ${String(lastErr)}`);
 }
 
+/**
+ * Command that adds a second IPv4 address to eth0 through the legacy ioctl,
+ * since iproute2 is absent from the sandbox image. The ':1' label keeps the
+ * address secondary, so the sandbox's own address — and with it the daemon
+ * connection carrying the exec — survives. Needs CAP_NET_ADMIN, hence sudo.
+ */
+export const addAddress = (ip: string) =>
+  `sudo -n python3 -c "import fcntl,socket,struct;` +
+  `s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);` +
+  `fcntl.ioctl(s,0x8916,struct.pack('16sH2s4s16s',b'eth0:1',socket.AF_INET,` +
+  `b'\\x00\\x00',socket.inet_aton('${ip}'),b'\\x00'*16))"`;
+
+/** An unused address in the same /24 as ip. */
+export const siblingOf = (ip: string) => ip.split('.').slice(0, 3).concat('250').join('.');
+
 export async function uploadFile(
   id: string,
   path: string,

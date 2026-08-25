@@ -1,21 +1,27 @@
 import { test, expect } from '@playwright/test';
 import './matchers';
-import { createSandbox, deleteSandbox, exec, execWithTransientRetry } from './helpers';
+import {
+  addAddress,
+  createSandbox,
+  deleteSandbox,
+  exec,
+  execWithTransientRetry,
+  siblingOf,
+} from './helpers';
 import { DOCKER_ONLY } from './tags';
 
-const addAddress = (ip: string) =>
-  `sudo -n python3 -c "import fcntl,socket,struct;` +
-  `s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);` +
-  `fcntl.ioctl(s,0x8916,struct.pack('16sH2s4s16s',b'eth0:1',socket.AF_INET,` +
-  `b'\\x00\\x00',socket.inet_aton('${ip}'),b'\\x00'*16))"`;
+// The bounding set the runner grants: CHOWN, DAC_OVERRIDE, FOWNER, SETGID,
+// SETUID (bits 0, 1, 3, 6, 7) and AUDIT_WRITE (bit 29).
+const ALLOWED_BOUNDING_SET = '00000000200000cb';
 
-const siblingOf = (ip: string) => ip.split('.').slice(0, 3).concat('250').join('.');
+// No effective capabilities, because every sandbox process starts as uid 1000.
+const NO_CAPABILITIES = '0000000000000000';
 
 test.describe('Docker sandbox capability policy', DOCKER_ONLY, () => {
   test('daemon and user processes have only the allowed bounding capabilities', async () => {
     const id = await createSandbox();
     try {
-      const result = await exec(
+      const result = await execWithTransientRetry(
         id,
         `for pid in 1 self; do ` +
           `awk '$1 == "CapEff:" { print $2 }' /proc/$pid/status; ` +
@@ -24,27 +30,36 @@ test.describe('Docker sandbox capability policy', DOCKER_ONLY, () => {
       );
       expect(result).toHaveSucceeded();
       expect(result.stdout.trim().split(/\s+/)).toEqual([
-        '0000000000000000',
-        '00000000200000cb',
-        '0000000000000000',
-        '00000000200000cb',
+        NO_CAPABILITIES,
+        ALLOWED_BOUNDING_SET,
+        NO_CAPABILITIES,
+        ALLOWED_BOUNDING_SET,
       ]);
     } finally {
       await deleteSandbox(id);
     }
   });
 
-  test('passwordless sudo can install a package', async () => {
-    test.setTimeout(180_000);
+  // iputils-ping asks setcap to give /usr/bin/ping CAP_NET_RAW. The allowlist
+  // holds no CAP_SETFCAP, so setcap fails and the package installs a setuid
+  // binary instead. This is the install path the capability policy changed, so
+  // it is the one the suite pins.
+  test('passwordless sudo can install a package that sets file capabilities', async () => {
+    test.setTimeout(240_000);
     const id = await createSandbox();
     try {
-      const result = await exec(
+      const updated = await execWithTransientRetry(id, 'sudo -n apt-get update', {
+        timeoutMs: 60_000,
+      });
+      expect(updated).toHaveSucceeded();
+
+      const installed = await exec(
         id,
-        'sudo -n apt-get update && sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y jq && jq --version',
+        'sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y iputils-ping && ls -l /usr/bin/ping',
         { timeoutMs: 150_000 },
       );
-      expect(result).toHaveSucceeded();
-      expect(result.stdout).toMatch(/jq-\d+/);
+      expect(installed).toHaveSucceeded();
+      expect(installed.stdout, 'expected the setuid fallback for /usr/bin/ping').toMatch(/^-rws/m);
     } finally {
       await deleteSandbox(id);
     }
@@ -59,8 +74,19 @@ test.describe('Docker sandbox capability policy', DOCKER_ONLY, () => {
       expect(ownIP).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
       const extraIP = siblingOf(ownIP);
 
+      // Positive control. Without it the assertion below also passes when
+      // passwordless sudo or python3 fcntl is missing, which hides a
+      // capability regression instead of reporting one.
+      const plumbing = await exec(id, 'sudo -n python3 -c "import fcntl"');
+      expect(plumbing, 'expected sudo -n and python3 fcntl to be available').toHaveSucceeded();
+
       const added = await exec(id, addAddress(extraIP));
       expect(added.exitCode, 'expected address addition to be denied').not.toBe(0);
+      // The errno separates the missing capability from other ioctl failures,
+      // such as ENODEV when the interface is not named eth0.
+      expect(added.stderr, 'expected the denial to come from the missing capability').toMatch(
+        /PermissionError|Operation not permitted/,
+      );
 
       const addresses = await exec(id, 'hostname -I');
       expect(addresses).toHaveSucceeded();

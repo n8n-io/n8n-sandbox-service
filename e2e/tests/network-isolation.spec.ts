@@ -3,12 +3,14 @@ import './matchers';
 import {
   ADMIN_API_KEY,
   BASE_URL,
+  addAddress,
   apiClient,
   createSandbox,
   deleteSandbox,
   docker,
   exec,
   execWithTransientRetry,
+  siblingOf,
 } from './helpers';
 import { DOCKER_ONLY } from './tags';
 import type { SandboxClient } from '@n8n/sandbox-client';
@@ -35,18 +37,6 @@ const resolve = (host: string) =>
 // since iproute2 is absent from the image and the Firecracker guest has no
 // /proc/net/route either — the daemon runs as PID 1, so nothing mounts /proc.
 const gatewayOf = (ip: string) => ip.split('.').slice(0, 3).concat('1').join('.');
-
-const siblingOf = (ip: string) => ip.split('.').slice(0, 3).concat('250').join('.');
-
-// Attempts to add a second IPv4 address to eth0 through the legacy ioctl, since
-// iproute2 is absent from the sandbox image. This needs CAP_NET_ADMIN. The
-// Docker capability policy blocks it; the helper remains a defense-in-depth
-// network-policy test for any runtime where the operation is available.
-const addAddress = (ip: string) =>
-  `sudo -n python3 -c "import fcntl,socket,struct;` +
-  `s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);` +
-  `fcntl.ioctl(s,0x8916,struct.pack('16sH2s4s16s',b'eth0:1',socket.AF_INET,` +
-  `b'\\x00\\x00',socket.inet_aton('${ip}'),b'\\x00'*16))"`;
 
 const tcpConnectFrom = (source: string, ip: string, port: number, timeout: number = 3) =>
   `curl --interface ${source} --connect-timeout ${timeout} -s -o /dev/null http://${ip}:${port}/`;
