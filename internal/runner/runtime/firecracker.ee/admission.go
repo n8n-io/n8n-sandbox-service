@@ -203,11 +203,12 @@ func fileSHA256(path string) (string, error) {
 // boot parameter sidecar counts as part of the snapshot: a runner upgraded onto
 // a host whose snapshot predates it has mem and state but no boot.json, and the
 // three have to describe the same build, so the whole set is rewritten rather
-// than the sidecar reconstructed from current config.
+// than the sidecar reconstructed from current config. A set that is already complete
+// is verified rather than trusted, see verifyGoldenSnapshotSet.
 func (r *Runtime) ensureGoldenSnapshot(ctx context.Context) error {
 	bootPath := bootParamsPath(r.config)
 	if r.deps.pathExists(r.config.SnapshotMemPath) && r.deps.pathExists(r.config.SnapshotStatePath) && r.deps.pathExists(bootPath) {
-		return nil
+		return r.verifyGoldenSnapshotSet()
 	}
 	if strings.TrimSpace(r.config.CreateSnapshotScript) == "" {
 		return fmt.Errorf("golden snapshot incomplete (need %s, %s and %s) and create script is not configured; re-run create-golden-snapshot.sh with --out %s",
@@ -279,8 +280,33 @@ DAEMON_PORT=%s \
 	)
 }
 
+// verifyGoldenSnapshotSet re-checks the snapshot/sidecar linkage of a set that is
+// already complete, which is every ordinary restart. Regeneration is otherwise the
+// only thing that checks it, and that is the moment it is least needed — the runner
+// has just written all three files itself — while the mismatch it catches survives
+// from one run to the next: a configured path aiming outside the output directory
+// keeps serving the snapshot from before the last regeneration while boot.json
+// describes the one after, and admission would certify it on every restart.
+//
+// Limited to hosts where the runner owns snapshot creation and its outputs are still
+// there. Without a create script nothing generated exists to compare against, and a
+// set assembled by hand is the operator's to name, so failing those over a missing
+// comparison target would refuse admission for no reason. Where the script is
+// configured, config validation has already required both configured paths to share
+// a directory, so one outDir covers them.
+func (r *Runtime) verifyGoldenSnapshotSet() error {
+	if strings.TrimSpace(r.config.CreateSnapshotScript) == "" {
+		return nil
+	}
+	outDir := filepath.Dir(r.config.SnapshotMemPath)
+	if !r.deps.pathExists(filepath.Join(outDir, "snapshot_mem")) || !r.deps.pathExists(filepath.Join(outDir, "snapshot_state")) {
+		return nil
+	}
+	return verifySnapshotPathsResolveToOutputs(outDir, r.config.SnapshotMemPath, r.config.SnapshotStatePath)
+}
+
 // verifySnapshotPathsResolveToOutputs rejects configured mem/state paths that do
-// not resolve to the files the create script just wrote. Regeneration only
+// not resolve to the files the create script wrote. Regeneration only
 // replaces snapshot_mem and snapshot_state inside outDir, so a configured path
 // that is an independent copy, a hard link, or a symlink out of outDir survives
 // untouched and still holds the previous snapshot while the fresh boot.json

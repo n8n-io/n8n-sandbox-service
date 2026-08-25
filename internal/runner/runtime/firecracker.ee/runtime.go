@@ -212,11 +212,22 @@ type processGroup struct {
 }
 
 func (p *processGroup) Kill() error {
-	// The pid identifies this process group only until it is reaped; the kernel is
-	// then free to hand it to something else, and signalling a whole group by a
-	// recycled id could kill unrelated processes. Crash handling reaches here after
-	// the exit it reacts to, having waited for the sandbox's claim, so this is the
-	// ordinary case rather than a corner of one.
+	// The pid names this process group only until it is reaped; the kernel is then
+	// free to hand the number to something else, and signalling a whole group by a
+	// recycled one could kill unrelated processes. Crash handling reaches here after
+	// the exit it reacts to, minutes later if it waited that long for the sandbox's
+	// claim, and it runs in the goroutine that did the reaping — so it always sees
+	// this flag set, and never signals.
+	//
+	// What the flag cannot order is a stop, delete or shutdown killing a guest that
+	// happens to be exiting on its own right then: it can read false in the instant
+	// between wait reaping the pid and the watcher recording it. No lock closes that,
+	// because the kernel frees the number inside wait, ahead of any code that could
+	// hold one. It stays harmless because of what the number being reusable implies:
+	// the kernel keeps it allocated while any process still belongs to the group, so
+	// a recycled id means the group was already empty and the signal had nothing of
+	// ours to reach. Jailer execs Firecracker in place, so that group is this one
+	// process and nothing else.
 	if p.reaped.Load() {
 		return os.ErrProcessDone
 	}

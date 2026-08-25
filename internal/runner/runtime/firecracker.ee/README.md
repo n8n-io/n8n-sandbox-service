@@ -270,6 +270,17 @@ is set, and otherwise fails naming the script to re-run. Bump `schema_version`
 when the layout changes; the runner rejects versions it does not know rather
 than guessing.
 
+A set that is already complete is verified rather than trusted, because the
+sidecar only certifies the snapshot the runner actually restores if the configured
+paths lead to it. Regeneration replaces `snapshot_mem` and `snapshot_state` inside
+the `--out` directory, so a configured path that is an independent copy or a
+symlink out of it keeps serving the previous snapshot under a `boot.json`
+describing the new one, and survives every restart in that state. So whenever the
+runner owns snapshot creation and its outputs are present, admission resolves both
+configured paths and fails if either does not land on the generated file. Hosts
+without a create script, or whose `--out` directory holds no generated files, have
+nothing to compare against and are left alone.
+
 ## Guest death
 
 A microVM can die on its own: the guest daemon runs as PID 1 with `panic=1

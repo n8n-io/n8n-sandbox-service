@@ -88,6 +88,87 @@ func TestEnsureGoldenSnapshotSkipsWhenPresent(t *testing.T) {
 	}
 }
 
+// A complete set is checked on every admission, not only in the moment after the
+// runner regenerated it: a configured path aiming away from the generated file
+// outlives regeneration, and every restart in between would certify it.
+func TestEnsureGoldenSnapshotVerifiesACompleteSet(t *testing.T) {
+	writeFile := func(t *testing.T, path string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte{1}, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeGenerated := func(t *testing.T, outDir string) {
+		t.Helper()
+		writeFile(t, filepath.Join(outDir, "snapshot_mem"))
+		writeFile(t, filepath.Join(outDir, "snapshot_state"))
+	}
+	symlink := func(t *testing.T, target, path string) {
+		t.Helper()
+		if err := os.Symlink(target, path); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	tests := []struct {
+		name    string
+		setup   func(t *testing.T, outDir, memPath, statePath string)
+		wantErr string
+	}{
+		{
+			name: "configured paths symlinked to the generated files",
+			setup: func(t *testing.T, outDir, memPath, statePath string) {
+				writeGenerated(t, outDir)
+				symlink(t, "snapshot_mem", memPath)
+				symlink(t, "snapshot_state", statePath)
+			},
+		},
+		{
+			name: "configured memory path is an independent copy beside the generated file",
+			setup: func(t *testing.T, outDir, memPath, statePath string) {
+				writeGenerated(t, outDir)
+				writeFile(t, memPath)
+				symlink(t, "snapshot_state", statePath)
+			},
+			wantErr: "resolves to",
+		},
+		{
+			name: "snapshot assembled by hand, with nothing generated to compare against",
+			setup: func(t *testing.T, _, memPath, statePath string) {
+				writeFile(t, memPath)
+				writeFile(t, statePath)
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			outDir := t.TempDir()
+			script := filepath.Join(t.TempDir(), "create.sh")
+			writeFile(t, script)
+
+			rt := testRuntime(1)
+			rt.config.CreateSnapshotScript = script
+			rt.config.SnapshotMemPath = filepath.Join(outDir, "mem")
+			rt.config.SnapshotStatePath = filepath.Join(outDir, "state")
+			rt.deps.pathExists = pathExists
+			rt.deps.run = func(context.Context, string, ...string) error {
+				t.Fatal("create script ran for a snapshot set that is already complete")
+				return nil
+			}
+			tc.setup(t, outDir, rt.config.SnapshotMemPath, rt.config.SnapshotStatePath)
+			writeBootParams(t, bootParamsPath(rt.config), testBootParams(rt.config))
+
+			err := rt.ensureGoldenSnapshot(context.Background())
+			switch {
+			case tc.wantErr == "" && err != nil:
+				t.Fatalf("ensureGoldenSnapshot() failed: %v", err)
+			case tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)):
+				t.Fatalf("ensureGoldenSnapshot() error = %v, want one containing %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestEnsureGoldenSnapshotRequiresScriptWhenMissing(t *testing.T) {
 	rt := testRuntime(1)
 	rt.config.CreateSnapshotScript = ""
