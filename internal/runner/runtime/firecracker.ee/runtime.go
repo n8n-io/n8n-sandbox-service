@@ -181,10 +181,13 @@ type sandboxState struct {
 	// incarnation from marking a freshly started one dead.
 	generation uint64
 
-	// mustColdBoot pins a crashed sandbox away from its snapshot. The guest kept
-	// writing to the rootfs after that snapshot was taken, and restoring a memory
-	// image whose cached filesystem metadata no longer matches the disk corrupts
-	// it silently, with nothing to detect the mismatch.
+	// mustColdBoot pins a sandbox away from its snapshot. Restoring a memory image
+	// whose cached filesystem metadata no longer matches the disk corrupts it
+	// silently, with nothing to detect the mismatch, and the guest has been writing
+	// to the rootfs ever since the restore that resumed it. So it is set once the
+	// snapshot is restored and cleared only by the snapshot a stop takes of the
+	// paused guest: anything else that ends the microVM in between — a crash, or a
+	// wake that failed after the restore — leaves the pair mismatched.
 	mustColdBoot bool
 }
 
@@ -501,16 +504,22 @@ func (r *Runtime) reserveSandbox(sandboxID string) (*sandboxState, error) {
 // is upgraded to transitionDeleting here for the create-cleanup path, which
 // deletes under its own creation claim.
 func (r *Runtime) deleteSandbox(ctx context.Context, state *sandboxState) error {
-	slog.Debug("firecracker sandbox cleanup started", "sandbox_id", state.id, "vm_id", state.vmID, "slot", state.slot)
 	r.mu.Lock()
 	if current, ok := r.sandboxes[state.id]; ok && current == state {
 		state.running = false
 		state.transition = transitionDeleting
 	}
+	// Read under the lock, once, and used for the rest of this call: on the Shutdown
+	// path this delete may not hold the sandbox's claim, so another teardown can be
+	// clearing the handles and releasing the slot while it runs.
+	hasVM := state.process != nil || state.proxy != nil
+	slot := state.slot
 	r.mu.Unlock()
 
+	slog.Debug("firecracker sandbox cleanup started", "sandbox_id", state.id, "vm_id", state.vmID, "slot", slot)
+
 	var errs []error
-	if state.process != nil || state.proxy != nil {
+	if hasVM {
 		if err := r.teardownRunningVM(ctx, state); err != nil {
 			slog.Warn("firecracker host cleanup failed", "sandbox_id", state.id, "err", err)
 			errs = append(errs, err)
@@ -520,7 +529,7 @@ func (r *Runtime) deleteSandbox(ctx context.Context, state *sandboxState) error 
 		slog.Warn("firecracker sandbox data cleanup failed", "sandbox_id", state.id, "data_dir", state.dataDir, "err", err)
 		errs = append(errs, fmt.Errorf("remove sandbox data dir: %w", err))
 	}
-	slog.Debug("firecracker sandbox cleanup finished", "sandbox_id", state.id, "vm_id", state.vmID, "slot", state.slot)
+	slog.Debug("firecracker sandbox cleanup finished", "sandbox_id", state.id, "vm_id", state.vmID, "slot", slot)
 	if err := joinErrors(errs); err != nil {
 		r.mu.Lock()
 		if current, ok := r.sandboxes[state.id]; ok && current == state {

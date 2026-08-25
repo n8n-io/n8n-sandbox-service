@@ -67,6 +67,29 @@ part of the public API, and not a promise that the same sandbox ID will always
 get the same slot after restart. A sandbox that stops releases its slot and may
 wake onto a different one.
 
+A stop releases its slot even when the host cleanup that follows fails. The
+failure is logged and returned, but the state moves on to stopped, because that is
+the only outcome that leaves the sandbox usable. `teardownRunningVM` drops the
+process and proxy handles whatever it returns, so no retry can resume where it
+stopped — and a sandbox left marked running would hold its slot for a microVM
+nothing can reach, hand out a daemon URL nothing listens on, and fail every later
+stop against an API socket that died with its guest. Nothing would ever reclaim it.
+The snapshot is written by then, so the sandbox becomes an ordinary stopped one and
+wakes on the next request instead; a slot handed back with jail mounts still on it
+comes up clean anyway, since the setup script deletes and recreates the netns
+before using it, and what survives is keyed to the `vmID` rather than the slot.
+
+A failed **delete** keeps its slot, which looks inconsistent with that but is not.
+Cleanup runs as a single shell command, so a failure that is not the jail directory
+it removes last — an expired context, a `sudo` that never ran — leaves it unknown
+whether the netns is really gone. Delete can afford that caution where stop cannot,
+because a delete retry does arrive: the API keeps the sandbox row when the runner
+reports a delete failure, and the idle sweeper retries every sweep interval. The
+retry skips the teardown it no longer has handles for, removes the data directory,
+and releases the slot. The admission canary is built on this — a canary whose
+cleanup fails keeps its slot and fails admission, so a capacity-1 runner is never
+marked healthy while one of its slots is unaccounted for.
+
 Because slot ownership moves like that, create, stop, wake, and delete are
 mutually exclusive per sandbox: each claims the sandbox for the duration of the
 transition and the others wait. Without that, a delete overlapping a create or
@@ -75,9 +98,18 @@ skip teardown, and leave an orphaned microVM holding host resources on a slot th
 runner had already handed back. The delete claim is terminal and doubles as the
 tombstone that hides the sandbox from lookups, so a single flag decides both
 mutual exclusion and visibility. `Shutdown` is the one exception to waiting — it
-sweeps sandboxes mid-stop or mid-wake, since the process is exiting and startup
-reconcile removes whatever leaks, but it still skips sandboxes a delete already
-claimed so teardown never runs twice.
+sweeps sandboxes mid-stop, mid-wake or mid-guest-death, since a claim it waited for
+could outlive the process and leave a microVM running past the runner (jailer's
+children are their own process group, so they do not die with it). It still skips
+sandboxes a delete already claimed, so a delete never runs twice.
+
+Because of that exception, the claim cannot be the only thing protecting a
+sandbox's `process` and `proxy` handles: `Shutdown` can be tearing down the same
+microVM as the claim holder. So `teardownRunningVM` takes both handles off the
+state in the same critical section that bumps the generation, and every other
+read and write of them holds `r.mu` too. Whoever takes the handles owns the stop
+and the kill, and the loser finds nil and repeats only `cleanupHost`, which is
+written to be repeatable.
 
 A claim comes with a budget: `beginTransition` returns the context its operation
 must run under, which is the caller's detached from cancellation and capped at two
@@ -207,9 +239,13 @@ Telling that apart from the runner's own kills is what `sandboxState.generation`
 is for. `teardownRunningVM` bumps it before killing the process, and each exit
 callback carries the generation of the microVM it was registered for, so a stop,
 delete, wake rollback or shutdown is not read as a crash — and an old
-incarnation's exit arriving late cannot mark a freshly woken one dead. The
-handler takes the sandbox's transition claim like any other lifecycle operation,
-so a stop already in flight finishes first and then invalidates it.
+incarnation's exit arriving late cannot mark a freshly woken one dead. The death
+is recorded straight away, before the handler queues for the sandbox's transition
+claim: an exit that arrives while another operation holds the sandbox is only
+looked at once that operation has released it, by which point its teardown has
+bumped the generation past the one the exit carries. A wake that fails *because*
+its guest just died goes exactly that way. The teardown that follows is still
+gated on the generation, so it cannot run twice on the same microVM.
 
 A dead guest is torn down immediately and **hands its slot back**, which is what
 bounds the damage: a crashed sandbox costs disk and nothing else, so a client
@@ -222,10 +258,19 @@ reports it not running.
 It is **not** restored from its snapshot afterwards. The guest kept writing to
 the rootfs after that snapshot was taken, and restoring a memory image whose
 cached filesystem metadata no longer matches the disk corrupts it silently —
-nothing detects the mismatch. So the sandbox is pinned (`mustColdBoot`) and
-`EnsureSandboxRunning` refuses it. Bringing it back needs a boot of its existing
-rootfs, which this runtime does not do yet; until then a request for a crashed
-sandbox fails and the sandbox stays deletable.
+nothing detects the mismatch. So `EnsureSandboxRunning` refuses a pinned
+(`mustColdBoot`) sandbox. Bringing it back needs a boot of its existing rootfs,
+which this runtime does not do yet; until then a request for a crashed sandbox
+fails and the sandbox stays deletable.
+
+The pin is set by the restore, not by the death: `snapshot/load` resumes the guest,
+so the mismatch begins the moment a wake or create succeeds at that step, and only
+the snapshot `StopSandbox` takes of the paused guest clears it. Tying it to the
+restore is what makes it hold for a guest that dies mid-wake, where the death
+cannot be told apart from the rollback's own kill. It also covers a wake that
+failed after the restore for a reason of its own: that guest ran too, so its
+snapshot is just as stale. Such a sandbox is refused until cold boot exists, which
+is the deliberate trade — a loud failure instead of a silently corrupted disk.
 
 ## Current Limitations
 

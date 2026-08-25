@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
@@ -31,17 +33,124 @@ func (s *guestExitStub) install(rt *Runtime, proc process) {
 // fire reports the exit of the nth microVM this runtime started, counting from 0.
 func (s *guestExitStub) fire(t *testing.T, n int) {
 	t.Helper()
+	s.at(t, n)(errors.New("signal: killed"))
+}
+
+// fireAsync reports the exit from a goroutine of its own, the way the real process
+// watcher does. Needed when the exit is injected from inside a lifecycle
+// operation, since handling it waits for that operation's transition claim.
+func (s *guestExitStub) fireAsync(t *testing.T, n int) {
+	t.Helper()
+	onExit := s.at(t, n)
+	go onExit(errors.New("signal: killed"))
+}
+
+func (s *guestExitStub) at(t *testing.T, n int) func(error) {
+	t.Helper()
 	s.mu.Lock()
-	count := len(s.exits)
-	var onExit func(error)
-	if n < count {
-		onExit = s.exits[n]
+	defer s.mu.Unlock()
+	if n >= len(s.exits) {
+		t.Fatalf("microVM %d was never started (%d starts recorded)", n, len(s.exits))
 	}
-	s.mu.Unlock()
-	if onExit == nil {
-		t.Fatalf("microVM %d was never started (%d starts recorded)", n, count)
+	return s.exits[n]
+}
+
+// waitForGuestDeaths blocks until the death handler has counted want deaths. The
+// handler runs on the watcher goroutine, so it is not ordered against the caller.
+func waitForGuestDeaths(t *testing.T, rec *metrics.RunnerRecorder, want float64) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		got := rec.GuestDeathCount()
+		if got >= want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("guest death metric = %v, want %v", got, want)
+		}
+		time.Sleep(time.Millisecond)
 	}
-	onExit(errors.New("signal: killed"))
+}
+
+// countingProcess and countingProxy are the concurrency-safe counterparts of
+// fakeProcess and fakeProxy, for the one test that drives two teardowns of the
+// same microVM at once. blockFirstStop holds the first Stop until released, which
+// is what parks a guest-death teardown mid-flight.
+type countingProcess struct {
+	kills atomic.Int32
+}
+
+func (p *countingProcess) Kill() error {
+	p.kills.Add(1)
+	return nil
+}
+
+type countingProxy struct {
+	stops          atomic.Int32
+	blockFirstStop chan struct{}
+	firstStop      chan struct{}
+}
+
+func (p *countingProxy) Stop() error {
+	if p.stops.Add(1) == 1 && p.blockFirstStop != nil {
+		close(p.firstStop)
+		<-p.blockFirstStop
+	}
+	return nil
+}
+
+// Shutdown will not wait for a transition claim it finds held, so it can tear down
+// the same microVM a guest-death handler is already tearing down. Both must not
+// stop the proxy or kill the process twice, and -race must stay quiet on the
+// handles they share.
+func TestShutdownRacingGuestDeathTearsDownTheMicroVMOnce(t *testing.T) {
+	rt := testRuntimeT(t, 1)
+	stubCreateDeps(rt)
+
+	proc := &countingProcess{}
+	proxy := &countingProxy{blockFirstStop: make(chan struct{}), firstStop: make(chan struct{})}
+	exits := &guestExitStub{}
+	exits.install(rt, proc)
+	rt.deps.newProxy = func(context.Context, string, string, string) (daemonProxy, error) { return proxy, nil }
+
+	const sandboxID = "sandbox-id-123456"
+	if _, err := rt.CreateSandbox(context.Background(), sandboxID, nil); err != nil {
+		t.Fatalf("CreateSandbox() failed: %v", err)
+	}
+
+	// The guest dies, and its handler is parked inside its own teardown holding the
+	// sandbox's claim.
+	exits.fireAsync(t, 0)
+	select {
+	case <-proxy.firstStop:
+	case <-time.After(5 * time.Second):
+		t.Fatal("guest death handler never reached its teardown")
+	}
+
+	shutdownDone := make(chan struct{})
+	go func() {
+		defer close(shutdownDone)
+		rt.Shutdown(context.Background())
+	}()
+
+	// Shutdown has to finish rather than block on the held claim, and the parked
+	// teardown then has to finish against a state Shutdown has already deleted.
+	close(proxy.blockFirstStop)
+	select {
+	case <-shutdownDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Shutdown blocked on the guest death handler's claim")
+	}
+
+	if got := proxy.stops.Load(); got != 1 {
+		t.Errorf("daemon proxy stopped %d times, want 1", got)
+	}
+	if got := proc.kills.Load(); got != 1 {
+		t.Errorf("microVM process killed %d times, want 1", got)
+	}
+	if got := capacityOf(t, rt); got.Used != 0 {
+		t.Errorf("capacity used = %d, want the slot back after shutdown", got.Used)
+	}
 }
 
 func capacityOf(t *testing.T, rt *Runtime) runnerruntime.Capacity {
@@ -109,6 +218,112 @@ func TestGuestDeathFreesSlotAndPinsSandboxToColdBoot(t *testing.T) {
 	}
 	if err := rt.DeleteSandbox(context.Background(), sandboxID); err != nil {
 		t.Fatalf("DeleteSandbox() after crash failed: %v", err)
+	}
+}
+
+// A guest that dies mid-wake is the case the generation counter cannot see: the
+// wake's rollback bumps the generation before the exit is handled, so the death
+// looks like one the runner asked for.
+func TestGuestDeathDuringWakePinsSandboxToColdBoot(t *testing.T) {
+	rt := testRuntimeT(t, 1)
+	stubCreateDeps(rt)
+	rec := metrics.NewRunnerRecorder(true)
+	rt.SetMetricsRecorder(rec)
+
+	exits := &guestExitStub{}
+	exits.install(rt, &fakeProcess{})
+
+	const sandboxID = "sandbox-id-123456"
+	if _, err := rt.CreateSandbox(context.Background(), sandboxID, nil); err != nil {
+		t.Fatalf("CreateSandbox() failed: %v", err)
+	}
+	if err := rt.StopSandbox(context.Background(), sandboxID); err != nil {
+		t.Fatalf("StopSandbox() failed: %v", err)
+	}
+
+	// The restored guest dies while the wake is still in flight, which is why the
+	// wake then fails: the probe only gives up once the guest is gone.
+	rt.deps.probeDaemon = func(context.Context, string) error {
+		exits.fireAsync(t, 1)
+		waitForGuestDeaths(t, rec, 1)
+		return errors.New("connection refused")
+	}
+	if err := rt.EnsureSandboxRunning(context.Background(), sandboxID); err == nil {
+		t.Fatal("EnsureSandboxRunning() succeeded, want a failure with the guest gone")
+	}
+
+	// The guest ran against the rootfs after that snapshot was restored, so waking
+	// again has to be refused rather than restore the same snapshot a second time.
+	restores := 0
+	rt.deps.loadSnapshot = func(context.Context, string, Config) error {
+		restores++
+		return nil
+	}
+	rt.deps.probeDaemon = func(context.Context, string) error { return nil }
+	if err := rt.EnsureSandboxRunning(context.Background(), sandboxID); !errors.Is(err, errGuestCrashed) {
+		t.Fatalf("EnsureSandboxRunning() error = %v, want errGuestCrashed", err)
+	}
+	if restores != 0 {
+		t.Fatalf("second wake restored the stale snapshot %d times", restores)
+	}
+}
+
+// Same hazard without a death: the wake failed for a reason of its own and killed
+// a guest that had been running since the restore.
+func TestWakeFailureAfterRestorePinsSandboxToColdBoot(t *testing.T) {
+	rt := testRuntimeT(t, 1)
+	stubCreateDeps(rt)
+	rec := metrics.NewRunnerRecorder(true)
+	rt.SetMetricsRecorder(rec)
+
+	const sandboxID = "sandbox-id-123456"
+	if _, err := rt.CreateSandbox(context.Background(), sandboxID, nil); err != nil {
+		t.Fatalf("CreateSandbox() failed: %v", err)
+	}
+	if err := rt.StopSandbox(context.Background(), sandboxID); err != nil {
+		t.Fatalf("StopSandbox() failed: %v", err)
+	}
+
+	rt.deps.probeDaemon = func(context.Context, string) error { return errors.New("connection refused") }
+	if err := rt.EnsureSandboxRunning(context.Background(), sandboxID); err == nil {
+		t.Fatal("EnsureSandboxRunning() succeeded, want the probe failure")
+	}
+	if got := rec.GuestDeathCount(); got != 0 {
+		t.Fatalf("guest death metric = %v, want 0 for a guest the runner killed itself", got)
+	}
+
+	rt.deps.probeDaemon = func(context.Context, string) error { return nil }
+	if err := rt.EnsureSandboxRunning(context.Background(), sandboxID); !errors.Is(err, errGuestCrashed) {
+		t.Fatalf("EnsureSandboxRunning() error = %v, want errGuestCrashed", err)
+	}
+}
+
+// The other side of that invariant: a wake that never got as far as restoring left
+// the snapshot matching the rootfs, so it has to stay wakeable.
+func TestWakeFailureBeforeRestoreLeavesSandboxWakeable(t *testing.T) {
+	rt := testRuntimeT(t, 1)
+	stubCreateDeps(rt)
+
+	const sandboxID = "sandbox-id-123456"
+	if _, err := rt.CreateSandbox(context.Background(), sandboxID, nil); err != nil {
+		t.Fatalf("CreateSandbox() failed: %v", err)
+	}
+	if err := rt.StopSandbox(context.Background(), sandboxID); err != nil {
+		t.Fatalf("StopSandbox() failed: %v", err)
+	}
+
+	rt.deps.start = func(context.Context, func(error), string, ...string) (process, error) {
+		return nil, errors.New("jailer refused to start")
+	}
+	if err := rt.EnsureSandboxRunning(context.Background(), sandboxID); err == nil {
+		t.Fatal("EnsureSandboxRunning() succeeded, want the jailer failure")
+	}
+
+	rt.deps.start = func(context.Context, func(error), string, ...string) (process, error) {
+		return &fakeProcess{}, nil
+	}
+	if err := rt.EnsureSandboxRunning(context.Background(), sandboxID); err != nil {
+		t.Fatalf("EnsureSandboxRunning() after a failure before the restore: %v", err)
 	}
 }
 

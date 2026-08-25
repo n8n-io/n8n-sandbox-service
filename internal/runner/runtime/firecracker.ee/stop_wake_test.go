@@ -59,6 +59,50 @@ func TestRuntimeStopSandboxEvictsOldestStoppedWhenDiskFull(t *testing.T) {
 	}
 }
 
+// Host cleanup is the one part of a stop that can fail after the microVM is
+// already gone. The stop has to finish anyway: teardown drops the process and
+// proxy handles, so a sandbox left marked running would hold its slot for a
+// microVM nothing can reach and fail every later stop against a dead API socket.
+func TestRuntimeStopSandboxFinishesWhenHostCleanupFails(t *testing.T) {
+	rt := testRuntimeT(t, 1)
+	stubCreateDeps(rt)
+
+	// cleanupHost is the only script that removes the jail directory, so a busy
+	// mount under it fails the stop's teardown and nothing else.
+	rt.deps.run = func(_ context.Context, _ string, args ...string) error {
+		if len(args) > 0 && strings.Contains(args[len(args)-1], "rm -rf") {
+			return errors.New("rm: cannot remove jail dir: Device or resource busy")
+		}
+		return nil
+	}
+
+	const sandboxID = "sandbox-id-123456"
+	if _, err := rt.CreateSandbox(context.Background(), sandboxID, nil); err != nil {
+		t.Fatalf("CreateSandbox() failed: %v", err)
+	}
+	if err := rt.StopSandbox(context.Background(), sandboxID); err == nil {
+		t.Fatal("StopSandbox() succeeded, want the host cleanup failure reported")
+	}
+
+	if got := capacityOf(t, rt); got.Used != 0 || got.Stopped != 1 {
+		t.Fatalf("capacity after the failed cleanup = %+v, want used 0 and stopped 1", got)
+	}
+	// Nothing is listening on the daemon URL any more, so a request has to be told
+	// the sandbox is not running instead of being proxied into a refused connection.
+	if _, err := rt.DaemonURL(context.Background(), sandboxID); !errors.Is(err, runnerruntime.ErrSandboxNotRunning) {
+		t.Fatalf("DaemonURL() error = %v, want ErrSandboxNotRunning", err)
+	}
+
+	// The snapshot was written before the cleanup failed, so the sandbox is a
+	// normal stopped one and has to wake.
+	if err := rt.EnsureSandboxRunning(context.Background(), sandboxID); err != nil {
+		t.Fatalf("EnsureSandboxRunning() after the failed cleanup: %v", err)
+	}
+	if got := capacityOf(t, rt); got.Used != 1 {
+		t.Fatalf("capacity after the wake = %+v, want the sandbox back on a slot", got)
+	}
+}
+
 func TestRuntimeEnsureSandboxRunningWaitsForStop(t *testing.T) {
 	rt := testRuntimeT(t, 2)
 	stubCreateDeps(rt)

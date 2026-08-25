@@ -56,8 +56,27 @@ func (r *Runtime) StopSandbox(ctx context.Context, sandboxID string) error {
 	if err := r.deps.createSnapshot(ctx, state.socketPath); err != nil {
 		return fmt.Errorf("create firecracker snapshot: %w", err)
 	}
-	if err := r.teardownRunningVM(ctx, state); err != nil {
-		return err
+	// Taken from a paused guest, so this snapshot and the rootfs describe the same
+	// moment. That makes this the one point at which restoring becomes safe again.
+	r.mu.Lock()
+	state.mustColdBoot = false
+	r.mu.Unlock()
+
+	// Reported, not returned as a reason to abandon the stop. The snapshot is
+	// written and the microVM is gone whatever this leaves on the host, and
+	// teardown has already dropped the process and proxy handles, so no retry can
+	// pick up where it stopped. Keeping the sandbox marked running would hold its
+	// slot for a microVM that no longer exists, hand out a daemon URL nothing
+	// listens on, and fail every later stop against an API socket that died with
+	// its guest, so nothing would ever reclaim it. The slot is safe to hand back
+	// regardless of what cleanup left: setupNetwork deletes and recreates the netns
+	// before using it, and the rest is keyed to the vmID, which reconcile removes.
+	//
+	// A failed delete keeps its slot instead, because a delete retry does arrive to
+	// reclaim it (see the README); a stop has no such retry.
+	teardownErr := r.teardownRunningVM(ctx, state)
+	if teardownErr != nil {
+		slog.Warn("firecracker stopped sandbox teardown failed", "sandbox_id", sandboxID, "err", teardownErr)
 	}
 
 	r.mu.Lock()
@@ -73,7 +92,7 @@ func (r *Runtime) StopSandbox(ctx context.Context, sandboxID string) error {
 	r.mu.Unlock()
 
 	slog.Info("firecracker sandbox stopped", "sandbox_id", sandboxID, "vm_id", state.vmID)
-	return nil
+	return teardownErr
 }
 
 // EnsureSandboxRunning restores a stopped sandbox from its per-sandbox snapshot.
@@ -171,7 +190,12 @@ func (r *Runtime) activateSandboxVM(ctx context.Context, state *sandboxState, t 
 	if err != nil {
 		return fmt.Errorf("start firecracker jailer: %w", err)
 	}
+	// Published under the lock because Shutdown reads it without waiting for this
+	// activation's claim, and has to see a handle it can kill rather than a torn
+	// read that lets the microVM outlive the runner.
+	r.mu.Lock()
 	state.process = process
+	r.mu.Unlock()
 	if err := t.step(stepWaitSocket, func() error { return r.waitForSocket(ctx, state.socketPath) }); err != nil {
 		return fmt.Errorf("wait for firecracker socket: %w", err)
 	}
@@ -180,6 +204,14 @@ func (r *Runtime) activateSandboxVM(ctx context.Context, state *sandboxState, t 
 	}); err != nil {
 		return fmt.Errorf("load firecracker snapshot: %w", err)
 	}
+	// The restore resumes the guest, so from here on it writes to a rootfs the
+	// snapshot it came from no longer describes. Pinning at the restore rather
+	// than when a guest death is detected is what makes the pin reliable: it holds
+	// however the microVM ends, including for the deaths that arrive too late to
+	// be told apart from an exit the runner asked for.
+	r.mu.Lock()
+	state.mustColdBoot = true
+	r.mu.Unlock()
 	guestAddr := net.JoinHostPort(r.config.GuestIP, fmt.Sprintf("%d", r.config.DaemonPort))
 	var proxy daemonProxy
 	err = t.step(stepStartProxy, func() error {
@@ -190,7 +222,9 @@ func (r *Runtime) activateSandboxVM(ctx context.Context, state *sandboxState, t 
 	if err != nil {
 		return fmt.Errorf("start firecracker daemon proxy: %w", err)
 	}
+	r.mu.Lock()
 	state.proxy = proxy
+	r.mu.Unlock()
 	if err := t.step(stepProbeDaemon, func() error { return r.deps.probeDaemon(ctx, state.daemonURL) }); err != nil {
 		return fmt.Errorf("connect to firecracker daemon: %w", err)
 	}
@@ -202,23 +236,30 @@ func (r *Runtime) activateSandboxVM(ctx context.Context, state *sandboxState, t 
 // The generation bump has to come before the kill: it is what tells the exit
 // callback of the process being killed here that the runner asked for this exit,
 // so an ordinary stop, delete or wake rollback is not reported as a crash.
+//
+// The handles are taken off the state in the same critical section, which is what
+// makes two teardowns of one microVM safe. Normally the transition claim keeps
+// them apart, but Shutdown deliberately does not wait for a claim it finds held —
+// it would rather race a stop, wake or guest death than leave a microVM running
+// past the runner. Whoever takes the handles owns the stop and the kill; the other
+// caller finds nil and only repeats cleanupHost, which is written to be repeatable.
 func (r *Runtime) teardownRunningVM(ctx context.Context, state *sandboxState) error {
 	r.mu.Lock()
 	state.generation++
+	proxy, process := state.proxy, state.process
+	state.proxy, state.process = nil, nil
 	r.mu.Unlock()
 
 	var errs []error
-	if state.proxy != nil {
-		if err := state.proxy.Stop(); err != nil {
+	if proxy != nil {
+		if err := proxy.Stop(); err != nil {
 			errs = append(errs, fmt.Errorf("stop daemon proxy: %w", err))
 		}
-		state.proxy = nil
 	}
-	if state.process != nil {
-		if err := state.process.Kill(); err != nil && !containsProcessFinished(err) {
+	if process != nil {
+		if err := process.Kill(); err != nil && !containsProcessFinished(err) {
 			errs = append(errs, fmt.Errorf("kill firecracker process: %w", err))
 		}
-		state.process = nil
 	}
 	if err := r.cleanupHost(ctx, state); err != nil {
 		errs = append(errs, fmt.Errorf("cleanup firecracker host state: %w", err))

@@ -20,27 +20,44 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function guestDeaths(): number {
-  return parseCounter(scrapeRunnerMetrics(), GUEST_DEATHS, RUNNER_LABELS);
+type CrashState = { deaths: number; active: number; stopped: number };
+
+function crashHandled(body: string, want: CrashState): boolean {
+  return (
+    parseCounter(body, GUEST_DEATHS, RUNNER_LABELS) >= want.deaths &&
+    parseGauge(body, ACTIVE) === want.active &&
+    parseGauge(body, STOPPED) === want.stopped
+  );
 }
 
 /**
- * Waits for the runner to notice the guest is gone. The guest panics a second
- * after the daemon exits, and the runner then tears the microVM down, so this is
- * the point from which the sandbox's state is settled.
+ * Waits for the runner to notice the guest is gone and finish reacting to it, and
+ * returns the scrape it settled on — or the last one taken, so that a caller's own
+ * assertions report the real values rather than a bare timeout.
+ *
+ * The death counter is deliberately not the only gate. It is incremented before the
+ * handler has even taken the sandbox's transition claim, and the sandbox is marked
+ * stopped and its slot handed back only after the microVM has been torn down, so a
+ * gate on the counter alone can return while active/stopped still hold their
+ * pre-crash values. Both gauges are evaluated at scrape time, which makes them the
+ * first honest sign that the crash is fully handled.
  */
-async function waitForGuestDeaths(want: number, timeoutMs = 60_000): Promise<void> {
+async function waitForCrashHandled(want: CrashState, timeoutMs = 60_000): Promise<string> {
   const deadline = Date.now() + timeoutMs;
-  let last = 0;
-  while (Date.now() < deadline) {
-    last = guestDeaths();
-    if (last >= want) return;
+  let body = scrapeRunnerMetrics();
+  while (!crashHandled(body, want) && Date.now() < deadline) {
     await sleep(500);
+    body = scrapeRunnerMetrics();
   }
-  throw new Error(
-    `${GUEST_DEATHS} reached ${last}, want >= ${want} within ${timeoutMs}ms — ` +
-      'the guest may not have died, or the runner did not detect it',
-  );
+
+  const deaths = parseCounter(body, GUEST_DEATHS, RUNNER_LABELS);
+  if (deaths < want.deaths) {
+    throw new Error(
+      `${GUEST_DEATHS} reached ${deaths}, want >= ${want.deaths} within ${timeoutMs}ms — ` +
+        'the guest may not have died, or the runner did not detect it',
+    );
+  }
+  return body;
 }
 
 // Docker detects a dead guest through its own event stream and heals it via the
@@ -65,11 +82,14 @@ test.describe('Guest crash detection', FIRECRACKER_ONLY, () => {
       expect(parseGauge(scrapeRunnerMetrics(), ACTIVE)).toBe(activeBefore + 1);
 
       await crashGuest(id);
-      await waitForGuestDeaths(deathsBefore + 1);
 
       // The point of tearing down eagerly: a crashed sandbox costs disk and
       // nothing else, so a client retrying cannot accumulate slots.
-      const after = scrapeRunnerMetrics();
+      const after = await waitForCrashHandled({
+        deaths: deathsBefore + 1,
+        active: activeBefore,
+        stopped: stoppedBefore + 1,
+      });
       expect(parseGauge(after, ACTIVE)).toBe(activeBefore);
       expect(parseGauge(after, STOPPED)).toBe(stoppedBefore + 1);
     } finally {
@@ -88,13 +108,24 @@ test.describe('Guest crash detection', FIRECRACKER_ONLY, () => {
     );
     test.setTimeout(150_000);
 
-    const deathsBefore = guestDeaths();
+    const before = scrapeRunnerMetrics();
+    const deathsBefore = parseCounter(before, GUEST_DEATHS, RUNNER_LABELS);
+    const activeBefore = parseGauge(before, ACTIVE);
+    const stoppedBefore = parseGauge(before, STOPPED);
+
     const id = await createSandboxWithRetry();
     try {
       await exec(id, `printf '%s' marker > /tmp/crash-marker`);
 
       await crashGuest(id);
-      await waitForGuestDeaths(deathsBefore + 1);
+      // The refusal below is only reachable once the sandbox is marked stopped,
+      // which is the last thing the crash handler does. Until then the runner still
+      // reports it running and the request fails against a proxy nothing is behind.
+      await waitForCrashHandled({
+        deaths: deathsBefore + 1,
+        active: activeBefore,
+        stopped: stoppedBefore + 1,
+      });
 
       // Restoring the snapshot here would corrupt the rootfs the guest kept
       // writing to, so the request must fail loudly instead of appearing to
