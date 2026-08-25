@@ -100,13 +100,15 @@ version never does so with a container on the bridge. Containers are created
 with IPv6 disabled.
 
 The runner creates every sandbox container with all Linux capabilities dropped.
-It then restores only `CAP_AUDIT_WRITE`, `CAP_CHOWN`, `CAP_DAC_OVERRIDE`,
-`CAP_FOWNER`, `CAP_SETGID`, and `CAP_SETUID`. This allowlist is sufficient for
-passwordless `sudo` and common `apt-get` package installation, while excluding
-capabilities for network administration, raw sockets, mounts, tracing, device
-creation, and other privileged operations. `CAP_AUDIT_WRITE` avoids audit
-warnings from successful `sudo` commands. `no-new-privileges` is not enabled
-because it would prevent the supported sudo workflow.
+It then restores only `CAP_CHOWN`, `CAP_DAC_OVERRIDE`, `CAP_FOWNER`,
+`CAP_SETGID`, and `CAP_SETUID`. This allowlist is sufficient for passwordless
+`sudo` and common `apt-get` package installation, while excluding capabilities
+for network administration, audit-log writes, raw sockets, mounts, tracing,
+device creation, and other privileged operations. Successful `sudo` commands
+may emit an audit warning because `CAP_AUDIT_WRITE` is intentionally excluded;
+granting it would allow audit-log injection and flooding in environments where
+the sandbox shares the initial user namespace. `no-new-privileges` is not
+enabled because it would prevent the supported sudo workflow.
 
 The allowlist holds in every environment. Sysbox isolation and privileged local
 DinD apply to the runner container, not to the sandbox container. A sandbox

@@ -11,8 +11,8 @@ import {
 import { DOCKER_ONLY } from './tags';
 
 // The bounding set the runner grants: CHOWN, DAC_OVERRIDE, FOWNER, SETGID,
-// SETUID (bits 0, 1, 3, 6, 7) and AUDIT_WRITE (bit 29).
-const ALLOWED_BOUNDING_SET = '00000000200000cb';
+// and SETUID (bits 0, 1, 3, 6, 7).
+const ALLOWED_BOUNDING_SET = '00000000000000cb';
 
 // No effective capabilities, because every sandbox process starts as uid 1000.
 const NO_CAPABILITIES = '0000000000000000';

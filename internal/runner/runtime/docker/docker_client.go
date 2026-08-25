@@ -153,7 +153,6 @@ func dockerContainerCreateArgs(sandboxID, containerName, image string, limits *R
 func dockerSandboxCapabilityArgs() []string {
 	return []string{
 		"--cap-drop", "ALL",
-		"--cap-add", "AUDIT_WRITE",
 		"--cap-add", "CHOWN",
 		"--cap-add", "DAC_OVERRIDE",
 		"--cap-add", "FOWNER",

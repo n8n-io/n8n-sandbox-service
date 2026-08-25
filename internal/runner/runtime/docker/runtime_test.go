@@ -117,7 +117,6 @@ func TestDockerContainerCreateArgs(t *testing.T) {
 		"--env", "HOME=/home/user",
 		"--env", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 		"--cap-drop", "ALL",
-		"--cap-add", "AUDIT_WRITE",
 		"--cap-add", "CHOWN",
 		"--cap-add", "DAC_OVERRIDE",
 		"--cap-add", "FOWNER",
@@ -140,7 +139,6 @@ func TestDockerContainerCreateArgs(t *testing.T) {
 func TestDockerContainerCreateArgsAlwaysApplyCapabilityPolicy(t *testing.T) {
 	want := []string{
 		"--cap-drop", "ALL",
-		"--cap-add", "AUDIT_WRITE",
 		"--cap-add", "CHOWN",
 		"--cap-add", "DAC_OVERRIDE",
 		"--cap-add", "FOWNER",
