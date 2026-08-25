@@ -1,0 +1,34 @@
+internal/runner/runtime/docker/runtime_test.go
+  s_d4fffa4cc3ccce::t_33adf876177424 99-169
+e2e/tests/network-isolation.spec.ts
+  s_d4fffa4cc3ccce::t_33adf876177424 39-42,219-221
+internal/runner/runtime/docker/netrules/netrules.go
+  s_d4fffa4cc3ccce::t_33adf876177424 91-95
+docs/security-model.md
+  s_d4fffa4cc3ccce::t_33adf876177424 88-103
+  s_d4fffa4cc3ccce::t_3b0cd425474836 162
+e2e/README.md
+  s_d4fffa4cc3ccce::t_3b0cd425474836 18-19
+e2e/tests/sandbox-capabilities.spec.ts
+  s_d4fffa4cc3ccce::t_33adf876177424 1-72
+internal/runner/runtime/docker/docker_client.go
+  s_d4fffa4cc3ccce::t_33adf876177424 109-118,130-132,138,144-145,147-158
+internal/runner/runtime/docker/README.md
+  s_d4fffa4cc3ccce::t_33adf876177424 23-28
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "6adbd720989d3183177138abdf0cb1c3ed7d2d22",
+  "prompts": {},
+  "sessions": {
+    "s_d4fffa4cc3ccce": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0384e-abd1-72e0-acd9-c51a6b5661d3",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
