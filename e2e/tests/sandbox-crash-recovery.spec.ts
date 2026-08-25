@@ -32,8 +32,7 @@ function crashHandled(body: string, want: CrashState): boolean {
 
 /**
  * Waits for the runner to notice the guest is gone and finish reacting to it, and
- * returns the scrape it settled on — or the last one taken, so that a caller's own
- * assertions report the real values rather than a bare timeout.
+ * returns the scrape it settled on so a caller can assert further on those values.
  *
  * The death counter is deliberately not the only gate. It is incremented before the
  * handler has even taken the sandbox's transition claim, and the sandbox is marked
@@ -41,6 +40,12 @@ function crashHandled(body: string, want: CrashState): boolean {
  * gate on the counter alone can return while active/stopped still hold their
  * pre-crash values. Both gauges are evaluated at scrape time, which makes them the
  * first honest sign that the crash is fully handled.
+ *
+ * Every condition throws here rather than being left to the caller. Callers treat
+ * this as a precondition, so returning with the crash half-handled would let a test
+ * run on against a sandbox the runner never finished stopping and fail later on
+ * something unrelated — which is the regression these tests exist to catch, reported
+ * as a puzzle. Each condition names what the runner failed to do.
  */
 async function waitForCrashHandled(want: CrashState, timeoutMs = 60_000): Promise<string> {
   const deadline = Date.now() + timeoutMs;
@@ -55,6 +60,16 @@ async function waitForCrashHandled(want: CrashState, timeoutMs = 60_000): Promis
     throw new Error(
       `${GUEST_DEATHS} reached ${deaths}, want >= ${want.deaths} within ${timeoutMs}ms — ` +
         'the guest may not have died, or the runner did not detect it',
+    );
+  }
+  const active = parseGauge(body, ACTIVE);
+  const stopped = parseGauge(body, STOPPED);
+  if (active !== want.active || stopped !== want.stopped) {
+    throw new Error(
+      `${ACTIVE} = ${active} (want ${want.active}) and ${STOPPED} = ${stopped} ` +
+        `(want ${want.stopped}) within ${timeoutMs}ms — the runner counted the death but ` +
+        'never finished handling it: the sandbox was not marked stopped, or its slot was ' +
+        'not released',
     );
   }
   return body;

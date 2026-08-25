@@ -153,6 +153,66 @@ func TestShutdownRacingGuestDeathTearsDownTheMicroVMOnce(t *testing.T) {
 	}
 }
 
+// Shutdown decides whether to kill a sandbox's microVM by reading handles that an
+// activation has not published yet, and it hands the slot back without waiting for
+// the activation's claim. So an activation still running afterwards must not go on
+// to finish a guest nothing tracks: jailer's children survive the runner.
+func TestShutdownDuringActivationDoesNotLeaveTheMicroVMRunning(t *testing.T) {
+	rt := testRuntimeT(t, 1)
+	stubCreateDeps(rt)
+
+	proc := &countingProcess{}
+	rt.deps.start = func(context.Context, func(error), string, ...string) (process, error) {
+		return proc, nil
+	}
+	proxy := &countingProxy{}
+	rt.deps.newProxy = func(context.Context, string, string, string) (daemonProxy, error) { return proxy, nil }
+
+	// Parks the create before it starts the microVM, so shutdown runs while both
+	// handles are still nil — the case where shutdown finds nothing to tear down.
+	cloneStarted := make(chan struct{})
+	allowClone := make(chan struct{})
+	rt.deps.cloneGoldenSnapshot = func(context.Context, string, string, string) error {
+		close(cloneStarted)
+		<-allowClone
+		return nil
+	}
+
+	const sandboxID = "sandbox-id-123456"
+	createErr := make(chan error, 1)
+	go func() {
+		_, err := rt.CreateSandbox(context.Background(), sandboxID, nil)
+		createErr <- err
+	}()
+
+	select {
+	case <-cloneStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("CreateSandbox never reached the golden snapshot clone")
+	}
+	rt.Shutdown(context.Background())
+	close(allowClone)
+
+	var err error
+	select {
+	case err = <-createErr:
+	case <-time.After(10 * time.Second):
+		t.Fatal("CreateSandbox never returned after shutdown")
+	}
+	if !errors.Is(err, errActivationAbandoned) {
+		t.Fatalf("CreateSandbox() error = %v, want errActivationAbandoned", err)
+	}
+	if got := proc.kills.Load(); got != 1 {
+		t.Errorf("microVM process killed %d times, want 1 — a guest nothing tracks was left running", got)
+	}
+	if got := capacityOf(t, rt); got.Used != 0 {
+		t.Errorf("capacity used = %d, want 0 after shutdown", got.Used)
+	}
+	if _, err := rt.GetSandboxInfo(context.Background(), sandboxID); !errors.Is(err, runnerruntime.ErrSandboxNotFound) {
+		t.Errorf("GetSandboxInfo() error = %v, want ErrSandboxNotFound", err)
+	}
+}
+
 func capacityOf(t *testing.T, rt *Runtime) runnerruntime.Capacity {
 	t.Helper()
 	capacity, err := rt.Capacity(context.Background())

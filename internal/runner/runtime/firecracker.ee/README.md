@@ -75,9 +75,22 @@ stopped — and a sandbox left marked running would hold its slot for a microVM
 nothing can reach, hand out a daemon URL nothing listens on, and fail every later
 stop against an API socket that died with its guest. Nothing would ever reclaim it.
 The snapshot is written by then, so the sandbox becomes an ordinary stopped one and
-wakes on the next request instead; a slot handed back with jail mounts still on it
-comes up clean anyway, since the setup script deletes and recreates the netns
-before using it, and what survives is keyed to the `vmID` rather than the slot.
+wakes on the next request instead; a slot handed back with leftovers on it comes up
+clean anyway, because the next sandbox clears the slot before building it.
+
+That last part is load-bearing for every path that releases a slot after a failed
+teardown, so it is worth being precise about which resources are per-slot. The netns
+`fc-sb-{slot}` and the host veth `fc-veth-{slot}` are, and the setup script deletes
+both before creating them — including the veth, without which a single leftover
+would fail `ip link add` under `set -eu` and strand the slot until the runner
+restarts. Deleting a netns by name works even while a stale microVM still runs
+inside it: the kernel keeps that namespace alive for the process while freeing the
+name, so the new sandbox gets an empty namespace and the stale guest is isolated in
+an unnamed one with its uplink gone. The proxy port is per-slot too, and is freed by
+the `Stop` that teardown performs on every handle it claims; were it ever left
+bound, the next create on the slot would fail loudly on bind rather than share it.
+The jail directory is keyed to the `vmID`, so it collides with nothing and startup
+reconcile sweeps it.
 
 A failed **delete** keeps its slot, which looks inconsistent with that but is not.
 Cleanup runs as a single shell command, so a failure that is not the jail directory
@@ -117,6 +130,20 @@ state in the same critical section that bumps the generation, and every other
 read and write of them holds `r.mu` too. Whoever takes the handles owns the stop
 and the kill, and the loser finds nil and repeats only `cleanupHost`, which is
 written to be repeatable.
+
+An activation is the other side of that: `Shutdown` decides whether to kill a
+microVM by reading handles a create or wake has not published yet, so it can find
+nothing to tear down, delete the sandbox and hand the slot back while the guest is
+still coming up. `activateSandboxVM` therefore rechecks after publishing each
+handle whether the sandbox is still its own, and fails with `errActivationAbandoned`
+if not. The recheck comes *after* the publication on purpose: the caller's rollback
+is what kills the microVM, and a rollback only tears down handles it can see.
+Carrying on instead would finish building a guest nothing tracks, holding the netns
+and jail mounts of a slot already handed to someone else — and outliving the runner,
+since jailer's children are their own process group. Today a stale `loadSnapshot`
+usually fails that activation anyway, because `Shutdown` deletes the data directory
+out from under it, but cold-boot recovery boots the rootfs and reads no snapshot
+files, so that accident stops covering it.
 
 A claim comes with a budget: `beginTransition` returns the context its operation
 must run under, which is the caller's detached from cancellation and capped at two

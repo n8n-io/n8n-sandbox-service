@@ -2,6 +2,7 @@ package firecracker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -69,8 +70,9 @@ func (r *Runtime) StopSandbox(ctx context.Context, sandboxID string) error {
 	// slot for a microVM that no longer exists, hand out a daemon URL nothing
 	// listens on, and fail every later stop against an API socket that died with
 	// its guest, so nothing would ever reclaim it. The slot is safe to hand back
-	// regardless of what cleanup left: setupNetwork deletes and recreates the netns
-	// before using it, and the rest is keyed to the vmID, which reconcile removes.
+	// regardless of what cleanup left, because the next sandbox on it clears it
+	// first: setupNetwork deletes both per-slot host names, netns and veth, before
+	// creating them. What is left is keyed to the vmID, which reconcile removes.
 	//
 	// A failed delete keeps its slot instead, because a delete retry does arrive to
 	// reclaim it (see the README); a stop has no such retry.
@@ -166,9 +168,35 @@ func (r *Runtime) ensureSandboxRunningOnce(ctx context.Context, sandboxID string
 	return nil
 }
 
+// errActivationAbandoned ends an activation whose sandbox stopped being the
+// runner's own while its microVM was starting. It is returned after the handle is
+// published, never instead of publishing it, so the caller's rollback finds the
+// microVM and kills it.
+var errActivationAbandoned = errors.New("sandbox was torn down while its microVM was starting")
+
+// activationAbandonedLocked reports whether the sandbox being activated has been
+// taken away from this activation. Only Shutdown can do that: every other
+// lifecycle operation waits for the activation's claim before touching the
+// sandbox, while Shutdown overwrites the claim and deletes the sandbox rather than
+// let a microVM outlive the runner. r.mu must be held.
+func (r *Runtime) activationAbandonedLocked(state *sandboxState) bool {
+	current, ok := r.sandboxes[state.id]
+	return !ok || current != state || state.deleting()
+}
+
 // activateSandboxVM prepares jail/netns, starts Firecracker, loads snapshot, and
 // exposes the guest daemon through the host proxy. Each phase is timed through
 // t, which the caller emits once the operation finishes.
+//
+// Both handles are published before that ownership is rechecked, and a lost
+// sandbox fails the activation rather than carrying on. Shutdown does not wait for
+// the claim this runs under, so it can delete the sandbox and hand its slot back
+// while the microVM is still coming up — and it decides whether to tear the microVM
+// down by reading handles that do not exist yet. Carrying on would finish building
+// a guest nothing tracks: jailer's children are their own process group, so it
+// would outlive the runner, holding the netns and jail mounts of a slot already
+// handed to someone else. Failing routes it into the caller's rollback, which is
+// why the handle is published first — a rollback only tears down what it can see.
 func (r *Runtime) activateSandboxVM(ctx context.Context, state *sandboxState, t *stepTimer) error {
 	if err := t.step(stepPrepareJail, func() error { return r.prepareJail(ctx, state) }); err != nil {
 		return fmt.Errorf("prepare firecracker jail: %w", err)
@@ -195,7 +223,11 @@ func (r *Runtime) activateSandboxVM(ctx context.Context, state *sandboxState, t 
 	// read that lets the microVM outlive the runner.
 	r.mu.Lock()
 	state.process = process
+	abandoned := r.activationAbandonedLocked(state)
 	r.mu.Unlock()
+	if abandoned {
+		return errActivationAbandoned
+	}
 	if err := t.step(stepWaitSocket, func() error { return r.waitForSocket(ctx, state.socketPath) }); err != nil {
 		return fmt.Errorf("wait for firecracker socket: %w", err)
 	}
@@ -224,7 +256,11 @@ func (r *Runtime) activateSandboxVM(ctx context.Context, state *sandboxState, t 
 	}
 	r.mu.Lock()
 	state.proxy = proxy
+	abandoned = r.activationAbandonedLocked(state)
 	r.mu.Unlock()
+	if abandoned {
+		return errActivationAbandoned
+	}
 	if err := t.step(stepProbeDaemon, func() error { return r.deps.probeDaemon(ctx, state.daemonURL) }); err != nil {
 		return fmt.Errorf("connect to firecracker daemon: %w", err)
 	}

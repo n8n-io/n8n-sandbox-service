@@ -352,10 +352,16 @@ func (r *Runtime) CreateSandbox(ctx context.Context, sandboxID string, _ *runner
 			// reclaim it, but no retry can arrive here: this create is about to return
 			// an error, so the API stores no record for the sandbox and neither an
 			// explicit delete nor the idle sweeper can name it again. Holding the slot
-			// would strand runner capacity until the process restarts. So it goes back
-			// on the same terms a failed stop hands its slot back: the next sandbox
-			// here recreates the netns, the rest of the leftovers are keyed to this
-			// vmID, and startup reconcile removes them.
+			// would strand runner capacity until the process restarts.
+			//
+			// So it goes back on the same terms a failed stop hands its slot back. What
+			// makes that safe is that the next sandbox here clears the slot before
+			// building it: setupNetwork deletes both per-slot host names, netns and
+			// veth, whatever state they were left in. The jail directory is keyed to
+			// this vmID, so it collides with nothing and startup reconcile sweeps it.
+			// The proxy port is per-slot and freed by the Stop that teardown performs on
+			// every handle it claims; if that ever left the port bound, the next create
+			// on this slot fails loudly on bind rather than sharing it.
 			slog.Warn("firecracker create cleanup failed, releasing slot anyway",
 				"sandbox_id", sandboxID, "vm_id", state.vmID, "slot", state.slot, "err", err)
 			r.untrackSandbox(state)

@@ -46,6 +46,16 @@ iptables -C FORWARD -i fc-veth+ -j ACCEPT 2>/dev/null \
 
 // SetupScript builds a shell script that creates a per-slot netns, TAP, veth
 // uplink, routing, NAT, and egress policy.
+//
+// It clears the slot before building it, which is what lets a slot be handed back
+// for reuse even when the teardown that released it failed. Both names it creates
+// on the host are per-slot, so both have to be cleared: a leftover veth would
+// otherwise fail `ip link add` under `set -eu`, and the leftover survives precisely
+// when cleanup never ran at all — a cleanup budget that expired before its script
+// started, say. Deleting the netns by name also succeeds while a stale microVM is
+// still running inside it, because the kernel keeps that namespace alive for the
+// process while the name is freed, so the new sandbox gets an empty namespace and
+// the stale guest is left isolated in an unnamed one.
 func SetupScript(slot int, netnsName, tapDevice, tapCIDR string) string {
 	q := shellquote.Quote
 	if tapDevice == "" {
@@ -56,6 +66,7 @@ func SetupScript(slot int, netnsName, tapDevice, tapCIDR string) string {
 
 	var b strings.Builder
 	b.WriteString("set -eu\n")
+	fmt.Fprintf(&b, "ip link delete %s 2>/dev/null || true\n", q(hostVeth))
 	fmt.Fprintf(&b, "ip netns delete %s 2>/dev/null || true\n", q(netnsName))
 	fmt.Fprintf(&b, "ip netns add %s\n", q(netnsName))
 	fmt.Fprintf(&b, "ip link add %s type veth peer name %s netns %s\n",
