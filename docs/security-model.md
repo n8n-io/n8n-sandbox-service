@@ -85,18 +85,29 @@ ranges, and a chain in `INPUT` dropping the connections a container opens to the
 runner host itself. The second is needed because `DOCKER-USER` is only consulted
 for forwarded packets, while anything addressed to a host-local address is
 delivered locally and never reaches the egress chain. Both match on the bridge
-interface rather than on the address the runner assigned, because a sandbox can
-add addresses to its own interface and would otherwise only have to send from a
-different one. A per-container chain, keyed on the container's address as a
-destination, drops connections to its daemon port. The runner's own connections
-are unaffected, being locally generated and so never subject to a chain that
-only sees forwarded packets; the exception for the gateway address applies only
-to packets that did not arrive on the bridge, for the same reason the rules
-above avoid matching on addresses. The two shared chains are rebuilt from empty
-at runner startup, after stale containers are removed and before any sandbox can
-be created, so an upgraded runner replacing the rules of an earlier version
-never does so with a container on the bridge. Containers are created with IPv6
-disabled.
+interface rather than on the address the runner assigned. Sandboxes cannot
+normally change their interface configuration without `CAP_NET_ADMIN`, but
+interface matching keeps the network policy independent of that capability
+boundary as defense in depth. A per-container chain, keyed on the container's
+address as a destination, drops connections to its daemon port. The runner's
+own connections are unaffected, being locally generated and so never subject to
+a chain that only sees forwarded packets; the exception for the gateway address
+applies only to packets that did not arrive on the bridge, for the same reason
+the rules above avoid matching on addresses. The two shared chains are rebuilt
+from empty at runner startup, after stale containers are removed and before any
+sandbox can be created, so an upgraded runner replacing the rules of an earlier
+version never does so with a container on the bridge. Containers are created
+with IPv6 disabled.
+
+Every Docker-backed sandbox, including privileged local DinD, is created with
+all Linux capabilities dropped and only `CAP_AUDIT_WRITE`, `CAP_CHOWN`,
+`CAP_DAC_OVERRIDE`, `CAP_FOWNER`, `CAP_SETGID`, and `CAP_SETUID` restored. This
+allowlist is sufficient for passwordless `sudo` and common `apt-get` package
+installation, while excluding capabilities for network administration, raw
+sockets, mounts, tracing, device creation, and other privileged operations.
+`CAP_AUDIT_WRITE` avoids audit warnings from successful `sudo` commands.
+`no-new-privileges` is not enabled because it would prevent the supported sudo
+workflow.
 
 Within a sandbox, the daemon runs as a non-root user, and file operations are
 path-validated to keep them inside the sandbox. The daemon authenticates
@@ -157,6 +168,7 @@ The boundaries above are covered by tests rather than asserted on paper.
 | Client-supplied ID conflicts | [internal/api/handlers_create_sandbox_test.go](../internal/api/handlers_create_sandbox_test.go) |
 | Admin route gating and key revocation | [internal/api/handlers_tenants_test.go](../internal/api/handlers_tenants_test.go) |
 | Sandbox-to-sandbox and blocked-range egress | [e2e/tests/network-isolation.spec.ts](../e2e/tests/network-isolation.spec.ts) |
+| Docker capability allowlist, sudo package installation, and denied network administration | [e2e/tests/sandbox-capabilities.spec.ts](../e2e/tests/sandbox-capabilities.spec.ts) |
 | Egress rule generation | [internal/runner/runtime/firecracker.ee/network/egress_test.go](../internal/runner/runtime/firecracker.ee/network/egress_test.go) |
 
 The network isolation suite is untagged, so it runs against both the Sysbox and

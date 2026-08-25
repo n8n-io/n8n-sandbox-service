@@ -96,6 +96,77 @@ func TestDockerLimitArgs(t *testing.T) {
 	}
 }
 
+func TestDockerContainerCreateArgs(t *testing.T) {
+	limits := &ResourceLimits{
+		MemoryMB:   512,
+		CPUPercent: 150,
+		PidsMax:    128,
+		DiskMB:     1024,
+	}
+
+	got := dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", limits, true)
+	want := []string{
+		"container", "create",
+		"--name", "sandbox-name",
+		"--hostname", "sandbox",
+		"--restart", "unless-stopped",
+		"--network", runnerBridgeNetwork,
+		"--label", containerLabelManaged + "=" + containerLabelManagedVal,
+		"--label", containerLabelSandboxID + "=sandbox-id",
+		"--user", "1000:1000",
+		"--env", "HOME=/home/user",
+		"--env", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		"--cap-drop", "ALL",
+		"--cap-add", "AUDIT_WRITE",
+		"--cap-add", "CHOWN",
+		"--cap-add", "DAC_OVERRIDE",
+		"--cap-add", "FOWNER",
+		"--cap-add", "SETGID",
+		"--cap-add", "SETUID",
+		"--sysctl", "net.ipv6.conf.all.disable_ipv6=1",
+		"--sysctl", "net.ipv6.conf.default.disable_ipv6=1",
+		"--sysctl", "net.ipv6.conf.lo.disable_ipv6=1",
+		"--memory", "512m",
+		"--cpus", "1.50",
+		"--pids-limit", "128",
+		"--storage-opt", "size=1024m",
+		"sandbox-image",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("dockerContainerCreateArgs() = %#v, want %#v", got, want)
+	}
+}
+
+func TestDockerContainerCreateArgsAlwaysApplyCapabilityPolicy(t *testing.T) {
+	want := []string{
+		"--cap-drop", "ALL",
+		"--cap-add", "AUDIT_WRITE",
+		"--cap-add", "CHOWN",
+		"--cap-add", "DAC_OVERRIDE",
+		"--cap-add", "FOWNER",
+		"--cap-add", "SETGID",
+		"--cap-add", "SETUID",
+	}
+
+	for _, enableCgroups := range []bool{false, true} {
+		gotArgs := dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", nil, enableCgroups)
+		var got []string
+		for i := 0; i < len(gotArgs); i++ {
+			if gotArgs[i] != "--cap-drop" && gotArgs[i] != "--cap-add" {
+				continue
+			}
+			if i+1 >= len(gotArgs) {
+				t.Fatalf("capability flag %q has no value", gotArgs[i])
+			}
+			got = append(got, gotArgs[i], gotArgs[i+1])
+			i++
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("capability args with enableCgroups=%v = %#v, want %#v", enableCgroups, got, want)
+		}
+	}
+}
+
 func TestDockerDiskQuotaArgs(t *testing.T) {
 	tests := []struct {
 		name   string

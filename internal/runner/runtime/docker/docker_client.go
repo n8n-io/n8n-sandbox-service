@@ -106,6 +106,16 @@ func (dc *dockerClient) ping(ctx context.Context) error {
 }
 
 func (dc *dockerClient) createContainer(ctx context.Context, sandboxID, containerName, image string, limits *ResourceLimits, enableCgroups bool) (string, error) {
+	args := dockerContainerCreateArgs(sandboxID, containerName, image, limits, enableCgroups)
+
+	out, err := dc.run(ctx, args...)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+func dockerContainerCreateArgs(sandboxID, containerName, image string, limits *ResourceLimits, enableCgroups bool) []string {
 	args := []string{
 		"container", "create",
 		"--name", containerName,
@@ -117,23 +127,36 @@ func (dc *dockerClient) createContainer(ctx context.Context, sandboxID, containe
 		"--user", "1000:1000",
 		"--env", "HOME=/home/user",
 		"--env", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+	}
+	args = append(args, dockerSandboxCapabilityArgs()...)
+	args = append(args,
 		// netrules only filter IPv4; disable v6 in the container so sandboxes
 		// can't bypass the policy via link-local/ULA or v6 metadata addresses.
 		"--sysctl", "net.ipv6.conf.all.disable_ipv6=1",
 		"--sysctl", "net.ipv6.conf.default.disable_ipv6=1",
 		"--sysctl", "net.ipv6.conf.lo.disable_ipv6=1",
-	}
+	)
 	if enableCgroups {
 		args = append(args, dockerLimitArgs(limits)...)
 	}
 	args = append(args, dockerDiskQuotaArgs(limits)...)
 	args = append(args, image)
+	return args
+}
 
-	out, err := dc.run(ctx, args...)
-	if err != nil {
-		return "", err
+// dockerSandboxCapabilityArgs is the single capability policy for every
+// Docker-backed sandbox. Keep the allowlist minimal while preserving
+// passwordless sudo for common package installation workflows.
+func dockerSandboxCapabilityArgs() []string {
+	return []string{
+		"--cap-drop", "ALL",
+		"--cap-add", "AUDIT_WRITE",
+		"--cap-add", "CHOWN",
+		"--cap-add", "DAC_OVERRIDE",
+		"--cap-add", "FOWNER",
+		"--cap-add", "SETGID",
+		"--cap-add", "SETUID",
 	}
-	return strings.TrimSpace(out), nil
 }
 
 func (dc *dockerClient) startContainer(ctx context.Context, containerID string) error {

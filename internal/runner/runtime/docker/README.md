@@ -20,6 +20,12 @@ containers direct access to the host Docker daemon.
   reachable.
 - Reports capacity from the current managed container count.
 - Applies default memory, CPU, PID, and optional disk quota limits on create.
+- Drops every Linux capability, then restores only `CAP_AUDIT_WRITE`,
+  `CAP_CHOWN`, `CAP_DAC_OVERRIDE`, `CAP_FOWNER`, `CAP_SETGID`, and `CAP_SETUID`.
+  This keeps passwordless `sudo` usable for common package installation while
+  preventing network administration, mounts, tracing, device creation, raw
+  sockets, and other privileged operations. The policy applies to every Docker
+  sandbox in both Sysbox and privileged local DinD environments.
 - Applies Docker-specific network isolation rules through `netrules`.
 - Waits for daemon `/healthz` and a tiny `/executions` round trip before
   returning a sandbox as ready.

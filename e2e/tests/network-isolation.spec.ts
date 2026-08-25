@@ -38,10 +38,10 @@ const gatewayOf = (ip: string) => ip.split('.').slice(0, 3).concat('1').join('.'
 
 const siblingOf = (ip: string) => ip.split('.').slice(0, 3).concat('250').join('.');
 
-// Adds a second IPv4 address to eth0 through the legacy ioctl, since iproute2 is
-// absent from the sandbox image. The ':1' label keeps the address secondary, so
-// the sandbox's own address — and with it the daemon connection carrying this
-// exec — survives. Needs CAP_NET_ADMIN, hence sudo.
+// Attempts to add a second IPv4 address to eth0 through the legacy ioctl, since
+// iproute2 is absent from the sandbox image. This needs CAP_NET_ADMIN. The
+// Docker capability policy blocks it; the helper remains a defense-in-depth
+// network-policy test for any runtime where the operation is available.
 const addAddress = (ip: string) =>
   `sudo -n python3 -c "import fcntl,socket,struct;` +
   `s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);` +
@@ -218,11 +218,9 @@ test.describe('Network isolation', () => {
   });
 
   // The host and private-range rules are matched on the bridge interface rather
-  // than on the address the runner assigned, because a sandbox that reaches
-  // CAP_NET_ADMIN can give itself another address and a source-matched rule
-  // would no longer apply to it. Passwordless sudo in the image plus Sysbox's
-  // full capability bounding set are enough to do that, so this asserts the
-  // policy still holds for traffic the runner never handed out an address for.
+  // than on the address the runner assigned. Docker sandboxes cannot obtain
+  // CAP_NET_ADMIN under the capability allowlist, but this remains a
+  // defense-in-depth check for runtimes where a secondary address is possible.
   test('sandbox cannot escape the policy by adding an address', async () => {
     const id = await createSandbox();
     try {

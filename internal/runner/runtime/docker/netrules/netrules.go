@@ -113,12 +113,11 @@ func ApplyPolicy(bridgeIface, containerID, sourceIP, gatewayIP string, daemonPor
 // the runner host itself.
 //
 // Both match on the bridge interface rather than on a container address,
-// because a sandbox controls which address it sends from and would otherwise
-// only have to pick a different one to fall outside the rule. Under Sysbox the
-// capability bounding set is full even for a non-root container process, so the
-// sandbox image's passwordless sudo yields CAP_NET_ADMIN inside the container's
-// own netns, which is enough to add an address to its interface. The interface
-// a packet arrives on is not something the container can choose.
+// so the policy does not depend on an address remaining fixed. Docker-backed
+// sandboxes are created without CAP_NET_ADMIN and cannot normally change their
+// interface addresses; interface matching remains defense in depth if that
+// capability boundary or another networking assumption regresses. The
+// interface a packet arrives on is not something the container can choose.
 //
 // The host block lives in INPUT because DOCKER-USER is only consulted for
 // forwarded packets: anything addressed to a host-local address (the bridge
