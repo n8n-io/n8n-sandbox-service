@@ -15,7 +15,8 @@ Multi-pod failover: `e2e/run-postgres-multi-pod.sh` fronts both API pods with an
 Specs run on every runner lane by default. Apply a marker
 from `tests/tags.ts` only to a spec (or `describe`) that is backend-specific:
 
-- `DOCKER_ONLY` (`@docker-only`) — e.g. inner-container recovery, xfs disk quota.
+- `DOCKER_ONLY` (`@docker-only`) — e.g. inner-container recovery, capability
+  policy, and xfs disk quota.
 - `FIRECRACKER_ONLY` (`@firecracker-only`) — e.g. rootfs capacity checks.
 
 Each lane excludes the other lane's marker via `--grep-invert`: the Docker lane
