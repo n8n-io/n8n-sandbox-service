@@ -27,6 +27,15 @@ Fix any issues before committing.
 
 Always document them into docs/API.md
 
+## When changing the Helm chart
+
+Any change under `charts/n8n-sandbox-service/` must bump `version` in `charts/n8n-sandbox-service/Chart.yaml`.
+Render the chart afterwards to check the templates still produce what you expect:
+
+```sh
+bash charts/n8n-sandbox-service/render-tests.sh
+```
+
 ## Keep documentation up-to-date
 
 Remember to update any relevant documentation in the docs/ folder if any of the changes affect them

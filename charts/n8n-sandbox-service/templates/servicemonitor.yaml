@@ -50,10 +50,23 @@ spec:
   endpoints:
     - port: http
       path: {{ .Values.monitoring.serviceMonitor.path | quote }}
-      scheme: {{ .Values.monitoring.serviceMonitor.runner.scheme | default .Values.monitoring.serviceMonitor.scheme | quote }}
-      {{- with .Values.monitoring.serviceMonitor.runner.tlsConfig }}
+      {{- $runnerScheme := .Values.monitoring.serviceMonitor.runner.scheme | default .Values.monitoring.serviceMonitor.scheme }}
+      scheme: {{ $runnerScheme | quote }}
+      {{- $runnerControl := .Values.tls.certificates.runnerControlServer }}
+      {{- $runnerTLS := .Values.monitoring.serviceMonitor.runner.tlsConfig }}
+      {{- if $runnerTLS }}
       tlsConfig:
-        {{- toYaml . | nindent 8 }}
+        {{- toYaml $runnerTLS | nindent 8 }}
+      {{- else if eq $runnerScheme "https" }}
+      # Verify against the CA that signs the runner certificate. serverName
+      # pins the Service DNS name because targets are scraped by pod IP, which
+      # is not a SAN.
+      tlsConfig:
+        ca:
+          secret:
+            name: {{ $runnerControl.secretName | quote }}
+            key: {{ $runnerControl.caFileKey | quote }}
+        serverName: {{ printf "%s.%s.svc.cluster.local" (include "n8n-sandbox-service.runnerName" .) .Release.Namespace | quote }}
       {{- end }}
       interval: {{ .Values.monitoring.serviceMonitor.interval | quote }}
       {{- if .Values.monitoring.serviceMonitor.scrapeTimeout }}

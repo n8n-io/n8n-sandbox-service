@@ -116,6 +116,11 @@ docker run -d --name sandbox-api --network host \
 
 ## 4. Start the runner
 
+`SANDBOX_RUNNER_HTTP_BASE_URL` uses `localhost` rather than `127.0.0.1` even
+though the listener binds the loopback address. The API verifies each runner's
+certificate against the host the runner advertises here, and `bootstrap-mtls.sh`
+issues DNS SANs only, so an IP would fail verification.
+
 ```bash
 TLS_DIR="$(pwd)/.tls"   # directory that contains api/ and runner/
 
@@ -123,7 +128,7 @@ sudo env \
   SANDBOX_RUNNER_BACKEND=firecracker \
   SANDBOX_RUNNER_ID="$(hostname)" \
   SANDBOX_RUNNER_LISTEN_ADDR=127.0.0.1:8081 \
-  SANDBOX_RUNNER_HTTP_BASE_URL=https://127.0.0.1:8081 \
+  SANDBOX_RUNNER_HTTP_BASE_URL=https://localhost:8081 \
   SANDBOX_RUNNER_DATA_DIR=/var/sandboxes \
   SANDBOX_RUNNER_CAPACITY_TOTAL=10 \
   SANDBOX_RUNNER_API_KEYS="$SANDBOX_API_RUNNER_API_KEY" \

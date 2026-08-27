@@ -171,7 +171,10 @@ RUNNER_ENV=(
 	SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE="$TLS_DIR/runner/grpc-client.crt"
 	SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE="$TLS_DIR/runner/grpc-client.key"
 	SANDBOX_RUNNER_REGISTRATION_GRPC_SERVER_NAME="$API_TLS_DNS"
-	SANDBOX_RUNNER_HTTP_BASE_URL="https://${RUNNER_ADDR}"
+	# localhost rather than RUNNER_ADDR's IP: the API verifies each runner
+	# against the host it advertises here, and bootstrap-mtls.sh issues DNS SANs
+	# only, always including localhost.
+	SANDBOX_RUNNER_HTTP_BASE_URL="https://localhost:$(e2e_addr_port "$RUNNER_ADDR")"
 	SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR="$RUNNER_CONTROL_LISTEN_ADDR"
 	SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR="$RUNNER_CONTROL_ADVERTISE_ADDR"
 	SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE="$TLS_DIR/runner/control-grpc-server.crt"

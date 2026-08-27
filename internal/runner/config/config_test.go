@@ -3,6 +3,7 @@ package config
 import (
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -92,6 +93,38 @@ func TestLoadRejectsPlaintextHTTPBaseURL(t *testing.T) {
 
 	if _, err := Load(); err == nil {
 		t.Fatal("expected Load to reject an http:// SANDBOX_RUNNER_HTTP_BASE_URL")
+	}
+}
+
+// url.Parse reports scheme https for several forms that carry no host, so a
+// scheme-only check lets the runner boot advertising a base URL nothing can
+// dial.
+//
+// The explicit advertise address matters: without it the host-less URL is
+// caught downstream, when the control gRPC address cannot be derived from it,
+// which would let this test pass without exercising the check above. The Helm
+// chart and the e2e scripts all set it, so that is also the configuration in
+// which the gap is reachable.
+func TestLoadRejectsHTTPBaseURLWithoutHost(t *testing.T) {
+	for _, base := range []string{
+		"https:runner:8080",
+		"https://",
+		"https:",
+		"https:///files",
+	} {
+		t.Run(base, func(t *testing.T) {
+			setRequiredEnv(t)
+			t.Setenv("SANDBOX_RUNNER_HTTP_BASE_URL", base)
+			t.Setenv("SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR", "runner:9091")
+
+			_, err := Load()
+			if err == nil {
+				t.Fatalf("expected Load to reject host-less SANDBOX_RUNNER_HTTP_BASE_URL %q", base)
+			}
+			if !strings.Contains(err.Error(), "SANDBOX_RUNNER_HTTP_BASE_URL") {
+				t.Fatalf("error should name the offending variable, got: %v", err)
+			}
+		})
 	}
 }
 

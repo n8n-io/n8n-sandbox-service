@@ -7,10 +7,13 @@ func TestIsValidRunnerHTTPBaseURL(t *testing.T) {
 		in   string
 		want bool
 	}{
-		{"http://runner:8080", true},
 		{"https://example.com", true},
-		{"HTTP://localhost:3000", true},
+		{"HTTPS://localhost:3000", true},
 		{"https://example.com/api/v1", true},
+		// Plaintext is rejected: TLSClientConfig does not apply to http URLs,
+		// so proxying to one would leak the runner API key.
+		{"http://runner:8080", false},
+		{"HTTP://localhost:3000", false},
 		{"", false},
 		{"foo", false},
 		{"/relative", false},

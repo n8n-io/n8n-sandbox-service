@@ -69,6 +69,24 @@ a runner: the caller also needs a key pair the CA has signed. That matters most
 for a compromised runner, which holds the fleet's API key but not the API's
 client certificate.
 
+The API keeps that guarantee from being negotiated away by the runner. A runner
+names its own address in heartbeats, and Go applies a transport's
+`TLSClientConfig` only to `https` URLs, so a runner advertising an `http://`
+base would receive proxied traffic, including the runner API key, in plaintext.
+The API therefore refuses a non-https base twice: at registration, so such a
+runner never enters the registry, and again before proxying a stored sandbox
+record, which catches rows written before this rule existed.
+
+For the same reason the proxy transport sets no `ServerName`. One transport
+reaches every runner, and Go derives the verification name from the host it
+dialled only while that field is empty, so a fixed name would be checked in
+place of the host each runner advertises. Every runner able to present a
+certificate for that one name could then answer for any other. Runners must
+advertise a host their own certificate covers, so per-host verification is what
+the deployment already promises. `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_SERVER_NAME`
+therefore applies to the control gRPC channel alone, whose dial address may
+legitimately be an address the certificate does not name.
+
 A runner only acts on sandbox IDs present in its own state, an in-memory map
 for the Firecracker runtime and a Docker label filter for the Sysbox runtime.
 An ID hosted by a different runner returns `404`. Routing is keyed entirely on

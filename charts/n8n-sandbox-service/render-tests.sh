@@ -150,4 +150,33 @@ for length in 1 20 40 41 42 43 44 45 46 47 48 49 50 53; do
 	done
 done
 
+echo "==> the runner scrape verifies TLS by default"
+# The default must pin serverName to a name the runner certificate actually
+# carries, or the scrape fails to verify. Compare against the issued SANs
+# rather than a literal, so renaming the runner cannot drift the two apart.
+cert_manager=(
+	--set tls.mode=certManager
+	--set tls.certManager.issuerRef.name=sandbox-ca
+	--set tls.certManager.issuerRef.kind=ClusterIssuer
+)
+monitor=$(render --set monitoring.serviceMonitor.enabled=true "${cert_manager[@]}" \
+	--show-only templates/servicemonitor.yaml)
+echo "$monitor" | grep -q 'key: "ca.crt"'
+server_name=$(echo "$monitor" | sed -n 's/.*serverName: "\(.*\)"/\1/p')
+test -n "$server_name"
+render "${cert_manager[@]}" --show-only templates/cert-manager.yaml |
+	grep -q -- "- $server_name\$"
+
+echo "==> the runner scrape TLS config stays overridable"
+render --set monitoring.serviceMonitor.enabled=true \
+	--set monitoring.serviceMonitor.runner.tlsConfig.insecureSkipVerify=true \
+	--show-only templates/servicemonitor.yaml | grep -q 'insecureSkipVerify: true'
+# A plaintext scrape must not carry a tlsConfig.
+if render --set monitoring.serviceMonitor.enabled=true \
+	--set monitoring.serviceMonitor.runner.scheme=http \
+	--show-only templates/servicemonitor.yaml | grep -q 'tlsConfig'; then
+	echo "a plaintext runner scrape must not render a tlsConfig" >&2
+	exit 1
+fi
+
 echo "render tests passed"

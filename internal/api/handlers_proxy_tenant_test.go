@@ -16,7 +16,7 @@ import (
 // code looks right.
 func TestTenantCannotProxyToOtherTenantSandbox(t *testing.T) {
 	var upstreamHits atomic.Int64
-	runner := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	runner := newTestRunnerServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		upstreamHits.Add(1)
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"ok":true}`))

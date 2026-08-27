@@ -40,7 +40,7 @@ All services are configured via environment variables.
 | `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE` | *(required)* | CA (PEM) that signed runner **SandboxControl** and HTTP server certs |
 | `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE` | *(required)* | API client certificate (PEM) for SandboxControl and the runner HTTP proxy |
 | `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE` | *(required)* | API client key (PEM) |
-| `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_SERVER_NAME` | *(empty)* | TLS verify name when it must differ from the dial host, applied to both runner channels (defaults to the runner host) |
+| `SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_SERVER_NAME` | *(empty)* | TLS verify name for the **SandboxControl gRPC channel only**, when it must differ from the dial host (defaults to the runner host). The HTTP proxy always verifies each runner against the host in its own advertised base URL, so this never applies there |
 
 **Heartbeat grace:** Runners stay registered while their gRPC stream is open and heartbeats are written to the store (Postgres) or in-memory registry (SQLite). Between heartbeats, the API still considers a runner usable for new placements only if its last heartbeat was within `SANDBOX_API_RUNNER_HEARTBEAT_GRACE`. After that window, the runner is skipped until the next heartbeat.
 

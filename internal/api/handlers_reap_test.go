@@ -17,7 +17,7 @@ import (
 )
 
 func TestSandboxProxyReapsStoreOnRunnerSandboxGone(t *testing.T) {
-	runner := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	runner := newTestRunnerServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sandboxproxy.MarkSandboxGone(w.Header())
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
@@ -42,11 +42,11 @@ func TestSandboxProxyReapsStoreOnRunnerSandboxGone(t *testing.T) {
 		t.Fatalf("Create() failed: %v", err)
 	}
 
-	router, err := NewGatewayRouter(s, &config.APIConfig{
+	router, err := NewGatewayRouter(s, withRunnerTLS(&config.APIConfig{
 		APIKeys:      map[string]struct{}{"public-key": {}},
 		RunnerAPIKey: "runner-key",
 		MaxFileBytes: 1024,
-	}, registry.New(45*time.Second), metrics.NewAPIRecorder(false))
+	}), registry.New(45*time.Second), metrics.NewAPIRecorder(false))
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}
@@ -89,7 +89,7 @@ func (deleteFailingStore) Delete(string) error {
 }
 
 func TestSandboxProxyDoesNotMarkActiveWhenReapDeleteFails(t *testing.T) {
-	runner := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	runner := newTestRunnerServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sandboxproxy.MarkSandboxGone(w.Header())
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
@@ -115,11 +115,11 @@ func TestSandboxProxyDoesNotMarkActiveWhenReapDeleteFails(t *testing.T) {
 		t.Fatalf("Create() failed: %v", err)
 	}
 
-	router, err := NewGatewayRouter(deleteFailingStore{s}, &config.APIConfig{
+	router, err := NewGatewayRouter(deleteFailingStore{s}, withRunnerTLS(&config.APIConfig{
 		APIKeys:      map[string]struct{}{"public-key": {}},
 		RunnerAPIKey: "runner-key",
 		MaxFileBytes: 1024,
-	}, registry.New(45*time.Second), metrics.NewAPIRecorder(false))
+	}), registry.New(45*time.Second), metrics.NewAPIRecorder(false))
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestSandboxProxyDoesNotMarkActiveWhenReapDeleteFails(t *testing.T) {
 }
 
 func TestSandboxProxyKeepsStoreOnRunnerExecutionNotFound(t *testing.T) {
-	runner := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	runner := newTestRunnerServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"error":"execution not found"}`))
@@ -174,11 +174,11 @@ func TestSandboxProxyKeepsStoreOnRunnerExecutionNotFound(t *testing.T) {
 		t.Fatalf("Create() failed: %v", err)
 	}
 
-	router, err := NewGatewayRouter(s, &config.APIConfig{
+	router, err := NewGatewayRouter(s, withRunnerTLS(&config.APIConfig{
 		APIKeys:      map[string]struct{}{"public-key": {}},
 		RunnerAPIKey: "runner-key",
 		MaxFileBytes: 1024,
-	}, registry.New(45*time.Second), metrics.NewAPIRecorder(false))
+	}), registry.New(45*time.Second), metrics.NewAPIRecorder(false))
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}

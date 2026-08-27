@@ -94,7 +94,7 @@ func (s *RunnerRegistryServer) Connect(stream grpc.BidiStreamingServer[pb.Runner
 		}
 		if httpBase == "" || !registry.IsValidRunnerHTTPBaseURL(httpBase) {
 			slog.Warn("runner registration rejected", "runner_id", committedRunnerID, "reason", "invalid_http_base_url", "http_base_url", httpBase)
-			return status.Errorf(codes.InvalidArgument, "http_base_url must be an absolute http or https URL with a host")
+			return status.Errorf(codes.InvalidArgument, "http_base_url must be an absolute https URL with a host")
 		}
 		controlGRPC := strings.TrimSpace(hb.GetControlGrpcAddr())
 		if committedRunnerID != "" && controlGRPC == "" {

@@ -28,7 +28,7 @@ func assertInvalidArgument(t *testing.T, err error) {
 func testHeartbeat(runnerID string) *pb.RunnerHeartbeat {
 	return &pb.RunnerHeartbeat{
 		RunnerId:        runnerID,
-		HttpBaseUrl:     "http://runner:8080",
+		HttpBaseUrl:     "https://runner:8080",
 		ControlGrpcAddr: "runner:9091",
 		Healthy:         true,
 		CapacityTotal:   10,
@@ -73,6 +73,56 @@ func TestConnectRejectsInvalidHTTPBaseURL(t *testing.T) {
 	} else {
 		if _, err := stream.Recv(); err == nil {
 			t.Fatal("expected error for invalid http_base_url")
+		} else {
+			assertInvalidArgument(t, err)
+		}
+	}
+	if _, err := reg.PickRoundRobin(); !errors.Is(err, registry.ErrNoRunners) {
+		t.Fatalf("registry: want ErrNoRunners, got %v", err)
+	}
+}
+
+// A runner advertising a plaintext base must not enter the registry: the API's
+// proxy transport applies its client certificate only to https URLs, so an
+// accepted http base would silently downgrade exec and file traffic and put the
+// runner API key on the wire.
+func TestConnectRejectsPlaintextHTTPBaseURL(t *testing.T) {
+	reg := registry.New(time.Hour)
+	token := "test-token"
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := grpc.NewServer()
+	pb.RegisterRunnerRegistryServer(srv, &RunnerRegistryServer{Token: token, Reg: reg})
+	go func() { _ = srv.Serve(lis) }()
+	defer srv.Stop()
+
+	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	ctx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+token)
+	stream, err := pb.NewRunnerRegistryClient(conn).Connect(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	hb := &pb.RunnerHeartbeat{
+		RunnerId:        "r1",
+		HttpBaseUrl:     "http://runner:8080",
+		ControlGrpcAddr: "runner:9091",
+		Healthy:         true,
+		CapacityTotal:   10,
+		CapacityUsed:    0,
+	}
+	if err := stream.Send(hb); err != nil {
+		assertInvalidArgument(t, err)
+	} else {
+		if _, err := stream.Recv(); err == nil {
+			t.Fatal("expected error for plaintext http_base_url")
 		} else {
 			assertInvalidArgument(t, err)
 		}
@@ -198,7 +248,7 @@ func TestConnectRequiresControlGRPCAddr(t *testing.T) {
 
 	hb := &pb.RunnerHeartbeat{
 		RunnerId:      "r1",
-		HttpBaseUrl:   "http://runner:8080",
+		HttpBaseUrl:   "https://runner:8080",
 		Healthy:       true,
 		CapacityTotal: 10,
 		CapacityUsed:  0,

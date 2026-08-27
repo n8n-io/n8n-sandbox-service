@@ -16,7 +16,7 @@ func TestSandboxProxyDoesNotCountServerErrorsAsActivity(t *testing.T) {
 	var upstreamStatus atomic.Int64
 	upstreamStatus.Store(http.StatusOK)
 
-	runner := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	runner := newTestRunnerServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(int(upstreamStatus.Load()))
 		_, _ = w.Write([]byte(`{"ok":false}`))
@@ -84,7 +84,7 @@ func TestSandboxProxyDoesNotCountServerErrorsAsActivity(t *testing.T) {
 // A 4xx means the caller sent something the sandbox rejected, which still
 // proves the sandbox is up and in use.
 func TestSandboxProxyCountsClientErrorsAsActivity(t *testing.T) {
-	runner := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	runner := newTestRunnerServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = w.Write([]byte(`{"error":"invalid path"}`))
@@ -124,7 +124,7 @@ func TestSandboxProxyCountsClientErrorsAsActivity(t *testing.T) {
 // An unreachable runner produces no upstream response at all, so the proxy's
 // ErrorHandler path must not count as activity either.
 func TestSandboxProxyDoesNotCountUnreachableRunnerAsActivity(t *testing.T) {
-	runner := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	runner := newTestRunnerServer(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	runnerURL := runner.URL
 	runner.Close()
 
@@ -156,5 +156,39 @@ func TestSandboxProxyDoesNotCountUnreachableRunnerAsActivity(t *testing.T) {
 	}
 	if rec.Status != "stopped" {
 		t.Errorf("status = %q, want stopped", rec.Status)
+	}
+}
+
+// Registration rejects plaintext bases, but rows written before that rule still
+// carry them. Proxying such a row would send the runner API key in the clear,
+// because Transport.TLSClientConfig applies only to https URLs.
+func TestSandboxProxyRefusesPlaintextRunnerBase(t *testing.T) {
+	var upstreamHits atomic.Int64
+	runner := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		upstreamHits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer runner.Close()
+
+	router, s := newTestGateway(t, "admin-key")
+
+	const sid = "dddddddd-4444-4444-8444-dddddddddddd"
+	if err := s.Create(&store.SandboxRecord{
+		ID: sid, Status: "running", CreatedAt: 1, LastActiveAt: 1,
+		TenantID: store.AdminTenantID, RunnerHTTPBase: runner.URL,
+	}); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/sandboxes/"+sid+"/files", nil)
+	req.Header.Set("X-Api-Key", "admin-key")
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("proxy returned %d, want %d", rr.Code, http.StatusBadGateway)
+	}
+	if hits := upstreamHits.Load(); hits != 0 {
+		t.Fatalf("expected nothing to reach the plaintext runner, got %d requests", hits)
 	}
 }

@@ -54,12 +54,17 @@ monitoring:
       enabled: true
       # The runner serves TLS, so its scrape overrides the shared scheme above.
       scheme: https
-      # The runner's certificate is signed by your private control-plane CA,
-      # which Prometheus does not trust by default. Point this at that CA, or
-      # set insecureSkipVerify. /metrics is unauthenticated and carries no
-      # tenant or sandbox identifiers.
-      tlsConfig:
-        insecureSkipVerify: true
+      # Left empty, the chart verifies the runner against the CA in
+      # tls.certificates.runnerControlServer and pins serverName to the runner
+      # Service DNS name, which every certificate the chart issues carries as a
+      # SAN. All runner pods present that one certificate, so a single
+      # serverName covers the whole StatefulSet.
+      #
+      # Under tls.mode=existingSecret the certificate is yours, so it must
+      # carry that same name or the scrape fails to verify. Setting this block
+      # replaces the default outright, so `insecureSkipVerify: true` is the
+      # escape hatch if you cannot reissue.
+      tlsConfig: {}
 
 tls:
   # Choose how the mTLS Secrets are provided: existingSecret or certManager.
