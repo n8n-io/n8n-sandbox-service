@@ -69,10 +69,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# -k so the same helper can poll the runner, which serves TLS with the private
+# CA bootstrapped above; it has no effect on the plain-HTTP API URLs.
 wait_for_http() {
 	local name=$1 url=$2
 	for i in $(seq 1 60); do
-		if curl -sf "$url" >/dev/null 2>&1; then
+		if curl -skf "$url" >/dev/null 2>&1; then
 			echo "${name} is ready."
 			return 0
 		fi
@@ -169,7 +171,7 @@ RUNNER_ENV=(
 	SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE="$TLS_DIR/runner/grpc-client.crt"
 	SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE="$TLS_DIR/runner/grpc-client.key"
 	SANDBOX_RUNNER_REGISTRATION_GRPC_SERVER_NAME="$API_TLS_DNS"
-	SANDBOX_RUNNER_HTTP_BASE_URL="http://${RUNNER_ADDR}"
+	SANDBOX_RUNNER_HTTP_BASE_URL="https://${RUNNER_ADDR}"
 	SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR="$RUNNER_CONTROL_LISTEN_ADDR"
 	SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR="$RUNNER_CONTROL_ADVERTISE_ADDR"
 	SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE="$TLS_DIR/runner/control-grpc-server.crt"
@@ -201,7 +203,7 @@ RUNNER_PID=$!
 export E2E_RUNNER_PID="$RUNNER_PID"
 echo "export E2E_RUNNER_PID=${RUNNER_PID}" >>"$FC_RUNNER_ENV_FILE"
 
-wait_for_http "Firecracker runner" "http://${RUNNER_ADDR}/readyz"
+wait_for_http "Firecracker runner" "https://${RUNNER_ADDR}/readyz"
 wait_for_runner_registered
 
 export E2E_PROJECT_DIR="$PROJECT_DIR"

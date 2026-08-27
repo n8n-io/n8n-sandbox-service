@@ -13,7 +13,7 @@ components and fail in different ways.
 | Boundary | Enforced by | Protects against |
 | --- | --- | --- |
 | Client → API | API key auth and per-request tenant checks | One tenant reaching another tenant's sandboxes |
-| API → Runner | mTLS and a shared runner API key | Unauthorized control of sandbox lifecycles |
+| API → Runner | mTLS on both listeners, plus a shared runner API key | Unauthorized control of sandbox lifecycles |
 | Guest → host and network | Network namespaces, iptables, and the container or microVM boundary | Untrusted code escaping its sandbox or reaching other sandboxes |
 
 Everything trusts the layer above it. Sandboxes trust nothing.
@@ -53,9 +53,21 @@ Runners register by opening a long-lived gRPC stream to the API, secured with
 mTLS plus a bearer token, and advertise their ID, HTTP base URL and capacity.
 Lifecycle calls go the other way, over the runner's `SandboxControl` gRPC
 listener, which also requires mTLS with a client certificate signed by the
-configured CA, plus an API key in the call metadata. Exec and file traffic is
-proxied over the runner's HTTP listener, which is authenticated by that same
-shared API key.
+configured CA, plus an API key in the call metadata.
+
+Exec and file traffic is proxied over the runner's HTTP listener, which requires
+the same two things. It serves TLS using the certificate configured for the
+control gRPC listener, so both channels to a runner share one identity and one
+rotation path, and the API presents its control-plane client certificate on the
+proxy transport. Because Kubernetes probes cannot present a client certificate,
+the listener negotiates with `VerifyClientCertIfGiven` rather than rejecting an
+unauthenticated peer during the handshake, and `AuthMiddleware` in
+[internal/runner/middleware_auth.go](../internal/runner/middleware_auth.go)
+requires a verified certificate on every route except the health and metrics
+endpoints. A leaked runner API key is therefore not by itself enough to drive
+a runner: the caller also needs a key pair the CA has signed. That matters most
+for a compromised runner, which holds the fleet's API key but not the API's
+client certificate.
 
 A runner only acts on sandbox IDs present in its own state, an in-memory map
 for the Firecracker runtime and a Docker label filter for the Sysbox runtime.
@@ -131,13 +143,14 @@ infrastructure, not the internet. Configurable per-sandbox allowlists are
 planned, not implemented.
 
 **The runner does not enforce tenancy.** It has no tenant concept at all. Anyone
-holding a runner API key with network access to a runner's HTTP listener can
-operate on any sandbox that runner hosts. Sandboxes themselves cannot reach that
-listener: on Firecracker its addresses sit inside the blocked ranges, and on
-Sysbox the bridge's `INPUT` chain drops connections to the host. Runner
-credentials are shared across the fleet rather than issued per runner or per
-tenant, and the HTTP listener uses the API key alone, without mTLS. Deployments
-are expected to keep runner listeners reachable only from the API.
+holding both a runner API key and a CA-signed client certificate can operate on
+any sandbox that runner hosts, because the runner does not know who owns any of
+them. Sandboxes themselves cannot reach that listener: on Firecracker its
+addresses sit inside the blocked ranges, and on Sysbox the bridge's `INPUT`
+chain drops connections to the host. Runner credentials are also shared across
+the fleet rather than issued per runner or per tenant, so one leaked pair is a
+fleet-wide leak. Deployments are expected to keep runner listeners reachable
+only from the API.
 
 **Client-supplied sandbox IDs leak existence.** Creating a sandbox with an ID
 that already belongs to another tenant returns `409` rather than `404`, so a

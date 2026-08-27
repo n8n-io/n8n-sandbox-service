@@ -410,9 +410,11 @@ export function stopSandboxViaRunner(sandboxId: string): void {
   });
 }
 
+// The runner serves TLS with a private CA, so -k here and --no-check-certificate
+// below: these probes only need to reach the unauthenticated endpoints.
 export function scrapeRunnerMetricsAt(addr: string): string {
   const host = addr.replace(/^https?:\/\//, '');
-  return execFileSync('curl', ['-sf', `http://${host}/metrics`], { encoding: 'utf8' });
+  return execFileSync('curl', ['-skf', `https://${host}/metrics`], { encoding: 'utf8' });
 }
 
 export function scrapeRunnerMetrics(): string {
@@ -425,17 +427,26 @@ export function scrapeRunnerMetrics(): string {
   }
   return execFileSync(
     'docker',
-    ['exec', runnerContainer, 'wget', '-q', '-O', '-', 'http://localhost:8080/metrics'],
+    [
+      'exec',
+      runnerContainer,
+      'wget',
+      '-q',
+      '-O',
+      '-',
+      '--no-check-certificate',
+      'https://localhost:8080/metrics',
+    ],
     { encoding: 'utf8' },
   );
 }
 
 export async function waitRunnerHttpReady(addr: string, deadlineMs = 75_000): Promise<void> {
-  const url = `http://${addr.replace(/^https?:\/\//, '')}/readyz`;
+  const url = `https://${addr.replace(/^https?:\/\//, '')}/readyz`;
   const deadline = Date.now() + deadlineMs;
   while (Date.now() < deadline) {
     try {
-      execFileSync('curl', ['-sf', url], { stdio: 'pipe' });
+      execFileSync('curl', ['-skf', url], { stdio: 'pipe' });
       return;
     } catch {
       await new Promise((r) => setTimeout(r, 250));

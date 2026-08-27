@@ -110,7 +110,7 @@ Each runner hosts sandboxes through the shared `runtime.Runtime` contract. The D
 | Network rules | `internal/runner/runtime/docker/netrules/` | iptables rules for Docker sandbox network isolation |
 | Resource limits | `internal/runner/runtime/docker/resource_limits.go` | Memory, CPU, PID, and disk quota enforcement |
 
-**Middleware chain:** Auth (API key) → Logging → Recovery
+**Middleware chain:** Auth (client certificate + API key) → Logging → Recovery
 
 ### Daemon
 
@@ -143,6 +143,8 @@ Runners register with the API by opening a long-lived gRPC stream (`RunnerRegist
 ### API → Runner Control (gRPC Unary + mTLS)
 
 When a client creates or deletes a sandbox, the API calls the runner's `SandboxControl` gRPC service (`CreateSandbox`, `StopSandbox`, `DeleteSandbox`). This channel also uses mTLS with API key authentication in gRPC metadata.
+
+The runner's HTTP listener uses the same certificate and the same client CA, so both channels to a runner share one identity. It negotiates with `VerifyClientCertIfGiven` so that health probes, which cannot present a certificate, still reach `/livez` and `/readyz`; the auth middleware requires a verified certificate on every other route.
 
 ### API/Runner → Daemon (HTTP Reverse Proxy)
 
@@ -188,6 +190,7 @@ See [security-model.md](security-model.md) for the trust boundaries behind these
 | Client → API | `X-Api-Key` (admin env keys or hashed tenant keys) | Authenticate and authorize API consumers |
 | API ↔ Runner registration | mTLS + bearer token | Authenticate runners during gRPC registration |
 | API → Runner control | mTLS + API key in gRPC metadata | Authenticate control-plane RPCs |
+| API → Runner HTTP | mTLS + `X-Api-Key` | Authenticate proxied exec and file traffic |
 | File paths | Path resolution and validation | Prevent directory traversal |
 | Network isolation | iptables rules on runner | Block sandbox access to private IP ranges |
 | Resource limits | cgroups + xfs disk quotas | Memory, CPU, PID count, disk space per sandbox |

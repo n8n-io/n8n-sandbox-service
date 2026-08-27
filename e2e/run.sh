@@ -156,7 +156,7 @@ docker run -d \
 	-e "SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE=/grpc-tls/grpc-client.crt" \
 	-e "SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE=/grpc-tls/grpc-client.key" \
 	-e "SANDBOX_RUNNER_REGISTRATION_GRPC_SERVER_NAME=$API_TLS_DNS" \
-	-e "SANDBOX_RUNNER_HTTP_BASE_URL=http://${RUNNER_CONTAINER_NAME}:8080" \
+	-e "SANDBOX_RUNNER_HTTP_BASE_URL=https://${RUNNER_CONTROL_ALIAS}:8080" \
 	-e "SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR=:9091" \
 	-e "SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR=${RUNNER_CONTROL_ALIAS}:9091" \
 	-e "SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE=/grpc-tls/control-grpc-server.crt" \
@@ -170,7 +170,7 @@ docker run -d \
 
 echo "Waiting for runner service..."
 for i in $(seq 1 60); do
-	if docker exec "$RUNNER_CONTAINER_NAME" wget -q -O - http://localhost:8080/readyz >/dev/null 2>&1; then
+	if docker exec "$RUNNER_CONTAINER_NAME" wget -q -O - --no-check-certificate https://localhost:8080/readyz >/dev/null 2>&1; then
 		echo "Runner is ready."
 		break
 	fi

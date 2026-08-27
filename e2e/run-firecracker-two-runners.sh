@@ -58,10 +58,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# -k so the same helper can poll the runner, which serves TLS with the private
+# CA bootstrapped above; it has no effect on the plain-HTTP API URLs.
 wait_for_http() {
 	local name=$1 url=$2
 	for _ in $(seq 1 60); do
-		if curl -sf "$url" >/dev/null 2>&1; then
+		if curl -skf "$url" >/dev/null 2>&1; then
 			echo "${name} is ready."
 			return 0
 		fi
@@ -137,7 +139,9 @@ runner_env=(
 	SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE="$TLS_DIR/runner/grpc-client.crt"
 	SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE="$TLS_DIR/runner/grpc-client.key"
 	SANDBOX_RUNNER_REGISTRATION_GRPC_SERVER_NAME="$API_TLS_DNS"
-	SANDBOX_RUNNER_HTTP_BASE_URL="http://${RUNNER1_ADDR}"
+	# localhost rather than 127.0.0.1: the runner's TLS certificate carries DNS
+	# SANs, and this runner listens on loopback only.
+	SANDBOX_RUNNER_HTTP_BASE_URL="https://localhost:$(e2e_addr_port "$RUNNER1_ADDR")"
 	SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR="$RUNNER1_CONTROL_LISTEN"
 	SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR="$RUNNER1_CONTROL_ADVERTISE"
 	SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE="$TLS_DIR/runner/control-grpc-server.crt"
@@ -166,7 +170,7 @@ echo "Starting Firecracker runner 1..."
 sudo env "${runner_env[@]}" "$PROJECT_DIR/bin/runner-firecracker" >"$RUNNER1_LOG" 2>&1 &
 RUNNER1_PID=$!
 echo "export E2E_RUNNER_PID=${RUNNER1_PID}" >>"$RUNNER1_ENV_FILE"
-wait_for_http "Firecracker runner 1" "http://${RUNNER1_ADDR}/readyz"
+wait_for_http "Firecracker runner 1" "https://${RUNNER1_ADDR}/readyz"
 
 wait_for_runners_registered
 sleep 6

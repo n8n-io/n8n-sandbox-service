@@ -52,7 +52,16 @@ async function waitDockerRunnerHTTPReady(name: string, deadlineMs: number, pollM
     try {
       execFileSync(
         'docker',
-        ['exec', name, 'wget', '-q', '-O', '-', 'http://localhost:8080/readyz'],
+        [
+          'exec',
+          name,
+          'wget',
+          '-q',
+          '-O',
+          '-',
+          '--no-check-certificate',
+          'https://localhost:8080/readyz',
+        ],
         { stdio: 'pipe' },
       );
       return;

@@ -27,10 +27,11 @@ sudo env "${RUNNER_ENV[@]}" "${RUNNER_BIN}" >"$RUNNER_LOG" 2>&1 &
 E2E_RUNNER_PID=$!
 export E2E_RUNNER_PID
 
+# -k because the runner serves TLS with the e2e private CA.
 wait_for_http() {
 	local name=$1 url=$2
 	for _ in $(seq 1 60); do
-		if curl -sf "$url" >/dev/null 2>&1; then
+		if curl -skf "$url" >/dev/null 2>&1; then
 			echo "${name} is ready."
 			return 0
 		fi
@@ -40,7 +41,7 @@ wait_for_http() {
 	return 1
 }
 
-wait_for_http "Firecracker runner" "http://${RUNNER_ADDR}/readyz"
+wait_for_http "Firecracker runner" "https://${RUNNER_ADDR}/readyz"
 
 # Persist the new pid for subsequent restarts in the same e2e session.
 {

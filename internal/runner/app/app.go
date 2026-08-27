@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"crypto/tls"
 	"log/slog"
 	"net"
 	"net/http"
@@ -80,9 +81,24 @@ func Run(cfg *config.Config, rt runnerruntime.Runtime) {
 
 	handler := runner.NewRouter(rt, cfg, mrec)
 
+	// VerifyClientCertIfGiven rather than RequireAndVerifyClientCert: health and
+	// metrics must stay reachable by probes, which cannot present a client
+	// certificate. AuthMiddleware requires one on every other route.
+	httpTLS, err := grpctls.NewServerTLSConfig(
+		cfg.ControlGRPCServerCertFile,
+		cfg.ControlGRPCServerKeyFile,
+		cfg.ControlGRPCClientCAFile,
+		tls.VerifyClientCertIfGiven,
+	)
+	if err != nil {
+		slog.Error("http tls", "error", err)
+		os.Exit(1)
+	}
+
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
 		Handler:           handler,
+		TLSConfig:         httpTLS,
 		ReadTimeout:       30 * time.Second,
 		ReadHeaderTimeout: 10 * time.Second,
 		WriteTimeout:      0, // disabled for streaming exec responses
@@ -119,8 +135,9 @@ func Run(cfg *config.Config, rt runnerruntime.Runtime) {
 
 	serverErr := make(chan error, 1)
 	go func() {
-		slog.Info("server listening", "addr", cfg.ListenAddr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		slog.Info("server listening", "addr", cfg.ListenAddr, "tls", true)
+		// Certificate and key come from srv.TLSConfig.
+		if err := srv.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
 			serverErr <- err
 		}
 	}()

@@ -11,7 +11,7 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("SANDBOX_RUNNER_API_KEYS", "test-key")
 	t.Setenv("SANDBOX_RUNNER_API_GRPC_ADDR", "api:9090")
 	t.Setenv("SANDBOX_RUNNER_REGISTRATION_TOKEN", "reg-token")
-	t.Setenv("SANDBOX_RUNNER_HTTP_BASE_URL", "http://runner:8080")
+	t.Setenv("SANDBOX_RUNNER_HTTP_BASE_URL", "https://runner:8080")
 	t.Setenv("SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE", "/tmp/reg-ca.crt")
 	t.Setenv("SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE", "/tmp/reg.crt")
 	t.Setenv("SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE", "/tmp/reg.key")
@@ -83,6 +83,15 @@ func TestLoadRejectsPartialControlGRPCTLS(t *testing.T) {
 
 	if _, err := Load(); err == nil {
 		t.Fatal("expected Load to reject partial SANDBOX_RUNNER_CONTROL_GRPC_TLS_*")
+	}
+}
+
+func TestLoadRejectsPlaintextHTTPBaseURL(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("SANDBOX_RUNNER_HTTP_BASE_URL", "http://runner:8080")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("expected Load to reject an http:// SANDBOX_RUNNER_HTTP_BASE_URL")
 	}
 }
 

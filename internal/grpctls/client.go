@@ -9,10 +9,10 @@ import (
 	"google.golang.org/grpc/credentials"
 )
 
-// NewClientTransportCredentials builds mTLS client credentials for dialing the API registry.
-// serverCAFile must contain PEM certificate(s) for the CA that signed the API server certificate.
+// NewClientTLSConfig builds an mTLS client config that presents clientCertFile
+// and verifies the server against serverCAFile.
 // serverName is used for certificate verification (SNI / hostname); may be empty to use the dial target host.
-func NewClientTransportCredentials(serverCAFile, clientCertFile, clientKeyFile, serverName string) (credentials.TransportCredentials, error) {
+func NewClientTLSConfig(serverCAFile, clientCertFile, clientKeyFile, serverName string) (*tls.Config, error) {
 	caPEM, err := os.ReadFile(serverCAFile)
 	if err != nil {
 		return nil, fmt.Errorf("grpctls: read server CA: %w", err)
@@ -27,11 +27,21 @@ func NewClientTransportCredentials(serverCAFile, clientCertFile, clientKeyFile, 
 		return nil, fmt.Errorf("grpctls: load client key pair: %w", err)
 	}
 
-	tlsConf := &tls.Config{
+	return &tls.Config{
 		RootCAs:              pool,
 		ServerName:           serverName,
 		GetClientCertificate: reloader.GetClientCertificate,
 		MinVersion:           tls.VersionTLS12,
+	}, nil
+}
+
+// NewClientTransportCredentials builds mTLS client credentials for dialing the API registry.
+// serverCAFile must contain PEM certificate(s) for the CA that signed the API server certificate.
+// serverName is used for certificate verification (SNI / hostname); may be empty to use the dial target host.
+func NewClientTransportCredentials(serverCAFile, clientCertFile, clientKeyFile, serverName string) (credentials.TransportCredentials, error) {
+	tlsConf, err := NewClientTLSConfig(serverCAFile, clientCertFile, clientKeyFile, serverName)
+	if err != nil {
+		return nil, err
 	}
 	return credentials.NewTLS(tlsConf), nil
 }

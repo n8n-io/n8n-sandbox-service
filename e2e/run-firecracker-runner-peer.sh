@@ -42,10 +42,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# -k so the same helper can poll the runner, which serves TLS with the private
+# CA shared from the control VM; it has no effect on plain-HTTP URLs.
 wait_for_http() {
 	local name=$1 url=$2
 	for _ in $(seq 1 60); do
-		if curl -sf "$url" >/dev/null 2>&1; then
+		if curl -skf "$url" >/dev/null 2>&1; then
 			echo "${name} is ready."
 			return 0
 		fi
@@ -82,7 +84,9 @@ runner_env=(
 	SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE="$E2E_TLS_DIR/runner/grpc-client.crt"
 	SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE="$E2E_TLS_DIR/runner/grpc-client.key"
 	SANDBOX_RUNNER_REGISTRATION_GRPC_SERVER_NAME="$API_TLS_DNS"
-	SANDBOX_RUNNER_HTTP_BASE_URL="http://${E2E_PEER_PRIVATE_IP}:$(e2e_addr_port "$RUNNER_ADDR")"
+	# The hosts entry the control VM installs for this peer, so the URL matches a
+	# DNS SAN on the runner's TLS certificate rather than a bare IP.
+	SANDBOX_RUNNER_HTTP_BASE_URL="https://runner-control-b:$(e2e_addr_port "$RUNNER_ADDR")"
 	SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR="$RUNNER_CONTROL_LISTEN"
 	SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR="$RUNNER_CONTROL_ADVERTISE"
 	SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE="$E2E_TLS_DIR/runner/control-grpc-server.crt"
@@ -113,6 +117,6 @@ RUNNER_PID=$!
 echo "export E2E_RUNNER_PID=${RUNNER_PID}" >>"$RUNNER_ENV_FILE"
 echo "$RUNNER_PID" >"$SCRIPT_DIR/.fc-runner-b.pid"
 
-wait_for_http "Peer Firecracker runner" "http://127.0.0.1:$(e2e_addr_port "$RUNNER_ADDR")/readyz"
+wait_for_http "Peer Firecracker runner" "https://127.0.0.1:$(e2e_addr_port "$RUNNER_ADDR")/readyz"
 trap - EXIT
 echo "Peer runner ready (pid ${RUNNER_PID})."

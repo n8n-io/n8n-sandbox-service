@@ -17,31 +17,42 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
 	"github.com/n8n-io/sandbox-service/internal/api/runnerctl"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
+	"github.com/n8n-io/sandbox-service/internal/grpctls"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/obs"
 	"github.com/n8n-io/sandbox-service/internal/sandboxproxy"
 )
 
-func runnerProxyForPick(w http.ResponseWriter, r *http.Request, limitBody bool, cfg *config.APIConfig, pick func() (*registry.Runner, error)) bool {
-	run, err := pick()
+// newRunnerTransport builds the transport the API uses to reach runner HTTP
+// listeners, presenting the same client certificate it uses for control gRPC.
+//
+// Build it once per process: it owns the connection pool, so a transport per
+// request would mean a fresh TLS handshake per request.
+//
+// Returns a nil RoundTripper when the control-plane material is unset, matching
+// runnerControlTLS. LoadAPI requires all three files, so that only happens in
+// tests, which then fall back to the default transport. The return type is the
+// interface rather than *http.Transport so that nil case stays a nil interface,
+// which is what ReverseProxy checks before substituting its default.
+func newRunnerTransport(cfg *config.APIConfig) (http.RoundTripper, error) {
+	if cfg.RunnerControlGRPCClientCAFile == "" {
+		return nil, nil
+	}
+	tlsConf, err := grpctls.NewClientTLSConfig(
+		cfg.RunnerControlGRPCClientCAFile,
+		cfg.RunnerControlGRPCClientCertFile,
+		cfg.RunnerControlGRPCClientKeyFile,
+		cfg.RunnerControlGRPCClientServerName,
+	)
 	if err != nil {
-		if errors.Is(err, registry.ErrNoRunners) {
-			writeError(w, http.StatusServiceUnavailable, err.Error())
-		} else {
-			writeError(w, http.StatusInternalServerError, err.Error())
-		}
-		return false
+		return nil, err
 	}
-	u, _ := url.Parse(strings.TrimRight(run.HTTPBaseURL, "/"))
-	proxy := newRunnerReverseProxy(u, cfg.RunnerAPIKey, nil)
-	if limitBody {
-		r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxFileBytes)
-	}
-	proxy.ServeHTTP(w, r)
-	return true
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.TLSClientConfig = tlsConf
+	return tr, nil
 }
 
-func sandboxProxyHandler(s store.SandboxStore, cfg *config.APIConfig) func(bool) http.HandlerFunc {
+func sandboxProxyHandler(s store.SandboxStore, cfg *config.APIConfig, transport http.RoundTripper) func(bool) http.HandlerFunc {
 	return func(limitBody bool) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			id := r.PathValue("id")
@@ -75,7 +86,7 @@ func sandboxProxyHandler(s store.SandboxStore, cfg *config.APIConfig) func(bool)
 
 			u, _ := url.Parse(strings.TrimRight(rec.RunnerHTTPBase, "/"))
 			upstreamStart := time.Now()
-			proxy := newRunnerReverseProxy(u, cfg.RunnerAPIKey, func(resp *http.Response) {
+			proxy := newRunnerReverseProxy(u, cfg.RunnerAPIKey, transport, func(resp *http.Response) {
 				// Response headers are in, so for a streamed exec this is the
 				// time to first byte rather than the full round trip.
 				fields.Add("ttfb_ms", time.Since(upstreamStart).Milliseconds())
@@ -438,9 +449,10 @@ func isValidUUID(id string) bool {
 	return id != "" && uuidRegex.MatchString(id)
 }
 
-func newRunnerReverseProxy(runnerURL *url.URL, runnerAPIKey string, onResponse func(*http.Response)) *httputil.ReverseProxy {
+func newRunnerReverseProxy(runnerURL *url.URL, runnerAPIKey string, transport http.RoundTripper, onResponse func(*http.Response)) *httputil.ReverseProxy {
 	target := *runnerURL
 	return &httputil.ReverseProxy{
+		Transport: transport,
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(&target)
 			pr.Out.URL.Path = pr.In.URL.Path

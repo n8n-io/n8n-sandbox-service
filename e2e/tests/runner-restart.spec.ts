@@ -7,7 +7,16 @@ async function waitDockerRunnerReady(container: string, deadlineMs = 75_000): Pr
     try {
       execFileSync(
         'docker',
-        ['exec', container, 'wget', '-q', '-O', '-', 'http://localhost:8080/readyz'],
+        [
+          'exec',
+          container,
+          'wget',
+          '-q',
+          '-O',
+          '-',
+          '--no-check-certificate',
+          'https://localhost:8080/readyz',
+        ],
         { stdio: 'pipe' },
       );
       return;

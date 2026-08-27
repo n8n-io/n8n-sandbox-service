@@ -261,6 +261,12 @@ func Load() (*Config, error) {
 	if cfg.RunnerHTTPBaseURL == "" {
 		return nil, fmt.Errorf("SANDBOX_RUNNER_HTTP_BASE_URL must be set")
 	}
+	// The HTTP listener serves TLS, and this URL is what the runner advertises
+	// to the API in heartbeats, so an http:// value would send every request to
+	// the wrong scheme.
+	if u, err := url.Parse(cfg.RunnerHTTPBaseURL); err != nil || !strings.EqualFold(u.Scheme, "https") {
+		return nil, fmt.Errorf("SANDBOX_RUNNER_HTTP_BASE_URL must be an https:// URL, got %q", cfg.RunnerHTTPBaseURL)
+	}
 
 	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR")); v != "" {
 		cfg.ControlGRPCListenAddr = v

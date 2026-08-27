@@ -13,7 +13,11 @@ import (
 // coordinates with registered runner services. If rec is enabled, its
 // /metrics handler is mounted and HTTPMiddleware wraps the request chain.
 func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.RunnerRegistry, rec *metrics.APIRecorder) (http.Handler, error) {
-	sandboxProxy := sandboxProxyHandler(s, cfg)
+	runnerTransport, err := newRunnerTransport(cfg)
+	if err != nil {
+		return nil, err
+	}
+	sandboxProxy := sandboxProxyHandler(s, cfg, runnerTransport)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {

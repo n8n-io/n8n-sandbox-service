@@ -82,14 +82,16 @@ curl http://localhost:8080/healthz
 
 ## mTLS certificate details
 
-The API and runners communicate over gRPC with mutual TLS (mTLS). The `tls-init` init container generates a private CA and the following leaf certificates on first startup:
+The API and runners communicate with mutual TLS (mTLS), over both gRPC and HTTP. The `tls-init` init container generates a private CA and the following leaf certificates on first startup:
 
 | Certificate | Type | Used by |
 |---|---|---|
 | Registration gRPC server | `server auth` | API (listens on :9090) |
 | Registration gRPC client | `client auth` | Runner (dials API :9090) |
-| SandboxControl gRPC server | `server auth` | Runner (listens on :9091) |
-| SandboxControl gRPC client | `client auth` | API (dials runner :9091) |
+| SandboxControl gRPC server | `server auth` | Runner (listens on :9091, and on :8080 for HTTP) |
+| SandboxControl gRPC client | `client auth` | API (dials runner :9091, and :8080 for exec and file traffic) |
+
+The runner's HTTP listener reuses the SandboxControl pair rather than having its own, so `SANDBOX_RUNNER_HTTP_BASE_URL` must be `https://` and its host must be one of that certificate's SANs.
 
 Certificates are organized into per-service directories (`.tls/api/` and `.tls/runner/`) so each service only has access to its own material.
 

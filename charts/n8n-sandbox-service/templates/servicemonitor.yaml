@@ -50,7 +50,11 @@ spec:
   endpoints:
     - port: http
       path: {{ .Values.monitoring.serviceMonitor.path | quote }}
-      scheme: {{ .Values.monitoring.serviceMonitor.scheme | quote }}
+      scheme: {{ .Values.monitoring.serviceMonitor.runner.scheme | default .Values.monitoring.serviceMonitor.scheme | quote }}
+      {{- with .Values.monitoring.serviceMonitor.runner.tlsConfig }}
+      tlsConfig:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       interval: {{ .Values.monitoring.serviceMonitor.interval | quote }}
       {{- if .Values.monitoring.serviceMonitor.scrapeTimeout }}
       scrapeTimeout: {{ .Values.monitoring.serviceMonitor.scrapeTimeout | quote }}

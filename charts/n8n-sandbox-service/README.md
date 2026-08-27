@@ -338,16 +338,18 @@ monitoring:
 
 This renders one `ServiceMonitor` for the API Service and, when the in-chart runner is enabled, one for the runner headless Service. It also enables the matching `/metrics` handlers in the API and runner containers. Use `monitoring.serviceMonitor.api.enabled` or `monitoring.serviceMonitor.runner.enabled` to disable either scrape target.
 
+The runner's HTTP listener serves TLS, so its scrape overrides the shared `scheme` with `monitoring.serviceMonitor.runner.scheme` (`https`) and defaults `monitoring.serviceMonitor.runner.tlsConfig` to `insecureSkipVerify: true`, since Prometheus does not trust your control-plane CA by default. To verify instead, replace that block with a `ca` reference to the CA that signed the runner certificate. `/metrics` is unauthenticated and carries no tenant or sandbox identifiers.
+
 ## Runner Identity
 
 The in-cluster runner is deployed as a StatefulSet with a headless Service so each runner pod has direct, DNS-based addressability from the API:
 
 ```text
-http://<pod>.<runner-service>.<namespace>.svc.cluster.local:8080
+https://<pod>.<runner-service>.<namespace>.svc.cluster.local:8080
 <pod>.<runner-service>.<namespace>.svc.cluster.local:9091
 ```
 
-The API must call the specific runner that owns a sandbox; a load-balanced Service is not enough for exec/files/control operations. Stable pod DNS also makes the runner control gRPC certificate SANs practical.
+The API must call the specific runner that owns a sandbox; a load-balanced Service is not enough for exec/files/control operations. Stable pod DNS also makes the runner certificate SANs practical: both the HTTP listener and the control gRPC listener serve TLS with the same certificate, so those names must appear in its SANs.
 
 If a runner dies, sandboxes on that runner should be treated as lost.
 

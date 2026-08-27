@@ -24,16 +24,18 @@ Mount PEMs from `Certificate` secrets (often `tls.crt`, `tls.key`) plus a CA bun
 **Runner**
 
 - Registration client (existing): `SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE`, `SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE`, `SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE`, optional `SANDBOX_RUNNER_REGISTRATION_GRPC_SERVER_NAME` (must match a DNS SAN on the API registration server cert).
-- Control listener: `SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE`, `SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE`, `SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE` (CA that signed **API control clients**).
+- Control listener: `SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE`, `SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE`, `SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE` (CA that signed **API control clients**). The runner's HTTP listener serves TLS with this same material, so its certificate needs a SAN for the HTTP host too, and the API's control client certificate authenticates both channels.
 
-Also set `SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR` (for example `:9091`) and either `SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR` or a usable `SANDBOX_RUNNER_HTTP_BASE_URL` so the runner can advertise `control_grpc_addr` in heartbeats.
+Also set `SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR` (for example `:9091`) and either `SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR` or a usable `SANDBOX_RUNNER_HTTP_BASE_URL` so the runner can advertise `control_grpc_addr` in heartbeats. `SANDBOX_RUNNER_HTTP_BASE_URL` must be `https://`.
+
+Probes are the one exception to client-certificate enforcement: a kubelet `httpGet` probe cannot present one, so the runner negotiates with `VerifyClientCertIfGiven` and leaves `/livez`, `/readyz` and `/metrics` unauthenticated. Set `scheme: HTTPS` on those probes.
 
 ## cert-manager sketch
 
 - One CA `Issuer` (or a CA you already run).
 - `Certificate` for the API registration gRPC server — `usages: [ "server auth" ]`, DNS SAN matching the Service DNS runners use (for example `sandbox-api.sandbox.svc.cluster.local`).
 - `Certificate` for runners as TLS clients to that API — `usages: [ "client auth" ]` (per-runner or shared, per your policy).
-- `Certificate` for each runner’s SandboxControl gRPC server — `usages: [ "server auth" ]`, DNS SAN matching how the API resolves the runner (Pod DNS, headless Service, etc.).
+- `Certificate` for each runner’s SandboxControl gRPC server — `usages: [ "server auth" ]`, DNS SAN matching how the API resolves the runner (Pod DNS, headless Service, etc.). The same certificate serves the runner's HTTP listener.
 - `Certificate` for the API as client to runners — `usages: [ "client auth" ]`.
 
 When `cert-manager` renews a leaf, updated files appear in the volume; the service binaries reload leaf key pairs from disk on the next TLS handshake. Rotating a CA that peers trust usually means updating mounted CA PEMs and rolling workloads. Prefer short-lived leaves and keep CA rotation infrequent.

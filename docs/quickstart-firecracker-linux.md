@@ -123,7 +123,7 @@ sudo env \
   SANDBOX_RUNNER_BACKEND=firecracker \
   SANDBOX_RUNNER_ID="$(hostname)" \
   SANDBOX_RUNNER_LISTEN_ADDR=127.0.0.1:8081 \
-  SANDBOX_RUNNER_HTTP_BASE_URL=http://127.0.0.1:8081 \
+  SANDBOX_RUNNER_HTTP_BASE_URL=https://127.0.0.1:8081 \
   SANDBOX_RUNNER_DATA_DIR=/var/sandboxes \
   SANDBOX_RUNNER_CAPACITY_TOTAL=10 \
   SANDBOX_RUNNER_API_KEYS="$SANDBOX_API_RUNNER_API_KEY" \
@@ -148,7 +148,8 @@ Defaults for Firecracker paths (`/opt/firecracker/bin`, `/srv/firecracker/...`) 
 
 ```bash
 curl -fsS http://127.0.0.1:8080/healthz
-curl -fsS http://127.0.0.1:8081/readyz
+# -k because the runner serves TLS with the private CA generated above.
+curl -fsSk https://127.0.0.1:8081/readyz
 
 export SANDBOX_API_BASE=http://127.0.0.1:8080 SANDBOX_API_KEY="$API_KEY"
 curl -fsS -H "X-Api-Key: $SANDBOX_API_KEY" -X POST "$SANDBOX_API_BASE/sandboxes" -d '{}'

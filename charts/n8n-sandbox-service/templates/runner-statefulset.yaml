@@ -74,7 +74,7 @@ spec:
             - name: SANDBOX_RUNNER_API_GRPC_ADDR
               value: "{{ include "n8n-sandbox-service.apiName" . }}:{{ .Values.api.service.grpcPort }}"
             - name: SANDBOX_RUNNER_HTTP_BASE_URL
-              value: "http://$(POD_NAME).{{ $runnerName }}.$(POD_NAMESPACE).svc.cluster.local:{{ $runner.service.httpPort }}"
+              value: "https://$(POD_NAME).{{ $runnerName }}.$(POD_NAMESPACE).svc.cluster.local:{{ $runner.service.httpPort }}"
             - name: SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR
               value: "$(POD_NAME).{{ $runnerName }}.$(POD_NAMESPACE).svc.cluster.local:{{ $runner.service.controlGrpcPort }}"
             - name: SANDBOX_RUNNER_API_KEYS
@@ -106,10 +106,14 @@ spec:
             {{- with $runner.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+          # scheme: HTTPS because the listener serves TLS. The kubelet cannot
+          # present a client certificate, which is why the runner negotiates
+          # with VerifyClientCertIfGiven and exempts these paths from auth.
           startupProbe:
             httpGet:
               path: /livez
               port: http
+              scheme: HTTPS
             initialDelaySeconds: 5
             periodSeconds: 5
             failureThreshold: 24
@@ -117,11 +121,13 @@ spec:
             httpGet:
               path: /livez
               port: http
+              scheme: HTTPS
             periodSeconds: 10
           readinessProbe:
             httpGet:
               path: /readyz
               port: http
+              scheme: HTTPS
             initialDelaySeconds: 5
             periodSeconds: 5
           volumeMounts:

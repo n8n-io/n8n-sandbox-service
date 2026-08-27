@@ -52,6 +52,14 @@ monitoring:
       enabled: true
     runner:
       enabled: true
+      # The runner serves TLS, so its scrape overrides the shared scheme above.
+      scheme: https
+      # The runner's certificate is signed by your private control-plane CA,
+      # which Prometheus does not trust by default. Point this at that CA, or
+      # set insecureSkipVerify. /metrics is unauthenticated and carries no
+      # tenant or sandbox identifiers.
+      tlsConfig:
+        insecureSkipVerify: true
 
 tls:
   # Choose how the mTLS Secrets are provided: existingSecret or certManager.
