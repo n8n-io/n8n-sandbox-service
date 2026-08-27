@@ -164,17 +164,25 @@ monitor=$(render --set monitoring.serviceMonitor.enabled=true "${cert_manager[@]
 echo "$monitor" | grep -q 'key: "ca.crt"'
 server_name=$(echo "$monitor" | sed -n 's/.*serverName: "\(.*\)"/\1/p')
 test -n "$server_name"
+# Strip the list markers and match the whole value as a fixed string: the dots
+# in a DNS name are regex wildcards to grep, so a pattern match would accept a
+# SAN that differs from serverName wherever a dot sits.
 render "${cert_manager[@]}" --show-only templates/cert-manager.yaml |
-	grep -q -- "- $server_name\$"
+	sed -n 's/^[[:space:]]*- //p' |
+	grep -Fxq "$server_name"
 
 echo "==> the runner scrape TLS config stays overridable"
 render --set monitoring.serviceMonitor.enabled=true \
 	--set monitoring.serviceMonitor.runner.tlsConfig.insecureSkipVerify=true \
 	--show-only templates/servicemonitor.yaml | grep -q 'insecureSkipVerify: true'
-# A plaintext scrape must not carry a tlsConfig.
-if render --set monitoring.serviceMonitor.enabled=true \
+# A plaintext scrape must not carry a tlsConfig. Render first and test the
+# captured output: set -e is suspended inside an if condition, and a failed
+# render leaves grep with nothing to match, so a broken template would look
+# exactly like a correctly absent tlsConfig and pass.
+plaintext=$(render --set monitoring.serviceMonitor.enabled=true \
 	--set monitoring.serviceMonitor.runner.scheme=http \
-	--show-only templates/servicemonitor.yaml | grep -q 'tlsConfig'; then
+	--show-only templates/servicemonitor.yaml)
+if grep -q 'tlsConfig' <<<"$plaintext"; then
 	echo "a plaintext runner scrape must not render a tlsConfig" >&2
 	exit 1
 fi

@@ -29,15 +29,33 @@ import (
 type runnerPKI struct {
 	dir        string
 	serverCert tls.Certificate
+	caPool     *x509.CertPool
 }
 
 var testRunnerPKI = sync.OnceValue(buildRunnerPKI)
+
+// pkiDir records the directory buildRunnerPKI created so TestMain can remove
+// it. Reading it there is safe: every test has returned by then, and
+// sync.OnceValue published the write before any of them observed the PKI.
+var pkiDir string
+
+// TestMain deletes the package PKI once the whole run is over. It cannot go any
+// earlier: these files back the certificate paths in the API config, so they
+// have to outlive every test that builds a gateway.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if pkiDir != "" {
+		_ = os.RemoveAll(pkiDir)
+	}
+	os.Exit(code)
+}
 
 func buildRunnerPKI() *runnerPKI {
 	dir, err := os.MkdirTemp("", "api-runner-pki")
 	if err != nil {
 		panic(err)
 	}
+	pkiDir = dir
 
 	caKey, caCert, caDER := issue(nil, nil, &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
@@ -75,7 +93,10 @@ func buildRunnerPKI() *runnerPKI {
 		panic(err)
 	}
 
-	return &runnerPKI{dir: dir, serverCert: serverCert}
+	pool := x509.NewCertPool()
+	pool.AddCert(caCert)
+
+	return &runnerPKI{dir: dir, serverCert: serverCert, caPool: pool}
 }
 
 // issue signs tpl with parent, or self-signs it when parent is nil.
@@ -218,11 +239,23 @@ func TestRunnerTransportVerifiesEachRunnerHostname(t *testing.T) {
 
 // newTestRunnerServer starts a stand-in runner over TLS, the way a real runner
 // now serves its HTTP listener.
+//
+// It demands a client certificate at the handshake, which is stricter than the
+// runner's own VerifyClientCertIfGiven. That is deliberate: without ClientAuth
+// the default is NoClientCert, so the server never asks, the API's
+// GetClientCertificate never runs, and every proxy test would keep passing if
+// the API stopped presenting a certificate. Requiring one here makes these
+// tests fail in that case. The runner's looser handshake, which keeps probes
+// working and defers the requirement to AuthMiddleware, is covered by
+// internal/runner/mtls_test.go.
 func newTestRunnerServer(t *testing.T, handler http.Handler) *httptest.Server {
 	t.Helper()
+	pki := testRunnerPKI()
 	srv := httptest.NewUnstartedServer(handler)
 	srv.TLS = &tls.Config{
-		Certificates: []tls.Certificate{testRunnerPKI().serverCert},
+		Certificates: []tls.Certificate{pki.serverCert},
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    pki.caPool,
 		MinVersion:   tls.VersionTLS12,
 	}
 	srv.StartTLS()

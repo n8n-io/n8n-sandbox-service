@@ -97,14 +97,17 @@ func TestLoadRejectsPlaintextHTTPBaseURL(t *testing.T) {
 }
 
 // url.Parse reports scheme https for several forms that carry no host, so a
-// scheme-only check lets the runner boot advertising a base URL nothing can
-// dial.
+// scheme-only check would let the runner boot advertising a base URL nothing
+// can dial.
 //
-// The explicit advertise address matters: without it the host-less URL is
-// caught downstream, when the control gRPC address cannot be derived from it,
-// which would let this test pass without exercising the check above. The Helm
-// chart and the e2e scripts all set it, so that is also the configuration in
-// which the gap is reachable.
+// Load rejects every form below at the host check itself. The advertise
+// address and the message match are here for the case where that check is
+// removed: these inputs are then still refused further down, where the control
+// gRPC address can no longer be derived from the URL, and that error names
+// SANDBOX_RUNNER_HTTP_BASE_URL as well, so a bare "did it fail" assertion would
+// not notice the loss. Setting the address removes that second net, and
+// matching the message pins which check spoke. The Helm chart and the e2e
+// scripts set the address too, so it also matches how runners really run.
 func TestLoadRejectsHTTPBaseURLWithoutHost(t *testing.T) {
 	for _, base := range []string{
 		"https:runner:8080",
@@ -121,8 +124,8 @@ func TestLoadRejectsHTTPBaseURLWithoutHost(t *testing.T) {
 			if err == nil {
 				t.Fatalf("expected Load to reject host-less SANDBOX_RUNNER_HTTP_BASE_URL %q", base)
 			}
-			if !strings.Contains(err.Error(), "SANDBOX_RUNNER_HTTP_BASE_URL") {
-				t.Fatalf("error should name the offending variable, got: %v", err)
+			if !strings.Contains(err.Error(), "must be an https:// URL with a host") {
+				t.Fatalf("expected the host check to reject %q, got: %v", base, err)
 			}
 		})
 	}
