@@ -96,10 +96,20 @@ no-op, so a partially imported run stays re-runnable.
 This only makes the version deployable; it rolls nothing out. Deployments still
 move their own tags (`prod`) or pin `{version}` explicitly.
 
-The import is gated on the image publish alone, not on tagging or release
-creation, so the two registries cannot disagree about which versions exist. A
-version that fails later in the release still lands in both, because by then the
-Docker Hub push has already happened and cannot be taken back.
+The import is gated on the image publish alone, not on tagging or release creation,
+so a failure in those steps can never skip it — the registries cannot diverge
+because of work the mirror does not depend on.
+
+The mirror can still fail on its own, whether from a transient Azure error or the
+digest refusal above, and `release-metadata` runs in parallel rather than waiting
+on it. A release can therefore end with the git tag, the GitHub Release, and Docker
+Hub all published while the private registry lacks `{version}`. The publish run is
+red in that case, and the version is not cloud-deployable until the mirror
+succeeds — re-run `mirror-to-acr`, which is idempotent. Metadata does not wait on
+the mirror by design: the golden-build tarball ships only as a release asset and
+the tag is the only record of what was published, so withholding both over an
+Azure hiccup would leave already-public images untraceable and Firecracker hosts
+unable to rebuild their snapshot.
 
 ### Steps
 
@@ -110,12 +120,20 @@ Docker Hub push has already happened and cannot be taken back.
 2. The workflow bumps `VERSION` and the chart's `appVersion` (via
    `scripts/set-release-version.sh`), then rejects the version unless it is both
    unused — no `service/v{version}` tag and no `service/release/{version}` branch,
-   so nothing is ever published twice — and strictly newer than the highest
-   existing `service/v*` release tag. Releases always build from the tip of `main`,
-   so a lower number would ship newer code while moving `latest` and `stable`
-   backwards. Staging and prod candidates carry a suffix and do not raise that
-   floor. It then creates a release branch (`service/release/{version}`) and opens
-   a PR.
+   so nothing is ever published twice — and strictly newer than every version
+   already released or in flight. That floor is the highest of all `service/v*`
+   tags and all `service/release/*` branches; branches count because a version is
+   claimed at prep and only tagged at the end of publishing, so a tag-only floor
+   would be blind to a release still under way. Releases always build from the tip
+   of `main`, so a lower number would ship newer code while moving `latest` and
+   `stable` backwards. Staging and prod candidates carry a suffix and do not raise
+   the floor. It then creates a release branch (`service/release/{version}`) and
+   opens a PR.
+
+   This orders the *starts* of releases, not their merges. Two releases can still
+   be in flight at once (prep 1.3.0, then prep 1.4.0), and merging them out of
+   order would move `latest` and `stable` backwards. Until publish enforces that
+   itself, merge open release PRs in ascending version order.
 3. The `Service Release Validate` workflow runs CI on the PR and fails if `VERSION`
    and the chart `appVersion` disagree.
 4. Merge the PR. This triggers the `Service Publish` workflow, whose
@@ -188,6 +206,11 @@ to `main`. The workflow:
 3. Creates a GitHub prerelease (`service/v{version}`) with the golden-build tarball,
    which pins the ACR sandbox candidate by its commit-SHA tag (the `version` label is
    caller-supplied and may be reused by a later run)
+
+The `version` input is rejected if it is a bare `x.y.z`. Candidates and releases
+share the `service/v*` tag namespace, and release prep reads it to order releases,
+so a candidate tagged `service/v1.3.0` would block the real v1.3.0 and every
+version below it. Keep a suffix, as the default label does.
 
 After deploying those image tags to staging, run:
 

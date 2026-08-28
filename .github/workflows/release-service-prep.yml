@@ -97,23 +97,27 @@ jobs:
         env:
           VERSION: ${{ steps.bump.outputs.version }}
         run: |
-          if ! tags=$(git ls-remote --tags --refs origin 'refs/tags/service/v*'); then
-            echo "::error::Could not reach origin to list release tags. Refusing to continue without confirming v${VERSION} is newer than the latest release; re-run once origin is reachable."
+          # Release branches count alongside tags. A version is claimed at prep and
+          # only tagged at the end of publishing, so a tag-only floor is blind to
+          # every release still in flight.
+          if ! refs=$(git ls-remote --refs origin 'refs/tags/service/v*' 'refs/heads/service/release/*'); then
+            echo "::error::Could not reach origin to list releases. Refusing to continue without confirming v${VERSION} is the newest; re-run once origin is reachable."
             exit 1
           fi
           # Staging and prod candidates carry a suffix and are not releases, so they
-          # must not raise the floor.
-          latest=$(awk -F'service/v' '{print $2}' <<< "$tags" \
-            | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+          # must not raise the floor. Filtered with sed rather than grep, which exits
+          # 1 on no match and would abort the very first release under pipefail.
+          latest=$(sed -nE 's#.*/service/(v|release/)##; /^[0-9]+\.[0-9]+\.[0-9]+$/p' <<< "$refs" \
+            | sort -V | tail -1)
           if [[ -z "$latest" ]]; then
-            echo "No prior release tags; v${VERSION} is the first."
+            echo "No prior releases; v${VERSION} is the first."
             exit 0
           fi
           if [[ "$(printf '%s\n%s\n' "$VERSION" "$latest" | sort -V | head -1)" == "$VERSION" ]]; then
-            echo "::error::v${VERSION} is not newer than the latest release v${latest}. Publishing it would move latest and stable backwards onto an older image set. Pick a version above v${latest}."
+            echo "::error::v${VERSION} is not newer than v${latest}, which is already released or still in flight. Publishing it would move latest and stable backwards onto an older image set. Release above v${latest}, wait for v${latest} to finish publishing, or delete its abandoned release branch."
             exit 1
           fi
-          echo "v${VERSION} is newer than the latest release v${latest}"
+          echo "v${VERSION} is newer than v${latest}"
 
       - name: Create release branch
         run: git push origin HEAD:refs/heads/service/release/${{ steps.bump.outputs.version }}
