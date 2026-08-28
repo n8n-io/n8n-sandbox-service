@@ -18,6 +18,7 @@ type fakeRuntime struct {
 	daemonErr error
 	ensureErr error
 	readyErr  error
+	recovered bool
 }
 
 func (f *fakeRuntime) Prepare(context.Context) {}
@@ -52,8 +53,15 @@ func (f *fakeRuntime) StopSandbox(context.Context, string) error {
 	return nil
 }
 
-func (f *fakeRuntime) EnsureSandboxRunning(context.Context, string) error {
-	return f.ensureErr
+func (f *fakeRuntime) EnsureSandboxRunning(context.Context, string) (runnerruntime.WakeResult, error) {
+	if f.ensureErr != nil {
+		return runnerruntime.WakeResult{}, f.ensureErr
+	}
+	// A wake that returns without an error ends with the sandbox up, recovery or
+	// not. For a recovery that is what makes refusing the request safe: the client's
+	// retry has somewhere to go.
+	f.daemonErr = nil
+	return runnerruntime.WakeResult{Recovered: f.recovered}, nil
 }
 
 func (f *fakeRuntime) DaemonURL(context.Context, string) (string, error) {

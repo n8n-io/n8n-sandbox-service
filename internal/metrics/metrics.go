@@ -31,6 +31,10 @@ const (
 	OpStop          = "stop"
 	OpEnsureRunning = "ensure_running"
 	OpEvict         = "evict"
+	// OpRecover is the wake of a sandbox whose guest died. Kept apart from
+	// ensure_running because it does different work — a cold boot instead of a
+	// snapshot restore — and mixing the two would hide both in one percentile.
+	OpRecover = "recover"
 )
 
 // Handler returns the http.Handler that serves the registry's metrics in
@@ -191,6 +195,7 @@ type RunnerRecorder struct {
 	containerOpDuration *prometheus.HistogramVec
 	lifecycleSteps      *prometheus.HistogramVec
 	guestDeaths         prometheus.Counter
+	recoveries          *prometheus.CounterVec
 }
 
 // NewRunnerRecorder builds the runner recorder. If enabled is false, the
@@ -238,7 +243,16 @@ func NewRunnerRecorder(enabled bool) *RunnerRecorder {
 			ConstLabels: prometheus.Labels{"role": RoleRunner},
 		},
 	)
-	reg.MustRegister(containerOps, containerOpDuration, lifecycleSteps, guestDeaths)
+	recoveries := prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   Namespace,
+			Name:        "recoveries_total",
+			Help:        "Attempts to recover a sandbox whose guest died, labeled by result.",
+			ConstLabels: prometheus.Labels{"role": RoleRunner},
+		},
+		[]string{"result"},
+	)
+	reg.MustRegister(containerOps, containerOpDuration, lifecycleSteps, guestDeaths, recoveries)
 	return &RunnerRecorder{
 		reg:                 reg,
 		httpRequests:        httpReq,
@@ -247,6 +261,7 @@ func NewRunnerRecorder(enabled bool) *RunnerRecorder {
 		containerOpDuration: containerOpDuration,
 		lifecycleSteps:      lifecycleSteps,
 		guestDeaths:         guestDeaths,
+		recoveries:          recoveries,
 	}
 }
 
@@ -294,6 +309,16 @@ func (r *RunnerRecorder) ObserveGuestDeath() {
 		return
 	}
 	r.guestDeaths.Inc()
+}
+
+// ObserveRecovery records an attempt to bring back a sandbox whose guest died.
+// Paired with guest deaths it answers the question a death count alone cannot:
+// whether the crashes clients hit are being recovered from.
+func (r *RunnerRecorder) ObserveRecovery(success bool) {
+	if r == nil || r.reg == nil {
+		return
+	}
+	r.recoveries.WithLabelValues(resultLabel(success)).Inc()
 }
 
 // SetActiveContainers registers a scrape-time gauge that calls f to read the
@@ -345,6 +370,15 @@ func (r *RunnerRecorder) GuestDeathCount() float64 {
 		return 0
 	}
 	return testutil.ToFloat64(r.guestDeaths)
+}
+
+// RecoveryCount returns the counter value for recovery attempts with the given
+// result. Intended for tests in other packages.
+func (r *RunnerRecorder) RecoveryCount(success bool) float64 {
+	if r.reg == nil {
+		return 0
+	}
+	return testutil.ToFloat64(r.recoveries.WithLabelValues(resultLabel(success)))
 }
 
 func resultLabel(success bool) string {

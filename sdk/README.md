@@ -156,6 +156,29 @@ try {
 
 `deleteSandbox` treats HTTP 404 as success (already gone), so a retried delete after a dropped `204` does not fail.
 
+### Sandbox restarts
+
+If a sandbox's guest crashes, the service recovers it by rebooting its filesystem and then fails the request that triggered the recovery with `SandboxCrashedError` (HTTP 409). The files are intact; everything that was in memory is not. Retry the request once — the sandbox is already running again — and relaunch whatever it was running in the background:
+
+```ts
+import { SandboxCrashedError } from '@n8n/sandbox-client';
+
+try {
+  return await client.exec(sandboxId, { command: 'curl -s localhost:3000' });
+} catch (err) {
+  if (err instanceof SandboxCrashedError) {
+    // Files survived; the dev server this depends on did not.
+    await client.exec(sandboxId, { command: 'npm run dev &' });
+    return await client.exec(sandboxId, { command: 'curl -s localhost:3000' });
+  }
+  throw err;
+}
+```
+
+It is never retried automatically, by design: an invisible retry would hand back a working sandbox and hide the loss. Two consequences to plan for — a completed execution is no longer readable (`getExecution` returns 404), and a caller-supplied `execId` is no longer idempotent, so re-posting one that ran before the restart runs the command again.
+
+A crash is not the only way memory goes, so do not treat this error as the only signal for it. A sandbox left idle long enough is stopped by the service, and depending on the deployment's runtime, waking it can cost the same three things — with no `SandboxCrashedError`, because an idle stop is reported through `status` instead: `getSandbox` returns `stopped` for it, while a crash leaves `running`. So checking `status` before relying on background processes is what catches the idle stop in advance. A crash cannot be caught that way — `status` stays `running` right through it — and the `SandboxCrashedError` above is its only notice.
+
 ## Development
 
 ```sh

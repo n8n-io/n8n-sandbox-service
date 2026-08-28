@@ -68,6 +68,7 @@ func stubCreateDeps(rt *Runtime) {
 	rt.deps.pauseVM = func(context.Context, string) error { return nil }
 	rt.deps.createSnapshot = func(context.Context, string) error { return nil }
 	rt.deps.loadSnapshot = func(context.Context, string, Config) error { return nil }
+	rt.deps.coldBoot = func(context.Context, string, *bootParams) error { return nil }
 	rt.deps.newProxy = func(context.Context, string, string, string) (daemonProxy, error) { return &fakeProxy{}, nil }
 	rt.deps.probeDaemon = func(context.Context, string) error { return nil }
 	rt.deps.freeBytesInDir = freeBytesInDir
@@ -75,22 +76,21 @@ func stubCreateDeps(rt *Runtime) {
 
 func testConfig() Config {
 	return Config{
-		JailerBin:               "/opt/firecracker/bin/jailer",
-		FirecrackerBin:          "/opt/firecracker/bin/firecracker",
-		JailerBaseDir:           "/srv/jailer",
-		TemplateDir:             "/srv/firecracker/template",
-		SnapshotMemPath:         "/srv/firecracker/snapshots/mem",
-		SnapshotStatePath:       "/srv/firecracker/snapshots/state",
-		SnapshotVirtioBlockPath: "/rootfs.ext4",
-		GuestIP:                 "172.16.0.10",
-		HostTapDeviceName:       "fc-tap-0",
-		HostTapIPCIDR:           "172.16.0.1/24",
-		DaemonPort:              8081,
-		ProxyListenIP:           "127.0.0.1",
-		ProxyPortStart:          18081,
-		SocketWaitAttempts:      1,
-		SocketWaitInterval:      time.Nanosecond,
-		DaemonWaitTimeout:       time.Second,
+		JailerBin:          "/opt/firecracker/bin/jailer",
+		FirecrackerBin:     "/opt/firecracker/bin/firecracker",
+		JailerBaseDir:      "/srv/jailer",
+		TemplateDir:        "/srv/firecracker/template",
+		SnapshotMemPath:    "/srv/firecracker/snapshots/mem",
+		SnapshotStatePath:  "/srv/firecracker/snapshots/state",
+		GuestIP:            "172.16.0.10",
+		HostTapDeviceName:  "fc-tap-0",
+		HostTapIPCIDR:      "172.16.0.1/24",
+		DaemonPort:         8081,
+		ProxyListenIP:      "127.0.0.1",
+		ProxyPortStart:     18081,
+		SocketWaitAttempts: 1,
+		SocketWaitInterval: time.Nanosecond,
+		DaemonWaitTimeout:  time.Second,
 	}
 }
 
@@ -108,7 +108,7 @@ func testRuntimeT(t *testing.T, capacity int32) *Runtime {
 // newTestRuntime constructs a runtime without startup reconcile (unit tests only).
 // ReadyCh stays open and admissionOK is false until markAdmissionOK is called.
 func newTestRuntime(capacity int32) *Runtime {
-	return &Runtime{
+	rt := &Runtime{
 		runnerConfig: testRunnerConfig(capacity),
 		config:       testConfig(),
 		deps:         defaultDependencies(testConfig()),
@@ -116,7 +116,22 @@ func newTestRuntime(capacity int32) *Runtime {
 		sandboxes:    make(map[string]*sandboxState),
 		readyCh:      make(chan struct{}),
 	}
+	// Part of the runtime's environment rather than a per-test stub: every sandbox
+	// is reserved against the sidecar of the snapshot it is created from, so without
+	// this no create reaches the behaviour under test.
+	rt.deps.loadBootParams = func(string) (*bootParams, error) {
+		params := testBootParams(rt.config)
+		return &params, nil
+	}
+	// Environment for the same reason: every sandbox is also reserved against the
+	// template kernel it would cold boot from, and no test has one on disk.
+	rt.deps.statTemplateKernel = func(string) (kernelPin, error) { return testKernelPin, nil }
+	return rt
 }
+
+// testKernelPin is what the template kernel stats as under test, so a test that
+// rebuilds the template only has to return something other than this.
+var testKernelPin = kernelPin{size: 42 << 20, modTime: time.Unix(1700000000, 0)}
 
 func TestRuntimeReadyChecksFirecrackerAssets(t *testing.T) {
 	rt := testRuntime(1)
@@ -414,8 +429,11 @@ func TestRuntimeDeleteSandboxDoesNotReleaseReassignedSlot(t *testing.T) {
 	rt := testRuntime(1)
 	rt.deps.run = func(context.Context, string, ...string) error { return nil }
 
-	oldState := &sandboxState{id: "sandbox-id-old123", slot: 0}
-	newState := &sandboxState{id: "sandbox-id-new456", slot: 0}
+	// bootParams as reserveSandbox would have set it: the teardown below reads the
+	// jail paths from it, and no sandbox exists without one.
+	params := testBootParams(rt.config)
+	oldState := &sandboxState{id: "sandbox-id-old123", slot: 0, bootParams: &params}
+	newState := &sandboxState{id: "sandbox-id-new456", slot: 0, bootParams: &params}
 	rt.sandboxes[newState.id] = newState
 	rt.slots[0].sandboxID = newState.id
 
@@ -515,6 +533,102 @@ func TestRuntimeCreateSandboxReleasesSlotWhenCleanupFails(t *testing.T) {
 		t.Fatal("expected CreateSandbox() failure")
 	} else if strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("CreateSandbox() error = %v, want the id to be reusable", err)
+	}
+}
+
+// The kernel is bound into every jail, including one that will restore a snapshot
+// and never read it: which path an activation takes is not known when the jail is
+// built, and a sandbox created from its snapshot can be cold booted later on the
+// same jail. It comes from the template, at the jail path the sandbox's own sidecar
+// records, and is left with the template's ownership because a bind mount shares
+// the inode with an asset every sandbox on the host uses.
+//
+// The teardown has to unmount it too. rm cannot delete a live mountpoint, so a
+// kernel left mounted fails the whole cleanup, and the sandbox keeps its slot: on
+// a capacity-1 host that is an admission canary that can never be reclaimed and a
+// runner that stays unhealthy for the rest of its life.
+func TestPrepareJailBindsTheKernelForALaterColdBoot(t *testing.T) {
+	rt := testRuntimeT(t, 1)
+	stubCreateDeps(rt)
+
+	var prepareScript, cleanupScript string
+	rt.deps.run = func(_ context.Context, _ string, args ...string) error {
+		switch script := args[len(args)-1]; {
+		case strings.Contains(script, "mount --bind") && prepareScript == "":
+			prepareScript = script
+		case strings.Contains(script, "umount -l") && cleanupScript == "":
+			cleanupScript = script
+		}
+		return nil
+	}
+
+	const sandboxID = "sandbox-id-123456"
+	if _, err := rt.CreateSandbox(context.Background(), sandboxID, nil); err != nil {
+		t.Fatalf("CreateSandbox() failed: %v", err)
+	}
+
+	jailRoot := filepath.Join(rt.config.JailerBaseDir, "firecracker", "sandbox-"+shortID(sandboxID), "root")
+	wantMount := "mount --bind '" + filepath.Join(rt.config.TemplateDir, "vmlinux") + "' '" + filepath.Join(jailRoot, "vmlinux") + "'"
+	if !strings.Contains(prepareScript, wantMount) {
+		t.Errorf("prepare jail script does not bind the kernel:\nwant %s\ngot\n%s", wantMount, prepareScript)
+	}
+	if strings.Contains(prepareScript, "chown 1000:1000 "+filepath.Join(jailRoot, "vmlinux")) {
+		t.Error("prepare jail chowns the shared template kernel through its bind mount")
+	}
+
+	if err := rt.DeleteSandbox(context.Background(), sandboxID); err != nil {
+		t.Fatalf("DeleteSandbox() failed: %v", err)
+	}
+	if want := "umount -l '" + filepath.Join(jailRoot, "vmlinux") + "'"; !strings.Contains(cleanupScript, want) {
+		t.Errorf("cleanup script does not unmount the kernel the jail prep mounted:\nwant %s\ngot\n%s", want, cleanupScript)
+	}
+}
+
+// The rootfs goes in at the jail path the sandbox's own sidecar records, because
+// that is the path both of its readers name: the snapshot was built with the drive
+// there, and a cold boot asks Firecracker to open whatever the sidecar says. A
+// mount anywhere else is a file neither of them finds. The teardown has to undo
+// the same path, or a delete leaves the sandbox's rootfs pinned under the jail.
+func TestJailMountsTheRootfsWhereTheSidecarRecordsIt(t *testing.T) {
+	rt := testRuntimeT(t, 1)
+	stubCreateDeps(rt)
+
+	// A snapshot built with its drive somewhere other than the default.
+	params := testBootParams(rt.config)
+	params.RootfsDrivePath = "/data/rootfs.ext4"
+	rt.deps.loadBootParams = func(string) (*bootParams, error) {
+		p := params
+		return &p, nil
+	}
+
+	var prepareScript, cleanupScript string
+	rt.deps.run = func(_ context.Context, _ string, args ...string) error {
+		switch script := args[len(args)-1]; {
+		case strings.Contains(script, "mount --bind") && prepareScript == "":
+			prepareScript = script
+		case strings.Contains(script, "umount -l") && cleanupScript == "":
+			cleanupScript = script
+		}
+		return nil
+	}
+
+	const sandboxID = "sandbox-id-123456"
+	if _, err := rt.CreateSandbox(context.Background(), sandboxID, nil); err != nil {
+		t.Fatalf("CreateSandbox() failed: %v", err)
+	}
+
+	jailRoot := filepath.Join(rt.config.JailerBaseDir, "firecracker", "sandbox-"+shortID(sandboxID), "root")
+	target := filepath.Join(jailRoot, "data", "rootfs.ext4")
+	wantMount := "mount --bind '" + sandboxRootfsPath(rt.runnerConfig.DataDir, sandboxID) + "' '" + target + "'"
+	if !strings.Contains(prepareScript, wantMount) {
+		t.Errorf("prepare jail script does not bind the rootfs where the sidecar records it:\nwant %s\ngot\n%s", wantMount, prepareScript)
+	}
+
+	if err := rt.DeleteSandbox(context.Background(), sandboxID); err != nil {
+		t.Fatalf("DeleteSandbox() failed: %v", err)
+	}
+	if want := "umount -l '" + target + "'"; !strings.Contains(cleanupScript, want) {
+		t.Errorf("cleanup script does not unmount the rootfs the jail prep mounted:\nwant %s\ngot\n%s", want, cleanupScript)
 	}
 }
 
@@ -731,8 +845,14 @@ func TestRuntimeEnsureSandboxRunningWakesStoppedSandbox(t *testing.T) {
 	if err := rt.StopSandbox(context.Background(), "sandbox-id-123456"); err != nil {
 		t.Fatalf("StopSandbox() failed: %v", err)
 	}
-	if err := rt.EnsureSandboxRunning(context.Background(), "sandbox-id-123456"); err != nil {
+	wake, err := rt.EnsureSandboxRunning(context.Background(), "sandbox-id-123456")
+	if err != nil {
 		t.Fatalf("EnsureSandboxRunning() failed: %v", err)
+	}
+	// An idle-stop wake stays transparent. Reporting it as a recovery would fail a
+	// request whose sandbox lost nothing, on every wake.
+	if wake.Recovered {
+		t.Error("an ordinary wake reported itself as a recovery")
 	}
 	if pauseCount != 1 {
 		t.Fatalf("pauseCount = %d, want 1", pauseCount)

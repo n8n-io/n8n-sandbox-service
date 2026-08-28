@@ -169,22 +169,19 @@ test.describe('Exec', () => {
     expect(result.timedOut).toBe(false);
   });
 
-  test('killing daemon mid-exec returns sandbox exec stream error', async () => {
-    let execErr: unknown;
-    try {
-      // Kill PID1 shortly after exec starts so the stream usually ends mid-flight.
-      // Depending on timing/runtime, this can surface as a stream error or a
-      // structured failed exec result.
-      const result = await exec(sandboxId, 'sh -c "(sleep 0.1; kill -9 1) & sleep 5"');
-      expect(result.success).toBe(false);
-      expect(result.exitCode).not.toBe(0);
-    } catch (err) {
-      execErr = err;
-    }
+  // SIGKILL at PID 1 is discarded by the kernel: a signal with no handler installed
+  // is never delivered to init, and SIGKILL can never have one. The sandbox is
+  // therefore untouched — worth pinning down, because it is why crashing a guest on
+  // purpose uses SIGTERM (see crashGuest), and because a test that fired this
+  // expecting a dead daemon would silently assert nothing. What a real guest death
+  // does is covered in sandbox-crash-recovery.spec.ts.
+  test('SIGKILL at PID 1 is ignored and leaves the sandbox usable', async () => {
+    const killed = await exec(sandboxId, 'kill -9 1');
+    expect(killed).toHaveSucceeded();
 
-    if (execErr) {
-      expect(execErr).toBeInstanceOf(Error);
-    }
+    const after = await exec(sandboxId, 'echo still-here');
+    expect(after).toHaveSucceeded();
+    expect(after.stdout).toBe('still-here\n');
   });
 
   test('environment variables as map', async () => {

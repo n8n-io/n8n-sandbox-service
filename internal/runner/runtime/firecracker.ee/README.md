@@ -253,6 +253,14 @@ guest would otherwise have to invent them. Recording them at build time keeps
 that boot faithful to how the snapshot was built, and keeps each sandbox pinned
 to its own snapshot lineage once a host serves more than one flavour.
 
+The two jail paths are also where `prepareJail` bind-mounts those assets, which is
+why neither has a `Config` field either. Both of their readers name the sidecar's
+value — the restore opens the drive where the snapshot was built with it, and a
+cold boot asks Firecracker for the paths it replays from the sidecar — so a
+runner-side path could only agree with them by coincidence, and a sandbox created
+from a rebuilt snapshot could not follow its own lineage. Being mount targets
+under the jail root, both are required absolute and free of `.` or `..` segments.
+
 Admission rejects a snapshot whose `guest_ip`, `host_tap_device_name`,
 `daemon_port` or `boot_args` gateway contradicts the runner: those are baked into
 the guest or the restored device model, so a mismatch yields sandboxes that never
@@ -308,15 +316,14 @@ retrying cannot accumulate slots. What is left behind is what an idle stop leave
 behind, minus a usable snapshot — stopped, no slot, files intact — so the
 existing paths need no special case: `StopSandbox` is idempotent instead of
 looping on a dead API socket, the idle sweeper can delete it, and `DaemonURL`
-reports it not running.
+reports it not running, which sends the next request down the wake path where the
+recovery happens.
 
 It is **not** restored from its snapshot afterwards. The guest kept writing to
 the rootfs after that snapshot was taken, and restoring a memory image whose
 cached filesystem metadata no longer matches the disk corrupts it silently —
-nothing detects the mismatch. So `EnsureSandboxRunning` refuses a pinned
-(`mustColdBoot`) sandbox. Bringing it back needs a boot of its existing rootfs,
-which this runtime does not do yet; until then a request for a crashed sandbox
-fails and the sandbox stays deletable.
+nothing detects the mismatch. So a pinned (`mustColdBoot`) sandbox comes back
+through a cold boot of its existing rootfs instead.
 
 The pin is set by the restore, not by the death, and specifically *before* the
 restore is asked for rather than after it reports success. `snapshot/load` carries
@@ -333,9 +340,75 @@ is just as stale. The cost of pinning first is that a load which failed without
 resuming anything is pinned as well, which costs a cold boot instead of a restore.
 Placing the pin immediately before the request rather than earlier is what keeps that
 cost small — every step ahead of it fails unambiguously with no guest having run, so
-those failures leave the sandbox wakeable. Until cold boot exists a pinned sandbox is
-refused, which is the deliberate trade: a loud failure instead of a silently
-corrupted disk.
+those failures leave the sandbox restorable.
+
+## Cold boot recovery
+
+A wake reads the pin and takes one of two paths, in `startGuest`: `snapshot/load` for
+a sandbox with a matching snapshot, or `coldBoot` for one without. Both leave the pin
+set — a restored guest resumes onto a rootfs its snapshot stops describing the moment
+it runs, and a cold booted one never had a matching snapshot at all — so only the
+snapshot `StopSandbox` takes of a paused guest clears it either way. Nothing else
+about the wake changes: it re-reserves a slot, prepares the same jail, and comes back
+with its files intact. What is gone is everything that was in memory, which is the
+loss the caller has to report.
+
+`boot.go` is a transcription of the five requests
+[create-golden-snapshot.sh](../../../../scripts/firecracker.ee/create-golden-snapshot.sh)
+boots the golden snapshot with — `/machine-config`, `/boot-source`, `/drives/rootfs`,
+`/network-interfaces/eth0`, then `/actions` with `InstanceStart` — over the same API
+socket client the snapshot calls use. The two cannot share code: the script runs
+standalone on runner VMs, and [RELEASE.md](../../../../docs/RELEASE.md) rebuilds the
+golden snapshot before rolling the runner image, so the matching binary is not on the
+host yet. They share `boot.json` instead, which is why the sidecar exists.
+
+Boot parameters travel per sandbox, not per runner. `reserveSandbox` resolves the
+sidecar once, when a sandbox is first tied to a golden snapshot, and stores it on
+`sandboxState`; recovery replays that copy and never re-reads configuration. An
+operator who rebuilds or swaps the golden snapshot under a running runner would
+otherwise have sandboxes created before the swap cold boot with another build's memory
+size, kernel and `init=`, against a rootfs matching none of it. When several golden
+snapshots land, the resolver in `reserveSandbox` is the only thing that has to change.
+
+`prepareJail` bind-mounts the kernel into every jail, not only into one about to cold
+boot: which path an activation takes is not known when the jail is built, and a
+sandbox created from its snapshot can be cold booted later on the same jail. It goes
+at the jail path the sandbox's own sidecar records, with the template's ownership and
+mode — Firecracker only reads it, and the mount shares an inode with an asset every
+sandbox on the host uses. `cleanupHost` unmounts it along with the rest, because the
+`rm -rf` that ends cleanup cannot delete a directory holding an active mount: a kernel
+left mounted fails the whole teardown, and the sandbox goes on holding its slot.
+
+That mount is the one boot input the sidecar does not carry, because the sidecar
+records the jail path the kernel is mounted at rather than the host file mounted
+there, and `prepareJail` resolves that file from `TemplateDir` every time it builds a
+jail — the build that recovers a crashed sandbox included. So `reserveSandbox` also
+stats the template kernel and keeps its size and modification time on `sandboxState`,
+and `startGuest` re-stats before a cold boot and refuses one that no longer matches.
+The pairing it refuses is undetectable downstream: the guest either comes up or does
+not, and one that comes up far enough to answer the daemon probe is served to the
+client as recovered. Kernels are meant to reach a host by replacing the runner, so
+this guards an in-place template rebuild under a live one rather than recovering from
+it, and refusing costs only the recovery — the sandbox stays as the crash left it,
+stopped with its rootfs on disk. The check sits on the cold boot branch alone: a
+restore takes the kernel from its memory image and never opens the file, so a wake
+with a snapshot to return to is unaffected.
+
+A recovery is reported, an ordinary wake is not. `EnsureSandboxRunning` returns
+`WakeResult{Recovered}`, and the runner's proxy turns that into `409
+sandbox_restarted` for the request that drove it rather than proxying it — see
+[API.md](../../../../docs/API.md#http-409-sandbox_restarted--the-sandbox-came-back-without-its-memory).
+The flag comes out of the wake singleflight, so every request stranded by the crash
+learns of it from the one recovery that served them all, and each recovery is timed
+under `metrics.OpRecover` with a `cold_boot` step where a wake has `load_snapshot`.
+Recovering before refusing is what makes the retry deterministic: by the time the 409
+is written, the sandbox is up.
+
+The flag is set on a failed recovery too, next to the error, which is what lets the
+outcome be counted: `sandbox_recoveries_total` is incremented inside the singleflight
+— once per crash, not once per stranded request — and covers every way the wake can
+fail, including a sandbox refused for want of capacity before any cold boot was
+attempted. Check the error before reading the flag.
 
 ## Current Limitations
 

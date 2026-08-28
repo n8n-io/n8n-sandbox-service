@@ -7,6 +7,13 @@ Always run the following checks after modifying Go files:
 ```sh
 make fmt-check
 make vet
+make test
+```
+
+After modifying anything under `sdk/`, run:
+
+```sh
+make sdk-test
 ```
 
 After modifying shell scripts, run:
@@ -25,7 +32,8 @@ Fix any issues before committing.
 
 ## When making changes to the API
 
-Always document them into docs/API.md
+Always document them into docs/API.md.
+Make sure for any changes we make the SDK is aligned.
 
 ## When changing the Helm chart
 
@@ -38,8 +46,13 @@ bash charts/n8n-sandbox-service/render-tests.sh
 
 ## Keep documentation up-to-date
 
-Remember to update any relevant documentation in the docs/ folder if any of the changes affect them
+Remember to update any relevant documentation in the docs/ folder if any of the changes affect them.
+
+Document what the code does today, never what is planned.
 
 ## Firecracker runner
 
 All Firecracker runner related files should contain `.ee` or be in a directory that contains `.ee` in the name, so the enterprise license applies.
+
+This applies to runner source only. Test files need no `.ee`: tag a
+Firecracker-only e2e spec `FIRECRACKER_ONLY` instead.

@@ -87,6 +87,10 @@ func TestLoadBootParamsRejectsUnusableSidecars(t *testing.T) {
 		{"no memory", func(p *bootParams) { p.MemSizeMiB = 0 }, "mem_size_mib"},
 		{"relative kernel", func(p *bootParams) { p.KernelImagePath = "vmlinux" }, "kernel_image_path"},
 		{"relative rootfs", func(p *bootParams) { p.RootfsDrivePath = "rootfs.ext4" }, "rootfs_drive_path"},
+		// Both are bind-mount targets under the jail root, so a path that climbs out
+		// of it mounts a guest asset somewhere on the host instead.
+		{"kernel outside the jail", func(p *bootParams) { p.KernelImagePath = "/../../etc/ssh/sshd_config" }, "kernel_image_path"},
+		{"rootfs outside the jail", func(p *bootParams) { p.RootfsDrivePath = "/srv/../../rootfs.ext4" }, "rootfs_drive_path"},
 		{"empty boot args", func(p *bootParams) { p.BootArgs = "  " }, "boot_args"},
 		{"boot args without guest network", func(p *bootParams) { p.BootArgs = "console=ttyS0 init=/sandbox-daemon" }, "ip="},
 		{"boot args without gateway", func(p *bootParams) { p.BootArgs = "console=ttyS0 ip=172.16.0.10" }, "gateway"},

@@ -44,6 +44,30 @@ The API and runner use two buckets so clients (including the SDK) can decide **w
 - **503 Service Unavailable** — **Transient / retry**: overload, no capacity yet, network or upstream not ready, or the sandbox daemon is not reachable *for the moment* while the container is otherwise expected to be usable. Safe to back off and retry the same operation.
 - **502 Bad Gateway** — **Not retryable as “wait and retry”**: the request does not make sense to repeat unchanged; fix state first (new sandbox, repair registry/routing, or handle the reported error). Examples: stored sandbox has **no runner HTTP base URL**, or **delete** failed on the runner control plane.
 
+### HTTP 409 `sandbox_restarted` — the sandbox came back without its memory
+
+A sandbox whose guest crashed is recovered automatically by booting its existing filesystem. Files survive; everything that was in memory does not. The request that triggered the recovery waits for it, then fails with `409`, so the loss is reported once instead of silently:
+
+```
+HTTP/1.1 409 Conflict
+X-Sandbox-Restarted: 1
+
+{"error":"sandbox restarted after guest crash; state in memory was lost","reason":"sandbox_restarted"}
+```
+
+Retry once. The sandbox is already running when this arrives, so there is no `Retry-After` and nothing to wait for. Do not retry it silently: the point of the status is that the client learns its sandbox is not the one it left behind.
+
+Match on `X-Sandbox-Restarted: 1`, which survives both proxy hops and is listed in `Access-Control-Expose-Headers` so browser clients can read it, or on the body's `reason`, the only field that tells this `409` from any other. Do not look for a `code` in it: the runner writes this body and the API proxies it through untouched, so unlike the shape above it carries `error` and `reason` only, and the integer status appears in the status line alone. Every request the crash stranded sees it, since one recovery serves them all. Later requests are ordinary `200`s, and `status` in `GET /sandboxes/{id}` stays `running` throughout.
+
+What the client loses:
+
+- Running processes. A dev server or worker started by an earlier execution is dead and nothing restarts it; its files remain, so relaunch it.
+- Completed executions. History is in memory only, so `GET /sandboxes/{id}/executions/{exec_id}` returns `404 execution not found` even for a command that finished before the crash.
+- Idempotency of a caller-supplied `exec_id`. Re-posting an id that ran before the restart runs the command again instead of returning the earlier result.
+- Writes that had not reached the disk. On Firecracker the crash is a guest kernel panic, so it takes the guest page cache with it, and neither a shell redirect nor `PUT /files` flushes. A file written seconds before the crash can be missing or truncated where an older one is intact. Run `sync` in the sandbox if a write has to survive a crash it is racing.
+
+An ordinary wake from an idle stop stays transparent: no `409`, no header. On the Sysbox runtime that wake costs the same three things, because a stopped container is started again rather than resumed; on Firecracker an idle stop snapshots the paused guest, so memory does survive it. The `409` is not what tells them apart — `status` is. An idle stop sets `status` to `stopped`, so a client can see it in `GET /sandboxes/{id}` and know what it lost, whereas a crash leaves `status` at `running`. The `409` exists for the case that has no other signal.
+
 **404** `sandbox not found` — Unknown id, the sandbox is past its idle delete-after wake window (`SANDBOX_API_IDLE_DELETE_AFTER`, default `24h`), or the runner no longer tracks the sandbox (eviction, delete, or runner restart). On exec/file proxy routes, when the runner signals sandbox gone (`X-Sandbox-Gone: 1` or `{"error":"sandbox not found"}`), the API removes the store row so subsequent `GET /sandboxes/{id}` also returns 404. Other runner **404** responses (for example `execution not found` or missing file paths) do **not** delete the sandbox. Exec and file routes may return **503** or **502** from the runner after the API successfully reaches the runner; the API may return **503** `runner unavailable` before the runner is contacted.
 
 ---

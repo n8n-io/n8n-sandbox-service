@@ -92,7 +92,7 @@ func TestEnsureSandboxRunningEmitsStepTimings(t *testing.T) {
 	}
 
 	ctx := obs.WithTraceparent(context.Background(), testTraceparent)
-	if err := rt.EnsureSandboxRunning(ctx, sandboxID); err != nil {
+	if _, err := rt.EnsureSandboxRunning(ctx, sandboxID); err != nil {
 		t.Fatalf("EnsureSandboxRunning() failed: %v", err)
 	}
 
@@ -112,6 +112,45 @@ func TestEnsureSandboxRunningEmitsStepTimings(t *testing.T) {
 	// A wake reuses the sandbox's disk, so it must not repeat the clone steps.
 	if _, ok := woke[0][stepCloneRootfs+"_ms"]; ok {
 		t.Fatalf("wake event records a rootfs clone: %v", woke[0])
+	}
+}
+
+// Recovery is timed under its own operation, so a cold boot's latency is not mixed
+// into the wake percentiles it does not resemble.
+func TestRecoveryEmitsStepTimingsUnderItsOwnOperation(t *testing.T) {
+	events := captureLifecycleEvents(t)
+	rt := testRuntimeT(t, 1)
+	stubCreateDeps(rt)
+	rt.SetMetricsRecorder(metrics.NewRunnerRecorder(true))
+
+	exits := &guestExitStub{}
+	exits.install(rt, &fakeProcess{})
+
+	const sandboxID = "sandbox-id-123456"
+	if _, err := rt.CreateSandbox(context.Background(), sandboxID, nil); err != nil {
+		t.Fatalf("CreateSandbox() failed: %v", err)
+	}
+	exits.fire(t, 0)
+
+	if _, err := rt.EnsureSandboxRunning(context.Background(), sandboxID); err != nil {
+		t.Fatalf("EnsureSandboxRunning() failed: %v", err)
+	}
+
+	woke := events("firecracker sandbox woke")
+	if len(woke) != 1 {
+		t.Fatalf("got %d wake events, want 1", len(woke))
+	}
+	if got := woke[0]["op"]; got != metrics.OpRecover {
+		t.Fatalf("recovery event op = %v, want %q", got, metrics.OpRecover)
+	}
+	if got := woke[0]["recovered"]; got != true {
+		t.Errorf("recovery event recovered = %v, want true", got)
+	}
+	requireStepFields(t, woke[0],
+		stepPrepareJail, stepSetupNetwork, stepStartJailer,
+		stepWaitSocket, stepColdBoot, stepStartProxy, stepProbeDaemon)
+	if _, ok := woke[0][stepLoadSnapshot+"_ms"]; ok {
+		t.Fatalf("recovery event records a snapshot restore: %v", woke[0])
 	}
 }
 

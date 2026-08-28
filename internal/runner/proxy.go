@@ -108,9 +108,16 @@ func resolveDaemonURL(w http.ResponseWriter, r *http.Request, rt runnerruntime.R
 	daemonBaseURL, err := rt.DaemonURL(r.Context(), id)
 	if err != nil && errors.Is(err, runnerruntime.ErrSandboxNotRunning) {
 		wakeStart := time.Now()
-		wakeErr := rt.EnsureSandboxRunning(r.Context(), id)
+		wake, wakeErr := rt.EnsureSandboxRunning(r.Context(), id)
 		if rec != nil {
-			rec.ObserveContainerOp(metrics.OpEnsureRunning, wakeErr == nil, time.Since(wakeStart))
+			// Under the operation the wake actually was, so a cold boot's latency does
+			// not land in the wake percentiles and the totals agree with the per-step
+			// timings the runtime records under the same label.
+			op := metrics.OpEnsureRunning
+			if wake.Recovered {
+				op = metrics.OpRecover
+			}
+			rec.ObserveContainerOp(op, wakeErr == nil, time.Since(wakeStart))
 		}
 		if wakeErr != nil {
 			if errors.Is(wakeErr, runnerruntime.ErrSandboxNotFound) {
@@ -118,6 +125,15 @@ func resolveDaemonURL(w http.ResponseWriter, r *http.Request, rt runnerruntime.R
 			} else {
 				writeError(w, http.StatusServiceUnavailable, "sandbox start: "+wakeErr.Error())
 			}
+			return "", false
+		}
+		// Recover first, then refuse. The sandbox is up by the time this runs, so the
+		// client's retry succeeds deterministically; proxying instead would hand back a
+		// healthy-looking sandbox whose processes are gone and leave the client to
+		// discover that as a bug in its own code. Every request coalesced into this one
+		// recovery lands here, so a burst after a crash tells all of them, once.
+		if wake.Recovered {
+			writeSandboxRestarted(w)
 			return "", false
 		}
 		daemonBaseURL, err = rt.DaemonURL(r.Context(), id)
