@@ -87,8 +87,19 @@ the publish workflow also imports all four images into it under `{version}`. The
 import is server-side and copies the published manifests, so the private
 registry's `{version}` resolves to the same digests as Docker Hub's.
 
+Each image is imported by digest rather than by tag, and an existing `{version}`
+is never replaced. If a rebuild of the same version produces a different
+manifest, the import fails instead of swapping the content behind a tag that
+deployments may already be running. Re-importing an identical manifest is a
+no-op, so a partially imported run stays re-runnable.
+
 This only makes the version deployable; it rolls nothing out. Deployments still
 move their own tags (`prod`) or pin `{version}` explicitly.
+
+The import is gated on the image publish alone, not on tagging or release
+creation, so the two registries cannot disagree about which versions exist. A
+version that fails later in the release still lands in both, because by then the
+Docker Hub push has already happened and cannot be taken back.
 
 ### Steps
 
@@ -97,19 +108,26 @@ move their own tags (`prod`) or pin `{version}` explicitly.
    ignores `bump`. Use it to skip a version number that a past release burned —
    `bump` derives from `VERSION`, so an abandoned version stays reachable by it.
 2. The workflow bumps `VERSION` and the chart's `appVersion` (via
-   `scripts/set-release-version.sh`), then fails if `service/v{version}` or
-   `service/release/{version}` already exists, so a version can never be
-   published twice. It creates a release branch (`service/release/{version}`) and
-   opens a PR.
+   `scripts/set-release-version.sh`), then rejects the version unless it is both
+   unused — no `service/v{version}` tag and no `service/release/{version}` branch,
+   so nothing is ever published twice — and strictly newer than the highest
+   existing `service/v*` release tag. Releases always build from the tip of `main`,
+   so a lower number would ship newer code while moving `latest` and `stable`
+   backwards. Staging and prod candidates carry a suffix and do not raise that
+   floor. It then creates a release branch (`service/release/{version}`) and opens
+   a PR.
 3. The `Service Release Validate` workflow runs CI on the PR and fails if `VERSION`
    and the chart `appVersion` disagree.
-4. Merge the PR. This triggers the `Service Publish` workflow, which:
-   - Runs tests
-   - Builds and pushes multi-arch images to Docker Hub, sandbox image included
-   - Imports those images into the private container registry under `{version}`
-   - Packages `firecracker-golden-build-{version}.tar.gz` and attaches it to the release
-   - Creates a git tag (`service/v{version}`) and GitHub Release
-   - Opens a post-release PR to sync `VERSION` and the chart `appVersion` back to `main`
+4. Merge the PR. This triggers the `Service Publish` workflow, whose
+   `publish-images` job runs tests and then builds and pushes the multi-arch images
+   to Docker Hub, sandbox image included. Two jobs run in parallel off that push,
+   neither waiting on the other:
+   - `mirror-to-acr` imports those images into the private container registry under
+     `{version}`
+   - `release-metadata` packages `firecracker-golden-build-{version}.tar.gz` and
+     attaches it to the release, creates a git tag (`service/v{version}`) and GitHub
+     Release, and opens a post-release PR to sync `VERSION` and the chart
+     `appVersion` back to `main`
 5. Merge the post-release PR. The chart publish workflow then ships a chart whose
    default image tags point at images that already exist.
 

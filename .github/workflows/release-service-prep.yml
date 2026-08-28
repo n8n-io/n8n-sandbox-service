@@ -20,6 +20,14 @@ permissions:
   contents: write
   pull-requests: write
 
+# Serialized, and deliberately not keyed by version: the resolved version is only
+# known mid-run, and two runs can reach the same one from different inputs. The
+# already-released check below is a read followed by a write, so it is only sound
+# while no other prep run is in flight.
+concurrency:
+  group: release-service-prep
+  cancel-in-progress: false
+
 jobs:
   prep-release:
     runs-on: ubuntu-latest
@@ -68,11 +76,44 @@ jobs:
           VERSION: ${{ steps.bump.outputs.version }}
         run: |
           for ref in "refs/tags/service/v${VERSION}" "refs/heads/service/release/${VERSION}"; do
-            if [[ -n "$(git ls-remote origin "$ref")" ]]; then
+            # "No such ref" and "origin did not answer" both print nothing, so the
+            # exit status is the only thing that distinguishes free from unknown.
+            if ! matches=$(git ls-remote origin "$ref"); then
+              echo "::error::Could not reach origin to look up ${ref}. Refusing to continue without confirming v${VERSION} is unreleased; re-run once origin is reachable."
+              exit 1
+            fi
+            if [[ -n "$matches" ]]; then
               echo "::error::${ref} already exists. v${VERSION} was already released, or a previous attempt left it behind. Pick a different version or delete the stale ref."
               exit 1
             fi
           done
+
+      # An unused version number is not necessarily a releasable one. VERSION on main
+      # lags whenever a release is abandoned, and the override is hand-typed, so both
+      # paths can land below the newest release — where every image tag, and latest
+      # and stable with them, would silently move backwards. Releases only ever build
+      # from the tip of main, so a lower number cannot describe what it ships.
+      - name: Fail if version is not newer than the latest release
+        env:
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: |
+          if ! tags=$(git ls-remote --tags --refs origin 'refs/tags/service/v*'); then
+            echo "::error::Could not reach origin to list release tags. Refusing to continue without confirming v${VERSION} is newer than the latest release; re-run once origin is reachable."
+            exit 1
+          fi
+          # Staging and prod candidates carry a suffix and are not releases, so they
+          # must not raise the floor.
+          latest=$(awk -F'service/v' '{print $2}' <<< "$tags" \
+            | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+          if [[ -z "$latest" ]]; then
+            echo "No prior release tags; v${VERSION} is the first."
+            exit 0
+          fi
+          if [[ "$(printf '%s\n%s\n' "$VERSION" "$latest" | sort -V | head -1)" == "$VERSION" ]]; then
+            echo "::error::v${VERSION} is not newer than the latest release v${latest}. Publishing it would move latest and stable backwards onto an older image set. Pick a version above v${latest}."
+            exit 1
+          fi
+          echo "v${VERSION} is newer than the latest release v${latest}"
 
       - name: Create release branch
         run: git push origin HEAD:refs/heads/service/release/${{ steps.bump.outputs.version }}
