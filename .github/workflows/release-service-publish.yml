@@ -16,6 +16,8 @@ jobs:
     if: github.event.pull_request.merged == true
     runs-on: ${{ vars.RUNNER_PROVIDER == 'github' && 'ubuntu-latest' || 'blacksmith-4vcpu-ubuntu-2204' }}
     environment: docker-release
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
@@ -93,8 +95,10 @@ jobs:
         run: |
           TAG="service/v${VERSION}"
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
-          git tag --force "${TAG}"
-          git push --force origin "${TAG}"
+          # Not forced: a released tag must keep pointing at the commit its images
+          # and GitHub Release assets were built from.
+          git tag "${TAG}"
+          git push origin "${TAG}"
 
       - name: Package Firecracker golden build tarball
         run: |
@@ -143,3 +147,40 @@ jobs:
             --label "release/service" \
             --message "service: bump version to v${VERSION}" \
             -- VERSION charts/n8n-sandbox-service/Chart.yaml
+
+  mirror-to-acr:
+    needs: publish
+    runs-on: ubuntu-latest
+    environment: ALL
+    permissions:
+      id-token: write
+      packages: read
+    steps:
+      - name: Azure Service Principal login (OIDC)
+        uses: azure/login@cb79c773a3cfa27f31f25eb3f677781210c9ce3d # v1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Import release images into ACR
+        env:
+          ACR_NAME: ${{ secrets.AZURE_ACR_NAME }}
+          VERSION: ${{ needs.publish.outputs.version }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for image in \
+            n8n-sandbox-service-api \
+            n8n-sandbox-service-runner-dind \
+            n8n-sandbox-service-runner-firecracker \
+            n8n-sandbox-service-sandbox; do
+            az acr import \
+              --name "$ACR_NAME" \
+              --source "ghcr.io/n8n-io/${image}:${VERSION}" \
+              --username "$GHCR_USER" \
+              --password "$GHCR_TOKEN" \
+              --image "${image}:${VERSION}" \
+              --force
+          done

@@ -4,13 +4,17 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: "Version bump type"
+        description: "Version bump type (ignored when version is set)"
         required: true
         type: choice
         options:
           - patch
           - minor
           - major
+      version:
+        description: "Exact version to release (x.y.z). Overrides bump."
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -31,20 +35,44 @@ jobs:
           app-id: ${{ secrets.N8N_ASSISTANT_APP_ID }}
           private-key: ${{ secrets.N8N_ASSISTANT_PRIVATE_KEY }}
 
-      - name: Bump version
+      # A bump computed from VERSION collides whenever a past release left VERSION
+      # behind — an abandoned version stays reachable by bump forever. The override
+      # lets a human name the next version instead of reverse-engineering the input
+      # that yields it. set-release-version.sh rejects anything that is not x.y.z.
+      - name: Resolve version
         id: bump
+        env:
+          BUMP: ${{ inputs.bump }}
+          OVERRIDE: ${{ inputs.version }}
         run: |
           CURRENT=$(cat VERSION)
-          IFS='.' read -r major minor patch <<< "$CURRENT"
-          case "${{ inputs.bump }}" in
-            major) major=$((major + 1)); minor=0; patch=0 ;;
-            minor) minor=$((minor + 1)); patch=0 ;;
-            patch) patch=$((patch + 1)) ;;
-          esac
-          VERSION="${major}.${minor}.${patch}"
+          if [[ -n "$OVERRIDE" ]]; then
+            VERSION="$OVERRIDE"
+          else
+            IFS='.' read -r major minor patch <<< "$CURRENT"
+            case "$BUMP" in
+              major) major=$((major + 1)); minor=0; patch=0 ;;
+              minor) minor=$((minor + 1)); patch=0 ;;
+              patch) patch=$((patch + 1)) ;;
+            esac
+            VERSION="${major}.${minor}.${patch}"
+          fi
           bash scripts/set-release-version.sh "$VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Bumped $CURRENT -> $VERSION"
+          echo "Releasing $CURRENT -> $VERSION"
+
+      # Catch a collision here rather than at the branch push, which reports it as
+      # an opaque non-fast-forward after the version has already been bumped.
+      - name: Fail if version was already released
+        env:
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: |
+          for ref in "refs/tags/service/v${VERSION}" "refs/heads/service/release/${VERSION}"; do
+            if [[ -n "$(git ls-remote origin "$ref")" ]]; then
+              echo "::error::${ref} already exists. v${VERSION} was already released, or a previous attempt left it behind. Pick a different version or delete the stale ref."
+              exit 1
+            fi
+          done
 
       - name: Create release branch
         run: git push origin HEAD:refs/heads/service/release/${{ steps.bump.outputs.version }}

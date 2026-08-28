@@ -38,6 +38,7 @@ flowchart TD
         I --> J[Build + push multi-arch\nimages to Docker Hub]
         J --> K[Create git tag +\nGitHub Release +\ngolden-build tarball]
         K --> L[Open post-release\nversion-bump PR to main]
+        J --> S[Import :version into\nprivate registry]
     end
 
     subgraph sdk ["SDK Release"]
@@ -79,17 +80,33 @@ Deploy the same `{version}` for all four. Mixing versions is unsupported — the
 no compatibility matrix, because the runner/daemon contract can change on any
 commit.
 
+### Private registry mirror
+
+Cloud environments pull from the private container registry, not Docker Hub, so
+the publish workflow also imports all four images into it under `{version}`. The
+import is server-side and copies the published manifests, so the private
+registry's `{version}` resolves to the same digests as Docker Hub's.
+
+This only makes the version deployable; it rolls nothing out. Deployments still
+move their own tags (`prod`) or pin `{version}` explicitly.
+
 ### Steps
 
 1. Go to Actions → Service Release Prep and run the workflow, choosing `patch`, `minor`, or `major`.
+   Set the optional `version` input to release an exact `x.y.z` instead, which
+   ignores `bump`. Use it to skip a version number that a past release burned —
+   `bump` derives from `VERSION`, so an abandoned version stays reachable by it.
 2. The workflow bumps `VERSION` and the chart's `appVersion` (via
-   `scripts/set-release-version.sh`), creates a release branch
-   (`service/release/{version}`), and opens a PR.
+   `scripts/set-release-version.sh`), then fails if `service/v{version}` or
+   `service/release/{version}` already exists, so a version can never be
+   published twice. It creates a release branch (`service/release/{version}`) and
+   opens a PR.
 3. The `Service Release Validate` workflow runs CI on the PR and fails if `VERSION`
    and the chart `appVersion` disagree.
 4. Merge the PR. This triggers the `Service Publish` workflow, which:
    - Runs tests
    - Builds and pushes multi-arch images to Docker Hub, sandbox image included
+   - Imports those images into the private container registry under `{version}`
    - Packages `firecracker-golden-build-{version}.tar.gz` and attaches it to the release
    - Creates a git tag (`service/v{version}`) and GitHub Release
    - Opens a post-release PR to sync `VERSION` and the chart `appVersion` back to `main`
@@ -197,6 +214,10 @@ communicates HTTP API compatibility to consumers who do not deploy this service.
 
 - Service: `service/v{version}` (e.g. `service/v1.0.0`) — covers all four images
 - SDK: `sdk/v{version}` (e.g. `sdk/v0.0.4`)
+
+Release tags are immutable: publish creates them unforced, so a tag always points
+at the commit its images and release assets were built from. That is what makes
+the `git_sha` assertion in the copy-on-release contract meaningful.
 
 `sandbox/v{version}` tags exist for releases made before versions were unified and
 are not created anymore.
