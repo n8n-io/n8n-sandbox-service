@@ -95,7 +95,7 @@ func TestRuntimeStopSandboxFinishesWhenHostCleanupFails(t *testing.T) {
 
 	// The snapshot was written before the cleanup failed, so the sandbox is a
 	// normal stopped one and has to wake.
-	if err := rt.EnsureSandboxRunning(context.Background(), sandboxID); err != nil {
+	if _, err := rt.EnsureSandboxRunning(context.Background(), sandboxID); err != nil {
 		t.Fatalf("EnsureSandboxRunning() after the failed cleanup: %v", err)
 	}
 	if got := capacityOf(t, rt); got.Used != 1 {
@@ -135,7 +135,8 @@ func TestRuntimeEnsureSandboxRunningWaitsForStop(t *testing.T) {
 
 	wakeDone := make(chan error, 1)
 	go func() {
-		wakeDone <- rt.EnsureSandboxRunning(context.Background(), sandboxID)
+		_, wakeErr := rt.EnsureSandboxRunning(context.Background(), sandboxID)
+		wakeDone <- wakeErr
 	}()
 
 	select {
@@ -192,7 +193,8 @@ func TestRuntimeDeleteSandboxWaitsForWake(t *testing.T) {
 
 	wakeDone := make(chan error, 1)
 	go func() {
-		wakeDone <- rt.EnsureSandboxRunning(context.Background(), sandboxID)
+		_, wakeErr := rt.EnsureSandboxRunning(context.Background(), sandboxID)
+		wakeDone <- wakeErr
 	}()
 
 	select {
@@ -415,7 +417,7 @@ func TestRuntimeWakeFailureCleansHostAfterBudgetExpires(t *testing.T) {
 	}
 	shrinkBudgets(t, 3*time.Second, 200*time.Millisecond)
 
-	if err := rt.EnsureSandboxRunning(context.Background(), sandboxID); err == nil {
+	if _, err := rt.EnsureSandboxRunning(context.Background(), sandboxID); err == nil {
 		t.Fatal("expected wake to fail once its budget expired")
 	}
 

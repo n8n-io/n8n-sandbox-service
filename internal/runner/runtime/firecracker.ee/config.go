@@ -11,23 +11,22 @@ import (
 )
 
 const (
-	defaultJailerBin               = "/opt/firecracker/bin/jailer"
-	defaultFirecrackerBin          = "/opt/firecracker/bin/firecracker"
-	defaultJailerBaseDir           = "/srv/jailer"
-	defaultTemplateDir             = "/srv/firecracker/template"
-	defaultSnapshotMemPath         = "/srv/firecracker/snapshots/mem"
-	defaultSnapshotStatePath       = "/srv/firecracker/snapshots/state"
-	defaultSnapshotVirtioBlockPath = "/rootfs.ext4"
-	defaultGuestIP                 = "172.16.0.10"
-	defaultHostTapDeviceName       = "fc-tap-0"
-	defaultHostTapIPCIDR           = "172.16.0.1/24"
-	defaultDaemonPort              = 8081
-	defaultProxyListenIP           = "127.0.0.1"
-	defaultProxyPortStart          = 18081
-	defaultSocketWaitAttempts      = 120
-	defaultSocketWaitInterval      = 20 * time.Millisecond
-	defaultDaemonWaitTimeout       = 60 * time.Second
-	defaultDaemonBin               = "/srv/firecracker/bin/sandbox-daemon"
+	defaultJailerBin          = "/opt/firecracker/bin/jailer"
+	defaultFirecrackerBin     = "/opt/firecracker/bin/firecracker"
+	defaultJailerBaseDir      = "/srv/jailer"
+	defaultTemplateDir        = "/srv/firecracker/template"
+	defaultSnapshotMemPath    = "/srv/firecracker/snapshots/mem"
+	defaultSnapshotStatePath  = "/srv/firecracker/snapshots/state"
+	defaultGuestIP            = "172.16.0.10"
+	defaultHostTapDeviceName  = "fc-tap-0"
+	defaultHostTapIPCIDR      = "172.16.0.1/24"
+	defaultDaemonPort         = 8081
+	defaultProxyListenIP      = "127.0.0.1"
+	defaultProxyPortStart     = 18081
+	defaultSocketWaitAttempts = 120
+	defaultSocketWaitInterval = 20 * time.Millisecond
+	defaultDaemonWaitTimeout  = 60 * time.Second
+	defaultDaemonBin          = "/srv/firecracker/bin/sandbox-daemon"
 )
 
 // Config holds configuration for the Firecracker runtime backend.
@@ -56,10 +55,6 @@ type Config struct {
 	// Parsed from SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_STATE_PATH.
 	// When CreateSnapshotScript is set, must share a directory with SnapshotMemPath.
 	SnapshotStatePath string
-
-	// SnapshotVirtioBlockPath is the rootfs path baked into the snapshot.
-	// Parsed from SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_VIRTIO_BLOCK_PATH.
-	SnapshotVirtioBlockPath string
 
 	// GuestIP is the fixed guest IP expected by the snapshot.
 	// Parsed from SANDBOX_RUNNER_FIRECRACKER_GUEST_IP.
@@ -117,23 +112,22 @@ type Config struct {
 
 func defaultConfig() Config {
 	return Config{
-		JailerBin:               defaultJailerBin,
-		FirecrackerBin:          defaultFirecrackerBin,
-		JailerBaseDir:           defaultJailerBaseDir,
-		TemplateDir:             defaultTemplateDir,
-		SnapshotMemPath:         defaultSnapshotMemPath,
-		SnapshotStatePath:       defaultSnapshotStatePath,
-		SnapshotVirtioBlockPath: defaultSnapshotVirtioBlockPath,
-		GuestIP:                 defaultGuestIP,
-		HostTapDeviceName:       defaultHostTapDeviceName,
-		HostTapIPCIDR:           defaultHostTapIPCIDR,
-		DaemonPort:              defaultDaemonPort,
-		ProxyListenIP:           defaultProxyListenIP,
-		ProxyPortStart:          defaultProxyPortStart,
-		SocketWaitAttempts:      defaultSocketWaitAttempts,
-		SocketWaitInterval:      defaultSocketWaitInterval,
-		DaemonWaitTimeout:       defaultDaemonWaitTimeout,
-		DaemonBin:               defaultDaemonBin,
+		JailerBin:          defaultJailerBin,
+		FirecrackerBin:     defaultFirecrackerBin,
+		JailerBaseDir:      defaultJailerBaseDir,
+		TemplateDir:        defaultTemplateDir,
+		SnapshotMemPath:    defaultSnapshotMemPath,
+		SnapshotStatePath:  defaultSnapshotStatePath,
+		GuestIP:            defaultGuestIP,
+		HostTapDeviceName:  defaultHostTapDeviceName,
+		HostTapIPCIDR:      defaultHostTapIPCIDR,
+		DaemonPort:         defaultDaemonPort,
+		ProxyListenIP:      defaultProxyListenIP,
+		ProxyPortStart:     defaultProxyPortStart,
+		SocketWaitAttempts: defaultSocketWaitAttempts,
+		SocketWaitInterval: defaultSocketWaitInterval,
+		DaemonWaitTimeout:  defaultDaemonWaitTimeout,
+		DaemonBin:          defaultDaemonBin,
 	}
 }
 
@@ -158,9 +152,6 @@ func LoadConfig(capacityTotal int32) (Config, error) {
 	}
 	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_STATE_PATH")); v != "" {
 		cfg.SnapshotStatePath = v
-	}
-	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_VIRTIO_BLOCK_PATH")); v != "" {
-		cfg.SnapshotVirtioBlockPath = v
 	}
 	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_GUEST_IP")); v != "" {
 		cfg.GuestIP = v
@@ -267,9 +258,6 @@ func validateConfig(cfg Config, capacityTotal int32) error {
 		if !strings.HasPrefix(value, "/") {
 			return fmt.Errorf("%s must be an absolute path, got %q", name, value)
 		}
-	}
-	if !strings.HasPrefix(cfg.SnapshotVirtioBlockPath, "/") {
-		return fmt.Errorf("SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_VIRTIO_BLOCK_PATH must be an absolute path, got %q", cfg.SnapshotVirtioBlockPath)
 	}
 	if net.ParseIP(cfg.GuestIP) == nil {
 		return fmt.Errorf("SANDBOX_RUNNER_FIRECRACKER_GUEST_IP must be an IP address, got %q", cfg.GuestIP)

@@ -18,6 +18,19 @@ func MarkSandboxGone(h http.Header) {
 	h.Set(SandboxGoneHeader, "1")
 }
 
+// SandboxRestartedHeader is set by the runner on the request it refuses because
+// the sandbox had to be restarted under it. It is the channel that survives both
+// proxy hops unambiguously: the runner's error bodies and the API's do not have
+// the same shape, and a proxied response passes the runner's body through
+// untouched, so a client cannot rely on one JSON field appearing everywhere.
+const SandboxRestartedHeader = "X-Sandbox-Restarted"
+
+// MarkSandboxRestarted sets the response header that tells the client its sandbox
+// came back without the state it had.
+func MarkSandboxRestarted(h http.Header) {
+	h.Set(SandboxRestartedHeader, "1")
+}
+
 // RunnerReportsSandboxGone reports whether a runner HTTP response means the sandbox
 // was evicted, deleted, or is otherwise unknown to that runner.
 func RunnerReportsSandboxGone(resp *http.Response) bool {

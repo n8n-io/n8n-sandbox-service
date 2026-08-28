@@ -2,17 +2,9 @@ package firecracker
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"time"
 )
-
-// errGuestCrashed is what the wake path returns for a sandbox pinned to cold
-// boot. Its files are intact and it is meant to come back, but only through a
-// boot of its rootfs, which this runner cannot do yet; restoring the snapshot
-// instead would corrupt the disk. Waking it is therefore refused rather than
-// attempted, and the sandbox stays deletable.
-var errGuestCrashed = errors.New("sandbox guest crashed and cannot be restored from its snapshot")
 
 // handleGuestDeath reacts to a Firecracker process that exited without the
 // runner killing it. It runs on the goroutine watching that process, so it takes
@@ -26,10 +18,11 @@ var errGuestCrashed = errors.New("sandbox guest crashed and cannot be restored f
 // the restore that resumed this guest. Every path that already handles a stopped
 // sandbox then behaves without knowing a crash happened — StopSandbox is
 // idempotent instead of looping on a dead API socket, the idle sweeper can delete
-// it, and DaemonURL reports it not running so a request drives the wake path,
-// which refuses it with errGuestCrashed. Freeing the slot here is what bounds the
-// damage: a crashed sandbox costs nothing but disk, so a client retrying cannot
-// accumulate slots.
+// it, and DaemonURL reports it not running so the next request drives the wake
+// path, where the pin turns that wake into a cold boot of the sandbox's own rootfs.
+// Freeing the slot here is what bounds the damage: a crashed sandbox costs nothing
+// but disk, so a client retrying cannot accumulate slots, and recovery re-reserves
+// a slot like any other wake.
 func (r *Runtime) handleGuestDeath(died *sandboxState, generation uint64, waitErr error) {
 	if !r.recordGuestDeath(died, generation, waitErr) {
 		return

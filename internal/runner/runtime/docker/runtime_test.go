@@ -60,10 +60,6 @@ func (f *fakeDockerBackend) inspectNetwork(context.Context, string) (*networkIns
 	return nil, errors.New("unexpected inspectNetwork")
 }
 
-func (f *fakeDockerBackend) listContainersByLabel(context.Context, string, string) ([]string, error) {
-	return nil, errors.New("unexpected listContainersByLabel")
-}
-
 func (f *fakeDockerBackend) findContainerByLabels(context.Context, ...string) ([]string, error) {
 	*f.events = append(*f.events, "find")
 	return []string{f.containerID}, nil
@@ -71,6 +67,10 @@ func (f *fakeDockerBackend) findContainerByLabels(context.Context, ...string) ([
 
 func (f *fakeDockerBackend) pullImage(context.Context, string) error {
 	return errors.New("unexpected pullImage")
+}
+
+func (f *fakeDockerBackend) watchContainerDeaths(context.Context, func(string, string)) error {
+	return errors.New("unexpected watchContainerDeaths")
 }
 
 func (f *fakeDockerBackend) run(context.Context, ...string) (string, error) {
@@ -93,6 +93,20 @@ func TestDockerLimitArgs(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("dockerLimitArgs()[%d] = %q, want %q", i, got[i], want[i])
 		}
+	}
+}
+
+// Every container ID the runner holds is matched against the ID a die event
+// carries, and events carry the full 64-character one. docker ps abbreviates to 12
+// unless told not to, and an abbreviated ID in the expected-stop map means a stop
+// the runner asked for never matches the death it caused: the stop is read as a
+// crash, and the next request for an idle-stopped sandbox is refused with a 409 it
+// should never see.
+func TestContainerIDArgsAskDockerForUntruncatedIDs(t *testing.T) {
+	got := containerIDArgs("label=managed=true", "label=sandbox=abc")
+	want := []string{"ps", "-aq", "--no-trunc", "--filter", "label=managed=true", "--filter", "label=sandbox=abc"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("containerIDArgs() = %#v, want %#v", got, want)
 	}
 }
 
@@ -333,7 +347,7 @@ func TestEnsureSandboxRunningCleansUpStartedContainerOnWakeFailures(t *testing.T
 				return nil
 			}
 
-			err := m.ensureSandboxRunningOnce(context.Background(), "sandbox-id")
+			_, err := m.ensureSandboxRunningOnce(context.Background(), "sandbox-id")
 			if err == nil {
 				t.Fatal("expected wake to fail")
 			}
@@ -371,7 +385,7 @@ func TestEnsureSandboxRunningFailedWakeAfterNetworkDetachStopsContainerAndRemove
 		return fmt.Errorf("unexpected waitForDaemon")
 	}
 
-	err := m.ensureSandboxRunningOnce(context.Background(), "sandbox-id")
+	_, err := m.ensureSandboxRunningOnce(context.Background(), "sandbox-id")
 	if !errors.Is(err, ErrSandboxNetworkUnavailable) {
 		t.Fatalf("ensureSandboxRunningOnce() error = %v, want %v", err, ErrSandboxNetworkUnavailable)
 	}
@@ -395,7 +409,7 @@ func TestEnsureSandboxRunningLeavesRulesWhenWakeCleanupCannotStopContainer(t *te
 		return nil
 	}
 
-	err := m.ensureSandboxRunningOnce(context.Background(), "sandbox-id")
+	_, err := m.ensureSandboxRunningOnce(context.Background(), "sandbox-id")
 	if err == nil {
 		t.Fatal("expected wake to fail")
 	}
@@ -425,7 +439,7 @@ func TestEnsureSandboxRunningDoesNotCleanUpAfterSuccessfulWake(t *testing.T) {
 		return nil
 	}
 
-	if err := m.ensureSandboxRunningOnce(context.Background(), "sandbox-id"); err != nil {
+	if _, err := m.ensureSandboxRunningOnce(context.Background(), "sandbox-id"); err != nil {
 		t.Fatalf("ensureSandboxRunningOnce() failed: %v", err)
 	}
 	wantEvents := []string{"find", "inspect", "start", "containerIP", "applyPolicy", "waitForDaemon"}

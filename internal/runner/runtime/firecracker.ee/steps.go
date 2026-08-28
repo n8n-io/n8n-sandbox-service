@@ -19,6 +19,7 @@ const (
 	stepStartJailer   = "start_jailer"
 	stepWaitSocket    = "wait_socket"
 	stepLoadSnapshot  = "load_snapshot"
+	stepColdBoot      = "cold_boot"
 	stepStartProxy    = "start_proxy"
 	stepProbeDaemon   = "probe_daemon"
 )

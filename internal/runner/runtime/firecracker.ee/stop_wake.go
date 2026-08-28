@@ -98,46 +98,73 @@ func (r *Runtime) StopSandbox(ctx context.Context, sandboxID string) error {
 	return teardownErr
 }
 
-// EnsureSandboxRunning restores a stopped sandbox from its per-sandbox snapshot.
-func (r *Runtime) EnsureSandboxRunning(ctx context.Context, sandboxID string) error {
+// EnsureSandboxRunning brings a stopped sandbox back: normally by restoring its
+// per-sandbox snapshot, and for one whose guest died by cold booting its rootfs.
+//
+// The recovery flag comes back through the singleflight, which is what makes every
+// request that arrived during a crash learn about it rather than only the one that
+// happened to trigger the recovery.
+func (r *Runtime) EnsureSandboxRunning(ctx context.Context, sandboxID string) (runnerruntime.WakeResult, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return runnerruntime.WakeResult{}, err
 	}
-	_, err, _ := r.wakeGroup.Do(sandboxID, func() (interface{}, error) {
+	recovered, err, _ := r.wakeGroup.Do(sandboxID, func() (interface{}, error) {
 		// beginTransition detaches the wake from the request that triggered it, so
 		// the wake outlives that request. Concurrent callers share one wake, so the
 		// wake event carries the trace id of whichever caller started it.
-		return nil, r.ensureSandboxRunningOnce(ctx, sandboxID)
+		recovering, err := r.ensureSandboxRunningOnce(ctx, sandboxID)
+		// Inside the singleflight, which is what counts one recovery per crash rather
+		// than one per request the crash stranded. Here rather than in
+		// ensureSandboxRunningOnce so that every way that call can fail is counted,
+		// including running out of capacity before the cold boot is even attempted.
+		if recovering {
+			r.metrics.ObserveRecovery(err == nil)
+		}
+		return recovering, err
 	})
-	return err
+	// Comma-ok: a wake that failed before it knew whether it was a recovery returns
+	// no value at all.
+	wasRecovery, _ := recovered.(bool)
+	return runnerruntime.WakeResult{Recovered: wasRecovery}, err
 }
 
-func (r *Runtime) ensureSandboxRunningOnce(ctx context.Context, sandboxID string) error {
+// ensureSandboxRunningOnce reports whether the sandbox came back through recovery,
+// which is a cold boot on its existing rootfs: its files are intact, but everything
+// that was in memory — running processes, execution history — is gone, and that loss
+// is what the caller has to tell the client about.
+func (r *Runtime) ensureSandboxRunningOnce(ctx context.Context, sandboxID string) (bool, error) {
 	state, ctx, cancel, err := r.beginTransition(ctx, sandboxID, transitionWaking)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer cancel()
 	defer r.endTransition(state)
 
 	r.mu.Lock()
-	running, stopped, mustColdBoot := state.running, state.stopped, state.mustColdBoot
+	running, stopped, recovering := state.running, state.stopped, state.mustColdBoot
 	r.mu.Unlock()
 	if running {
-		return nil
+		return false, nil
 	}
 	if !stopped {
-		return runnerruntime.ErrSandboxNotRunning
-	}
-	if mustColdBoot {
-		return errGuestCrashed
+		return false, runnerruntime.ErrSandboxNotRunning
 	}
 
+	// From here on failures return `recovering` rather than false: a recovery that
+	// could not get a slot, or whose cold boot failed, is still a recovery attempt,
+	// and a caller that could not tell would meter it as an ordinary wake.
 	if err := r.reserveWakeSlot(state); err != nil {
-		return err
+		return recovering, err
 	}
 
-	timer := newStepTimer(metrics.OpEnsureRunning, r.metrics)
+	// Recovery is timed under its own operation: it cold boots where a wake restores,
+	// so sharing ensure_running's series would blur both. The step names differ too,
+	// which is what makes the split visible in the per-step histogram.
+	op := metrics.OpEnsureRunning
+	if recovering {
+		op = metrics.OpRecover
+	}
+	timer := newStepTimer(op, r.metrics)
 	if err := r.activateSandboxVM(ctx, state, timer); err != nil {
 		// The activation may have failed because the wake ran out of budget, so
 		// teardown needs a context of its own; the slot is released below either
@@ -156,7 +183,7 @@ func (r *Runtime) ensureSandboxRunningOnce(ctx context.Context, sandboxID string
 		state.process = nil
 		state.proxy = nil
 		r.mu.Unlock()
-		return err
+		return recovering, err
 	}
 
 	r.mu.Lock()
@@ -165,8 +192,8 @@ func (r *Runtime) ensureSandboxRunningOnce(ctx context.Context, sandboxID string
 	slot := state.slot
 	r.mu.Unlock()
 	slog.Info("firecracker sandbox woke",
-		append([]any{"sandbox_id", sandboxID, "vm_id", state.vmID, "slot", slot}, timer.attrsFor(ctx)...)...)
-	return nil
+		append([]any{"sandbox_id", sandboxID, "vm_id", state.vmID, "slot", slot, "recovered", recovering}, timer.attrsFor(ctx)...)...)
+	return recovering, nil
 }
 
 // errActivationAbandoned ends an activation whose sandbox stopped being the
@@ -232,27 +259,8 @@ func (r *Runtime) activateSandboxVM(ctx context.Context, state *sandboxState, t 
 	if err := t.step(stepWaitSocket, func() error { return r.waitForSocket(ctx, state.socketPath) }); err != nil {
 		return fmt.Errorf("wait for firecracker socket: %w", err)
 	}
-	// Pinned before the request that would earn it, not after, because that request
-	// resumes the guest as it restores: one call both loads the snapshot and lets the
-	// guest start writing to a rootfs the snapshot no longer describes. A load that
-	// resumes the guest and then fails to report it — a deadline that expires while
-	// the response is read, a dropped connection — would otherwise roll back with the
-	// pin unset, and the next wake would restore that same snapshot onto the changed
-	// rootfs and corrupt it silently, which is the one outcome nothing downstream can
-	// detect. So the ambiguous case is resolved as if the guest ran.
-	//
-	// The cost is a load that failed without resuming anything being pinned too,
-	// which cold-boot recovery turns into a boot of the sandbox's own rootfs instead
-	// of a restore. Pinning here rather than earlier is what keeps that cost small:
-	// every step before this one fails unambiguously, with no guest having run, so
-	// those failures still leave the sandbox wakeable.
-	r.mu.Lock()
-	state.mustColdBoot = true
-	r.mu.Unlock()
-	if err := t.step(stepLoadSnapshot, func() error {
-		return r.deps.loadSnapshot(ctx, state.socketPath, r.config)
-	}); err != nil {
-		return fmt.Errorf("load firecracker snapshot: %w", err)
+	if err := r.startGuest(ctx, state, t); err != nil {
+		return err
 	}
 	guestAddr := net.JoinHostPort(r.config.GuestIP, fmt.Sprintf("%d", r.config.DaemonPort))
 	var proxy daemonProxy
@@ -273,6 +281,53 @@ func (r *Runtime) activateSandboxVM(ctx context.Context, state *sandboxState, t 
 	}
 	if err := t.step(stepProbeDaemon, func() error { return r.deps.probeDaemon(ctx, state.daemonURL) }); err != nil {
 		return fmt.Errorf("connect to firecracker daemon: %w", err)
+	}
+	return nil
+}
+
+// startGuest gets the guest running, from its snapshot or from its own rootfs.
+//
+// The pin decides which, and both outcomes leave it set: a restored guest resumes
+// against a rootfs its snapshot stops describing the moment it runs, and a cold
+// booted one never had a matching snapshot to begin with. So after this returns the
+// sandbox is always pinned, and only the snapshot StopSandbox takes of the paused
+// guest clears it — one rule for both paths, rather than a pin that has to be
+// reasoned about per entry point.
+//
+// The restore is pinned before the request rather than after it, because that one
+// call both loads the snapshot and resumes the guest: a load that resumes and then
+// fails to report it — a deadline that expires while the response is read, a dropped
+// connection — would otherwise roll back with the pin unset, and the next wake would
+// restore that same snapshot onto a rootfs the guest had moved on from and corrupt it
+// silently, which is the one outcome nothing downstream can detect. The cost is that
+// a load which failed without resuming anything is pinned too, and pays a cold boot
+// it did not need. Pinning here rather than earlier keeps that cost small: every step
+// before this one fails with no guest having run, so those failures leave the sandbox
+// restorable.
+func (r *Runtime) startGuest(ctx context.Context, state *sandboxState, t *stepTimer) error {
+	r.mu.Lock()
+	coldBoot, params, kernel := state.mustColdBoot, state.bootParams, state.kernel
+	state.mustColdBoot = true
+	r.mu.Unlock()
+
+	if coldBoot {
+		// Checked on this branch alone: a restore boots the kernel out of its memory
+		// image and never opens the file, so a wake that has a snapshot to return to
+		// has no reason to care what the template holds now.
+		if err := r.verifyKernelPin(kernel); err != nil {
+			return err
+		}
+		if err := t.step(stepColdBoot, func() error {
+			return r.deps.coldBoot(ctx, state.socketPath, params)
+		}); err != nil {
+			return fmt.Errorf("cold boot firecracker vm: %w", err)
+		}
+		return nil
+	}
+	if err := t.step(stepLoadSnapshot, func() error {
+		return r.deps.loadSnapshot(ctx, state.socketPath, r.config)
+	}); err != nil {
+		return fmt.Errorf("load firecracker snapshot: %w", err)
 	}
 	return nil
 }

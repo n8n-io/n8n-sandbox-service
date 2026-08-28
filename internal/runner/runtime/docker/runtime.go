@@ -7,9 +7,11 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 	"github.com/n8n-io/sandbox-service/internal/runner/runtime/docker/netrules"
@@ -56,6 +58,16 @@ type Runtime struct {
 	waitForDaemon func(ctx context.Context, baseURL string) error
 	imageReady    atomic.Bool
 	imageReadyCh  chan struct{}
+	metrics       *metrics.RunnerRecorder
+	watchBackoff  time.Duration
+
+	// mu guards what the event watcher and request-serving goroutines share: which
+	// containers the runner is stopping on purpose, and which sandboxes Docker
+	// restarted under it. Everything else about a sandbox is read back from Docker.
+	mu            sync.Mutex
+	expectedStops map[string]expectedStop
+	stopToken     uint64
+	restarted     map[string]struct{}
 }
 
 var _ runnerruntime.Runtime = (*Runtime)(nil)
@@ -104,7 +116,16 @@ func newRuntime(runnerConfig *config.Config, cfg Config, docker dockerBackend) *
 		teardownRules: netrules.Teardown,
 		waitForDaemon: waitForDaemon,
 		imageReadyCh:  make(chan struct{}),
+		watchBackoff:  2 * time.Second,
+		expectedStops: make(map[string]expectedStop),
+		restarted:     make(map[string]struct{}),
 	}
+}
+
+// SetMetricsRecorder attaches the runner metrics recorder. A nil recorder is safe;
+// every observation on it is a no-op.
+func (m *Runtime) SetMetricsRecorder(rec *metrics.RunnerRecorder) {
+	m.metrics = rec
 }
 
 // EnsureSandboxImage pulls the sandbox image with retries. It is intended to
@@ -147,8 +168,12 @@ func (m *Runtime) ImageReadyCh() <-chan struct{} {
 	return m.imageReadyCh
 }
 
-// Prepare readies the Docker sandbox image for future sandbox creation.
+// Prepare readies the Docker sandbox image for future sandbox creation and starts
+// watching for guest deaths. The watcher starts before the image is pulled, not
+// after: the pull can take minutes and retries forever, and a runner that served a
+// sandbox while not watching would restart it silently.
 func (m *Runtime) Prepare(ctx context.Context) {
+	go m.watchGuestDeaths(ctx)
 	m.EnsureSandboxImage(ctx)
 }
 
@@ -197,7 +222,11 @@ func (m *Runtime) DeleteSandbox(ctx context.Context, sandboxID string) error {
 	if err != nil {
 		return err
 	}
-	return m.DeleteContainer(ctx, containerID)
+	if err := m.DeleteContainer(ctx, containerID); err != nil {
+		return err
+	}
+	m.clearRestarted(sandboxID)
+	return nil
 }
 
 // StopSandbox stops a sandbox without removing it.
@@ -293,63 +322,138 @@ func (m *Runtime) GetContainerInfo(ctx context.Context, containerID string) (*Co
 
 // EnsureSandboxRunning starts a stopped container if needed, reapplies network
 // policy for its current IP, and waits until the daemon accepts traffic.
-func (m *Runtime) EnsureSandboxRunning(ctx context.Context, sandboxID string) error {
+//
+// It also re-admits a container Docker restarted on its own after a crash, which is
+// the only path that can: `--restart unless-stopped` brings the container back
+// without asking the runner, on a new IP the sandbox's network rules do not know.
+func (m *Runtime) EnsureSandboxRunning(ctx context.Context, sandboxID string) (runnerruntime.WakeResult, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return runnerruntime.WakeResult{}, err
 	}
-	_, err, _ := m.wakeGroup.Do(sandboxID, func() (interface{}, error) {
+	recovered, err, _ := m.wakeGroup.Do(sandboxID, func() (interface{}, error) {
 		// singleflight runs this once for all waiters; do not use the caller's ctx
 		// here or one canceled/short-lived request fails everyone else waiting on
 		// the same key.
 		wakeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		return nil, m.ensureSandboxRunningOnce(wakeCtx, sandboxID)
+		recovering, err := m.ensureSandboxRunningOnce(wakeCtx, sandboxID)
+		// Inside the singleflight, so a burst of requests stranded by one crash counts
+		// as the one recovery it is.
+		if recovering {
+			m.metrics.ObserveRecovery(err == nil)
+		}
+		return recovering, err
 	})
-	return err
+	// Comma-ok: a wake that failed before it knew whether it was a recovery returns
+	// no value at all.
+	wasRecovery, _ := recovered.(bool)
+	return runnerruntime.WakeResult{Recovered: wasRecovery}, err
 }
 
-func (m *Runtime) ensureSandboxRunningOnce(ctx context.Context, sandboxID string) error {
+// ensureSandboxRunningOnce reports whether the sandbox came back from a crash rather
+// than from an idle stop. Docker has already restarted it in that case, so what is
+// left to do is what Docker does not: point the sandbox's network rules at the IP it
+// came back on, and wait for a daemon that has lost every process it was running.
+func (m *Runtime) ensureSandboxRunningOnce(ctx context.Context, sandboxID string) (bool, error) {
 	containerID, err := m.FindContainerIDByLabel(ctx, sandboxID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	inspect, err := m.docker.inspectContainer(ctx, containerID)
 	if err != nil {
 		if isDockerNotFound(err) {
-			return ErrSandboxNotFound
+			return false, ErrSandboxNotFound
 		}
-		return err
+		return false, err
 	}
-	if isContainerReady(inspect.State) {
-		return nil
+
+	// From here on failures return `recovering`: a recovery whose repair failed is
+	// still a recovery attempt, and the mark stays so the next request retries it.
+	recovering := m.wasRestarted(sandboxID)
+	if !recovering && isContainerReady(inspect.State) {
+		return false, nil
 	}
-	if !canStartContainer(inspect.State) {
-		return fmt.Errorf("sandbox container is not startable from docker state %q", inspect.State.Status)
+	if recovering {
+		// The container is usually already running, and never startable while Docker
+		// is between restarts, so a wake that lands in that window waits for it. This
+		// is the request that has to come back with the restart, so failing it here
+		// would report a crash as a plain error.
+		if inspect, err = m.awaitContainerRestart(ctx, containerID); err != nil {
+			return recovering, err
+		}
 	}
-	if err := m.docker.startContainer(ctx, containerID); err != nil {
-		return fmt.Errorf("start container: %w", err)
+	if !isContainerReady(inspect.State) {
+		if !canStartContainer(inspect.State) {
+			return recovering, fmt.Errorf("sandbox container is not startable from docker state %q", inspect.State.Status)
+		}
+		// A mark recorded for this container is deliberately left alone. It belongs to
+		// a stop whose die event may still be in the events pipe, and dropping it here
+		// would leave that death to be read as a crash; the stop that can never produce
+		// a death records nothing in the first place, so there is nothing to clean up.
+		if err := m.docker.startContainer(ctx, containerID); err != nil {
+			return recovering, fmt.Errorf("start container: %w", err)
+		}
 	}
 	containerIP, err := m.docker.containerIP(ctx, containerID)
 	if err != nil {
 		m.cleanupWakeFailure(containerID)
-		return err
+		return recovering, err
 	}
 	if err := m.applyPolicy(m.bridgeIface, containerID, containerIP, m.gatewayIP, daemonPort); err != nil {
 		m.cleanupWakeFailure(containerID)
-		return fmt.Errorf("apply network rules: %w", err)
+		return recovering, fmt.Errorf("apply network rules: %w", err)
 	}
 	baseURL := fmt.Sprintf("http://%s:%d", containerIP, daemonPort)
 	if err := m.waitForDaemon(ctx, baseURL); err != nil {
 		m.cleanupWakeFailure(containerID)
-		return err
+		return recovering, err
 	}
-	return nil
+	if recovering {
+		// Cleared only now: until the rules match the container's IP, nothing may be
+		// proxied to it, and DaemonURL keeps reporting it not running while the mark is
+		// set. Clearing it is also what spends the one restart report a client gets.
+		m.clearRestarted(sandboxID)
+		slog.Info("docker sandbox recovered", "sandbox_id", sandboxID, "container_id", containerID, "ip", containerIP)
+	}
+	return recovering, nil
+}
+
+// awaitContainerRestart waits out the gap between a container dying and Docker's
+// restart policy bringing it back, where it is neither ready nor startable.
+func (m *Runtime) awaitContainerRestart(ctx context.Context, containerID string) (*containerInspect, error) {
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+	deadline := time.After(60 * time.Second)
+
+	for {
+		inspect, err := m.docker.inspectContainer(ctx, containerID)
+		if err != nil {
+			if isDockerNotFound(err) {
+				return nil, ErrSandboxNotFound
+			}
+			return nil, err
+		}
+		// Exited is a settled state: the restart policy gave up, or the container was
+		// stopped since. Either way the caller starts it rather than waiting.
+		if !inspect.State.Restarting {
+			return inspect, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-deadline:
+			return nil, fmt.Errorf("timeout waiting for container %s to finish restarting", containerID)
+		case <-ticker.C:
+		}
+	}
 }
 
 func (m *Runtime) cleanupWakeFailure(containerID string) {
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	token := m.expectStop(containerID)
 	if err := m.docker.stopContainer(cleanupCtx, containerID); err != nil {
+		m.forgetExpectedStop(containerID, token)
 		slog.Warn("stop container after wake failure", "container_id", containerID, "err", err)
 		return
 	}
@@ -376,11 +480,34 @@ func (m *Runtime) StopSandboxContainer(ctx context.Context, sandboxID string) er
 	if !inspect.State.Running {
 		return nil
 	}
-	return m.docker.stopContainer(ctx, containerID)
+	// A container Docker is between restarts of is reported running, so this stop is
+	// not a no-op — it cancels the pending restart. What it cannot do is produce a
+	// death: the process that would have been restarted died at crash time and
+	// emitted the container's one die event already. Recording a mark for a death
+	// that never arrives is what would leave it to excuse the next real crash of this
+	// container, once a wake has started it again.
+	if inspect.State.Restarting {
+		return m.docker.stopContainer(ctx, containerID)
+	}
+	token := m.expectStop(containerID)
+	if err := m.docker.stopContainer(ctx, containerID); err != nil {
+		m.forgetExpectedStop(containerID, token)
+		return err
+	}
+	return nil
 }
 
 // DaemonURL returns the daemon URL for a container by sandbox ID.
 func (m *Runtime) DaemonURL(ctx context.Context, sandboxID string) (string, error) {
+	// A container Docker restarted after a crash looks perfectly healthy here, which
+	// is the problem: its network rules still point at the IP it had, and the request
+	// that reaches it would find a sandbox that quietly lost everything it was
+	// running. Reporting it not running routes the caller through the wake path, which
+	// repairs the rules and reports the restart.
+	if m.wasRestarted(sandboxID) {
+		return "", ErrSandboxNotRunning
+	}
+
 	containerID, err := m.FindContainerIDByLabel(ctx, sandboxID)
 	if err != nil {
 		return "", err
@@ -424,7 +551,10 @@ func (m *Runtime) removeContainerAndTeardownRules(ctx context.Context, container
 	if containerID == "" {
 		return nil
 	}
+	// Removing a running container kills it, and that death is the runner's doing.
+	token := m.expectStop(containerID)
 	if err := m.docker.removeContainer(ctx, containerID); err != nil {
+		m.forgetExpectedStop(containerID, token)
 		slog.Warn("remove sandbox container", "container_id", containerID, "err", err)
 		return err
 	}
@@ -537,7 +667,7 @@ func isSuccessfulExit(body []byte) bool {
 }
 
 func (m *Runtime) reconcileContainers(ctx context.Context) error {
-	ids, err := m.docker.listContainersByLabel(ctx, containerLabelManaged, containerLabelManagedVal)
+	ids, err := m.docker.findContainerByLabels(ctx, managedLabelFilter)
 	if err != nil {
 		return err
 	}
@@ -573,7 +703,7 @@ func (m *Runtime) createRunnerBridge(ctx context.Context) (*networkInspect, erro
 
 // ManagedContainerCount returns how many sandbox containers this runner is managing.
 func (m *Runtime) ManagedContainerCount(ctx context.Context) (int, error) {
-	ids, err := m.docker.listContainersByLabel(ctx, containerLabelManaged, containerLabelManagedVal)
+	ids, err := m.docker.findContainerByLabels(ctx, managedLabelFilter)
 	if err != nil {
 		return 0, err
 	}
@@ -583,7 +713,7 @@ func (m *Runtime) ManagedContainerCount(ctx context.Context) (int, error) {
 // FindContainerIDByLabel finds a container ID by sandbox ID using label filters.
 func (m *Runtime) FindContainerIDByLabel(ctx context.Context, sandboxID string) (string, error) {
 	lines, err := m.docker.findContainerByLabels(ctx,
-		"label="+containerLabelManaged+"="+containerLabelManagedVal,
+		managedLabelFilter,
 		"label="+containerLabelSandboxID+"="+sandboxID)
 	if err != nil {
 		return "", err

@@ -204,15 +204,40 @@ export async function execWithTransientRetry(
  *
  * On Firecracker the VMM process exits, which is what the runner detects. On
  * Docker the container exits and its restart policy brings it back.
+ *
+ * Sent as a bare request rather than through `exec`, because the SDK reacts to
+ * the dropped stream the way any client would: it resumes the execution over
+ * `GET /executions/{exec_id}`, then deletes it. Both routes wake a stopped
+ * sandbox and report the recovery as a 409, by design — so going through the SDK
+ * recovers the very crash the caller asked for, before the caller can observe
+ * it. The stream is abandoned instead of read for the same reason.
  */
 export async function crashGuest(id: string): Promise<void> {
-  await ensureTenantAuth();
+  // Resolved outside the try: minting the tenant key is not the request whose
+  // failure a crash is allowed to look like.
+  const requestHeaders = await headers({ 'Content-Type': 'application/json' });
+
+  let res: Response;
   try {
-    await exec(id, 'kill -TERM 1');
+    res = await fetch(`${BASE_URL}/sandboxes/${id}/executions`, {
+      method: 'POST',
+      headers: requestHeaders,
+      body: JSON.stringify({ command: 'kill -TERM 1' }),
+    });
   } catch {
     // Shutdown is graceful, so this call normally returns before the guest goes
     // down — but a dropped connection is the requested outcome, not a failure.
+    return;
   }
+
+  // The daemon writes the 200 and flushes it before it runs the command, so a
+  // delivered kill always carries one. Any other status is a request that never
+  // reached the guest, and a caller that went on would wait out its crash timeout
+  // on a sandbox that is still alive.
+  if (!res.ok) {
+    throw new Error(`crash guest ${id} failed: ${res.status} ${await res.text()}`);
+  }
+  await res.body?.cancel();
 }
 
 /**
@@ -318,7 +343,12 @@ export async function apiRequest(
   method: string,
   path: string,
   opts?: { data?: unknown; rawHeaders?: Record<string, string> },
-): Promise<{ status: number; body: string; json: () => Promise<unknown> }> {
+): Promise<{
+  status: number;
+  body: string;
+  headers: Record<string, string>;
+  json: () => Promise<unknown>;
+}> {
   const h = opts?.rawHeaders ?? (await headers({ 'Content-Type': 'application/json' }));
   const resp = await request.fetch(path, {
     method,
@@ -329,6 +359,8 @@ export async function apiRequest(
   return {
     status: resp.status(),
     body,
+    // Playwright lowercases response header names.
+    headers: resp.headers(),
     json: () => Promise.resolve(JSON.parse(body)),
   };
 }

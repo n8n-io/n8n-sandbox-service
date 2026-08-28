@@ -69,11 +69,11 @@ func (p *bootParams) validate() error {
 	if p.MemSizeMiB <= 0 {
 		return fmt.Errorf("mem_size_mib must be positive, got %d", p.MemSizeMiB)
 	}
-	if !strings.HasPrefix(p.KernelImagePath, "/") {
-		return fmt.Errorf("kernel_image_path must be an absolute jail path, got %q", p.KernelImagePath)
+	if err := validateJailPath("kernel_image_path", p.KernelImagePath); err != nil {
+		return err
 	}
-	if !strings.HasPrefix(p.RootfsDrivePath, "/") {
-		return fmt.Errorf("rootfs_drive_path must be an absolute jail path, got %q", p.RootfsDrivePath)
+	if err := validateJailPath("rootfs_drive_path", p.RootfsDrivePath); err != nil {
+		return err
 	}
 	if strings.TrimSpace(p.BootArgs) == "" {
 		return fmt.Errorf("boot_args must not be empty")
@@ -92,6 +92,22 @@ func (p *bootParams) validate() error {
 	}
 	if p.DaemonPort <= 0 || p.DaemonPort > 65535 {
 		return fmt.Errorf("daemon_port must be between 1 and 65535, got %d", p.DaemonPort)
+	}
+	return nil
+}
+
+// validateJailPath accepts the paths the sidecar records for Firecracker to open
+// inside the jail. Each is also where prepareJail bind-mounts the asset, so one
+// that climbs out of the jail root would mount a sandbox's rootfs, or the kernel
+// every sandbox on the host shares, at a path of the sidecar's choosing. Required
+// clean rather than repaired, because a sidecar that needs repairing does not
+// describe the snapshot the runner is about to restore.
+func validateJailPath(field, path string) error {
+	if !strings.HasPrefix(path, "/") {
+		return fmt.Errorf("%s must be an absolute jail path, got %q", field, path)
+	}
+	if filepath.Clean(path) != path {
+		return fmt.Errorf("%s must be an absolute jail path with no . or .. segments, got %q", field, path)
 	}
 	return nil
 }

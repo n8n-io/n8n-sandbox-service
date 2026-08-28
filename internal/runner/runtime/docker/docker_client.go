@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -19,6 +20,10 @@ const (
 	containerLabelManaged    = "sandbox-service.managed"
 	containerLabelManagedVal = "true"
 	containerLabelSandboxID  = "sandbox-service.id"
+
+	// managedLabelFilter selects the containers this runner owns, and is what keeps
+	// every lookup and the death watcher agreeing on that set.
+	managedLabelFilter = "label=" + containerLabelManaged + "=" + containerLabelManagedVal
 )
 
 type containerInspect struct {
@@ -43,6 +48,17 @@ type containerState struct {
 	Dead       bool   `json:"Dead"`
 }
 
+// containerEvent is the subset of a `docker events` record this runtime reads.
+// Actor.ID is the container, and Actor.Attributes carries the container's labels,
+// which is how a die event names the sandbox that died without a second lookup —
+// the container is often already gone by the time the event is read.
+type containerEvent struct {
+	Actor struct {
+		ID         string            `json:"ID"`
+		Attributes map[string]string `json:"Attributes"`
+	} `json:"Actor"`
+}
+
 type networkInspect struct {
 	ID      string            `json:"Id"`
 	Name    string            `json:"Name"`
@@ -63,9 +79,9 @@ type dockerBackend interface {
 	containerIP(ctx context.Context, containerID string) (string, error)
 	inspectContainer(ctx context.Context, containerID string) (*containerInspect, error)
 	inspectNetwork(ctx context.Context, name string) (*networkInspect, error)
-	listContainersByLabel(ctx context.Context, label, value string) ([]string, error)
 	findContainerByLabels(ctx context.Context, filterArgs ...string) ([]string, error)
 	pullImage(ctx context.Context, image string) error
+	watchContainerDeaths(ctx context.Context, onDie func(containerID, sandboxID string)) error
 	run(ctx context.Context, args ...string) (string, error)
 }
 
@@ -224,8 +240,8 @@ func (dc *dockerClient) inspectNetwork(ctx context.Context, name string) (*netwo
 	return &items[0], nil
 }
 
-func (dc *dockerClient) listContainersByLabel(ctx context.Context, label, value string) ([]string, error) {
-	out, err := dc.run(ctx, "ps", "-aq", "--filter", "label="+label+"="+value)
+func (dc *dockerClient) findContainerByLabels(ctx context.Context, filterArgs ...string) ([]string, error) {
+	out, err := dc.run(ctx, containerIDArgs(filterArgs...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -236,20 +252,23 @@ func (dc *dockerClient) listContainersByLabel(ctx context.Context, label, value 
 	return lines, nil
 }
 
-func (dc *dockerClient) findContainerByLabels(ctx context.Context, filterArgs ...string) ([]string, error) {
-	args := []string{"ps", "-aq"}
-	for _, f := range filterArgs {
+// containerIDArgs builds the lookup every container ID in this package comes from,
+// so there is one place that decides how wide those IDs are.
+//
+// --no-trunc is the whole reason it exists. docker ps abbreviates IDs to 12
+// characters, while docker create and the die events from docker events both report
+// the full 64, and the runner matches one against the other: a stop it recorded
+// under an abbreviated ID never matches the death that stop caused, so the runner
+// reads its own deliberate stop as a crash and the next request is refused with
+// 409 sandbox_restarted. Nothing downstream notices the difference otherwise —
+// docker resolves ID prefixes, and netrules truncates to 12 for its chain names.
+func containerIDArgs(filters ...string) []string {
+	args := make([]string, 0, 3+2*len(filters))
+	args = append(args, "ps", "-aq", "--no-trunc")
+	for _, f := range filters {
 		args = append(args, "--filter", f)
 	}
-	out, err := dc.run(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-	lines := strings.Fields(strings.TrimSpace(out))
-	if len(lines) == 1 && lines[0] == "" {
-		return nil, nil
-	}
-	return lines, nil
+	return args
 }
 
 func (dc *dockerClient) pullImage(ctx context.Context, image string) error {
@@ -259,6 +278,54 @@ func (dc *dockerClient) pullImage(ctx context.Context, image string) error {
 	}
 	_, err := dc.run(ctx, "pull", image)
 	return err
+}
+
+// watchContainerDeaths calls onDie for every managed sandbox container that exits,
+// until ctx is canceled or the stream breaks. It is the only long-running docker
+// invocation in this package, so it streams rather than buffering like run does.
+//
+// The filters are the daemon's, not ours: asking it for die events on managed
+// containers means the runner is not woken for every image pull and exec on the
+// host. Callers get the events from the moment this connects — a death during a
+// reconnect is not replayed, which is why the wake path still repairs a container
+// it finds restarted rather than trusting the event alone.
+func (dc *dockerClient) watchContainerDeaths(ctx context.Context, onDie func(containerID, sandboxID string)) error {
+	cmd := exec.CommandContext(ctx, "docker", "events",
+		"--filter", "type=container",
+		"--filter", "event=die",
+		"--filter", managedLabelFilter,
+		"--format", "{{json .}}")
+	cmd.Env = append(os.Environ(), "DOCKER_HOST="+dc.host)
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("pipe docker events: %w", err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start docker events: %w", err)
+	}
+
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		var event containerEvent
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			slog.Warn("decode docker event", "err", err)
+			continue
+		}
+		onDie(event.Actor.ID, event.Actor.Attributes[containerLabelSandboxID])
+	}
+	// Wait after draining, or the pipe closes under the scanner. A canceled ctx kills
+	// the process, so the error it reports then is the cancellation, not a failure.
+	waitErr := cmd.Wait()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if scanErr := scanner.Err(); scanErr != nil {
+		return fmt.Errorf("read docker events: %w", scanErr)
+	}
+	return fmt.Errorf("docker events exited: %s: %w", strings.TrimSpace(stderr.String()), waitErr)
 }
 
 func firstGateway(inspect *networkInspect) string {

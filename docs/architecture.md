@@ -181,6 +181,28 @@ Each hop uses `httputil.ReverseProxy` with URL rewriting. The runner can wake a 
 
 File read, write, list, stat, copy, move, and delete follow the same two-hop reverse proxy path. The daemon performs all file system operations inside the container. Request body size is capped (default 10 MB).
 
+### Recovering a Crashed Guest
+
+A sandbox can lose its guest without losing its files: the Firecracker guest daemon runs as PID 1 with `panic=1 reboot=k`, so a dead daemon or a panicking kernel resets the CPU and exits the VMM.
+
+1. The runner waits on the VMM process — jailer execs Firecracker in place, so that process lives exactly as long as the guest — and reads its exit as a crash unless a generation counter, bumped before every deliberate kill, says the runner asked for it
+2. The dead sandbox is torn down and hands its slot back immediately, leaving what an idle stop leaves minus a usable snapshot: stopped, no slot, files intact. Nothing is recovered until a request arrives, so a crashed sandbox nobody touches again costs only disk
+3. The next request finds it not running and drives the ordinary wake path, which cold boots the sandbox's own rootfs instead of restoring its snapshot, replaying the boot parameters recorded at create
+4. That request then fails with `409 sandbox_restarted` rather than being proxied, because the recovery cannot restore what was in memory: processes an earlier execution started, and the daemon's execution history. The retry succeeds. See [API.md](API.md#http-409-sandbox_restarted--the-sandbox-came-back-without-its-memory)
+
+A stale snapshot is never restored. Restoring a memory image onto a rootfs the guest has written to since corrupts the filesystem silently: the image carries the guest's cached filesystem metadata, the checksum covers only the state file, and nothing detects the mismatch. So a sandbox is pinned to cold boot from the moment its snapshot is restored, and only a clean stop — which pauses the guest before snapshotting it — pairs a fresh snapshot with the disk again and lifts the pin.
+
+Cold boot beats recreating the sandbox from the golden snapshot: it keeps the files, skips the rootfs and snapshot clones that are ~72% of a create, and unlike a restore does not scale with the flavor's memory size. Recreating remains the fallback if cold boot ever measures worse.
+
+The Docker backend reaches the same `409` by a different route, because there the recovery is not the runner's to perform:
+
+1. Containers carry `--restart unless-stopped`, so Docker has the container back up — with its writable layer, and usually before any request notices
+2. The runner learns of the death from a `docker events` stream filtered to `die` on its own containers. Every deliberate stop and remove is recorded before the call that causes it and matched against the event; exit codes are never consulted, because a guest that exits `0` on its own has still lost everything it was running
+3. A sandbox marked that way is reported as not running until the runner re-admits it, which is what drives a container that already looks healthy through the wake path. The restarted container may hold a new IP its network policy still does not know about
+4. The wake reapplies the policy, waits for the daemon, and reports the restart — the same `409` for the request that found it, and the same `sandbox_recoveries_total`
+
+Losing the event stream is the silent failure here, since containers keep working while crashes stop being reported, so the watcher reconnects for the life of the runner. A death missed while it was down is served without its `409`.
+
 ## Security Model
 
 See [security-model.md](security-model.md) for the trust boundaries behind these mechanisms and the non-guarantees that come with them.

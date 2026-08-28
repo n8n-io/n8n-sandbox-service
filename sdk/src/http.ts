@@ -82,7 +82,7 @@ export class HttpClient {
 
         if (response.status >= 400) {
           const body = await this.drainStream(response.data);
-          throw createErrorFromResponse(response.status, this.tryParseJson(body));
+          throw createErrorFromResponse(response.status, this.tryParseJson(body), response.headers);
         }
 
         return { stream: response.data, status: response.status };
@@ -112,7 +112,11 @@ export class HttpClient {
 
         const body = Buffer.from(response.data);
         if (response.status >= 400) {
-          throw createErrorFromResponse(response.status, this.tryParseJson(body.toString("utf-8")));
+          throw createErrorFromResponse(
+            response.status,
+            this.tryParseJson(body.toString("utf-8")),
+            response.headers,
+          );
         }
 
         return body;
@@ -145,7 +149,11 @@ export class HttpClient {
     if (error instanceof SandboxServiceError) return error;
 
     if (isAxiosError(error) && error.response) {
-      return createErrorFromResponse(error.response.status, error.response.data);
+      return createErrorFromResponse(
+        error.response.status,
+        error.response.data,
+        error.response.headers,
+      );
     }
 
     const message = error instanceof Error ? error.message : "Unknown sandbox service error";
