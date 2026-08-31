@@ -12,10 +12,12 @@ permissions:
   packages: write
 
 jobs:
-  publish:
+  publish-images:
     if: github.event.pull_request.merged == true
     runs-on: ${{ vars.RUNNER_PROVIDER == 'github' && 'ubuntu-latest' || 'blacksmith-4vcpu-ubuntu-2204' }}
     environment: docker-release
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
@@ -79,6 +81,24 @@ jobs:
           dockerhub-token: ${{ secrets.DOCKERHUB_TOKEN }}
           ghcr-token: ${{ github.token }}
 
+  # Separate job so publishing the images is what gates the ACR mirror below,
+  # rather than the tagging and release bookkeeping the mirror does not depend on.
+  release-metadata:
+    needs: publish-images
+    runs-on: ${{ vars.RUNNER_PROVIDER == 'github' && 'ubuntu-latest' || 'blacksmith-4vcpu-ubuntu-2204' }}
+    env:
+      VERSION: ${{ needs.publish-images.outputs.version }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      # The golden build tarball embeds a freshly compiled cmd/daemon; without the
+      # test action in this job, nothing else puts Go on the runner.
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version: "1.25.0"
+
       - name: Generate GitHub App Token
         id: generate-token
         uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
@@ -89,24 +109,24 @@ jobs:
       - name: Create git tag
         env:
           GH_TOKEN: ${{ steps.generate-token.outputs.token }}
-          VERSION: ${{ steps.version.outputs.version }}
         run: |
           TAG="service/v${VERSION}"
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
-          git tag --force "${TAG}"
-          git push --force origin "${TAG}"
+          # Not forced: a released tag must keep pointing at the commit its images
+          # and GitHub Release assets were built from.
+          git tag "${TAG}"
+          git push origin "${TAG}"
 
       - name: Package Firecracker golden build tarball
         run: |
           chmod +x scripts/package-firecracker-golden-build.sh
           ./scripts/package-firecracker-golden-build.sh \
-            --version "${{ steps.version.outputs.version }}" \
-            --output "dist/firecracker-golden-build-${{ steps.version.outputs.version }}.tar.gz"
+            --version "${VERSION}" \
+            --output "dist/firecracker-golden-build-${VERSION}.tar.gz"
 
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ steps.generate-token.outputs.token }}
-          VERSION: ${{ steps.version.outputs.version }}
         run: |
           gh release create "service/v${VERSION}" \
             --title "service v${VERSION}" \
@@ -131,7 +151,6 @@ jobs:
       - name: Open version-bump PR against main
         env:
           GH_TOKEN: ${{ steps.generate-token.outputs.token }}
-          VERSION: ${{ steps.version.outputs.version }}
         run: |
           bash scripts/set-release-version.sh "${VERSION}"
           npm ci --prefix .github/scripts
@@ -143,3 +162,67 @@ jobs:
             --label "release/service" \
             --message "service: bump version to v${VERSION}" \
             -- VERSION charts/n8n-sandbox-service/Chart.yaml
+
+  mirror-to-acr:
+    needs: publish-images
+    runs-on: ubuntu-latest
+    environment: ALL
+    permissions:
+      id-token: write
+      packages: read
+    steps:
+      - name: Azure Service Principal login (OIDC)
+        uses: azure/login@cb79c773a3cfa27f31f25eb3f677781210c9ce3d # v1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Import release images into ACR
+        env:
+          ACR_NAME: ${{ secrets.AZURE_ACR_NAME }}
+          VERSION: ${{ needs.publish-images.outputs.version }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for image in \
+            n8n-sandbox-service-api \
+            n8n-sandbox-service-runner-dind \
+            n8n-sandbox-service-runner-firecracker \
+            n8n-sandbox-service-sandbox; do
+            # Resolve the source to a digest: rebuilding a version moves the GHCR
+            # tag, and importing by tag would copy whatever it points at now.
+            source_digest=$(docker buildx imagetools inspect \
+              --format '{{json .Manifest}}' "ghcr.io/n8n-io/${image}:${VERSION}" | jq -r '.digest')
+            acr_digest=$(az acr repository show \
+              --name "$ACR_NAME" --image "${image}:${VERSION}" \
+              --query digest -o tsv 2>/dev/null || true)
+
+            # Keeps a partially imported run re-runnable.
+            if [[ "$acr_digest" == "$source_digest" ]]; then
+              echo "${image}:${VERSION} already imported as ${source_digest}"
+              continue
+            fi
+
+            if [[ -n "$acr_digest" ]]; then
+              echo "::error::${image}:${VERSION} is in ACR as ${acr_digest} but now builds to ${source_digest}. Deployments may already run the existing manifest, so this version cannot be replaced — release a new version instead."
+              exit 1
+            fi
+
+            # No --force, so ACR still refuses to overwrite if the digest read above
+            # failed for a reason other than the tag being absent.
+            az acr import \
+              --name "$ACR_NAME" \
+              --source "ghcr.io/n8n-io/${image}@${source_digest}" \
+              --username "$GHCR_USER" \
+              --password "$GHCR_TOKEN" \
+              --image "${image}:${VERSION}"
+          done

@@ -5,8 +5,8 @@ on:
     inputs:
       version:
         description: >-
-          Release version label (default: {VERSION}-staging.{short_sha}).
-          Becomes tag service/v{version}.
+          Candidate label (default: {VERSION}-staging.{short_sha}). Becomes tag
+          service/v{version}, so it must not be a bare x.y.z release version.
         required: false
         type: string
       run_tests:
@@ -32,13 +32,22 @@ jobs:
 
       - name: Resolve version
         id: meta
+        env:
+          VERSION_INPUT: ${{ inputs.version }}
         run: |
           BASE="$(tr -d '[:space:]' < VERSION)"
           SHA="$(git rev-parse --short HEAD)"
           FULL_SHA="$(git rev-parse HEAD)"
-          VERSION="${{ inputs.version }}"
+          VERSION="$VERSION_INPUT"
           if [[ -z "$VERSION" ]]; then
             VERSION="${BASE}-staging.${SHA}"
+          # A bare x.y.z would mint service/v{x.y.z}, the namespace release prep reads
+          # to order releases: it would block that version and every version below it.
+          # Rejected rather than given a suffix, because the label also names the ACR
+          # image tags the caller is about to deploy.
+          elif [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version '${VERSION}' is a release version, which a staging candidate must not claim. Add a suffix, for example '${VERSION}-rc.1'."
+            exit 1
           fi
           TAG="service/v${VERSION}"
           TARBALL="dist/firecracker-golden-build-${VERSION}.tar.gz"
