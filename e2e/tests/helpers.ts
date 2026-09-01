@@ -244,7 +244,11 @@ export async function crashGuest(id: string): Promise<void> {
  * Command that adds a second IPv4 address to eth0 through the legacy ioctl,
  * since iproute2 is absent from the sandbox image. The ':1' label keeps the
  * address secondary, so the sandbox's own address — and with it the daemon
- * connection carrying the exec — survives. Needs CAP_NET_ADMIN, hence sudo.
+ * connection carrying the exec — survives.
+ *
+ * It runs as the sandbox user, which has no CAP_NET_ADMIN, so the ioctl is
+ * denied. Callers expect that: sandbox-capabilities.spec.ts asserts the denial,
+ * and network-isolation.spec.ts skips on it.
  */
 export const addAddress = (ip: string) =>
   `python3 -c "import fcntl,socket,struct;` +
