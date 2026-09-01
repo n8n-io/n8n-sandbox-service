@@ -207,10 +207,10 @@ test.describe('Network isolation', () => {
     }
   });
 
-  // The host and private-range rules are matched on the bridge interface rather
-  // than on the address the runner assigned. Docker sandboxes cannot obtain
-  // CAP_NET_ADMIN under the capability allowlist, but this remains a
-  // defense-in-depth check for runtimes where a secondary address is possible.
+  // The host and private-range rules match on the bridge interface, not on the
+  // address the runner assigned. No runtime lets a sandbox add an address today,
+  // so this test skips on both lanes. It stays as the check that reactivates if
+  // one ever grants CAP_NET_ADMIN.
   test('sandbox cannot escape the policy by adding an address', async () => {
     const id = await createSandbox();
     try {

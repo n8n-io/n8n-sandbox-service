@@ -129,21 +129,27 @@ sandbox can be created, so an upgraded runner replacing the rules of an earlier
 version never does so with a container on the bridge. Containers are created
 with IPv6 disabled.
 
-The runner creates every sandbox container with all Linux capabilities dropped.
-It then restores only `CAP_CHOWN`, `CAP_DAC_OVERRIDE`, `CAP_FOWNER`,
-`CAP_SETGID`, and `CAP_SETUID`. This allowlist is sufficient for passwordless
-`sudo` and common `apt-get` package installation, while excluding capabilities
-for network administration, audit-log writes, raw sockets, mounts, tracing,
-device creation, and other privileged operations. Successful `sudo` commands
-may emit an audit warning because `CAP_AUDIT_WRITE` is intentionally excluded;
-granting it would allow audit-log injection and flooding in environments where
-the sandbox shares the initial user namespace. `no-new-privileges` is not
-enabled because it would prevent the supported sudo workflow.
+The runner drops all Linux capabilities from every sandbox container and
+restores none. The container runs as uid 1000, so no process holds an effective
+capability, and the empty bounding set stops one being gained.
 
-The allowlist holds in every environment. Sysbox isolation and privileged local
-DinD apply to the runner container, not to the sandbox container. A sandbox
-container is never privileged, because Docker ignores `--cap-drop` for a
-privileged container and the allowlist would then have no effect.
+That alone would not close the path to root. A setuid-root binary still makes
+its caller uid 0, and uid 0 owns `/usr/local` whatever capabilities it holds.
+Two things close it: the runner sets `no-new-privileges`, which makes every
+setuid binary inert, and the image ships no `sudo` and no setuid binary at all,
+because the Firecracker runtime has no equivalent flag.
+
+A sandbox therefore has no root and no `apt-get`. Packages install unprivileged,
+under `/home/user`: `pip` runs from a virtual environment at `/home/user/venv`,
+and `npm install -g` writes to `/home/user/.npm-global`.
+[internal/daemon/exec.go](../internal/daemon/exec.go) puts both first on the
+`PATH` every command gets. The image also carries a compiler and the Python
+headers, because a source build could not otherwise install.
+
+The policy holds in every environment. Sysbox isolation and privileged local
+DinD apply to the runner container, not the sandbox container. A sandbox
+container is never privileged, because Docker then ignores `--cap-drop` and the
+policy has no effect.
 
 Within a sandbox, the daemon runs as a non-root user, and file operations are
 path-validated to keep them inside the sandbox. The daemon authenticates
@@ -205,7 +211,8 @@ The boundaries above are covered by tests rather than asserted on paper.
 | Client-supplied ID conflicts | [internal/api/handlers_create_sandbox_test.go](../internal/api/handlers_create_sandbox_test.go) |
 | Admin route gating and key revocation | [internal/api/handlers_tenants_test.go](../internal/api/handlers_tenants_test.go) |
 | Sandbox-to-sandbox and blocked-range egress | [e2e/tests/network-isolation.spec.ts](../e2e/tests/network-isolation.spec.ts) |
-| Docker capability allowlist, sudo package installation, and denied network administration | [e2e/tests/sandbox-capabilities.spec.ts](../e2e/tests/sandbox-capabilities.spec.ts) |
+| Docker capability policy, absence of a root path, and denied network administration | [e2e/tests/sandbox-capabilities.spec.ts](../e2e/tests/sandbox-capabilities.spec.ts) |
+| Unprivileged npm and PyPI installation, and the build toolchain | [e2e/tests/sandbox-packages.spec.ts](../e2e/tests/sandbox-packages.spec.ts) |
 | Egress rule generation | [internal/runner/runtime/firecracker.ee/network/egress_test.go](../internal/runner/runtime/firecracker.ee/network/egress_test.go) |
 
 The network isolation suite is untagged, so it runs against both the Sysbox and

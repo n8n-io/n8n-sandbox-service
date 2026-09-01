@@ -10,15 +10,12 @@ import {
 } from './helpers';
 import { DOCKER_ONLY } from './tags';
 
-// The bounding set the runner grants: CHOWN, DAC_OVERRIDE, FOWNER, SETGID,
-// and SETUID (bits 0, 1, 3, 6, 7).
-const ALLOWED_BOUNDING_SET = '00000000000000cb';
-
-// No effective capabilities, because every sandbox process starts as uid 1000.
+// Every sandbox process starts as uid 1000, so nothing is effective. The
+// bounding set is where a restored capability would show up.
 const NO_CAPABILITIES = '0000000000000000';
 
 test.describe('Docker sandbox capability policy', DOCKER_ONLY, () => {
-  test('daemon and user processes have only the allowed bounding capabilities', async () => {
+  test('daemon and user processes have no capabilities at all', async () => {
     const id = await createSandbox();
     try {
       const result = await execWithTransientRetry(
@@ -31,35 +28,35 @@ test.describe('Docker sandbox capability policy', DOCKER_ONLY, () => {
       expect(result).toHaveSucceeded();
       expect(result.stdout.trim().split(/\s+/)).toEqual([
         NO_CAPABILITIES,
-        ALLOWED_BOUNDING_SET,
         NO_CAPABILITIES,
-        ALLOWED_BOUNDING_SET,
+        NO_CAPABILITIES,
+        NO_CAPABILITIES,
       ]);
     } finally {
       await deleteSandbox(id);
     }
   });
 
-  // iputils-ping asks setcap to give /usr/bin/ping CAP_NET_RAW. The allowlist
-  // holds no CAP_SETFCAP, so setcap fails and the package installs a setuid
-  // binary instead. This is the install path the capability policy changed, so
-  // it is the one the suite pins.
-  test('passwordless sudo can install a package that sets file capabilities', async () => {
-    test.setTimeout(240_000);
+  // An empty bounding set alone leaves the path to root open: a setuid-root
+  // binary still makes the caller uid 0, and uid 0 owns /usr/local whatever its
+  // capabilities. This pins the three things that close it.
+  test('has no path to root', async () => {
     const id = await createSandbox();
     try {
-      const updated = await execWithTransientRetry(id, 'sudo -n apt-get update', {
-        timeoutMs: 60_000,
-      });
-      expect(updated).toHaveSucceeded();
+      const uid = await execWithTransientRetry(id, 'id -u');
+      expect(uid).toHaveSucceeded();
+      expect(uid.stdout.trim()).not.toBe('0');
 
-      const installed = await exec(
+      const escalation = await exec(
         id,
-        'sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y iputils-ping && ls -l /usr/bin/ping',
-        { timeoutMs: 150_000 },
+        'command -v sudo; find / -xdev -perm /4000 -type f 2>/dev/null',
+        { timeoutMs: 60_000 },
       );
-      expect(installed).toHaveSucceeded();
-      expect(installed.stdout, 'expected the setuid fallback for /usr/bin/ping').toMatch(/^-rws/m);
+      expect(escalation.stdout.trim(), 'expected no sudo and no setuid binary').toBe('');
+
+      const write = await exec(id, 'touch /usr/local/bin/escalated');
+      expect(write.exitCode, 'expected a write to /usr/local/bin to be refused').not.toBe(0);
+      expect(write.stderr).toMatch(/Permission denied/);
     } finally {
       await deleteSandbox(id);
     }
@@ -75,10 +72,9 @@ test.describe('Docker sandbox capability policy', DOCKER_ONLY, () => {
       const extraIP = siblingOf(ownIP);
 
       // Positive control. Without it the assertion below also passes when
-      // passwordless sudo or python3 fcntl is missing, which hides a
-      // capability regression instead of reporting one.
-      const plumbing = await exec(id, 'sudo -n python3 -c "import fcntl"');
-      expect(plumbing, 'expected sudo -n and python3 fcntl to be available').toHaveSucceeded();
+      // python3 fcntl is missing, hiding a capability regression.
+      const plumbing = await exec(id, 'python3 -c "import fcntl"');
+      expect(plumbing, 'expected python3 fcntl to be available').toHaveSucceeded();
 
       const added = await exec(id, addAddress(extraIP));
       expect(added.exitCode, 'expected address addition to be denied').not.toBe(0);

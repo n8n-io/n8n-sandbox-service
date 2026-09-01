@@ -27,9 +27,17 @@ func HandleExec(ctx context.Context, command string, env []string, workdir strin
 
 	// Start with sensible defaults so common tools work out of the box, then
 	// layer caller-supplied env vars on top (later values win).
+	//
+	// This replaces the environment rather than extending it, so it is the only
+	// one a user command sees on either runtime: image ENV and the runner's
+	// --env reach the daemon, not the commands it runs.
+	//
+	// The first two PATH entries are the install roots a sandbox without root
+	// can write: ~/.npm-global for a global npm install, and the prebuilt venv
+	// for pip.
 	cmd.Env = append([]string{
 		"HOME=/home/user",
-		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		"PATH=/home/user/venv/bin:/home/user/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 	}, env...)
 
 	if workdir != "" {

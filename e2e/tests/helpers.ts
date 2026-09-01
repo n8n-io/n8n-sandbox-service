@@ -247,7 +247,7 @@ export async function crashGuest(id: string): Promise<void> {
  * connection carrying the exec — survives. Needs CAP_NET_ADMIN, hence sudo.
  */
 export const addAddress = (ip: string) =>
-  `sudo -n python3 -c "import fcntl,socket,struct;` +
+  `python3 -c "import fcntl,socket,struct;` +
   `s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);` +
   `fcntl.ioctl(s,0x8916,struct.pack('16sH2s4s16s',b'eth0:1',socket.AF_INET,` +
   `b'\\x00\\x00',socket.inet_aton('${ip}'),b'\\x00'*16))"`;
