@@ -1,0 +1,27 @@
+internal/runner/proxy_test.go
+  s_5f01f3d97d8c48::t_33be5ebc434ccf 182-186
+  s_5f01f3d97d8c48::t_264a96933a4fa8 4,154-171,173-175,179,181,187-196,198-200,202-203,205-216,218-221,223-226
+internal/runner/response.go
+  s_5f01f3d97d8c48::t_9343dcfe39d100 32-39
+internal/runner/exec_proxy.go
+  s_5f01f3d97d8c48::t_bec4c495e8d9e6 60
+internal/runner/proxy.go
+  s_5f01f3d97d8c48::t_bec4c495e8d9e6 27,32,35-36,47-50,53,85,125,134-137
+  s_5f01f3d97d8c48::t_9343dcfe39d100 37-46,51-52,119-124
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "18fcea280e1f44a64f5d645c6a72cbef8251c4f2",
+  "prompts": {},
+  "sessions": {
+    "s_5f01f3d97d8c48": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "589354f6-e4a5-4c9f-861a-561707271135",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
