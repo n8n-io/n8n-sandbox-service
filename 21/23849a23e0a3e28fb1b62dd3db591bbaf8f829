@@ -1,0 +1,52 @@
+internal/runner/runtime/docker/README.md
+  s_6e160c24841931::t_523930b5367d2a 24-25
+  s_6e160c24841931::t_68370182fd47b5 23,26-27,30
+e2e/tests/helpers.ts
+  s_6e160c24841931::t_51c884bd6509d1 250
+e2e/tests/network-isolation.spec.ts
+  s_6e160c24841931::t_a196e7f2888f6e 210-213
+internal/runner/runtime/docker/docker_client.go
+  s_6e160c24841931::t_015143b9eafc70 149,165,169,173,176,179
+  s_6e160c24841931::t_decd5a1a48cc7e 144-145,166-167,170-172,174-175
+e2e/tests/sandbox-packages.spec.ts
+  s_6e160c24841931::t_a196e7f2888f6e 5-7,23-24,51-52,80-81
+  s_6e160c24841931::t_5706d467c05b04 18-21
+  s_6e160c24841931::t_9c1f525d2d59ad 1-4,8-17,22,25-50,53-79,82-95
+docs/security-model.md
+  s_6e160c24841931::t_753d5135d4e991 135,140-141,148-149,214-215
+e2e/tests/sandbox-capabilities.spec.ts
+  s_6e160c24841931::t_62e036e5c8c3bc 18,32-33,41,43,46-48,50,52,55-59,76-77
+  s_6e160c24841931::t_5706d467c05b04 53
+  s_6e160c24841931::t_a196e7f2888f6e 13-14,40,42,75
+Dockerfile.sandbox
+  s_6e160c24841931::t_f2758f0acd0f89 82
+  s_6e160c24841931::t_96b7f3b4e1e5ae 26-30,34-35
+  s_6e160c24841931::t_29b232419ebcfc 33,68,81,83-84
+  s_6e160c24841931::t_a090b5a59d9a17 63
+  s_6e160c24841931::t_c874926cb12330 79
+  s_6e160c24841931::t_decd5a1a48cc7e 66-67,75-78,80
+internal/daemon/exec.go
+  s_6e160c24841931::t_7832687a472710 30-31,34,40
+  s_6e160c24841931::t_decd5a1a48cc7e 32-33,35-37
+docs/API.md
+  s_6e160c24841931::t_887a614ecfd383 279-299
+internal/runner/runtime/docker/runtime_test.go
+  s_6e160c24841931::t_decd5a1a48cc7e 149-150
+  s_6e160c24841931::t_8deea804ccff87 134,151,154,161,165,171
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "2123849a23e0a3e28fb1b62dd3db591bbaf8f829",
+  "prompts": {},
+  "sessions": {
+    "s_6e160c24841931": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d5ac3339-204e-4239-a82c-24e16d9931a1",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
