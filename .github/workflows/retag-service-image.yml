@@ -1,0 +1,92 @@
+name: Retag Service Image
+
+# Points published tags at a manifest that is already in the registries, for
+# recovering from a release that tagged the wrong images. It cannot build or
+# delete anything.
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: Image to retag
+        required: true
+        type: choice
+        options:
+          - n8n-sandbox-service-api
+          - n8n-sandbox-service-runner-dind
+          - n8n-sandbox-service-runner-firecracker
+          - n8n-sandbox-service-sandbox
+      digest:
+        description: "Manifest digest the tags should point at (sha256:...)"
+        required: true
+        type: string
+      tags:
+        description: Space-separated tags to move (e.g. "1.1.1 latest stable")
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: retag-service-image-${{ inputs.image }}
+  cancel-in-progress: false
+
+jobs:
+  retag:
+    runs-on: ubuntu-latest
+    environment: docker-release
+    steps:
+      - name: Log in to Docker Hub
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Move tags
+        env:
+          IMAGE: ${{ inputs.image }}
+          DIGEST: ${{ inputs.digest }}
+          TAGS: ${{ inputs.tags }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::digest must be sha256 followed by 64 hex characters, got '${DIGEST}'"
+            exit 1
+          fi
+
+          digest_of() {
+            docker buildx imagetools inspect --format '{{json .Manifest}}' "$1" 2>/dev/null \
+              | jq -r '.digest' || true
+          }
+
+          for repo in "n8nio/${IMAGE}" "ghcr.io/n8n-io/${IMAGE}"; do
+            # Both registries must already hold the manifest, so a mistyped digest
+            # fails here rather than moving one registry and not the other.
+            if [[ "$(digest_of "${repo}@${DIGEST}")" != "$DIGEST" ]]; then
+              echo "::error::${repo}@${DIGEST} does not exist. Nothing was changed."
+              exit 1
+            fi
+          done
+
+          for repo in "n8nio/${IMAGE}" "ghcr.io/n8n-io/${IMAGE}"; do
+            for tag in $TAGS; do
+              echo "${repo}:${tag} was $(digest_of "${repo}:${tag}" | grep . || echo absent)"
+              # A single index source is copied as-is, so the tag resolves to the
+              # same digest in both registries.
+              docker buildx imagetools create --tag "${repo}:${tag}" "${repo}@${DIGEST}"
+              landed=$(digest_of "${repo}:${tag}")
+              if [[ "$landed" != "$DIGEST" ]]; then
+                echo "::error::${repo}:${tag} landed as ${landed}, expected ${DIGEST}"
+                exit 1
+              fi
+              echo "${repo}:${tag} now ${landed}"
+            done
+          done

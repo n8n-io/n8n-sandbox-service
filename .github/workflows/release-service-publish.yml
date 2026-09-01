@@ -21,13 +21,34 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
-          ref: ${{ github.event.pull_request.base.ref }}
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
 
       - name: Read version
         id: version
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
-          VERSION=$(cat VERSION)
+          VERSION="${BASE_REF#service/release/}"
+          FILE_VERSION=$(tr -d '[:space:]' < VERSION)
+          if [[ "$VERSION" != "$FILE_VERSION" ]]; then
+            echo "::error::Release branch ${BASE_REF} claims v${VERSION} but VERSION reads ${FILE_VERSION}. Refusing to publish under either version."
+            exit 1
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      # release-metadata only tags at the very end, long after the images are public.
+      - name: Fail if version was already released
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if ! matches=$(git ls-remote origin "refs/tags/service/v${VERSION}"); then
+            echo "::error::Could not reach origin to look up service/v${VERSION}. Refusing to publish without confirming it is unreleased; re-run once origin is reachable."
+            exit 1
+          fi
+          if [[ -n "$matches" ]]; then
+            echo "::error::service/v${VERSION} already exists, so v${VERSION} was published before. Publishing it again would overwrite its images and move latest and stable onto them."
+            exit 1
+          fi
 
       - name: Run tests
         uses: ./.github/actions/sandbox-service-test
@@ -91,7 +112,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
-          ref: ${{ github.event.pull_request.base.ref }}
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
 
       # The golden build tarball embeds a freshly compiled cmd/daemon; without the
       # test action in this job, nothing else puts Go on the runner.
@@ -185,30 +206,52 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      - name: Import release images into ACR
+      - name: Log in to ACR
+        env:
+          ACR_NAME: ${{ secrets.AZURE_ACR_NAME }}
+        run: az acr login -n "$ACR_NAME"
+
+      - name: Copy release images into ACR
         env:
           ACR_NAME: ${{ secrets.AZURE_ACR_NAME }}
           VERSION: ${{ needs.publish-images.outputs.version }}
-          GHCR_USER: ${{ github.actor }}
-          GHCR_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          REGISTRY="${ACR_NAME}.azurecr.io"
+
+          # Sets DIGEST to the tag's digest, or to "" when the tag is absent. Every
+          # other failure returns non-zero, so a transport or auth error cannot pass
+          # as "not mirrored yet" and overwrite a manifest deployments already run.
+          read_digest() {
+            local ref=$1 out
+            DIGEST=""
+            if out=$(docker buildx imagetools inspect --format '{{json .Manifest}}' "$ref" 2>&1); then
+              DIGEST=$(jq -r '.digest' <<< "$out")
+              return 0
+            fi
+            [[ "$out" == *": not found" ]] && return 0
+            echo "::error::Could not read ${ref}: ${out}"
+            return 1
+          }
+
           for image in \
             n8n-sandbox-service-api \
             n8n-sandbox-service-runner-dind \
             n8n-sandbox-service-runner-firecracker \
             n8n-sandbox-service-sandbox; do
-            # Resolve the source to a digest: rebuilding a version moves the GHCR
-            # tag, and importing by tag would copy whatever it points at now.
-            source_digest=$(docker buildx imagetools inspect \
-              --format '{{json .Manifest}}' "ghcr.io/n8n-io/${image}:${VERSION}" | jq -r '.digest')
-            acr_digest=$(az acr repository show \
-              --name "$ACR_NAME" --image "${image}:${VERSION}" \
-              --query digest -o tsv 2>/dev/null || true)
+            read_digest "ghcr.io/n8n-io/${image}:${VERSION}"
+            source_digest="$DIGEST"
+            if [[ -z "$source_digest" ]]; then
+              echo "::error::ghcr.io/n8n-io/${image}:${VERSION} does not exist, so it was never published."
+              exit 1
+            fi
 
-            # Keeps a partially imported run re-runnable.
+            read_digest "${REGISTRY}/${image}:${VERSION}"
+            acr_digest="$DIGEST"
+
+            # Keeps a partially mirrored run re-runnable.
             if [[ "$acr_digest" == "$source_digest" ]]; then
-              echo "${image}:${VERSION} already imported as ${source_digest}"
+              echo "${image}:${VERSION} already mirrored as ${source_digest}"
               continue
             fi
 
@@ -217,12 +260,13 @@ jobs:
               exit 1
             fi
 
-            # No --force, so ACR still refuses to overwrite if the digest read above
-            # failed for a reason other than the tag being absent.
-            az acr import \
-              --name "$ACR_NAME" \
-              --source "ghcr.io/n8n-io/${image}@${source_digest}" \
-              --username "$GHCR_USER" \
-              --password "$GHCR_TOKEN" \
-              --image "${image}:${VERSION}"
+            docker buildx imagetools create \
+              --tag "${REGISTRY}/${image}:${VERSION}" \
+              "ghcr.io/n8n-io/${image}@${source_digest}"
+
+            read_digest "${REGISTRY}/${image}:${VERSION}"
+            if [[ "$DIGEST" != "$source_digest" ]]; then
+              echo "::error::${image}:${VERSION} landed in ACR as ${DIGEST}, expected ${source_digest}."
+              exit 1
+            fi
           done
