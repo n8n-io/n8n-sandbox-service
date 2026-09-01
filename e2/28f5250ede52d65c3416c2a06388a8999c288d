@@ -1,0 +1,19 @@
+e2e/tests/sandbox-capabilities.spec.ts
+  s_6e160c24841931::t_cd6e03f84ec353 50-54,57-59
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "e228f5250ede52d65c3416c2a06388a8999c288d",
+  "prompts": {},
+  "sessions": {
+    "s_6e160c24841931": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d5ac3339-204e-4239-a82c-24e16d9931a1",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
