@@ -38,7 +38,7 @@ flowchart TD
         I --> J[Build + push multi-arch\nimages to Docker Hub]
         J --> K[Create git tag +\nGitHub Release +\ngolden-build tarball]
         K --> L[Open post-release\nversion-bump PR to main]
-        J --> S[Import :version into\nprivate registry]
+        J --> S[Copy :version into\nprivate registry]
     end
 
     subgraph sdk ["SDK Release"]
@@ -83,20 +83,26 @@ commit.
 ### Private registry mirror
 
 Cloud environments pull from the private container registry, not Docker Hub, so
-the publish workflow also imports all four images into it under `{version}`. The
-import is server-side and copies the published manifests, so the private
+the publish workflow also copies all four images into it under `{version}`. It
+copies the published manifests instead of rebuilding them, so the private
 registry's `{version}` resolves to the same digests as Docker Hub's.
 
-Each image is imported by digest rather than by tag, and an existing `{version}`
-is never replaced. If a rebuild of the same version produces a different
-manifest, the import fails instead of swapping the content behind a tag that
-deployments may already be running. Re-importing an identical manifest is a
-no-op, so a partially imported run stays re-runnable.
+The copy runs over the registry API with `docker buildx imagetools create`, after
+the same `az acr login` the alpha and staging workflows use, so it needs nothing
+beyond push access to the registry. `az acr import` is the more obvious tool but
+needs the registry readable as an ARM resource plus `importImage` on it — control
+plane access nothing else in this repository requires.
+
+Each image is copied by digest rather than by tag, and an existing `{version}` is
+never replaced. If a rebuild of the same version produces a different manifest,
+the copy fails instead of swapping the content behind a tag that deployments may
+already be running. Re-copying an identical manifest is a no-op, so a partially
+mirrored run stays re-runnable.
 
 This only makes the version deployable; it rolls nothing out. Deployments still
 move their own tags (`prod`) or pin `{version}` explicitly.
 
-The import is gated on the image publish alone, not on tagging or release creation,
+The copy is gated on the image publish alone, not on tagging or release creation,
 so a failure in those steps can never skip it — the registries cannot diverge
 because of work the mirror does not depend on.
 
@@ -138,9 +144,21 @@ unable to rebuild their snapshot.
    and the chart `appVersion` disagree.
 4. Merge the PR. This triggers the `Service Publish` workflow, whose
    `publish-images` job runs tests and then builds and pushes the multi-arch images
-   to Docker Hub, sandbox image included. Two jobs run in parallel off that push,
-   neither waiting on the other:
-   - `mirror-to-acr` imports those images into the private container registry under
+   to Docker Hub, sandbox image included.
+
+   Every job builds from the PR's merge commit rather than from the base branch by
+   name, and takes the version from the base branch name (`service/release/{version}`)
+   rather than from the `VERSION` file. Merging the release PR is what puts the new
+   version on that branch, so a job that resolves the branch name can still read the
+   pre-merge tip and publish the *previous* release's version on top of itself.
+   `VERSION` is only cross-checked against the branch name, so a release PR that
+   bumps to a different number fails before anything is pushed. As a second line of
+   defence, publishing aborts if `service/v{version}` already exists — checked up
+   front, because the tag is otherwise only created at the very end, long after the
+   images are public.
+
+   Two jobs then run in parallel off that push, neither waiting on the other:
+   - `mirror-to-acr` copies those images into the private container registry under
      `{version}`
    - `release-metadata` packages `firecracker-golden-build-{version}.tar.gz` and
      attaches it to the release, creates a git tag (`service/v{version}`) and GitHub
@@ -257,8 +275,9 @@ communicates HTTP API compatibility to consumers who do not deploy this service.
 - SDK: `sdk/v{version}` (e.g. `sdk/v0.0.4`)
 
 Release tags are immutable: publish creates them unforced, so a tag always points
-at the commit its images and release assets were built from. That is what makes
-the `git_sha` assertion in the copy-on-release contract meaningful.
+at the commit its images and release assets were built from — both jobs check out
+the release PR's merge commit, so they cannot diverge. That is what makes the
+`git_sha` assertion in the copy-on-release contract meaningful.
 
 `sandbox/v{version}` tags exist for releases made before versions were unified and
 are not created anymore.
