@@ -24,15 +24,33 @@ type proxyTarget struct {
 
 // ProxyHandler returns a handler that reverse-proxies requests to the sandbox daemon.
 func ProxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder) http.HandlerFunc {
-	return proxyHandler(rt, cfg, rec, false)
+	return proxyHandler(rt, cfg, rec, false, true)
 }
 
 // UploadProxyHandler is like ProxyHandler but enforces cfg.MaxFileBytes on the request body.
 func UploadProxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder) http.HandlerFunc {
-	return proxyHandler(rt, cfg, rec, true)
+	return proxyHandler(rt, cfg, rec, true, true)
 }
 
-func proxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder, limitBody bool) http.HandlerFunc {
+// DeleteExecutionHandler serves DELETE /sandboxes/{id}/executions/{exec_id}, the
+// one sandbox route that answers without waking.
+//
+// An execution lives only in the guest's memory, so a sandbox that is stopped, or
+// that came back from a crash, has already lost the one this names and the delete
+// has nothing left to do. It gets 204.
+//
+// Not waking is what keeps the crash report honest. A recovery reports the restart
+// to the single request that wakes the sandbox, and this delete is not a client
+// asking to use it: the SDK sends one in the background after every command and
+// discards the answer. Letting it spend the report would hide the crash from the
+// request that comes next.
+func DeleteExecutionHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder) http.HandlerFunc {
+	return proxyHandler(rt, cfg, rec, false, false)
+}
+
+// wake says whether a sandbox that is not running is started for the request. Only
+// DeleteExecutionHandler passes false; see there for why.
+func proxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder, limitBody bool, wake bool) http.HandlerFunc {
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			// Comma-ok assertion: the context key is missing when
@@ -64,7 +82,7 @@ func proxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.Run
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		daemonBaseURL, ok := resolveDaemonURL(w, r, rt, rec)
+		daemonBaseURL, ok := resolveDaemonURL(w, r, rt, rec, wake)
 		if !ok {
 			return
 		}
@@ -98,7 +116,13 @@ func proxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.Run
 // resolveDaemonURL validates the sandbox ID, looks up the daemon URL, and
 // wakes the sandbox if necessary. On error it writes an HTTP response and
 // returns ("", false).
-func resolveDaemonURL(w http.ResponseWriter, r *http.Request, rt runnerruntime.Runtime, rec *metrics.RunnerRecorder) (string, bool) {
+//
+// wake=false is for a route that must not start a stopped sandbox. It answers the
+// request here rather than leaving the caller to check first and proxy after: the
+// lookup below is a docker ps and inspect, so a caller that decided on its own
+// lookup and then reached a handler that repeats it leaves a window a crash fits
+// inside — one wide enough to have failed in CI. One lookup, one decision.
+func resolveDaemonURL(w http.ResponseWriter, r *http.Request, rt runnerruntime.Runtime, rec *metrics.RunnerRecorder, wake bool) (string, bool) {
 	id := r.PathValue("id")
 	if !isValidID(id) {
 		writeError(w, http.StatusBadRequest, "invalid sandbox id")
@@ -107,6 +131,10 @@ func resolveDaemonURL(w http.ResponseWriter, r *http.Request, rt runnerruntime.R
 
 	daemonBaseURL, err := rt.DaemonURL(r.Context(), id)
 	if err != nil && errors.Is(err, runnerruntime.ErrSandboxNotRunning) {
+		if !wake {
+			writeExecutionGone(w)
+			return "", false
+		}
 		wakeStart := time.Now()
 		wake, wakeErr := rt.EnsureSandboxRunning(r.Context(), id)
 		if rec != nil {
@@ -152,32 +180,4 @@ func resolveDaemonURL(w http.ResponseWriter, r *http.Request, rt runnerruntime.R
 	}
 
 	return daemonBaseURL, true
-}
-
-// DeleteExecutionHandler serves DELETE /sandboxes/{id}/executions/{exec_id}.
-//
-// It answers 204 without waking a sandbox that is not running. An execution lives
-// only in the daemon's memory, so a sandbox that is stopped, or that Docker
-// restarted under a crash, has already lost it and the delete has nothing left to
-// do.
-//
-// Skipping the wake is what keeps the crash report honest. A recovery reports the
-// restart to the one request that wakes the sandbox, and this delete is not a client
-// asking to use it: the SDK sends it to clean up after an execution that already
-// finished, and throws the answer away. Letting it spend the report would hide the
-// crash from the request that comes next.
-func DeleteExecutionHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder) http.HandlerFunc {
-	proxy := ProxyHandler(rt, cfg, rec)
-
-	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		// An invalid id falls through to the proxy, which is what reports it as 400.
-		if isValidID(id) {
-			if _, err := rt.DaemonURL(r.Context(), id); errors.Is(err, runnerruntime.ErrSandboxNotRunning) {
-				w.WriteHeader(http.StatusNoContent)
-				return
-			}
-		}
-		proxy(w, r)
-	}
 }

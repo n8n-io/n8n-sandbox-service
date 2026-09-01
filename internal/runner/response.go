@@ -29,3 +29,11 @@ func writeSandboxRestarted(w http.ResponseWriter) {
 		"reason": "sandbox_restarted",
 	})
 }
+
+// writeExecutionGone answers a delete whose sandbox is not running. The execution it
+// names was in the guest's memory, which a stop or a crash already took, so the
+// delete has its outcome and 204 reports it — the same status the daemon gives for
+// deleting an execution it does not have.
+func writeExecutionGone(w http.ResponseWriter) {
+	w.WriteHeader(http.StatusNoContent)
+}
