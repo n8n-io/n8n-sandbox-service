@@ -141,10 +141,12 @@ func dockerContainerCreateArgs(sandboxID, containerName, image string, limits *R
 		"--label", containerLabelManaged + "=" + containerLabelManagedVal,
 		"--label", containerLabelSandboxID + "=" + sandboxID,
 		"--user", "1000:1000",
+		// The daemon process only. internal/daemon/exec.go sets the environment
+		// user commands see.
 		"--env", "HOME=/home/user",
 		"--env", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 	}
-	args = append(args, dockerSandboxCapabilityArgs()...)
+	args = append(args, dockerSandboxSecurityArgs()...)
 	args = append(args,
 		// netrules only filter IPv4; disable v6 in the container so sandboxes
 		// can't bypass the policy via link-local/ULA or v6 metadata addresses.
@@ -160,20 +162,21 @@ func dockerContainerCreateArgs(sandboxID, containerName, image string, limits *R
 	return args
 }
 
-// dockerSandboxCapabilityArgs is the single capability policy for every
-// Docker-backed sandbox. Keep the allowlist minimal while preserving
-// passwordless sudo for common package installation workflows.
+// dockerSandboxSecurityArgs is the single security policy for every Docker-backed
+// sandbox. The container runs as uid 1000, so it holds no effective capability
+// anyway; the empty bounding set stops a setuid binary gaining one.
 //
-// Never create a sandbox container with --privileged. Docker ignores --cap-drop
-// for a privileged container, so that flag would void this policy silently.
-func dockerSandboxCapabilityArgs() []string {
+// no-new-privileges is what closes the path to root. Without it a setuid-root
+// binary still makes the caller uid 0, and uid 0 owns /usr/local whatever its
+// capabilities. The image ships no sudo and no setuid binary; this flag holds
+// even if one returns.
+//
+// Never create a sandbox container with --privileged. Docker then ignores
+// --cap-drop and voids this policy silently.
+func dockerSandboxSecurityArgs() []string {
 	return []string{
 		"--cap-drop", "ALL",
-		"--cap-add", "CHOWN",
-		"--cap-add", "DAC_OVERRIDE",
-		"--cap-add", "FOWNER",
-		"--cap-add", "SETGID",
-		"--cap-add", "SETUID",
+		"--security-opt", "no-new-privileges",
 	}
 }
 

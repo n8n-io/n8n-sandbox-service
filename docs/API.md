@@ -276,6 +276,27 @@ pipes, redirects, etc.) work consistently.
 
 `env` accepts an object of key-value pairs: `{"KEY": "VALUE"}`.
 
+**Sandbox environment.** A command starts with `HOME=/home/user` and this `PATH`:
+
+```
+/home/user/venv/bin:/home/user/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+```
+
+`env` layers on top, so a supplied `PATH` replaces this one.
+
+A sandbox has no root and no `sudo`, so `apt-get` does not work. Install packages
+unprivileged instead. Each command below writes only under `/home/user`:
+
+| To install | Run |
+| --- | --- |
+| A PyPI package | `pip install <name>` — `python3` and `pip` come from the virtual environment at `/home/user/venv` |
+| A global npm package | `npm install -g <name>` — writes to `/home/user/.npm-global`, whose `bin` is on `PATH` |
+| A project npm package | `npm install <name>` in the project directory |
+
+The image carries a C and C++ compiler, `make` and the Python headers, so a
+source build works too. It carries no other library's development headers, and a
+sandbox cannot add them.
+
 `exec_id`, when provided, sets the execution identifier. If an execution with that ID
 already exists, the response follows it instead of starting a new command. This lets the
 client define the ID upfront and resume even if the initial connection drops before any

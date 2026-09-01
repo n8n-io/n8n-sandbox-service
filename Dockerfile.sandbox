@@ -23,14 +23,20 @@ ARG NODE_VERSION=22.16.0
 ARG NODE_X64_SHA256=f4cb75bb036f0d0eddf6b79d9596df1aaab9ddccd6a20bf489be5abe9467e84e
 ARG NODE_ARM64_SHA256=eab80cb88f8fda1e65f5e8d0420c9809bdb320b03fd34976ab7161b6e703b910
 
+# build-essential and python3-dev are here because the sandbox has no root, so it
+# cannot apt-get a compiler later. Source builds need one.
+#
+# xz-utils only untars the Node tarball below, but it stays in the image:
+# build-essential needs it through dpkg-dev.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
-    python3-pip \
+    python3-venv \
+    python3-dev \
+    build-essential \
     ca-certificates \
     curl \
     ripgrep \
     wget \
-    sudo \
     xz-utils \
     && arch="${TARGETARCH}" \
     && if [ -z "$arch" ]; then \
@@ -52,16 +58,30 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm /tmp/node.tar.xz \
     && node -v && npm -v \
     && npm install -g typescript \
-    && apt-get purge -y xz-utils \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
+
 RUN groupadd --gid 1000 user && useradd --uid 1000 --gid 1000 --create-home --shell /bin/sh user
-RUN echo "user ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/user && chmod 0440 /etc/sudoers.d/user
+
+# no-new-privileges makes setuid binaries inert on the Docker runtime. Clearing
+# the bits does the same in a Firecracker guest, which has no such flag.
+RUN find / -xdev -perm /4000 -type f -exec chmod u-s {} +
 
 COPY --from=builder /out/daemon /usr/local/bin/sandbox-daemon
 
 USER 1000:1000
 WORKDIR /home/user
+
+# Install roots owned by uid 1000, because root owns /usr/local: a global npm
+# install needs its own prefix, and pip needs a venv to get past Debian's
+# externally-managed marker. Both sit under /home/user, the only directory uid
+# 1000 owns on either runtime. internal/daemon/exec.go puts them on PATH.
+#
+# ensurepip seeds pip 23.0.1, which builds an sdist the legacy setup.py way.
+RUN python3 -m venv venv \
+    && venv/bin/pip install --no-cache-dir --quiet --upgrade pip \
+    && printf 'prefix=/home/user/.npm-global\n' > .npmrc \
+    && mkdir -p .npm-global/bin
 
 RUN mkdir -p workspace/src workspace/chunks workspace/node-types
 COPY --chown=1000:1000 sandbox-workspace/ workspace/

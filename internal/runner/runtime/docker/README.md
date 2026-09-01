@@ -20,15 +20,14 @@ containers direct access to the host Docker daemon.
   reachable.
 - Reports capacity from the current managed container count.
 - Applies default memory, CPU, PID, and optional disk quota limits on create.
-- Drops every Linux capability, then restores only `CAP_CHOWN`,
-  `CAP_DAC_OVERRIDE`, `CAP_FOWNER`, `CAP_SETGID`, and `CAP_SETUID`. This keeps
-  passwordless `sudo` usable for common package installation while preventing
-  network administration, audit-log writes, mounts, tracing, device creation,
-  raw sockets, and other privileged operations. Successful `sudo` commands may
-  emit an audit warning because `CAP_AUDIT_WRITE` is intentionally excluded.
+- Drops every Linux capability, restores none, and sets `no-new-privileges`.
+  The container runs as uid 1000, so it holds nothing effective; the empty
+  bounding set stops it gaining anything, and `no-new-privileges` makes any
+  setuid binary inert. With an image that ships no `sudo`, that leaves no path
+  to root and so no `apt-get`; packages install unprivileged under `/home/user`.
   Sysbox isolation and privileged local DinD apply to the runner container, so
   every sandbox container gets the same policy. Never create a sandbox container
-  with `--privileged`: Docker then ignores `--cap-drop` and the allowlist has no
+  with `--privileged`: Docker then ignores `--cap-drop` and the policy has no
   effect.
 - Applies Docker-specific network isolation rules through `netrules`.
 - Waits for daemon `/healthz` and a tiny `/executions` round trip before

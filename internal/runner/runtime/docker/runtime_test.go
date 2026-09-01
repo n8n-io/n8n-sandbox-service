@@ -131,11 +131,7 @@ func TestDockerContainerCreateArgs(t *testing.T) {
 		"--env", "HOME=/home/user",
 		"--env", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 		"--cap-drop", "ALL",
-		"--cap-add", "CHOWN",
-		"--cap-add", "DAC_OVERRIDE",
-		"--cap-add", "FOWNER",
-		"--cap-add", "SETGID",
-		"--cap-add", "SETUID",
+		"--security-opt", "no-new-privileges",
 		"--sysctl", "net.ipv6.conf.all.disable_ipv6=1",
 		"--sysctl", "net.ipv6.conf.default.disable_ipv6=1",
 		"--sysctl", "net.ipv6.conf.lo.disable_ipv6=1",
@@ -150,31 +146,29 @@ func TestDockerContainerCreateArgs(t *testing.T) {
 	}
 }
 
-func TestDockerContainerCreateArgsAlwaysApplyCapabilityPolicy(t *testing.T) {
+// Comparing every extracted flag against the whole policy is what catches a
+// --cap-add creeping back in: it shows up as an extra pair.
+func TestDockerContainerCreateArgsAlwaysApplySecurityPolicy(t *testing.T) {
 	want := []string{
 		"--cap-drop", "ALL",
-		"--cap-add", "CHOWN",
-		"--cap-add", "DAC_OVERRIDE",
-		"--cap-add", "FOWNER",
-		"--cap-add", "SETGID",
-		"--cap-add", "SETUID",
+		"--security-opt", "no-new-privileges",
 	}
 
 	for _, enableCgroups := range []bool{false, true} {
 		gotArgs := dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", nil, enableCgroups)
 		var got []string
 		for i := 0; i < len(gotArgs); i++ {
-			if gotArgs[i] != "--cap-drop" && gotArgs[i] != "--cap-add" {
+			if gotArgs[i] != "--cap-drop" && gotArgs[i] != "--cap-add" && gotArgs[i] != "--security-opt" {
 				continue
 			}
 			if i+1 >= len(gotArgs) {
-				t.Fatalf("capability flag %q has no value", gotArgs[i])
+				t.Fatalf("security flag %q has no value", gotArgs[i])
 			}
 			got = append(got, gotArgs[i], gotArgs[i+1])
 			i++
 		}
 		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("capability args with enableCgroups=%v = %#v, want %#v", enableCgroups, got, want)
+			t.Fatalf("security args with enableCgroups=%v = %#v, want %#v", enableCgroups, got, want)
 		}
 	}
 }
