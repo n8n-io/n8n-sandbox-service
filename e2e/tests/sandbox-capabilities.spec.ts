@@ -47,10 +47,16 @@ test.describe('Docker sandbox capability policy', DOCKER_ONLY, () => {
       expect(uid).toHaveSucceeded();
       expect(uid.stdout.trim()).not.toBe('0');
 
+      // Only the exec directories, not the whole tree: a setuid binary has to
+      // live somewhere on PATH to be reachable, and /bin and /sbin are symlinks
+      // into /usr on bookworm. Scanning / instead would stat every inode of the
+      // node_modules and venv trees, which is 8x the work and slows the specs
+      // that run after this one.
       const escalation = await exec(
         id,
-        'command -v sudo; find / -xdev -perm /4000 -type f 2>/dev/null',
-        { timeoutMs: 60_000 },
+        'command -v sudo; ' +
+          'find /usr/bin /usr/sbin /usr/local/bin /usr/local/sbin /usr/lib ' +
+          '-xdev -perm /4000 -type f 2>/dev/null',
       );
       expect(escalation.stdout.trim(), 'expected no sudo and no setuid binary').toBe('');
 
