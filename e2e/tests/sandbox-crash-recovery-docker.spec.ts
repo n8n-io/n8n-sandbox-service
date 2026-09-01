@@ -34,8 +34,14 @@ function sleep(ms: number): Promise<void> {
  * Unlike Firecracker, nothing about the sandbox settles into a stopped state to wait
  * for: Docker's restart policy has the container back up, usually before this even
  * returns. The death counter is the honest gate here because the runner marks the
- * sandbox restarted before incrementing it, so once the counter moves the next request
- * is guaranteed to meet the 409 rather than race the event.
+ * sandbox restarted before incrementing it, so a request sent after the counter moves
+ * meets the 409 rather than racing the event.
+ *
+ * It says nothing about a request that was already in flight. One crash is reported
+ * once, to whichever request wakes the sandbox first, so a request that overtakes the
+ * one below takes the report with it. What keeps this test honest is that the only
+ * request still in flight here is the SDK's fire-and-forget delete of the execution
+ * that ran last, and the runner answers that one without waking the sandbox.
  */
 async function waitForDeath(want: number, timeoutMs = 60_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;

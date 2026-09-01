@@ -153,3 +153,31 @@ func resolveDaemonURL(w http.ResponseWriter, r *http.Request, rt runnerruntime.R
 
 	return daemonBaseURL, true
 }
+
+// DeleteExecutionHandler serves DELETE /sandboxes/{id}/executions/{exec_id}.
+//
+// It answers 204 without waking a sandbox that is not running. An execution lives
+// only in the daemon's memory, so a sandbox that is stopped, or that Docker
+// restarted under a crash, has already lost it and the delete has nothing left to
+// do.
+//
+// Skipping the wake is what keeps the crash report honest. A recovery reports the
+// restart to the one request that wakes the sandbox, and this delete is not a client
+// asking to use it: the SDK sends it to clean up after an execution that already
+// finished, and throws the answer away. Letting it spend the report would hide the
+// crash from the request that comes next.
+func DeleteExecutionHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder) http.HandlerFunc {
+	proxy := ProxyHandler(rt, cfg, rec)
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		// An invalid id falls through to the proxy, which is what reports it as 400.
+		if isValidID(id) {
+			if _, err := rt.DaemonURL(r.Context(), id); errors.Is(err, runnerruntime.ErrSandboxNotRunning) {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+		}
+		proxy(w, r)
+	}
+}
