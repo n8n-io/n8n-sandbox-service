@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-DOCKERD_LOG=${DOCKERD_LOG:-/tmp/dockerd.log}
+DOCKERD_LOG=${DOCKERD_LOG:-/var/log/dockerd.log}
 DOCKERD_CONFIG_DIR=${DOCKERD_CONFIG_DIR:-/etc/docker}
 DOCKERD_CONFIG_FILE=${DOCKERD_CONFIG_FILE:-${DOCKERD_CONFIG_DIR}/daemon.json}
 
