@@ -142,15 +142,6 @@ Two hardening options, both described in the chart [README](../charts/n8n-sandbo
 
 ## Troubleshooting
 
-**The runner logs `cat: can't open '/tmp/dockerd.log'`.** The inner Docker daemon did not become ready, and the runner could not print its log. Releases up to 1.3.1 wrote that log to `/tmp`, and the dind wrapper mounts a tmpfs over `/tmp`, which hides the file. Set the path outside `/tmp` to read the real error:
-
-```yaml
-runner:
-  extraEnv:
-    - name: DOCKERD_LOG
-      value: /var/log/dockerd.log
-```
-
 **Install succeeds but no runner pod appears.** Admission denied the pod, so `kubectl get pods` shows nothing and the error lands on the StatefulSet. Inspect the StatefulSet events:
 
 ```bash

@@ -1,10 +1,6 @@
 #!/bin/sh
 set -eu
 
-# Keep this log out of /tmp. dockerd-entrypoint.sh execs through the dind
-# wrapper, and that wrapper mounts a tmpfs over /tmp when /tmp is not already a
-# mount point. The mount hides this file from the shell, so the failure path
-# below printed "cat: can't open" and lost the reason dockerd never started.
 DOCKERD_LOG=${DOCKERD_LOG:-/var/log/dockerd.log}
 DOCKERD_CONFIG_DIR=${DOCKERD_CONFIG_DIR:-/etc/docker}
 DOCKERD_CONFIG_FILE=${DOCKERD_CONFIG_FILE:-${DOCKERD_CONFIG_DIR}/daemon.json}
