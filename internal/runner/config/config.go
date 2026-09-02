@@ -285,7 +285,7 @@ func Load() (*Config, error) {
 		)
 		cfg.RunnerHTTPBaseURL = u.String()
 	}
-	if err != nil || !strings.EqualFold(u.Scheme, "https") || u.Host == "" {
+	if err != nil || !strings.EqualFold(u.Scheme, "https") || u.Hostname() == "" {
 		return nil, fmt.Errorf("SANDBOX_RUNNER_HTTP_BASE_URL must be an https:// URL with a host, got %q", cfg.RunnerHTTPBaseURL)
 	}
 
