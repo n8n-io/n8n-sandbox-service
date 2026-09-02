@@ -59,7 +59,7 @@ The idle sweeper waits `SANDBOX_API_ORPHAN_REAP_BUFFER` (default `5m`) after a r
 | `SANDBOX_RUNNER_LISTEN_ADDR` | `:8080` | HTTPS listen address; serves TLS with the `SANDBOX_RUNNER_CONTROL_GRPC_TLS_*` material |
 | `SANDBOX_RUNNER_API_GRPC_ADDR` | *(required)* | API `host:port` for gRPC registration |
 | `SANDBOX_RUNNER_REGISTRATION_TOKEN` | *(required)* | Must match `SANDBOX_API_RUNNER_REGISTRATION_TOKEN` on the API |
-| `SANDBOX_RUNNER_HTTP_BASE_URL` | *(required)* | Base URL the API uses to reach this runner; must be `https://` and its host must match a SAN on the runner's control cert (e.g. `https://runner:8080`) |
+| `SANDBOX_RUNNER_HTTP_BASE_URL` | *(required)* | Base URL the API uses to reach this runner; its host must match a SAN on the runner's control cert (e.g. `https://runner:8080`). An `http://` value is upgraded to `https://` with a warning, since the listener only serves TLS |
 | `SANDBOX_RUNNER_ID` | hostname | Stable runner id sent to the API |
 | `SANDBOX_RUNNER_CAPACITY_TOTAL` | `1000` | Reported capacity for placement (`0` = unlimited) |
 | `SANDBOX_RUNNER_DATA_DIR` | `/var/sandboxes` | Directory for SQLite state |

@@ -91,7 +91,7 @@ The API and runners communicate with mutual TLS (mTLS), over both gRPC and HTTP.
 | SandboxControl gRPC server | `server auth` | Runner (listens on :9091, and on :8080 for HTTP) |
 | SandboxControl gRPC client | `client auth` | API (dials runner :9091, and :8080 for exec and file traffic) |
 
-The runner's HTTP listener reuses the SandboxControl pair rather than having its own, so `SANDBOX_RUNNER_HTTP_BASE_URL` must be `https://` and its host must be one of that certificate's SANs.
+The runner's HTTP listener reuses the SandboxControl pair rather than having its own, so the host in `SANDBOX_RUNNER_HTTP_BASE_URL` must be one of that certificate's SANs. The listener only serves TLS, so an `http://` value left over from an older deployment is upgraded to `https://` and logged as a warning at startup.
 
 Certificates are organized into per-service directories (`.tls/api/` and `.tls/runner/`) so each service only has access to its own material.
 
