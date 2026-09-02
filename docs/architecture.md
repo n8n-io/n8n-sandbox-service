@@ -203,6 +203,8 @@ The Docker backend reaches the same `409` by a different route, because there th
 
 Losing the event stream is the silent failure here, since containers keep working while crashes stop being reported, so the watcher reconnects for the life of the runner. A death missed while it was down is served without its `409`.
 
+On both backends the report is spent by the first request that wakes the sandbox, so a request that carries no client intent must not be one. `DELETE /sandboxes/{id}/executions/{exec_id}` is the case that arises: the SDK sends it in the background after every command and discards the answer. The runner answers it `204` without waking a sandbox that is not running — an execution lives only in the guest's memory, so the crash already did what the delete asks for — and the `409` waits for the next request a client reads.
+
 ## Security Model
 
 See [security-model.md](security-model.md) for the trust boundaries behind these mechanisms and the non-guarantees that come with them.

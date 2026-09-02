@@ -57,7 +57,7 @@ func ExecProxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics
 	client := &http.Client{}
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		daemonBaseURL, ok := resolveDaemonURL(w, r, rt, rec)
+		daemonBaseURL, ok := resolveDaemonURL(w, r, rt, rec, true)
 		if !ok {
 			return
 		}

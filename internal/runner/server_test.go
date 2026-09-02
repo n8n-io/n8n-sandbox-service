@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/n8n-io/sandbox-service/internal/metrics"
@@ -19,6 +20,8 @@ type fakeRuntime struct {
 	ensureErr error
 	readyErr  error
 	recovered bool
+
+	ensureCalls atomic.Int32
 }
 
 func (f *fakeRuntime) Prepare(context.Context) {}
@@ -54,6 +57,7 @@ func (f *fakeRuntime) StopSandbox(context.Context, string) error {
 }
 
 func (f *fakeRuntime) EnsureSandboxRunning(context.Context, string) (runnerruntime.WakeResult, error) {
+	f.ensureCalls.Add(1)
 	if f.ensureErr != nil {
 		return runnerruntime.WakeResult{}, f.ensureErr
 	}

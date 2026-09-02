@@ -62,7 +62,7 @@ Match on `X-Sandbox-Restarted: 1`, which survives both proxy hops and is listed 
 What the client loses:
 
 - Running processes. A dev server or worker started by an earlier execution is dead and nothing restarts it; its files remain, so relaunch it.
-- Completed executions. History is in memory only, so `GET /sandboxes/{id}/executions/{exec_id}` returns `404 execution not found` even for a command that finished before the crash.
+- Completed executions. History is in memory only, so `GET /sandboxes/{id}/executions/{exec_id}` returns `404 execution not found` even for a command that finished before the crash. `DELETE` of one returns `204` instead, since the crash already did what the delete asks for.
 - Idempotency of a caller-supplied `exec_id`. Re-posting an id that ran before the restart runs the command again instead of returning the earlier result.
 - Writes that had not reached the disk. On Firecracker the crash is a guest kernel panic, so it takes the guest page cache with it, and neither a shell redirect nor `PUT /files` flushes. A file written seconds before the crash can be missing or truncated where an older one is intact. Run `sync` in the sandbox if a write has to survive a crash it is racing.
 
@@ -405,6 +405,14 @@ Delete an execution. Kills the running process (if still active) and immediately
 removes the execution state from memory. After deletion, the execution can no
 longer be resumed or queried. The operation is idempotent — deleting a
 nonexistent execution returns `204`.
+
+This is the one sandbox route that never wakes a stopped sandbox. An execution
+lives only in the guest's memory, so a sandbox that is stopped, or that was
+restarted after a crash, has already lost it and the runner answers `204` without
+starting anything. It therefore never returns `409 sandbox_restarted` either, and
+never spends the one restart report a crash gets — that report is kept for the next
+request a client actually reads. The SDK relies on this: it deletes an execution in
+the background after every command and discards the answer.
 
 **Path Parameters:**
 - `id` — Sandbox UUID

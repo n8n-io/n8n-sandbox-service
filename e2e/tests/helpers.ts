@@ -207,10 +207,11 @@ export async function execWithTransientRetry(
  *
  * Sent as a bare request rather than through `exec`, because the SDK reacts to
  * the dropped stream the way any client would: it resumes the execution over
- * `GET /executions/{exec_id}`, then deletes it. Both routes wake a stopped
- * sandbox and report the recovery as a 409, by design — so going through the SDK
- * recovers the very crash the caller asked for, before the caller can observe
- * it. The stream is abandoned instead of read for the same reason.
+ * `GET /executions/{exec_id}`. That route wakes a stopped sandbox and reports the
+ * recovery as a 409, by design — so going through the SDK recovers the very crash
+ * the caller asked for, before the caller can observe it. The stream is abandoned
+ * instead of read for the same reason. The delete that follows is harmless here:
+ * it never wakes a sandbox, so it cannot take the report.
  */
 export async function crashGuest(id: string): Promise<void> {
   // Resolved outside the try: minting the tenant key is not the request whose
