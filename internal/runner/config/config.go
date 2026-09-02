@@ -262,13 +262,30 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("SANDBOX_RUNNER_HTTP_BASE_URL must be set")
 	}
 	// The HTTP listener serves TLS, and this URL is what the runner advertises
-	// to the API in heartbeats, so an http:// value would send every request to
-	// the wrong scheme. The host has to be checked separately: url.Parse reads
+	// to the API in heartbeats, so it has to name https or the API would send
+	// every request to the wrong scheme. The host has to be checked
+	// separately: url.Parse reads
 	// "https:runner:8080" as an opaque path and "https://" as empty, both with
 	// scheme https and no host, and either would leave the runner advertising
 	// an address nothing can dial and no host to derive the control gRPC
 	// advertise address from.
-	if u, err := url.Parse(cfg.RunnerHTTPBaseURL); err != nil || !strings.EqualFold(u.Scheme, "https") || u.Host == "" {
+	u, err := url.Parse(cfg.RunnerHTTPBaseURL)
+	// http:// is upgraded rather than refused. Deployments written before the
+	// listener served TLS still carry it, and refusing here exits before
+	// registration, so the operator sees a runner missing from the API rather
+	// than a scheme they can fix. Only the scheme changes, so certificate
+	// coverage is unaffected: a host the runner's certificate does not cover
+	// fails the first request with a TLS error either way.
+	if err == nil && u.Host != "" && strings.EqualFold(u.Scheme, "http") {
+		u.Scheme = "https"
+		slog.Warn(
+			"SANDBOX_RUNNER_HTTP_BASE_URL uses http://, which the runner HTTP listener does not serve; advertising https:// instead. Update the configuration.",
+			"configured", cfg.RunnerHTTPBaseURL,
+			"advertising", u.String(),
+		)
+		cfg.RunnerHTTPBaseURL = u.String()
+	}
+	if err != nil || !strings.EqualFold(u.Scheme, "https") || u.Hostname() == "" {
 		return nil, fmt.Errorf("SANDBOX_RUNNER_HTTP_BASE_URL must be an https:// URL with a host, got %q", cfg.RunnerHTTPBaseURL)
 	}
 

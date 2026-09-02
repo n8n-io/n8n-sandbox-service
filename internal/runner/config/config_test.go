@@ -87,16 +87,29 @@ func TestLoadRejectsPartialControlGRPCTLS(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsPlaintextHTTPBaseURL(t *testing.T) {
+// Deployments written before the runner's HTTP listener served TLS still set
+// http://. Load upgrades the scheme instead of exiting, so those runners keep
+// registering; only the scheme changes, so the host the API verifies the
+// runner's certificate against is the one that was configured.
+func TestLoadUpgradesPlaintextHTTPBaseURL(t *testing.T) {
 	setRequiredEnv(t)
 	t.Setenv("SANDBOX_RUNNER_HTTP_BASE_URL", "http://runner:8080")
 
-	if _, err := Load(); err == nil {
-		t.Fatal("expected Load to reject an http:// SANDBOX_RUNNER_HTTP_BASE_URL")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("expected Load to upgrade an http:// SANDBOX_RUNNER_HTTP_BASE_URL, got: %v", err)
+	}
+	if cfg.RunnerHTTPBaseURL != "https://runner:8080" {
+		t.Fatalf("expected https://runner:8080, got %q", cfg.RunnerHTTPBaseURL)
+	}
+	// The control gRPC advertise address is derived from this URL, so the
+	// upgrade must not disturb the host or it would be advertised wrong too.
+	if got := cfg.ResolvedControlGRPCAdvertiseAddr(); got != "runner:9091" {
+		t.Fatalf("expected the upgrade to leave the control gRPC advertise address at runner:9091, got %q", got)
 	}
 }
 
-// url.Parse reports scheme https for several forms that carry no host, so a
+// url.Parse reports a scheme for several forms that carry no host, so a
 // scheme-only check would let the runner boot advertising a base URL nothing
 // can dial.
 //
@@ -114,6 +127,11 @@ func TestLoadRejectsHTTPBaseURLWithoutHost(t *testing.T) {
 		"https://",
 		"https:",
 		"https:///files",
+		// The http:// upgrade must not become a way around the host check.
+		"http:runner:8080",
+		"http://",
+		"http:",
+		"http:///files",
 	} {
 		t.Run(base, func(t *testing.T) {
 			setRequiredEnv(t)

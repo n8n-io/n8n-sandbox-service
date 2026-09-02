@@ -26,7 +26,7 @@ Mount PEMs from `Certificate` secrets (often `tls.crt`, `tls.key`) plus a CA bun
 - Registration client (existing): `SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE`, `SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE`, `SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE`, optional `SANDBOX_RUNNER_REGISTRATION_GRPC_SERVER_NAME` (must match a DNS SAN on the API registration server cert).
 - Control listener: `SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE`, `SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE`, `SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE` (CA that signed **API control clients**). The runner's HTTP listener serves TLS with this same material, so its certificate needs a SAN for the HTTP host too, and the API's control client certificate authenticates both channels.
 
-Also set `SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR` (for example `:9091`) and either `SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR` or a usable `SANDBOX_RUNNER_HTTP_BASE_URL` so the runner can advertise `control_grpc_addr` in heartbeats. `SANDBOX_RUNNER_HTTP_BASE_URL` must be `https://`.
+Also set `SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR` (for example `:9091`) and either `SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR` or a usable `SANDBOX_RUNNER_HTTP_BASE_URL` so the runner can advertise `control_grpc_addr` in heartbeats. The runner serves `SANDBOX_RUNNER_HTTP_BASE_URL` over TLS, and upgrades an `http://` value to `https://` with a warning.
 
 Probes are the one exception to client-certificate enforcement: a kubelet `httpGet` probe cannot present one, so the runner negotiates with `VerifyClientCertIfGiven` and leaves `/livez`, `/readyz` and `/metrics` unauthenticated. Set `scheme: HTTPS` on those probes.
 
