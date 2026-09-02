@@ -80,6 +80,45 @@ must_fail "positive whole number" "${privileged[@]}" \
 must_fail "positive whole number" "${privileged[@]}" \
 	--set runner.config.defaultDiskQuotaMb=2048
 
+# Sysbox isolation gets the bounded emptyDir data root when persistence is off,
+# the same as privileged isolation. This is the default configuration.
+manifests=$(render)
+echo "$manifests" | grep -q 'mountPath: "/var/lib/docker"'
+echo "$manifests" | grep -q 'sizeLimit: 64Gi'
+
+# Persistence replaces the emptyDir with a volume claim, and the claim is the
+# only data-root volume.
+manifests=$(render \
+	--set runner.dockerDataRoot.persistence.enabled=true \
+	--set runner.sysbox.runtime.hostUsers=null)
+echo "$manifests" | grep -q 'mountPath: "/var/lib/docker"'
+echo "$manifests" | grep -q "volumeClaimTemplates"
+if echo "$manifests" | grep -q 'sizeLimit:'; then
+	echo "expected no emptyDir sizeLimit when persistence is enabled" >&2
+	exit 1
+fi
+
+# A PersistentVolume data root inside a user namespace must fail the render:
+# dockerd cannot chmod a volume root it does not own.
+must_fail "operation not permitted" \
+	--set runner.dockerDataRoot.persistence.enabled=true
+# The acknowledgement is the way through.
+render \
+	--set runner.dockerDataRoot.persistence.enabled=true \
+	--set runner.dockerDataRoot.persistence.acknowledgeUserNamespace=true >/dev/null
+# hostUsers=null leaves the shifting to sysbox, so the guard does not apply.
+render \
+	--set runner.dockerDataRoot.persistence.enabled=true \
+	--set runner.sysbox.runtime.hostUsers=null >/dev/null
+# Privileged isolation does not read runner.sysbox, so it is unaffected.
+render "${privileged[@]}" \
+	--set runner.dockerDataRoot.persistence.enabled=true >/dev/null
+# Disk quotas move the data root onto an xfs image the container owns.
+render \
+	--set runner.dockerDataRoot.persistence.enabled=true \
+	--set runner.config.defaultDiskQuotaMb=2048 \
+	--set runner.config.diskQuotaPoolSizeGb=60 >/dev/null
+
 # A missing or unsupported volume size must fail, not skip the guard.
 must_fail "whole number of G or Gi" "${privileged[@]}" \
 	--set runner.config.defaultDiskQuotaMb=2048 \
@@ -97,14 +136,19 @@ manifests=$(render "${privileged[@]}" \
 	--set runner.config.diskQuotaPoolPath=/mnt/pool/docker.img)
 echo "$manifests" | grep -q 'SANDBOX_RUNNER_DISK_QUOTA_POOL_PATH: "/mnt/pool/docker.img"'
 
-# Default sysbox isolation has no volume for the pool image. Quotas must not
-# render, because the runner would put a pool sized from capacityTotal on the
-# container filesystem.
-must_fail "needs a bounded volume" \
+# Default sysbox isolation now holds the pool image on its bounded emptyDir,
+# so quotas render without persistence.
+manifests=$(render \
 	--set runner.config.defaultDiskQuotaMb=2048 \
-	--set runner.config.diskQuotaPoolSizeGb=60
-must_fail "needs a bounded volume" \
+	--set runner.config.diskQuotaPoolSizeGb=60)
+echo "$manifests" | grep -q 'mountPath: "/var/lib/docker-pool"'
+echo "$manifests" | grep -q 'SANDBOX_RUNNER_DISK_QUOTA_POOL_PATH: "/var/lib/docker-pool/docker.img"'
+# The pool size is still mandatory, and still checked against that volume.
+must_fail "positive whole number" \
 	--set runner.config.defaultDiskQuotaMb=2048
+must_fail "must not exceed the docker data root size" \
+	--set runner.config.defaultDiskQuotaMb=2048 \
+	--set runner.config.diskQuotaPoolSizeGb=100
 
 # An explicit pool path covers that case: the operator owns the volume.
 manifests=$(render \
