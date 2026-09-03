@@ -414,7 +414,8 @@ attempted. Check the error before reading the flag.
 
 - Slots are allocated in memory and are not pre-created or persisted.
 - On runner startup, orphaned per-sandbox data directories, jailer state, and
-  slot network namespaces are removed. Sandboxes are not reattached after a
+  slot network namespaces are removed; a jail directory still holding an active
+  bind mount is logged and left in place. Sandboxes are not reattached after a
   runner restart (same contract as the Docker runner reconcile).
 - LRU eviction of stopped sandboxes for disk space is runner-local and does not
   notify the API.

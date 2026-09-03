@@ -17,7 +17,7 @@ See [docs/](docs/README.md) for the full documentation, including:
 ## Runtime Model
 
 - The public API runs in a dedicated `n8n-sandbox-service-api` container.
-- One or more `n8n-sandbox-service-runner-dind` containers run Docker-in-Docker and manage sandbox lifecycles (the local script starts two so you can exercise round-robin placement).
+- One or more `n8n-sandbox-service-runner-dind` containers run Docker-in-Docker and manage sandbox lifecycles (the local script starts two so you can exercise multi-runner placement).
 - The runner container is expected to run with `sysbox-runc`.
 - Sandboxes are started from a separate Debian sandbox image referenced by `SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE`.
 - The API forwards sandbox and image requests to the runner; the runner talks to sandbox daemons over the inner Docker bridge on port `8081`.
