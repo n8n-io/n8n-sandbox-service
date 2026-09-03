@@ -122,6 +122,8 @@ List sandboxes, ordered by creation time (newest first).
 - Admin key: all sandboxes
 - Tenant key: only sandboxes owned by that tenant
 
+Sandboxes past their idle-delete window stay listed until the sweeper removes them, even though `GET /sandboxes/{id}` already returns `404` for them.
+
 **Response:** `200 OK`
 
 ```json
@@ -158,7 +160,7 @@ If that ID still belongs to the caller and is within its idle-delete window, the
 
 With a tenant key, the sandbox is owned by that tenant and counts toward the tenant's `max_sandboxes` quota (`403` when exceeded). With an admin key, the sandbox is stored with `tenant_id` `__admin__` (admin-owned; not visible to tenant keys; admins see all sandboxes in list).
 
-Quota enforcement is a soft check-then-act (`CountByTenant` before create). Concurrent `POST /sandboxes` from the same tenant can briefly exceed `max_sandboxes` and consume shared runner capacity. Treat the limit as a soft ceiling, not a hard atomic reservation.
+Quota enforcement is a soft check-then-act (`CountByTenant` before create). Concurrent `POST /sandboxes` from the same tenant can exceed `max_sandboxes` by up to the number of creates in flight and consume shared runner capacity. Treat the limit as a soft ceiling, not a hard atomic reservation.
 
 Resource limits (memory, CPU, process count) are configured on the runner via environment variables. Network policy blocks all private IP ranges and allows public internet access.
 
@@ -195,7 +197,7 @@ curl -X POST http://localhost:8080/sandboxes \
 
 Get sandbox details.
 
-This is a read-only status check: it does not update `last_active_at` or extend idle timers. Only proxied traffic (exec, files, etc.) counts as activity, and only when the sandbox actually serves it — a request that fails with **502** or **503** leaves `last_active_at` and `status` untouched, so retrying against a broken sandbox cannot hold it open past its idle timers. A **4xx** still counts, since the sandbox was reachable and rejected the request — except a runner sandbox-gone **404**, which never counts as activity even if removing the store row fails.
+This is a read-only status check: it does not update `last_active_at` or extend idle timers. Only proxied traffic (exec, files, etc.) counts as activity, and only when the sandbox actually serves it — a request that fails with **502** or **503** leaves `last_active_at` and `status` untouched, so retrying against a broken sandbox cannot hold it open past its idle timers. A **4xx** still counts, since the sandbox was reachable and rejected the request — except a runner sandbox-gone **404**, which never counts as activity even if removing the store row fails. Activity is recorded when the response starts, not while it streams, so a command that runs longer than the idle stop timer can be stopped by the sweeper mid-run.
 
 **Path Parameters:**
 - `id` — Sandbox UUID
@@ -820,4 +822,4 @@ Mint an additional API key for the tenant. Returns plaintext `api_key` once (`20
 
 ### DELETE /admin/tenants/{id}/keys/{keyId}
 
-Revoke an API key (`204`). Revoked keys are rejected immediately.
+Revoke an API key (`204`). Revoked keys are rejected from the next request on.

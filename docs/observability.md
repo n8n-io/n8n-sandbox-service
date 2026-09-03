@@ -23,7 +23,8 @@ Rules:
   freshly generated one. What the API logs and forwards to the runner is always
   rebuilt from those parsed fields, so a caller cannot inject content into the
   service's logs or make it relay bytes of their choosing.
-- `tracestate` and vendor extensions are not propagated.
+- `tracestate` is never read or logged. The HTTP hops forward it unchanged, like
+  any other header; the gRPC hop does not carry it.
 - Every event carries `trace_id`, the 32 hex character trace-id field of the
   traceparent. That is the join key across processes.
 - A wake started by one request may be shared by others that arrive while it

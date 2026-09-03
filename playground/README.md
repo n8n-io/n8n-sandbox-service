@@ -19,7 +19,7 @@ pnpm install --frozen-lockfile
 pnpm start
 ```
 
-Then open `http://localhost:3000` in your browser.
+Then open `http://localhost:5173` in your browser.
 
 Enter the **Base URL** of the sandbox service (default: `http://localhost:8080`) and your **API Key** in the sidebar, then create or select a sandbox to start.
 

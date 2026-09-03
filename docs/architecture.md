@@ -1,6 +1,6 @@
 # Architecture
 
-The n8n Sandbox Service provides isolated, on-demand execution environments via a REST API. Each sandbox is a Debian-based Docker container with a per-container HTTP daemon that handles command execution and file operations. The service is designed for horizontal scalability: runners register dynamically with a central API gateway, which routes client requests to the appropriate runner and sandbox.
+The n8n Sandbox Service provides isolated, on-demand execution environments via a REST API. Each sandbox is a Debian-based container (Docker/Sysbox runner) or microVM (Firecracker runner) with an HTTP daemon inside that handles command execution and file operations. The service is designed for horizontal scalability: runners register dynamically with a central API gateway, which routes client requests to the appropriate runner and sandbox.
 
 ## System Overview
 
@@ -53,11 +53,13 @@ The n8n Sandbox Service provides isolated, on-demand execution environments via 
                └────────────────────────────────────────────────────────────────────┘
 ```
 
+The diagram shows the Docker runner. The Firecracker runner replaces the Docker-in-Docker daemon and containers with one jailer-launched microVM per sandbox; the store is SQLite or Postgres.
+
 The system has three tiers:
 
 1. **API Gateway** — public entry point; routes requests, manages state, coordinates runners
-2. **Runner** — manages sandbox container lifecycle via Docker-in-Docker; proxies exec/file operations to daemons
-3. **Daemon** — lightweight HTTP server running inside each sandbox container; executes commands and manages files
+2. **Runner** — manages sandbox lifecycle (containers or microVMs); proxies exec/file operations to daemons
+3. **Daemon** — lightweight HTTP server running inside each sandbox; executes commands and manages files
 
 Multiple runners can register with a single API gateway for horizontal scaling. The API distributes sandbox creation across eligible runners using load-aware placement (lowest `capacity_used`).
 
@@ -90,7 +92,7 @@ The API gateway is the single public-facing service. It exposes a REST API for s
 | Idle sweeper | `internal/api/ttl.go` | Periodic scan to stop/delete idle sandboxes |
 | Config | `internal/api/config/` | Environment variable parsing and validation |
 
-**Middleware chain:** Auth (API key) → Logging → CORS (optional) → Recovery
+**Middleware chain:** Recovery → CORS (optional) → Logging → Auth (API key) → Metrics (optional)
 
 ### Runner
 
@@ -110,7 +112,7 @@ Each runner hosts sandboxes through the shared `runtime.Runtime` contract. The D
 | Network rules | `internal/runner/runtime/docker/netrules/` | iptables rules for Docker sandbox network isolation |
 | Resource limits | `internal/runner/runtime/docker/resource_limits.go` | Memory, CPU, PID, and disk quota enforcement |
 
-**Middleware chain:** Auth (client certificate + API key) → Logging → Recovery
+**Middleware chain:** Recovery → Logging → Auth (client certificate + API key) → Metrics (optional)
 
 ### Daemon
 
@@ -132,7 +134,7 @@ A lightweight HTTP server embedded in every sandbox container. It is the only pr
 
 All client requests go through the API gateway over HTTP. Authentication uses an `X-Api-Key` header. Keys in `SANDBOX_API_KEYS` are admin keys (full access). Admin-minted tenant keys (stored hashed in the API database) are scoped to that tenant's sandboxes.
 
-Per-tenant `max_sandboxes` is enforced with a soft check-then-act before create. Concurrent creates can briefly exceed the quota and burn shared runner capacity; the limit is not an atomic reservation.
+Per-tenant `max_sandboxes` is enforced with a soft check-then-act before create. Concurrent creates can exceed the quota by up to the number in flight and burn shared runner capacity; the limit is not an atomic reservation.
 
 ### API ↔ Runner Registration (gRPC Bidirectional Streaming + mTLS)
 
@@ -161,18 +163,18 @@ Each hop uses `httputil.ReverseProxy` with URL rewriting. The runner can wake a 
 ### Creating a Sandbox
 
 1. Client sends `POST /sandboxes` with API key
-2. API picks a runner via round-robin from the registry
+2. API picks the eligible runner with the lowest reported `capacity_used`
 3. API calls `SandboxControl.CreateSandbox` on the selected runner (gRPC)
-4. Runner creates a Docker container with the sandbox image, resource limits, and labels
-5. Runner waits for the container to get a network IP and the daemon to become healthy
-6. API stores the sandbox record in SQLite (ID, status, runner assignment)
+4. Runner creates the sandbox: a container from the sandbox image with resource limits and labels, or a microVM restored from the golden snapshot
+5. Runner waits for the daemon inside it to become healthy
+6. API stores the sandbox record (ID, tenant, status, runner assignment)
 7. API returns the sandbox ID and status to the client
 
 ### Executing a Command
 
 1. Client sends `POST /sandboxes/{id}/executions` with command, env, and working directory
-2. API looks up the sandbox in SQLite, proxies the request to the runner's HTTP endpoint
-3. Runner proxies to the daemon at `{container_ip}:8081/executions` using a retry-aware exec proxy
+2. API looks up the sandbox in the store, proxies the request to the runner's HTTP endpoint
+3. Runner proxies to the sandbox daemon's `/executions` (container IP on Docker, a host-local per-slot port on Firecracker) using a retry-aware exec proxy
 4. Daemon forks the process, streams stdout/stderr as NDJSON events
 5. Events stream back through the proxy chain to the client. If the runner→daemon connection drops mid-stream, the runner automatically resumes via `GET /executions/{exec_id}?follow=true&after=<seq>` (up to 3 retries)
 6. Client can poll `GET /sandboxes/{id}/executions/{exec_id}` or cancel with `DELETE`
@@ -215,23 +217,24 @@ See [security-model.md](security-model.md) for the trust boundaries behind these
 | API ↔ Runner registration | mTLS + bearer token | Authenticate runners during gRPC registration |
 | API → Runner control | mTLS + API key in gRPC metadata | Authenticate control-plane RPCs |
 | API → Runner HTTP | mTLS + `X-Api-Key` | Authenticate proxied exec and file traffic |
-| File paths | Path resolution and validation | Prevent directory traversal |
 | Network isolation | iptables rules on runner | Block sandbox access to private IP ranges |
-| Resource limits | cgroups + xfs disk quotas | Memory, CPU, PID count, disk space per sandbox |
+| Resource limits | Docker: cgroups + optional xfs quota; Firecracker: snapshot vCPU/memory + fixed-size rootfs | Bound memory, CPU, process count, and disk per sandbox |
 | Request size | Configurable body size limits | Prevent oversized uploads |
-| Error sanitization | Strip internal paths from responses | Avoid leaking server internals |
+| File operations | In-guest daemon running as uid 1000; paths are cleaned and anchored at the guest root | Confine file access to what uid 1000 can reach inside the sandbox |
+| Error sanitization | API-generated error bodies have runner-side sandbox paths stripped; proxied runner responses pass through unchanged | Keep runner filesystem layout out of API errors |
+| Build inputs | Checksums, digest-pinned release images, optional manifest pin | Detect substituted dependencies and guest assets |
 
 TLS certificates can be bootstrapped locally with `scripts/bootstrap-mtls.sh` or managed in Kubernetes with cert-manager (see [cert-manager-k8s.md](cert-manager-k8s.md)).
 
 ## Data Storage
 
-### API Gateway SQLite
+### API store
 
-The API persists sandbox metadata in a SQLite database at `/var/lib/n8n-sandbox-api/api.db`. The schema tracks sandbox ID, status, timestamps, container IP, daemon port, and runner assignment. Migrations run automatically on startup.
+SQLite at `SANDBOX_API_DATA_DIR/api.db` (default) or Postgres. Tables: `sandboxes` (ID, tenant, status, timestamps, runner routing), `tenants`, `api_keys` (hashed), and on Postgres `runners` (heartbeats; SQLite keeps the runner registry in memory). Migrations run automatically on startup.
 
-### Runner Stateless
+### Runner stateless
 
-Runners hold no persistent state. Container information is retrieved from the Docker daemon. On startup, the runner reconciles its containers (cleans up orphans, rebuilds its in-memory map).
+Runners hold no persistent state. On startup each runtime removes every sandbox left over from a previous run and starts empty; sandboxes do not survive a runner restart.
 
 ### Daemon In-Memory
 
