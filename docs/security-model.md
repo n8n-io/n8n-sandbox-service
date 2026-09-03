@@ -7,14 +7,15 @@ reviewing the service or deciding what it is safe to run on it.
 
 ## Trust boundaries
 
-Three boundaries carry the isolation guarantees. They are enforced by different
-components and fail in different ways.
+Four boundaries carry the guarantees. They are enforced by different components
+and fail in different ways.
 
 | Boundary | Enforced by | Protects against |
 | --- | --- | --- |
 | Client → API | API key auth and per-request tenant checks | One tenant reaching another tenant's sandboxes |
 | API → Runner | mTLS on both listeners, plus a shared runner API key | Unauthorized control of sandbox lifecycles |
 | Guest → host and network | Network namespaces, iptables, and the container or microVM boundary | Untrusted code escaping its sandbox or reaching other sandboxes |
+| Build inputs → images and guest assets | Checksums on fetched binaries, digest-pinned releases, an optional manifest check | A substituted build input reaching every sandbox, for the inputs that are verified |
 
 Everything trusts the layer above it. Sandboxes trust nothing.
 
@@ -33,7 +34,8 @@ Authorization runs on every sandbox request through `canAccessSandbox` in
 [internal/api/middleware_auth.go](../internal/api/middleware_auth.go):
 
 - Read, delete and all proxied routes (exec and files) load the sandbox record
-  and compare its `tenant_id` against the caller's.
+  and compare its `tenant_id` against the caller's. An admin key passes this
+  check for every sandbox, whoever owns it.
 - List is scoped at the query level with `ListByTenant`.
 - Create sets `tenant_id` from the authenticated identity. A caller cannot
   assign a sandbox to another tenant.
@@ -51,9 +53,12 @@ decided the caller is entitled to it.
 
 Runners register by opening a long-lived gRPC stream to the API, secured with
 mTLS plus a bearer token, and advertise their ID, HTTP base URL and capacity.
-Lifecycle calls go the other way, over the runner's `SandboxControl` gRPC
-listener, which also requires mTLS with a client certificate signed by the
-configured CA, plus an API key in the call metadata.
+The API checks that the certificate chains to its CA and that the token
+matches; it does not bind the advertised ID to the certificate, so the ID is
+taken as given and becomes the key under which that runner receives placements
+and lifecycle calls. Lifecycle calls go the other way, over the runner's
+`SandboxControl` gRPC listener, which also requires mTLS with a client
+certificate signed by the configured CA, plus an API key in the call metadata.
 
 Exec and file traffic is proxied over the runner's HTTP listener, which requires
 the same two things. It serves TLS using the certificate configured for the
@@ -65,12 +70,20 @@ unauthenticated peer during the handshake, and `AuthMiddleware` in
 [internal/runner/middleware_auth.go](../internal/runner/middleware_auth.go)
 requires a verified certificate on every route except the health and metrics
 endpoints. A leaked runner API key is therefore not by itself enough to drive
-a runner: the caller also needs a key pair the CA has signed. That matters most
-for a compromised runner, which holds the fleet's API key but not the API's
-client certificate.
+a runner: the caller also needs a key pair the CA has signed. Neither listener
+looks further than the chain, though. Any client certificate the CA issued
+satisfies them, and a runner's own registration certificate is one such
+certificate when the same CA issues both, as it does in the chart's
+cert-manager mode. Runner credentials are fleet-wide rather than per-runner, so
+what one runner holds drives every runner.
 
-The API keeps that guarantee from being negotiated away by the runner. A runner
-names its own address in heartbeats, and Go applies a transport's
+The proxy replaces the caller's `X-Api-Key` with the runner API key before
+forwarding, so tenant and admin keys never reach a runner, and it forwards the
+trace context it established rather than the caller's header. Responses are
+relayed to the client as the runner returned them.
+
+The API keeps the TLS guarantee from being negotiated away by the runner. A
+runner names its own address in heartbeats, and Go applies a transport's
 `TLSClientConfig` only to `https` URLs, so a runner advertising an `http://`
 base would receive proxied traffic, including the runner API key, in plaintext.
 The API therefore refuses a non-https base twice: at registration, so such a
@@ -98,8 +111,8 @@ redirect a call to a different sandbox.
 Sandbox contents are untrusted. Both runtimes block egress to the same list of
 IPv4 destinations, defined once in
 [internal/runner/runtime/netpolicy/private_ranges.go](../internal/runner/runtime/netpolicy/private_ranges.go)
-and covering RFC1918 space, loopback, link-local (which includes the cloud
-metadata endpoint), carrier-grade NAT, benchmarking and reserved space.
+and covering RFC1918 space, loopback, link-local (which includes the instance
+metadata service address), carrier-grade NAT, benchmarking and reserved space.
 
 The Firecracker runtime gives every slot its own network namespace with a
 dedicated TAP device and veth uplink. The guest subnet is identical in every
@@ -127,7 +140,11 @@ the rules above avoid matching on addresses. The two shared chains are rebuilt
 from empty at runner startup, after stale containers are removed and before any
 sandbox can be created, so an upgraded runner replacing the rules of an earlier
 version never does so with a container on the bridge. Containers are created
-with IPv6 disabled.
+with IPv6 disabled. Every rule above, and Docker's own inter-container block,
+applies to bridged traffic only on a host running `br_netfilter` with
+`bridge-nf-call-iptables` enabled. Hosts prepared by
+[scripts/setup-sysbox.sh](../scripts/setup-sysbox.sh) get that; any other host
+must provide it.
 
 The runner drops all Linux capabilities from every sandbox container and
 restores none. The container runs as uid 1000, so no process holds an effective
@@ -137,7 +154,8 @@ That alone would not close the path to root. A setuid-root binary still makes
 its caller uid 0, and uid 0 owns `/usr/local` whatever capabilities it holds.
 Two things close it: the runner sets `no-new-privileges`, which makes every
 setuid binary inert, and the image ships no `sudo` and no setuid binary at all,
-because the Firecracker runtime has no equivalent flag.
+because the Firecracker runtime has no equivalent flag. Setgid bits are left in
+place; a setgid binary can change its group, never its user.
 
 A sandbox therefore has no root and no `apt-get`. Packages install unprivileged,
 under `/home/user`: `pip` runs from a virtual environment at `/home/user/venv`,
@@ -151,30 +169,55 @@ DinD apply to the runner container, not the sandbox container. A sandbox
 container is never privileged, because Docker then ignores `--cap-drop` and the
 policy has no effect.
 
-Within a sandbox, the daemon runs as a non-root user, and file operations are
-path-validated to keep them inside the sandbox. The daemon authenticates
-nobody, so reachability is the whole boundary in front of its exec and file
-APIs, on both runtimes.
+Within a sandbox, the daemon runs as uid 1000. File operations resolve every
+path against the sandbox's root filesystem, so the containment is the sandbox
+itself and the daemon's uid, not a workspace directory: whatever uid 1000 can
+read or write in the guest is reachable through the file API. The daemon
+authenticates nobody, so reachability is the whole boundary in front of its
+exec and file APIs, on both runtimes.
+
+## Build inputs
+
+The service images, the sandbox image and the Firecracker guest assets are
+built from inputs fetched at build time, and a substituted input would reach
+every sandbox built from it. What is verified today:
+
+- The Firecracker release tarball is checked against a SHA-256 that
+  [scripts/firecracker.ee/install-runner-host.sh](../scripts/firecracker.ee/install-runner-host.sh)
+  carries for the versions it knows; any other version needs
+  `FIRECRACKER_TARBALL_SHA256`.
+- The Node.js tarball in the sandbox image is checked against the SHA-256
+  values recorded in [Dockerfile.sandbox](../Dockerfile.sandbox).
+- Service images are published by version. The release workflow mirrors each
+  version into the deployment registry by digest and refuses to replace a
+  version that is already there.
+- The SDK is published to npm through trusted publishing, with provenance.
+- The Firecracker runner can pin its guest assets to a release manifest with
+  `SANDBOX_RUNNER_FIRECRACKER_MANIFEST_PATH` and
+  `SANDBOX_RUNNER_FIRECRACKER_EXPECTED_GIT_SHA`, and refuses to start on a
+  mismatch. This is off unless both are configured.
 
 ## Non-guarantees
 
 These are known and accepted. Do not read the section above as implying any of
 them.
 
-**Egress is not restricted to an allowlist.** Sandboxes can reach any public
-address. The blocked ranges above stop a sandbox reaching internal
-infrastructure, not the internet. Configurable per-sandbox allowlists are
-planned, not implemented.
+**Egress is not restricted to an allowlist.** Sandboxes can reach any address
+outside the blocked ranges. Those ranges cover private and special-purpose IPv4
+space; they are not a definition of what is internal, and anything outside them
+is reachable. Per-sandbox allowlists are not implemented.
 
 **The runner does not enforce tenancy.** It has no tenant concept at all. Anyone
-holding both a runner API key and a CA-signed client certificate can operate on
-any sandbox that runner hosts, because the runner does not know who owns any of
-them. Sandboxes themselves cannot reach that listener: on Firecracker its
-addresses sit inside the blocked ranges, and on Sysbox the bridge's `INPUT`
-chain drops connections to the host. Runner credentials are also shared across
-the fleet rather than issued per runner or per tenant, so one leaked pair is a
-fleet-wide leak. Deployments are expected to keep runner listeners reachable
-only from the API.
+holding a runner API key and a client certificate the CA has signed can operate
+on any sandbox any runner hosts, because the runner does not know who owns any
+of them and its credentials are shared across the fleet rather than issued per
+runner or per tenant; one leaked pair is a fleet-wide leak. Sandboxes
+themselves cannot reach that listener: on Firecracker its addresses sit inside
+the blocked ranges, and on Sysbox the bridge's `INPUT` chain drops connections
+to the host. The chart can restrict the runner's listeners to the API's pods
+with a NetworkPolicy (`networkPolicy.enabled`), off by default because many
+clusters manage network policy elsewhere. Who else can reach a runner is a
+property of the deployment, not of the service.
 
 **Client-supplied sandbox IDs leak existence.** Creating a sandbox with an ID
 that already belongs to another tenant returns `409` rather than `404`, so a
@@ -182,24 +225,45 @@ caller can learn that an ID is taken. This is deliberate, so that a client can
 reconnect to its own deterministic IDs. Since IDs are UUIDs, it confirms an ID
 the caller already holds and does not help discover new ones.
 
-**Tenant quotas are not atomic.** `max_sandboxes` is a check-then-act before
-create, so concurrent requests can briefly exceed it.
+**Tenant quotas are not atomic.** `max_sandboxes` is compared against the
+tenant's recorded sandboxes before a create is recorded, so concurrent creates
+that all pass the check are all admitted. The excess is bounded by how many
+creates the caller runs in parallel, not by time, and the tenant then holds more
+than its quota until it deletes sandboxes.
+
+**Per-sandbox disk usage is not bounded by default.** On the Sysbox runtime a
+per-sandbox disk quota applies only when `SANDBOX_RUNNER_DISK_QUOTA_ACTIVE` is
+true and `SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB` is non-zero. Both default off,
+and sandboxes then share the runner's storage with no per-sandbox limit. The
+Firecracker runtime gives each sandbox a fixed-size root filesystem image.
 
 **Health and metrics endpoints are unauthenticated.** `/healthz` and `/metrics`
-bypass auth on both the API and the runner. They expose fleet-level counters —
-sandbox and runner counts, capacity, request and operation rates — and carry no
-tenant or sandbox identifiers. Sandboxes cannot reach the runner's, per the
-section above; the API serves its own on the public HTTP port, so a deployment
-that enables ingress publishes them. Restrict both to the monitoring system.
+bypass auth on both the API and the runner, as do the runner's `/livez` and
+`/readyz`. Requests to them are not access-logged. They expose fleet-level
+counters — sandbox and runner counts, capacity, request and operation rates —
+and carry no tenant or sandbox identifiers. Sandboxes cannot reach the runner's,
+per the section above; the API serves its own on the public HTTP port, so a
+deployment that enables ingress publishes them. Restrict both to the monitoring
+system.
+
+**The database connection is encrypted but not verified by default.**
+`SANDBOX_API_POSTGRES_SSLMODE` defaults to `require`, which encrypts the
+connection without checking the server's certificate. Set `verify-full` to
+check it against the API's trusted roots.
 
 **A sandbox escape is a runner compromise.** If code escapes its sandbox, treat
 every sandbox on that runner, and every credential mounted into it, as
-compromised. The Firecracker runtime's boundary is a microVM, which is why it is
-the target runtime for multi-tenant workloads. The macOS development setup runs
-runners privileged and is not an isolation boundary at all.
+compromised. Since those credentials are fleet-wide, so is the reach they give:
+the runner's API key is the fleet's, and its certificate satisfies every
+listener that trusts the CA which issued it. The Firecracker runtime's boundary
+is a microVM, which is why it is the target runtime for multi-tenant workloads.
+The macOS development setup runs runners privileged and is not an isolation
+boundary at all.
 
 **Sandboxes do not survive their runner.** If a runner is lost, its sandboxes
-are lost with it.
+are lost with it. A restart counts: both runtimes remove every sandbox they find
+at startup and rebuild nothing, so a runner upgrade or crash ends every sandbox
+it hosted.
 
 ## Verification
 
@@ -210,10 +274,15 @@ The boundaries above are covered by tests rather than asserted on paper.
 | Cross-tenant read, list, delete, exec, files | [internal/api/handlers_tenants_test.go](../internal/api/handlers_tenants_test.go), [internal/api/handlers_proxy_tenant_test.go](../internal/api/handlers_proxy_tenant_test.go), [e2e/tests/sandbox-api.spec.ts](../e2e/tests/sandbox-api.spec.ts) |
 | Client-supplied ID conflicts | [internal/api/handlers_create_sandbox_test.go](../internal/api/handlers_create_sandbox_test.go) |
 | Admin route gating and key revocation | [internal/api/handlers_tenants_test.go](../internal/api/handlers_tenants_test.go) |
+| Runner listeners require a CA-signed client certificate; the API verifies each runner's host name and refuses a non-https base | [internal/runner/mtls_test.go](../internal/runner/mtls_test.go), [internal/api/runnertls_test.go](../internal/api/runnertls_test.go), [internal/api/registry/validate_test.go](../internal/api/registry/validate_test.go) |
 | Sandbox-to-sandbox and blocked-range egress | [e2e/tests/network-isolation.spec.ts](../e2e/tests/network-isolation.spec.ts) |
 | Docker capability policy, absence of a root path, and denied network administration | [e2e/tests/sandbox-capabilities.spec.ts](../e2e/tests/sandbox-capabilities.spec.ts) |
 | Unprivileged npm and PyPI installation, and the build toolchain | [e2e/tests/sandbox-packages.spec.ts](../e2e/tests/sandbox-packages.spec.ts) |
 | Egress rule generation | [internal/runner/runtime/firecracker.ee/network/egress_test.go](../internal/runner/runtime/firecracker.ee/network/egress_test.go) |
 
 The network isolation suite is untagged, so it runs against both the Sysbox and
-the Firecracker runner.
+the Firecracker runner. Its blocked-range test probes one address per listed
+range, so it shows the rules are applied, not that the list is complete. The
+capability suite is Docker-only: the setuid clearing it depends on is a property
+of the image both runtimes share, but no Firecracker test asserts it, and
+`no-new-privileges` has no Firecracker counterpart to test.
