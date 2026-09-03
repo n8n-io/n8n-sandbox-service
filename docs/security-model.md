@@ -232,10 +232,11 @@ creates the caller runs in parallel, not by time, and the tenant then holds more
 than its quota until it deletes sandboxes.
 
 **Per-sandbox disk usage is not bounded by default.** On the Sysbox runtime a
-per-sandbox disk quota applies only when `SANDBOX_RUNNER_DISK_QUOTA_ACTIVE` is
-true and `SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB` is non-zero. Both default off,
-and sandboxes then share the runner's storage with no per-sandbox limit. The
-Firecracker runtime gives each sandbox a fixed-size root filesystem image.
+per-sandbox disk quota applies only when `SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB`
+is non-zero and the runner's entrypoint managed to mount its quota pool at
+startup; it defaults to `0`, and sandboxes then share the runner's storage with
+no per-sandbox limit. The Firecracker runtime gives each sandbox a fixed-size
+root filesystem image.
 
 **Health and metrics endpoints are unauthenticated.** `/healthz` and `/metrics`
 bypass auth on both the API and the runner, as do the runner's `/livez` and
