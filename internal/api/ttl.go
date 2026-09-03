@@ -151,6 +151,29 @@ func withLockedSandbox(ctx context.Context, s store.SandboxStore, id string, fn 
 	return nil
 }
 
+// deleteIdleSandbox removes a sandbox the sweeper has decided is past its
+// window. Callers hold the sandbox lock. Any failure leaves the row in place so
+// the next sweep retries; the runner delete is idempotent, so a crash between
+// the runner delete and the store delete is recovered the same way.
+func deleteIdleSandbox(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, rec *store.SandboxRecord, now time.Time, reason string) {
+	if orphanReapDue(reg, rec.RunnerID, cfg, now) {
+		reapOrphanSandbox(s, rec, rec.RunnerID)
+		return
+	}
+	controlAddr := resolveControlAddr(rec, reg)
+	if err := runnerctl.DeleteSandbox(ctx, controlAddr, cfg.RunnerAPIKey, tlsCfg, rec.ID); err != nil {
+		if ctx.Err() == nil {
+			slog.Error("idle delete failed", "sandbox_id", rec.ID, "reason", reason, "err", err)
+		}
+		return
+	}
+	if err := s.Delete(rec.ID); err != nil {
+		slog.Error("idle delete store failed", "sandbox_id", rec.ID, "reason", reason, "err", err)
+		return
+	}
+	logSandboxDeleted(rec.ID, rec.RunnerID, reason)
+}
+
 func sweepIdleDeleteSandboxes(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) {
 	deleteSec := int64(cfg.IdleDeleteAfter.Seconds())
 	bufferSec := int64(cfg.IdleDeleteSafetyBuffer.Seconds())
@@ -171,22 +194,7 @@ func sweepIdleDeleteSandboxes(ctx context.Context, s store.SandboxStore, reg reg
 			if rec.Status != "stopped" || rec.LastActiveAt > deleteCutoff {
 				return
 			}
-			if orphanReapDue(reg, rec.RunnerID, cfg, now) {
-				reapOrphanSandbox(s, rec, rec.RunnerID)
-				return
-			}
-			controlAddr := resolveControlAddr(rec, reg)
-			if err := runnerctl.DeleteSandbox(ctx, controlAddr, cfg.RunnerAPIKey, tlsCfg, rec.ID); err != nil {
-				if ctx.Err() == nil {
-					slog.Error("idle delete failed", "sandbox_id", rec.ID, "err", err)
-				}
-				return
-			}
-			if err := s.Delete(rec.ID); err != nil {
-				slog.Error("idle delete store failed", "sandbox_id", rec.ID, "err", err)
-				return
-			}
-			logSandboxDeleted(rec.ID, rec.RunnerID, "idle")
+			deleteIdleSandbox(ctx, s, reg, cfg, tlsCfg, rec, now, "idle")
 		})
 		if err != nil && ctx.Err() == nil {
 			slog.Error("idle delete lock or refresh failed", "sandbox_id", id, "err", err)
@@ -200,6 +208,11 @@ func sweepIdleDeleteSandboxes(ctx context.Context, s store.SandboxStore, reg reg
 func sweepIdleStopSandboxes(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) {
 	stopSec := int64(cfg.IdleStopAfter.Seconds())
 	stopCutoff := now.Unix() - stopSec
+	// Ephemeral sandboxes are deleted here instead of stopped. The request path
+	// already refuses them past stopCutoff (isPastIdleDeleteWindow), and the
+	// same safety buffer as the idle delete keeps that fence ahead of the
+	// irreversible delete.
+	ephemeralDeleteCutoff := stopCutoff - int64(cfg.IdleDeleteSafetyBuffer.Seconds())
 
 	records, err := s.ListForIdleReapStop(stopCutoff)
 	if err != nil {
@@ -214,6 +227,12 @@ func sweepIdleStopSandboxes(ctx context.Context, s store.SandboxStore, reg regis
 		id := rec.ID
 		err := withLockedSandbox(ctx, s, id, func(rec *store.SandboxRecord) {
 			if rec.Status != "running" || rec.LastActiveAt > stopCutoff {
+				return
+			}
+			if rec.Ephemeral {
+				if rec.LastActiveAt <= ephemeralDeleteCutoff {
+					deleteIdleSandbox(ctx, s, reg, cfg, tlsCfg, rec, now, "ephemeral")
+				}
 				return
 			}
 			if orphanReapDue(reg, rec.RunnerID, cfg, now) {

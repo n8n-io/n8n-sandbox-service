@@ -52,6 +52,7 @@ type SandboxRecord struct {
 	RunnerHTTPBase        string // Base URL to reach that runner's HTTP API (for proxying)
 	RunnerControlGRPCAddr string // host:port for SandboxControl gRPC
 	TenantID              string // AdminTenantID = admin-owned; otherwise a tenants.id UUID
+	Ephemeral             bool   // Deleted instead of stopped when idle; never enters "stopped"
 }
 
 // Tenant is a provisioned consumer of the sandbox API (e.g. an n8n instance).
@@ -126,6 +127,7 @@ func scanRecord(row scanner) (*SandboxRecord, error) {
 		&r.RunnerHTTPBase,
 		&r.RunnerControlGRPCAddr,
 		&r.TenantID,
+		&r.Ephemeral,
 	)
 	if err != nil {
 		return nil, err

@@ -1,7 +1,12 @@
 import { APIRequestContext, expect } from '@playwright/test';
 import * as http from 'node:http';
 import * as https from 'node:https';
-import { SandboxClient, SandboxServiceError, type ExecResult } from '@n8n/sandbox-client';
+import {
+  SandboxClient,
+  SandboxServiceError,
+  type CreateSandboxOptions,
+  type ExecResult,
+} from '@n8n/sandbox-client';
 import { execFileSync } from 'node:child_process';
 
 /** Admin key from env (SANDBOX_API_KEYS). Used to mint tenant keys. */
@@ -81,9 +86,9 @@ async function headers(extra?: Record<string, string>): Promise<Record<string, s
   return { 'X-Api-Key': await getApiKey(), ...extra };
 }
 
-export async function createSandbox(): Promise<string> {
+export async function createSandbox(options?: CreateSandboxOptions): Promise<string> {
   await ensureTenantAuth();
-  const record = await client.createSandbox();
+  const record = await client.createSandbox(options);
   return record.id;
 }
 

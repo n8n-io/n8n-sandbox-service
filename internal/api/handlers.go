@@ -127,10 +127,12 @@ type SandboxResponse struct {
 	Status       string `json:"status"`
 	CreatedAt    int64  `json:"created_at"`
 	LastActiveAt int64  `json:"last_active_at"`
+	Ephemeral    bool   `json:"ephemeral"`
 }
 
 type createSandboxRequest struct {
-	ID *string `json:"id"`
+	ID        *string `json:"id"`
+	Ephemeral bool    `json:"ephemeral"`
 }
 
 func sandboxResponse(rec *store.SandboxRecord) *SandboxResponse {
@@ -139,6 +141,7 @@ func sandboxResponse(rec *store.SandboxRecord) *SandboxResponse {
 		Status:       rec.Status,
 		CreatedAt:    rec.CreatedAt,
 		LastActiveAt: rec.LastActiveAt,
+		Ephemeral:    rec.Ephemeral,
 	}
 }
 
@@ -164,12 +167,7 @@ func handleListSandboxes(s store.SandboxStore) http.HandlerFunc {
 		}
 		resp := make([]*SandboxResponse, len(records))
 		for i, rec := range records {
-			resp[i] = &SandboxResponse{
-				ID:           rec.ID,
-				Status:       rec.Status,
-				CreatedAt:    rec.CreatedAt,
-				LastActiveAt: rec.LastActiveAt,
-			}
+			resp[i] = sandboxResponse(rec)
 		}
 		writeJSON(w, http.StatusOK, resp)
 	}
@@ -195,21 +193,30 @@ func handleGetSandbox(s store.SandboxStore, cfg *config.APIConfig) http.HandlerF
 			writeError(w, http.StatusNotFound, "sandbox not found")
 			return
 		}
-		resp := &SandboxResponse{
-			ID:           rec.ID,
-			Status:       rec.Status,
-			CreatedAt:    rec.CreatedAt,
-			LastActiveAt: rec.LastActiveAt,
-		}
-		writeJSON(w, http.StatusOK, resp)
+		writeJSON(w, http.StatusOK, sandboxResponse(rec))
 	}
 }
 
+// idleDeleteWindow is how long after last activity the sweeper will delete rec.
+// An ephemeral sandbox is deleted where a regular one would only be stopped, so
+// its window is the idle-stop one. Zero means the sandbox is never deleted for
+// idleness.
+func idleDeleteWindow(rec *store.SandboxRecord, cfg *config.APIConfig) time.Duration {
+	if rec.Ephemeral && cfg.IdleStopAfter > 0 {
+		return cfg.IdleStopAfter
+	}
+	return cfg.IdleDeleteAfter
+}
+
 func isPastIdleDeleteWindow(rec *store.SandboxRecord, cfg *config.APIConfig, now int64) bool {
-	if rec == nil || cfg.IdleDeleteAfter <= 0 {
+	if rec == nil {
 		return false
 	}
-	return now > rec.LastActiveAt+int64(cfg.IdleDeleteAfter.Seconds())
+	window := idleDeleteWindow(rec, cfg)
+	if window <= 0 {
+		return false
+	}
+	return now > rec.LastActiveAt+int64(window.Seconds())
 }
 
 func runnerControlTLS(cfg *config.APIConfig) *runnerctl.TLS {
@@ -338,6 +345,7 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 			"runner_capacity_used", run.CapacityUsed,
 			"runner_capacity_stopped", run.CapacityStopped,
 			"tenant_id", tenantID,
+			"ephemeral", req.Ephemeral,
 		)
 		gresp, err := runnerctl.CreateSandbox(r.Context(), controlAddr, cfg.RunnerAPIKey, tlsCfg, sandboxID, "{}")
 		if err != nil {
@@ -365,6 +373,7 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 			RunnerHTTPBase:        strings.TrimRight(run.HTTPBaseURL, "/"),
 			RunnerControlGRPCAddr: controlAddr,
 			TenantID:              tenantID,
+			Ephemeral:             req.Ephemeral,
 		}
 		if err := s.Create(record); err != nil {
 			_ = runnerctl.DeleteSandbox(r.Context(), controlAddr, cfg.RunnerAPIKey, tlsCfg, sandboxID)

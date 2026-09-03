@@ -15,6 +15,13 @@ export interface SandboxClientOptions {
 export interface CreateSandboxOptions {
   /** UUID to create or reuse. The service generates one when omitted. */
   id?: string;
+  /**
+   * Delete the sandbox, instead of stopping it, once it has been idle for the
+   * service's idle-stop window. An ephemeral sandbox never reports `stopped`
+   * and cannot be woken; requests past the window return 404. Defaults to false.
+   * Fixed at creation: reconnecting to an existing `id` keeps its current value.
+   */
+  ephemeral?: boolean;
 }
 
 /** Retry policy for transient HTTP failures. */
@@ -45,6 +52,8 @@ export interface SandboxRecord {
   createdAt: number;
   /** Unix timestamp (seconds) of last activity. */
   lastActiveAt: number;
+  /** Whether the sandbox is deleted, rather than stopped, when it goes idle. */
+  ephemeral: boolean;
 }
 
 /** Directory entry returned by the file listing API. */
@@ -145,6 +154,7 @@ export type SandboxWireResponse = {
   status: string;
   created_at: number;
   last_active_at: number;
+  ephemeral: boolean;
 };
 
 export type FileEntryWireResponse = {

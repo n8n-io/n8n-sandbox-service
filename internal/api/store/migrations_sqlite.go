@@ -27,6 +27,8 @@ const sqliteAddRunnerControlGRPCAddrCol = `ALTER TABLE sandboxes ADD COLUMN runn
 
 const sqliteAddTenantIDCol = `ALTER TABLE sandboxes ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '__admin__'`
 
+const sqliteAddEphemeralCol = `ALTER TABLE sandboxes ADD COLUMN ephemeral INTEGER NOT NULL DEFAULT 0`
+
 // Backfill legacy empty tenant_id to the admin sentinel.
 const sqliteBackfillAdminTenantID = `UPDATE sandboxes SET tenant_id = '__admin__' WHERE tenant_id = ''`
 

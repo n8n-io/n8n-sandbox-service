@@ -37,6 +37,42 @@ func TestStorePersistsDockerMetadata(t *testing.T) {
 	}
 }
 
+func TestStorePersistsEphemeral(t *testing.T) {
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	defer s.Close()
+
+	for _, rec := range []*SandboxRecord{
+		{ID: "ephemeral", Status: "running", CreatedAt: 1, LastActiveAt: 1, Ephemeral: true},
+		{ID: "regular", Status: "running", CreatedAt: 1, LastActiveAt: 1},
+	} {
+		if err := s.Create(rec); err != nil {
+			t.Fatalf("create %s: %v", rec.ID, err)
+		}
+		got, err := s.Get(rec.ID)
+		if err != nil || got == nil {
+			t.Fatalf("get %s: rec=%v err=%v", rec.ID, got, err)
+		}
+		if got.Ephemeral != rec.Ephemeral {
+			t.Fatalf("%s: Ephemeral = %v, want %v", rec.ID, got.Ephemeral, rec.Ephemeral)
+		}
+	}
+
+	rows, err := s.ListForIdleReapStop(1)
+	if err != nil {
+		t.Fatalf("ListForIdleReapStop: %v", err)
+	}
+	seen := map[string]bool{}
+	for _, r := range rows {
+		seen[r.ID] = r.Ephemeral
+	}
+	if !seen["ephemeral"] || seen["regular"] {
+		t.Fatalf("Ephemeral not carried through list scan: %v", seen)
+	}
+}
+
 func TestSQLiteDSNEnablesForeignKeys(t *testing.T) {
 	s, err := New(":memory:")
 	if err != nil {

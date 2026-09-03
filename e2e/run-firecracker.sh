@@ -233,12 +233,13 @@ fi
 echo "Running Firecracker-compatible e2e tests..."
 PLAYWRIGHT_SPECS=()
 if [[ "${E2E_IDLE_TTL_SUITE:-}" == "1" ]]; then
-	PLAYWRIGHT_SPECS=("tests/sandbox-idle-ttl.spec.ts")
+	PLAYWRIGHT_SPECS=("tests/sandbox-idle-ttl.spec.ts" "tests/sandbox-ephemeral.spec.ts")
 else
 	shopt -s nullglob
 	for f in tests/*.spec.ts; do
 		bn=$(basename "$f")
 		[[ "$bn" == sandbox-idle-ttl.spec.ts ]] && continue
+		[[ "$bn" == sandbox-ephemeral.spec.ts ]] && continue
 		[[ "$bn" == multi-pod-api.spec.ts ]] && continue
 		PLAYWRIGHT_SPECS+=("$f")
 	done

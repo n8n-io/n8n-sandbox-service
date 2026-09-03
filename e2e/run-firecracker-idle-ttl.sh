@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Firecracker lane with short API idle TTL; runs only tests/sandbox-idle-ttl.spec.ts.
+# Firecracker lane with short API idle TTL; runs only the idle specs:
+# tests/sandbox-idle-ttl.spec.ts and tests/sandbox-ephemeral.spec.ts.
 # Uses a dedicated port set so back-to-back suites on the same VM do not collide.
 set -euo pipefail
 export E2E_IDLE_TTL_SUITE=1
