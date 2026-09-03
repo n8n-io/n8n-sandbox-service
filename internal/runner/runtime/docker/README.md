@@ -11,7 +11,9 @@ containers direct access to the host Docker daemon.
 - Starts sandbox containers from `SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE`.
 - Connects containers to the runner bridge network. The host must have
   `br_netfilter` loaded with `bridge-nf-call-iptables=1`, or bridged sandbox
-  traffic bypasses the iptables rules; `scripts/setup-sysbox.sh` sets this.
+  traffic bypasses the iptables rules. `scripts/setup-sysbox.sh` loads the
+  module; the sysctl defaults to `1` once it is loaded, so only a host that
+  overrides it needs attention.
 - Proxies API traffic to the sandbox daemon on port `8081`.
 
 ## Supported Features

@@ -220,6 +220,8 @@ See [security-model.md](security-model.md) for the trust boundaries behind these
 | Network isolation | iptables rules on runner | Block sandbox access to private IP ranges |
 | Resource limits | Docker: cgroups + optional xfs quota; Firecracker: snapshot vCPU/memory + fixed-size rootfs | Bound memory, CPU, process count, and disk per sandbox |
 | Request size | Configurable body size limits | Prevent oversized uploads |
+| File operations | In-guest daemon running as uid 1000; paths are cleaned and anchored at the guest root | Confine file access to what uid 1000 can reach inside the sandbox |
+| Error sanitization | API-generated error bodies have runner-side sandbox paths stripped; proxied runner responses pass through unchanged | Keep runner filesystem layout out of API errors |
 | Build inputs | Checksums, digest-pinned release images, optional manifest pin | Detect substituted dependencies and guest assets |
 
 TLS certificates can be bootstrapped locally with `scripts/bootstrap-mtls.sh` or managed in Kubernetes with cert-manager (see [cert-manager-k8s.md](cert-manager-k8s.md)).

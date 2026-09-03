@@ -45,6 +45,9 @@ Authorization runs on every sandbox request through `canAccessSandbox` in
 Cross-tenant and non-existent sandboxes both return `404`, so a tenant cannot
 use the status code to learn whether an ID exists.
 
+Error bodies the API generates itself have runner-side sandbox paths stripped
+before they are returned; responses proxied from a runner are relayed as-is.
+
 ## API to runner
 
 Runners do not know about tenants. A runner authenticates its caller and then
@@ -142,9 +145,10 @@ sandbox can be created, so an upgraded runner replacing the rules of an earlier
 version never does so with a container on the bridge. Containers are created
 with IPv6 disabled. Every rule above, and Docker's own inter-container block,
 applies to bridged traffic only on a host running `br_netfilter` with
-`bridge-nf-call-iptables` enabled. Hosts prepared by
-[scripts/setup-sysbox.sh](../scripts/setup-sysbox.sh) get that; any other host
-must provide it.
+`bridge-nf-call-iptables` enabled.
+[scripts/setup-sysbox.sh](../scripts/setup-sysbox.sh) loads the module, and the
+kernel enables the sysctl by default once it is loaded; a host that overrides
+that default, or was not prepared by the script, must provide both.
 
 The runner drops all Linux capabilities from every sandbox container and
 restores none. The container runs as uid 1000, so no process holds an effective
@@ -192,10 +196,11 @@ every sandbox built from it. What is verified today:
   version into the deployment registry by digest and refuses to replace a
   version that is already there.
 - The SDK is published to npm through trusted publishing, with provenance.
-- The Firecracker runner can pin its guest assets to a release manifest with
-  `SANDBOX_RUNNER_FIRECRACKER_MANIFEST_PATH` and
-  `SANDBOX_RUNNER_FIRECRACKER_EXPECTED_GIT_SHA`, and refuses to start on a
-  mismatch. This is off unless both are configured.
+- The Firecracker runner can check its guest assets against a release manifest.
+  Setting `SANDBOX_RUNNER_FIRECRACKER_MANIFEST_PATH` alone makes it refuse to
+  start if the daemon binary's SHA-256 differs from the one in the manifest;
+  adding `SANDBOX_RUNNER_FIRECRACKER_EXPECTED_GIT_SHA` also pins the manifest's
+  `git_sha`. Neither is set by default.
 
 ## Non-guarantees
 
