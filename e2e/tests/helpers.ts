@@ -529,10 +529,20 @@ export function restartFirecrackerRunnerFromEnvFile(
   const projectDir = e2eProjectDir();
   if (remote?.ssh) {
     const sshArgs = remote.sshOpts ? remote.sshOpts.split(/\s+/).filter(Boolean) : [];
-    execFileSync('ssh', [...sshArgs, remote.ssh, 'bash', `${projectDir}/e2e/lib/restart-firecracker-runner.sh`], {
-      stdio: 'inherit',
-      env: { ...process.env, E2E_FIRECRACKER_RUNNER_ENV_FILE: envFile },
-    });
+    // ssh does not forward the local environment, so the env file path has to
+    // travel inside the remote command.
+    execFileSync(
+      'ssh',
+      [
+        ...sshArgs,
+        remote.ssh,
+        'env',
+        `E2E_FIRECRACKER_RUNNER_ENV_FILE=${envFile}`,
+        'bash',
+        `${projectDir}/e2e/lib/restart-firecracker-runner.sh`,
+      ],
+      { stdio: 'inherit' },
+    );
     return;
   }
   execFileSync('bash', [`${projectDir}/e2e/lib/restart-firecracker-runner.sh`], {
