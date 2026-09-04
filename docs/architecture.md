@@ -89,7 +89,7 @@ The API gateway is the single public-facing service. It exposes a REST API for s
 | gRPC server | `internal/api/grpc/` | `RunnerRegistry` service — accepts runner heartbeat streams |
 | Store | `internal/api/store/` | Sandbox metadata (`sqlite` default, `postgres` for multi-pod) |
 | Sweeper lock | `internal/api/store/postgres.go` | Postgres advisory lock for idle sweeper leadership |
-| Idle sweeper | `internal/api/ttl.go` | Periodic scan to stop/delete idle sandboxes |
+| Idle sweeper | `internal/api/ttl.go` | Periodic scan to stop/delete idle sandboxes; ephemeral sandboxes are deleted where a regular one would be stopped |
 | Config | `internal/api/config/` | Environment variable parsing and validation |
 
 **Middleware chain:** Recovery → CORS (optional) → Logging → Auth (API key) → Metrics (optional)

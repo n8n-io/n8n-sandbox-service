@@ -46,6 +46,10 @@ func NewPostgres(cfg config.PostgresConfig) (*PostgresStore, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: backfill admin tenant_id: %w", err)
 	}
+	if _, err := db.Exec(postgresAddEphemeralCol); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: add ephemeral column: %w", err)
+	}
 	if _, err := db.Exec(postgresSandboxTenantIndex); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: sandboxes tenant index: %w", err)
@@ -84,7 +88,7 @@ func (s *PostgresStore) Backend() Backend { return BackendPostgres }
 
 func (s *PostgresStore) Close() error { return errors.Join(s.db.Close(), s.lockDB.Close()) }
 
-const pgSandboxCols = `id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id`
+const pgSandboxCols = `id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral`
 
 type pgExecer interface {
 	Exec(query string, args ...any) (sql.Result, error)
@@ -93,9 +97,9 @@ type pgExecer interface {
 func (s *PostgresStore) insertSandbox(e pgExecer, record *SandboxRecord) error {
 	const q = `
 		INSERT INTO sandboxes
-			(id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id)
+			(id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral)
 		VALUES
-			($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`
+			($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`
 
 	_, err := e.Exec(q,
 		record.ID,
@@ -110,6 +114,7 @@ func (s *PostgresStore) insertSandbox(e pgExecer, record *SandboxRecord) error {
 		record.RunnerHTTPBase,
 		record.RunnerControlGRPCAddr,
 		record.TenantID,
+		record.Ephemeral,
 	)
 	if err != nil {
 		return fmt.Errorf("store: create sandbox %s: %w", record.ID, err)

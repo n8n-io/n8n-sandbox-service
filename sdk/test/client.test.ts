@@ -53,6 +53,7 @@ describe("SandboxClient", () => {
       status: "running",
       created_at: 1000,
       last_active_at: 1000,
+      ephemeral: false,
     });
 
     const result = await client.createSandbox();
@@ -63,7 +64,59 @@ describe("SandboxClient", () => {
       status: "running",
       createdAt: 1000,
       lastActiveAt: 1000,
+      ephemeral: false,
     });
+  });
+
+  it("createSandbox with ephemeral sends the flag without marking the POST retry-safe", async () => {
+    const mock = getMockHttp(client);
+    mock.requestJson.mockResolvedValue({
+      id: "abc",
+      status: "running",
+      created_at: 1000,
+      last_active_at: 1000,
+      ephemeral: true,
+    });
+
+    const result = await client.createSandbox({ ephemeral: true });
+
+    expect(mock.requestJson).toHaveBeenCalledWith("POST", "/sandboxes", {
+      data: { ephemeral: true },
+      isSafeToRetry: false,
+    });
+    expect(result.ephemeral).toBe(true);
+  });
+
+  it("createSandbox with id and ephemeral stays retry-safe", async () => {
+    const mock = getMockHttp(client);
+    mock.requestJson.mockResolvedValue({
+      id: "11111111-1111-4111-8111-111111111111",
+      status: "running",
+      created_at: 1000,
+      last_active_at: 1000,
+      ephemeral: true,
+    });
+
+    await client.createSandbox({ id: "11111111-1111-4111-8111-111111111111", ephemeral: true });
+
+    expect(mock.requestJson).toHaveBeenCalledWith("POST", "/sandboxes", {
+      data: { id: "11111111-1111-4111-8111-111111111111", ephemeral: true },
+      isSafeToRetry: true,
+    });
+  });
+
+  it("maps a missing ephemeral field to false", async () => {
+    const mock = getMockHttp(client);
+    mock.requestJson.mockResolvedValue({
+      id: "abc",
+      status: "running",
+      created_at: 1000,
+      last_active_at: 1000,
+    });
+
+    const result = await client.getSandbox("abc");
+
+    expect(result.ephemeral).toBe(false);
   });
 
   it("creates or reuses a caller-supplied sandbox ID", async () => {
@@ -73,6 +126,7 @@ describe("SandboxClient", () => {
       status: "running",
       created_at: 1000,
       last_active_at: 1000,
+      ephemeral: false,
     });
 
     const result = await client.createSandbox({ id: "11111111-1111-4111-8111-111111111111" });
@@ -91,6 +145,7 @@ describe("SandboxClient", () => {
       status: "running",
       created_at: 2000,
       last_active_at: 2000,
+      ephemeral: false,
     });
 
     const result = await client.getSandbox("xyz");

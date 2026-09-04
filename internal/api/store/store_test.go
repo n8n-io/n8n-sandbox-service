@@ -20,6 +20,7 @@ func TestStorePersistsDockerMetadata(t *testing.T) {
 		LastActiveAt: 2,
 		ContainerIP:  "172.30.0.2",
 		DaemonPort:   8081,
+		Ephemeral:    true,
 	}
 	if err := s.Create(rec); err != nil {
 		t.Fatalf("create record: %v", err)
@@ -32,7 +33,7 @@ func TestStorePersistsDockerMetadata(t *testing.T) {
 	if got == nil {
 		t.Fatal("expected record")
 	}
-	if got.ContainerIP != rec.ContainerIP || got.DaemonPort != rec.DaemonPort {
+	if got.ContainerIP != rec.ContainerIP || got.DaemonPort != rec.DaemonPort || !got.Ephemeral {
 		t.Fatalf("unexpected docker metadata: %+v", got)
 	}
 }

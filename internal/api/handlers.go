@@ -79,13 +79,15 @@ func sandboxProxyHandler(s store.SandboxStore, cfg *config.APIConfig, transport 
 				return
 			}
 
-			if rec.RunnerHTTPBase == "" {
-				writeError(w, http.StatusBadGateway, "sandbox has no runner routing information")
+			// Fence before routing checks: a sandbox past its delete window is
+			// 404 regardless of whether its row still has routing information.
+			if isPastIdleDeleteWindow(rec, cfg, time.Now().Unix()) {
+				writeError(w, http.StatusNotFound, "sandbox not found")
 				return
 			}
 
-			if isPastIdleDeleteWindow(rec, cfg, time.Now().Unix()) {
-				writeError(w, http.StatusNotFound, "sandbox not found")
+			if rec.RunnerHTTPBase == "" {
+				writeError(w, http.StatusBadGateway, "sandbox has no runner routing information")
 				return
 			}
 
@@ -127,10 +129,12 @@ type SandboxResponse struct {
 	Status       string `json:"status"`
 	CreatedAt    int64  `json:"created_at"`
 	LastActiveAt int64  `json:"last_active_at"`
+	Ephemeral    bool   `json:"ephemeral"`
 }
 
 type createSandboxRequest struct {
-	ID *string `json:"id"`
+	ID        *string `json:"id"`
+	Ephemeral bool    `json:"ephemeral"`
 }
 
 func sandboxResponse(rec *store.SandboxRecord) *SandboxResponse {
@@ -139,6 +143,7 @@ func sandboxResponse(rec *store.SandboxRecord) *SandboxResponse {
 		Status:       rec.Status,
 		CreatedAt:    rec.CreatedAt,
 		LastActiveAt: rec.LastActiveAt,
+		Ephemeral:    rec.Ephemeral,
 	}
 }
 
@@ -164,12 +169,7 @@ func handleListSandboxes(s store.SandboxStore) http.HandlerFunc {
 		}
 		resp := make([]*SandboxResponse, len(records))
 		for i, rec := range records {
-			resp[i] = &SandboxResponse{
-				ID:           rec.ID,
-				Status:       rec.Status,
-				CreatedAt:    rec.CreatedAt,
-				LastActiveAt: rec.LastActiveAt,
-			}
+			resp[i] = sandboxResponse(rec)
 		}
 		writeJSON(w, http.StatusOK, resp)
 	}
@@ -195,21 +195,19 @@ func handleGetSandbox(s store.SandboxStore, cfg *config.APIConfig) http.HandlerF
 			writeError(w, http.StatusNotFound, "sandbox not found")
 			return
 		}
-		resp := &SandboxResponse{
-			ID:           rec.ID,
-			Status:       rec.Status,
-			CreatedAt:    rec.CreatedAt,
-			LastActiveAt: rec.LastActiveAt,
-		}
-		writeJSON(w, http.StatusOK, resp)
+		writeJSON(w, http.StatusOK, sandboxResponse(rec))
 	}
 }
 
 func isPastIdleDeleteWindow(rec *store.SandboxRecord, cfg *config.APIConfig, now int64) bool {
-	if rec == nil || cfg.IdleDeleteAfter <= 0 {
+	if rec == nil {
 		return false
 	}
-	return now > rec.LastActiveAt+int64(cfg.IdleDeleteAfter.Seconds())
+	window := cfg.IdleDeleteAfter
+	if rec.Ephemeral {
+		window = ephemeralIdleWindow(cfg)
+	}
+	return window > 0 && now > rec.LastActiveAt+idleSeconds(window)
 }
 
 func runnerControlTLS(cfg *config.APIConfig) *runnerctl.TLS {
@@ -338,6 +336,7 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 			"runner_capacity_used", run.CapacityUsed,
 			"runner_capacity_stopped", run.CapacityStopped,
 			"tenant_id", tenantID,
+			"ephemeral", req.Ephemeral,
 		)
 		gresp, err := runnerctl.CreateSandbox(r.Context(), controlAddr, cfg.RunnerAPIKey, tlsCfg, sandboxID, "{}")
 		if err != nil {
@@ -365,6 +364,7 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 			RunnerHTTPBase:        strings.TrimRight(run.HTTPBaseURL, "/"),
 			RunnerControlGRPCAddr: controlAddr,
 			TenantID:              tenantID,
+			Ephemeral:             req.Ephemeral,
 		}
 		if err := s.Create(record); err != nil {
 			_ = runnerctl.DeleteSandbox(r.Context(), controlAddr, cfg.RunnerAPIKey, tlsCfg, sandboxID)

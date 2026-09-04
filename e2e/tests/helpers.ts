@@ -1,7 +1,12 @@
 import { APIRequestContext, expect } from '@playwright/test';
 import * as http from 'node:http';
 import * as https from 'node:https';
-import { SandboxClient, SandboxServiceError, type ExecResult } from '@n8n/sandbox-client';
+import {
+  SandboxClient,
+  SandboxServiceError,
+  type CreateSandboxOptions,
+  type ExecResult,
+} from '@n8n/sandbox-client';
 import { execFileSync } from 'node:child_process';
 
 /** Admin key from env (SANDBOX_API_KEYS). Used to mint tenant keys. */
@@ -81,9 +86,9 @@ async function headers(extra?: Record<string, string>): Promise<Record<string, s
   return { 'X-Api-Key': await getApiKey(), ...extra };
 }
 
-export async function createSandbox(): Promise<string> {
+export async function createSandbox(options?: CreateSandboxOptions): Promise<string> {
   await ensureTenantAuth();
-  const record = await client.createSandbox();
+  const record = await client.createSandbox(options);
   return record.id;
 }
 
@@ -524,10 +529,20 @@ export function restartFirecrackerRunnerFromEnvFile(
   const projectDir = e2eProjectDir();
   if (remote?.ssh) {
     const sshArgs = remote.sshOpts ? remote.sshOpts.split(/\s+/).filter(Boolean) : [];
-    execFileSync('ssh', [...sshArgs, remote.ssh, 'bash', `${projectDir}/e2e/lib/restart-firecracker-runner.sh`], {
-      stdio: 'inherit',
-      env: { ...process.env, E2E_FIRECRACKER_RUNNER_ENV_FILE: envFile },
-    });
+    // ssh does not forward the local environment, so the env file path has to
+    // travel inside the remote command.
+    execFileSync(
+      'ssh',
+      [
+        ...sshArgs,
+        remote.ssh,
+        'env',
+        `E2E_FIRECRACKER_RUNNER_ENV_FILE=${envFile}`,
+        'bash',
+        `${projectDir}/e2e/lib/restart-firecracker-runner.sh`,
+      ],
+      { stdio: 'inherit' },
+    );
     return;
   }
   execFileSync('bash', [`${projectDir}/e2e/lib/restart-firecracker-runner.sh`], {

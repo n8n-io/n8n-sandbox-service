@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/n8n-io/sandbox-service/internal/api/store"
 )
@@ -190,5 +191,30 @@ func TestSandboxProxyRefusesPlaintextRunnerBase(t *testing.T) {
 	}
 	if hits := upstreamHits.Load(); hits != 0 {
 		t.Fatalf("expected nothing to reach the plaintext runner, got %d requests", hits)
+	}
+}
+
+// The idle-delete fence is the tenant-visible contract and must win over
+// routing validation: a row that predates runner_http_base_url has no base,
+// but once it is past its window the proxy still answers 404, not 502.
+func TestSandboxProxyFencesExpiredSandboxWithoutRunnerBase(t *testing.T) {
+	router, s, cfg := newIdleTestGateway(t, "admin-key")
+
+	stale := time.Now().Add(-cfg.IdleStopAfter - time.Second).Unix()
+	const sid = "eeeeeeee-5555-4555-8555-eeeeeeeeeeee"
+	if err := s.Create(&store.SandboxRecord{
+		ID: sid, Status: "running", CreatedAt: stale, LastActiveAt: stale,
+		TenantID: store.AdminTenantID, Ephemeral: true,
+	}); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/sandboxes/"+sid+"/files", nil)
+	req.Header.Set("X-Api-Key", "admin-key")
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("proxy returned %d body=%s, want %d", rr.Code, rr.Body.String(), http.StatusNotFound)
 	}
 }

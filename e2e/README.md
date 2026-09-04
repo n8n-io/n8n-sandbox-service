@@ -4,7 +4,7 @@ Playwright drives the HTTP API. Shell scripts start Docker networks, the API, an
 
 Run with `e2e/run-all.sh` (SQLite API by default, plus a required Postgres API phase at the end).
 
-Idle TTL: The default `e2e/run.sh` API uses production defaults for `SANDBOX_API_IDLE_*`. Run **`e2e/run-idle-ttl.sh`** for a dedicated stack with short idle timers and only `tests/sandbox-idle-ttl.spec.ts` (also used as phase 4 of `run-all.sh`).
+Idle TTL: The default `e2e/run.sh` API uses production defaults for `SANDBOX_API_IDLE_*`. Run **`e2e/run-idle-ttl.sh`** for a dedicated stack with short idle timers and only the idle specs, `tests/sandbox-idle-ttl.spec.ts` and `tests/sandbox-ephemeral.spec.ts` (also used as phase 4 of `run-all.sh`).
 
 Postgres API: Phase 5 of `run-all.sh` runs **`e2e/run-postgres.sh`** (idle TTL, two-runner placement, and multi-pod API specs against Postgres with the Docker runner). Run it alone with `e2e/run-postgres.sh`.
 
@@ -34,9 +34,10 @@ The wrapper provisions the VM, runs the Firecracker e2e tests over SSH, collects
 logs on failure, and destroys the VM resources on exit.
 
 Idle TTL (Firecracker): Like Docker, the default `e2e/run-firecracker.sh` uses
-production `SANDBOX_API_IDLE_*` defaults and excludes `tests/sandbox-idle-ttl.spec.ts`.
+production `SANDBOX_API_IDLE_*` defaults and excludes the idle specs
+(`tests/sandbox-idle-ttl.spec.ts`, `tests/sandbox-ephemeral.spec.ts`).
 Run `e2e/run-firecracker-idle-ttl.sh` for a dedicated stack with short idle
-timers and only that spec (uses its own HTTP/gRPC/control ports so it can run
+timers and only those specs (uses its own HTTP/gRPC/control ports so it can run
 back-to-back with the main suite on the same VM).
 
 Two runners (Firecracker): Firecracker runners cannot share one host network

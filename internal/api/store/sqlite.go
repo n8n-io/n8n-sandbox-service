@@ -51,6 +51,7 @@ func NewSQLite(dbPath string) (*SQLiteStore, error) {
 		{sql: sqliteAddRunnerHTTPBaseURLCol, name: "runner_http_base_url"},
 		{sql: sqliteAddRunnerControlGRPCAddrCol, name: "runner_control_grpc_addr"},
 		{sql: sqliteAddTenantIDCol, name: "tenant_id"},
+		{sql: sqliteAddEphemeralCol, name: "ephemeral"},
 	} {
 		if _, err := db.Exec(stmt.sql); err != nil {
 			if strings.Contains(err.Error(), "duplicate column") ||
@@ -102,7 +103,7 @@ func (s *SQLiteStore) Backend() Backend { return BackendSQLite }
 
 func (s *SQLiteStore) Close() error { return s.db.Close() }
 
-const sqliteSandboxCols = `id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id`
+const sqliteSandboxCols = `id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral`
 
 type sqliteExecer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
@@ -111,9 +112,9 @@ type sqliteExecer interface {
 func (s *SQLiteStore) insertSandbox(e sqliteExecer, record *SandboxRecord) error {
 	const q = `
 		INSERT INTO sandboxes
-			(id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id)
+			(id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral)
 		VALUES
-			(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	_, err := e.ExecContext(context.Background(), q,
 		record.ID,
@@ -128,6 +129,7 @@ func (s *SQLiteStore) insertSandbox(e sqliteExecer, record *SandboxRecord) error
 		record.RunnerHTTPBase,
 		record.RunnerControlGRPCAddr,
 		record.TenantID,
+		record.Ephemeral,
 	)
 	if err != nil {
 		return fmt.Errorf("store: create sandbox %s: %w", record.ID, err)
