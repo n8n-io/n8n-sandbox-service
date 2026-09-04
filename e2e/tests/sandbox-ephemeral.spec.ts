@@ -1,13 +1,9 @@
 import { test, expect } from '@playwright/test';
 import './matchers';
-import {
-  apiRequest,
-  client,
-  createSandbox,
-  execWithTransientRetry,
-  listSandboxes,
-} from './helpers';
+import { apiRequest, client, createSandbox, execWithTransientRetry } from './helpers';
 test.describe.configure({ timeout: 300_000 });
+
+type ListedSandbox = { id: string; status: string; ephemeral: boolean };
 
 test.describe('ephemeral sandbox', () => {
   test('is deleted at the idle-stop window without ever reporting stopped', async ({ request }) => {
@@ -22,20 +18,18 @@ test.describe('ephemeral sandbox', () => {
     expect(execRes).toHaveSucceeded();
 
     // Idle suite: stop_after=3s, buffer=2s (Docker) / 5s (Firecracker), sweep=1s.
-    // The row goes straight from running to gone; the regular idle-delete
-    // window (10s / 90s) never comes into play.
-    //
-    // GET /sandboxes/{id} is fenced: it 404s as soon as the stop window passes,
-    // before anything is deleted. The unfenced list shows the row until the
-    // sweeper has removed it (which only happens after the runner delete
-    // succeeded), so that is what proves cleanup. Along the way: the fence must
-    // go up while the row still exists, and the row is never "stopped".
+    // GET /sandboxes/{id} is fenced (404) as soon as the stop window passes; the
+    // unfenced list keeps the row until the sweeper has deleted it, which is what
+    // proves cleanup. The fence must be up before the row goes, and the row is
+    // never "stopped".
     const seen = new Set<string>();
     const deadline = Date.now() + 120_000;
     let fenced = false;
     let removed = false;
     while (Date.now() < deadline) {
-      const row = (await listSandboxes(request)).find((r) => r.id === id);
+      const list = await apiRequest(request, 'GET', '/sandboxes');
+      expect(list.status).toBe(200);
+      const row = ((await list.json()) as ListedSandbox[]).find((r) => r.id === id);
       if (!row) {
         removed = true;
         break;

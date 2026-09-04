@@ -199,24 +199,15 @@ func handleGetSandbox(s store.SandboxStore, cfg *config.APIConfig) http.HandlerF
 	}
 }
 
-// idleDeleteWindow is how long after last activity the sweeper will delete rec.
-// Zero means the sandbox is never deleted for idleness.
-func idleDeleteWindow(rec *store.SandboxRecord, cfg *config.APIConfig) time.Duration {
-	if rec.Ephemeral {
-		return ephemeralIdleWindow(cfg)
-	}
-	return cfg.IdleDeleteAfter
-}
-
 func isPastIdleDeleteWindow(rec *store.SandboxRecord, cfg *config.APIConfig, now int64) bool {
 	if rec == nil {
 		return false
 	}
-	window := idleDeleteWindow(rec, cfg)
-	if window <= 0 {
-		return false
+	window := cfg.IdleDeleteAfter
+	if rec.Ephemeral {
+		window = ephemeralIdleWindow(cfg)
 	}
-	return now > rec.LastActiveAt+idleSeconds(window)
+	return window > 0 && now > rec.LastActiveAt+idleSeconds(window)
 }
 
 func runnerControlTLS(cfg *config.APIConfig) *runnerctl.TLS {

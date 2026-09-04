@@ -162,7 +162,7 @@ If that ID still belongs to the caller and is within its idle-delete window, the
 **Request body fields** (all optional):
 
 - `id` — lowercase UUID to create or reconnect to, as above.
-- `ephemeral` (boolean, default `false`) — delete the sandbox, instead of stopping it, once it has been idle for `SANDBOX_API_IDLE_STOP_AFTER` (default `1h`). An ephemeral sandbox never reports `status: "stopped"` and cannot be woken: its idle-delete window is the idle-stop window, so once that has passed, `GET`, exec and file requests return `404` and the sweeper removes it. Use it for throwaway work where nothing needs to survive the run. The flag is fixed at creation; reconnecting to an existing `id` returns the sandbox with the value it was created with. When idle stop is disabled (`SANDBOX_API_IDLE_STOP_AFTER=0`), the window is `SANDBOX_API_IDLE_DELETE_AFTER` instead; when both are `0`, ephemeral sandboxes are never reclaimed for idleness, like any other sandbox.
+- `ephemeral` (boolean, default `false`) — delete the sandbox, instead of stopping it, once it has been idle for `SANDBOX_API_IDLE_STOP_AFTER` (default `1h`; `SANDBOX_API_IDLE_DELETE_AFTER` when idle stop is disabled). It never reports `status: "stopped"`; once the window has passed, `GET`, exec and file requests return `404` and the sweeper removes it. Fixed at creation: reconnecting to an existing `id` keeps the value it was created with.
 
 ```json
 {

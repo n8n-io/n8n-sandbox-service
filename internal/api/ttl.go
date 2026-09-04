@@ -115,11 +115,9 @@ func sweepIdleSandboxes(ctx context.Context, s store.SandboxStore, reg registry.
 	return nil
 }
 
-// ephemeralIdleWindow is how long an ephemeral sandbox may sit idle before it
-// is deleted: the idle-stop window, since it is deleted where a regular sandbox
-// would be stopped, or the idle-delete window when idle stop is disabled. Zero
-// when neither is set. The request-path fence (isPastIdleDeleteWindow) and
-// sweepEphemeralSandboxes both derive from it, so they cannot disagree.
+// ephemeralIdleWindow is how long an ephemeral sandbox may idle before deletion:
+// the idle-stop window, or the idle-delete window when idle stop is disabled.
+// Both the request-path fence and sweepEphemeralSandboxes use it.
 func ephemeralIdleWindow(cfg *config.APIConfig) time.Duration {
 	if cfg.IdleStopAfter > 0 {
 		return cfg.IdleStopAfter
@@ -173,10 +171,8 @@ func withLockedSandbox(ctx context.Context, s store.SandboxStore, id string, fn 
 	return nil
 }
 
-// deleteIdleSandbox removes a sandbox the sweeper has decided is past its
-// window. Callers hold the sandbox lock. Any failure leaves the row in place so
-// the next sweep retries; the runner delete is idempotent, so a crash between
-// the runner delete and the store delete is recovered the same way.
+// deleteIdleSandbox deletes rec on the runner, then in the store. Callers hold
+// the sandbox lock. Any failure leaves the row in place so the next sweep retries.
 func deleteIdleSandbox(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, rec *store.SandboxRecord, now time.Time, reason string) {
 	if orphanReapDue(reg, rec.RunnerID, cfg, now) {
 		reapOrphanSandbox(s, rec, rec.RunnerID)
@@ -196,14 +192,15 @@ func deleteIdleSandbox(ctx context.Context, s store.SandboxStore, reg registry.R
 	logSandboxDeleted(rec.ID, rec.RunnerID, reason)
 }
 
-// idleSeconds converts an idle window or buffer to whole seconds, rounding up.
-// Timestamps are second-granular, so this is the only conversion the fence and
-// the sweeps use. Rounding down would act before the configured duration had
-// fully elapsed, and for the safety buffer a sub-second setting such as 500ms
-// would silently become no buffer at all, letting the delete land in the same
-// second the fence goes up.
+// idleSeconds converts an idle window or buffer to whole seconds, rounding up so
+// that nothing acts before the configured duration has fully elapsed and a
+// sub-second safety buffer does not truncate to none.
 func idleSeconds(d time.Duration) int64 {
-	return int64((d + time.Second - 1) / time.Second)
+	secs := int64(d / time.Second)
+	if d%time.Second != 0 {
+		secs++ // ceil without d+time.Second overflowing near math.MaxInt64
+	}
+	return secs
 }
 
 func sweepIdleDeleteSandboxes(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) {
@@ -283,11 +280,8 @@ func sweepIdleStopSandboxes(ctx context.Context, s store.SandboxStore, reg regis
 		}
 		id := rec.ID
 		err := withLockedSandbox(ctx, s, id, func(rec *store.SandboxRecord) {
-			if rec.Status != "running" || rec.LastActiveAt > stopCutoff {
-				return
-			}
-			if rec.Ephemeral {
-				// Deleted by sweepEphemeralSandboxes, never stopped.
+			// Ephemeral rows are deleted by sweepEphemeralSandboxes, never stopped.
+			if rec.Status != "running" || rec.Ephemeral || rec.LastActiveAt > stopCutoff {
 				return
 			}
 			if orphanReapDue(reg, rec.RunnerID, cfg, now) {

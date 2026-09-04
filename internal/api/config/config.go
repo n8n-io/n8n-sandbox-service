@@ -108,10 +108,9 @@ type APIConfig struct {
 	// IdleDeleteAfter is how long after last activity the API deletes the sandbox
 	// (0 = disabled). Wakes are refused after this window until the row is removed.
 	IdleDeleteAfter time.Duration
-	// IdleDeleteSafetyBuffer is added to the idle delete window before deletion
-	// (race guard): IdleDeleteAfter for stopped sandboxes; IdleStopAfter, or
-	// IdleDeleteAfter when idle stop is disabled, for ephemeral ones. When either
-	// window is > 0 and this is unset, it defaults to 1m.
+	// IdleDeleteSafetyBuffer is added to a sandbox's idle window before the sweeper
+	// deletes it (race guard). Ephemeral sandboxes are deleted at IdleStopAfter, so
+	// when either window is > 0 and this is unset, it defaults to 1m.
 	IdleDeleteSafetyBuffer time.Duration
 	// IdleSweepInterval is how often the idle stop/delete sweeper runs (default 1m).
 	IdleSweepInterval time.Duration

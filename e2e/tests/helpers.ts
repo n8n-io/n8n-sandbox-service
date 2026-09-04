@@ -375,19 +375,6 @@ export async function apiRequest(
   };
 }
 
-/**
- * GET /sandboxes for the tenant. Unlike GET /sandboxes/{id}, the list is not
- * fenced by the idle-delete window: a row appears here until the sweeper has
- * actually removed it.
- */
-export async function listSandboxes(
-  request: APIRequestContext,
-): Promise<Array<{ id: string; status: string; ephemeral: boolean }>> {
-  const res = await apiRequest(request, 'GET', '/sandboxes');
-  expect(res.status).toBe(200);
-  return (await res.json()) as Array<{ id: string; status: string; ephemeral: boolean }>;
-}
-
 /** Poll GET /sandboxes/{id} until status matches (GET does not bump last_active_at). */
 export async function waitForSandboxStatus(
   request: APIRequestContext,

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"crypto/tls"
+	"math"
 	"net"
 	"sync"
 	"testing"
@@ -169,9 +170,8 @@ func TestIdleStopSweepDeletesEphemeralInsteadOfStopping(t *testing.T) {
 	}
 }
 
-// With idle stop disabled the fence moves to the idle-delete window, and the
-// sweeper must still reach ephemeral rows there: they never become "stopped",
-// so the regular idle-delete sweep would never pick them up.
+// With idle stop disabled, ephemeral rows are deleted at the idle-delete window
+// even though they never become "stopped".
 func TestIdleSweepDeletesEphemeralWhenIdleStopDisabled(t *testing.T) {
 	fake := &fakeSandboxControl{}
 	addr := startFakeRunnerControl(t, fake)
@@ -236,9 +236,7 @@ func TestIdleStopSweepHoldsEphemeralInsideSafetyBuffer(t *testing.T) {
 	}
 }
 
-// A sub-second buffer must still keep the delete behind the fence. Timestamps
-// are whole seconds, so truncating 500ms to 0 would let the sweeper delete a
-// row that the request path is still serving.
+// A sub-second buffer must still keep the delete behind the fence.
 func TestIdleStopSweepRoundsSubSecondBufferUp(t *testing.T) {
 	fake := &fakeSandboxControl{}
 	addr := startFakeRunnerControl(t, fake)
@@ -279,6 +277,9 @@ func TestIdleSeconds(t *testing.T) {
 		{1500 * time.Millisecond, 2},
 		{time.Minute, 60},
 		{time.Hour + 500*time.Millisecond, 3601},
+		// ParseDuration accepts up to MaxInt64 ns; rounding up must not overflow
+		// into a negative cutoff that makes every sandbox look idle.
+		{time.Duration(math.MaxInt64), math.MaxInt64/int64(time.Second) + 1},
 	}
 	for _, tc := range cases {
 		if got := idleSeconds(tc.in); got != tc.want {

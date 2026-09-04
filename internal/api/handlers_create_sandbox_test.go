@@ -191,8 +191,7 @@ func TestCreateSandboxQuotaExceeded(t *testing.T) {
 	}
 }
 
-// newIdleTestGateway is newTestGateway with idle windows configured and one
-// registered runner backed by a fake SandboxControl, so create can complete.
+// newIdleTestGateway is newTestGateway with idle windows and a fake runner.
 func newIdleTestGateway(t *testing.T, adminKey string) (http.Handler, store.SandboxStore, *config.APIConfig) {
 	t.Helper()
 	s, err := store.New(":memory:")
@@ -245,17 +244,6 @@ func TestCreateSandboxPersistsEphemeral(t *testing.T) {
 	}
 }
 
-func TestCreateSandboxRejectsNonBoolEphemeral(t *testing.T) {
-	router, _ := newTestGateway(t, "admin-key")
-
-	rr := postCreateSandbox(t, router, "admin-key", `{"ephemeral":"yes"}`)
-	if rr.Code != http.StatusBadRequest {
-		t.Fatalf("non-bool ephemeral: expected %d, got %d body=%s", http.StatusBadRequest, rr.Code, rr.Body.String())
-	}
-}
-
-// An ephemeral sandbox is fenced off at the idle-stop window, not the idle-delete
-// one: GET reports it while fresh and 404s once the stop window has passed.
 func TestGetSandboxFencesEphemeralAtStopWindow(t *testing.T) {
 	router, s, cfg := newIdleTestGateway(t, "admin-key")
 

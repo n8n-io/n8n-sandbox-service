@@ -43,10 +43,8 @@ const stableSandbox = await client.createSandbox({
   id: '550e8400-e29b-41d4-a716-446655440000',
 });
 
-// Create an ephemeral sandbox: deleted, rather than stopped, once idle.
-// It never reports `stopped`; once past the service's idle-stop window
-// (or its idle-delete window, if idle stop is disabled), every request
-// to it returns 404.
+// Ephemeral: deleted instead of stopped once idle past the service's
+// idle-stop window; it never reports `stopped` and then returns 404.
 const scratch = await client.createSandbox({ ephemeral: true });
 console.log(scratch.ephemeral); // true
 
