@@ -17,9 +17,13 @@ export interface CreateSandboxOptions {
   id?: string;
   /**
    * Delete the sandbox, instead of stopping it, once it has been idle for the
-   * service's idle-stop window. An ephemeral sandbox never reports `stopped`
-   * and cannot be woken; requests past the window return 404. Defaults to false.
-   * Fixed at creation: reconnecting to an existing `id` keeps its current value.
+   * service's idle-stop window (`SANDBOX_API_IDLE_STOP_AFTER`). If the service
+   * has idle stop disabled, the idle-delete window (`SANDBOX_API_IDLE_DELETE_AFTER`)
+   * applies instead; if both are disabled, the sandbox is never reclaimed for
+   * idleness, like any other sandbox. An ephemeral sandbox never reports
+   * `stopped` and cannot be woken; requests past the window return 404.
+   * Defaults to false. Fixed at creation: reconnecting to an existing `id`
+   * keeps its current value.
    */
   ephemeral?: boolean;
 }

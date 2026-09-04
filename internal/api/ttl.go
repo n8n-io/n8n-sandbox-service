@@ -196,17 +196,18 @@ func deleteIdleSandbox(ctx context.Context, s store.SandboxStore, reg registry.R
 	logSandboxDeleted(rec.ID, rec.RunnerID, reason)
 }
 
-// safetyBufferSeconds is IdleDeleteSafetyBuffer in whole seconds, rounded up.
-// Timestamps are second-granular, and truncating would shrink the buffer: a
-// sub-second setting such as 500ms would silently become no buffer at all,
-// letting the delete land in the same second the fence goes up.
-func safetyBufferSeconds(cfg *config.APIConfig) int64 {
-	return int64((cfg.IdleDeleteSafetyBuffer + time.Second - 1) / time.Second)
+// idleSeconds converts an idle window or buffer to whole seconds, rounding up.
+// Timestamps are second-granular, so this is the only conversion the fence and
+// the sweeps use. Rounding down would act before the configured duration had
+// fully elapsed, and for the safety buffer a sub-second setting such as 500ms
+// would silently become no buffer at all, letting the delete land in the same
+// second the fence goes up.
+func idleSeconds(d time.Duration) int64 {
+	return int64((d + time.Second - 1) / time.Second)
 }
 
 func sweepIdleDeleteSandboxes(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) {
-	deleteSec := int64(cfg.IdleDeleteAfter.Seconds())
-	deleteCutoff := now.Unix() - deleteSec - safetyBufferSeconds(cfg)
+	deleteCutoff := now.Unix() - idleSeconds(cfg.IdleDeleteAfter) - idleSeconds(cfg.IdleDeleteSafetyBuffer)
 
 	records, err := s.ListForIdleReapDelete(deleteCutoff)
 	if err != nil {
@@ -238,8 +239,7 @@ func sweepIdleDeleteSandboxes(ctx context.Context, s store.SandboxStore, reg reg
 // window plus the safety buffer. The request path already refuses them past the
 // window, so the fence is up before the irreversible delete.
 func sweepEphemeralSandboxes(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) {
-	windowSec := int64(ephemeralIdleWindow(cfg).Seconds())
-	cutoff := now.Unix() - windowSec - safetyBufferSeconds(cfg)
+	cutoff := now.Unix() - idleSeconds(ephemeralIdleWindow(cfg)) - idleSeconds(cfg.IdleDeleteSafetyBuffer)
 
 	// Running rows idle past cutoff; the ephemeral ones are filtered here.
 	records, err := s.ListForIdleReapStop(cutoff)
@@ -269,8 +269,7 @@ func sweepEphemeralSandboxes(ctx context.Context, s store.SandboxStore, reg regi
 }
 
 func sweepIdleStopSandboxes(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) {
-	stopSec := int64(cfg.IdleStopAfter.Seconds())
-	stopCutoff := now.Unix() - stopSec
+	stopCutoff := now.Unix() - idleSeconds(cfg.IdleStopAfter)
 
 	records, err := s.ListForIdleReapStop(stopCutoff)
 	if err != nil {

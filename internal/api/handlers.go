@@ -79,13 +79,15 @@ func sandboxProxyHandler(s store.SandboxStore, cfg *config.APIConfig, transport 
 				return
 			}
 
-			if rec.RunnerHTTPBase == "" {
-				writeError(w, http.StatusBadGateway, "sandbox has no runner routing information")
+			// Fence before routing checks: a sandbox past its delete window is
+			// 404 regardless of whether its row still has routing information.
+			if isPastIdleDeleteWindow(rec, cfg, time.Now().Unix()) {
+				writeError(w, http.StatusNotFound, "sandbox not found")
 				return
 			}
 
-			if isPastIdleDeleteWindow(rec, cfg, time.Now().Unix()) {
-				writeError(w, http.StatusNotFound, "sandbox not found")
+			if rec.RunnerHTTPBase == "" {
+				writeError(w, http.StatusBadGateway, "sandbox has no runner routing information")
 				return
 			}
 
@@ -214,7 +216,7 @@ func isPastIdleDeleteWindow(rec *store.SandboxRecord, cfg *config.APIConfig, now
 	if window <= 0 {
 		return false
 	}
-	return now > rec.LastActiveAt+int64(window.Seconds())
+	return now > rec.LastActiveAt+idleSeconds(window)
 }
 
 func runnerControlTLS(cfg *config.APIConfig) *runnerctl.TLS {

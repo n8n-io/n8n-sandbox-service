@@ -267,7 +267,7 @@ func TestIdleStopSweepRoundsSubSecondBufferUp(t *testing.T) {
 	}
 }
 
-func TestSafetyBufferSeconds(t *testing.T) {
+func TestIdleSeconds(t *testing.T) {
 	cases := []struct {
 		in   time.Duration
 		want int64
@@ -278,10 +278,11 @@ func TestSafetyBufferSeconds(t *testing.T) {
 		{time.Second, 1},
 		{1500 * time.Millisecond, 2},
 		{time.Minute, 60},
+		{time.Hour + 500*time.Millisecond, 3601},
 	}
 	for _, tc := range cases {
-		if got := safetyBufferSeconds(&config.APIConfig{IdleDeleteSafetyBuffer: tc.in}); got != tc.want {
-			t.Errorf("safetyBufferSeconds(%s) = %d, want %d", tc.in, got, tc.want)
+		if got := idleSeconds(tc.in); got != tc.want {
+			t.Errorf("idleSeconds(%s) = %d, want %d", tc.in, got, tc.want)
 		}
 	}
 }
@@ -325,6 +326,8 @@ func TestIsPastIdleDeleteWindow(t *testing.T) {
 	cfg := &config.APIConfig{IdleStopAfter: 100 * time.Second, IdleDeleteAfter: 1000 * time.Second}
 	noStop := &config.APIConfig{IdleDeleteAfter: 1000 * time.Second}
 	noDelete := &config.APIConfig{IdleStopAfter: 100 * time.Second}
+	// Fractional windows round up to whole seconds, never down.
+	fractional := &config.APIConfig{IdleStopAfter: 100*time.Second + 500*time.Millisecond, IdleDeleteAfter: 1000*time.Second + 500*time.Millisecond}
 
 	cases := []struct {
 		name         string
@@ -342,6 +345,10 @@ func TestIsPastIdleDeleteWindow(t *testing.T) {
 		{"ephemeral past delete window when stop disabled", noStop, true, now - 1001, true},
 		{"ephemeral past stop window when delete disabled", noDelete, true, now - 101, true},
 		{"regular never fenced when delete disabled", noDelete, false, now - 100_000, false},
+		{"regular fractional window not fenced at truncated edge", fractional, false, now - 1001, false},
+		{"regular fractional window fenced past rounded-up edge", fractional, false, now - 1002, true},
+		{"ephemeral fractional window not fenced at truncated edge", fractional, true, now - 101, false},
+		{"ephemeral fractional window fenced past rounded-up edge", fractional, true, now - 102, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
