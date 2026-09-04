@@ -3,7 +3,7 @@
 {{- $iso := index $runner $runner.isolation }}
 {{- $component := include "n8n-sandbox-service.runnerComponent" . }}
 {{- $runnerName := include "n8n-sandbox-service.runnerName" . }}
-{{- $dockerEmptyDir := and $privileged (not $runner.dockerDataRoot.persistence.enabled) }}
+{{- $dockerEmptyDir := not $runner.dockerDataRoot.persistence.enabled }}
 {{- if eq .Values.dataPlane.mode "in-cluster" }}
 {{- $runnerRegistration := .Values.tls.certificates.runnerRegistrationClient -}}
 {{- $runnerControl := .Values.tls.certificates.runnerControlServer -}}
@@ -143,10 +143,8 @@ spec:
               subPath: config.json
               readOnly: true
             {{- end }}
-            {{- if or $runner.dockerDataRoot.persistence.enabled $dockerEmptyDir }}
             - name: docker-data
               mountPath: {{ include "n8n-sandbox-service.runnerDockerDataMountPath" . | quote }}
-            {{- end }}
             {{- with $runner.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

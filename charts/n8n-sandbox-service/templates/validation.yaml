@@ -48,16 +48,24 @@
 {{- fail "runner.config.controlGrpcListenAddr port must match runner.service.controlGrpcPort" -}}
 {{- end -}}
 {{- end -}}
+{{- if eq .Values.dataPlane.mode "in-cluster" -}}
+{{- $dockerDataRoot := .Values.runner.dockerDataRoot -}}
+{{- $sysboxUserns := and (eq .Values.runner.isolation "sysbox") (kindIs "bool" .Values.runner.sysbox.runtime.hostUsers) (not .Values.runner.sysbox.runtime.hostUsers) -}}
+{{- /* Disk quotas move the volume to /var/lib/docker-pool and give dockerd a
+       freshly made xfs image as its data root, which the container owns, so
+       that path does not hit the chmod below. */ -}}
+{{- if and $sysboxUserns $dockerDataRoot.persistence.enabled (le (int .Values.runner.config.defaultDiskQuotaMb) 0) -}}
+{{- if ne $dockerDataRoot.persistence.acknowledgeUserNamespace true -}}
+{{- fail "runner.dockerDataRoot.persistence.enabled with runner.sysbox.runtime.hostUsers=false mounts a PersistentVolume at /var/lib/docker inside a user namespace. The inner Docker daemon chmods its data root at startup, and the volume root belongs to a UID outside the pod's mapping, so dockerd exits with `chmod /var/lib/docker: operation not permitted` and the runner never becomes ready. The pod's UID range can also change when the pod is recreated, so a runner that works today can fail on the next rollout. Disable persistence to use the bounded emptyDir instead, or set runner.sysbox.runtime.hostUsers=null on CRI-O nodes. Set runner.dockerDataRoot.persistence.acknowledgeUserNamespace=true if your CSI driver id-maps volumes and this combination works on your cluster. See the chart README section 'Docker Data Root'" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- if and (eq .Values.dataPlane.mode "in-cluster") (gt (int .Values.runner.config.defaultDiskQuotaMb) 0) -}}
 {{- $dockerDataRoot := .Values.runner.dockerDataRoot -}}
-{{- $chartVolume := or $dockerDataRoot.persistence.enabled (eq .Values.runner.isolation "privileged") -}}
-{{- if and (not $chartVolume) (not .Values.runner.config.diskQuotaPoolPath) -}}
-{{- fail "runner.config.defaultDiskQuotaMb above 0 needs a bounded volume for the disk-quota pool image, and this configuration has none. The image would land on the container filesystem and could fill the node disk. Set runner.dockerDataRoot.persistence.enabled=true, or set runner.config.diskQuotaPoolPath to a path on a volume you supply through runner.extraVolumes. See the chart README section 'Disk Quotas'" -}}
-{{- end -}}
 {{- if not (regexMatch "^[1-9][0-9]*$" (toString .Values.runner.config.diskQuotaPoolSizeGb)) -}}
 {{- fail (printf "runner.config.diskQuotaPoolSizeGb must be a positive whole number of GB when runner.config.defaultDiskQuotaMb is above 0 (got %q): the derived pool size scales with runner.config.capacityTotal and can outgrow the volume that holds the pool image. See the chart README section 'Disk Quotas'" (toString .Values.runner.config.diskQuotaPoolSizeGb)) -}}
 {{- end -}}
-{{- if and $chartVolume (not .Values.runner.config.diskQuotaPoolPath) -}}
+{{- if not .Values.runner.config.diskQuotaPoolPath -}}
 {{- $volumeSize := ternary $dockerDataRoot.persistence.size (($dockerDataRoot.emptyDir | default dict).sizeLimit | default "") $dockerDataRoot.persistence.enabled | toString -}}
 {{- $volumeKey := ternary "runner.dockerDataRoot.persistence.size" "runner.dockerDataRoot.emptyDir.sizeLimit" $dockerDataRoot.persistence.enabled -}}
 {{- if not (regexMatch "^[0-9]+Gi?$" $volumeSize) -}}

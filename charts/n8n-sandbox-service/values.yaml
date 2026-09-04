@@ -207,6 +207,10 @@ runner:
   # /var/lib/docker-pool when config.defaultDiskQuotaMb is above 0, because the
   # quota pool image needs the bounded volume then. See the chart README
   # section 'Disk Quotas'.
+  #
+  # Both isolations always get a volume: the PersistentVolume below when
+  # persistence is enabled, the emptyDir otherwise. See the chart README
+  # section 'Docker Data Root'.
   dockerDataRoot:
     persistence:
       enabled: false
@@ -214,8 +218,16 @@ runner:
       storageClass: ""
       accessModes:
         - ReadWriteOnce
-    # Used only with isolation=privileged when persistence is disabled.
-    # Bounds the inner Docker daemon's image layers and sandbox filesystems.
+      # A PersistentVolume at /var/lib/docker breaks the inner Docker daemon
+      # inside a user namespace: the daemon chmods its data root and does not
+      # own the volume root, so it exits with `chmod /var/lib/docker:
+      # operation not permitted`. The render fails on that combination
+      # (isolation=sysbox with sysbox.runtime.hostUsers=false, and no disk
+      # quotas). Set this to true if your CSI driver id-maps volumes and the
+      # combination works on your cluster.
+      acknowledgeUserNamespace: false
+    # Used when persistence is disabled. Bounds the inner Docker daemon's
+    # image layers and sandbox filesystems.
     emptyDir:
       sizeLimit: 64Gi
 

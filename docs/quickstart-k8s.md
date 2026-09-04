@@ -142,6 +142,8 @@ Two hardening options, both described in the chart [README](../charts/n8n-sandbo
 
 ## Troubleshooting
 
+**The runner logs `chmod /var/lib/docker: operation not permitted`.** The inner Docker daemon cannot chmod its data root, so it exits and the runner never becomes ready. A `PersistentVolume` is mounted at `/var/lib/docker` and the pod runs in a user namespace, so the volume root belongs to a UID outside the pod's mapping. Chart 0.6.3 and later fail the render on this combination. Disable `runner.dockerDataRoot.persistence` to use the bounded `emptyDir` instead, and see the chart README section [Docker Data Root](../charts/n8n-sandbox-service/README.md#docker-data-root).
+
 **Install succeeds but no runner pod appears.** Admission denied the pod, so `kubectl get pods` shows nothing and the error lands on the StatefulSet. Inspect the StatefulSet events:
 
 ```bash
