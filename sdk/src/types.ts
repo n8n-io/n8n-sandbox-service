@@ -154,7 +154,8 @@ export type SandboxWireResponse = {
   status: string;
   created_at: number;
   last_active_at: number;
-  ephemeral: boolean;
+  /** Absent from services that predate the ephemeral flag; mapped to `false`. */
+  ephemeral?: boolean;
 };
 
 export type FileEntryWireResponse = {

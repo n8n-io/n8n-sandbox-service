@@ -198,12 +198,10 @@ func handleGetSandbox(s store.SandboxStore, cfg *config.APIConfig) http.HandlerF
 }
 
 // idleDeleteWindow is how long after last activity the sweeper will delete rec.
-// An ephemeral sandbox is deleted where a regular one would only be stopped, so
-// its window is the idle-stop one. Zero means the sandbox is never deleted for
-// idleness.
+// Zero means the sandbox is never deleted for idleness.
 func idleDeleteWindow(rec *store.SandboxRecord, cfg *config.APIConfig) time.Duration {
-	if rec.Ephemeral && cfg.IdleStopAfter > 0 {
-		return cfg.IdleStopAfter
+	if rec.Ephemeral {
+		return ephemeralIdleWindow(cfg)
 	}
 	return cfg.IdleDeleteAfter
 }

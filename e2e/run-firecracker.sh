@@ -246,7 +246,7 @@ else
 	shopt -u nullglob
 fi
 if [[ ${#PLAYWRIGHT_SPECS[@]} -eq 0 ]]; then
-	echo "No Playwright specs found under tests/ (after excluding sandbox-idle-ttl.spec.ts)" >&2
+	echo "No Playwright specs found under tests/ (after excluding sandbox-idle-ttl.spec.ts, sandbox-ephemeral.spec.ts, multi-pod-api.spec.ts)" >&2
 	exit 1
 fi
 BASE_URL="http://127.0.0.1:$PORT" SANDBOX_API_KEY="$API_KEY" \

@@ -109,8 +109,9 @@ type APIConfig struct {
 	// (0 = disabled). Wakes are refused after this window until the row is removed.
 	IdleDeleteAfter time.Duration
 	// IdleDeleteSafetyBuffer is added to the idle delete window before deletion
-	// (race guard): IdleDeleteAfter for stopped sandboxes, IdleStopAfter for
-	// ephemeral ones. When either window is > 0 and this is unset, it defaults to 1m.
+	// (race guard): IdleDeleteAfter for stopped sandboxes; IdleStopAfter, or
+	// IdleDeleteAfter when idle stop is disabled, for ephemeral ones. When either
+	// window is > 0 and this is unset, it defaults to 1m.
 	IdleDeleteSafetyBuffer time.Duration
 	// IdleSweepInterval is how often the idle stop/delete sweeper runs (default 1m).
 	IdleSweepInterval time.Duration

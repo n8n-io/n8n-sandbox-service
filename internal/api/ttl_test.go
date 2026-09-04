@@ -127,6 +127,15 @@ func mustGet(t *testing.T, s store.SandboxStore, id string) *store.SandboxRecord
 	return rec
 }
 
+// runSweep runs one full sweep pass exactly as StartIdleSweeper would, so the
+// tests cover the config gating as well as each sweep's own logic.
+func runSweep(t *testing.T, s store.SandboxStore, cfg *config.APIConfig, now time.Time) {
+	t.Helper()
+	if err := sweepIdleSandboxes(context.Background(), s, registry.New(45*time.Second), cfg, runnerControlTLS(cfg), now); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+}
+
 // An ephemeral sandbox that would be stopped for idleness is deleted instead
 // and never passes through the stopped state; a regular one still stops.
 func TestIdleStopSweepDeletesEphemeralInsteadOfStopping(t *testing.T) {
@@ -143,7 +152,7 @@ func TestIdleStopSweepDeletesEphemeralInsteadOfStopping(t *testing.T) {
 	seedRunningSandbox(t, s, ephemeralID, addr, stale, true)
 	seedRunningSandbox(t, s, regularID, addr, stale, false)
 
-	sweepIdleStopSandboxes(context.Background(), s, registry.New(45*time.Second), cfg, runnerControlTLS(cfg), now)
+	runSweep(t, s, cfg, now)
 
 	stopped, deleted := fake.calls()
 	if len(deleted) != 1 || deleted[0] != ephemeralID {
@@ -157,6 +166,44 @@ func TestIdleStopSweepDeletesEphemeralInsteadOfStopping(t *testing.T) {
 	}
 	if rec := mustGet(t, s, regularID); rec == nil || rec.Status != "stopped" {
 		t.Fatalf("regular row = %+v, want status stopped", rec)
+	}
+}
+
+// With idle stop disabled the fence moves to the idle-delete window, and the
+// sweeper must still reach ephemeral rows there: they never become "stopped",
+// so the regular idle-delete sweep would never pick them up.
+func TestIdleSweepDeletesEphemeralWhenIdleStopDisabled(t *testing.T) {
+	fake := &fakeSandboxControl{}
+	addr := startFakeRunnerControl(t, fake)
+	s := newSweepStore(t)
+	cfg := idleSweepConfig()
+	cfg.IdleStopAfter = 0
+
+	now := time.Now()
+	stale := now.Add(-cfg.IdleDeleteAfter - cfg.IdleDeleteSafetyBuffer - time.Second).Unix()
+	const ephemeralID = "ffffffff-ffff-4fff-8fff-ffffffffffff"
+	const regularID = "abababab-abab-4bab-8bab-abababababab"
+	seedRunningSandbox(t, s, ephemeralID, addr, stale, true)
+	seedRunningSandbox(t, s, regularID, addr, stale, false)
+
+	if !isPastIdleDeleteWindow(mustGet(t, s, ephemeralID), cfg, now.Unix()) {
+		t.Fatal("request path should refuse the ephemeral sandbox past the delete window")
+	}
+
+	runSweep(t, s, cfg, now)
+
+	stopped, deleted := fake.calls()
+	if len(deleted) != 1 || deleted[0] != ephemeralID {
+		t.Fatalf("runner deletes = %v, want [%s]", deleted, ephemeralID)
+	}
+	if len(stopped) != 0 {
+		t.Fatalf("runner stops = %v, want none with idle stop disabled", stopped)
+	}
+	if rec := mustGet(t, s, ephemeralID); rec != nil {
+		t.Fatalf("ephemeral row still present after sweep: %+v", rec)
+	}
+	if rec := mustGet(t, s, regularID); rec == nil || rec.Status != "running" {
+		t.Fatalf("regular row = %+v, want untouched running row", rec)
 	}
 }
 
@@ -179,13 +226,63 @@ func TestIdleStopSweepHoldsEphemeralInsideSafetyBuffer(t *testing.T) {
 		t.Fatal("request path should already refuse the sandbox")
 	}
 
-	sweepIdleStopSandboxes(context.Background(), s, registry.New(45*time.Second), cfg, runnerControlTLS(cfg), now)
+	runSweep(t, s, cfg, now)
 
 	if stopped, deleted := fake.calls(); len(stopped) != 0 || len(deleted) != 0 {
 		t.Fatalf("runner calls inside buffer: stops=%v deletes=%v, want none", stopped, deleted)
 	}
 	if rec := mustGet(t, s, id); rec == nil || rec.Status != "running" {
 		t.Fatalf("row = %+v, want untouched running row", rec)
+	}
+}
+
+// A sub-second buffer must still keep the delete behind the fence. Timestamps
+// are whole seconds, so truncating 500ms to 0 would let the sweeper delete a
+// row that the request path is still serving.
+func TestIdleStopSweepRoundsSubSecondBufferUp(t *testing.T) {
+	fake := &fakeSandboxControl{}
+	addr := startFakeRunnerControl(t, fake)
+	s := newSweepStore(t)
+	cfg := idleSweepConfig()
+	cfg.IdleDeleteSafetyBuffer = 500 * time.Millisecond
+
+	now := time.Now()
+	// Exactly on the stop cutoff: listed as a stop candidate, but the fence
+	// (now > lastActive + stop) is not up yet.
+	lastActive := now.Add(-cfg.IdleStopAfter).Unix()
+	const id = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+	seedRunningSandbox(t, s, id, addr, lastActive, true)
+
+	if isPastIdleDeleteWindow(mustGet(t, s, id), cfg, now.Unix()) {
+		t.Fatal("precondition: request path should still serve the sandbox")
+	}
+
+	runSweep(t, s, cfg, now)
+
+	if _, deleted := fake.calls(); len(deleted) != 0 {
+		t.Fatalf("runner deletes = %v, want none while the sandbox is still reachable", deleted)
+	}
+	if rec := mustGet(t, s, id); rec == nil {
+		t.Fatal("row deleted while the request path still served it")
+	}
+}
+
+func TestSafetyBufferSeconds(t *testing.T) {
+	cases := []struct {
+		in   time.Duration
+		want int64
+	}{
+		{0, 0},
+		{time.Millisecond, 1},
+		{500 * time.Millisecond, 1},
+		{time.Second, 1},
+		{1500 * time.Millisecond, 2},
+		{time.Minute, 60},
+	}
+	for _, tc := range cases {
+		if got := safetyBufferSeconds(&config.APIConfig{IdleDeleteSafetyBuffer: tc.in}); got != tc.want {
+			t.Errorf("safetyBufferSeconds(%s) = %d, want %d", tc.in, got, tc.want)
+		}
 	}
 }
 
@@ -196,8 +293,6 @@ func TestIdleStopSweepRetriesEphemeralDeleteAfterRunnerFailure(t *testing.T) {
 	addr := startFakeRunnerControl(t, fake)
 	s := newSweepStore(t)
 	cfg := idleSweepConfig()
-	reg := registry.New(45 * time.Second)
-	tlsCfg := runnerControlTLS(cfg)
 
 	now := time.Now()
 	stale := now.Add(-cfg.IdleStopAfter - cfg.IdleDeleteSafetyBuffer - time.Second).Unix()
@@ -205,7 +300,7 @@ func TestIdleStopSweepRetriesEphemeralDeleteAfterRunnerFailure(t *testing.T) {
 	seedRunningSandbox(t, s, id, addr, stale, true)
 
 	fake.failDeletes(status.Error(codes.Unavailable, "runner busy"))
-	sweepIdleStopSandboxes(context.Background(), s, reg, cfg, tlsCfg, now)
+	runSweep(t, s, cfg, now)
 
 	if stopped, _ := fake.calls(); len(stopped) != 0 {
 		t.Fatalf("runner stops after failed delete = %v, want none", stopped)
@@ -215,7 +310,7 @@ func TestIdleStopSweepRetriesEphemeralDeleteAfterRunnerFailure(t *testing.T) {
 	}
 
 	fake.failDeletes(nil)
-	sweepIdleStopSandboxes(context.Background(), s, reg, cfg, tlsCfg, now.Add(cfg.IdleSweepInterval))
+	runSweep(t, s, cfg, now.Add(cfg.IdleSweepInterval))
 
 	if _, deleted := fake.calls(); len(deleted) != 1 || deleted[0] != id {
 		t.Fatalf("runner deletes on retry = %v, want [%s]", deleted, id)

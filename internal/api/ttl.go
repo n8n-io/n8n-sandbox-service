@@ -77,17 +77,7 @@ func StartIdleSweeper(ctx context.Context, s store.SandboxStore, reg registry.Ru
 				return
 			case <-t.C:
 				runSweep := func() error {
-					now := time.Now()
-					if cfg.IdleStopAfter > 0 {
-						sweepIdleStopSandboxes(ctx, s, reg, cfg, tlsCfg, now)
-					}
-					if ctx.Err() != nil {
-						return ctx.Err()
-					}
-					if cfg.IdleDeleteAfter > 0 {
-						sweepIdleDeleteSandboxes(ctx, s, reg, cfg, tlsCfg, now)
-					}
-					return nil
+					return sweepIdleSandboxes(ctx, s, reg, cfg, tlsCfg, time.Now())
 				}
 
 				if sweepLockDB != nil {
@@ -103,6 +93,38 @@ func StartIdleSweeper(ctx context.Context, s store.SandboxStore, reg registry.Ru
 			}
 		}
 	}()
+}
+
+// sweepIdleSandboxes runs one pass of every sweep the config enables.
+func sweepIdleSandboxes(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) error {
+	if cfg.IdleStopAfter > 0 {
+		sweepIdleStopSandboxes(ctx, s, reg, cfg, tlsCfg, now)
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if cfg.IdleDeleteAfter > 0 {
+		sweepIdleDeleteSandboxes(ctx, s, reg, cfg, tlsCfg, now)
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if ephemeralIdleWindow(cfg) > 0 {
+		sweepEphemeralSandboxes(ctx, s, reg, cfg, tlsCfg, now)
+	}
+	return nil
+}
+
+// ephemeralIdleWindow is how long an ephemeral sandbox may sit idle before it
+// is deleted: the idle-stop window, since it is deleted where a regular sandbox
+// would be stopped, or the idle-delete window when idle stop is disabled. Zero
+// when neither is set. The request-path fence (isPastIdleDeleteWindow) and
+// sweepEphemeralSandboxes both derive from it, so they cannot disagree.
+func ephemeralIdleWindow(cfg *config.APIConfig) time.Duration {
+	if cfg.IdleStopAfter > 0 {
+		return cfg.IdleStopAfter
+	}
+	return cfg.IdleDeleteAfter
 }
 
 func resolveControlAddr(rec *store.SandboxRecord, reg registry.RunnerRegistry) string {
@@ -174,10 +196,17 @@ func deleteIdleSandbox(ctx context.Context, s store.SandboxStore, reg registry.R
 	logSandboxDeleted(rec.ID, rec.RunnerID, reason)
 }
 
+// safetyBufferSeconds is IdleDeleteSafetyBuffer in whole seconds, rounded up.
+// Timestamps are second-granular, and truncating would shrink the buffer: a
+// sub-second setting such as 500ms would silently become no buffer at all,
+// letting the delete land in the same second the fence goes up.
+func safetyBufferSeconds(cfg *config.APIConfig) int64 {
+	return int64((cfg.IdleDeleteSafetyBuffer + time.Second - 1) / time.Second)
+}
+
 func sweepIdleDeleteSandboxes(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) {
 	deleteSec := int64(cfg.IdleDeleteAfter.Seconds())
-	bufferSec := int64(cfg.IdleDeleteSafetyBuffer.Seconds())
-	deleteCutoff := now.Unix() - deleteSec - bufferSec
+	deleteCutoff := now.Unix() - deleteSec - safetyBufferSeconds(cfg)
 
 	records, err := s.ListForIdleReapDelete(deleteCutoff)
 	if err != nil {
@@ -205,14 +234,43 @@ func sweepIdleDeleteSandboxes(ctx context.Context, s store.SandboxStore, reg reg
 	}
 }
 
+// sweepEphemeralSandboxes deletes running ephemeral sandboxes idle past their
+// window plus the safety buffer. The request path already refuses them past the
+// window, so the fence is up before the irreversible delete.
+func sweepEphemeralSandboxes(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) {
+	windowSec := int64(ephemeralIdleWindow(cfg).Seconds())
+	cutoff := now.Unix() - windowSec - safetyBufferSeconds(cfg)
+
+	// Running rows idle past cutoff; the ephemeral ones are filtered here.
+	records, err := s.ListForIdleReapStop(cutoff)
+	if err != nil {
+		slog.Error("idle sweep list ephemeral candidates failed", "err", err)
+		return
+	}
+
+	for _, rec := range records {
+		if rec == nil || !rec.Ephemeral {
+			continue
+		}
+		id := rec.ID
+		err := withLockedSandbox(ctx, s, id, func(rec *store.SandboxRecord) {
+			if !rec.Ephemeral || rec.Status != "running" || rec.LastActiveAt > cutoff {
+				return
+			}
+			deleteIdleSandbox(ctx, s, reg, cfg, tlsCfg, rec, now, "ephemeral")
+		})
+		if err != nil && ctx.Err() == nil {
+			slog.Error("ephemeral delete lock or refresh failed", "sandbox_id", id, "err", err)
+		}
+		if ctx.Err() != nil {
+			return
+		}
+	}
+}
+
 func sweepIdleStopSandboxes(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) {
 	stopSec := int64(cfg.IdleStopAfter.Seconds())
 	stopCutoff := now.Unix() - stopSec
-	// Ephemeral sandboxes are deleted here instead of stopped. The request path
-	// already refuses them past stopCutoff (isPastIdleDeleteWindow), and the
-	// same safety buffer as the idle delete keeps that fence ahead of the
-	// irreversible delete.
-	ephemeralDeleteCutoff := stopCutoff - int64(cfg.IdleDeleteSafetyBuffer.Seconds())
 
 	records, err := s.ListForIdleReapStop(stopCutoff)
 	if err != nil {
@@ -230,9 +288,7 @@ func sweepIdleStopSandboxes(ctx context.Context, s store.SandboxStore, reg regis
 				return
 			}
 			if rec.Ephemeral {
-				if rec.LastActiveAt <= ephemeralDeleteCutoff {
-					deleteIdleSandbox(ctx, s, reg, cfg, tlsCfg, rec, now, "ephemeral")
-				}
+				// Deleted by sweepEphemeralSandboxes, never stopped.
 				return
 			}
 			if orphanReapDue(reg, rec.RunnerID, cfg, now) {
