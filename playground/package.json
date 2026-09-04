@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@n8n/sandbox-client": "file:../sdk",
-    "axios": "^1.15.0"
+    "axios": "^1.20.0"
   },
   "devDependencies": {
     "vite": "^6.0.0",
