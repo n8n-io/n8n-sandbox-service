@@ -1,0 +1,22 @@
+scripts/setup-sysbox.sh
+  s_b0c7e723bf7fa2::t_92e99fc86aff89 8-9
+  s_b0c7e723bf7fa2::t_c00ea788edc221 5
+docs/quickstart-linux.md
+  s_b0c7e723bf7fa2::t_7c91d98122658b 22
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "01e6be4e1ce697cd75f30f09011cdd2211837bd6",
+  "prompts": {},
+  "sessions": {
+    "s_b0c7e723bf7fa2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e2a690f3-b9aa-48c2-b5ed-1520e1538706",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
