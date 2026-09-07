@@ -1,0 +1,21 @@
+internal/runner/runtime/docker/netrules/netrules.go
+  s_92fcf5a2b73832::t_09cf705f50609c 6,139-146
+scripts/start-runner.sh
+  s_92fcf5a2b73832::t_09cf705f50609c 141
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "f9cf87ba826b0159ef1a13fcfa4451e17e3508fe",
+  "prompts": {},
+  "sessions": {
+    "s_92fcf5a2b73832": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ed2702ba-598f-42b1-a573-29de396bffcf",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
