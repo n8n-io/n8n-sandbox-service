@@ -55,6 +55,7 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	mux.HandleFunc("DELETE /sandboxes/{id}/files", sandboxProxy(false))
 	mux.HandleFunc("POST /sandboxes/{id}/mkdir", sandboxProxy(false))
 	mux.HandleFunc("GET /sandboxes/{id}/stat", sandboxProxy(false))
+	mux.HandleFunc("/sandboxes/{id}/ports/{port}/", sandboxProxy(false))
 
 	var handler http.Handler = mux
 	if rec.Enabled() {

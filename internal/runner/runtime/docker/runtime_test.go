@@ -484,3 +484,23 @@ func TestIsDockerNotFound(t *testing.T) {
 		})
 	}
 }
+
+func TestSandboxAddrDialsTheContainerIPOnTheRequestedPort(t *testing.T) {
+	backend := &crashBackend{states: []containerState{runningState()}, ip: "172.18.0.2"}
+	m, _ := newCrashRuntime(t, backend)
+
+	addr, err := m.SandboxAddr(context.Background(), crashSandboxID, 5173)
+	if err != nil {
+		t.Fatalf("SandboxAddr() failed: %v", err)
+	}
+	if want := "http://172.18.0.2:5173"; addr != want {
+		t.Errorf("SandboxAddr() = %q, want %q", addr, want)
+	}
+
+	// Same gate as DaemonURL: a container Docker restarted behind the runner's back
+	// is not dialed until the wake path has re-admitted it.
+	m.handleContainerDeath(crashContainerID, crashSandboxID)
+	if _, err := m.SandboxAddr(context.Background(), crashSandboxID, 5173); !errors.Is(err, ErrSandboxNotRunning) {
+		t.Errorf("SandboxAddr() after restart error = %v, want %v", err, ErrSandboxNotRunning)
+	}
+}

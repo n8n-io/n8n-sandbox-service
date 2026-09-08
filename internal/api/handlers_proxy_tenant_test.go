@@ -54,6 +54,7 @@ func TestTenantCannotProxyToOtherTenantSandbox(t *testing.T) {
 		{http.MethodPost, "/files/move", `{"src":"/tmp/a","dest":"/tmp/b"}`},
 		{http.MethodPost, "/mkdir?path=/tmp/pwned", ""},
 		{http.MethodGet, "/stat?path=/tmp/x", ""},
+		{http.MethodGet, "/ports/5173/", ""},
 	}
 
 	call := func(method, path, key, body string) *httptest.ResponseRecorder {

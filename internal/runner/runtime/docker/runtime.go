@@ -499,6 +499,17 @@ func (m *Runtime) StopSandboxContainer(ctx context.Context, sandboxID string) er
 
 // DaemonURL returns the daemon URL for a container by sandbox ID.
 func (m *Runtime) DaemonURL(ctx context.Context, sandboxID string) (string, error) {
+	return m.sandboxURL(ctx, sandboxID, daemonPort)
+}
+
+// SandboxAddr returns http://<containerIP>:<port>. The runner dials the bridge IP
+// from its own netns, which no ingress rule filters, so any port the sandbox
+// listens on is reachable.
+func (m *Runtime) SandboxAddr(ctx context.Context, sandboxID string, port int) (string, error) {
+	return m.sandboxURL(ctx, sandboxID, port)
+}
+
+func (m *Runtime) sandboxURL(ctx context.Context, sandboxID string, port int) (string, error) {
 	// A container Docker restarted after a crash looks perfectly healthy here, which
 	// is the problem: its network rules still point at the IP it had, and the request
 	// that reaches it would find a sandbox that quietly lost everything it was
@@ -529,8 +540,7 @@ func (m *Runtime) DaemonURL(ctx context.Context, sandboxID string) (string, erro
 		return "", fmt.Errorf("%w: container %s has no IP on %s", ErrSandboxNetworkUnavailable, containerID, runnerBridgeNetwork)
 	}
 
-	baseURL := fmt.Sprintf("http://%s:%d", network.IPAddress, daemonPort)
-	return baseURL, nil
+	return fmt.Sprintf("http://%s:%d", network.IPAddress, port), nil
 }
 
 // DeleteContainer stops and removes a container.

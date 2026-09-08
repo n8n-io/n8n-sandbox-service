@@ -1,10 +1,14 @@
 package api
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
+
+	"golang.org/x/net/websocket"
 
 	"github.com/n8n-io/sandbox-service/internal/api/store"
 )
@@ -190,5 +194,95 @@ func TestSandboxProxyRefusesPlaintextRunnerBase(t *testing.T) {
 	}
 	if hits := upstreamHits.Load(); hits != 0 {
 		t.Fatalf("expected nothing to reach the plaintext runner, got %d requests", hits)
+	}
+}
+
+// The port route is what keeps a sandbox with a dev server alive, so its traffic
+// has to count like exec and file traffic, and the path reaches the runner
+// verbatim: the runner, not the API, strips the route prefix.
+func TestSandboxPortProxyForwardsPathVerbatimAndCountsAsActivity(t *testing.T) {
+	var seen atomic.Value
+	runner := newTestRunnerServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen.Store(r.URL.RequestURI())
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer runner.Close()
+
+	router, s := newTestGateway(t, "admin-key")
+
+	const sid = "eeeeeeee-5555-4555-8555-eeeeeeeeeeee"
+	if err := s.Create(&store.SandboxRecord{
+		ID: sid, Status: "stopped", CreatedAt: 1, LastActiveAt: 1,
+		TenantID: store.AdminTenantID, RunnerHTTPBase: runner.URL,
+	}); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+
+	path := "/sandboxes/" + sid + "/ports/5173/src/main.ts?v=1"
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.Header.Set("X-Api-Key", "admin-key")
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("proxy returned %d, want 200: %s", rr.Code, rr.Body.String())
+	}
+	if got, _ := seen.Load().(string); got != path {
+		t.Errorf("runner saw %q, want %q", got, path)
+	}
+
+	rec, err := s.Get(sid)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if rec.LastActiveAt <= 1 {
+		t.Errorf("last_active_at = %d, want a fresh timestamp", rec.LastActiveAt)
+	}
+	if rec.Status != "running" {
+		t.Errorf("status = %q, want running", rec.Status)
+	}
+}
+
+// The API hop has to pass a 101 through as well, or a dev server's HMR socket
+// dies at the first proxy.
+func TestSandboxPortProxyForwardsWebSocketUpgrades(t *testing.T) {
+	runner := newTestRunnerServer(t, websocket.Handler(func(ws *websocket.Conn) {
+		_, _ = io.Copy(ws, ws)
+	}))
+	defer runner.Close()
+
+	router, s := newTestGateway(t, "admin-key")
+	api := httptest.NewServer(router)
+	defer api.Close()
+
+	const sid = "ffffffff-6666-4666-8666-ffffffffffff"
+	if err := s.Create(&store.SandboxRecord{
+		ID: sid, Status: "running", CreatedAt: 1, LastActiveAt: 1,
+		TenantID: store.AdminTenantID, RunnerHTTPBase: runner.URL,
+	}); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+
+	wsURL := "ws" + strings.TrimPrefix(api.URL, "http") + "/sandboxes/" + sid + "/ports/5173/?token=abc"
+	cfg, err := websocket.NewConfig(wsURL, "http://localhost/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Header.Set("X-Api-Key", "admin-key")
+	ws, err := websocket.DialConfig(cfg)
+	if err != nil {
+		t.Fatalf("dial through api: %v", err)
+	}
+	defer ws.Close()
+
+	if _, err := ws.Write([]byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 16)
+	n, err := ws.Read(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(buf[:n]); got != "ping" {
+		t.Errorf("echo = %q", got)
 	}
 }

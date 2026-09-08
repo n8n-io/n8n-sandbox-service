@@ -123,13 +123,19 @@ func proxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.Run
 // lookup and then reached a handler that repeats it leaves a window a crash fits
 // inside — one wide enough to have failed in CI. One lookup, one decision.
 func resolveDaemonURL(w http.ResponseWriter, r *http.Request, rt runnerruntime.Runtime, rec *metrics.RunnerRecorder, wake bool) (string, bool) {
+	return resolveSandboxURL(w, r, rt, rec, wake, rt.DaemonURL)
+}
+
+// resolveSandboxURL is resolveDaemonURL with the address lookup supplied, so the
+// port proxy shares the wake and restart-report path with the daemon routes.
+func resolveSandboxURL(w http.ResponseWriter, r *http.Request, rt runnerruntime.Runtime, rec *metrics.RunnerRecorder, wake bool, lookup func(context.Context, string) (string, error)) (string, bool) {
 	id := r.PathValue("id")
 	if !isValidID(id) {
 		writeError(w, http.StatusBadRequest, "invalid sandbox id")
 		return "", false
 	}
 
-	daemonBaseURL, err := rt.DaemonURL(r.Context(), id)
+	daemonBaseURL, err := lookup(r.Context(), id)
 	if err != nil && errors.Is(err, runnerruntime.ErrSandboxNotRunning) {
 		if !wake {
 			writeExecutionGone(w)
@@ -164,11 +170,13 @@ func resolveDaemonURL(w http.ResponseWriter, r *http.Request, rt runnerruntime.R
 			writeSandboxRestarted(w)
 			return "", false
 		}
-		daemonBaseURL, err = rt.DaemonURL(r.Context(), id)
+		daemonBaseURL, err = lookup(r.Context(), id)
 	}
 	if err != nil {
 		if errors.Is(err, runnerruntime.ErrSandboxNotFound) {
 			writeSandboxNotFound(w)
+		} else if errors.Is(err, runnerruntime.ErrPortForwardUnsupported) {
+			writeError(w, http.StatusNotImplemented, err.Error())
 		} else if errors.Is(err, runnerruntime.ErrSandboxNotRunning) {
 			writeError(w, http.StatusBadGateway, runnerruntime.ErrSandboxNotRunning.Error())
 		} else if errors.Is(err, runnerruntime.ErrSandboxNetworkUnavailable) {

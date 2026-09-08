@@ -15,6 +15,10 @@ var ErrSandboxNetworkUnavailable = errors.New("sandbox network unavailable")
 // ErrSandboxNotRunning is returned when a sandbox exists but is not running.
 var ErrSandboxNotRunning = errors.New("sandbox not running")
 
+// ErrPortForwardUnsupported is returned by a runtime that cannot reach arbitrary
+// sandbox ports from the runner.
+var ErrPortForwardUnsupported = errors.New("port forwarding not supported by this runtime")
+
 // CreateOptions holds optional parameters for sandbox creation.
 type CreateOptions struct{}
 
@@ -62,6 +66,9 @@ type Runtime interface {
 	StopSandbox(ctx context.Context, sandboxID string) error
 	EnsureSandboxRunning(ctx context.Context, sandboxID string) (WakeResult, error)
 	DaemonURL(ctx context.Context, sandboxID string) (string, error)
+	// SandboxAddr returns the base URL the runner dials to reach a process listening
+	// on port inside the sandbox. Same not-found and not-running semantics as DaemonURL.
+	SandboxAddr(ctx context.Context, sandboxID string, port int) (string, error)
 
 	Shutdown(ctx context.Context)
 }

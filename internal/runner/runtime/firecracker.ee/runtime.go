@@ -480,6 +480,13 @@ func (r *Runtime) DeleteSandbox(ctx context.Context, sandboxID string) error {
 	return r.deleteSandbox(ctx, state)
 }
 
+// SandboxAddr is unsupported: the guest is reachable only through a per-sandbox
+// daemon-port proxy dialing inside its netns (see daemon_proxy.go), and no such
+// proxy exists for other ports.
+func (r *Runtime) SandboxAddr(context.Context, string, int) (string, error) {
+	return "", runnerruntime.ErrPortForwardUnsupported
+}
+
 // DaemonURL returns the host-local proxy URL, not the guest IP directly.
 func (r *Runtime) DaemonURL(_ context.Context, sandboxID string) (string, error) {
 	r.mu.Lock()
