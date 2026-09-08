@@ -32,7 +32,7 @@ flowchart TD
 
     subgraph versioned ["Versioned Release (all deployable images)"]
         E[Manual: Run Release Prep] --> F[Bump VERSION + chart appVersion\nCreate release branch + PR]
-        F --> G[Release Validate CI]
+        F --> G[Release Validate CI\n+ Sysbox and Firecracker e2e on Azure]
         G --> H{Merge PR}
         H --> I[Run tests]
         I --> J[Build + push multi-arch\nimages to Docker Hub]
@@ -141,7 +141,14 @@ unable to rebuild their snapshot.
    order would move `latest` and `stable` backwards. Until publish enforces that
    itself, merge open release PRs in ascending version order.
 3. The `Service Release Validate` workflow runs CI on the PR and fails if `VERSION`
-   and the chart `appVersion` disagree.
+   and the chart `appVersion` disagree. It also runs the Sysbox and Firecracker
+   e2e suites on Azure VMs — the same workflows the `e2e-sysbox` and
+   `e2e-firecracker` labels trigger on ordinary PRs, called as jobs of the
+   validate run. CI on `main` only exercises the privileged-Docker lane, so this
+   is where both shipped runners get covered before their images are built. The
+   Azure lanes run in parallel with the unit tests and image builds and are the
+   long pole: allow about an hour. To retry a flaky lane, re-run the failed job
+   from the validate run; there is no need to re-prep.
 4. Merge the PR. This triggers the `Service Publish` workflow, whose
    `publish-images` job runs tests and then builds and pushes the multi-arch images
    to Docker Hub, sandbox image included.

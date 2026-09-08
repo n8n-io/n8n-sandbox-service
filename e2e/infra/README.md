@@ -4,14 +4,16 @@ Terraform config that provisions an ephemeral Ubuntu 24.04 VM in Azure for runni
 
 In CI, the Sysbox workflow uses `e2e/infra/scripts/provision-e2e-vm.sh` and
 `e2e/infra/scripts/cleanup-e2e-vm.sh` to manage the Azure VM. That workflow runs
-on manual dispatch and on PRs labeled `e2e-sysbox`.
+on manual dispatch, on PRs labeled `e2e-sysbox`, and as a job of `Service
+Release Validate` on every service release PR.
 
 The same Terraform VM shape is also reused by the Firecracker e2e lane via
 `e2e/infra/scripts/provision-firecracker-e2e-vm.sh`. That path runs
 `scripts/firecracker.ee/setup-firecracker-e2e-vm.sh` on the VM (nested KVM
 preflight, Firecracker/jailer, rootfs from `Dockerfile.sandbox` + CI `vmlinux`,
-golden snapshot). The Firecracker workflow runs on manual dispatch and on PRs
-labeled `e2e-firecracker`.
+golden snapshot). The Firecracker workflow runs on manual dispatch, on PRs
+labeled `e2e-firecracker`, and as a job of `Service Release Validate` on every
+service release PR.
 
 ## Prerequisites
 

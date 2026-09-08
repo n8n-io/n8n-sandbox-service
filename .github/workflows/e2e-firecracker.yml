@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
   pull_request:
     types: [labeled]
+  workflow_call:
 
 permissions:
   id-token: write
@@ -23,9 +24,7 @@ jobs:
   e2e-firecracker:
     runs-on: ubuntu-latest
     environment: e2e
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' && github.event.label.name == 'e2e-firecracker')
+    if: github.event.action != 'labeled' || github.event.label.name == 'e2e-firecracker'
     timeout-minutes: 60
 
     steps:
