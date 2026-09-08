@@ -30,6 +30,9 @@ func PortProxyHandler(rt runnerruntime.Runtime, rec *metrics.RunnerRecorder) htt
 			pr.SetURL(pt.url)
 			pr.Out.URL.Path = pt.path
 			pr.Out.URL.RawQuery = pr.In.URL.RawQuery
+			// The runner's own credential, set by the API hop; the process in the
+			// sandbox is user code and must not see it.
+			pr.Out.Header.Del("X-Api-Key")
 		},
 		FlushInterval: -1,
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
