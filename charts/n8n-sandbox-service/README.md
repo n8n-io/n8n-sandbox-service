@@ -64,7 +64,7 @@ Requirements and recommendations:
 - Prefer a dedicated node pool for the runner via `runner.privileged.scheduling`.
 - Platforms that block privileged containers outright (for example GKE Autopilot) cannot use this isolation; use `dataPlane.mode: external` there.
 
-When `runner.dockerDataRoot.persistence` is disabled, the chart mounts an `emptyDir` with `runner.dockerDataRoot.emptyDir.sizeLimit` at `/var/lib/docker`, so the inner Docker daemon's layers are bounded. With disk quotas the volume holds the quota pool image instead; see [Disk Quotas](#disk-quotas).
+The chart bounds the inner Docker daemon's data root for both isolations; see [Docker Data Root](#docker-data-root).
 
 Two hardening options:
 
@@ -144,6 +144,37 @@ runner:
           effect: NoSchedule
 ```
 
+## Docker Data Root
+
+The runner always gets a volume for the inner Docker daemon's data root, so its image layers and sandbox filesystems cannot fill the node disk. Which volume depends on `runner.dockerDataRoot.persistence.enabled`:
+
+| `persistence.enabled` | Volume | Bounded by |
+| --- | --- | --- |
+| `false` (default) | `emptyDir`, created fresh for each pod | `runner.dockerDataRoot.emptyDir.sizeLimit` |
+| `true` | `PersistentVolumeClaim`, one per runner pod | `runner.dockerDataRoot.persistence.size` |
+
+The volume mounts at `/var/lib/docker`, or at `/var/lib/docker-pool` when `runner.config.defaultDiskQuotaMb` is above 0, because the quota pool image needs the bounded volume then. See [Disk Quotas](#disk-quotas).
+
+Persistence buys one thing: a warm image cache. It does not carry sandboxes across a runner restart. The runner deletes every sandbox container it finds when it starts, and again when it shuts down, so no sandbox survives a rollout either way.
+
+### Persistence and user namespaces
+
+Do not enable persistence for a runner in a user namespace. The inner Docker daemon chmods its data root at startup. A `PersistentVolume` root belongs to a UID outside the pod's mapping, so the chmod fails and the daemon exits:
+
+```
+level=info msg="Daemon shutdown complete" error="chmod /var/lib/docker: operation not permitted"
+```
+
+The runner then never becomes ready. The pod's UID range can also change when the pod is recreated, so a runner that works today can fail on the next rollout.
+
+The chart fails the render for `runner.isolation: sysbox` with `runner.sysbox.runtime.hostUsers: false` and persistence enabled, unless disk quotas are on. Quotas move the volume to `/var/lib/docker-pool` and give the daemon a freshly made xfs image as its data root, which the container owns.
+
+Three ways out, best first:
+
+- Leave persistence disabled. The `emptyDir` is created and owned by the kubelet for each pod, so there is no stale ownership, and `sizeLimit` still bounds it. You give up the image cache.
+- Set `runner.sysbox.runtime.hostUsers: null` on CRI-O nodes, and add the annotation Sysbox documents. Sysbox then shifts the volume's ownership itself. On containerd this is not supported; see [quickstart-k8s.md](../../docs/quickstart-k8s.md).
+- Set `runner.dockerDataRoot.persistence.acknowledgeUserNamespace: true` if your CSI driver id-maps volumes and you have verified the combination on your cluster.
+
 ## Disk Quotas
 
 `runner.config.defaultDiskQuotaMb` above 0 caps the writable layer of each sandbox. To enforce the cap, the runner allocates a loopback xfs image, mounts it with `prjquota` at `/var/lib/docker`, and runs the inner Docker daemon against that mount.
@@ -179,9 +210,8 @@ runner:
 
 `runner.config.diskQuotaPoolPath` overrides the image path. When it points at a volume you mount yourself (for example through `runner.extraVolumes`), the chart skips the size comparison. You then own the fit between the pool and that volume. Keep the override on a volume with a size limit; the mount that the image backs does not bound the image.
 
-The render fails in three cases:
+The render fails in two cases:
 
-- No volume holds the pool image. This happens when `runner.dockerDataRoot.persistence` is disabled, isolation is `sysbox`, and `diskQuotaPoolPath` is empty. It is the default configuration, so enable persistence or set an explicit path.
 - `runner.config.diskQuotaPoolSizeGb` is not a positive whole number of GB. The chart never falls back to the derived pool size, because that size scales with `runner.config.capacityTotal`. A 2048 MB per-sandbox quota and the default `capacityTotal` of 1000 derive a 2400 GB pool.
 - `runner.config.diskQuotaPoolSizeGb` is larger than the chart-owned volume.
 
