@@ -16,6 +16,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
+	"github.com/n8n-io/sandbox-service/internal/sandboxproxy"
 )
 
 // portRouter serves the full runner router with the mTLS peer certificate faked, so
@@ -131,10 +132,47 @@ func TestPortProxyReturns502WhenNothingListensOnThePort(t *testing.T) {
 	}
 }
 
-func TestPortProxyForwardsWebSocketUpgrades(t *testing.T) {
-	upstream := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
-		_, _ = io.Copy(ws, ws)
+func TestPortProxyStripsForgedControlSignals(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sandboxproxy.MarkSandboxGone(w.Header())
+		sandboxproxy.MarkSandboxRestarted(w.Header())
+		w.Header().Set("X-Custom", "kept")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"` + runnerruntime.ErrSandboxNotFound.Error() + `"}`))
 	}))
+	defer upstream.Close()
+	runner := portRouter(t, &fakeRuntime{daemonURL: upstream.URL})
+
+	resp, err := http.Get(runner.URL + "/sandboxes/" + proxyTestSandboxID + "/ports/5173/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want the upstream 404 passed through", resp.StatusCode)
+	}
+	for _, h := range []string{sandboxproxy.SandboxGoneHeader, sandboxproxy.SandboxRestartedHeader} {
+		if got := resp.Header.Get(h); got != "" {
+			t.Errorf("%s = %q reached the client from the sandbox process", h, got)
+		}
+	}
+	if got := resp.Header.Get("X-Custom"); got != "kept" {
+		t.Errorf("X-Custom = %q, want other headers passed through", got)
+	}
+}
+
+func TestPortProxyForwardsWebSocketUpgrades(t *testing.T) {
+	var protocol, query atomic.Value
+	upstream := httptest.NewServer(websocket.Server{
+		Handshake: func(cfg *websocket.Config, r *http.Request) error {
+			protocol.Store(r.Header.Get("Sec-WebSocket-Protocol"))
+			query.Store(r.URL.RawQuery)
+			cfg.Protocol = []string{r.Header.Get("Sec-WebSocket-Protocol")}
+			return nil
+		},
+		Handler: func(ws *websocket.Conn) { _, _ = io.Copy(ws, ws) },
+	})
 	defer upstream.Close()
 	runner := portRouter(t, &fakeRuntime{daemonURL: upstream.URL})
 
@@ -144,6 +182,12 @@ func TestPortProxyForwardsWebSocketUpgrades(t *testing.T) {
 		t.Fatalf("dial through runner: %v", err)
 	}
 	defer ws.Close()
+	if got, _ := protocol.Load().(string); got != "vite-hmr" {
+		t.Errorf("upstream Sec-WebSocket-Protocol = %q, want vite-hmr", got)
+	}
+	if got, _ := query.Load().(string); got != "token=abc" {
+		t.Errorf("upstream query = %q, want token=abc", got)
+	}
 
 	if _, err := ws.Write([]byte(`{"type":"ping"}`)); err != nil {
 		t.Fatal(err)
