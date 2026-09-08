@@ -3,7 +3,7 @@ package netrules
 import (
 	"bytes"
 	"fmt"
-	"os"
+	"net"
 	"os/exec"
 	"strings"
 	"sync"
@@ -136,7 +136,14 @@ func ensureBridgePolicy(bridgeIface string) error {
 	// iptables accepts a rule naming an interface that does not exist, and that
 	// rule then matches nothing. Every sandbox would run unfiltered with no
 	// error anywhere, so refuse to build the policy instead.
-	if _, err := os.Stat("/sys/class/net/" + bridgeIface); err != nil {
+	//
+	// Ask netlink, not /sys/class/net. The kernel ties a sysfs mount to the
+	// network namespace of the process that mounted it. Sysbox 0.7.1 mounts the
+	// container's sysfs from a helper that stays in the host namespace, so
+	// /sys/class/net inside the runner lists the host's interfaces and the
+	// bridge looks absent. net.InterfaceByName asks the caller's namespace.
+	// Upstream: https://github.com/nestybox/sysbox-runc/commit/87af3d5
+	if _, err := net.InterfaceByName(bridgeIface); err != nil {
 		return fmt.Errorf("bridge interface %q not found: %w", bridgeIface, err)
 	}
 

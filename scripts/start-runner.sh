@@ -138,6 +138,7 @@ if ! docker network inspect runner-bridge >/dev/null 2>&1; then
 	docker network create \
 		--driver bridge \
 		--opt "com.docker.network.bridge.enable_icc=false" \
+		--opt "com.docker.network.bridge.name=runner-bridge" \
 		runner-bridge >/dev/null
 fi
 
