@@ -33,9 +33,9 @@ func portRouter(t *testing.T, rt runnerruntime.Runtime) *httptest.Server {
 }
 
 func TestPortProxyStripsPrefixAndSetsHostToTarget(t *testing.T) {
-	type seen struct{ Host, Path, Query string }
+	type seen struct{ Host, Path, Query, APIKey string }
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(seen{r.Host, r.URL.Path, r.URL.RawQuery})
+		_ = json.NewEncoder(w).Encode(seen{r.Host, r.URL.Path, r.URL.RawQuery, r.Header.Get("X-Api-Key")})
 	}))
 	defer upstream.Close()
 	runner := portRouter(t, &fakeRuntime{daemonURL: upstream.URL})
@@ -64,6 +64,9 @@ func TestPortProxyStripsPrefixAndSetsHostToTarget(t *testing.T) {
 		}
 		if strings.Contains(reqPath, "?v=1") && got.Query != "v=1" {
 			t.Errorf("%s: query = %q, want v=1", reqPath, got.Query)
+		}
+		if got.APIKey != "" {
+			t.Errorf("%s: runner API key %q reached the sandbox process", reqPath, got.APIKey)
 		}
 	}
 }
