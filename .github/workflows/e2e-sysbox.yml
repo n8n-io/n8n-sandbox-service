@@ -18,10 +18,6 @@ permissions:
   id-token: write
   contents: read
 
-concurrency:
-  group: e2e-sysbox-${{ github.ref }}
-  cancel-in-progress: true
-
 env:
   ARM_USE_OIDC: "true"
   ARM_CLIENT_ID: ${{ secrets.AZURE_E2E_CLIENT_ID }}
@@ -33,6 +29,9 @@ jobs:
     runs-on: ubuntu-latest
     environment: e2e
     if: github.event.action != 'labeled' || github.event.label.name == 'e2e-sysbox'
+    concurrency:
+      group: ${{ github.workflow }}-e2e-sysbox-${{ github.ref }}
+      cancel-in-progress: true
     timeout-minutes: 45
 
     steps:
