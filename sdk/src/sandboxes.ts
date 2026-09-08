@@ -6,13 +6,12 @@ export async function createSandbox(
   http: HttpClient,
   options?: CreateSandboxOptions,
 ): Promise<SandboxRecord> {
-  const response =
-    options?.id !== undefined
-      ? await http.requestJson<SandboxWireResponse>("POST", "/sandboxes", {
-          data: { id: options.id },
-          isSafeToRetry: true,
-        })
-      : await http.requestJson<SandboxWireResponse>("POST", "/sandboxes");
+  const response = await http.requestJson<SandboxWireResponse>("POST", "/sandboxes", {
+    data: { id: options?.id, ephemeral: options?.ephemeral },
+    // Only a caller-supplied id makes a repeated POST idempotent; retrying an
+    // anonymous create would provision a second sandbox.
+    isSafeToRetry: options?.id !== undefined,
+  });
   return mapSandboxRecord(response);
 }
 
@@ -37,5 +36,6 @@ function mapSandboxRecord(wire: SandboxWireResponse): SandboxRecord {
     status: wire.status,
     createdAt: wire.created_at,
     lastActiveAt: wire.last_active_at,
+    ephemeral: wire.ephemeral === true,
   };
 }

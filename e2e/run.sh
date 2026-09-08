@@ -200,7 +200,7 @@ export E2E_RUNNER_CONTROL_TLS_SERVER_NAME="$RUNNER_CONTROL_ALIAS"
 echo "Running e2e tests (excluding topology-only + resilience; API restart runs last)..."
 MAIN_SPECS=()
 if [[ "${E2E_IDLE_TTL_SUITE:-}" == "1" ]]; then
-	MAIN_SPECS=("tests/sandbox-idle-ttl.spec.ts")
+	MAIN_SPECS=("tests/sandbox-idle-ttl.spec.ts" "tests/sandbox-ephemeral.spec.ts")
 else
 	shopt -s nullglob
 	for f in tests/*.spec.ts; do
@@ -210,6 +210,7 @@ else
 		[[ "$bn" == placement-two-runners.spec.ts ]] && continue
 		[[ "$bn" == multi-pod-api.spec.ts ]] && continue
 		[[ "$bn" == sandbox-idle-ttl.spec.ts ]] && continue
+		[[ "$bn" == sandbox-ephemeral.spec.ts ]] && continue
 		MAIN_SPECS+=("$f")
 	done
 	shopt -u nullglob

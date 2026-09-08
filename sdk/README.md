@@ -43,6 +43,10 @@ const stableSandbox = await client.createSandbox({
   id: '550e8400-e29b-41d4-a716-446655440000',
 });
 
+// Ephemeral: deleted instead of stopped when idle (see API.md, POST /sandboxes)
+const scratch = await client.createSandbox({ ephemeral: true });
+console.log(scratch.ephemeral); // true
+
 // Get sandbox info
 const info = await client.getSandbox(sandbox.id);
 

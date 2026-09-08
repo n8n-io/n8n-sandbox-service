@@ -229,6 +229,11 @@ func TestLoadAPIIdleDeleteAfterZeroDisablesDelete(t *testing.T) {
 	if cfg.IdleDeleteAfter != 0 {
 		t.Fatalf("IdleDeleteAfter: want 0, got %s", cfg.IdleDeleteAfter)
 	}
+	// Ephemeral sandboxes are still deleted at the idle-stop window, so the
+	// buffer that keeps the request-path fence ahead of that delete must apply.
+	if cfg.IdleDeleteSafetyBuffer != time.Minute {
+		t.Fatalf("IdleDeleteSafetyBuffer: want 1m, got %s", cfg.IdleDeleteSafetyBuffer)
+	}
 }
 
 func TestLoadAPIIdleTTLZeroDisablesDefaults(t *testing.T) {

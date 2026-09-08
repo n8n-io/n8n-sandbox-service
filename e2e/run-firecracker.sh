@@ -233,19 +233,20 @@ fi
 echo "Running Firecracker-compatible e2e tests..."
 PLAYWRIGHT_SPECS=()
 if [[ "${E2E_IDLE_TTL_SUITE:-}" == "1" ]]; then
-	PLAYWRIGHT_SPECS=("tests/sandbox-idle-ttl.spec.ts")
+	PLAYWRIGHT_SPECS=("tests/sandbox-idle-ttl.spec.ts" "tests/sandbox-ephemeral.spec.ts")
 else
 	shopt -s nullglob
 	for f in tests/*.spec.ts; do
 		bn=$(basename "$f")
 		[[ "$bn" == sandbox-idle-ttl.spec.ts ]] && continue
+		[[ "$bn" == sandbox-ephemeral.spec.ts ]] && continue
 		[[ "$bn" == multi-pod-api.spec.ts ]] && continue
 		PLAYWRIGHT_SPECS+=("$f")
 	done
 	shopt -u nullglob
 fi
 if [[ ${#PLAYWRIGHT_SPECS[@]} -eq 0 ]]; then
-	echo "No Playwright specs found under tests/ (after excluding sandbox-idle-ttl.spec.ts)" >&2
+	echo "No Playwright specs found under tests/ (after excluding sandbox-idle-ttl.spec.ts, sandbox-ephemeral.spec.ts, multi-pod-api.spec.ts)" >&2
 	exit 1
 fi
 BASE_URL="http://127.0.0.1:$PORT" SANDBOX_API_KEY="$API_KEY" \

@@ -20,6 +20,7 @@ func TestStorePersistsDockerMetadata(t *testing.T) {
 		LastActiveAt: 2,
 		ContainerIP:  "172.30.0.2",
 		DaemonPort:   8081,
+		Ephemeral:    true,
 	}
 	if err := s.Create(rec); err != nil {
 		t.Fatalf("create record: %v", err)
@@ -32,7 +33,7 @@ func TestStorePersistsDockerMetadata(t *testing.T) {
 	if got == nil {
 		t.Fatal("expected record")
 	}
-	if got.ContainerIP != rec.ContainerIP || got.DaemonPort != rec.DaemonPort {
+	if got.ContainerIP != rec.ContainerIP || got.DaemonPort != rec.DaemonPort || !got.Ephemeral {
 		t.Fatalf("unexpected docker metadata: %+v", got)
 	}
 }
@@ -94,6 +95,10 @@ func TestListForIdleReapDeleteAndStop(t *testing.T) {
 		ID: "c-run-recent", Status: "running", CreatedAt: 3, LastActiveAt: recent,
 		RunnerControlGRPCAddr: ctl, RunnerHTTPBase: "http://x",
 	})
+	must(&SandboxRecord{
+		ID: "d-eph-old", Status: "running", CreatedAt: 4, LastActiveAt: old,
+		RunnerControlGRPCAddr: ctl, RunnerHTTPBase: "http://x", Ephemeral: true,
+	})
 
 	cutoff := int64(200)
 	delRows, err := s.ListForIdleReapDelete(cutoff)
@@ -112,16 +117,23 @@ func TestListForIdleReapDeleteAndStop(t *testing.T) {
 		t.Fatalf("unexpected delete id %q", ids[0])
 	}
 
-	stopRows, err := s.ListForIdleReapStop(cutoff)
-	if err != nil {
-		t.Fatalf("ListForIdleReapStop: %v", err)
-	}
-	var stopIDs []string
-	for _, r := range stopRows {
-		stopIDs = append(stopIDs, r.ID)
-	}
-	if len(stopIDs) != 1 || stopIDs[0] != "a-run-old" {
-		t.Fatalf("stop candidates: got %v want [a-run-old]", stopIDs)
+	// Old running rows split by the ephemeral flag: regular ones are stop
+	// candidates, ephemeral ones delete candidates.
+	for _, tc := range []struct {
+		ephemeral bool
+		want      string
+	}{{false, "a-run-old"}, {true, "d-eph-old"}} {
+		stopRows, err := s.ListForIdleReapStop(cutoff, tc.ephemeral)
+		if err != nil {
+			t.Fatalf("ListForIdleReapStop(ephemeral=%v): %v", tc.ephemeral, err)
+		}
+		var stopIDs []string
+		for _, r := range stopRows {
+			stopIDs = append(stopIDs, r.ID)
+		}
+		if len(stopIDs) != 1 || stopIDs[0] != tc.want {
+			t.Fatalf("stop candidates (ephemeral=%v): got %v want [%s]", tc.ephemeral, stopIDs, tc.want)
+		}
 	}
 }
 

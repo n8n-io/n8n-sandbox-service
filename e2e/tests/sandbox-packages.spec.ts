@@ -64,10 +64,12 @@ test.describe('sandbox package installation', () => {
     try {
       await execWithTransientRetry(id, 'true');
 
+      // --no-audit: a project install otherwise calls npm's audit endpoint, which
+      // can hang while the registry itself is healthy; -g installs never audit.
       const installed = await exec(
         id,
         'mkdir -p /home/user/proj && cd /home/user/proj && npm init -y >/dev/null && ' +
-          `npm install --ignore-scripts semver >/dev/null && node -e "require('semver'); console.log('ok')"`,
+          `npm install --ignore-scripts --no-audit semver >/dev/null && node -e "require('semver'); console.log('ok')"`,
         { timeoutMs: 120_000 },
       );
       expect(installed).toHaveSucceeded();

@@ -52,6 +52,7 @@ type SandboxRecord struct {
 	RunnerHTTPBase        string // Base URL to reach that runner's HTTP API (for proxying)
 	RunnerControlGRPCAddr string // host:port for SandboxControl gRPC
 	TenantID              string // AdminTenantID = admin-owned; otherwise a tenants.id UUID
+	Ephemeral             bool   // Deleted instead of stopped when idle; never enters "stopped"
 }
 
 // Tenant is a provisioned consumer of the sandbox API (e.g. an n8n instance).
@@ -83,7 +84,9 @@ type SandboxStore interface {
 	Delete(id string) error
 	LockSandbox(ctx context.Context, id string) (unlock func(), err error)
 	ListForIdleReapDelete(cutoff int64) ([]*SandboxRecord, error)
-	ListForIdleReapStop(cutoff int64) ([]*SandboxRecord, error)
+	// ListForIdleReapStop returns running rows idle since cutoff with the given
+	// ephemeral flag: regular rows are stop candidates, ephemeral rows delete candidates.
+	ListForIdleReapStop(cutoff int64, ephemeral bool) ([]*SandboxRecord, error)
 	Count() (int64, error)
 	CountByTenant(tenantID string) (int64, error)
 	List() ([]*SandboxRecord, error)
@@ -126,6 +129,7 @@ func scanRecord(row scanner) (*SandboxRecord, error) {
 		&r.RunnerHTTPBase,
 		&r.RunnerControlGRPCAddr,
 		&r.TenantID,
+		&r.Ephemeral,
 	)
 	if err != nil {
 		return nil, err

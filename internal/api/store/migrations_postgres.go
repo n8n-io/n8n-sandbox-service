@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS sandboxes (
 	runner_id                 TEXT NOT NULL DEFAULT '',
 	runner_http_base_url      TEXT NOT NULL DEFAULT '',
 	runner_control_grpc_addr  TEXT NOT NULL DEFAULT '',
-	tenant_id                 TEXT NOT NULL DEFAULT '__admin__'
+	tenant_id                 TEXT NOT NULL DEFAULT '__admin__',
+	ephemeral                 BOOLEAN NOT NULL DEFAULT false
 );
 CREATE INDEX IF NOT EXISTS sandboxes_idle_reap_idx
 	ON sandboxes (status, last_active_at);
@@ -58,6 +59,8 @@ CREATE INDEX IF NOT EXISTS api_keys_tenant_idx ON api_keys (tenant_id);
 `
 
 const postgresAddTenantIDCol = `ALTER TABLE sandboxes ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT '__admin__'`
+
+const postgresAddEphemeralCol = `ALTER TABLE sandboxes ADD COLUMN IF NOT EXISTS ephemeral BOOLEAN NOT NULL DEFAULT false`
 
 // Backfill legacy empty tenant_id to the admin sentinel.
 const postgresBackfillAdminTenantID = `UPDATE sandboxes SET tenant_id = '__admin__' WHERE tenant_id = ''`
