@@ -1,0 +1,19 @@
+docs/quickstart-linux.md
+  s_6540949382bcea::t_31b85a9c7742f6 22
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "896054c811eaedc7442af61f019ff1111824c6bd",
+  "prompts": {},
+  "sessions": {
+    "s_6540949382bcea": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e23d2b21-51e4-4d98-a388-3c8cadea3a23",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
