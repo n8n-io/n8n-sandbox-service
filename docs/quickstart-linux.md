@@ -19,7 +19,7 @@ Linux deployments additionally require **sysbox-runc** installed on the host. Sy
 
 ## Install sysbox
 
-An automated setup script is available that installs sysbox v0.7.0.
+Sysbox v0.7.0 and v0.7.1 are supported. An automated setup script is available that installs sysbox v0.7.1.
 
 1. **Download the setup script:**
 

@@ -2,11 +2,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-SYSBOX_VERSION="0.7.0"
+SYSBOX_VERSION="0.7.1"
 SYSBOX_BASE_URL="https://downloads.nestybox.com/sysbox/releases/v${SYSBOX_VERSION}"
 MANUAL_INSTALL_URL="https://github.com/nestybox/sysbox/blob/master/docs/user-guide/install-package.md"
-SHA256_AMD64="eeff273671467b8fa351ab3d40709759462dc03d9f7b50a1b207b37982ce40a9"
-SHA256_ARM64="eae9c0e91ddd39bd1826d6a7a313a73d42a8449ef5113e9d6d118b559cb809ba"
+SHA256_AMD64="9d6d5484f980d0a17f86c492c1262015c2afb66280bdb97215b79fde6a0261c5"
+SHA256_ARM64="04ca894ae0b53f0fa54eaacc173ce40363c9a95ea5450f773716a84ef650a69b"
 
 DRY_RUN="${DRY_RUN:-}"
 DL_DIR=""
