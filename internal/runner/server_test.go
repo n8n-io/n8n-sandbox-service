@@ -17,6 +17,7 @@ import (
 type fakeRuntime struct {
 	daemonURL string
 	daemonErr error
+	portErr   error
 	ensureErr error
 	readyErr  error
 	recovered bool
@@ -73,6 +74,15 @@ func (f *fakeRuntime) DaemonURL(context.Context, string) (string, error) {
 		return "", f.daemonErr
 	}
 	return f.daemonURL, nil
+}
+
+// SandboxAddr hands out the same fake upstream as DaemonURL: in these tests the
+// upstream is an httptest server, so the port only matters for the URL in prod.
+func (f *fakeRuntime) SandboxAddr(ctx context.Context, id string, _ int) (string, error) {
+	if f.portErr != nil {
+		return "", f.portErr
+	}
+	return f.DaemonURL(ctx, id)
 }
 
 func (f *fakeRuntime) Shutdown(context.Context) {}

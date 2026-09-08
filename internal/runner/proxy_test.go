@@ -23,6 +23,13 @@ var wakingHandlers = map[string]func(runnerruntime.Runtime, *config.Config, *met
 	"proxy":        ProxyHandler,
 	"upload proxy": UploadProxyHandler,
 	"exec proxy":   ExecProxyHandler,
+	"port proxy": func(rt runnerruntime.Runtime, _ *config.Config, rec *metrics.RunnerRecorder) http.HandlerFunc {
+		handler := PortProxyHandler(rt, rec)
+		return func(w http.ResponseWriter, r *http.Request) {
+			r.SetPathValue("port", "5173")
+			handler(w, r)
+		}
+	},
 }
 
 // MaxFileBytes has to be set for the upload proxy, which enforces it on every body
