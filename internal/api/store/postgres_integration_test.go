@@ -95,7 +95,7 @@ func TestPostgresStoreCRUD(t *testing.T) {
 		t.Fatalf("update last active: %v", err)
 	}
 
-	rows, err := s.ListForIdleReapStop(9999999999)
+	rows, err := s.ListForIdleReapStop(9999999999, false)
 	if err != nil {
 		t.Fatalf("list stop: %v", err)
 	}

@@ -232,12 +232,13 @@ func (s *PostgresStore) ListForIdleReapDelete(cutoff int64) ([]*SandboxRecord, e
 	return s.querySandboxRecords(q, cutoff)
 }
 
-func (s *PostgresStore) ListForIdleReapStop(cutoff int64) ([]*SandboxRecord, error) {
+func (s *PostgresStore) ListForIdleReapStop(cutoff int64, ephemeral bool) ([]*SandboxRecord, error) {
 	q := `SELECT ` + pgSandboxCols + `
 		FROM sandboxes
 		WHERE status = 'running'
-		  AND last_active_at <= $1`
-	return s.querySandboxRecords(q, cutoff)
+		  AND last_active_at <= $1
+		  AND ephemeral = $2`
+	return s.querySandboxRecords(q, cutoff, ephemeral)
 }
 
 func (s *PostgresStore) querySandboxRecords(q string, args ...any) ([]*SandboxRecord, error) {

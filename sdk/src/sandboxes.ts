@@ -6,19 +6,12 @@ export async function createSandbox(
   http: HttpClient,
   options?: CreateSandboxOptions,
 ): Promise<SandboxRecord> {
-  const data: Record<string, unknown> = {};
-  if (options?.id !== undefined) data.id = options.id;
-  if (options?.ephemeral !== undefined) data.ephemeral = options.ephemeral;
-
-  const response =
-    Object.keys(data).length > 0
-      ? await http.requestJson<SandboxWireResponse>("POST", "/sandboxes", {
-          data,
-          // Only a caller-supplied id makes a repeated POST idempotent; retrying
-          // an anonymous create would provision a second sandbox.
-          isSafeToRetry: options?.id !== undefined,
-        })
-      : await http.requestJson<SandboxWireResponse>("POST", "/sandboxes");
+  const response = await http.requestJson<SandboxWireResponse>("POST", "/sandboxes", {
+    data: { id: options?.id, ephemeral: options?.ephemeral },
+    // Only a caller-supplied id makes a repeated POST idempotent; retrying an
+    // anonymous create would provision a second sandbox.
+    isSafeToRetry: options?.id !== undefined,
+  });
   return mapSandboxRecord(response);
 }
 

@@ -238,20 +238,19 @@ func sweepIdleDeleteSandboxes(ctx context.Context, s store.SandboxStore, reg reg
 func sweepEphemeralSandboxes(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) {
 	cutoff := now.Unix() - idleSeconds(ephemeralIdleWindow(cfg)) - idleSeconds(cfg.IdleDeleteSafetyBuffer)
 
-	// Running rows idle past cutoff; the ephemeral ones are filtered here.
-	records, err := s.ListForIdleReapStop(cutoff)
+	records, err := s.ListForIdleReapStop(cutoff, true)
 	if err != nil {
 		slog.Error("idle sweep list ephemeral candidates failed", "err", err)
 		return
 	}
 
 	for _, rec := range records {
-		if rec == nil || !rec.Ephemeral {
+		if rec == nil {
 			continue
 		}
 		id := rec.ID
 		err := withLockedSandbox(ctx, s, id, func(rec *store.SandboxRecord) {
-			if !rec.Ephemeral || rec.Status != "running" || rec.LastActiveAt > cutoff {
+			if rec.Status != "running" || rec.LastActiveAt > cutoff {
 				return
 			}
 			deleteIdleSandbox(ctx, s, reg, cfg, tlsCfg, rec, now, "ephemeral")
@@ -268,7 +267,7 @@ func sweepEphemeralSandboxes(ctx context.Context, s store.SandboxStore, reg regi
 func sweepIdleStopSandboxes(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) {
 	stopCutoff := now.Unix() - idleSeconds(cfg.IdleStopAfter)
 
-	records, err := s.ListForIdleReapStop(stopCutoff)
+	records, err := s.ListForIdleReapStop(stopCutoff, false)
 	if err != nil {
 		slog.Error("idle sweep list stop candidates failed", "err", err)
 		return
@@ -280,8 +279,7 @@ func sweepIdleStopSandboxes(ctx context.Context, s store.SandboxStore, reg regis
 		}
 		id := rec.ID
 		err := withLockedSandbox(ctx, s, id, func(rec *store.SandboxRecord) {
-			// Ephemeral rows are deleted by sweepEphemeralSandboxes, never stopped.
-			if rec.Status != "running" || rec.Ephemeral || rec.LastActiveAt > stopCutoff {
+			if rec.Status != "running" || rec.LastActiveAt > stopCutoff {
 				return
 			}
 			if orphanReapDue(reg, rec.RunnerID, cfg, now) {

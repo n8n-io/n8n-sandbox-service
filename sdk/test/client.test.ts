@@ -58,7 +58,11 @@ describe("SandboxClient", () => {
 
     const result = await client.createSandbox();
 
-    expect(mock.requestJson).toHaveBeenCalledWith("POST", "/sandboxes");
+    // No options serialises to `{}`; an anonymous create is never retry-safe.
+    expect(mock.requestJson).toHaveBeenCalledWith("POST", "/sandboxes", {
+      data: {},
+      isSafeToRetry: false,
+    });
     expect(result).toEqual({
       id: "abc",
       status: "running",

@@ -259,12 +259,13 @@ func (s *SQLiteStore) ListForIdleReapDelete(cutoff int64) ([]*SandboxRecord, err
 	return s.querySandboxRecords(q, cutoff)
 }
 
-func (s *SQLiteStore) ListForIdleReapStop(cutoff int64) ([]*SandboxRecord, error) {
+func (s *SQLiteStore) ListForIdleReapStop(cutoff int64, ephemeral bool) ([]*SandboxRecord, error) {
 	q := `SELECT ` + sqliteSandboxCols + `
 		FROM sandboxes
 		WHERE status = 'running'
-		  AND last_active_at <= ?`
-	return s.querySandboxRecords(q, cutoff)
+		  AND last_active_at <= ?
+		  AND ephemeral = ?`
+	return s.querySandboxRecords(q, cutoff, ephemeral)
 }
 
 func (s *SQLiteStore) querySandboxRecords(q string, args ...any) ([]*SandboxRecord, error) {

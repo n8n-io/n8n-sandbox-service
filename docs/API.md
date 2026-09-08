@@ -66,9 +66,9 @@ What the client loses:
 - Idempotency of a caller-supplied `exec_id`. Re-posting an id that ran before the restart runs the command again instead of returning the earlier result.
 - Writes that had not reached the disk. On Firecracker the crash is a guest kernel panic, so it takes the guest page cache with it, and neither a shell redirect nor `PUT /files` flushes. A file written seconds before the crash can be missing or truncated where an older one is intact. Run `sync` in the sandbox if a write has to survive a crash it is racing.
 
-An ordinary wake from an idle stop stays transparent: no `409`, no header. On the Sysbox runtime that wake costs the same three things, because a stopped container is started again rather than resumed; on Firecracker an idle stop snapshots the paused guest, so memory does survive it. The `409` is not what tells them apart — `status` is. An idle stop sets `status` to `stopped`, so a client can see it in `GET /sandboxes/{id}` and know what it lost, whereas a crash leaves `status` at `running`. The `409` exists for the case that has no other signal. An ephemeral sandbox (`"ephemeral": true`) never reaches `stopped`: where the idle stop would happen it is deleted instead, and there is nothing to wake.
+An ordinary wake from an idle stop stays transparent: no `409`, no header. On the Sysbox runtime that wake costs the same three things, because a stopped container is started again rather than resumed; on Firecracker an idle stop snapshots the paused guest, so memory does survive it. The `409` is not what tells them apart — `status` is. An idle stop sets `status` to `stopped`, so a client can see it in `GET /sandboxes/{id}` and know what it lost, whereas a crash leaves `status` at `running`. The `409` exists for the case that has no other signal. An ephemeral sandbox never reaches `stopped`; it is deleted instead (see `ephemeral` under `POST /sandboxes`).
 
-**404** `sandbox not found` — Unknown id, the sandbox is past its idle delete-after wake window (`SANDBOX_API_IDLE_DELETE_AFTER`, default `24h`; for an ephemeral sandbox the window is `SANDBOX_API_IDLE_STOP_AFTER`, default `1h`, or `SANDBOX_API_IDLE_DELETE_AFTER` when idle stop is disabled), or the runner no longer tracks the sandbox (eviction, delete, or runner restart). On exec/file proxy routes, when the runner signals sandbox gone (`X-Sandbox-Gone: 1` or `{"error":"sandbox not found"}`), the API removes the store row so subsequent `GET /sandboxes/{id}` also returns 404. Other runner **404** responses (for example `execution not found` or missing file paths) do **not** delete the sandbox. Exec and file routes may return **503** or **502** from the runner after the API successfully reaches the runner; the API may return **503** `runner unavailable` before the runner is contacted.
+**404** `sandbox not found` — Unknown id, the sandbox is past its idle delete-after wake window (`SANDBOX_API_IDLE_DELETE_AFTER`, default `24h`; the idle-stop window for an ephemeral sandbox, see `POST /sandboxes`), or the runner no longer tracks the sandbox (eviction, delete, or runner restart). On exec/file proxy routes, when the runner signals sandbox gone (`X-Sandbox-Gone: 1` or `{"error":"sandbox not found"}`), the API removes the store row so subsequent `GET /sandboxes/{id}` also returns 404. Other runner **404** responses (for example `execution not found` or missing file paths) do **not** delete the sandbox. Exec and file routes may return **503** or **502** from the runner after the API successfully reaches the runner; the API may return **503** `runner unavailable` before the runner is contacted.
 
 ---
 
@@ -162,7 +162,7 @@ If that ID still belongs to the caller and is within its idle-delete window, the
 **Request body fields** (all optional):
 
 - `id` — lowercase UUID to create or reconnect to, as above.
-- `ephemeral` (boolean, default `false`) — delete the sandbox, instead of stopping it, once it has been idle for `SANDBOX_API_IDLE_STOP_AFTER` (default `1h`; `SANDBOX_API_IDLE_DELETE_AFTER` when idle stop is disabled). It never reports `status: "stopped"`; once the window has passed, `GET`, exec and file requests return `404` and the sweeper removes it. Fixed at creation: reconnecting to an existing `id` keeps the value it was created with.
+- `ephemeral` (boolean, default `false`) — delete the sandbox, instead of stopping it, once it has been idle for `SANDBOX_API_IDLE_STOP_AFTER` (default `1h`; `SANDBOX_API_IDLE_DELETE_AFTER` when idle stop is disabled, never when both are `0`). It never reports `status: "stopped"`; once the window has passed, `GET`, exec and file requests return `404` and the sweeper removes it. Fixed at creation: reconnecting to an existing `id` keeps the value it was created with.
 
 ```json
 {
@@ -203,7 +203,7 @@ curl -X POST http://localhost:8080/sandboxes \
   -H "Content-Type: application/json" \
   -d '{"id":"550e8400-e29b-41d4-a716-446655440000"}'
 
-# Ephemeral: deleted instead of stopped when idle
+# Ephemeral
 curl -X POST http://localhost:8080/sandboxes \
   -H "X-Api-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
@@ -233,7 +233,7 @@ This is a read-only status check: it does not update `last_active_at` or extend 
 }
 ```
 
-`status` is `running` or `stopped`; an ephemeral sandbox is only ever `running`, since it is deleted where a regular sandbox would be stopped.
+`status` is `running` or `stopped`; an ephemeral sandbox is only ever `running`.
 
 **Errors:** `400` invalid id, `404` not found
 

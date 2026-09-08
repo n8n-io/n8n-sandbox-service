@@ -84,7 +84,9 @@ type SandboxStore interface {
 	Delete(id string) error
 	LockSandbox(ctx context.Context, id string) (unlock func(), err error)
 	ListForIdleReapDelete(cutoff int64) ([]*SandboxRecord, error)
-	ListForIdleReapStop(cutoff int64) ([]*SandboxRecord, error)
+	// ListForIdleReapStop returns running rows idle since cutoff with the given
+	// ephemeral flag: regular rows are stop candidates, ephemeral rows delete candidates.
+	ListForIdleReapStop(cutoff int64, ephemeral bool) ([]*SandboxRecord, error)
 	Count() (int64, error)
 	CountByTenant(tenantID string) (int64, error)
 	List() ([]*SandboxRecord, error)
