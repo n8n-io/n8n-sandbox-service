@@ -37,3 +37,17 @@ jobs:
           make docker-runner-amd64
           make docker-firecracker-runner-amd64
           make docker-sandbox-amd64
+
+  e2e-sysbox:
+    uses: ./.github/workflows/e2e-sysbox.yml
+    secrets: inherit
+    permissions:
+      id-token: write
+      contents: read
+
+  e2e-firecracker:
+    uses: ./.github/workflows/e2e-firecracker.yml
+    secrets: inherit
+    permissions:
+      id-token: write
+      contents: read
