@@ -60,8 +60,12 @@ func newRunnerTransport(cfg *config.APIConfig) (http.RoundTripper, error) {
 	return tr, nil
 }
 
-func sandboxProxyHandler(s store.SandboxStore, cfg *config.APIConfig, transport http.RoundTripper) func(bool) http.HandlerFunc {
-	return func(limitBody bool) http.HandlerFunc {
+// trustGoneSignals says whether a "sandbox gone" response may drop the store
+// row. True for the daemon routes, where only the runner writes responses.
+// False for the port route: the body comes from user code in the sandbox, and
+// a forged 404 would orphan a running container with no row left to sweep it.
+func sandboxProxyHandler(s store.SandboxStore, cfg *config.APIConfig, transport http.RoundTripper) func(limitBody, trustGoneSignals bool) http.HandlerFunc {
+	return func(limitBody, trustGoneSignals bool) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			id := r.PathValue("id")
 			if !isValidUUID(id) {
@@ -107,7 +111,7 @@ func sandboxProxyHandler(s store.SandboxStore, cfg *config.APIConfig, transport 
 				// Response headers are in, so for a streamed exec this is the
 				// time to first byte rather than the full round trip.
 				fields.Add("ttfb_ms", time.Since(upstreamStart).Milliseconds())
-				if reapSandboxIfRunnerGone(s, id, resp) {
+				if trustGoneSignals && reapSandboxIfRunnerGone(s, id, resp) {
 					return
 				}
 				markSandboxActive(s, id, resp.StatusCode)

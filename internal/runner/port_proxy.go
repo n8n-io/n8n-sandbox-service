@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
+	"github.com/n8n-io/sandbox-service/internal/sandboxproxy"
 )
 
 const minForwardablePort = 1024
@@ -34,21 +36,30 @@ func PortProxyHandler(rt runnerruntime.Runtime, rec *metrics.RunnerRecorder) htt
 			// sandbox is user code and must not see it.
 			pr.Out.Header.Del("X-Api-Key")
 		},
+		// The API acts on these headers (drops the store row, tells the client
+		// its sandbox restarted). Only the runner may set them; the process on
+		// the port is user code, and its own 404/409 are written before ServeHTTP.
+		ModifyResponse: func(resp *http.Response) error {
+			resp.Header.Del(sandboxproxy.SandboxGoneHeader)
+			resp.Header.Del(sandboxproxy.SandboxRestartedHeader)
+			return nil
+		},
 		FlushInterval: -1,
-		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
-			writeError(w, http.StatusBadGateway, "sandbox port unreachable: "+err.Error())
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			slog.Warn("port proxy: dial failed", "sandbox_id", r.PathValue("id"), "port", r.PathValue("port"), "err", err)
+			writeError(w, http.StatusBadGateway, "sandbox port unreachable")
 		},
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		port, err := strconv.Atoi(r.PathValue("port"))
-		if err != nil || port < minForwardablePort || port > 65535 {
+		port, err := strconv.ParseUint(r.PathValue("port"), 10, 16)
+		if err != nil || port < minForwardablePort {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid port: must be %d-65535", minForwardablePort))
 			return
 		}
 
 		baseURL, ok := resolveSandboxURL(w, r, rt, rec, true, func(ctx context.Context, id string) (string, error) {
-			return rt.SandboxAddr(ctx, id, port)
+			return rt.SandboxAddr(ctx, id, int(port))
 		})
 		if !ok {
 			return

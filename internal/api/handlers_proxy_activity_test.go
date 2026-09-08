@@ -11,6 +11,8 @@ import (
 	"golang.org/x/net/websocket"
 
 	"github.com/n8n-io/sandbox-service/internal/api/store"
+	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
+	"github.com/n8n-io/sandbox-service/internal/sandboxproxy"
 )
 
 // A sandbox that only ever answers with server errors must not be able to keep
@@ -239,6 +241,44 @@ func TestSandboxPortProxyForwardsPathVerbatimAndCountsAsActivity(t *testing.T) {
 	}
 	if rec.Status != "running" {
 		t.Errorf("status = %q, want running", rec.Status)
+	}
+}
+
+// On the port route the response body comes from user code in the sandbox, so a
+// 404 that looks like the runner's "sandbox not found" must not drop the row.
+func TestSandboxPortProxyIgnoresForgedSandboxGone(t *testing.T) {
+	runner := newTestRunnerServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sandboxproxy.MarkSandboxGone(w.Header())
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"` + runnerruntime.ErrSandboxNotFound.Error() + `"}`))
+	}))
+	defer runner.Close()
+
+	router, s := newTestGateway(t, "admin-key")
+
+	const sid = "abababab-7777-4777-8777-abababababab"
+	if err := s.Create(&store.SandboxRecord{
+		ID: sid, Status: "running", CreatedAt: 1, LastActiveAt: 1,
+		TenantID: store.AdminTenantID, RunnerHTTPBase: runner.URL,
+	}); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/sandboxes/"+sid+"/ports/5173/missing", nil)
+	req.Header.Set("X-Api-Key", "admin-key")
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("proxy returned %d, want the upstream 404", rr.Code)
+	}
+
+	rec, err := s.Get(sid)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if rec == nil {
+		t.Fatal("store row was removed on a 404 from the sandbox process")
 	}
 }
 

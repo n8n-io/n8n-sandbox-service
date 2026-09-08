@@ -68,7 +68,7 @@ What the client loses:
 
 An ordinary wake from an idle stop stays transparent: no `409`, no header. On the Sysbox runtime that wake costs the same three things, because a stopped container is started again rather than resumed; on Firecracker an idle stop snapshots the paused guest, so memory does survive it. The `409` is not what tells them apart — `status` is. An idle stop sets `status` to `stopped`, so a client can see it in `GET /sandboxes/{id}` and know what it lost, whereas a crash leaves `status` at `running`. The `409` exists for the case that has no other signal.
 
-**404** `sandbox not found` — Unknown id, the sandbox is past its idle delete-after wake window (`SANDBOX_API_IDLE_DELETE_AFTER`, default `24h`), or the runner no longer tracks the sandbox (eviction, delete, or runner restart). On exec/file/port proxy routes, when the runner signals sandbox gone (`X-Sandbox-Gone: 1` or `{"error":"sandbox not found"}`), the API removes the store row so subsequent `GET /sandboxes/{id}` also returns 404. Other runner **404** responses (for example `execution not found` or missing file paths) do **not** delete the sandbox. Exec and file routes may return **503** or **502** from the runner after the API successfully reaches the runner; the API may return **503** `runner unavailable` before the runner is contacted.
+**404** `sandbox not found` — Unknown id, the sandbox is past its idle delete-after wake window (`SANDBOX_API_IDLE_DELETE_AFTER`, default `24h`), or the runner no longer tracks the sandbox (eviction, delete, or runner restart). On exec/file proxy routes, when the runner signals sandbox gone (`X-Sandbox-Gone: 1` or `{"error":"sandbox not found"}`), the API removes the store row so subsequent `GET /sandboxes/{id}` also returns 404. This rule does not apply to the port route: there the body comes from the process in the sandbox, so a `404` from it never removes the row. Other runner **404** responses (for example `execution not found` or missing file paths) do **not** delete the sandbox. Exec and file routes may return **503** or **502** from the runner after the API successfully reaches the runner; the API may return **503** `runner unavailable` before the runner is contacted.
 
 ---
 
@@ -734,11 +734,14 @@ the sandbox sees no API key.
   removed, query string included. `/sandboxes/{id}/ports/{port}/` forwards `/`;
   the variant without the trailing slash is redirected (`307`) to it.
 
-The request body, method, headers and the response are passed through unchanged
-and unbuffered, so streamed responses and WebSocket upgrades (`101`) work. The
-runner dials the sandbox by its container address and sets the outbound `Host`
-header to `<container-ip>:<port>`, not to the client's `Host`; a dev server that
-checks `Host` sees an IP literal.
+The request body, method and the response are passed through unbuffered, so
+streamed responses and WebSocket upgrades (`101`) work. The runner dials the
+sandbox by its container address and sets the outbound `Host` header to
+`<container-ip>:<port>`, not to the client's `Host`; a dev server that checks
+`Host` sees an IP literal. `X-Sandbox-Gone` and `X-Sandbox-Restarted` set by the
+process in the sandbox are stripped from the response: only the runner may
+signal those states, and a `404` body from the process never removes the store
+row (see the `404` rule above). Other headers pass through unchanged.
 
 A stopped sandbox is woken like on the exec and file routes, and the request
 counts as activity for `last_active_at`. A wake that turned out to be a crash
