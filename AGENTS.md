@@ -50,6 +50,8 @@ Remember to update any relevant documentation in the docs/ folder if any of the 
 
 Document what the code does today, never what is planned.
 
+`docs/examples/compose.*.yaml` are not exercised by CI: when changing the API ↔ runner env or TLS contract, check for inconsistencies.
+
 ## Firecracker runner
 
 All Firecracker runner related files should contain `.ee` or be in a directory that contains `.ee` in the name, so the enterprise license applies.

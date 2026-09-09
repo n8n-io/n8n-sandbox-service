@@ -2,7 +2,7 @@
 # Smoke test against a deployed or local sandbox API.
 #
 # Uses SANDBOX_API_KEY as an admin key to mint a tenant API key, then runs
-# create → exec → resolv.conf → DNS → HTTPS → file write/read → delete
+# create (ephemeral) → exec → resolv.conf → DNS → HTTPS → file write/read → delete
 # with that tenant key (not the admin key).
 #
 # Environment:
@@ -209,12 +209,12 @@ assert_exec() {
 
 create_sandbox() {
 	local label="$1"
-	local create_json="" attempt=0 new_sid=""
+	local create_json="" attempt=0 new_sid="" ephemeral=""
 
 	printf '==> %s\n' "${label}" >&2
 	while [ "${attempt}" -lt 5 ]; do
 		attempt=$((attempt + 1))
-		if create_json="$(api_json -X POST "${BASE}/sandboxes" -d '{}' 2>/dev/null)"; then
+		if create_json="$(api_json -X POST "${BASE}/sandboxes" -d '{"ephemeral":true}' 2>/dev/null)"; then
 			break
 		fi
 		sleep 2
@@ -226,7 +226,11 @@ create_sandbox() {
 	if [ -z "${new_sid}" ] || [ "${new_sid}" = "null" ]; then
 		fail "${label}: missing id"
 	fi
-	printf '    sandbox_id: %s\n' "${new_sid}" >&2
+	ephemeral="$(printf '%s' "${create_json}" | jq -r .ephemeral)"
+	if [ "${ephemeral}" != "true" ]; then
+		fail "${label}: ephemeral ${ephemeral:-<missing>}, want true"
+	fi
+	printf '    sandbox_id: %s (ephemeral)\n' "${new_sid}" >&2
 	printf '%s' "${new_sid}"
 }
 
