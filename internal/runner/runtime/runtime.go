@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"net"
 )
 
 // ErrSandboxNotFound is returned when a sandbox ID is not found.
@@ -18,6 +19,10 @@ var ErrSandboxNotRunning = errors.New("sandbox not running")
 // ErrPortForwardUnsupported is returned by a runtime that cannot reach arbitrary
 // sandbox ports from the runner.
 var ErrPortForwardUnsupported = errors.New("port forwarding not supported by this runtime")
+
+// DialFunc opens a connection to a sandbox address on behalf of the runner, for
+// runtimes whose sandboxes are not reachable from the runner's own network.
+type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 
 // CreateOptions holds optional parameters for sandbox creation.
 type CreateOptions struct{}
@@ -67,8 +72,10 @@ type Runtime interface {
 	EnsureSandboxRunning(ctx context.Context, sandboxID string) (WakeResult, error)
 	DaemonURL(ctx context.Context, sandboxID string) (string, error)
 	// SandboxAddr returns the base URL the runner dials to reach a process listening
-	// on port inside the sandbox. Same not-found and not-running semantics as DaemonURL.
-	SandboxAddr(ctx context.Context, sandboxID string, port int) (string, error)
+	// on port inside the sandbox, and the dialer to reach it with; a nil dialer means
+	// the runner's own network reaches the URL. Same not-found and not-running
+	// semantics as DaemonURL.
+	SandboxAddr(ctx context.Context, sandboxID string, port int) (string, DialFunc, error)
 
 	Shutdown(ctx context.Context)
 }

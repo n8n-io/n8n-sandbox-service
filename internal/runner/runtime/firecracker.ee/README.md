@@ -33,6 +33,7 @@ matter:
 | **TAP** (`fc-tap-0`) | Virtio NIC the microVM talks to; gateway `172.16.0.1`, guest `172.16.0.10` (baked into the golden snapshot). |
 | **veth uplink** (`fc-uplink` in netns ↔ `fc-veth-{slot}` on host) | Routes guest traffic out of the netns to the host routing table. |
 | **Host proxy** (`127.0.0.1:{port}`) | API/exec path: runner listens on the host, dials the guest daemon from inside the netns. |
+| **Port route dialer** | `/sandboxes/{id}/ports/{port}` path: no listener; the runner dials `guest:{port}` from inside the netns once per request (`SandboxAddr`). |
 
 ```
 Guest 172.16.0.10 ── virtio ── TAP (172.16.0.1)
@@ -44,6 +45,7 @@ Guest 172.16.0.10 ── virtio ── TAP (172.16.0.1)
 Host fc-veth-{slot} ── FORWARD ── MASQUERADE ── internet
 
 API/exec: 127.0.0.1 proxy ── setns ── guest:8081
+Port route: runner HTTP transport ── setns ── guest:{port}
 ```
 
 **`network/`** owns sandbox networking: topology (netns, TAP, veth, routes, NAT)

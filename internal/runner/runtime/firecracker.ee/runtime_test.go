@@ -825,6 +825,52 @@ func TestRuntimeStopSandboxKeepsSandboxStopped(t *testing.T) {
 	}
 }
 
+func TestSandboxAddrDialsTheGuestPortInsideTheSandboxNetns(t *testing.T) {
+	rt := testRuntimeT(t, 2)
+	stubCreateDeps(rt)
+	type dialed struct{ netnsPath, network, address string }
+	var got dialed
+	rt.deps.dialInNetNS = func(_ context.Context, netnsPath, network, address string) (net.Conn, error) {
+		got = dialed{netnsPath, network, address}
+		c1, c2 := net.Pipe()
+		_ = c2.Close()
+		return c1, nil
+	}
+
+	if _, _, err := rt.SandboxAddr(context.Background(), "sandbox-id-123456", 5173); !errors.Is(err, runnerruntime.ErrSandboxNotFound) {
+		t.Fatalf("SandboxAddr() before create error = %v, want ErrSandboxNotFound", err)
+	}
+	if _, err := rt.CreateSandbox(context.Background(), "sandbox-id-123456", nil); err != nil {
+		t.Fatalf("CreateSandbox() failed: %v", err)
+	}
+
+	url, dial, err := rt.SandboxAddr(context.Background(), "sandbox-id-123456", 5173)
+	if err != nil {
+		t.Fatalf("SandboxAddr() failed: %v", err)
+	}
+	if url != "http://172.16.0.10:5173" {
+		t.Fatalf("SandboxAddr() = %s, want the guest IP on the requested port", url)
+	}
+	if dial == nil {
+		t.Fatal("SandboxAddr() dialer = nil, want a netns dialer: the runner cannot route to the guest IP")
+	}
+	conn, err := dial(context.Background(), "tcp", "ignored:1")
+	if err != nil {
+		t.Fatalf("dial() failed: %v", err)
+	}
+	_ = conn.Close()
+	if want := (dialed{"/run/netns/fc-sb-0", "tcp", "172.16.0.10:5173"}); got != want {
+		t.Fatalf("dial = %+v, want %+v", got, want)
+	}
+
+	if err := rt.StopSandbox(context.Background(), "sandbox-id-123456"); err != nil {
+		t.Fatalf("StopSandbox() failed: %v", err)
+	}
+	if _, _, err := rt.SandboxAddr(context.Background(), "sandbox-id-123456", 5173); !errors.Is(err, runnerruntime.ErrSandboxNotRunning) {
+		t.Fatalf("SandboxAddr() after stop error = %v, want ErrSandboxNotRunning so the port route wakes it", err)
+	}
+}
+
 func TestRuntimeEnsureSandboxRunningWakesStoppedSandbox(t *testing.T) {
 	rt := testRuntimeT(t, 2)
 	stubCreateDeps(rt)

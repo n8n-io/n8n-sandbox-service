@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -280,6 +281,7 @@ type dependencies struct {
 	statTemplateKernel  func(path string) (kernelPin, error)
 	newProxy            func(ctx context.Context, listenAddr string, netnsName string, guestAddr string) (daemonProxy, error)
 	probeDaemon         func(ctx context.Context, baseURL string) error
+	dialInNetNS         netnsDialFunc
 	freeBytesInDir      func(path string) (int64, error)
 }
 
@@ -302,6 +304,7 @@ func defaultDependencies(fc Config) dependencies {
 		probeDaemon: func(ctx context.Context, baseURL string) error {
 			return probeDaemon(ctx, baseURL, fc.DaemonWaitTimeout)
 		},
+		dialInNetNS:    dialContextInNetNS,
 		freeBytesInDir: freeBytesInDir,
 	}
 }
@@ -480,11 +483,26 @@ func (r *Runtime) DeleteSandbox(ctx context.Context, sandboxID string) error {
 	return r.deleteSandbox(ctx, state)
 }
 
-// SandboxAddr is unsupported: the guest is reachable only through a per-sandbox
-// daemon-port proxy dialing inside its netns (see daemon_proxy.go), and no such
-// proxy exists for other ports.
-func (r *Runtime) SandboxAddr(context.Context, string, int) (string, error) {
-	return "", runnerruntime.ErrPortForwardUnsupported
+// SandboxAddr returns http://<guest-ip>:<port> and a dialer that connects from
+// inside the sandbox's netns, because the guest IP is only routable there. Every
+// sandbox has the same guest IP, so the runner must not pool connections made
+// through this dialer across sandboxes.
+func (r *Runtime) SandboxAddr(_ context.Context, sandboxID string, port int) (string, runnerruntime.DialFunc, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	state, err := r.proxyableStateLocked(sandboxID)
+	if err != nil {
+		return "", nil, err
+	}
+	netnsPath := filepath.Join("/run/netns", state.netnsName)
+	guestAddr := net.JoinHostPort(r.config.GuestIP, strconv.Itoa(port))
+	dial := func(ctx context.Context, network, _ string) (net.Conn, error) {
+		ctx, cancel := context.WithTimeout(ctx, daemonProxyDialTimeout)
+		defer cancel()
+		return r.deps.dialInNetNS(ctx, netnsPath, network, guestAddr)
+	}
+	return "http://" + guestAddr, dial, nil
 }
 
 // DaemonURL returns the host-local proxy URL, not the guest IP directly.
@@ -492,19 +510,29 @@ func (r *Runtime) DaemonURL(_ context.Context, sandboxID string) (string, error)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	state, ok := r.sandboxes[sandboxID]
-	if !ok || state.deleting() {
-		return "", runnerruntime.ErrSandboxNotFound
-	}
-	if state.transition != transitionNone || state.stopped || !state.running {
-		// Reject proxies while a lifecycle transition is in flight, stopped, or not
-		// yet running (create in progress).
-		return "", runnerruntime.ErrSandboxNotRunning
+	state, err := r.proxyableStateLocked(sandboxID)
+	if err != nil {
+		return "", err
 	}
 	if state.daemonURL == "" {
 		return "", runnerruntime.ErrSandboxNetworkUnavailable
 	}
 	return state.daemonURL, nil
+}
+
+// proxyableStateLocked returns the sandbox if requests may be proxied to it right
+// now. Caller holds r.mu.
+func (r *Runtime) proxyableStateLocked(sandboxID string) (*sandboxState, error) {
+	state, ok := r.sandboxes[sandboxID]
+	if !ok || state.deleting() {
+		return nil, runnerruntime.ErrSandboxNotFound
+	}
+	if state.transition != transitionNone || state.stopped || !state.running {
+		// Reject proxies while a lifecycle transition is in flight, stopped, or not
+		// yet running (create in progress).
+		return nil, runnerruntime.ErrSandboxNotRunning
+	}
+	return state, nil
 }
 
 // Shutdown best-effort deletes every sandbox currently tracked by this runtime.

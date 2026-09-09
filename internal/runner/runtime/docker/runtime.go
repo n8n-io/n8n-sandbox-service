@@ -505,8 +505,9 @@ func (m *Runtime) DaemonURL(ctx context.Context, sandboxID string) (string, erro
 // SandboxAddr returns http://<containerIP>:<port>. The runner dials the bridge IP
 // from its own netns, which no ingress rule filters, so any port the sandbox
 // listens on is reachable.
-func (m *Runtime) SandboxAddr(ctx context.Context, sandboxID string, port int) (string, error) {
-	return m.sandboxURL(ctx, sandboxID, port)
+func (m *Runtime) SandboxAddr(ctx context.Context, sandboxID string, port int) (string, runnerruntime.DialFunc, error) {
+	url, err := m.sandboxURL(ctx, sandboxID, port)
+	return url, nil, err
 }
 
 func (m *Runtime) sandboxURL(ctx context.Context, sandboxID string, port int) (string, error) {

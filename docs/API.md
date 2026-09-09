@@ -736,23 +736,31 @@ the sandbox sees no API key.
 
 The request body, method and the response are passed through unbuffered, so
 streamed responses and WebSocket upgrades (`101`) work. The runner dials the
-sandbox by its container address and sets the outbound `Host` header to
-`<container-ip>:<port>`, not to the client's `Host`; a dev server that checks
-`Host` sees an IP literal. `X-Sandbox-Gone` and `X-Sandbox-Restarted` set by the
+sandbox by its own address and sets the outbound `Host` header to
+`<sandbox-ip>:<port>`, not to the client's `Host`; a dev server that checks
+`Host` sees an IP literal. On the Sysbox runtime that is the container's bridge
+IP; on Firecracker it is the guest IP, dialed from inside the sandbox's network
+namespace. Each request opens a new connection to the process; the runner does
+not reuse connections between requests on this route. `X-Sandbox-Gone` and `X-Sandbox-Restarted` set by the
 process in the sandbox are stripped from the response: only the runner may
 signal those states, and a `404` body from the process never removes the store
 row (see the `404` rule above). Other headers pass through unchanged.
 
 A stopped sandbox is woken like on the exec and file routes, and the request
-counts as activity for `last_active_at`. A wake that turned out to be a crash
-recovery answers `409 sandbox_restarted` (see above) — the process the client
-wants to reach is gone in that case and has to be started again.
+counts as activity for `last_active_at`. Whether the process is still there
+after the wake depends on the runtime: on Firecracker an idle stop snapshots the
+paused guest, so a dev server survives it and answers again; on Sysbox the
+container is stopped and started, so the process is gone and the wake answers
+`502` until it is started again. A wake that turned out to be a crash recovery
+answers `409 sandbox_restarted` (see above) — the process the client wants to
+reach is gone in that case on every runtime and has to be started again.
 
 **Response:** whatever the process in the sandbox answers.
 
 **Errors:** `400` invalid id or port outside `1024`–`65535`, `404` sandbox not
 found, `409` sandbox restarted, `501` the runner's runtime cannot forward ports
-(Firecracker), `502` nothing accepts connections on that port in the sandbox.
+(neither shipped runtime returns this), `502` nothing accepts connections on
+that port in the sandbox.
 
 **Example:**
 

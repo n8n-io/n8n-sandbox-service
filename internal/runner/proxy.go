@@ -20,6 +20,8 @@ type proxyContextKey struct{}
 type proxyTarget struct {
 	url  *url.URL
 	path string
+	// dial reaches url when the runner's own network cannot; nil on the daemon routes.
+	dial runnerruntime.DialFunc
 }
 
 // ProxyHandler returns a handler that reverse-proxies requests to the sandbox daemon.

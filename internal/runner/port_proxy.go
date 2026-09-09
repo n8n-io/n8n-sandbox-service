@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
@@ -44,6 +46,19 @@ func PortProxyHandler(rt runnerruntime.Runtime, rec *metrics.RunnerRecorder) htt
 			resp.Header.Del(sandboxproxy.SandboxRestartedHeader)
 			return nil
 		},
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				if pt, ok := ctx.Value(proxyContextKey{}).(*proxyTarget); ok && pt != nil && pt.dial != nil {
+					return pt.dial(ctx, network, addr)
+				}
+				return (&net.Dialer{Timeout: 30 * time.Second}).DialContext(ctx, network, addr)
+			},
+			// Idle connections are pooled by address, and a runtime dialer may reach a
+			// different sandbox at the same address (Firecracker guests share one IP),
+			// so a pooled connection could serve the wrong sandbox. Upgrades are exempt
+			// from the Connection: close this adds, so WebSockets still work.
+			DisableKeepAlives: true,
+		},
 		FlushInterval: -1,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			slog.Warn("port proxy: dial failed", "sandbox_id", r.PathValue("id"), "port", r.PathValue("port"), "err", err)
@@ -58,8 +73,11 @@ func PortProxyHandler(rt runnerruntime.Runtime, rec *metrics.RunnerRecorder) htt
 			return
 		}
 
+		var dial runnerruntime.DialFunc
 		baseURL, ok := resolveSandboxURL(w, r, rt, rec, true, func(ctx context.Context, id string) (string, error) {
-			return rt.SandboxAddr(ctx, id, int(port))
+			addr, d, err := rt.SandboxAddr(ctx, id, int(port))
+			dial = d
+			return addr, err
 		})
 		if !ok {
 			return
@@ -76,7 +94,7 @@ func PortProxyHandler(rt runnerruntime.Runtime, rec *metrics.RunnerRecorder) htt
 			path = "/"
 		}
 
-		ctx := context.WithValue(r.Context(), proxyContextKey{}, &proxyTarget{url: target, path: path})
+		ctx := context.WithValue(r.Context(), proxyContextKey{}, &proxyTarget{url: target, path: path, dial: dial})
 		proxy.ServeHTTP(w, r.WithContext(ctx))
 	}
 }
