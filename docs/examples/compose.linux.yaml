@@ -21,7 +21,7 @@ services:
         bootstrap-mtls.sh
         --out-dir /tls
         --api-san n8n-sandbox-api-local
-        --control-san-prefix n8n-sandbox-runner-local
+        --control-san-prefix n8n-sandbox-runner
         && chown -R sandbox-api:sandbox-api /tls/api
     environment:
       NUM_RUNNERS: ${NUM_RUNNERS:-1}
@@ -49,7 +49,6 @@ services:
       SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE: /tls/ca.crt
       SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE: /tls/control-grpc-api-client.crt
       SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE: /tls/control-grpc-api-client.key
-      SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_SERVER_NAME: n8n-sandbox-runner-local-1
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/healthz"]
       interval: 5s

@@ -16,7 +16,7 @@
 
 services:
   tls-init:
-    image: n8nio/n8n-sandbox-api:latest
+    image: n8nio/n8n-sandbox-service-api:latest
     user: "0:0"
     entrypoint: ["sh", "-c"]
     command:
@@ -24,7 +24,7 @@ services:
         bootstrap-mtls.sh
         --out-dir /tls
         --api-san n8n-sandbox-api-local
-        --control-san-prefix n8n-sandbox-runner-local
+        --control-san-prefix n8n-sandbox-runner
         && chown -R sandbox-api:sandbox-api /tls/api
     environment:
       NUM_RUNNERS: ${NUM_RUNNERS:-1}
@@ -34,7 +34,7 @@ services:
       - sandbox-service
 
   api:
-    image: n8nio/n8n-sandbox-api:latest
+    image: n8nio/n8n-sandbox-service-api:latest
     restart: unless-stopped
     depends_on:
       tls-init:
@@ -52,7 +52,6 @@ services:
       SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE: /tls/ca.crt
       SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE: /tls/control-grpc-api-client.crt
       SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE: /tls/control-grpc-api-client.key
-      SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_SERVER_NAME: n8n-sandbox-runner-local-1
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/healthz"]
       interval: 5s
@@ -65,7 +64,7 @@ services:
           - n8n-sandbox-api
 
   runner:
-    image: n8nio/n8n-sandbox-runner:latest
+    image: n8nio/n8n-sandbox-service-runner-dind:latest
     privileged: true
     restart: unless-stopped
     depends_on:
@@ -79,7 +78,7 @@ services:
       - ./.tls/runner:/tls:ro
     env_file: .env
     environment:
-      SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE: n8nio/n8n-sandbox:latest
+      SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE: n8nio/n8n-sandbox-service-sandbox:latest
       SANDBOX_RUNNER_API_GRPC_ADDR: n8n-sandbox-api:9090
       SANDBOX_RUNNER_HTTP_BASE_URL: https://n8n-sandbox-runner-1:8080
       SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR: ":9091"
