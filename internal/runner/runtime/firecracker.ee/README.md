@@ -21,6 +21,7 @@ Each sandbox slot gets its own network namespace:
 | TAP `fc-tap-0` | Virtio NIC; gateway `172.16.0.1`, guest `172.16.0.10` (baked into the snapshot) |
 | veth `fc-uplink` (netns) ↔ `fc-veth-{slot}` (host) | Routes guest traffic to the host routing table |
 | Host proxy `127.0.0.1:{port}` | Runner listens on the host, dials the guest daemon from inside the netns |
+| Port route dialer | `/sandboxes/{id}/ports/{port}`: no listener; the runner dials `guest:{port}` from inside the netns once per request (`SandboxAddr`) |
 
 ```
 Guest 172.16.0.10 ── virtio ── TAP (172.16.0.1)
@@ -32,6 +33,7 @@ Guest 172.16.0.10 ── virtio ── TAP (172.16.0.1)
 Host fc-veth-{slot} ── FORWARD ── MASQUERADE ── internet
 
 API/exec: 127.0.0.1 proxy ── setns ── guest:8081
+Port route: runner HTTP transport ── setns ── guest:{port}
 ```
 
 `network/network.go` owns topology (netns, TAP, veth, routes, NAT); `network/egress.go` owns the private-CIDR `FORWARD` rules (Docker `netpolicy` parity). Guest IPv6 is disabled via `ipv6.disable=1` in the snapshot boot args; changing boot args requires a snapshot rebuild.

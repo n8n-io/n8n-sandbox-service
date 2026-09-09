@@ -1,13 +1,16 @@
 package runner
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -159,6 +162,95 @@ func TestPortProxyStripsForgedControlSignals(t *testing.T) {
 	}
 	if got := resp.Header.Get("X-Custom"); got != "kept" {
 		t.Errorf("X-Custom = %q, want other headers passed through", got)
+	}
+}
+
+// unreachableAddr returns a loopback address nothing listens on, so a request the
+// proxy dials with the default dialer fails fast instead of reaching the upstream.
+func unreachableAddr(t *testing.T) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := l.Addr().String()
+	_ = l.Close()
+	return addr
+}
+
+func TestPortProxyDialsThroughTheRuntimeDialer(t *testing.T) {
+	type seen struct{ Host, Path, Query string }
+	mux := http.NewServeMux()
+	mux.HandleFunc("/src/main.ts", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(seen{r.Host, r.URL.Path, r.URL.RawQuery})
+	})
+	mux.Handle("/ws", websocket.Server{
+		Handshake: func(*websocket.Config, *http.Request) error { return nil },
+		Handler:   func(ws *websocket.Conn) { _, _ = io.Copy(ws, ws) },
+	})
+	upstream := httptest.NewServer(mux)
+	defer upstream.Close()
+
+	guestAddr := unreachableAddr(t)
+	var dialedAddrs []string
+	var dialMu sync.Mutex
+	rt := &fakeRuntime{
+		daemonURL: "http://" + guestAddr,
+		portDial: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			dialMu.Lock()
+			dialedAddrs = append(dialedAddrs, addr)
+			dialMu.Unlock()
+			return (&net.Dialer{}).DialContext(ctx, network, strings.TrimPrefix(upstream.URL, "http://"))
+		},
+	}
+	runner := portRouter(t, rt)
+
+	resp, err := http.Get(runner.URL + "/sandboxes/" + proxyTestSandboxID + "/ports/5173/src/main.ts?v=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got seen
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode (status %d): %v", resp.StatusCode, err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got.Path != "/src/main.ts" || got.Query != "v=1" {
+		t.Errorf("upstream path = %q query = %q, want /src/main.ts v=1", got.Path, got.Query)
+	}
+	if got.Host != guestAddr {
+		t.Errorf("upstream Host = %q, want the sandbox address %q, not the dialer's", got.Host, guestAddr)
+	}
+
+	wsURL := "ws" + strings.TrimPrefix(runner.URL, "http") + "/sandboxes/" + proxyTestSandboxID + "/ports/5173/ws"
+	ws, err := websocket.Dial(wsURL, "", "http://localhost/")
+	if err != nil {
+		t.Fatalf("websocket dial through runner: %v", err)
+	}
+	defer ws.Close()
+	if _, err := ws.Write([]byte("hello")); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 64)
+	n, err := ws.Read(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(buf[:n]); got != "hello" {
+		t.Errorf("echo = %q", got)
+	}
+
+	dialMu.Lock()
+	defer dialMu.Unlock()
+	if len(dialedAddrs) != 2 {
+		t.Fatalf("runtime dialer calls = %d (%v), want one per request", len(dialedAddrs), dialedAddrs)
+	}
+	for _, addr := range dialedAddrs {
+		if addr != guestAddr {
+			t.Errorf("runtime dialer got addr %q, want %q", addr, guestAddr)
+		}
 	}
 }
 
