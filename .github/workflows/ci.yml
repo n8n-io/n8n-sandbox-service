@@ -60,7 +60,7 @@ jobs:
 
       - uses: pnpm/action-setup@a0ea98b2dc7d387a59324835f7421c1d5f8357b4 # v6
         with:
-          version: 10
+          package_json_file: sdk/package.json
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

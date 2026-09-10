@@ -477,6 +477,11 @@ func isValidUUID(id string) bool {
 	return id != "" && uuidRegex.MatchString(id)
 }
 
+// errRunnerRedirect marks a 3xx from the runner, which the proxy refuses: no
+// runner route redirects, and relaying one would send a client, and the API key
+// it holds, wherever a compromised runner points.
+var errRunnerRedirect = errors.New("runner returned a redirect")
+
 func newRunnerReverseProxy(runnerURL *url.URL, runnerAPIKey string, transport http.RoundTripper, onResponse func(*http.Response)) *httputil.ReverseProxy {
 	target := *runnerURL
 	return &httputil.ReverseProxy{
@@ -500,6 +505,15 @@ func newRunnerReverseProxy(runnerURL *url.URL, runnerAPIKey string, transport ht
 			}
 		},
 		ModifyResponse: func(resp *http.Response) error {
+			// Before onResponse, so a redirect never counts as sandbox activity.
+			if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+				loc := resp.Header.Get("Location")
+				if len(loc) > 200 {
+					loc = loc[:200]
+				}
+				obs.FieldsFrom(resp.Request.Context()).Add("runner_redirect_status", resp.StatusCode, "runner_redirect_location", loc)
+				return errRunnerRedirect
+			}
 			if onResponse != nil {
 				onResponse(resp)
 			}
@@ -507,6 +521,10 @@ func newRunnerReverseProxy(runnerURL *url.URL, runnerAPIKey string, transport ht
 		},
 		FlushInterval: -1,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			if errors.Is(err, errRunnerRedirect) {
+				writeError(w, http.StatusBadGateway, err.Error())
+				return
+			}
 			var maxBytesErr *http.MaxBytesError
 			if errors.As(err, &maxBytesErr) {
 				writeError(w, http.StatusBadRequest, "failed to read request body: "+maxBytesErr.Error())
