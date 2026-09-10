@@ -20,6 +20,7 @@ All services are configured via environment variables.
 | `SANDBOX_API_LOG_LEVEL` | `info` | Minimum log severity (`debug`, `info`, `warn`, `error`; case-insensitive) |
 | `SANDBOX_API_LISTEN_ADDR` | `:8080` | Public HTTP listen address |
 | `SANDBOX_API_GRPC_LISTEN_ADDR` | `:9090` | Private gRPC listen address for runner registration streams |
+| `SANDBOX_API_METRICS_LISTEN_ADDR` | *(empty)* | Dedicated `host:port` for Prometheus `/metrics`. Empty, or the same port as `SANDBOX_API_LISTEN_ADDR`, serves `/metrics` on the public listener; any other port starts a second server that serves only `/metrics`. Must not use the `SANDBOX_API_GRPC_LISTEN_ADDR` port. Ignored, with a warning, when `SANDBOX_API_METRICS_ENABLED=false`. See [Metrics](#metrics). |
 | `SANDBOX_API_STORE` | `sqlite` | Store backend: `sqlite` (default, single API pod) or `postgres` (multi-pod) |
 | `SANDBOX_API_DATA_DIR` | `/var/lib/n8n-sandbox-api` | SQLite store directory when `SANDBOX_API_STORE=sqlite`; must exist and be writable. Mount a persistent volume here to retain sandbox state across API pod restarts. |
 | `SANDBOX_API_POSTGRES_HOST` | *(required with postgres)* | Postgres host |
@@ -31,7 +32,7 @@ All services are configured via environment variables.
 | `SANDBOX_API_MAX_FILE_BYTES` | `10485760` | Maximum file upload size (10 MB) |
 | `SANDBOX_API_DEFAULT_MAX_SANDBOXES` | `50` | Default per-tenant sandbox quota when `POST /admin/tenants` omits `max_sandboxes` (`0` = unlimited). Must fit Postgres/SQLite `INTEGER` (`0`…`2147483647`). Soft check-then-act: concurrent creates can exceed the limit (see `docs/API.md`). |
 | `SANDBOX_API_ENABLE_CORS` | `false` | Enable CORS headers (allow all origins); needed for the browser playground |
-| `SANDBOX_API_METRICS_ENABLED` | `false` | When true, expose Prometheus `/metrics` on the public listener (no `X-Api-Key`; firewall the port). See [Metrics](#metrics). |
+| `SANDBOX_API_METRICS_ENABLED` | `false` | When true, expose Prometheus `/metrics` (no `X-Api-Key`; firewall the port it lands on). `SANDBOX_API_METRICS_LISTEN_ADDR` chooses the listener. See [Metrics](#metrics). |
 | `SANDBOX_API_RUNNER_HEARTBEAT_GRACE` | `45s` | How long after the last gRPC heartbeat a runner remains eligible for placement (Go [`time.ParseDuration`](https://pkg.go.dev/time#ParseDuration) syntax, e.g. `45s`, `2m`) |
 | `SANDBOX_API_ORPHAN_REAP_BUFFER` | `5m` | How long after a runner deregisters before the idle sweeper removes its orphaned sandbox rows from the store |
 | `SANDBOX_API_GRPC_TLS_CERT_FILE` | *(required)* | Server certificate (PEM) for the registration gRPC listener |
@@ -167,11 +168,28 @@ These variables are set inside each sandbox container and are typically baked in
 
 ## Metrics
 
-The API and runner can each expose a Prometheus `/metrics` endpoint on the same HTTP port that serves their public API. Set `SANDBOX_API_METRICS_ENABLED=true` and/or `SANDBOX_RUNNER_METRICS_ENABLED=true` to enable. The endpoint:
+The API and runner can each expose a Prometheus `/metrics` endpoint. Set `SANDBOX_API_METRICS_ENABLED=true` and/or `SANDBOX_RUNNER_METRICS_ENABLED=true` to enable. By default both serve it on the same HTTP port that serves their public API; the API can move it to a port of its own. The endpoint:
 
-- Bypasses `X-Api-Key`, matching the n8n core operator model. Operators are expected to firewall the HTTP port or front it with a private LB; otherwise anyone reaching the listener can read the metrics.
+- Bypasses `X-Api-Key`, matching the n8n core operator model. Operators are expected to firewall the port it lands on or front it with a private LB; otherwise anyone reaching the listener can read the metrics.
 - Uses the `sandbox_` namespace, with a `role` label (`api` or `runner`) on every metric so series from both binaries can live in one Prometheus.
 - Bounds cardinality by labeling HTTP series with the route pattern (e.g. `/sandboxes/{id}/executions`), not the raw path.
+
+### A dedicated metrics port for the API
+
+`SANDBOX_API_METRICS_LISTEN_ADDR` moves the API's `/metrics` to its own listener, so the scrape port can be restricted independently of the port an ingress publishes:
+
+```sh
+SANDBOX_API_LISTEN_ADDR=:8080
+SANDBOX_API_METRICS_ENABLED=true
+SANDBOX_API_METRICS_LISTEN_ADDR=127.0.0.1:9100
+```
+
+- Leaving it empty, or giving it the same port as `SANDBOX_API_LISTEN_ADDR`, keeps `/metrics` on the API listener. That is the default and matches earlier releases.
+- A different port starts a second HTTP server that serves `GET /metrics` and nothing else: no auth, no access log, no CORS, and 404 for every other path. `/metrics` is then a 404 on the public port, and `/healthz` stays there.
+- Using the same port with a different host, or the `SANDBOX_API_GRPC_LISTEN_ADDR` port, is rejected at startup. So is a port already in use, which fails the process rather than starting half-configured.
+- A dedicated listener does not record its own scrapes, so no `route="/metrics"` series appear. On the shared listener they still do. Sums over `sandbox_http_requests_total` therefore step down when a deployment splits the port.
+
+The runner always serves `/metrics` on its own HTTPS listener; it has no equivalent setting.
 
 Series exposed today:
 

@@ -78,6 +78,18 @@ func TestLoadAPIParsesDefaults(t *testing.T) {
 	if cfg.LogLevel != slog.LevelInfo {
 		t.Errorf("expected LogLevel info, got %v", cfg.LogLevel)
 	}
+
+	if cfg.MetricsListenAddr != "" {
+		t.Errorf("expected empty MetricsListenAddr, got %s", cfg.MetricsListenAddr)
+	}
+
+	if !cfg.MetricsOnMainListener() {
+		t.Error("expected /metrics on the API listener by default")
+	}
+
+	if cfg.ResolvedMetricsListenAddr() != ":8080" {
+		t.Errorf("expected ResolvedMetricsListenAddr :8080, got %s", cfg.ResolvedMetricsListenAddr())
+	}
 }
 
 func TestLoadAPIHeartbeatGraceFromEnv(t *testing.T) {
@@ -307,5 +319,142 @@ func TestLoadAPIPostgresStoreRequiresFields(t *testing.T) {
 	}
 	if cfg.Postgres.Host != "db.example.com" || cfg.Postgres.Database != "sandbox" {
 		t.Fatalf("unexpected postgres config: %+v", cfg.Postgres)
+	}
+}
+
+func TestLoadAPIMetricsListenAddrFromEnv(t *testing.T) {
+	t.Setenv("SANDBOX_API_KEYS", "test-key")
+	t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	t.Setenv("SANDBOX_API_METRICS_LISTEN_ADDR", ":9100")
+	setRequiredGRPCMTLS(t)
+
+	cfg, err := LoadAPI()
+	if err != nil {
+		t.Fatalf("LoadAPI() failed: %v", err)
+	}
+	if cfg.MetricsListenAddr != ":9100" {
+		t.Fatalf("MetricsListenAddr: want :9100, got %s", cfg.MetricsListenAddr)
+	}
+	if cfg.MetricsOnMainListener() {
+		t.Fatal("expected a dedicated metrics listener for :9100")
+	}
+	if cfg.ResolvedMetricsListenAddr() != ":9100" {
+		t.Fatalf("ResolvedMetricsListenAddr: want :9100, got %s", cfg.ResolvedMetricsListenAddr())
+	}
+}
+
+func TestLoadAPIMetricsListenAddrSamePortStaysOnMainListener(t *testing.T) {
+	// One port is one socket, however the two addresses spell it.
+	cases := []struct{ listen, metrics string }{
+		{":8080", ":8080"},
+		{":8080", "0.0.0.0:8080"},
+		{"0.0.0.0:8080", ":8080"},
+		{"[::]:8080", ":8080"},
+		{"127.0.0.1:8081", "127.0.0.1:8081"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.listen+"_"+tc.metrics, func(t *testing.T) {
+			t.Setenv("SANDBOX_API_KEYS", "test-key")
+			t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+			t.Setenv("SANDBOX_API_LISTEN_ADDR", tc.listen)
+			t.Setenv("SANDBOX_API_METRICS_LISTEN_ADDR", tc.metrics)
+			setRequiredGRPCMTLS(t)
+
+			cfg, err := LoadAPI()
+			if err != nil {
+				t.Fatalf("LoadAPI() failed: %v", err)
+			}
+			if !cfg.MetricsOnMainListener() {
+				t.Fatalf("expected /metrics on the API listener for listen=%q metrics=%q", tc.listen, tc.metrics)
+			}
+			if cfg.ResolvedMetricsListenAddr() != tc.listen {
+				t.Fatalf("ResolvedMetricsListenAddr: want %s, got %s", tc.listen, cfg.ResolvedMetricsListenAddr())
+			}
+		})
+	}
+}
+
+func TestLoadAPIMetricsListenAddrFollowsCustomListenAddr(t *testing.T) {
+	t.Setenv("SANDBOX_API_KEYS", "test-key")
+	t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	t.Setenv("SANDBOX_API_LISTEN_ADDR", "127.0.0.1:8080")
+	setRequiredGRPCMTLS(t)
+
+	cfg, err := LoadAPI()
+	if err != nil {
+		t.Fatalf("LoadAPI() failed: %v", err)
+	}
+	if !cfg.MetricsOnMainListener() {
+		t.Fatal("expected /metrics on the API listener when only the API addr is set")
+	}
+	if cfg.ResolvedMetricsListenAddr() != "127.0.0.1:8080" {
+		t.Fatalf("ResolvedMetricsListenAddr: want 127.0.0.1:8080, got %s", cfg.ResolvedMetricsListenAddr())
+	}
+}
+
+func TestLoadAPIRejectsMetricsListenAddrHostMismatchOnSamePort(t *testing.T) {
+	cases := []struct{ listen, metrics string }{
+		{"127.0.0.1:8080", "0.0.0.0:8080"},
+		{"0.0.0.0:8080", "127.0.0.1:8080"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.listen+"_"+tc.metrics, func(t *testing.T) {
+			t.Setenv("SANDBOX_API_KEYS", "test-key")
+			t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+			t.Setenv("SANDBOX_API_LISTEN_ADDR", tc.listen)
+			t.Setenv("SANDBOX_API_METRICS_LISTEN_ADDR", tc.metrics)
+			setRequiredGRPCMTLS(t)
+
+			if _, err := LoadAPI(); err == nil {
+				t.Fatalf("expected LoadAPI to reject listen=%q with metrics=%q", tc.listen, tc.metrics)
+			}
+		})
+	}
+}
+
+func TestLoadAPIRejectsMetricsListenAddrOnGRPCPort(t *testing.T) {
+	t.Setenv("SANDBOX_API_KEYS", "test-key")
+	t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	t.Setenv("SANDBOX_API_METRICS_LISTEN_ADDR", ":9090")
+	setRequiredGRPCMTLS(t)
+
+	if _, err := LoadAPI(); err == nil {
+		t.Fatal("expected LoadAPI to reject a metrics addr on the runner-registry gRPC port")
+	}
+}
+
+func TestLoadAPIRejectsInvalidMetricsListenAddr(t *testing.T) {
+	for _, v := range []string{"9100", ":0", ":99999", "localhost", ":abc"} {
+		t.Run(v, func(t *testing.T) {
+			t.Setenv("SANDBOX_API_KEYS", "test-key")
+			t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+			t.Setenv("SANDBOX_API_METRICS_LISTEN_ADDR", v)
+			setRequiredGRPCMTLS(t)
+
+			if _, err := LoadAPI(); err == nil {
+				t.Fatalf("expected LoadAPI to reject SANDBOX_API_METRICS_LISTEN_ADDR=%q", v)
+			}
+		})
+	}
+}
+
+func TestLoadAPIMetricsListenAddrLoadsWhenMetricsDisabled(t *testing.T) {
+	// The chart derives METRICS_ENABLED from the ServiceMonitor values and the
+	// addr from api.config, so the combination must load and only warn.
+	t.Setenv("SANDBOX_API_KEYS", "test-key")
+	t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	t.Setenv("SANDBOX_API_METRICS_LISTEN_ADDR", ":9100")
+	t.Setenv("SANDBOX_API_METRICS_ENABLED", "false")
+	setRequiredGRPCMTLS(t)
+
+	cfg, err := LoadAPI()
+	if err != nil {
+		t.Fatalf("LoadAPI() failed: %v", err)
+	}
+	if cfg.MetricsEnabled {
+		t.Fatal("expected MetricsEnabled false")
+	}
+	if cfg.MetricsListenAddr != ":9100" {
+		t.Fatalf("MetricsListenAddr: want :9100, got %s", cfg.MetricsListenAddr)
 	}
 }

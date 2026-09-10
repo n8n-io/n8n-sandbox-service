@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -93,9 +94,16 @@ type APIConfig struct {
 
 	// MetricsEnabled controls whether the Prometheus /metrics endpoint is served.
 	// Parsed from SANDBOX_API_METRICS_ENABLED (default false). When true, /metrics
-	// is exposed on the public listener and bypasses X-Api-Key authentication;
-	// operators are expected to firewall the port or front it with a private LB.
+	// bypasses X-Api-Key authentication on whichever listener serves it; operators
+	// are expected to firewall that port or front it with a private LB.
 	MetricsEnabled bool
+
+	// MetricsListenAddr is the TCP address for a dedicated Prometheus listener.
+	// Parsed from SANDBOX_API_METRICS_LISTEN_ADDR (default empty). Empty, or the
+	// same port as ListenAddr, keeps /metrics on the public API listener; any
+	// other port starts a second server that serves only /metrics. Ignored when
+	// MetricsEnabled is false.
+	MetricsListenAddr string
 
 	// Runner registration gRPC mTLS (required). All three must be set.
 	GRPCServerCertFile string
@@ -176,6 +184,27 @@ func LoadAPI() (*APIConfig, error) {
 
 	if v := os.Getenv("SANDBOX_API_GRPC_LISTEN_ADDR"); v != "" {
 		cfg.GRPCListenAddr = v
+	}
+
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_METRICS_LISTEN_ADDR")); v != "" {
+		if err := validateListenAddr(v); err != nil {
+			return nil, fmt.Errorf("SANDBOX_API_METRICS_LISTEN_ADDR must be host:port (e.g. :9100), got %q: %w", v, err)
+		}
+		cfg.MetricsListenAddr = v
+	}
+	if cfg.MetricsListenAddr != "" {
+		// One port is one socket, and the mTLS gRPC server owns its own. Failing
+		// here beats an EADDRINUSE crash loop with no hint which vars collided.
+		if listenPort(cfg.MetricsListenAddr) == listenPort(cfg.GRPCListenAddr) {
+			return nil, fmt.Errorf("SANDBOX_API_METRICS_LISTEN_ADDR (%q) must not use the same port as SANDBOX_API_GRPC_LISTEN_ADDR (%q)", cfg.MetricsListenAddr, cfg.GRPCListenAddr)
+		}
+		// Sharing the API port means the API listener serves /metrics, so a
+		// different host there would be silently ignored — and quietly binding
+		// metrics to loopback when the operator asked for every interface (or
+		// the reverse) is not something to paper over.
+		if cfg.MetricsOnMainListener() && !sameListenHost(cfg.MetricsListenAddr, cfg.ListenAddr) {
+			return nil, fmt.Errorf("SANDBOX_API_METRICS_LISTEN_ADDR (%q) uses the port of SANDBOX_API_LISTEN_ADDR (%q) but a different host; leave it unset to serve /metrics on the API listener", cfg.MetricsListenAddr, cfg.ListenAddr)
+		}
 	}
 
 	cfg.RegistrationToken = os.Getenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN")
@@ -348,4 +377,69 @@ func LoadAPI() (*APIConfig, error) {
 	}
 
 	return cfg, nil
+}
+
+// MetricsOnMainListener reports whether /metrics is served by the public API
+// listener rather than by a dedicated one. True when MetricsListenAddr is unset
+// or names the same port as ListenAddr, since one port is one socket.
+func (c *APIConfig) MetricsOnMainListener() bool {
+	if c.MetricsListenAddr == "" {
+		return true
+	}
+	return listenPort(c.MetricsListenAddr) == listenPort(c.ListenAddr)
+}
+
+// ResolvedMetricsListenAddr returns the address /metrics is reachable on.
+func (c *APIConfig) ResolvedMetricsListenAddr() string {
+	if c.MetricsOnMainListener() {
+		return c.ListenAddr
+	}
+	return c.MetricsListenAddr
+}
+
+// validateListenAddr accepts any host a listener may bind — empty (":9100"),
+// loopback, or an explicit interface — and requires a usable numeric port.
+func validateListenAddr(v string) error {
+	_, port, err := net.SplitHostPort(strings.TrimSpace(v))
+	if err != nil {
+		return err
+	}
+	p, err := strconv.Atoi(port)
+	if err != nil || p <= 0 || p > 65535 {
+		return fmt.Errorf("invalid port %q", port)
+	}
+	return nil
+}
+
+// listenPort returns the port part of a listen address, or "" when it has none.
+// Ports are compared as strings so service names (":http") work too.
+func listenPort(addr string) string {
+	_, port, err := net.SplitHostPort(strings.TrimSpace(addr))
+	if err != nil {
+		return ""
+	}
+	return port
+}
+
+// sameListenHost reports whether two listen addresses bind the same interface.
+// Every spelling of "all interfaces" counts as one host, so ":8080" and
+// "[::]:8080" are not treated as a conflict.
+func sameListenHost(a, b string) bool {
+	hostA, _, errA := net.SplitHostPort(strings.TrimSpace(a))
+	hostB, _, errB := net.SplitHostPort(strings.TrimSpace(b))
+	if errA != nil || errB != nil {
+		return false
+	}
+	if isWildcardHost(hostA) && isWildcardHost(hostB) {
+		return true
+	}
+	return hostA == hostB
+}
+
+func isWildcardHost(host string) bool {
+	switch strings.TrimSpace(host) {
+	case "", "0.0.0.0", "::":
+		return true
+	}
+	return false
 }

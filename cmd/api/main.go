@@ -86,7 +86,13 @@ func main() {
 			return float64(n)
 		})
 		mrec.SetRunnersRegistered(func() float64 { return float64(runnerReg.Len()) })
-		slog.Info("metrics endpoint enabled", "path", "/metrics")
+		slog.Info("metrics endpoint enabled",
+			"path", "/metrics",
+			"addr", cfg.ResolvedMetricsListenAddr(),
+			"dedicated_listener", !cfg.MetricsOnMainListener())
+	} else if cfg.MetricsListenAddr != "" {
+		slog.Warn("metrics listen addr set but SANDBOX_API_METRICS_ENABLED is false; no metrics listener will start",
+			"addr", cfg.MetricsListenAddr)
 	}
 
 	api.LogIdleSweepConfig(cfg)
@@ -110,6 +116,31 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
+	// A dedicated metrics listener keeps /metrics off the port an ingress
+	// publishes. Bind it here, before any goroutine starts, so an occupied port
+	// fails at startup instead of racing the signal handler.
+	var (
+		metricsSrv *http.Server
+		metricsLis net.Listener
+	)
+	if mrec.Enabled() && !cfg.MetricsOnMainListener() {
+		metricsSrv = &http.Server{
+			Addr:              cfg.MetricsListenAddr,
+			Handler:           api.NewMetricsRouter(mrec),
+			ReadTimeout:       30 * time.Second,
+			ReadHeaderTimeout: 10 * time.Second,
+			// The API server needs WriteTimeout 0 for streamed execution
+			// responses; a scrape does not, so keep a deadline here.
+			WriteTimeout: 30 * time.Second,
+			IdleTimeout:  120 * time.Second,
+		}
+		metricsLis, err = net.Listen("tcp", cfg.MetricsListenAddr)
+		if err != nil {
+			slog.Error("metrics listen", "addr", cfg.MetricsListenAddr, "error", err)
+			os.Exit(1)
+		}
+	}
+
 	grpcLis, err := net.Listen("tcp", cfg.GRPCListenAddr)
 	if err != nil {
 		slog.Error("grpc listen", "addr", cfg.GRPCListenAddr, "error", err)
@@ -131,7 +162,8 @@ func main() {
 		Reg:   runnerReg,
 	})
 
-	serverErr := make(chan error, 1)
+	// One slot per listener, so a second failure never blocks its goroutine.
+	serverErr := make(chan error, 3)
 	go func() {
 		slog.Info("api listening", "addr", cfg.ListenAddr, "grpc_addr", cfg.GRPCListenAddr, "store", cfg.Store)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -146,6 +178,15 @@ func main() {
 			serverErr <- err
 		}
 	}()
+
+	if metricsSrv != nil {
+		go func() {
+			slog.Info("metrics listening", "addr", cfg.MetricsListenAddr, "path", "/metrics")
+			if err := metricsSrv.Serve(metricsLis); err != nil && err != http.ErrServerClosed {
+				serverErr <- err
+			}
+		}()
+	}
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
@@ -165,6 +206,12 @@ func main() {
 	grpcSrv.Stop()
 	if err := srv.Shutdown(ctx); err != nil {
 		slog.Error("graceful shutdown failed", "error", err)
+	}
+	// Metrics last: a draining pod's final scrape is the one worth keeping.
+	if metricsSrv != nil {
+		if err := metricsSrv.Shutdown(ctx); err != nil {
+			slog.Error("metrics graceful shutdown failed", "error", err)
+		}
 	}
 
 	slog.Info("api stopped")

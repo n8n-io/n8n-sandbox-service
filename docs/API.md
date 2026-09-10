@@ -1,6 +1,6 @@
 # Sandbox Service API
 
-All endpoints except `/healthz` and `/metrics` require the `X-Api-Key` header for authentication. `/metrics` is only exposed when `SANDBOX_API_METRICS_ENABLED=true` and is intended to be scraped over a private network.
+All endpoints except `/healthz` and `/metrics` require the `X-Api-Key` header for authentication. `/metrics` is only exposed when `SANDBOX_API_METRICS_ENABLED=true` and is intended to be scraped over a private network; `SANDBOX_API_METRICS_LISTEN_ADDR` can move it to a port of its own, off the port that serves this API.
 
 ### API keys and tenants
 
@@ -96,6 +96,8 @@ curl http://localhost:8080/healthz
 
 Prometheus exposition of the API's metrics. Only mounted when `SANDBOX_API_METRICS_ENABLED=true`; bypasses `X-Api-Key` so a scraper can reach it. Firewall the listener or front it with a private LB.
 
+Served on the port that serves this API unless `SANDBOX_API_METRICS_LISTEN_ADDR` names another one, in which case a dedicated listener serves it and this path is a `404` here. See [configuration.md](configuration.md#metrics).
+
 Metric families include:
 
 - `sandbox_http_requests_total{role,route,method,status}` — request counter; `route` is the matched route pattern (e.g. `/sandboxes/{id}`), not the raw path.
@@ -111,6 +113,8 @@ Metric families include:
 
 ```bash
 curl http://localhost:8080/metrics
+# with SANDBOX_API_METRICS_LISTEN_ADDR=127.0.0.1:9100
+curl http://127.0.0.1:9100/metrics
 ```
 
 ---

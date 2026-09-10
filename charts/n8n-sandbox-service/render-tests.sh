@@ -150,6 +150,47 @@ for length in 1 20 40 41 42 43 44 45 46 47 48 49 50 53; do
 	done
 done
 
+echo "==> the API serves metrics on its HTTP port by default"
+# dataPlane.mode=external isolates the API ServiceMonitor: both live in one
+# rendered file, so the runner's would otherwise satisfy these greps too.
+api_only=(--set dataPlane.mode=external --set monitoring.serviceMonitor.enabled=true)
+render "${api_only[@]}" --show-only templates/configmap.yaml |
+	grep -q 'SANDBOX_API_METRICS_LISTEN_ADDR: ""'
+render "${api_only[@]}" --show-only templates/servicemonitor.yaml | grep -q 'port: http'
+# Render first, then test the captured output: set -e is suspended inside an if
+# condition, so a broken template would look like a correctly absent port.
+default_service=$(render "${api_only[@]}" --show-only templates/api-service.yaml)
+if grep -q 'name: metrics' <<<"$default_service"; then
+	echo "the default must not add a metrics Service port" >&2
+	exit 1
+fi
+
+echo "==> a dedicated metrics port moves the container port, Service port, scrape and policy"
+# --set-string, or helm reads the leading colon as a nested key.
+separate=("${api_only[@]}" --set-string api.config.metricsListenAddr=:9100)
+render "${separate[@]}" --show-only templates/api-deployment.yaml | grep -q 'containerPort: 9100'
+render "${separate[@]}" --show-only templates/api-service.yaml | grep -q 'port: 9100'
+render "${separate[@]}" --show-only templates/servicemonitor.yaml | grep -q 'port: metrics'
+render "${separate[@]}" --set networkPolicy.enabled=true \
+	--show-only templates/networkpolicy.yaml | grep -q 'port: metrics'
+
+echo "==> a metrics addr on the API port keeps the shared listener"
+shared=("${api_only[@]}" --set-string api.config.metricsListenAddr=:8080)
+shared_service=$(render "${shared[@]}" --show-only templates/api-service.yaml)
+if grep -q 'name: metrics' <<<"$shared_service"; then
+	echo "a metrics addr on the API port must not add a Service port" >&2
+	exit 1
+fi
+render "${shared[@]}" --show-only templates/servicemonitor.yaml | grep -q 'port: http'
+
+echo "==> conflicting metrics addresses fail the render"
+must_fail "must not use the port of api.config.grpcListenAddr" \
+	--set-string api.config.metricsListenAddr=:9090
+must_fail "leave it empty to serve /metrics on the API listener" \
+	--set-string api.config.metricsListenAddr=0.0.0.0:8080
+must_fail "must be host:port with a numeric port" \
+	--set-string api.config.metricsListenAddr=9100
+
 echo "==> the runner scrape verifies TLS by default"
 # The default must pin serverName to a name the runner certificate actually
 # carries, or the scrape fails to verify. Compare against the issued SANs

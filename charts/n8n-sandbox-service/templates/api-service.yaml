@@ -20,3 +20,8 @@ spec:
     - name: grpc
       port: {{ .Values.api.service.grpcPort }}
       targetPort: grpc
+    {{- with (include "n8n-sandbox-service.apiMetricsPort" .) }}
+    - name: metrics
+      port: {{ . }}
+      targetPort: metrics
+    {{- end }}
