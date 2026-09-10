@@ -49,8 +49,15 @@ bash charts/n8n-sandbox-service/render-tests.sh
 Remember to update any relevant documentation in the docs/ folder if any of the changes affect them.
 
 Document what the code does today, never what is planned.
+Keep documentation as short as possible.
 
 `docs/examples/compose.*.yaml` are not exercised by CI: when changing the API ↔ runner env or TLS contract, check for inconsistencies.
+
+## Security review before reporting done
+
+After changing anything other than docs or tests, review the diff for security
+regressions before you report the work done. Use a fresh context where the
+tooling allows.
 
 ## Firecracker runner
 

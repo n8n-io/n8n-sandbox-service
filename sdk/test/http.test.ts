@@ -250,4 +250,33 @@ describe("HttpClient", () => {
       await postServer.close();
     }
   });
+
+  it("never follows a redirect, so the API key never reaches another origin", async () => {
+    let targetHits = 0;
+    const target = await startTestServer((_req, res) => {
+      targetHits += 1;
+      res.writeHead(200);
+      res.end();
+    });
+    const redirecting = await startTestServer((_req, res) => {
+      res.writeHead(302, { Location: `${target.baseUrl}/steal` });
+      res.end();
+    });
+
+    try {
+      const client = new HttpClient(redirecting.baseUrl, "secret-key", { attempts: 0 });
+      const calls = [
+        client.requestJson("GET", "/redirect"),
+        client.requestStream("GET", "/redirect"),
+        client.requestBuffer("GET", "/redirect"),
+      ];
+      for (const call of calls) {
+        await expect(call).rejects.toMatchObject({ name: "SandboxServiceError", status: 302 });
+      }
+      expect(targetHits).toBe(0);
+    } finally {
+      await redirecting.close();
+      await target.close();
+    }
+  });
 });

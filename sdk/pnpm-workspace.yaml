@@ -1,0 +1,5 @@
+# pnpm fails the install on a build script nobody has ruled on. esbuild's
+# postinstall only re-checks the platform binary that @esbuild/* already ships,
+# so keep it off.
+allowBuilds:
+  esbuild: false

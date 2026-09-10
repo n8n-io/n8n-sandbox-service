@@ -160,6 +160,8 @@ try {
 
 `deleteSandbox` treats HTTP 404 as success (already gone), so a retried delete after a dropped `204` does not fail.
 
+The client never follows redirects: a 3xx is thrown as `SandboxServiceError` like any other non-2xx, so the API key is never re-sent to a different host. Point `baseUrl` at the service directly, not at something that redirects to it.
+
 ### Sandbox restarts
 
 If a sandbox's guest crashes, the service recovers it by rebooting its filesystem and then fails the request that triggered the recovery with `SandboxCrashedError` (HTTP 409). The files are intact; everything that was in memory is not. Retry the request once — the sandbox is already running again — and relaunch whatever it was running in the background:

@@ -46,7 +46,7 @@ Cross-tenant and non-existent sandboxes both return `404`, so a tenant cannot
 use the status code to learn whether an ID exists.
 
 Error bodies the API generates itself have runner-side sandbox paths stripped
-before they are returned; responses proxied from a runner are relayed as-is.
+before they are returned.
 
 ## API to runner
 
@@ -83,7 +83,9 @@ what one runner holds drives every runner.
 The proxy replaces the caller's `X-Api-Key` with the runner API key before
 forwarding, so tenant and admin keys never reach a runner, and it forwards the
 trace context it established rather than the caller's header. Responses are
-relayed to the client as the runner returned them.
+relayed to the client as the runner returned them, except a 3xx, which is
+refused with `502` so a runner cannot redirect a client, and the API key it
+holds, to another host.
 
 The API keeps the TLS guarantee from being negotiated away by the runner. A
 runner names its own address in heartbeats, and Go applies a transport's

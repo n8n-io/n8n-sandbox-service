@@ -33,6 +33,7 @@ export class HttpClient {
     this.instance = axios.create({
       baseURL: normalizedBase,
       headers: apiKey ? { "X-Api-Key": apiKey } : {},
+      maxRedirects: 0,
     });
     this.retry = {
       attempts: Math.max(0, retry?.attempts ?? 3),
@@ -80,7 +81,7 @@ export class HttpClient {
           validateStatus: () => true,
         });
 
-        if (response.status >= 400) {
+        if (response.status >= 300) {
           const body = await this.drainStream(response.data);
           throw createErrorFromResponse(response.status, this.tryParseJson(body), response.headers);
         }
@@ -111,7 +112,7 @@ export class HttpClient {
         });
 
         const body = Buffer.from(response.data);
-        if (response.status >= 400) {
+        if (response.status >= 300) {
           throw createErrorFromResponse(
             response.status,
             this.tryParseJson(body.toString("utf-8")),
