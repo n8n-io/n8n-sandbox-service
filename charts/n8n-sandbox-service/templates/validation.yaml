@@ -98,6 +98,19 @@ way net.Listen does, so a named port here would silently compare as 0.
 {{- fail (printf "api.config.metricsListenAddr (%q) must not use the port of api.config.grpcListenAddr (%q): one port cannot serve both" $apiMetricsAddr $apiGrpcAddr) -}}
 {{- end -}}
 {{- $apiListenPort := last (splitList ":" $apiListenAddr) -}}
+{{/*
+api.service.httpPort and grpcPort are Service-facing numbers, independent of
+the container ports the API binds (api-service.yaml reaches those by name). The
+metrics Service port is the container port itself, so it can land on one of
+them and leave the Service listing a port twice, which is invalid.
+*/}}
+{{- if ne (atoi $apiMetricsPort) (atoi $apiListenPort) -}}
+{{- $httpServicePort := atoi (toString .Values.api.service.httpPort) -}}
+{{- $grpcServicePort := atoi (toString .Values.api.service.grpcPort) -}}
+{{- if or (eq (atoi $apiMetricsPort) $httpServicePort) (eq (atoi $apiMetricsPort) $grpcServicePort) -}}
+{{- fail (printf "api.config.metricsListenAddr (%q) repeats an API Service port (api.service.httpPort=%v, api.service.grpcPort=%v): a Service cannot list one port twice" $apiMetricsAddr .Values.api.service.httpPort .Values.api.service.grpcPort) -}}
+{{- end -}}
+{{- end -}}
 {{- $metricsHost := trimSuffix "]" (trimPrefix "[" (trimSuffix (printf ":%s" $apiMetricsPort) $apiMetricsAddr)) -}}
 {{/* Brackets stripped and wildcards folded together, matching sameListenHost in internal/api/config. */}}
 {{- if eq (atoi $apiMetricsPort) (atoi $apiListenPort) -}}
