@@ -1,8 +1,10 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -132,5 +134,26 @@ func TestGatewayMetricsEndpointDisabledReturns404(t *testing.T) {
 
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("expected %d, got %d", http.StatusNotFound, rr.Code)
+	}
+}
+
+func TestHealthzAdvertisesThePortRouteCapability(t *testing.T) {
+	handler, _ := newTestGateway(t, "admin-key")
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var body struct {
+		Status       string   `json:"status"`
+		Capabilities []string `json:"capabilities"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.Status != "ok" || !slices.Contains(body.Capabilities, "ports") {
+		t.Fatalf("body = %s, want status ok with the ports capability", rec.Body.String())
 	}
 }
