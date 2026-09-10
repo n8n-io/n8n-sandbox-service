@@ -76,12 +76,16 @@ An ordinary wake from an idle stop stays transparent: no `409`, no header. On th
 
 ### GET /healthz
 
-Health check. No authentication required.
+Health check. No authentication required. `capabilities` lists optional
+features of this deployment so a client can pick a code path before it makes
+any authenticated call; `ports` means the
+[`/sandboxes/{id}/ports/{port}/…`](#any-sandboxesidportsportpath) route exists.
+Older deployments omit the field.
 
 **Response:** `200 OK`
 
 ```json
-{"status": "ok"}
+{"status": "ok", "capabilities": ["ports"]}
 ```
 
 **Example:**

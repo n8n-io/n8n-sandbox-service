@@ -1,8 +1,10 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -169,5 +171,26 @@ func TestGatewayOmitsMetricsWhenOnDedicatedListener(t *testing.T) {
 
 	if listRR.Code != http.StatusOK {
 		t.Fatalf("/sandboxes: expected %d, got %d", http.StatusOK, listRR.Code)
+	}
+}
+
+func TestHealthzAdvertisesThePortRouteCapability(t *testing.T) {
+	handler, _ := newTestGateway(t, "admin-key")
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var body struct {
+		Status       string   `json:"status"`
+		Capabilities []string `json:"capabilities"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.Status != "ok" || !slices.Contains(body.Capabilities, "ports") {
+		t.Fatalf("body = %s, want status ok with the ports capability", rec.Body.String())
 	}
 }
