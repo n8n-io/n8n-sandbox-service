@@ -310,6 +310,7 @@ When enabled, the chart renders Kubernetes `NetworkPolicy` resources for the API
 
 - API HTTP remains reachable from all sources by default so an existing ingress controller continues to work. Set `networkPolicy.api.httpIngressFrom` to restrict it to your ingress controller.
 - API registration gRPC is reachable from the in-chart runner by default. In external data-plane mode it is denied unless peers are added through `networkPolicy.api.grpcIngressFrom`.
+- The API metrics port, when `api.config.metricsListenAddr` sets one, is reachable from all sources by default so an existing Prometheus keeps scraping. Set `networkPolicy.api.metricsIngressFrom` to restrict it to your monitoring namespace.
 - Runner HTTP/control ports are reachable from the in-chart API by default. Add peers through `networkPolicy.runner.ingressFrom` only if another component needs direct runner access.
 
 Example restricting public API traffic to an ingress controller namespace:
@@ -326,7 +327,7 @@ networkPolicy:
 
 ## Prometheus Metrics
 
-The API and the in-cluster runner expose Prometheus metrics on their HTTP port at `/metrics`. If your cluster uses Prometheus Operator, enable `ServiceMonitor` resources:
+The API and the in-cluster runner expose Prometheus metrics at `/metrics`, by default on the same HTTP port that serves their API. If your cluster uses Prometheus Operator, enable `ServiceMonitor` resources:
 
 ```yaml
 monitoring:
@@ -337,6 +338,20 @@ monitoring:
 ```
 
 This renders one `ServiceMonitor` for the API Service and, when the in-chart runner is enabled, one for the runner headless Service. It also enables the matching `/metrics` handlers in the API and runner containers. Use `monitoring.serviceMonitor.api.enabled` or `monitoring.serviceMonitor.runner.enabled` to disable either scrape target.
+
+### A dedicated metrics port for the API
+
+`api.config.metricsListenAddr` moves the API's `/metrics` off the port an Ingress publishes:
+
+```yaml
+api:
+  config:
+    metricsListenAddr: ":9100"
+```
+
+The chart then adds a `metrics` container port and Service port, points the API `ServiceMonitor` at it instead of `http`, and — when `networkPolicy.enabled` — renders an ingress rule for it that `networkPolicy.api.metricsIngressFrom` restricts. Leaving the value empty, or giving it the `api.config.listenAddr` port, keeps `/metrics` on the API's HTTP port, which is the default and what earlier chart versions rendered.
+
+The port must not collide with `api.config.grpcListenAddr`, and if it uses the `api.config.listenAddr` port the whole address must match it; either mistake fails the render. This needs an API image that supports `SANDBOX_API_METRICS_LISTEN_ADDR`. An image predating it ignores the variable and keeps serving `/metrics` on its HTTP port, which leaves the scrape pointed at a port nothing listens on — the target shows as connection-refused rather than silently returning partial data.
 
 The runner's HTTP listener serves TLS, so its scrape overrides the shared `scheme` with `monitoring.serviceMonitor.runner.scheme` (`https`). The scrape verifies that TLS by default: with `monitoring.serviceMonitor.runner.tlsConfig` left empty, the chart points `ca` at `tls.certificates.runnerControlServer.secretName` and pins `serverName` to the runner Service DNS name. Targets are scraped by pod IP, which is not a SAN, so that pin is what makes verification succeed; every runner pod presents the same certificate, so one name covers the StatefulSet.
 

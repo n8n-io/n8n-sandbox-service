@@ -69,6 +69,20 @@
 {{- end -}}
 {{- end -}}
 {{- end -}}
+{{- $apiMetricsAddr := .Values.api.config.metricsListenAddr | default "" | toString | trim -}}
+{{- if $apiMetricsAddr -}}
+{{- $apiMetricsPort := last (splitList ":" $apiMetricsAddr) -}}
+{{- if or (not (contains ":" $apiMetricsAddr)) (not (regexMatch "^[1-9][0-9]{0,4}$" $apiMetricsPort)) -}}
+{{- fail (printf "api.config.metricsListenAddr must be host:port with a numeric port, e.g. \":9100\" (got %q)" $apiMetricsAddr) -}}
+{{- end -}}
+{{- $apiListenAddr := .Values.api.config.listenAddr | toString | trim -}}
+{{- if eq $apiMetricsPort (last (splitList ":" (.Values.api.config.grpcListenAddr | toString | trim))) -}}
+{{- fail (printf "api.config.metricsListenAddr (%q) must not use the port of api.config.grpcListenAddr (%q): one port cannot serve both" $apiMetricsAddr (.Values.api.config.grpcListenAddr | toString)) -}}
+{{- end -}}
+{{- if and (eq $apiMetricsPort (last (splitList ":" $apiListenAddr))) (ne $apiMetricsAddr $apiListenAddr) -}}
+{{- fail (printf "api.config.metricsListenAddr (%q) uses the port of api.config.listenAddr (%q) but a different host: leave it empty to serve /metrics on the API listener" $apiMetricsAddr $apiListenAddr) -}}
+{{- end -}}
+{{- end -}}
 {{- if not .Values.auth.existingSecret -}}
 {{- range $key := list "apiKeys" "runnerRegistrationToken" "runnerApiKey" "runnerApiKeys" -}}
 {{- $stringValue := default "" (index $.Values.auth.generated $key) | toString | trim -}}

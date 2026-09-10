@@ -2,7 +2,7 @@ apiVersion: v2
 name: n8n-sandbox-service
 description: n8n Sandbox Service control plane with optional in-cluster Docker-in-Docker runner
 type: application
-version: "0.6.6"
+version: "0.7.0"
 # The single release version shared by the API, runner, and sandbox images. Image
 # tags default to it, so this is the set that is supported together. Bumped by
 # the release workflow together with VERSION (see docs/RELEASE.md).

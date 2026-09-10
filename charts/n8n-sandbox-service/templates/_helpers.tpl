@@ -110,3 +110,19 @@ app.kubernetes.io/component: {{ .component }}
 {{- define "n8n-sandbox-service.sandboxImage" -}}
 {{- printf "%s:%s" .Values.runner.sandboxImage.repository (.Values.runner.sandboxImage.tag | default .Chart.AppVersion) }}
 {{- end }}
+
+{{/*
+The API's dedicated metrics port, or "" when /metrics shares the HTTP port
+(api.config.metricsListenAddr unset, or naming the api.config.listenAddr port).
+Every metrics port/scrape/policy block in the chart keys off this.
+*/}}
+{{- define "n8n-sandbox-service.apiMetricsPort" -}}
+{{- $addr := .Values.api.config.metricsListenAddr | default "" | toString | trim -}}
+{{- if $addr -}}
+{{- $port := last (splitList ":" $addr) -}}
+{{- $listenPort := last (splitList ":" (.Values.api.config.listenAddr | toString | trim)) -}}
+{{- if ne $port $listenPort -}}
+{{- $port -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
