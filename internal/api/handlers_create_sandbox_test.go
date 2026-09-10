@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -191,8 +192,8 @@ func TestCreateSandboxQuotaExceeded(t *testing.T) {
 	}
 }
 
-// newIdleTestGateway is newTestGateway with idle windows and a fake runner.
-func newIdleTestGateway(t *testing.T, adminKey string) (http.Handler, store.SandboxStore, *config.APIConfig) {
+// newIdleTestGateway is newTestGateway with idle windows and a runner serving fake.
+func newIdleTestGateway(t *testing.T, adminKey string, fake *fakeSandboxControl) (http.Handler, store.SandboxStore, *config.APIConfig) {
 	t.Helper()
 	s, err := store.New(":memory:")
 	if err != nil {
@@ -206,7 +207,7 @@ func newIdleTestGateway(t *testing.T, adminKey string) (http.Handler, store.Sand
 	cfg.DefaultMaxSandboxes = 50
 
 	reg := registry.New(45 * time.Second)
-	reg.Upsert("runner-1", "https://127.0.0.1:9", startFakeRunnerControl(t, &fakeSandboxControl{}), true, 10, 0, 0)
+	reg.Upsert("runner-1", "https://127.0.0.1:9", startFakeRunnerControl(t, fake), true, 10, 0, 0)
 
 	router, err := NewGatewayRouter(s, cfg, reg, metrics.NewAPIRecorder(false))
 	if err != nil {
@@ -215,8 +216,52 @@ func newIdleTestGateway(t *testing.T, adminKey string) (http.Handler, store.Sand
 	return router, s, cfg
 }
 
+// A client that disconnects while the runner is still creating must not
+// cancel the runner call: the runner finishes either way, and without a store
+// row the sandbox would hold a slot that neither quota nor the idle sweeper can
+// see. The create runs to completion and the row is stored.
+func TestCreateSandboxClientDisconnectStillStoresRow(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	fake := &fakeSandboxControl{createHook: func(context.Context) {
+		close(started)
+		<-release
+	}}
+	router, s, _ := newIdleTestGateway(t, "admin-key", fake)
+
+	ctx, disconnect := context.WithCancel(context.Background())
+	defer disconnect()
+	req := httptest.NewRequest(http.MethodPost, "/sandboxes", nil).WithContext(ctx)
+	req.Header.Set("X-Api-Key", "admin-key")
+	rr := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		router.ServeHTTP(rr, req)
+	}()
+
+	<-started
+	disconnect()
+	close(release)
+	<-done
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create after disconnect: expected %d, got %d body=%s", http.StatusCreated, rr.Code, rr.Body.String())
+	}
+	var resp SandboxResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if rec, err := s.Get(resp.ID); err != nil || rec == nil {
+		t.Fatalf("stored row = %+v err=%v, want the created sandbox", rec, err)
+	}
+	if _, deleted := fake.calls(); len(deleted) != 0 {
+		t.Fatalf("runner deletes = %v, want none", deleted)
+	}
+}
+
 func TestCreateSandboxPersistsEphemeral(t *testing.T) {
-	router, s, _ := newIdleTestGateway(t, "admin-key")
+	router, s, _ := newIdleTestGateway(t, "admin-key", &fakeSandboxControl{})
 
 	rr := postCreateSandbox(t, router, "admin-key", `{"ephemeral":true}`)
 	if rr.Code != http.StatusCreated {
@@ -245,7 +290,7 @@ func TestCreateSandboxPersistsEphemeral(t *testing.T) {
 }
 
 func TestGetSandboxFencesEphemeralAtStopWindow(t *testing.T) {
-	router, s, cfg := newIdleTestGateway(t, "admin-key")
+	router, s, cfg := newIdleTestGateway(t, "admin-key", &fakeSandboxControl{})
 
 	get := func(id string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodGet, "/sandboxes/"+id, nil)

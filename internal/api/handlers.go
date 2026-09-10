@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -222,6 +223,14 @@ func runnerControlTLS(cfg *config.APIConfig) *runnerctl.TLS {
 	}
 }
 
+// runnerCreateBudget bounds the runner create RPC independently of the client
+// connection. A client that disconnects mid-create must not cancel the RPC:
+// the runner would finish the create anyway, and with no store row the sandbox
+// would be invisible to quota and the idle sweeper while still holding a slot.
+// Three minutes sits above Firecracker's own 2-minute create budget, so the
+// runner always answers before the API gives up.
+const runnerCreateBudget = 3 * time.Minute
+
 func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, rec *metrics.APIRecorder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		success := false
@@ -338,7 +347,9 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 			"tenant_id", tenantID,
 			"ephemeral", req.Ephemeral,
 		)
-		gresp, err := runnerctl.CreateSandbox(r.Context(), controlAddr, cfg.RunnerAPIKey, tlsCfg, sandboxID, "{}")
+		createCtx, cancelCreate := context.WithTimeout(context.WithoutCancel(r.Context()), runnerCreateBudget)
+		defer cancelCreate()
+		gresp, err := runnerctl.CreateSandbox(createCtx, controlAddr, cfg.RunnerAPIKey, tlsCfg, sandboxID, "{}")
 		if err != nil {
 			slog.ErrorContext(
 				r.Context(),
@@ -367,7 +378,7 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 			Ephemeral:             req.Ephemeral,
 		}
 		if err := s.Create(record); err != nil {
-			_ = runnerctl.DeleteSandbox(r.Context(), controlAddr, cfg.RunnerAPIKey, tlsCfg, sandboxID)
+			_ = runnerctl.DeleteSandbox(createCtx, controlAddr, cfg.RunnerAPIKey, tlsCfg, sandboxID)
 			if existing, getErr := s.Get(sandboxID); getErr == nil && existing != nil {
 				if canAccessSandbox(r, existing) {
 					writeJSON(w, http.StatusOK, sandboxResponse(existing))

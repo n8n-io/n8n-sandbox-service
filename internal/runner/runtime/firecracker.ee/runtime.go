@@ -106,11 +106,12 @@ const (
 // fail every later operation on that sandbox.
 //
 // beginTransition applies transitionBudget to stop, wake, and delete. Create has
-// its own, larger budget because it clones the rootfs and snapshot before booting,
-// and it claims the sandbox in reserveSandbox rather than through beginTransition.
+// its own because it claims the sandbox in reserveSandbox rather than through
+// beginTransition. The API caps its create RPC at three minutes and must stay
+// above createBudget, so the runner always answers before the API gives up.
 // Vars rather than consts so tests can shrink them.
 var (
-	createBudget     = 3 * time.Minute
+	createBudget     = 2 * time.Minute
 	transitionBudget = 2 * time.Minute
 )
 

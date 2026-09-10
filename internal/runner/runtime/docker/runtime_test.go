@@ -23,7 +23,8 @@ func (f *fakeDockerBackend) ping(context.Context) error {
 }
 
 func (f *fakeDockerBackend) createContainer(context.Context, string, string, string, *ResourceLimits, bool) (string, error) {
-	return "", errors.New("unexpected createContainer")
+	*f.events = append(*f.events, "create")
+	return f.containerID, nil
 }
 
 func (f *fakeDockerBackend) startContainer(context.Context, string) error {
@@ -36,8 +37,12 @@ func (f *fakeDockerBackend) stopContainer(context.Context, string) error {
 	return f.stopErr
 }
 
-func (f *fakeDockerBackend) removeContainer(context.Context, string) error {
-	return errors.New("unexpected removeContainer")
+func (f *fakeDockerBackend) removeContainer(ctx context.Context, _ string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	*f.events = append(*f.events, "remove")
+	return nil
 }
 
 func (f *fakeDockerBackend) containerIP(context.Context, string) (string, error) {
@@ -349,6 +354,40 @@ func TestEnsureSandboxRunningCleansUpStartedContainerOnWakeFailures(t *testing.T
 				t.Fatalf("events = %v, want %v", events, tc.wantEvents)
 			}
 		})
+	}
+}
+
+func TestCreateContainerCleansUpAfterContextCancellation(t *testing.T) {
+	events := []string{}
+	const containerID = "container-1"
+	m := newRuntime(&config.Config{}, Config{}, &fakeDockerBackend{
+		events:      &events,
+		containerID: containerID,
+		ip:          "172.18.0.2",
+	})
+	m.imageReady.Store(true)
+	m.applyPolicy = func(string, string, string, string, int) error {
+		events = append(events, "applyPolicy")
+		return nil
+	}
+	m.teardownRules = func(string) error {
+		events = append(events, "teardown")
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.waitForDaemon = func(ctx context.Context, _ string) error {
+		events = append(events, "waitForDaemon")
+		cancel()
+		return ctx.Err()
+	}
+
+	if _, err := m.CreateContainer(ctx, "sandbox-id-1234", nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("CreateContainer() error = %v, want %v", err, context.Canceled)
+	}
+	wantEvents := []string{"create", "start", "containerIP", "applyPolicy", "waitForDaemon", "remove", "teardown"}
+	if !reflect.DeepEqual(events, wantEvents) {
+		t.Fatalf("events = %v, want %v", events, wantEvents)
 	}
 }
 

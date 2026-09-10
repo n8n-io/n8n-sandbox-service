@@ -24,13 +24,17 @@ import (
 // which lifecycle calls reached it.
 type fakeSandboxControl struct {
 	pb.UnimplementedSandboxControlServer
-	mu        sync.Mutex
-	stopped   []string
-	deleted   []string
-	deleteErr error
+	mu         sync.Mutex
+	stopped    []string
+	deleted    []string
+	deleteErr  error
+	createHook func(ctx context.Context)
 }
 
-func (f *fakeSandboxControl) CreateSandbox(_ context.Context, _ *pb.CreateSandboxRequest) (*pb.CreateSandboxResponse, error) {
+func (f *fakeSandboxControl) CreateSandbox(ctx context.Context, _ *pb.CreateSandboxRequest) (*pb.CreateSandboxResponse, error) {
+	if f.createHook != nil {
+		f.createHook(ctx)
+	}
 	return &pb.CreateSandboxResponse{ContainerIp: "10.0.0.2"}, nil
 }
 
