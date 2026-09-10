@@ -13,15 +13,15 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /out/daemon ./cmd/daemon
 # =============================================================================
 # Stage 2: Sandbox image
 # =============================================================================
-# Node >=22 is required by @n8n/workflow-sdk → isolated-vm. Debian bookworm's
-# apt nodejs is still 18, so install the official Node 22 binary instead.
+# Node >=24 is required by @n8n/workflow-sdk → isolated-vm. Debian bookworm's
+# apt nodejs is still 18, so install the official Node 24 binary instead.
 FROM debian:bookworm-slim
 
 ARG TARGETARCH
-ARG NODE_VERSION=22.16.0
+ARG NODE_VERSION=24.21.0
 # From https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt
-ARG NODE_X64_SHA256=f4cb75bb036f0d0eddf6b79d9596df1aaab9ddccd6a20bf489be5abe9467e84e
-ARG NODE_ARM64_SHA256=eab80cb88f8fda1e65f5e8d0420c9809bdb320b03fd34976ab7161b6e703b910
+ARG NODE_X64_SHA256=fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6
+ARG NODE_ARM64_SHA256=6ad1325edbdb5649c379b75a237147a666c95d4f9ae8d340fef2d1575d289ad2
 
 # build-essential and python3-dev are here because the sandbox has no root, so it
 # cannot apt-get a compiler later. Source builds need one.
