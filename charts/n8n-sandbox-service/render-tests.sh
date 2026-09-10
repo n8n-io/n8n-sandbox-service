@@ -204,6 +204,24 @@ must_fail "port must be between 1 and 65535" \
 must_fail "leave it empty to serve /metrics on the API listener" \
 	--set-string api.config.listenAddr=127.0.0.1:8080 \
 	--set-string api.config.metricsListenAddr=0.0.0.0:8080
+# net.SplitHostPort rejects an unbracketed IPv6 address; the bracketed form is fine.
+must_fail "must be host:port with a numeric port" \
+	--set-string api.config.metricsListenAddr=::1:9100
+render "${api_only[@]}" --set-string 'api.config.metricsListenAddr=[::]:9100' \
+	--show-only templates/api-service.yaml | grep -q 'port: 9100'
+# Helm cannot resolve a service name, so it must not guess at one.
+must_fail "must use a numeric port when api.config.metricsListenAddr is set" \
+	--set-string api.config.listenAddr=:http \
+	--set-string api.config.metricsListenAddr=:80
+# A loopback bind is unreachable from a ServiceMonitor scraping the pod IP.
+must_fail "binds loopback" \
+	--set monitoring.serviceMonitor.enabled=true \
+	--set-string api.config.metricsListenAddr=127.0.0.1:9100
+# ...but it is legitimate for a sidecar, so it renders with that scrape off.
+render --set monitoring.serviceMonitor.enabled=true \
+	--set monitoring.serviceMonitor.api.enabled=false \
+	--set-string api.config.metricsListenAddr=127.0.0.1:9100 \
+	--show-only templates/api-service.yaml | grep -q 'port: 9100'
 
 echo "==> the runner scrape verifies TLS by default"
 # The default must pin serverName to a name the runner certificate actually
