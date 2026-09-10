@@ -355,6 +355,9 @@ func TestLoadAPIMetricsListenAddrSamePortStaysOnMainListener(t *testing.T) {
 		// splitting the listener here would just fail to bind.
 		{":8080", ":08080"},
 		{":08080", ":8080"},
+		// Same for a service name on the API address.
+		{":http", ":80"},
+		{"127.0.0.1:http", "127.0.0.1:80"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.listen+"_"+tc.metrics, func(t *testing.T) {
@@ -424,6 +427,20 @@ func TestLoadAPIRejectsMetricsListenAddrOnGRPCPort(t *testing.T) {
 
 	if _, err := LoadAPI(); err == nil {
 		t.Fatal("expected LoadAPI to reject a metrics addr on the runner-registry gRPC port")
+	}
+}
+
+func TestLoadAPIRejectsMetricsListenAddrOnNamedGRPCPort(t *testing.T) {
+	// The gRPC address is not port-validated, so a service name there must still
+	// be recognized as the socket it resolves to.
+	t.Setenv("SANDBOX_API_KEYS", "test-key")
+	t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	t.Setenv("SANDBOX_API_GRPC_LISTEN_ADDR", ":https")
+	t.Setenv("SANDBOX_API_METRICS_LISTEN_ADDR", ":443")
+	setRequiredGRPCMTLS(t)
+
+	if _, err := LoadAPI(); err == nil {
+		t.Fatal("expected LoadAPI to reject a metrics addr on the resolved gRPC port")
 	}
 }
 

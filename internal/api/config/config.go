@@ -407,15 +407,17 @@ func validateListenAddr(v string) error {
 	return nil
 }
 
-// listenPort canonicalizes a numeric port, because net.Listen resolves ":8080"
-// and ":08080" to one socket and comparing them as written would start two
-// servers on it. A service name (":http") is returned as written.
+// listenPort resolves a port the way net.Listen will, so addresses that name
+// one socket compare equal. That covers a padded number (":08080") and a
+// service name (":http"), either of which would otherwise look like a port of
+// its own and start a second server that cannot bind. Metrics addresses are
+// numeric by validateListenAddr, but ListenAddr and GRPCListenAddr are not.
 func listenPort(addr string) string {
 	_, port, err := net.SplitHostPort(strings.TrimSpace(addr))
 	if err != nil {
 		return ""
 	}
-	if n, err := strconv.Atoi(port); err == nil {
+	if n, err := net.LookupPort("tcp", port); err == nil {
 		return strconv.Itoa(n)
 	}
 	return port
