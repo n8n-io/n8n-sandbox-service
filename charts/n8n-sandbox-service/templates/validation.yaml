@@ -72,15 +72,30 @@
 {{- $apiMetricsAddr := .Values.api.config.metricsListenAddr | default "" | toString | trim -}}
 {{- if $apiMetricsAddr -}}
 {{- $apiMetricsPort := last (splitList ":" $apiMetricsAddr) -}}
-{{- if or (not (contains ":" $apiMetricsAddr)) (not (regexMatch "^[1-9][0-9]{0,4}$" $apiMetricsPort)) -}}
+{{- if or (not (contains ":" $apiMetricsAddr)) (not (regexMatch "^[0-9]{1,5}$" $apiMetricsPort)) -}}
 {{- fail (printf "api.config.metricsListenAddr must be host:port with a numeric port, e.g. \":9100\" (got %q)" $apiMetricsAddr) -}}
 {{- end -}}
+{{/* Match the range the API accepts, so a bad port fails the render rather than the container. */}}
+{{- if or (lt (atoi $apiMetricsPort) 1) (gt (atoi $apiMetricsPort) 65535) -}}
+{{- fail (printf "api.config.metricsListenAddr port must be between 1 and 65535 (got %q)" $apiMetricsAddr) -}}
+{{- end -}}
 {{- $apiListenAddr := .Values.api.config.listenAddr | toString | trim -}}
-{{- if eq $apiMetricsPort (last (splitList ":" (.Values.api.config.grpcListenAddr | toString | trim))) -}}
+{{- $apiListenPort := last (splitList ":" $apiListenAddr) -}}
+{{- if eq (atoi $apiMetricsPort) (atoi (last (splitList ":" (.Values.api.config.grpcListenAddr | toString | trim)))) -}}
 {{- fail (printf "api.config.metricsListenAddr (%q) must not use the port of api.config.grpcListenAddr (%q): one port cannot serve both" $apiMetricsAddr (.Values.api.config.grpcListenAddr | toString)) -}}
 {{- end -}}
-{{- if and (eq $apiMetricsPort (last (splitList ":" $apiListenAddr))) (ne $apiMetricsAddr $apiListenAddr) -}}
+{{/*
+Sharing the API port means the API listener serves /metrics, so only a
+genuinely different host is a conflict. Every spelling of "all interfaces" is
+one host here, matching sameListenHost in internal/api/config/config.go.
+*/}}
+{{- if eq (atoi $apiMetricsPort) (atoi $apiListenPort) -}}
+{{- $wildcards := list "" "0.0.0.0" "::" "[::]" -}}
+{{- $metricsHost := trimSuffix (printf ":%s" $apiMetricsPort) $apiMetricsAddr -}}
+{{- $listenHost := trimSuffix (printf ":%s" $apiListenPort) $apiListenAddr -}}
+{{- if and (ne $metricsHost $listenHost) (not (and (has $metricsHost $wildcards) (has $listenHost $wildcards))) -}}
 {{- fail (printf "api.config.metricsListenAddr (%q) uses the port of api.config.listenAddr (%q) but a different host: leave it empty to serve /metrics on the API listener" $apiMetricsAddr $apiListenAddr) -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- if not .Values.auth.existingSecret -}}

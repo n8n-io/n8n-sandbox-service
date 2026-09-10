@@ -349,7 +349,7 @@ api:
     metricsListenAddr: ":9100"
 ```
 
-The chart then adds a `metrics` container port and Service port, points the API `ServiceMonitor` at it instead of `http`, and — when `networkPolicy.enabled` — renders an ingress rule for it that `networkPolicy.api.metricsIngressFrom` restricts. Leaving the value empty, or giving it the `api.config.listenAddr` port, keeps `/metrics` on the API's HTTP port, which is the default and what earlier chart versions rendered.
+The chart then adds a `metrics` port to the API container and to its Service, points the API `ServiceMonitor` at it instead of `http`, and — when `networkPolicy.enabled` — renders an ingress rule for it that `networkPolicy.api.metricsIngressFrom` restricts. Leaving the value empty, or giving it the `api.config.listenAddr` port, keeps `/metrics` on the API's HTTP port, which is the default and what earlier chart versions rendered.
 
 The port must not collide with `api.config.grpcListenAddr`, and if it uses the `api.config.listenAddr` port the whole address must match it; either mistake fails the render. This needs an API image that supports `SANDBOX_API_METRICS_LISTEN_ADDR`. An image predating it ignores the variable and keeps serving `/metrics` on its HTTP port, which leaves the scrape pointed at a port nothing listens on — the target shows as connection-refused rather than silently returning partial data.
 
