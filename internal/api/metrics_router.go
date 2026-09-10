@@ -8,13 +8,11 @@ import (
 
 // NewMetricsRouter returns the handler for the dedicated Prometheus listener,
 // used when SANDBOX_API_METRICS_LISTEN_ADDR names a port other than the API's.
-// It serves GET /metrics and nothing else: no auth (there is nothing else on the
-// port to protect), no access log, no CORS, and no HTTP metrics of its own,
-// since a scrape is not API traffic. RecoveryMiddleware wraps it so a panic in
-// the exposition path becomes a logged 500 like everywhere else.
+// Deliberately no auth, access log, CORS or HTTP metrics: there is nothing else
+// on the port to protect, and a scrape is not API traffic.
 //
-// A disabled recorder has a nil registry, which promhttp panics on at
-// construction, so it yields a 404-only handler.
+// The Enabled guard is load-bearing: a disabled recorder has a nil registry,
+// which promhttp panics on at construction.
 func NewMetricsRouter(rec *metrics.APIRecorder) http.Handler {
 	mux := http.NewServeMux()
 	if rec.Enabled() {

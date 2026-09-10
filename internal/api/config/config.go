@@ -100,9 +100,8 @@ type APIConfig struct {
 
 	// MetricsListenAddr is the TCP address for a dedicated Prometheus listener.
 	// Parsed from SANDBOX_API_METRICS_LISTEN_ADDR (default empty). Empty, or the
-	// same port as ListenAddr, keeps /metrics on the public API listener; any
-	// other port starts a second server that serves only /metrics. Ignored when
-	// MetricsEnabled is false.
+	// same port as ListenAddr, keeps /metrics on the public API listener.
+	// Ignored when MetricsEnabled is false.
 	MetricsListenAddr string
 
 	// Runner registration gRPC mTLS (required). All three must be set.
@@ -193,15 +192,12 @@ func LoadAPI() (*APIConfig, error) {
 		cfg.MetricsListenAddr = v
 	}
 	if cfg.MetricsListenAddr != "" {
-		// One port is one socket, and the mTLS gRPC server owns its own. Failing
-		// here beats an EADDRINUSE crash loop with no hint which vars collided.
+		// Caught here rather than as an EADDRINUSE crash loop that names neither var.
 		if listenPort(cfg.MetricsListenAddr) == listenPort(cfg.GRPCListenAddr) {
 			return nil, fmt.Errorf("SANDBOX_API_METRICS_LISTEN_ADDR (%q) must not use the same port as SANDBOX_API_GRPC_LISTEN_ADDR (%q)", cfg.MetricsListenAddr, cfg.GRPCListenAddr)
 		}
-		// Sharing the API port means the API listener serves /metrics, so a
-		// different host there would be silently ignored — and quietly binding
-		// metrics to loopback when the operator asked for every interface (or
-		// the reverse) is not something to paper over.
+		// The API listener wins the shared port, so accepting a different host
+		// here would quietly bind metrics somewhere the operator did not ask for.
 		if cfg.MetricsOnMainListener() && !sameListenHost(cfg.MetricsListenAddr, cfg.ListenAddr) {
 			return nil, fmt.Errorf("SANDBOX_API_METRICS_LISTEN_ADDR (%q) uses the port of SANDBOX_API_LISTEN_ADDR (%q) but a different host; leave it unset to serve /metrics on the API listener", cfg.MetricsListenAddr, cfg.ListenAddr)
 		}
@@ -380,8 +376,8 @@ func LoadAPI() (*APIConfig, error) {
 }
 
 // MetricsOnMainListener reports whether /metrics is served by the public API
-// listener rather than by a dedicated one. True when MetricsListenAddr is unset
-// or names the same port as ListenAddr, since one port is one socket.
+// listener rather than by a dedicated one. One port is one socket, so naming
+// the ListenAddr port counts as sharing it.
 func (c *APIConfig) MetricsOnMainListener() bool {
 	if c.MetricsListenAddr == "" {
 		return true
@@ -397,8 +393,8 @@ func (c *APIConfig) ResolvedMetricsListenAddr() string {
 	return c.MetricsListenAddr
 }
 
-// validateListenAddr accepts any host a listener may bind — empty (":9100"),
-// loopback, or an explicit interface — and requires a usable numeric port.
+// validateListenAddr leaves the host unconstrained: empty (":9100"), loopback
+// and an explicit interface are all bindable.
 func validateListenAddr(v string) error {
 	_, port, err := net.SplitHostPort(strings.TrimSpace(v))
 	if err != nil {
@@ -411,10 +407,9 @@ func validateListenAddr(v string) error {
 	return nil
 }
 
-// listenPort returns the port part of a listen address, or "" when it has none.
-// A numeric port is canonicalized, because net.Listen resolves ":8080" and
-// ":08080" to one socket and comparing them as written would start two servers
-// on it. A service name (":http") is returned as written.
+// listenPort canonicalizes a numeric port, because net.Listen resolves ":8080"
+// and ":08080" to one socket and comparing them as written would start two
+// servers on it. A service name (":http") is returned as written.
 func listenPort(addr string) string {
 	_, port, err := net.SplitHostPort(strings.TrimSpace(addr))
 	if err != nil {
@@ -426,9 +421,8 @@ func listenPort(addr string) string {
 	return port
 }
 
-// sameListenHost reports whether two listen addresses bind the same interface.
-// Every spelling of "all interfaces" counts as one host, so ":8080" and
-// "[::]:8080" are not treated as a conflict.
+// sameListenHost treats every spelling of "all interfaces" as one host, so
+// ":8080" and "[::]:8080" are not a conflict.
 func sameListenHost(a, b string) bool {
 	hostA, _, errA := net.SplitHostPort(strings.TrimSpace(a))
 	hostB, _, errB := net.SplitHostPort(strings.TrimSpace(b))

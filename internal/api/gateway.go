@@ -27,8 +27,7 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 
-	// /metrics lives here only when it shares the API listener. A dedicated
-	// metrics port is served by NewMetricsRouter instead.
+	// A dedicated metrics port is served by NewMetricsRouter instead.
 	if rec.Enabled() && cfg.MetricsOnMainListener() {
 		mux.Handle("GET /metrics", metrics.Handler(rec.Registry()))
 	}

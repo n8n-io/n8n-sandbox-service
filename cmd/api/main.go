@@ -117,9 +117,8 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	// A dedicated metrics listener keeps /metrics off the port an ingress
-	// publishes. Bind it here, before any goroutine starts, so an occupied port
-	// fails at startup instead of racing the signal handler.
+	// Bound before any goroutine starts, so an occupied port fails at startup
+	// rather than racing the signal handler.
 	var (
 		metricsSrv *http.Server
 		metricsLis net.Listener
@@ -130,8 +129,7 @@ func main() {
 			Handler:           api.NewMetricsRouter(mrec),
 			ReadTimeout:       30 * time.Second,
 			ReadHeaderTimeout: 10 * time.Second,
-			// The API server needs WriteTimeout 0 for streamed execution
-			// responses; a scrape does not, so keep a deadline here.
+			// Unlike the API server, nothing here streams, so a deadline is safe.
 			WriteTimeout: 30 * time.Second,
 			IdleTimeout:  120 * time.Second,
 		}
@@ -209,10 +207,9 @@ func main() {
 		slog.Error("graceful shutdown failed", "error", err)
 	}
 	// Metrics last, so a scrape in flight during a normal drain still completes.
-	// It shares the deadline above rather than taking its own: if the API drain
-	// burns all 30s, the kubelet is at terminationGracePeriodSeconds and about to
-	// SIGKILL us, so a second window would not buy the scrape anything. A
-	// deadline already spent is that case, not a failure worth an error.
+	// The deadline above is deliberately shared: once it is spent the kubelet is
+	// at terminationGracePeriodSeconds and about to SIGKILL us, so that case is
+	// expected rather than an error worth logging.
 	if metricsSrv != nil {
 		if err := metricsSrv.Shutdown(ctx); err != nil && !errors.Is(err, context.DeadlineExceeded) {
 			slog.Error("metrics graceful shutdown failed", "error", err)

@@ -84,11 +84,7 @@
 {{- if eq (atoi $apiMetricsPort) (atoi (last (splitList ":" (.Values.api.config.grpcListenAddr | toString | trim)))) -}}
 {{- fail (printf "api.config.metricsListenAddr (%q) must not use the port of api.config.grpcListenAddr (%q): one port cannot serve both" $apiMetricsAddr (.Values.api.config.grpcListenAddr | toString)) -}}
 {{- end -}}
-{{/*
-Sharing the API port means the API listener serves /metrics, so only a
-genuinely different host is a conflict. Every spelling of "all interfaces" is
-one host here, matching sameListenHost in internal/api/config/config.go.
-*/}}
+{{/* Wildcard hosts are one host, matching sameListenHost in internal/api/config. */}}
 {{- if eq (atoi $apiMetricsPort) (atoi $apiListenPort) -}}
 {{- $wildcards := list "" "0.0.0.0" "::" "[::]" -}}
 {{- $metricsHost := trimSuffix (printf ":%s" $apiMetricsPort) $apiMetricsAddr -}}
