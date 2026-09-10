@@ -13,10 +13,9 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 )
 
-// dedicatedMetricsSetup wires one recorder into both routers the way cmd/api
-// does when SANDBOX_API_METRICS_LISTEN_ADDR names its own port, and drives one
-// authenticated API request through the gateway so the registry has a series:
-// scrapes only emit families that have at least one observed series.
+// dedicatedMetricsSetup shares one recorder between both routers, as cmd/api
+// does on a dedicated metrics port. The warm-up request matters: a scrape only
+// emits families that have at least one observed series.
 func dedicatedMetricsSetup(t *testing.T) http.Handler {
 	t.Helper()
 

@@ -169,8 +169,8 @@ fi
 echo "==> a dedicated metrics port moves the container port, Service port, scrape and policy"
 # --set-string, or helm reads the leading colon as a nested key.
 separate=("${api_only[@]}" --set-string api.config.metricsListenAddr=:9100)
-# Assert the env var too: without it the API keeps /metrics on its HTTP port and
-# every port assertion below would still pass against a dead scrape target.
+# Without the env var the API keeps /metrics on its HTTP port, and every port
+# assertion below would still pass against a dead scrape target.
 render "${separate[@]}" --show-only templates/configmap.yaml |
 	grep -q 'SANDBOX_API_METRICS_LISTEN_ADDR: ":9100"'
 render "${separate[@]}" --show-only templates/api-deployment.yaml | grep -q 'containerPort: 9100'
@@ -180,8 +180,7 @@ render "${separate[@]}" --set networkPolicy.enabled=true \
 	--show-only templates/networkpolicy.yaml | grep -q 'port: metrics'
 
 echo "==> a metrics addr on the API port keeps the shared listener"
-# Including the spellings the API treats as one wildcard host, and the padded
-# port net.Listen resolves to the same socket: the chart must not split a
+# Wildcard spellings and a padded port included: the chart must not split a
 # listener the binary would share.
 for addr in :8080 0.0.0.0:8080 "[::]:8080" :08080; do
 	shared=("${api_only[@]}" --set-string "api.config.metricsListenAddr=$addr")

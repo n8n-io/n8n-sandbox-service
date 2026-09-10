@@ -112,9 +112,8 @@ app.kubernetes.io/component: {{ .component }}
 {{- end }}
 
 {{/*
-The API's dedicated metrics port, or "" when /metrics shares the HTTP port
-(api.config.metricsListenAddr unset, or naming the api.config.listenAddr port).
-Every metrics port/scrape/policy block in the chart keys off this.
+The API's dedicated metrics port, or "" when /metrics shares the HTTP port.
+Every metrics port, scrape and policy block in the chart keys off this.
 */}}
 {{- define "n8n-sandbox-service.apiMetricsPort" -}}
 {{- $addr := .Values.api.config.metricsListenAddr | default "" | toString | trim -}}
