@@ -42,7 +42,7 @@ log events. See [observability.md](observability.md).
 The API and runner use two buckets so clients (including the SDK) can decide **when to retry the same request** vs **when to change strategy** (e.g. create a new sandbox, fix routing, surface an error to the user).
 
 - **503 Service Unavailable** — **Transient / retry**: overload, no capacity yet, network or upstream not ready, or the sandbox daemon is not reachable *for the moment* while the container is otherwise expected to be usable. Safe to back off and retry the same operation.
-- **502 Bad Gateway** — **Not retryable as “wait and retry”**: the request does not make sense to repeat unchanged; fix state first (new sandbox, repair registry/routing, or handle the reported error). Examples: stored sandbox has **no runner HTTP base URL**, **delete** failed on the runner control plane, or the runner answered a proxied route with a **redirect** (`runner returned a redirect`). The API relays no 3xx from the runner, and the SDK follows no redirect (`maxRedirects: 0`, a 3xx is a `SandboxServiceError`), so an API key is never re-sent to another host.
+- **502 Bad Gateway** — **Not retryable as “wait and retry”**: the request does not make sense to repeat unchanged; fix state first (new sandbox, repair registry/routing, or handle the reported error). Examples: stored sandbox has **no runner HTTP base URL** or **delete** failed on the runner control plane.
 
 ### HTTP 409 `sandbox_restarted` — the sandbox came back without its memory
 
