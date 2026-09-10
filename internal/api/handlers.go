@@ -227,9 +227,7 @@ func runnerControlTLS(cfg *config.APIConfig) *runnerctl.TLS {
 // connection. A client that disconnects mid-create must not cancel the RPC:
 // the runner would finish the create anyway, and with no store row the sandbox
 // would be invisible to quota and the idle sweeper while still holding a slot.
-// Three minutes sits above Firecracker's own 2-minute create budget, so the
-// runner always answers before the API gives up.
-const runnerCreateBudget = 3 * time.Minute
+var runnerCreateBudget = 3 * time.Minute
 
 func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, rec *metrics.APIRecorder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -378,7 +376,19 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 			Ephemeral:             req.Ephemeral,
 		}
 		if err := s.Create(record); err != nil {
-			_ = runnerctl.DeleteSandbox(createCtx, controlAddr, cfg.RunnerAPIKey, tlsCfg, sandboxID)
+			deleteCtx, cancelDelete := context.WithTimeout(context.WithoutCancel(r.Context()), runnerCreateBudget)
+			delErr := runnerctl.DeleteSandbox(deleteCtx, controlAddr, cfg.RunnerAPIKey, tlsCfg, sandboxID)
+			cancelDelete()
+			if delErr != nil {
+				slog.ErrorContext(
+					r.Context(),
+					"create sandbox failed: compensating runner delete, sandbox is untracked",
+					"sandbox_id", sandboxID,
+					"runner_id", run.ID,
+					"runner_control_grpc_addr", controlAddr,
+					"error", delErr,
+				)
+			}
 			if existing, getErr := s.Get(sandboxID); getErr == nil && existing != nil {
 				if canAccessSandbox(r, existing) {
 					writeJSON(w, http.StatusOK, sandboxResponse(existing))

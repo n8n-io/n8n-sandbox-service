@@ -104,12 +104,6 @@ const (
 // RPCs carry the API request context, the idle sweeper's context lives until the
 // API exits), so a wedged host command would otherwise hold the claim forever and
 // fail every later operation on that sandbox.
-//
-// beginTransition applies transitionBudget to stop, wake, and delete. Create has
-// its own because it claims the sandbox in reserveSandbox rather than through
-// beginTransition. The API caps its create RPC at three minutes and must stay
-// above createBudget, so the runner always answers before the API gives up.
-// Vars rather than consts so tests can shrink them.
 var (
 	createBudget     = 2 * time.Minute
 	transitionBudget = 2 * time.Minute

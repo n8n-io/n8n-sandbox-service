@@ -9,6 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/n8n-io/sandbox-service/internal/api/config"
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
@@ -240,10 +243,22 @@ func TestCreateSandboxClientDisconnectStillStoresRow(t *testing.T) {
 		router.ServeHTTP(rr, req)
 	}()
 
-	<-started
+	// Bounded waits: if the create returns before reaching the runner, started
+	// never closes, and the suite must fail here rather than stall.
+	select {
+	case <-started:
+	case <-done:
+		t.Fatalf("create returned before reaching the runner: status %d body=%s", rr.Code, rr.Body.String())
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the runner create to start")
+	}
 	disconnect()
 	close(release)
-	<-done
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("create did not finish after the runner was released")
+	}
 
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("create after disconnect: expected %d, got %d body=%s", http.StatusCreated, rr.Code, rr.Body.String())
@@ -258,6 +273,90 @@ func TestCreateSandboxClientDisconnectStillStoresRow(t *testing.T) {
 	if _, deleted := fake.calls(); len(deleted) != 0 {
 		t.Fatalf("runner deletes = %v, want none", deleted)
 	}
+}
+
+// The Firecracker runner answers a successful create within its createBudget
+// (internal/runner/runtime/firecracker.ee/runtime.go). Giving up before that
+// would leave a live sandbox behind that no store row names.
+func TestRunnerCreateBudgetExceedsRunnerCreate(t *testing.T) {
+	const firecrackerCreateBudget = 2 * time.Minute
+	if runnerCreateBudget <= firecrackerCreateBudget {
+		t.Fatalf("runnerCreateBudget = %v, must stay above the Firecracker runner's createBudget of %v", runnerCreateBudget, firecrackerCreateBudget)
+	}
+}
+
+// A store write that fails after the runner has created the sandbox must still
+// get the runner-side sandbox deleted, or it holds a slot nothing can reclaim.
+// The create RPC may have used most of the create budget, so the compensating
+// delete cannot run on what is left of it: here the create drains 70% of the
+// budget and the delete needs 60%, which only completes on a budget of its own.
+func TestCreateSandboxStoreFailureDeletesRunnerSandbox(t *testing.T) {
+	restore := runnerCreateBudget
+	runnerCreateBudget = time.Second
+	t.Cleanup(func() { runnerCreateBudget = restore })
+
+	var s store.SandboxStore
+	var tenantID string
+	fake := &fakeSandboxControl{}
+	fake.createHook = func(context.Context) {
+		time.Sleep(700 * time.Millisecond)
+		// The tenant goes away mid-create, so the store refuses the row.
+		if err := s.DeleteTenant(tenantID); err != nil {
+			t.Errorf("delete tenant: %v", err)
+		}
+	}
+	fake.deleteHook = func(ctx context.Context) error {
+		select {
+		case <-time.After(600 * time.Millisecond):
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	var router http.Handler
+	router, s, _ = newIdleTestGateway(t, "admin-key", fake)
+	tenant := mintTenantKey(t, router, `{"name":"t"}`)
+	tenantID = tenant.Tenant.ID
+
+	rr := postCreateSandbox(t, router, tenant.Key.APIKey, "")
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("create with tenant deleted mid-create: expected %d, got %d body=%s", http.StatusConflict, rr.Code, rr.Body.String())
+	}
+	if _, deleted := fake.calls(); len(deleted) != 1 {
+		t.Fatalf("runner deletes = %v, want the compensating delete to complete", deleted)
+	}
+}
+
+// A compensating delete that fails is what leaves an untracked sandbox behind,
+// so it has to be reported, not swallowed.
+func TestCreateSandboxStoreFailureLogsFailedRunnerDelete(t *testing.T) {
+	logs := captureLogs(t)
+	var s store.SandboxStore
+	var tenantID string
+	fake := &fakeSandboxControl{}
+	fake.createHook = func(context.Context) {
+		if err := s.DeleteTenant(tenantID); err != nil {
+			t.Errorf("delete tenant: %v", err)
+		}
+	}
+	fake.failDeletes(status.Error(codes.Unavailable, "runner busy"))
+	var router http.Handler
+	router, s, _ = newIdleTestGateway(t, "admin-key", fake)
+	tenant := mintTenantKey(t, router, `{"name":"t"}`)
+	tenantID = tenant.Tenant.ID
+
+	if rr := postCreateSandbox(t, router, tenant.Key.APIKey, ""); rr.Code != http.StatusConflict {
+		t.Fatalf("create with tenant deleted mid-create: expected %d, got %d body=%s", http.StatusConflict, rr.Code, rr.Body.String())
+	}
+	for _, event := range logs() {
+		if msg, _ := event["msg"].(string); strings.HasPrefix(msg, "create sandbox failed: compensating runner delete") {
+			if event["sandbox_id"] == nil || !strings.Contains(event["error"].(string), "runner busy") {
+				t.Fatalf("delete failure event = %v, want sandbox_id and the runner error", event)
+			}
+			return
+		}
+	}
+	t.Fatal("no log event for the failed compensating delete")
 }
 
 func TestCreateSandboxPersistsEphemeral(t *testing.T) {

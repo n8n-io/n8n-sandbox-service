@@ -868,3 +868,14 @@ func TestRuntimeEnsureSandboxRunningWakesStoppedSandbox(t *testing.T) {
 		t.Fatalf("DaemonURL() = %s", url)
 	}
 }
+
+// The API gives up on a create RPC after runnerCreateBudget (internal/api/
+// handlers.go). A create that succeeds answers within createBudget, so that cap
+// must stay above it: an API that gave up on a create that then succeeded would
+// report a failure for a sandbox that is live here and named by no store row.
+func TestCreateBudgetStaysBelowAPICap(t *testing.T) {
+	const apiRunnerCreateBudget = 3 * time.Minute
+	if createBudget >= apiRunnerCreateBudget {
+		t.Fatalf("createBudget = %v, must stay below the API's runnerCreateBudget of %v", createBudget, apiRunnerCreateBudget)
+	}
+}
