@@ -412,11 +412,16 @@ func validateListenAddr(v string) error {
 }
 
 // listenPort returns the port part of a listen address, or "" when it has none.
-// Ports are compared as strings so service names (":http") work too.
+// A numeric port is canonicalized, because net.Listen resolves ":8080" and
+// ":08080" to one socket and comparing them as written would start two servers
+// on it. A service name (":http") is returned as written.
 func listenPort(addr string) string {
 	_, port, err := net.SplitHostPort(strings.TrimSpace(addr))
 	if err != nil {
 		return ""
+	}
+	if n, err := strconv.Atoi(port); err == nil {
+		return strconv.Itoa(n)
 	}
 	return port
 }

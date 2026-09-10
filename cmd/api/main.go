@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
@@ -207,9 +208,13 @@ func main() {
 	if err := srv.Shutdown(ctx); err != nil {
 		slog.Error("graceful shutdown failed", "error", err)
 	}
-	// Metrics last: a draining pod's final scrape is the one worth keeping.
+	// Metrics last, so a scrape in flight during a normal drain still completes.
+	// It shares the deadline above rather than taking its own: if the API drain
+	// burns all 30s, the kubelet is at terminationGracePeriodSeconds and about to
+	// SIGKILL us, so a second window would not buy the scrape anything. A
+	// deadline already spent is that case, not a failure worth an error.
 	if metricsSrv != nil {
-		if err := metricsSrv.Shutdown(ctx); err != nil {
+		if err := metricsSrv.Shutdown(ctx); err != nil && !errors.Is(err, context.DeadlineExceeded) {
 			slog.Error("metrics graceful shutdown failed", "error", err)
 		}
 	}

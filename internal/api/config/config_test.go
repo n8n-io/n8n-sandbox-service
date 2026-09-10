@@ -351,6 +351,10 @@ func TestLoadAPIMetricsListenAddrSamePortStaysOnMainListener(t *testing.T) {
 		{"0.0.0.0:8080", ":8080"},
 		{"[::]:8080", ":8080"},
 		{"127.0.0.1:8081", "127.0.0.1:8081"},
+		// net.Listen resolves a zero-padded port to the same socket, so
+		// splitting the listener here would just fail to bind.
+		{":8080", ":08080"},
+		{":08080", ":8080"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.listen+"_"+tc.metrics, func(t *testing.T) {

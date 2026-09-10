@@ -144,8 +144,9 @@ api:
     # Where the API serves /metrics. Empty, or the same port as listenAddr,
     # keeps it on the API's HTTP port, which is the default. Any other port
     # makes the API start a dedicated listener that serves only /metrics; the
-    # chart then adds a `metrics` container and Service port, points the API
-    # ServiceMonitor at it, and (when networkPolicy.enabled) opens it through
+    # chart then adds a `metrics` port to the API container and to its Service,
+    # points the API ServiceMonitor at it, and (when networkPolicy.enabled)
+    # opens it through
     # networkPolicy.api.metricsIngressFrom. Must not use the grpcListenAddr port.
     metricsListenAddr: ""
     store: sqlite

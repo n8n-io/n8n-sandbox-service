@@ -119,8 +119,9 @@ Every metrics port/scrape/policy block in the chart keys off this.
 {{- define "n8n-sandbox-service.apiMetricsPort" -}}
 {{- $addr := .Values.api.config.metricsListenAddr | default "" | toString | trim -}}
 {{- if $addr -}}
-{{- $port := last (splitList ":" $addr) -}}
-{{- $listenPort := last (splitList ":" (.Values.api.config.listenAddr | toString | trim)) -}}
+{{/* atoi, not the raw string: ":8080" and ":08080" are one socket to net.Listen. */}}
+{{- $port := last (splitList ":" $addr) | atoi -}}
+{{- $listenPort := last (splitList ":" (.Values.api.config.listenAddr | toString | trim)) | atoi -}}
 {{- if ne $port $listenPort -}}
 {{- $port -}}
 {{- end -}}
