@@ -213,6 +213,18 @@ render "${api_only[@]}" --set-string 'api.config.metricsListenAddr=[::]:9100' \
 must_fail "must use a numeric port when api.config.metricsListenAddr is set" \
 	--set-string api.config.listenAddr=:http \
 	--set-string api.config.metricsListenAddr=:80
+# api.service.* ports are independent of the bound ports, so a metrics port can
+# collide with one and make the Service list it twice.
+must_fail "repeats an API Service port" \
+	--set api.service.httpPort=9100 \
+	--set-string api.config.metricsListenAddr=:9100
+must_fail "repeats an API Service port" \
+	--set api.service.grpcPort=9100 \
+	--set-string api.config.metricsListenAddr=:9100
+# A custom Service port that does not collide still renders.
+render "${api_only[@]}" --set api.service.httpPort=8090 \
+	--set-string api.config.metricsListenAddr=:9100 \
+	--show-only templates/api-service.yaml | grep -q 'port: 9100'
 # A loopback bind is unreachable from a ServiceMonitor scraping the pod IP.
 must_fail "binds loopback" \
 	--set monitoring.serviceMonitor.enabled=true \
