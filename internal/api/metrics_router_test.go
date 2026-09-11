@@ -98,13 +98,12 @@ func TestMetricsRouterDoesNotRecordScrapes(t *testing.T) {
 	}
 }
 
-func TestMetricsRouterWithDisabledRecorderReturns404(t *testing.T) {
-	router := NewMetricsRouter(metrics.NewAPIRecorder(false))
+func TestMetricsRouterRequiresEnabledRecorder(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected NewMetricsRouter to panic on a disabled recorder")
+		}
+	}()
 
-	rr := httptest.NewRecorder()
-	router.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-
-	if rr.Code != http.StatusNotFound {
-		t.Fatalf("expected %d, got %d", http.StatusNotFound, rr.Code)
-	}
+	NewMetricsRouter(metrics.NewAPIRecorder(false))
 }
