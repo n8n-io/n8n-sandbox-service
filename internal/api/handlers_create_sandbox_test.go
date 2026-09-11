@@ -280,66 +280,22 @@ func TestCreateSandboxClientDisconnectStillStoresRow(t *testing.T) {
 	}
 }
 
-// A store write that fails after the runner has created the sandbox must still
-// get the runner-side sandbox deleted, or it holds a slot nothing can reclaim.
-// The create RPC may have used most of the create budget, so the compensating
-// delete cannot run on what is left of it: the deadline the runner sees on the
-// delete has to be set after the create finished, not inherited from the create.
-func TestCreateSandboxStoreFailureDeletesRunnerSandbox(t *testing.T) {
-	const createTakes = 200 * time.Millisecond
+// createWithTenantDeletedMidCreate posts a tenant create whose tenant is deleted
+// while the runner is still creating, so the store refuses the row and the
+// handler has to compensate on the runner. inCreate, if set, runs first inside
+// the runner create. The create must answer with the 409 for the lost tenant.
+func createWithTenantDeletedMidCreate(t *testing.T, fake *fakeSandboxControl, inCreate func(context.Context)) {
+	t.Helper()
 	var s store.SandboxStore
 	var tenantID string
-	createDeadline := make(chan time.Time, 1)
-	deleteDeadline := make(chan time.Time, 1)
-	fake := &fakeSandboxControl{}
 	fake.createHook = func(ctx context.Context) {
-		deadline, _ := ctx.Deadline()
-		createDeadline <- deadline
-		// Long enough that a delete deadline inherited from the create sits
-		// measurably before one set after it.
-		time.Sleep(createTakes)
-		// The tenant goes away mid-create, so the store refuses the row.
+		if inCreate != nil {
+			inCreate(ctx)
+		}
 		if err := s.DeleteTenant(tenantID); err != nil {
 			t.Errorf("delete tenant: %v", err)
 		}
 	}
-	fake.deleteHook = func(ctx context.Context) error {
-		deadline, _ := ctx.Deadline()
-		deleteDeadline <- deadline
-		return nil
-	}
-	var router http.Handler
-	router, s, _ = newIdleTestGateway(t, "admin-key", fake)
-	tenant := mintTenantKey(t, router, `{"name":"t"}`)
-	tenantID = tenant.Tenant.ID
-
-	rr := postCreateSandbox(t, router, tenant.Key.APIKey, "")
-	if rr.Code != http.StatusConflict {
-		t.Fatalf("create with tenant deleted mid-create: expected %d, got %d body=%s", http.StatusConflict, rr.Code, rr.Body.String())
-	}
-	if _, deleted := fake.calls(); len(deleted) != 1 {
-		t.Fatalf("runner deletes = %v, want the compensating delete", deleted)
-	}
-	// A delete on the create's leftover budget carries the create's deadline; one
-	// on a budget of its own is later by at least the time the create took.
-	if gap := (<-deleteDeadline).Sub(<-createDeadline); gap < createTakes/2 {
-		t.Fatalf("delete deadline is %v after the create's, want at least %v: the delete inherited the create's budget", gap, createTakes/2)
-	}
-}
-
-// A compensating delete that fails is what leaves an untracked sandbox behind,
-// so it has to be reported, not swallowed.
-func TestCreateSandboxStoreFailureLogsFailedRunnerDelete(t *testing.T) {
-	logs := captureLogs(t)
-	var s store.SandboxStore
-	var tenantID string
-	fake := &fakeSandboxControl{}
-	fake.createHook = func(context.Context) {
-		if err := s.DeleteTenant(tenantID); err != nil {
-			t.Errorf("delete tenant: %v", err)
-		}
-	}
-	fake.failDeletes(status.Error(codes.Unavailable, "runner busy"))
 	var router http.Handler
 	router, s, _ = newIdleTestGateway(t, "admin-key", fake)
 	tenant := mintTenantKey(t, router, `{"name":"t"}`)
@@ -348,6 +304,39 @@ func TestCreateSandboxStoreFailureLogsFailedRunnerDelete(t *testing.T) {
 	if rr := postCreateSandbox(t, router, tenant.Key.APIKey, ""); rr.Code != http.StatusConflict {
 		t.Fatalf("create with tenant deleted mid-create: expected %d, got %d body=%s", http.StatusConflict, rr.Code, rr.Body.String())
 	}
+}
+
+// A store write that fails after the runner has created the sandbox must still
+// get the runner-side sandbox deleted, or it holds a slot nothing can reclaim.
+// The create RPC may have used most of the create budget, so the compensating
+// delete cannot run on what is left of it: it has to reach the runner with a
+// budget of its own.
+func TestCreateSandboxStoreFailureDeletesRunnerSandbox(t *testing.T) {
+	const createTakes = 200 * time.Millisecond
+	remaining := make(chan time.Duration, 1)
+	fake := &fakeSandboxControl{deleteHook: func(ctx context.Context) {
+		deadline, _ := ctx.Deadline()
+		remaining <- time.Until(deadline)
+	}}
+	// Long enough that a delete on the create's leftover is measurably short.
+	createWithTenantDeletedMidCreate(t, fake, func(context.Context) { time.Sleep(createTakes) })
+
+	if _, deleted := fake.calls(); len(deleted) != 1 {
+		t.Fatalf("runner deletes = %v, want the compensating delete", deleted)
+	}
+	if got := <-remaining; got < runnerCreateBudget-createTakes/2 {
+		t.Fatalf("delete reached the runner with %v left, want about %v: it ran on the create's leftover budget", got, runnerCreateBudget)
+	}
+}
+
+// A compensating delete that fails is what leaves an untracked sandbox behind,
+// so it has to be reported, not swallowed.
+func TestCreateSandboxStoreFailureLogsFailedRunnerDelete(t *testing.T) {
+	logs := captureLogs(t)
+	fake := &fakeSandboxControl{}
+	fake.failDeletes(status.Error(codes.Unavailable, "runner busy"))
+	createWithTenantDeletedMidCreate(t, fake, nil)
+
 	for _, event := range logs() {
 		if msg, _ := event["msg"].(string); strings.HasPrefix(msg, "create sandbox failed: compensating runner delete") {
 			if event["sandbox_id"] == nil || !strings.Contains(event["error"].(string), "runner busy") {

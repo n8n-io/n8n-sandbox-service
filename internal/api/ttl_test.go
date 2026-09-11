@@ -29,7 +29,7 @@ type fakeSandboxControl struct {
 	deleted    []string
 	deleteErr  error
 	createHook func(ctx context.Context)
-	deleteHook func(ctx context.Context) error
+	deleteHook func(ctx context.Context)
 }
 
 func (f *fakeSandboxControl) CreateSandbox(ctx context.Context, _ *pb.CreateSandboxRequest) (*pb.CreateSandboxResponse, error) {
@@ -48,9 +48,7 @@ func (f *fakeSandboxControl) StopSandbox(_ context.Context, req *pb.StopSandboxR
 
 func (f *fakeSandboxControl) DeleteSandbox(ctx context.Context, req *pb.DeleteSandboxRequest) (*pb.DeleteSandboxResponse, error) {
 	if f.deleteHook != nil {
-		if err := f.deleteHook(ctx); err != nil {
-			return nil, err
-		}
+		f.deleteHook(ctx)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
