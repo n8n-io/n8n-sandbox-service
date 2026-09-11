@@ -109,7 +109,7 @@ func connectOnce(ctx context.Context, cfg *config.Config, rt runnerruntime.Runti
 	send := func() error {
 		capacity, err := rt.Capacity(ctx)
 		if err != nil {
-			slog.Debug("runtime capacity failed", "error", err)
+			slog.Warn("runtime capacity failed", "error", err)
 			capacity = runnerruntime.Capacity{Total: cfg.CapacityTotal}
 		}
 		healthy := true

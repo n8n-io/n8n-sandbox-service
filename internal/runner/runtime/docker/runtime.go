@@ -37,6 +37,10 @@ const (
 	containerStatusRemoving   = "removing"
 	containerStatusDead       = "dead"
 	daemonPort                = 8081
+
+	// cleanupBudget is the deadline for removing a half-built container after a
+	// failed create. The create context cannot be used: it may be what failed.
+	cleanupBudget = 2 * time.Minute
 )
 
 // CreateOptions holds optional parameters for sandbox creation.
@@ -258,7 +262,9 @@ func (m *Runtime) CreateContainer(ctx context.Context, sandboxID string, opts *C
 	}
 
 	cleanupOnError := func() {
-		_ = m.removeContainerAndTeardownRules(ctx, containerID)
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupBudget)
+		defer cancel()
+		_ = m.removeContainerAndTeardownRules(cleanupCtx, containerID)
 	}
 
 	if err := m.docker.startContainer(ctx, containerID); err != nil {
@@ -558,7 +564,7 @@ func (m *Runtime) removeContainerAndTeardownRules(ctx context.Context, container
 		slog.Warn("remove sandbox container", "container_id", containerID, "err", err)
 		return err
 	}
-	if err := netrules.Teardown(containerID); err != nil {
+	if err := m.teardownRules(containerID); err != nil {
 		// TODO: consider adding metrics to track this in the future.
 		slog.Warn("teardown network rules", "container_id", containerID, "err", err)
 	}

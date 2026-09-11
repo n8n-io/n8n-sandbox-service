@@ -1,12 +1,17 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/n8n-io/sandbox-service/internal/api/config"
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
@@ -191,8 +196,8 @@ func TestCreateSandboxQuotaExceeded(t *testing.T) {
 	}
 }
 
-// newIdleTestGateway is newTestGateway with idle windows and a fake runner.
-func newIdleTestGateway(t *testing.T, adminKey string) (http.Handler, store.SandboxStore, *config.APIConfig) {
+// newIdleTestGateway is newTestGateway with idle windows and a runner serving fake.
+func newIdleTestGateway(t *testing.T, adminKey string, fake *fakeSandboxControl) (http.Handler, store.SandboxStore, *config.APIConfig) {
 	t.Helper()
 	s, err := store.New(":memory:")
 	if err != nil {
@@ -206,7 +211,7 @@ func newIdleTestGateway(t *testing.T, adminKey string) (http.Handler, store.Sand
 	cfg.DefaultMaxSandboxes = 50
 
 	reg := registry.New(45 * time.Second)
-	reg.Upsert("runner-1", "https://127.0.0.1:9", startFakeRunnerControl(t, &fakeSandboxControl{}), true, 10, 0, 0)
+	reg.Upsert("runner-1", "https://127.0.0.1:9", startFakeRunnerControl(t, fake), true, 10, 0, 0)
 
 	router, err := NewGatewayRouter(s, cfg, reg, metrics.NewAPIRecorder(false))
 	if err != nil {
@@ -215,8 +220,132 @@ func newIdleTestGateway(t *testing.T, adminKey string) (http.Handler, store.Sand
 	return router, s, cfg
 }
 
+// A client hanging up mid-create must not cancel the runner call: the runner
+// finishes the create either way, and without a store row the sandbox would
+// hold a slot that quota and the idle sweeper cannot see.
+func TestCreateSandboxClientDisconnectStillStoresRow(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	// Release on every exit path so a failed assertion cannot leave the fake blocked.
+	releaseRunner := sync.OnceFunc(func() { close(release) })
+	defer releaseRunner()
+	fake := &fakeSandboxControl{createHook: func(context.Context) {
+		close(started)
+		<-release
+	}}
+	router, s, _ := newIdleTestGateway(t, "admin-key", fake)
+
+	ctx, disconnect := context.WithCancel(context.Background())
+	defer disconnect()
+	req := httptest.NewRequest(http.MethodPost, "/sandboxes", nil).WithContext(ctx)
+	req.Header.Set("X-Api-Key", "admin-key")
+	rr := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		router.ServeHTTP(rr, req)
+	}()
+
+	// If the create returns without reaching the runner, started never closes;
+	// fail rather than hang.
+	select {
+	case <-started:
+	case <-done:
+		t.Fatalf("create returned before reaching the runner: status %d body=%s", rr.Code, rr.Body.String())
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the runner create to start")
+	}
+	disconnect()
+	releaseRunner()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("create did not finish after the runner was released")
+	}
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create after disconnect: expected %d, got %d body=%s", http.StatusCreated, rr.Code, rr.Body.String())
+	}
+	var resp SandboxResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if rec, err := s.Get(resp.ID); err != nil || rec == nil {
+		t.Fatalf("stored row = %+v err=%v, want the created sandbox", rec, err)
+	}
+	if _, deleted := fake.calls(); len(deleted) != 0 {
+		t.Fatalf("runner deletes = %v, want none", deleted)
+	}
+}
+
+// createWithTenantDeletedMidCreate posts a create and deletes the tenant while
+// the runner is still creating, so storing the row fails and the handler has to
+// delete the sandbox on the runner again. inCreate, if set, runs inside the
+// runner create first. Asserts the 409 for the lost tenant.
+func createWithTenantDeletedMidCreate(t *testing.T, fake *fakeSandboxControl, inCreate func(context.Context)) {
+	t.Helper()
+	var s store.SandboxStore
+	var tenantID string
+	fake.createHook = func(ctx context.Context) {
+		if inCreate != nil {
+			inCreate(ctx)
+		}
+		if err := s.DeleteTenant(tenantID); err != nil {
+			t.Errorf("delete tenant: %v", err)
+		}
+	}
+	var router http.Handler
+	router, s, _ = newIdleTestGateway(t, "admin-key", fake)
+	tenant := mintTenantKey(t, router, `{"name":"t"}`)
+	tenantID = tenant.Tenant.ID
+
+	if rr := postCreateSandbox(t, router, tenant.Key.APIKey, ""); rr.Code != http.StatusConflict {
+		t.Fatalf("create with tenant deleted mid-create: expected %d, got %d body=%s", http.StatusConflict, rr.Code, rr.Body.String())
+	}
+}
+
+// If storing the row fails after the runner created the sandbox, the handler
+// must delete it on the runner, or it holds a slot nothing can reclaim. That
+// delete needs its own deadline: the create may have used up most of its own.
+func TestCreateSandboxStoreFailureDeletesRunnerSandbox(t *testing.T) {
+	const createTakes = 200 * time.Millisecond
+	remaining := make(chan time.Duration, 1)
+	fake := &fakeSandboxControl{deleteHook: func(ctx context.Context) {
+		deadline, _ := ctx.Deadline()
+		remaining <- time.Until(deadline)
+	}}
+	// Long enough that a delete reusing the create's deadline is measurably short.
+	createWithTenantDeletedMidCreate(t, fake, func(context.Context) { time.Sleep(createTakes) })
+
+	if _, deleted := fake.calls(); len(deleted) != 1 {
+		t.Fatalf("runner deletes = %v, want the compensating delete", deleted)
+	}
+	if got := <-remaining; got < runnerCreateBudget-createTakes/2 {
+		t.Fatalf("delete reached the runner with %v left, want about %v: it ran on the create's leftover budget", got, runnerCreateBudget)
+	}
+}
+
+// If that delete fails, the sandbox is now untracked; the failure must be
+// logged, not swallowed.
+func TestCreateSandboxStoreFailureLogsFailedRunnerDelete(t *testing.T) {
+	logs := captureLogs(t)
+	fake := &fakeSandboxControl{}
+	fake.failDeletes(status.Error(codes.Unavailable, "runner busy"))
+	createWithTenantDeletedMidCreate(t, fake, nil)
+
+	for _, event := range logs() {
+		if msg, _ := event["msg"].(string); strings.HasPrefix(msg, "create sandbox failed: compensating runner delete") {
+			if event["sandbox_id"] == nil || !strings.Contains(event["error"].(string), "runner busy") {
+				t.Fatalf("delete failure event = %v, want sandbox_id and the runner error", event)
+			}
+			return
+		}
+	}
+	t.Fatal("no log event for the failed compensating delete")
+}
+
 func TestCreateSandboxPersistsEphemeral(t *testing.T) {
-	router, s, _ := newIdleTestGateway(t, "admin-key")
+	router, s, _ := newIdleTestGateway(t, "admin-key", &fakeSandboxControl{})
 
 	rr := postCreateSandbox(t, router, "admin-key", `{"ephemeral":true}`)
 	if rr.Code != http.StatusCreated {
@@ -245,7 +374,7 @@ func TestCreateSandboxPersistsEphemeral(t *testing.T) {
 }
 
 func TestGetSandboxFencesEphemeralAtStopWindow(t *testing.T) {
-	router, s, cfg := newIdleTestGateway(t, "admin-key")
+	router, s, cfg := newIdleTestGateway(t, "admin-key", &fakeSandboxControl{})
 
 	get := func(id string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodGet, "/sandboxes/"+id, nil)

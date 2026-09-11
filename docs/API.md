@@ -159,6 +159,8 @@ Create a sandbox. With no request body, the service generates a UUID. Callers ma
 
 If that ID still belongs to the caller and is within its idle-delete window, the existing sandbox is returned. If it has passed the window, the stale sandbox is deleted before the ID is reused. If the ID belongs to another tenant (or to admin when the caller is a tenant), the request fails with `409`.
 
+Disconnecting before the response does not cancel the create: the sandbox is still created and tracked, and can be found by listing or by repeating the request with the same `id`.
+
 **Request body fields** (all optional):
 
 - `id` — lowercase UUID to create or reconnect to, as above.

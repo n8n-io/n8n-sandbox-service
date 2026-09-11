@@ -198,7 +198,7 @@ func TestSandboxProxyRefusesPlaintextRunnerBase(t *testing.T) {
 // routing validation: a row that predates runner_http_base_url has no base,
 // but once it is past its window the proxy still answers 404, not 502.
 func TestSandboxProxyFencesExpiredSandboxWithoutRunnerBase(t *testing.T) {
-	router, s, cfg := newIdleTestGateway(t, "admin-key")
+	router, s, cfg := newIdleTestGateway(t, "admin-key", &fakeSandboxControl{})
 
 	stale := time.Now().Add(-cfg.IdleStopAfter - time.Second).Unix()
 	const sid = "eeeeeeee-5555-4555-8555-eeeeeeeeeeee"
