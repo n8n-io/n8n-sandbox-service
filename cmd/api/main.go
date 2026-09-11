@@ -117,27 +117,10 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	// Bound before any goroutine starts, so an occupied port fails at startup
-	// rather than racing the signal handler.
-	var (
-		metricsSrv *http.Server
-		metricsLis net.Listener
-	)
-	if mrec.Enabled() && !cfg.MetricsOnMainListener() {
-		metricsSrv = &http.Server{
-			Addr:              cfg.MetricsListenAddr,
-			Handler:           api.NewMetricsRouter(mrec),
-			ReadTimeout:       30 * time.Second,
-			ReadHeaderTimeout: 10 * time.Second,
-			// Unlike the API server, nothing here streams, so a deadline is safe.
-			WriteTimeout: 30 * time.Second,
-			IdleTimeout:  120 * time.Second,
-		}
-		metricsLis, err = net.Listen("tcp", cfg.MetricsListenAddr)
-		if err != nil {
-			slog.Error("metrics listen", "addr", cfg.MetricsListenAddr, "error", err)
-			os.Exit(1)
-		}
+	metricsSrv, metricsLis, err := newMetricsServer(cfg, mrec)
+	if err != nil {
+		slog.Error("metrics listen", "addr", cfg.MetricsListenAddr, "error", err)
+		os.Exit(1)
 	}
 
 	grpcLis, err := net.Listen("tcp", cfg.GRPCListenAddr)
