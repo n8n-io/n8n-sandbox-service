@@ -9,19 +9,18 @@ import {
   waitForSandboxStatus,
 } from './helpers';
 
-// How long after sending POST /sandboxes the client hangs up, tried largest
-// first. The API hands the create to the runner within a few ms and the runner
-// takes ~0.7-0.9s on both lanes, so the first offset lands mid-create. If the
-// create answers first, the next attempt hangs up earlier rather than failing
-// on a speedup. Below the last offset the API's own pre-runner work (auth, id
-// lock) is a comparable share of the request, and a hang-up that lands before
-// the runner is asked is indistinguishable from the bug this guards, so the
-// test gives up and says so instead of passing vacuously.
+// Delays (ms) between sending POST /sandboxes and hanging up, tried in order.
+// The hang-up has to happen while the runner is still building the sandbox.
+// Creates take ~0.7-0.9s, so 150ms is normally enough; if the API answers
+// before the hang-up, the next shorter delay is tried. Below 20ms the hang-up
+// may land before the API has even called the runner, so if every delay is
+// answered the test fails rather than pretending it tested anything.
 const DISCONNECT_OFFSETS_MS = [150, 75, 40, 20];
 
-// A raw fetch with an aborted signal closes the socket, which is what makes the
-// API's request context cancel; the SDK never disconnects mid-create. Resolves
-// to the status if the API answered first, undefined if the client hung up first.
+// POST /sandboxes and hang up after afterMs. Uses fetch rather than the SDK
+// because aborting a fetch closes the socket, which is what cancels the API's
+// request context. Returns the status if the API answered first, undefined if
+// the hang-up won.
 async function createAndHangUp(apiKey: string, id: string, afterMs: number): Promise<number | undefined> {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), afterMs);
@@ -46,8 +45,8 @@ test.describe('client disconnect during create', () => {
     test.setTimeout(120_000);
     const apiKey = await getApiKey();
 
-    // Find an offset that hangs up mid-create. An answered 201 is a real sandbox
-    // that has to go; any other answer is an infrastructure failure, not a miss.
+    // Find a delay that hangs up mid-create. A 201 means the sandbox was created
+    // and must be cleaned up; any other status is an unrelated failure.
     let id: string | undefined;
     let disconnectAfterMs = 0;
     const answers: string[] = [];
@@ -69,25 +68,25 @@ test.describe('client disconnect during create', () => {
     }
     if (id === undefined) {
       throw new Error(
-        `create answered before every disconnect offset (${answers.join(', ')}): ` +
-          'creates are now too fast for a client to hang up mid-create, so this test no longer exercises one',
+        `the API answered before every hang-up delay (${answers.join(', ')}): ` +
+          'creates are too fast for this test to hang up mid-create',
       );
     }
 
     try {
-      // The runner finishes the create regardless of the disconnect, so the row
-      // must follow: a sandbox the runner has and the API does not is a slot no
-      // quota or sweeper can ever reclaim.
+      // The runner finishes the create despite the hang-up, so the API must
+      // store the row too. A sandbox the runner has but the API does not know
+      // about holds a slot forever: quota and the idle sweeper never see it.
       try {
         await waitForSandboxStatus(request, id, 'running', 60_000);
       } catch (err) {
         throw new Error(
-          `create aborted at ${disconnectAfterMs}ms left no row: the runner-side sandbox is untracked, ` +
-            `or the hang-up landed before the API reached the runner: ${String(err)}`,
+          `no sandbox after hanging up at ${disconnectAfterMs}ms: either the runner-side sandbox ` +
+            `is untracked, or the hang-up landed before the API called the runner: ${String(err)}`,
         );
       }
 
-      // And the row names a live sandbox, not just a record.
+      // The sandbox is live, not just a row.
       expect(await execWithTransientRetry(id, 'echo tracked')).toHaveSucceeded();
     } finally {
       await deleteSandbox(id);

@@ -24,10 +24,11 @@ import (
 // which lifecycle calls reached it.
 type fakeSandboxControl struct {
 	pb.UnimplementedSandboxControlServer
-	mu         sync.Mutex
-	stopped    []string
-	deleted    []string
-	deleteErr  error
+	mu        sync.Mutex
+	stopped   []string
+	deleted   []string
+	deleteErr error
+	// Run at the start of the RPC, on the server-side context, when set.
 	createHook func(ctx context.Context)
 	deleteHook func(ctx context.Context)
 }

@@ -6,13 +6,11 @@ import (
 	"time"
 )
 
-// CreateBudget bounds how long CreateSandbox may run before the runtime gives up
-// on it. It is part of the contract because the API sizes its create RPC
-// deadline from it: the API has to keep waiting for as long as a create can
-// still succeed, or a create it gave up on finishes as a live sandbox that no
-// store row names. Firecracker applies it as its own ceiling, detached from the
-// caller, and needs the headroom because it clones the rootfs and snapshot
-// before booting; the Docker runtime inherits its caller's deadline instead.
+// CreateBudget is how long a runtime may spend on CreateSandbox. It is part of
+// the contract because the API derives its create RPC deadline from it: giving
+// up earlier than the runtime would leave a sandbox that finishes creating with
+// no store row. Firecracker enforces it itself, detached from the caller;
+// Docker inherits the caller's deadline.
 const CreateBudget = 3 * time.Minute
 
 // ErrSandboxNotFound is returned when a sandbox ID is not found.

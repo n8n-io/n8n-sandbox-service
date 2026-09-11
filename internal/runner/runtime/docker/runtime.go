@@ -38,8 +38,8 @@ const (
 	containerStatusDead       = "dead"
 	daemonPort                = 8081
 
-	// cleanupBudget bounds the removal of a half-built container after a
-	// failed create, independently of the create context.
+	// cleanupBudget is the deadline for removing a half-built container after a
+	// failed create. The create context cannot be used: it may be what failed.
 	cleanupBudget = 2 * time.Minute
 )
 

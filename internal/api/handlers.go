@@ -224,12 +224,11 @@ func runnerControlTLS(cfg *config.APIConfig) *runnerctl.TLS {
 	}
 }
 
-// runnerCreateBudget bounds the runner create RPC independently of the client
-// connection. A client that disconnects mid-create must not cancel the RPC:
-// the runner would finish the create anyway, and with no store row the sandbox
-// would be invisible to quota and the idle sweeper while still holding a slot.
-// It is the runtime's own create budget plus a margin for the dial and round
-// trip, so a create that succeeds always answers before the API gives up.
+// runnerCreateBudget is the deadline for the runner create RPC, used instead of
+// the client's request context: a client disconnect must not cancel the RPC,
+// because the runner would finish the create anyway and the resulting sandbox,
+// with no store row, would hold a slot that quota and the idle sweeper cannot
+// see. The runtime's own create budget plus a margin for the round trip.
 const runnerCreateBudget = runnerruntime.CreateBudget + time.Minute
 
 func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, rec *metrics.APIRecorder) http.HandlerFunc {
@@ -379,6 +378,7 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 			Ephemeral:             req.Ephemeral,
 		}
 		if err := s.Create(record); err != nil {
+			// Fresh deadline: the create may have used up most of createCtx.
 			deleteCtx, cancelDelete := context.WithTimeout(context.WithoutCancel(r.Context()), runnerCreateBudget)
 			delErr := runnerctl.DeleteSandbox(deleteCtx, controlAddr, cfg.RunnerAPIKey, tlsCfg, sandboxID)
 			cancelDelete()

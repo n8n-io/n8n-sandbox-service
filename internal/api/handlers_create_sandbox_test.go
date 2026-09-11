@@ -220,15 +220,13 @@ func newIdleTestGateway(t *testing.T, adminKey string, fake *fakeSandboxControl)
 	return router, s, cfg
 }
 
-// A client that disconnects while the runner is still creating must not
-// cancel the runner call: the runner finishes either way, and without a store
-// row the sandbox would hold a slot that neither quota nor the idle sweeper can
-// see. The create runs to completion and the row is stored.
+// A client hanging up mid-create must not cancel the runner call: the runner
+// finishes the create either way, and without a store row the sandbox would
+// hold a slot that quota and the idle sweeper cannot see.
 func TestCreateSandboxClientDisconnectStillStoresRow(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
-	// Released on every exit path, so a failing run does not leave the fake's
-	// create blocked forever.
+	// Release on every exit path so a failed assertion cannot leave the fake blocked.
 	releaseRunner := sync.OnceFunc(func() { close(release) })
 	defer releaseRunner()
 	fake := &fakeSandboxControl{createHook: func(context.Context) {
@@ -248,8 +246,8 @@ func TestCreateSandboxClientDisconnectStillStoresRow(t *testing.T) {
 		router.ServeHTTP(rr, req)
 	}()
 
-	// Bounded waits: if the create returns before reaching the runner, started
-	// never closes, and the suite must fail here rather than stall.
+	// If the create returns without reaching the runner, started never closes;
+	// fail rather than hang.
 	select {
 	case <-started:
 	case <-done:
@@ -280,10 +278,10 @@ func TestCreateSandboxClientDisconnectStillStoresRow(t *testing.T) {
 	}
 }
 
-// createWithTenantDeletedMidCreate posts a tenant create whose tenant is deleted
-// while the runner is still creating, so the store refuses the row and the
-// handler has to compensate on the runner. inCreate, if set, runs first inside
-// the runner create. The create must answer with the 409 for the lost tenant.
+// createWithTenantDeletedMidCreate posts a create and deletes the tenant while
+// the runner is still creating, so storing the row fails and the handler has to
+// delete the sandbox on the runner again. inCreate, if set, runs inside the
+// runner create first. Asserts the 409 for the lost tenant.
 func createWithTenantDeletedMidCreate(t *testing.T, fake *fakeSandboxControl, inCreate func(context.Context)) {
 	t.Helper()
 	var s store.SandboxStore
@@ -306,11 +304,9 @@ func createWithTenantDeletedMidCreate(t *testing.T, fake *fakeSandboxControl, in
 	}
 }
 
-// A store write that fails after the runner has created the sandbox must still
-// get the runner-side sandbox deleted, or it holds a slot nothing can reclaim.
-// The create RPC may have used most of the create budget, so the compensating
-// delete cannot run on what is left of it: it has to reach the runner with a
-// budget of its own.
+// If storing the row fails after the runner created the sandbox, the handler
+// must delete it on the runner, or it holds a slot nothing can reclaim. That
+// delete needs its own deadline: the create may have used up most of its own.
 func TestCreateSandboxStoreFailureDeletesRunnerSandbox(t *testing.T) {
 	const createTakes = 200 * time.Millisecond
 	remaining := make(chan time.Duration, 1)
@@ -318,7 +314,7 @@ func TestCreateSandboxStoreFailureDeletesRunnerSandbox(t *testing.T) {
 		deadline, _ := ctx.Deadline()
 		remaining <- time.Until(deadline)
 	}}
-	// Long enough that a delete on the create's leftover is measurably short.
+	// Long enough that a delete reusing the create's deadline is measurably short.
 	createWithTenantDeletedMidCreate(t, fake, func(context.Context) { time.Sleep(createTakes) })
 
 	if _, deleted := fake.calls(); len(deleted) != 1 {
@@ -329,8 +325,8 @@ func TestCreateSandboxStoreFailureDeletesRunnerSandbox(t *testing.T) {
 	}
 }
 
-// A compensating delete that fails is what leaves an untracked sandbox behind,
-// so it has to be reported, not swallowed.
+// If that delete fails, the sandbox is now untracked; the failure must be
+// logged, not swallowed.
 func TestCreateSandboxStoreFailureLogsFailedRunnerDelete(t *testing.T) {
 	logs := captureLogs(t)
 	fake := &fakeSandboxControl{}
