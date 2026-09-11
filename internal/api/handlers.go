@@ -21,6 +21,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/grpctls"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/obs"
+	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 	"github.com/n8n-io/sandbox-service/internal/sandboxproxy"
 )
 
@@ -227,7 +228,9 @@ func runnerControlTLS(cfg *config.APIConfig) *runnerctl.TLS {
 // connection. A client that disconnects mid-create must not cancel the RPC:
 // the runner would finish the create anyway, and with no store row the sandbox
 // would be invisible to quota and the idle sweeper while still holding a slot.
-var runnerCreateBudget = 3 * time.Minute
+// It is the runtime's own create budget plus a margin for the dial and round
+// trip, so a create that succeeds always answers before the API gives up.
+const runnerCreateBudget = runnerruntime.CreateBudget + time.Minute
 
 func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, rec *metrics.APIRecorder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

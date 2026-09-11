@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -226,6 +227,10 @@ func newIdleTestGateway(t *testing.T, adminKey string, fake *fakeSandboxControl)
 func TestCreateSandboxClientDisconnectStillStoresRow(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
+	// Released on every exit path, so a failing run does not leave the fake's
+	// create blocked forever.
+	releaseRunner := sync.OnceFunc(func() { close(release) })
+	defer releaseRunner()
 	fake := &fakeSandboxControl{createHook: func(context.Context) {
 		close(started)
 		<-release
@@ -253,7 +258,7 @@ func TestCreateSandboxClientDisconnectStillStoresRow(t *testing.T) {
 		t.Fatal("timed out waiting for the runner create to start")
 	}
 	disconnect()
-	close(release)
+	releaseRunner()
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
@@ -275,43 +280,33 @@ func TestCreateSandboxClientDisconnectStillStoresRow(t *testing.T) {
 	}
 }
 
-// The Firecracker runner answers a successful create within its createBudget
-// (internal/runner/runtime/firecracker.ee/runtime.go). Giving up before that
-// would leave a live sandbox behind that no store row names.
-func TestRunnerCreateBudgetExceedsRunnerCreate(t *testing.T) {
-	const firecrackerCreateBudget = 2 * time.Minute
-	if runnerCreateBudget <= firecrackerCreateBudget {
-		t.Fatalf("runnerCreateBudget = %v, must stay above the Firecracker runner's createBudget of %v", runnerCreateBudget, firecrackerCreateBudget)
-	}
-}
-
 // A store write that fails after the runner has created the sandbox must still
 // get the runner-side sandbox deleted, or it holds a slot nothing can reclaim.
 // The create RPC may have used most of the create budget, so the compensating
-// delete cannot run on what is left of it: here the create drains 70% of the
-// budget and the delete needs 60%, which only completes on a budget of its own.
+// delete cannot run on what is left of it: the deadline the runner sees on the
+// delete has to be set after the create finished, not inherited from the create.
 func TestCreateSandboxStoreFailureDeletesRunnerSandbox(t *testing.T) {
-	restore := runnerCreateBudget
-	runnerCreateBudget = time.Second
-	t.Cleanup(func() { runnerCreateBudget = restore })
-
+	const createTakes = 200 * time.Millisecond
 	var s store.SandboxStore
 	var tenantID string
+	createDeadline := make(chan time.Time, 1)
+	deleteDeadline := make(chan time.Time, 1)
 	fake := &fakeSandboxControl{}
-	fake.createHook = func(context.Context) {
-		time.Sleep(700 * time.Millisecond)
+	fake.createHook = func(ctx context.Context) {
+		deadline, _ := ctx.Deadline()
+		createDeadline <- deadline
+		// Long enough that a delete deadline inherited from the create sits
+		// measurably before one set after it.
+		time.Sleep(createTakes)
 		// The tenant goes away mid-create, so the store refuses the row.
 		if err := s.DeleteTenant(tenantID); err != nil {
 			t.Errorf("delete tenant: %v", err)
 		}
 	}
 	fake.deleteHook = func(ctx context.Context) error {
-		select {
-		case <-time.After(600 * time.Millisecond):
-			return nil
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+		deadline, _ := ctx.Deadline()
+		deleteDeadline <- deadline
+		return nil
 	}
 	var router http.Handler
 	router, s, _ = newIdleTestGateway(t, "admin-key", fake)
@@ -323,7 +318,12 @@ func TestCreateSandboxStoreFailureDeletesRunnerSandbox(t *testing.T) {
 		t.Fatalf("create with tenant deleted mid-create: expected %d, got %d body=%s", http.StatusConflict, rr.Code, rr.Body.String())
 	}
 	if _, deleted := fake.calls(); len(deleted) != 1 {
-		t.Fatalf("runner deletes = %v, want the compensating delete to complete", deleted)
+		t.Fatalf("runner deletes = %v, want the compensating delete", deleted)
+	}
+	// A delete on the create's leftover budget carries the create's deadline; one
+	// on a budget of its own is later by at least the time the create took.
+	if gap := (<-deleteDeadline).Sub(<-createDeadline); gap < createTakes/2 {
+		t.Fatalf("delete deadline is %v after the create's, want at least %v: the delete inherited the create's budget", gap, createTakes/2)
 	}
 }
 

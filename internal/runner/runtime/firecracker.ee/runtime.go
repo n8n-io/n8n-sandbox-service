@@ -104,8 +104,12 @@ const (
 // RPCs carry the API request context, the idle sweeper's context lives until the
 // API exits), so a wedged host command would otherwise hold the claim forever and
 // fail every later operation on that sandbox.
+//
+// Create gets the runtime contract's larger budget because it clones the rootfs
+// and snapshot before booting; the API sizes its create RPC deadline from the
+// same constant. Vars rather than consts so tests can shrink them.
 var (
-	createBudget     = 2 * time.Minute
+	createBudget     = runnerruntime.CreateBudget
 	transitionBudget = 2 * time.Minute
 )
 

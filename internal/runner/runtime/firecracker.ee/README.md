@@ -157,9 +157,10 @@ files, so that accident stops covering it.
 
 A claim comes with a budget: `beginTransition` returns the context its operation
 must run under, which is the caller's detached from cancellation and capped at two
-minutes (create claims in `reserveSandbox` instead, under the same cap). Returning
-the two together is deliberate — a new lifecycle operation cannot acquire a claim
-without also bounding it.
+minutes (create claims in `reserveSandbox` instead and gets three, since it clones
+the rootfs and snapshot before booting; the API sizes its create RPC deadline from
+the same constant). Returning the two together is deliberate — a new lifecycle
+operation cannot acquire a claim without also bounding it.
 
 That budget starts when the claim is won. Waiting for another operation to finish
 is bounded separately and more generously, by `transitionWaitBudget`, so that
