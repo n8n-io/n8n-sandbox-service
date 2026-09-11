@@ -112,11 +112,20 @@ app.kubernetes.io/component: {{ .component }}
 {{- end }}
 
 {{/*
+api.config.metricsListenAddr, normalized. Defined once and included everywhere
+because toString on an unset value yields "<nil>", which would read as an
+address the operator had set.
+*/}}
+{{- define "n8n-sandbox-service.apiMetricsListenAddr" -}}
+{{- .Values.api.config.metricsListenAddr | default "" | toString | trim -}}
+{{- end }}
+
+{{/*
 The API's dedicated metrics port, or "" when /metrics shares the HTTP port.
 Every metrics port, scrape and policy block in the chart keys off this.
 */}}
 {{- define "n8n-sandbox-service.apiMetricsPort" -}}
-{{- $addr := .Values.api.config.metricsListenAddr | default "" | toString | trim -}}
+{{- $addr := include "n8n-sandbox-service.apiMetricsListenAddr" . -}}
 {{- if $addr -}}
 {{/*
 atoi, not the raw string: ":8080" and ":08080" are one socket to net.Listen.

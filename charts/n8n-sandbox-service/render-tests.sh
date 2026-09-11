@@ -234,6 +234,16 @@ render --set monitoring.serviceMonitor.enabled=true \
 	--set monitoring.serviceMonitor.api.enabled=false \
 	--set-string api.config.metricsListenAddr=127.0.0.1:9100 \
 	--show-only templates/api-service.yaml | grep -q 'port: 9100'
+# A loopback address on the shared port is listenAddr's business, not the
+# metrics port's: the scrape follows the http port, so this must still render
+# rather than send the operator to advice that trips the host-mismatch guard.
+render --set monitoring.serviceMonitor.enabled=true \
+	--set-string api.config.listenAddr=127.0.0.1:8080 \
+	--set-string api.config.metricsListenAddr=127.0.0.1:8080 \
+	--show-only templates/configmap.yaml | grep -q 'SANDBOX_API_METRICS_LISTEN_ADDR: "127.0.0.1:8080"'
+# An unset address must not read as one that was set ("<nil>").
+render "${api_only[@]}" --set api.config.metricsListenAddr=null \
+	--show-only templates/configmap.yaml | grep -q 'SANDBOX_API_METRICS_LISTEN_ADDR: ""'
 
 echo "==> the runner scrape verifies TLS by default"
 # The default must pin serverName to a name the runner certificate actually
