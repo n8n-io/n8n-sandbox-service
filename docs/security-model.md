@@ -250,9 +250,12 @@ bypass auth on both the API and the runner, as do the runner's `/livez` and
 `/readyz`. Requests to them are not access-logged. They expose fleet-level
 counters — sandbox and runner counts, capacity, request and operation rates —
 and carry no tenant or sandbox identifiers. Sandboxes cannot reach the runner's,
-per the section above; the API serves its own on the public HTTP port, so a
-deployment that enables ingress publishes them. Restrict both to the monitoring
-system.
+per the section above; the API serves its own on the public HTTP port by default,
+so a deployment that enables ingress publishes them. Set
+`SANDBOX_API_METRICS_LISTEN_ADDR` to move the API's `/metrics` to a port of its
+own, which an ingress does not publish and a NetworkPolicy can restrict on its
+own terms. `/healthz` stays on the public port either way. Restrict both to the
+monitoring system.
 
 **The database connection is encrypted but not verified by default.**
 `SANDBOX_API_POSTGRES_SSLMODE` defaults to `require`, which encrypts the

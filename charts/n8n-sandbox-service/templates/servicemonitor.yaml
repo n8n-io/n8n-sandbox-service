@@ -18,7 +18,8 @@ spec:
     matchLabels:
       {{- include "n8n-sandbox-service.selectorLabels" (dict "Release" .Release "Chart" .Chart "Values" .Values "component" "api") | nindent 6 }}
   endpoints:
-    - port: http
+    {{- $apiMetricsPort := include "n8n-sandbox-service.apiMetricsPort" . }}
+    - port: {{ if $apiMetricsPort }}metrics{{ else }}http{{ end }}
       path: {{ .Values.monitoring.serviceMonitor.path | quote }}
       scheme: {{ .Values.monitoring.serviceMonitor.scheme | quote }}
       interval: {{ .Values.monitoring.serviceMonitor.interval | quote }}

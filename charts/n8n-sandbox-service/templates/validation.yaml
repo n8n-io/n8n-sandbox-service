@@ -69,6 +69,70 @@
 {{- end -}}
 {{- end -}}
 {{- end -}}
+{{- $apiMetricsAddr := include "n8n-sandbox-service.apiMetricsListenAddr" . -}}
+{{- if $apiMetricsAddr -}}
+{{- $apiListenAddr := .Values.api.config.listenAddr | toString | trim -}}
+{{- $apiGrpcAddr := .Values.api.config.grpcListenAddr | toString | trim -}}
+{{/*
+Whole-address shape, not just the last segment: net.SplitHostPort rejects a
+bare host, and an unbracketed IPv6 address ("::1:9100") for too many colons.
+*/}}
+{{- if not (regexMatch `^(\[[^]]*\]|[^:]*):[0-9]{1,5}$` $apiMetricsAddr) -}}
+{{- fail (printf "api.config.metricsListenAddr must be host:port with a numeric port, e.g. \":9100\" or \"[::]:9100\" (got %q)" $apiMetricsAddr) -}}
+{{- end -}}
+{{- $apiMetricsPort := last (splitList ":" $apiMetricsAddr) -}}
+{{/* Match the range the API accepts, so a bad port fails the render rather than the container. */}}
+{{- if or (lt (atoi $apiMetricsPort) 1) (gt (atoi $apiMetricsPort) 65535) -}}
+{{- fail (printf "api.config.metricsListenAddr port must be between 1 and 65535 (got %q)" $apiMetricsAddr) -}}
+{{- end -}}
+{{/*
+The comparisons below are numeric, and Helm cannot resolve a service name the
+way net.Listen does, so a named port here would silently compare as 0.
+*/}}
+{{- range $key, $addr := dict "listenAddr" $apiListenAddr "grpcListenAddr" $apiGrpcAddr -}}
+{{- if not (regexMatch "^[0-9]{1,5}$" (last (splitList ":" $addr))) -}}
+{{- fail (printf "api.config.%s (%q) must use a numeric port when api.config.metricsListenAddr is set, so the chart can tell the ports apart" $key $addr) -}}
+{{- end -}}
+{{- end -}}
+{{- if eq (atoi $apiMetricsPort) (atoi (last (splitList ":" $apiGrpcAddr))) -}}
+{{- fail (printf "api.config.metricsListenAddr (%q) must not use the port of api.config.grpcListenAddr (%q): one port cannot serve both" $apiMetricsAddr $apiGrpcAddr) -}}
+{{- end -}}
+{{- $apiListenPort := last (splitList ":" $apiListenAddr) -}}
+{{/*
+api.service.httpPort and grpcPort are Service-facing numbers, independent of
+the container ports the API binds (api-service.yaml reaches those by name). The
+metrics Service port is the container port itself, so it can land on one of
+them and leave the Service listing a port twice, which is invalid.
+*/}}
+{{- if ne (atoi $apiMetricsPort) (atoi $apiListenPort) -}}
+{{- $httpServicePort := atoi (toString .Values.api.service.httpPort) -}}
+{{- $grpcServicePort := atoi (toString .Values.api.service.grpcPort) -}}
+{{- if or (eq (atoi $apiMetricsPort) $httpServicePort) (eq (atoi $apiMetricsPort) $grpcServicePort) -}}
+{{- fail (printf "api.config.metricsListenAddr (%q) repeats an API Service port (api.service.httpPort=%v, api.service.grpcPort=%v): a Service cannot list one port twice" $apiMetricsAddr .Values.api.service.httpPort .Values.api.service.grpcPort) -}}
+{{- end -}}
+{{- end -}}
+{{- $metricsHost := trimSuffix "]" (trimPrefix "[" (trimSuffix (printf ":%s" $apiMetricsPort) $apiMetricsAddr)) -}}
+{{/* Brackets stripped and wildcards folded together, matching sameListenHost in internal/api/config. */}}
+{{- if eq (atoi $apiMetricsPort) (atoi $apiListenPort) -}}
+{{- $wildcards := list "" "0.0.0.0" "::" -}}
+{{- $listenHost := trimSuffix "]" (trimPrefix "[" (trimSuffix (printf ":%s" $apiListenPort) $apiListenAddr)) -}}
+{{- if and (ne $metricsHost $listenHost) (not (and (has $metricsHost $wildcards) (has $listenHost $wildcards))) -}}
+{{- fail (printf "api.config.metricsListenAddr (%q) uses the port of api.config.listenAddr (%q) but a different host: leave it empty to serve /metrics on the API listener" $apiMetricsAddr $apiListenAddr) -}}
+{{- end -}}
+{{- end -}}
+{{/*
+A ServiceMonitor scrapes the pod IP, which a loopback-only listener never
+accepts. Binding loopback is still valid for a sidecar that shares the pod
+network namespace, so this only fails when something outside would scrape it.
+Gated on a dedicated port: on the shared one the scrape follows listenAddr, and
+a loopback API fails its readiness probe long before metrics matter.
+*/}}
+{{- if and .Values.monitoring.serviceMonitor.enabled .Values.monitoring.serviceMonitor.api.enabled (include "n8n-sandbox-service.apiMetricsPort" .) -}}
+{{- if or (hasPrefix "127." $metricsHost) (eq $metricsHost "localhost") (eq $metricsHost "::1") -}}
+{{- fail (printf "api.config.metricsListenAddr (%q) binds loopback, which the API ServiceMonitor cannot scrape: bind all interfaces (\":%s\") or set monitoring.serviceMonitor.api.enabled=false" $apiMetricsAddr $apiMetricsPort) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- if not .Values.auth.existingSecret -}}
 {{- range $key := list "apiKeys" "runnerRegistrationToken" "runnerApiKey" "runnerApiKeys" -}}
 {{- $stringValue := default "" (index $.Values.auth.generated $key) | toString | trim -}}

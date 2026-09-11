@@ -150,6 +150,101 @@ for length in 1 20 40 41 42 43 44 45 46 47 48 49 50 53; do
 	done
 done
 
+echo "==> the API serves metrics on its HTTP port by default"
+# dataPlane.mode=external isolates the API ServiceMonitor: both live in one
+# rendered file, so the runner's would otherwise satisfy these greps too.
+api_only=(--set dataPlane.mode=external --set monitoring.serviceMonitor.enabled=true)
+config=$(render "${api_only[@]}" --show-only templates/configmap.yaml)
+grep -q 'SANDBOX_API_METRICS_ENABLED: "true"' <<<"$config"
+grep -q 'SANDBOX_API_METRICS_LISTEN_ADDR: ""' <<<"$config"
+render "${api_only[@]}" --show-only templates/servicemonitor.yaml | grep -q 'port: http'
+# Render first, then test the captured output: set -e is suspended inside an if
+# condition, so a broken template would look like a correctly absent port.
+default_service=$(render "${api_only[@]}" --show-only templates/api-service.yaml)
+if grep -q 'name: metrics' <<<"$default_service"; then
+	echo "the default must not add a metrics Service port" >&2
+	exit 1
+fi
+
+echo "==> a dedicated metrics port moves the container port, Service port, scrape and policy"
+# --set-string, or helm reads the leading colon as a nested key.
+separate=("${api_only[@]}" --set-string api.config.metricsListenAddr=:9100)
+# Without the env var the API keeps /metrics on its HTTP port, and every port
+# assertion below would still pass against a dead scrape target.
+render "${separate[@]}" --show-only templates/configmap.yaml |
+	grep -q 'SANDBOX_API_METRICS_LISTEN_ADDR: ":9100"'
+render "${separate[@]}" --show-only templates/api-deployment.yaml | grep -q 'containerPort: 9100'
+render "${separate[@]}" --show-only templates/api-service.yaml | grep -q 'port: 9100'
+render "${separate[@]}" --show-only templates/servicemonitor.yaml | grep -q 'port: metrics'
+render "${separate[@]}" --set networkPolicy.enabled=true \
+	--show-only templates/networkpolicy.yaml | grep -q 'port: metrics'
+
+echo "==> a metrics addr on the API port keeps the shared listener"
+# Wildcard spellings and a padded port included: the chart must not split a
+# listener the binary would share.
+for addr in :8080 0.0.0.0:8080 "[::]:8080" :08080; do
+	shared=("${api_only[@]}" --set-string "api.config.metricsListenAddr=$addr")
+	shared_service=$(render "${shared[@]}" --show-only templates/api-service.yaml)
+	if grep -q 'name: metrics' <<<"$shared_service"; then
+		echo "metricsListenAddr=$addr must not add a Service port" >&2
+		exit 1
+	fi
+	render "${shared[@]}" --show-only templates/servicemonitor.yaml | grep -q 'port: http'
+done
+
+echo "==> conflicting metrics addresses fail the render"
+must_fail "must not use the port of api.config.grpcListenAddr" \
+	--set-string api.config.metricsListenAddr=:9090
+must_fail "must be host:port with a numeric port" \
+	--set-string api.config.metricsListenAddr=9100
+# A port the API rejects at startup must not render a manifest.
+must_fail "port must be between 1 and 65535" \
+	--set-string api.config.metricsListenAddr=:70000
+# Same port, genuinely different host: the API refuses this, so the render does.
+must_fail "leave it empty to serve /metrics on the API listener" \
+	--set-string api.config.listenAddr=127.0.0.1:8080 \
+	--set-string api.config.metricsListenAddr=0.0.0.0:8080
+# net.SplitHostPort rejects an unbracketed IPv6 address; the bracketed form is fine.
+must_fail "must be host:port with a numeric port" \
+	--set-string api.config.metricsListenAddr=::1:9100
+render "${api_only[@]}" --set-string 'api.config.metricsListenAddr=[::]:9100' \
+	--show-only templates/api-service.yaml | grep -q 'port: 9100'
+# Helm cannot resolve a service name, so it must not guess at one.
+must_fail "must use a numeric port when api.config.metricsListenAddr is set" \
+	--set-string api.config.listenAddr=:http \
+	--set-string api.config.metricsListenAddr=:80
+# api.service.* ports are independent of the bound ports, so a metrics port can
+# collide with one and make the Service list it twice.
+must_fail "repeats an API Service port" \
+	--set api.service.httpPort=9100 \
+	--set-string api.config.metricsListenAddr=:9100
+must_fail "repeats an API Service port" \
+	--set api.service.grpcPort=9100 \
+	--set-string api.config.metricsListenAddr=:9100
+# A custom Service port that does not collide still renders.
+render "${api_only[@]}" --set api.service.httpPort=8090 \
+	--set-string api.config.metricsListenAddr=:9100 \
+	--show-only templates/api-service.yaml | grep -q 'port: 9100'
+# A loopback bind is unreachable from a ServiceMonitor scraping the pod IP.
+must_fail "binds loopback" \
+	--set monitoring.serviceMonitor.enabled=true \
+	--set-string api.config.metricsListenAddr=127.0.0.1:9100
+# ...but it is legitimate for a sidecar, so it renders with that scrape off.
+render --set monitoring.serviceMonitor.enabled=true \
+	--set monitoring.serviceMonitor.api.enabled=false \
+	--set-string api.config.metricsListenAddr=127.0.0.1:9100 \
+	--show-only templates/api-service.yaml | grep -q 'port: 9100'
+# A loopback address on the shared port is listenAddr's business, not the
+# metrics port's: the scrape follows the http port, so this must still render
+# rather than send the operator to advice that trips the host-mismatch guard.
+render --set monitoring.serviceMonitor.enabled=true \
+	--set-string api.config.listenAddr=127.0.0.1:8080 \
+	--set-string api.config.metricsListenAddr=127.0.0.1:8080 \
+	--show-only templates/configmap.yaml | grep -q 'SANDBOX_API_METRICS_LISTEN_ADDR: "127.0.0.1:8080"'
+# An unset address must not read as one that was set ("<nil>").
+render "${api_only[@]}" --set api.config.metricsListenAddr=null \
+	--show-only templates/configmap.yaml | grep -q 'SANDBOX_API_METRICS_LISTEN_ADDR: ""'
+
 echo "==> the runner scrape verifies TLS by default"
 # The default must pin serverName to a name the runner certificate actually
 # carries, or the scrape fails to verify. Compare against the issued SANs

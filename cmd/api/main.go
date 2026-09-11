@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
@@ -86,7 +87,13 @@ func main() {
 			return float64(n)
 		})
 		mrec.SetRunnersRegistered(func() float64 { return float64(runnerReg.Len()) })
-		slog.Info("metrics endpoint enabled", "path", "/metrics")
+		slog.Info("metrics endpoint enabled",
+			"path", "/metrics",
+			"addr", cfg.ResolvedMetricsListenAddr(),
+			"dedicated_listener", !cfg.MetricsOnMainListener())
+	} else if cfg.MetricsListenAddr != "" {
+		slog.Warn("metrics listen addr set but SANDBOX_API_METRICS_ENABLED is false; no metrics listener will start",
+			"addr", cfg.MetricsListenAddr)
 	}
 
 	api.LogIdleSweepConfig(cfg)
@@ -110,6 +117,12 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
+	metricsSrv, metricsLis, err := newMetricsServer(cfg, mrec)
+	if err != nil {
+		slog.Error("metrics listen", "addr", cfg.MetricsListenAddr, "error", err)
+		os.Exit(1)
+	}
+
 	grpcLis, err := net.Listen("tcp", cfg.GRPCListenAddr)
 	if err != nil {
 		slog.Error("grpc listen", "addr", cfg.GRPCListenAddr, "error", err)
@@ -131,7 +144,8 @@ func main() {
 		Reg:   runnerReg,
 	})
 
-	serverErr := make(chan error, 1)
+	// One slot per listener, so a second failure never blocks its goroutine.
+	serverErr := make(chan error, 3)
 	go func() {
 		slog.Info("api listening", "addr", cfg.ListenAddr, "grpc_addr", cfg.GRPCListenAddr, "store", cfg.Store)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -146,6 +160,15 @@ func main() {
 			serverErr <- err
 		}
 	}()
+
+	if metricsSrv != nil {
+		go func() {
+			slog.Info("metrics listening", "addr", cfg.MetricsListenAddr, "path", "/metrics")
+			if err := metricsSrv.Serve(metricsLis); err != nil && err != http.ErrServerClosed {
+				serverErr <- err
+			}
+		}()
+	}
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
@@ -165,6 +188,15 @@ func main() {
 	grpcSrv.Stop()
 	if err := srv.Shutdown(ctx); err != nil {
 		slog.Error("graceful shutdown failed", "error", err)
+	}
+	// Metrics last, so a scrape in flight during a normal drain still completes.
+	// The deadline above is deliberately shared: once it is spent the kubelet is
+	// at terminationGracePeriodSeconds and about to SIGKILL us, so that case is
+	// expected rather than an error worth logging.
+	if metricsSrv != nil {
+		if err := metricsSrv.Shutdown(ctx); err != nil && !errors.Is(err, context.DeadlineExceeded) {
+			slog.Error("metrics graceful shutdown failed", "error", err)
+		}
 	}
 
 	slog.Info("api stopped")

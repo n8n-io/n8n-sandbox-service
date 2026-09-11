@@ -161,6 +161,10 @@ Related series:
 - `sandbox_http_request_duration_seconds{role,route,method}` — end-to-end per
   route on both binaries.
 
+Both binaries serve `/metrics` on the port that serves their API. The API can
+move its own to a dedicated port with `SANDBOX_API_METRICS_LISTEN_ADDR`, which
+also stops it recording its own scrapes as `route="/metrics"`.
+
 Full list in [configuration.md](configuration.md#metrics).
 
 ## Working with the events

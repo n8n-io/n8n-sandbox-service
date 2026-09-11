@@ -112,6 +112,8 @@ monitoring:
     enabled: true
 ```
 
+That serves the API's `/metrics` on its public HTTP port. Set `api.config.metricsListenAddr` (for example `":9100"`) to move it to a dedicated port instead, which the Ingress does not publish.
+
 ## Immutable-rootfs distributions (privileged isolation)
 
 Sysbox cannot install on distributions with a read-only root filesystem and machine-managed containerd configuration. Verified on Talos; the same constraint applies to Bottlerocket, Flatcar, and Fedora CoreOS. Use `runner.isolation: privileged` there. It runs the same Docker-in-Docker runner with `privileged: true` instead of the sysbox runtime, so any node can run it.

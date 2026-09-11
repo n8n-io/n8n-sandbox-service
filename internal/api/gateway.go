@@ -10,8 +10,9 @@ import (
 )
 
 // NewGatewayRouter creates the public API gateway that manages state and
-// coordinates with registered runner services. If rec is enabled, its
-// /metrics handler is mounted and HTTPMiddleware wraps the request chain.
+// coordinates with registered runner services. If rec is enabled, HTTPMiddleware
+// wraps the request chain, and its /metrics handler is mounted here unless
+// cfg gives metrics a listener of their own.
 func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.RunnerRegistry, rec *metrics.APIRecorder) (http.Handler, error) {
 	runnerTransport, err := newRunnerTransport(cfg)
 	if err != nil {
@@ -26,7 +27,8 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 
-	if rec.Enabled() {
+	// A dedicated metrics port is served by NewMetricsRouter instead.
+	if rec.Enabled() && cfg.MetricsOnMainListener() {
 		mux.Handle("GET /metrics", metrics.Handler(rec.Registry()))
 	}
 
