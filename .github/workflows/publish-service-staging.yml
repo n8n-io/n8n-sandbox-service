@@ -21,8 +21,10 @@ permissions:
   contents: read
   id-token: write
 
+# Keyed by what names the label: runs that would mint the same service/v{label}
+# tag queue behind each other, so the tag check below cannot pass for two of them.
 concurrency:
-  group: publish-service-staging-${{ github.ref }}
+  group: publish-service-staging-${{ inputs.version || github.sha }}
   cancel-in-progress: false
 
 jobs:
@@ -54,6 +56,10 @@ jobs:
           # splice it into shell commands, so it is restricted to tag-safe characters.
           elif [[ ! "$VERSION" =~ ^[0-9A-Za-z][0-9A-Za-z._-]*$ ]]; then
             echo "::error::version '${VERSION}' may only contain letters, digits, '.', '_' and '-', and must start with a letter or digit."
+            exit 1
+          # The character class still admits names git rejects ('..', a trailing '.' or '.lock').
+          elif ! git check-ref-format "refs/tags/service/v${VERSION}"; then
+            echo "::error::version '${VERSION}' is not a valid git tag name."
             exit 1
           fi
           TAG="service/v${VERSION}"

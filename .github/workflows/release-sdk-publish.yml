@@ -12,7 +12,6 @@ permissions:
   # The tag, release and post-release PR are created with the release app's
   # token, so GITHUB_TOKEN only needs to read the checkout.
   contents: read
-  pull-requests: write
 
 jobs:
   publish:

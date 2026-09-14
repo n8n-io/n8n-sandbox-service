@@ -141,11 +141,12 @@ two records kept outside it:
   (`vm-images/firecracker-sandbox-runner/golden-build-bundle.sha256`), one line
   per adopted version, taken from GitHub's asset digest — the file header has
   the command;
-- `gh release verify-asset service/v{version} <file>`, GitHub's signed release
-  attestation. Releases published before immutability was enabled have none.
+- `gh release verify-asset service/v{version} <file> --repo n8n-io/n8n-sandbox-service`,
+  GitHub's signed release attestation. Releases published before immutability
+  was enabled have none and rely on the pin alone.
 
-The infra `bake-golden-build-bundle.sh` does both and refuses a missing pin or
-a mismatch.
+The infra `bake-golden-build-bundle.sh` checks the pin for every version and
+the attestation for immutable releases, and refuses a missing pin or a mismatch.
 
 ## Consumer workflow
 
