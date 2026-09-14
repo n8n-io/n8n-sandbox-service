@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -20,6 +21,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/grpctls"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/obs"
+	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 	"github.com/n8n-io/sandbox-service/internal/sandboxproxy"
 )
 
@@ -222,6 +224,13 @@ func runnerControlTLS(cfg *config.APIConfig) *runnerctl.TLS {
 	}
 }
 
+// runnerCreateBudget is the deadline for the runner create RPC, used instead of
+// the client's request context: a client disconnect must not cancel the RPC,
+// because the runner would finish the create anyway and the resulting sandbox,
+// with no store row, would hold a slot that quota and the idle sweeper cannot
+// see. The runtime's own create budget plus a margin for the round trip.
+const runnerCreateBudget = runnerruntime.CreateBudget + time.Minute
+
 func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, rec *metrics.APIRecorder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		success := false
@@ -338,7 +347,9 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 			"tenant_id", tenantID,
 			"ephemeral", req.Ephemeral,
 		)
-		gresp, err := runnerctl.CreateSandbox(r.Context(), controlAddr, cfg.RunnerAPIKey, tlsCfg, sandboxID, "{}")
+		createCtx, cancelCreate := context.WithTimeout(context.WithoutCancel(r.Context()), runnerCreateBudget)
+		defer cancelCreate()
+		gresp, err := runnerctl.CreateSandbox(createCtx, controlAddr, cfg.RunnerAPIKey, tlsCfg, sandboxID, "{}")
 		if err != nil {
 			slog.ErrorContext(
 				r.Context(),
@@ -367,7 +378,20 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 			Ephemeral:             req.Ephemeral,
 		}
 		if err := s.Create(record); err != nil {
-			_ = runnerctl.DeleteSandbox(r.Context(), controlAddr, cfg.RunnerAPIKey, tlsCfg, sandboxID)
+			// Fresh deadline: the create may have used up most of createCtx.
+			deleteCtx, cancelDelete := context.WithTimeout(context.WithoutCancel(r.Context()), runnerCreateBudget)
+			delErr := runnerctl.DeleteSandbox(deleteCtx, controlAddr, cfg.RunnerAPIKey, tlsCfg, sandboxID)
+			cancelDelete()
+			if delErr != nil {
+				slog.ErrorContext(
+					r.Context(),
+					"create sandbox failed: compensating runner delete, sandbox is untracked",
+					"sandbox_id", sandboxID,
+					"runner_id", run.ID,
+					"runner_control_grpc_addr", controlAddr,
+					"error", delErr,
+				)
+			}
 			if existing, getErr := s.Get(sandboxID); getErr == nil && existing != nil {
 				if canAccessSandbox(r, existing) {
 					writeJSON(w, http.StatusOK, sandboxResponse(existing))

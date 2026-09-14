@@ -28,9 +28,15 @@ type fakeSandboxControl struct {
 	stopped   []string
 	deleted   []string
 	deleteErr error
+	// Run at the start of the RPC, on the server-side context, when set.
+	createHook func(ctx context.Context)
+	deleteHook func(ctx context.Context)
 }
 
-func (f *fakeSandboxControl) CreateSandbox(_ context.Context, _ *pb.CreateSandboxRequest) (*pb.CreateSandboxResponse, error) {
+func (f *fakeSandboxControl) CreateSandbox(ctx context.Context, _ *pb.CreateSandboxRequest) (*pb.CreateSandboxResponse, error) {
+	if f.createHook != nil {
+		f.createHook(ctx)
+	}
 	return &pb.CreateSandboxResponse{ContainerIp: "10.0.0.2"}, nil
 }
 
@@ -41,7 +47,10 @@ func (f *fakeSandboxControl) StopSandbox(_ context.Context, req *pb.StopSandboxR
 	return &pb.StopSandboxResponse{}, nil
 }
 
-func (f *fakeSandboxControl) DeleteSandbox(_ context.Context, req *pb.DeleteSandboxRequest) (*pb.DeleteSandboxResponse, error) {
+func (f *fakeSandboxControl) DeleteSandbox(ctx context.Context, req *pb.DeleteSandboxRequest) (*pb.DeleteSandboxResponse, error) {
+	if f.deleteHook != nil {
+		f.deleteHook(ctx)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.deleteErr != nil {

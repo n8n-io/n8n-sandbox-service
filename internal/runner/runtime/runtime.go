@@ -3,7 +3,15 @@ package runtime
 import (
 	"context"
 	"errors"
+	"time"
 )
+
+// CreateBudget is how long a runtime may spend on CreateSandbox. It is part of
+// the contract because the API derives its create RPC deadline from it: giving
+// up earlier than the runtime would leave a sandbox that finishes creating with
+// no store row. Firecracker enforces it itself, detached from the caller;
+// Docker inherits the caller's deadline.
+const CreateBudget = 3 * time.Minute
 
 // ErrSandboxNotFound is returned when a sandbox ID is not found.
 var ErrSandboxNotFound = errors.New("sandbox not found")

@@ -105,12 +105,13 @@ const (
 // API exits), so a wedged host command would otherwise hold the claim forever and
 // fail every later operation on that sandbox.
 //
-// beginTransition applies transitionBudget to stop, wake, and delete. Create has
-// its own, larger budget because it clones the rootfs and snapshot before booting,
-// and it claims the sandbox in reserveSandbox rather than through beginTransition.
-// Vars rather than consts so tests can shrink them.
+// beginTransition applies transitionBudget to stop, wake, and delete. Create
+// claims in reserveSandbox and gets the larger runnerruntime.CreateBudget, since
+// it clones the rootfs and snapshot before booting; the API derives its create
+// RPC deadline from the same constant. Vars rather than consts so tests can
+// shrink them.
 var (
-	createBudget     = 3 * time.Minute
+	createBudget     = runnerruntime.CreateBudget
 	transitionBudget = 2 * time.Minute
 )
 
