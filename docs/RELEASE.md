@@ -239,9 +239,10 @@ The `version` input is rejected if it is a bare `x.y.z`. Candidates and releases
 share the `service/v*` tag namespace, and release prep reads it to order releases,
 so a candidate tagged `service/v1.3.0` would block the real v1.3.0 and every
 version below it. Keep a suffix, as the default label does. A label is also
-single-use: prereleases are immutable, so the workflow fails before pushing any
-image if `service/v{version}` already exists — publish the same commit again
-under a new label, for example `1.3.5-staging.abc1234.2`.
+single-use: prereleases are immutable, so the workflow reserves the
+`service/v{version}` tag before pushing any image and fails if it already
+exists — a run that fails later has still spent its label. Publish the same
+commit again under a new label, for example `1.3.5-staging.abc1234.2`.
 
 After deploying those image tags to staging, run:
 

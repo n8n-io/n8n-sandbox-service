@@ -21,10 +21,8 @@ permissions:
   contents: read
   id-token: write
 
-# Keyed by what names the label: runs that would mint the same service/v{label}
-# tag queue behind each other, so the tag check below cannot pass for two of them.
 concurrency:
-  group: publish-service-staging-${{ inputs.version || github.sha }}
+  group: publish-service-staging-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -34,10 +32,21 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - name: Resolve version
+      # The service/v* tag ruleset only lets the release app create tags. The
+      # tag is reserved below and the prerelease created at the end, both with
+      # this token.
+      - name: Generate GitHub App Token
+        id: generate-token
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
+        with:
+          app-id: ${{ secrets.N8N_ASSISTANT_APP_ID }}
+          private-key: ${{ secrets.N8N_ASSISTANT_PRIVATE_KEY }}
+
+      - name: Resolve version and reserve its tag
         id: meta
         env:
           VERSION_INPUT: ${{ inputs.version }}
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
         run: |
           BASE="$(tr -d '[:space:]' < VERSION)"
           SHA="$(git rev-parse --short HEAD)"
@@ -65,13 +74,16 @@ jobs:
           TAG="service/v${VERSION}"
           # Releases are immutable: a published prerelease cannot have its asset
           # replaced, and its tag can never be reused, so a label is single-use.
-          # Checked here so a repeat run fails before it pushes images under the label.
-          if ! matches=$(git ls-remote origin "refs/tags/${TAG}"); then
-            echo "::error::Could not reach origin to look up ${TAG}. Refusing to publish without confirming the label is unused; re-run once origin is reachable."
-            exit 1
-          fi
-          if [[ -n "$matches" ]]; then
-            echo "::error::${TAG} already exists. Releases are immutable, so a label cannot be published twice; pass a new 'version' label, for example '${VERSION}.2'."
+          # Creating the ref is atomic and fails if it exists, so a repeat or a
+          # concurrent run with the same label stops here, before any image is
+          # pushed under it. A run that fails later leaves the tag behind and the
+          # label is spent; the next run needs a new one.
+          if ! out=$(gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" -f ref="refs/tags/${TAG}" -f sha="${FULL_SHA}" 2>&1); then
+            if [[ "$out" == *"Reference already exists"* ]]; then
+              echo "::error::${TAG} already exists. Releases are immutable, so a label cannot be published twice; pass a new 'version' label, for example '${VERSION}.2'."
+            else
+              echo "::error::Could not create ${TAG}: ${out}"
+            fi
             exit 1
           fi
           TARBALL="dist/firecracker-golden-build-${VERSION}.tar.gz"
@@ -141,15 +153,6 @@ jobs:
           build_push Dockerfile.ee.runner-firecracker n8n-sandbox-service-runner-firecracker linux/amd64
           build_push Dockerfile.sandbox n8n-sandbox-service-sandbox
 
-      # The service/v* tag ruleset only lets the release app create tags, and
-      # gh release create mints the tag.
-      - name: Generate GitHub App Token
-        id: generate-token
-        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
-        with:
-          app-id: ${{ secrets.N8N_ASSISTANT_APP_ID }}
-          private-key: ${{ secrets.N8N_ASSISTANT_PRIVATE_KEY }}
-
       - name: Create GitHub prerelease
         env:
           GH_TOKEN: ${{ steps.generate-token.outputs.token }}
@@ -193,11 +196,9 @@ jobs:
 
           # The tarball goes in this one call: gh creates a draft, uploads, then
           # publishes, and nothing can be attached once the release is immutable.
-          # --target pins the tag to the built commit; without it the tag would
-          # point at the default branch, not the branch this run built.
+          # The release lands on the tag reserved above, at the built commit.
           gh release create "$TAG" \
             --prerelease \
-            --target "$FULL_SHA" \
             --title "Service staging ${VERSION}" \
             --notes-file "$NOTES_FILE" \
             "$TARBALL"
