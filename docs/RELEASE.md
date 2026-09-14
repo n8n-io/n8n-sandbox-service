@@ -173,6 +173,8 @@ unable to rebuild their snapshot.
      `appVersion` back to `main`
 5. Merge the post-release PR. The chart publish workflow then ships a chart whose
    default image tags point at images that already exist.
+6. Pin the tarball digest in the infra repo before baking a runner image from
+   this version (see [Verifying the tarball](../BUNDLE.md#verifying-the-tarball)).
 
 ### Firecracker golden build asset
 
@@ -207,7 +209,8 @@ can't drift apart.
 
 Deploy sequence (per environment):
 
-1. Download and unpack `firecracker-golden-build-{version}.tar.gz`; read `MANIFEST.json`.
+1. Download `firecracker-golden-build-{version}.tar.gz`, [verify it](../BUNDLE.md#verifying-the-tarball),
+   then unpack it and read `MANIFEST.json`.
 2. Assert the golden build and the runner image you deploy came from the same
    commit: compare `git_sha` in `MANIFEST.json` against the runner image's SHA
    tag (every image is tagged with its full commit SHA).
@@ -228,14 +231,17 @@ to `main`. The workflow:
 2. Builds and pushes the API, runner-dind, Firecracker runner, and sandbox images
    to the private container registry tagged `{VERSION}-staging.{short_sha}`
    (override with the `version` input)
-3. Creates a GitHub prerelease (`service/v{version}`) with the golden-build tarball,
-   which pins the ACR sandbox candidate by its commit-SHA tag (the `version` label is
-   caller-supplied and may be reused by a later run)
+3. Creates a GitHub prerelease (`service/v{version}`) tagged at the built commit,
+   with the golden-build tarball, which pins the ACR sandbox candidate by its
+   commit-SHA tag
 
 The `version` input is rejected if it is a bare `x.y.z`. Candidates and releases
 share the `service/v*` tag namespace, and release prep reads it to order releases,
 so a candidate tagged `service/v1.3.0` would block the real v1.3.0 and every
-version below it. Keep a suffix, as the default label does.
+version below it. Keep a suffix, as the default label does. A label is also
+single-use: prereleases are immutable, so the workflow fails before pushing any
+image if `service/v{version}` already exists — publish the same commit again
+under a new label, for example `1.3.5-staging.abc1234.2`.
 
 After deploying those image tags to staging, run:
 
@@ -281,10 +287,15 @@ communicates HTTP API compatibility to consumers who do not deploy this service.
 - Service: `service/v{version}` (e.g. `service/v1.0.0`) — covers all four images
 - SDK: `sdk/v{version}` (e.g. `sdk/v0.0.4`)
 
-Release tags are immutable: publish creates them unforced, so a tag always points
-at the commit its images and release assets were built from — both jobs check out
-the release PR's merge commit, so they cannot diverge. That is what makes the
-`git_sha` assertion in the copy-on-release contract meaningful.
+Release tags are immutable. Publish creates them unforced with the release
+GitHub App's token, so a tag always points at the commit its images and release
+assets were built from — which is what makes the `git_sha` assertion in the
+copy-on-release contract meaningful. A tag ruleset on `service/v*` and `sdk/v*`
+blocks moving and deleting them and only lets the app create them, and release
+immutability is enabled on the repository: a published release or prerelease
+keeps its assets and tag for good, and its tag name can never be reused. The
+tarball is therefore attached in the `gh release create` call itself. Releases
+made before the setting was enabled stay mutable.
 
 `sandbox/v{version}` tags exist for releases made before versions were unified and
 are not created anymore.

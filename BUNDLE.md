@@ -130,6 +130,23 @@ linux/amd64 binary built at package time. `MANIFEST.json` includes `sha256` for
 verification. Infra may bake this onto gallery images instead of pulling a
 separate container image.
 
+## Verifying the tarball
+
+The bundle runs as root on every runner host and its daemon is PID 1 of every
+guest, and `MANIFEST.json` travels inside the tarball, so its checksums only
+catch corruption, not a swap. Before extracting, check the download against the
+two records kept outside it:
+
+- the SHA-256 pinned in the infra repo
+  (`vm-images/firecracker-sandbox-runner/golden-build-bundle.sha256`), one line
+  per adopted version, taken from GitHub's asset digest — the file header has
+  the command;
+- `gh release verify-asset service/v{version} <file>`, GitHub's signed release
+  attestation. Releases published before immutability was enabled have none.
+
+The infra `bake-golden-build-bundle.sh` does both and refuses a missing pin or
+a mismatch.
+
 ## Consumer workflow
 
 See [docs/quickstart-firecracker-linux.md](docs/quickstart-firecracker-linux.md) for a
@@ -156,7 +173,8 @@ entrypoints or fail loudly when they are missing.
 
 Rollout order on Firecracker runners:
 
-1. Install/replace bundle on the host (or bake into a new gallery image).
+1. Verify the tarball (above), then install/replace the bundle on the host (or
+   bake it into a new gallery image).
 2. Ensure the rootfs template exists (`build_rootfs_template` at gallery bake;
    first-boot skips when `/srv/firecracker/template/rootfs.ext4` is present).
 3. Set `SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT` (and

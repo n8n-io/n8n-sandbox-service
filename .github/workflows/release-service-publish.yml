@@ -6,8 +6,10 @@ on:
     branches:
       - 'service/release/**'
 
+# The tag, release and post-release PR are created with the release app's
+# token, so GITHUB_TOKEN only needs to read the checkout and push to GHCR.
 permissions:
-  contents: write
+  contents: read
   pull-requests: write
   packages: write
 
@@ -110,9 +112,13 @@ jobs:
     env:
       VERSION: ${{ needs.publish-images.outputs.version }}
     steps:
+      # Without persist-credentials: false the checkout leaves GITHUB_TOKEN in
+      # git's extraheader, which wins over the token in the remote URL below, so
+      # the tag would be pushed by github-actions[bot] instead of the release app.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
+          persist-credentials: false
 
       # The golden build tarball embeds a freshly compiled cmd/daemon; without the
       # test action in this job, nothing else puts Go on the runner.
@@ -145,6 +151,9 @@ jobs:
             --version "${VERSION}" \
             --output "dist/firecracker-golden-build-${VERSION}.tar.gz"
 
+      # The tarball must go in this one call: gh creates a draft, uploads, then
+      # publishes, and the release is immutable from then on — assets cannot be
+      # added or replaced afterwards, and the tag can never be reused.
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ steps.generate-token.outputs.token }}

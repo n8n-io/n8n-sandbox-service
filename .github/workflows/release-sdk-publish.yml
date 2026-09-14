@@ -9,7 +9,9 @@ on:
 permissions:
   # Required to mint an OIDC token for npm Trusted Publishing and provenance.
   id-token: write
-  contents: write
+  # The tag, release and post-release PR are created with the release app's
+  # token, so GITHUB_TOKEN only needs to read the checkout.
+  contents: read
   pull-requests: write
 
 jobs:
@@ -21,10 +23,15 @@ jobs:
       run:
         working-directory: sdk
     steps:
+      # Without persist-credentials: false the checkout leaves GITHUB_TOKEN in
+      # git's extraheader, which wins over the token in the remote URL set
+      # below, so the tag would be pushed by github-actions[bot] instead of the
+      # release app.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ github.event.pull_request.base.ref }}
           fetch-depth: 100
+          persist-credentials: false
 
       # Node 24 ships with npm >=11.5.1, which is required for npm Trusted
       # Publishing to exchange the OIDC token for a registry auth token. The
@@ -61,31 +68,36 @@ jobs:
           RELEASE_BRANCH: ${{ github.event.pull_request.base.ref }}
         run: pnpm publish --publish-branch "$RELEASE_BRANCH"
 
-      - name: Create git tag
-        working-directory: .
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          TAG="sdk/v${VERSION}"
-          git tag --force "${TAG}"
-          git push --force origin "${TAG}"
-
-      - name: Create GitHub Release
-        working-directory: .
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          gh release create "sdk/v${VERSION}" \
-            --title "@n8n/sandbox-client v${VERSION}" \
-            --notes ""
-
+      # The sdk/v* tag ruleset only lets the release app create tags.
       - name: Generate GitHub App Token
         id: generate-token
         uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
         with:
           app-id: ${{ secrets.N8N_ASSISTANT_APP_ID }}
           private-key: ${{ secrets.N8N_ASSISTANT_PRIVATE_KEY }}
+
+      - name: Create git tag
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          TAG="sdk/v${VERSION}"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          # Not forced: a released tag must keep pointing at the commit its package
+          # was published from, and the ruleset rejects moving it anyway.
+          git tag "${TAG}"
+          git push origin "${TAG}"
+
+      - name: Create GitHub Release
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "sdk/v${VERSION}" \
+            --title "@n8n/sandbox-client v${VERSION}" \
+            --notes ""
 
       - name: Open version-bump PR against main
         working-directory: .

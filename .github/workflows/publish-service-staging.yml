@@ -15,8 +15,10 @@ on:
         default: true
         type: boolean
 
+# The prerelease and its tag are created with the release app's token, not
+# GITHUB_TOKEN, so this token only needs to read the checkout.
 permissions:
-  contents: write
+  contents: read
   id-token: write
 
 concurrency:
@@ -48,8 +50,24 @@ jobs:
           elif [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::version '${VERSION}' is a release version, which a staging candidate must not claim. Add a suffix, for example '${VERSION}-rc.1'."
             exit 1
+          # The label becomes a tag, an asset name and image tags, and later steps
+          # splice it into shell commands, so it is restricted to tag-safe characters.
+          elif [[ ! "$VERSION" =~ ^[0-9A-Za-z][0-9A-Za-z._-]*$ ]]; then
+            echo "::error::version '${VERSION}' may only contain letters, digits, '.', '_' and '-', and must start with a letter or digit."
+            exit 1
           fi
           TAG="service/v${VERSION}"
+          # Releases are immutable: a published prerelease cannot have its asset
+          # replaced, and its tag can never be reused, so a label is single-use.
+          # Checked here so a repeat run fails before it pushes images under the label.
+          if ! matches=$(git ls-remote origin "refs/tags/${TAG}"); then
+            echo "::error::Could not reach origin to look up ${TAG}. Refusing to publish without confirming the label is unused; re-run once origin is reachable."
+            exit 1
+          fi
+          if [[ -n "$matches" ]]; then
+            echo "::error::${TAG} already exists. Releases are immutable, so a label cannot be published twice; pass a new 'version' label, for example '${VERSION}.2'."
+            exit 1
+          fi
           TARBALL="dist/firecracker-golden-build-${VERSION}.tar.gz"
           {
             echo "version=${VERSION}"
@@ -63,20 +81,20 @@ jobs:
         uses: ./.github/actions/sandbox-service-test
 
       # Staging pins the ACR sandbox candidate, not Docker Hub: the guest userspace
-      # must match the images this run publishes. Pin the commit-SHA tag rather than
-      # the version label, which is caller-supplied and can be reused by a later run
-      # from another commit — the rootfs would then drift from the manifest git_sha.
+      # must match the images this run publishes. Pin the commit-SHA tag, which names
+      # exactly the image this run pushed, rather than the caller-supplied label.
       - name: Package Firecracker golden build tarball
         env:
           ACR_NAME: ${{ secrets.AZURE_ACR_NAME }}
           VERSION: ${{ steps.meta.outputs.version }}
           FULL_SHA: ${{ steps.meta.outputs.full_sha }}
+          TARBALL: ${{ steps.meta.outputs.tarball }}
         run: |
           chmod +x scripts/package-firecracker-golden-build.sh
           SANDBOX_IMAGE_REF="${ACR_NAME}.azurecr.io/n8n-sandbox-service-sandbox:${FULL_SHA}" \
             ./scripts/package-firecracker-golden-build.sh \
             --version "${VERSION}" \
-            --output "${{ steps.meta.outputs.tarball }}"
+            --output "${TARBALL}"
 
       - name: Azure Service Principal login (OIDC)
         uses: azure/login@cb79c773a3cfa27f31f25eb3f677781210c9ce3d # v1
@@ -117,9 +135,18 @@ jobs:
           build_push Dockerfile.ee.runner-firecracker n8n-sandbox-service-runner-firecracker linux/amd64
           build_push Dockerfile.sandbox n8n-sandbox-service-sandbox
 
+      # The service/v* tag ruleset only lets the release app create tags, and
+      # gh release create mints the tag.
+      - name: Generate GitHub App Token
+        id: generate-token
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
+        with:
+          app-id: ${{ secrets.N8N_ASSISTANT_APP_ID }}
+          private-key: ${{ secrets.N8N_ASSISTANT_PRIVATE_KEY }}
+
       - name: Create GitHub prerelease
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
           VERSION: ${{ steps.meta.outputs.version }}
           TAG: ${{ steps.meta.outputs.tag }}
           TARBALL: ${{ steps.meta.outputs.tarball }}
@@ -158,13 +185,13 @@ jobs:
           \`\`\`
           EOF
 
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$TARBALL" --clobber
-            gh release edit "$TAG" --prerelease --title "Service staging ${VERSION}" --notes-file "$NOTES_FILE"
-          else
-            gh release create "$TAG" \
-              --prerelease \
-              --title "Service staging ${VERSION}" \
-              --notes-file "$NOTES_FILE" \
-              "$TARBALL"
-          fi
+          # The tarball goes in this one call: gh creates a draft, uploads, then
+          # publishes, and nothing can be attached once the release is immutable.
+          # --target pins the tag to the built commit; without it the tag would
+          # point at the default branch, not the branch this run built.
+          gh release create "$TAG" \
+            --prerelease \
+            --target "$FULL_SHA" \
+            --title "Service staging ${VERSION}" \
+            --notes-file "$NOTES_FILE" \
+            "$TARBALL"
