@@ -32,11 +32,11 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      # The service/v* tag ruleset only lets the release app create tags. The
-      # tag is reserved below and the prerelease created at the end, both with
-      # this token.
-      - name: Generate GitHub App Token
-        id: generate-token
+      # The service/v* tag ruleset only lets the release app create tags. This
+      # token reserves the tag; the release step mints its own, since app tokens
+      # expire after an hour and the image builds sit in between.
+      - name: Generate GitHub App Token for the tag
+        id: reserve-token
         uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
         with:
           app-id: ${{ secrets.N8N_ASSISTANT_APP_ID }}
@@ -46,7 +46,7 @@ jobs:
         id: meta
         env:
           VERSION_INPUT: ${{ inputs.version }}
-          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+          GH_TOKEN: ${{ steps.reserve-token.outputs.token }}
         run: |
           BASE="$(tr -d '[:space:]' < VERSION)"
           SHA="$(git rev-parse --short HEAD)"
@@ -153,9 +153,16 @@ jobs:
           build_push Dockerfile.ee.runner-firecracker n8n-sandbox-service-runner-firecracker linux/amd64
           build_push Dockerfile.sandbox n8n-sandbox-service-sandbox
 
+      - name: Generate GitHub App Token for the release
+        id: release-token
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
+        with:
+          app-id: ${{ secrets.N8N_ASSISTANT_APP_ID }}
+          private-key: ${{ secrets.N8N_ASSISTANT_PRIVATE_KEY }}
+
       - name: Create GitHub prerelease
         env:
-          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+          GH_TOKEN: ${{ steps.release-token.outputs.token }}
           VERSION: ${{ steps.meta.outputs.version }}
           TAG: ${{ steps.meta.outputs.tag }}
           TARBALL: ${{ steps.meta.outputs.tarball }}
