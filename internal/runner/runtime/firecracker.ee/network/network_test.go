@@ -5,6 +5,12 @@ import (
 	"testing"
 )
 
+func TestNetnsName(t *testing.T) {
+	if got := NetnsName(3); got != "fc-sb-3" {
+		t.Fatalf("NetnsName(3) = %q", got)
+	}
+}
+
 func TestHostVethName(t *testing.T) {
 	if got := HostVethName(3); got != "fc-veth-3" {
 		t.Fatalf("HostVethName(3) = %q", got)
@@ -42,5 +48,17 @@ func TestSetupScriptClearsSlotBeforeCreatingIt(t *testing.T) {
 	}
 	if strings.Index(script, "ip link delete 'fc-veth-3'") > strings.Index(script, "ip link add 'fc-veth-3'") {
 		t.Error("setup script deletes the host veth after creating it")
+	}
+}
+
+// The slot wirer builds namespaces in the background while a create may be
+// building another inline, so two scripts can contend for /run/xtables.lock.
+// Without -w the loser fails immediately instead of waiting; without a bound on
+// it, a lock held by something stuck would stall the build for its whole budget.
+func TestSetupScriptWaitsForTheXtablesLock(t *testing.T) {
+	for _, line := range strings.Split(SetupScript(0, "fc-sb-0", "fc-tap-0", "172.16.0.1/24"), "\n") {
+		if strings.Contains(line, "iptables") && !strings.Contains(line, "iptables -w 5 ") {
+			t.Errorf("iptables call does not wait (bounded) for the xtables lock: %s", line)
+		}
 	}
 }

@@ -54,6 +54,13 @@ idempotently at runner startup.
 Guest IPv6 is disabled via `ipv6.disable=1` in the golden snapshot kernel boot
 args — rebuild the snapshot after changing boot args.
 
+Nothing in the namespace build depends on the sandbox that will use it, so a
+background wirer (`wire.go`, started from `Prepare`) builds every free slot at
+startup and rebuilds each slot after release. Activation skips the build on a wired
+slot (`setup_network_ms` ≈ 0), waits on one mid-build, and builds inline on one the
+wirer has not reached. Readiness does not wait for wiring, and teardown still
+deletes the namespace, so every sandbox gets a fresh one.
+
 We need slots because Firecracker does not provide Docker-style bridge networking
 or container names for free. Each microVM clone needs its own host network
 namespace and a TAP device with the snapshot's expected name inside that
@@ -76,7 +83,8 @@ nothing can reach, hand out a daemon URL nothing listens on, and fail every late
 stop against an API socket that died with its guest. Nothing would ever reclaim it.
 The snapshot is written by then, so the sandbox becomes an ordinary stopped one and
 wakes on the next request instead; a slot handed back with leftovers on it comes up
-clean anyway, because the next sandbox clears the slot before building it.
+clean anyway, because teardown marks it unwired and the rebuild after release clears
+the slot before building it.
 
 That last part is load-bearing for every path that releases a slot after a failed
 teardown, so it is worth being precise about which resources are per-slot. The netns
@@ -91,6 +99,11 @@ the `Stop` that teardown performs on every handle it claims; were it ever left
 bound, the next create on the slot would fail loudly on bind rather than share it.
 The jail directory is keyed to the `vmID`, so it collides with nothing and startup
 reconcile sweeps it.
+
+Only the slot's current holder tears down its netns and veth: a stopped sandbox
+keeps the names of the slot it gave back, and by the time it is deleted that slot
+may hold the wirer's rebuild or another sandbox. Its jail cleanup is keyed to its
+own `vmID` and runs regardless.
 
 A failed **delete** keeps its slot, which looks inconsistent with that but is not.
 Cleanup runs as a single shell command, so a failure that is not the jail directory
@@ -413,14 +426,13 @@ attempted. Check the error before reading the flag.
 
 ## Current Limitations
 
-- Slots are allocated in memory and are not pre-created or persisted.
+- Slots are allocated in memory and are not persisted.
 - On runner startup, orphaned per-sandbox data directories, jailer state, and
   slot network namespaces are removed; a jail directory still holding an active
   bind mount is logged and left in place. Sandboxes are not reattached after a
   runner restart (same contract as the Docker runner reconcile).
 - LRU eviction of stopped sandboxes for disk space is runner-local and does not
   notify the API.
-- Per-sandbox egress uses per-netns iptables (not nftables sets or a pre-wired
-  slot pool); optimize if create latency becomes critical.
+- Per-sandbox egress uses per-netns iptables, not nftables sets.
 - The snapshot/rootfs set must be built together and include the n8n sandbox
   daemon listening on the configured daemon port.

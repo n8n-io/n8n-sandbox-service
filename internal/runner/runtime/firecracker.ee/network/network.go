@@ -14,6 +14,11 @@ const (
 	guestSubnetCIDR = "172.16.0.0/24"
 )
 
+// NetnsName returns the network namespace for a runner slot.
+func NetnsName(slot int) string {
+	return fmt.Sprintf("fc-sb-%d", slot)
+}
+
 // HostVethName returns the host-side veth for a runner slot.
 func HostVethName(slot int) string {
 	return fmt.Sprintf("fc-veth-%d", slot)
@@ -56,6 +61,11 @@ iptables -C FORWARD -i fc-veth+ -j ACCEPT 2>/dev/null \
 // still running inside it, because the kernel keeps that namespace alive for the
 // process while the name is freed, so the new sandbox gets an empty namespace and
 // the stale guest is left isolated in an unnamed one.
+//
+// The netns iptables calls wait for the xtables lock (-w 5): the background slot
+// wirer builds namespaces concurrently with inline builds, and without it a
+// contended /run/xtables.lock fails the script outright. The wait is bounded so
+// a lock held by something stuck fails the build rather than stalling it.
 func SetupScript(slot int, netnsName, tapDevice, tapCIDR string) string {
 	q := shellquote.Quote
 	if tapDevice == "" {
@@ -83,7 +93,7 @@ func SetupScript(slot int, netnsName, tapDevice, tapCIDR string) string {
 	fmt.Fprintf(&b, "ip netns exec %s ip route add default via %s dev %s\n",
 		q(netnsName), q(hostIP), q(uplinkIfaceName))
 	fmt.Fprintf(&b, "ip netns exec %s sysctl -w net.ipv4.ip_forward=1\n", q(netnsName))
-	fmt.Fprintf(&b, "ip netns exec %s iptables -t nat -A POSTROUTING -s %s -o %s -j MASQUERADE\n",
+	fmt.Fprintf(&b, "ip netns exec %s iptables -w 5 -t nat -A POSTROUTING -s %s -o %s -j MASQUERADE\n",
 		q(netnsName), guestSubnetCIDR, q(uplinkIfaceName))
 	for _, line := range forwardEgressRules(netnsName, tapDevice) {
 		b.WriteString(line)

@@ -12,14 +12,14 @@ import (
 func forwardEgressRules(netns, tapIface string) []string {
 	q := shellquote.Quote
 	lines := []string{
-		fmt.Sprintf("ip netns exec %s iptables -A FORWARD -i %s -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT",
+		fmt.Sprintf("ip netns exec %s iptables -w 5 -A FORWARD -i %s -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT",
 			q(netns), q(tapIface)),
 	}
 	for _, cidr := range netpolicy.PrivateRangesV4 {
-		lines = append(lines, fmt.Sprintf("ip netns exec %s iptables -A FORWARD -i %s -d %s -j DROP",
+		lines = append(lines, fmt.Sprintf("ip netns exec %s iptables -w 5 -A FORWARD -i %s -d %s -j DROP",
 			q(netns), q(tapIface), q(cidr)))
 	}
-	lines = append(lines, fmt.Sprintf("ip netns exec %s iptables -A FORWARD -i %s -j ACCEPT",
+	lines = append(lines, fmt.Sprintf("ip netns exec %s iptables -w 5 -A FORWARD -i %s -j ACCEPT",
 		q(netns), q(tapIface)))
 	return lines
 }

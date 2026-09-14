@@ -71,9 +71,10 @@ func (r *Runtime) StopSandbox(ctx context.Context, sandboxID string) error {
 	// slot for a microVM that no longer exists, hand out a daemon URL nothing
 	// listens on, and fail every later stop against an API socket that died with
 	// its guest, so nothing would ever reclaim it. The slot is safe to hand back
-	// regardless of what cleanup left, because the next sandbox on it clears it
-	// first: setupNetwork deletes both per-slot host names, netns and veth, before
-	// creating them. What is left is keyed to the vmID, which reconcile removes.
+	// regardless of what cleanup left, because teardown unwires it and the next
+	// build on it clears it first: SetupScript deletes both per-slot host names,
+	// netns and veth, before creating them. What is left is keyed to the vmID,
+	// which reconcile removes.
 	//
 	// A failed delete keeps its slot instead, because a delete retry does arrive to
 	// reclaim it (see the README); a stop has no such retry.
@@ -229,7 +230,10 @@ func (r *Runtime) activateSandboxVM(ctx context.Context, state *sandboxState, t 
 	if err := t.step(stepPrepareJail, func() error { return r.prepareJail(ctx, state) }); err != nil {
 		return fmt.Errorf("prepare firecracker jail: %w", err)
 	}
-	if err := t.step(stepSetupNetwork, func() error { return r.setupNetwork(ctx, state) }); err != nil {
+	// Still a timed step on a slot the wirer already built, where it only takes the
+	// slot's lock: setup_network_ms then reads near zero, which is how the pre-wire
+	// hit rate shows up in the create and wake events.
+	if err := t.step(stepSetupNetwork, func() error { return r.setupNetwork(ctx, state.slot) }); err != nil {
 		return fmt.Errorf("setup firecracker network: %w", err)
 	}
 	r.mu.Lock()
@@ -344,11 +348,18 @@ func (r *Runtime) startGuest(ctx context.Context, state *sandboxState, t *stepTi
 // it would rather race a stop, wake or guest death than leave a microVM running
 // past the runner. Whoever takes the handles owns the stop and the kill; the other
 // caller finds nil and only repeats cleanupHost, which is written to be repeatable.
+//
+// Slot ownership is read in that same critical section and decides whether the
+// slot's namespace is torn down and unwired (see cleanupHost). Reading it once up
+// front rather than at the point of use matters for the same racing-teardown
+// reason: the loser may see the slot released between the two.
 func (r *Runtime) teardownRunningVM(ctx context.Context, state *sandboxState) error {
 	r.mu.Lock()
 	state.generation++
 	proxy, process := state.proxy, state.process
 	state.proxy, state.process = nil, nil
+	slot := state.slot
+	ownsSlot := slot >= 0 && r.slotOwnedByLocked(slot, state.id)
 	r.mu.Unlock()
 
 	var errs []error
@@ -362,8 +373,14 @@ func (r *Runtime) teardownRunningVM(ctx context.Context, state *sandboxState) er
 			errs = append(errs, fmt.Errorf("kill firecracker process: %w", err))
 		}
 	}
-	if err := r.cleanupHost(ctx, state); err != nil {
+	if err := r.cleanupHost(ctx, state, ownsSlot); err != nil {
 		errs = append(errs, fmt.Errorf("cleanup firecracker host state: %w", err))
+	}
+	// Unwired whether or not cleanup succeeded: a failed cleanup leaves the
+	// namespace in an unknown state, and the rebuild clears the slot before
+	// building it, so treating it as gone is the safe reading either way.
+	if ownsSlot {
+		r.unwireSlot(slot)
 	}
 	return joinErrors(errs)
 }
@@ -427,7 +444,7 @@ func (r *Runtime) reserveWakeSlot(state *sandboxState) error {
 		return fmt.Errorf("firecracker runner capacity exhausted")
 	}
 	state.slot = slot
-	state.netnsName = fmt.Sprintf("fc-sb-%d", slot)
+	state.netnsName = fcnetwork.NetnsName(slot)
 	state.hostVeth = fcnetwork.HostVethName(slot)
 	state.socketPath = filepath.Join(r.config.JailerBaseDir, "firecracker", state.vmID, "root", "firecracker.socket")
 	state.daemonURL = fmt.Sprintf("http://%s", net.JoinHostPort(r.config.ProxyListenIP, fmt.Sprintf("%d", r.config.ProxyPortStart+slot)))

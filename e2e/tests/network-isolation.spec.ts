@@ -12,7 +12,7 @@ import {
   execWithTransientRetry,
   siblingOf,
 } from './helpers';
-import { DOCKER_ONLY } from './tags';
+import { DOCKER_ONLY, FIRECRACKER_ONLY } from './tags';
 import type { SandboxClient } from '@n8n/sandbox-client';
 
 const tcpConnect = (ip: string, port: number = 80, timeout: number = 3) =>
@@ -286,6 +286,38 @@ test.describe('Network isolation', () => {
       expect(result).toHaveSucceeded();
       // Should resolve to an IP address
       expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
+    } finally {
+      await deleteSandbox(id);
+    }
+  });
+});
+
+// The Firecracker runner builds each slot's network namespace in the background
+// and rebuilds it after every release, so the second sandbox on a slot runs in a
+// namespace nobody built on its behalf. This checks that the rebuilt namespace
+// carries the same egress policy as a first build. With `workers: 1` and
+// first-free slot allocation, B lands on A's slot deterministically.
+test.describe('Reused slot', FIRECRACKER_ONLY, () => {
+  test('egress policy holds on a reused slot', async () => {
+    const first = await createSandbox();
+    await deleteSandbox(first);
+
+    const id = await createSandbox();
+    try {
+      const blocked = await execWithTransientRetry(id, tcpConnect('169.254.169.254', 80, 3), {
+        timeoutMs: 10_000,
+      });
+      expect(blocked.exitCode, 'expected the metadata endpoint to be unreachable on a reused slot').not.toBe(
+        0,
+      );
+
+      const allowed = await exec(
+        id,
+        `curl -fsSL -o /dev/null -w '%{http_code}' --max-time 15 https://example.com/`,
+        { timeoutMs: 30_000 },
+      );
+      expect(allowed, 'expected public egress to work on a reused slot').toHaveSucceeded();
+      expect(allowed.stdout.trim()).toBe('200');
     } finally {
       await deleteSandbox(id);
     }
