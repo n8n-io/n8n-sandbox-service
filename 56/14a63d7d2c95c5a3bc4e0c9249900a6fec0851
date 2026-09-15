@@ -1,0 +1,19 @@
+.github/workflows/build-sysbox-branch-images.yml
+  s_1baf01b3f5f1d3::t_ce46cc2baeb4a3 1-3,24-27,34,37-38,42,55-59
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "5614a63d7d2c95c5a3bc4e0c9249900a6fec0851",
+  "prompts": {},
+  "sessions": {
+    "s_1baf01b3f5f1d3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c5c9470b-9487-4cb6-bead-e388c450cb8f",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
