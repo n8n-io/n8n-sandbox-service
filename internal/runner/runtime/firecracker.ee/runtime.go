@@ -56,7 +56,7 @@ var _ runnerruntime.Runtime = (*Runtime)(nil)
 // complete inside the runtime (for example LRU evictions).
 func (r *Runtime) SetMetricsRecorder(rec *metrics.RunnerRecorder) {
 	r.metrics = rec
-	rec.SetWiredSlots(func() float64 { return float64(r.wiredSlots()) })
+	rec.SetUnwiredSlots(func() float64 { return float64(r.unwiredSlots()) })
 }
 
 func New(runnerConfig *config.Config, cfg Config) *Runtime {
@@ -85,8 +85,8 @@ func New(runnerConfig *config.Config, cfg Config) *Runtime {
 // finds it wired when the lock is handed over. wired means the slot's netns and
 // veth exist as SetupScript leaves them. It is written under netMu and goes false
 // only when clearSlotNetwork deletes them, so nothing rebuilds a namespace a live
-// microVM is still in; it is atomic so the slots_wired gauge can read it without
-// waiting behind a build.
+// microVM is still in; it is atomic so the slots_unwired gauge can read it
+// without waiting behind a build.
 type slotState struct {
 	sandboxID string
 

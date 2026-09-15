@@ -165,20 +165,20 @@ func TestRunnerRecorderDisabled(t *testing.T) {
 	r.ObserveLifecycleStep(OpCreate, "clone_rootfs", time.Millisecond)
 	r.ObserveGuestDeath()
 	r.SetActiveContainers(func() float64 { return 1 })
-	r.SetWiredSlots(func() float64 { return 1 })
+	r.SetUnwiredSlots(func() float64 { return 1 })
 }
 
 func TestRunnerRecorderStoppedGaugeScrape(t *testing.T) {
 	r := NewRunnerRecorder(true)
 	r.SetActiveContainers(func() float64 { return 2 })
 	r.SetStoppedContainers(func() float64 { return 3 })
-	r.SetWiredSlots(func() float64 { return 4 })
+	r.SetUnwiredSlots(func() float64 { return 4 })
 
 	body := scrape(t, r.Registry())
 	for _, want := range []string{
 		"sandbox_containers_active",
 		"sandbox_containers_stopped",
-		"sandbox_slots_wired",
+		"sandbox_slots_unwired",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("scrape body missing %q", want)

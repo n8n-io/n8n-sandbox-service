@@ -22,8 +22,8 @@ import (
 // scratch. Readiness does not wait for wiring; a slot the wirer has not reached is
 // built inline by the sandbox that lands on it, as every create did before.
 // Shutdown clears the namespaces of free slots, best-effort; startup reconcile
-// sweeps whatever that leaves. The slots_wired gauge reports how many slots are
-// built at any moment.
+// sweeps whatever that leaves. The slots_unwired gauge reports how many slots
+// are not built at any moment; zero means the wirer has nothing left to do.
 
 // setupNetwork makes sure the slot's network namespace exists with TAP, veth
 // uplink, and per-netns egress iptables matching the Docker private-CIDR policy.
@@ -52,12 +52,12 @@ func (r *Runtime) setupNetwork(ctx context.Context, slot int) error {
 	return nil
 }
 
-// wiredSlots counts the slots whose namespace is currently built, occupied or
-// not. Lock-free, so a scrape never waits behind a build.
-func (r *Runtime) wiredSlots() int {
+// unwiredSlots counts the slots whose namespace is not currently built. Lock-free,
+// so a scrape never waits behind a build.
+func (r *Runtime) unwiredSlots() int {
 	n := 0
 	for i := range r.slots {
-		if r.slots[i].wired.Load() {
+		if !r.slots[i].wired.Load() {
 			n++
 		}
 	}

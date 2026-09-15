@@ -74,8 +74,8 @@ func TestWirerBuildsFreeSlotsAndActivationSkipsTheBuild(t *testing.T) {
 	if slotWired(rt, 1) {
 		t.Fatal("wirer built an occupied slot")
 	}
-	if got := rt.wiredSlots(); got != 2 {
-		t.Fatalf("wiredSlots() = %d, want the two built slots", got)
+	if got := rt.unwiredSlots(); got != 1 {
+		t.Fatalf("unwiredSlots() = %d, want only the occupied slot", got)
 	}
 	builds := log.matching("ip netns add")
 	if len(builds) != 2 {
