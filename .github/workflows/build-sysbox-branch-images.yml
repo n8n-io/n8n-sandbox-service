@@ -1,0 +1,92 @@
+# Builds only the images a Docker/sysbox deployment runs. It builds no
+# Firecracker runner image, and no golden-build bundle for one.
+name: Build Sysbox Branch Images
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Branch (or tag, or commit SHA) to build
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      # A Docker tag accepts [a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}, so a branch name
+      # like `tomi/my-fix` becomes `branch-tomi-my-fix`. The `branch-` prefix keeps
+      # these builds out of the tags a release owns: the same GHCR repositories hold
+      # `latest`, `stable` and every `x.y.z`, and a branch named `stable` would
+      # otherwise overwrite the released image under that tag.
+      - name: Derive image tag from branch
+        id: tag
+        env:
+          BRANCH: ${{ inputs.branch }}
+        run: |
+          set -euo pipefail
+          SLUG="$(printf '%s' "$BRANCH" \
+            | tr '[:upper:]' '[:lower:]' \
+            | sed -e 's/[^a-z0-9._-]/-/g' -e 's/^[^a-z0-9]*//' \
+            | cut -c1-121)"
+          if [[ -z "$SLUG" ]]; then
+            echo "::error::Branch '${BRANCH}' has no characters a Docker tag can use."
+            exit 1
+          fi
+          TAG="branch-${SLUG}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          {
+            echo "Branch \`${BRANCH}\` builds these images:"
+            echo
+            for image in api runner-dind sandbox; do
+              echo "- \`ghcr.io/n8n-io/n8n-sandbox-service-${image}:${TAG}\`"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    needs: tag
+    runs-on: ${{ vars.RUNNER_PROVIDER == 'github' && 'ubuntu-latest' || 'blacksmith-4vcpu-ubuntu-2204' }}
+    # Keyed on the derived tag, not on the input: `feature/foo` and `feature-foo`
+    # are different inputs that push the same tag, so only this serializes them.
+    concurrency:
+      group: ${{ github.workflow }}-${{ needs.tag.outputs.tag }}-${{ matrix.image }}
+      cancel-in-progress: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: n8n-sandbox-service-api
+            dockerfile: Dockerfile.api
+          - image: n8n-sandbox-service-runner-dind
+            dockerfile: Dockerfile.runner-dind
+          - image: n8n-sandbox-service-sandbox
+            dockerfile: Dockerfile.sandbox
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ inputs.branch }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
+
+      - name: Build and push
+        uses: useblacksmith/build-push-action@30c71162f16ea2c27c3e21523255d209b8b538c1 # v2
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/n8n-io/${{ matrix.image }}:${{ needs.tag.outputs.tag }}
