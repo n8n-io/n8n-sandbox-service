@@ -298,11 +298,13 @@ test.describe('Network isolation', () => {
 // and rebuilds it after every release, so the second sandbox on a slot runs in a
 // namespace the wirer built. Slots are not in the API, so the runner's metrics
 // stand in: an empty runner (no slot-blocking sandbox) hands out slot 0 first, so
-// A and B share a slot when both are created into one; and a create that finds
-// its slot built spends no measurable time in setup_network, where an inline
-// build takes 85–105 ms (docs/performance.md).
+// A and B share a slot when both are created into one; sandbox_slots_wired drops
+// when A's teardown deletes the namespace and recovers when the wirer has
+// rebuilt it; and a create that finds its slot built spends no measurable time in
+// setup_network, where an inline build takes 85–105 ms (docs/performance.md).
 test.describe('Reused slot', FIRECRACKER_ONLY, () => {
   const ACTIVE = 'sandbox_containers_active';
+  const WIRED = 'sandbox_slots_wired';
   const STEP = 'sandbox_lifecycle_step_duration_seconds';
   const SETUP_NETWORK = { role: 'runner', operation: 'create', step: 'setup_network' };
   const PREWIRED_MAX_SECONDS = 0.04;
@@ -311,6 +313,22 @@ test.describe('Reused slot', FIRECRACKER_ONLY, () => {
     count: parseCounter(body, `${STEP}_count`, SETUP_NETWORK),
     sum: parseCounter(body, `${STEP}_sum`, SETUP_NETWORK),
   });
+
+  // The wirer visits slots in index order and is idle between releases, so the
+  // first slot it wires after A's release is A's. Waiting for the count to come
+  // back is waiting for that build; only then does B's setup_network time say
+  // whether B found the slot built rather than how long it queued behind the build.
+  async function waitForWiredSlots(want: number, timeoutMs = 10_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    let wired = parseGauge(scrapeRunnerMetrics(), WIRED);
+    while (wired < want && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 100));
+      wired = parseGauge(scrapeRunnerMetrics(), WIRED);
+    }
+    if (wired < want) {
+      throw new Error(`${WIRED} = ${wired}, want >= ${want} within ${timeoutMs}ms — the wirer did not rebuild the released slot`);
+    }
+  }
 
   test('the second sandbox on a slot gets the rebuilt namespace, egress policy intact', async () => {
     test.skip(
@@ -323,10 +341,11 @@ test.describe('Reused slot', FIRECRACKER_ONLY, () => {
     );
 
     const first = await createSandbox();
+    // A's slot counts as wired while A runs in it, whoever built it.
+    const wiredWithA = parseGauge(scrapeRunnerMetrics(), WIRED);
     await deleteSandbox(first);
     expect(parseGauge(scrapeRunnerMetrics(), ACTIVE), 'A did not give its slot back').toBe(0);
-    // The rebuild costs one inline build; a second later it is long finished.
-    await new Promise((r) => setTimeout(r, 1000));
+    await waitForWiredSlots(wiredWithA);
 
     const before = setupNetworkOfCreates(scrapeRunnerMetrics());
     const id = await createSandbox();

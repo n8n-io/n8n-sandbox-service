@@ -37,10 +37,7 @@ func (l *scriptLog) matching(substr string) []string {
 }
 
 func slotWired(rt *Runtime, slot int) bool {
-	s := &rt.slots[slot]
-	s.netMu.Lock()
-	defer s.netMu.Unlock()
-	return s.wired
+	return rt.slots[slot].wired.Load()
 }
 
 func waitSlotWired(t *testing.T, rt *Runtime, slot int, want bool) {
@@ -76,6 +73,9 @@ func TestWirerBuildsFreeSlotsAndActivationSkipsTheBuild(t *testing.T) {
 	waitSlotWired(t, rt, 2, true)
 	if slotWired(rt, 1) {
 		t.Fatal("wirer built an occupied slot")
+	}
+	if got := rt.wiredSlots(); got != 2 {
+		t.Fatalf("wiredSlots() = %d, want the two built slots", got)
 	}
 	builds := log.matching("ip netns add")
 	if len(builds) != 2 {
@@ -279,6 +279,53 @@ func TestTeardownRechecksSlotOwnershipBeforeClearingTheNamespace(t *testing.T) {
 	rt.mu.Unlock()
 	if owner != nextID {
 		t.Fatalf("slot 0 owner = %q after the delete, want %q left in place", owner, nextID)
+	}
+}
+
+// The slot's owner is compared by ID, and IDs come back: the API re-creates a
+// sandbox under its old ID when a runner has lost it. A teardown of the old
+// incarnation that outlives its untracking must not take the ID match for
+// ownership and clear the namespace the new incarnation is running in.
+func TestTeardownOfAnUntrackedIncarnationLeavesItsSuccessorsSlotAlone(t *testing.T) {
+	rt := testRuntimeT(t, 1)
+	stubCreateDeps(rt)
+	log := &scriptLog{}
+	rt.deps.run = log.run
+
+	const sandboxID = "sandbox-id-123456"
+	var old *sandboxState
+	rt.deps.newProxy = func(context.Context, string, string, string) (daemonProxy, error) {
+		return &hookProxy{onStop: func() {
+			// Shutdown untracked and released the old incarnation; a create under
+			// the same ID reserved slot 0 and is now the tracked one.
+			rt.mu.Lock()
+			rt.sandboxes[sandboxID] = &sandboxState{id: sandboxID, slot: 0}
+			rt.slots[0].sandboxID = sandboxID
+			rt.mu.Unlock()
+		}}, nil
+	}
+	if _, err := rt.CreateSandbox(context.Background(), sandboxID, nil); err != nil {
+		t.Fatalf("CreateSandbox() failed: %v", err)
+	}
+	rt.mu.Lock()
+	old = rt.sandboxes[sandboxID]
+	rt.mu.Unlock()
+
+	cleanupsBefore := len(log.matching("ip netns delete"))
+	if err := rt.deleteSandbox(context.Background(), old); err != nil {
+		t.Fatalf("deleteSandbox() failed: %v", err)
+	}
+	if got := len(log.matching("ip netns delete")); got != cleanupsBefore {
+		t.Fatal("teardown of the old incarnation deleted the namespace its successor runs in")
+	}
+	if !slotWired(rt, 0) {
+		t.Fatal("teardown of the old incarnation unwired its successor's slot")
+	}
+	rt.mu.Lock()
+	current, held := rt.sandboxes[sandboxID], rt.slots[0].sandboxID
+	rt.mu.Unlock()
+	if current == old || current == nil || held != sandboxID {
+		t.Fatal("teardown of the old incarnation untracked or released its successor")
 	}
 }
 

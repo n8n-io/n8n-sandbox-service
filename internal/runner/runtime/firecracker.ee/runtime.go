@@ -56,6 +56,7 @@ var _ runnerruntime.Runtime = (*Runtime)(nil)
 // complete inside the runtime (for example LRU evictions).
 func (r *Runtime) SetMetricsRecorder(rec *metrics.RunnerRecorder) {
 	r.metrics = rec
+	rec.SetWiredSlots(func() float64 { return float64(r.wiredSlots()) })
 }
 
 func New(runnerConfig *config.Config, cfg Config) *Runtime {
@@ -82,13 +83,15 @@ func New(runnerConfig *config.Config, cfg Config) *Runtime {
 // runtime-wide lock: netMu is held for the whole build, so a sandbox activating
 // on the slot and the background wirer cannot both build it, and whichever waits
 // finds it wired when the lock is handed over. wired means the slot's netns and
-// veth exist as SetupScript leaves them. It goes false only after cleanupHost has
-// deleted them, so nothing rebuilds a namespace a live microVM is still in.
+// veth exist as SetupScript leaves them. It is written under netMu and goes false
+// only when clearSlotNetwork deletes them, so nothing rebuilds a namespace a live
+// microVM is still in; it is atomic so the slots_wired gauge can read it without
+// waiting behind a build.
 type slotState struct {
 	sandboxID string
 
 	netMu sync.Mutex
-	wired bool
+	wired atomic.Bool
 }
 
 func (s *slotState) occupied() bool {
@@ -519,7 +522,7 @@ func (r *Runtime) DaemonURL(_ context.Context, sandboxID string) (string, error)
 }
 
 // Shutdown best-effort deletes every sandbox currently tracked by this runtime,
-// then clears the namespaces the wirer built for slots no sandbox took.
+// then, equally best-effort, clears the namespaces of the slots left free.
 func (r *Runtime) Shutdown(ctx context.Context) {
 	r.mu.Lock()
 	states := make([]*sandboxState, 0, len(r.sandboxes))
@@ -543,7 +546,7 @@ func (r *Runtime) Shutdown(ctx context.Context) {
 	// A slot still held here belongs to a delete that failed or is in flight and
 	// is that delete's to clean; startup reconcile backstops the rest.
 	for slot := range r.slots {
-		if err := r.clearSlotNetwork(ctx, slot, ""); err != nil {
+		if err := r.clearSlotNetwork(ctx, slot, nil); err != nil {
 			slog.Warn("firecracker free slot cleanup failed on shutdown", "slot", slot, "err", err)
 		}
 	}

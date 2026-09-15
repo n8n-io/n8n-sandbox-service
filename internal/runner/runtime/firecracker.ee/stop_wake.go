@@ -375,7 +375,7 @@ func (r *Runtime) teardownRunningVM(ctx context.Context, state *sandboxState) er
 		errs = append(errs, fmt.Errorf("cleanup firecracker host state: %w", err))
 	}
 	if slot >= 0 {
-		if err := r.clearSlotNetwork(ctx, slot, state.id); err != nil {
+		if err := r.clearSlotNetwork(ctx, slot, state); err != nil {
 			errs = append(errs, fmt.Errorf("clear slot %d network: %w", slot, err))
 		}
 	}

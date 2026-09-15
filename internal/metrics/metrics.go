@@ -354,6 +354,23 @@ func (r *RunnerRecorder) SetStoppedContainers(f func() float64) {
 	))
 }
 
+// SetWiredSlots registers a scrape-time gauge for Firecracker slots whose network
+// namespace is pre-built.
+func (r *RunnerRecorder) SetWiredSlots(f func() float64) {
+	if r == nil || r.reg == nil {
+		return
+	}
+	r.reg.MustRegister(prometheus.NewGaugeFunc(
+		prometheus.GaugeOpts{
+			Namespace:   Namespace,
+			Name:        "slots_wired",
+			Help:        "Current number of Firecracker slots whose network namespace is built, occupied or not.",
+			ConstLabels: prometheus.Labels{"role": RoleRunner},
+		},
+		f,
+	))
+}
+
 // ContainerOpCount returns the counter value for a runner container operation.
 // Intended for tests in other packages.
 func (r *RunnerRecorder) ContainerOpCount(operation string, success bool) float64 {

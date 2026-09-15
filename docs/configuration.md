@@ -178,7 +178,7 @@ Series exposed today:
 - `sandbox_http_requests_total{role,route,method,status}` and `sandbox_http_request_duration_seconds{role,route,method}` (both binaries).
 - API: `sandbox_sandbox_operations_total{operation,result}`, `sandbox_sandboxes_active`, `sandbox_runners_registered`.
 - Runner: `sandbox_container_operations_total{operation,result}`, `sandbox_container_operation_duration_seconds{operation}`, `sandbox_containers_active`, plus `sandbox_guest_deaths_total`, sandbox guests that died on their own, and `sandbox_recoveries_total{result}`, attempts to bring one back.
-- Firecracker runner: `sandbox_lifecycle_step_duration_seconds{operation,step}`, the per-step breakdown of a create, wake or recovery. See [observability.md](observability.md).
+- Firecracker runner: `sandbox_lifecycle_step_duration_seconds{operation,step}`, the per-step breakdown of a create, wake or recovery, and `sandbox_slots_wired`, slots whose network namespace is pre-built. See [observability.md](observability.md).
 - Plus the standard `go_*` and `process_*` collectors.
 
 ## Disk quotas

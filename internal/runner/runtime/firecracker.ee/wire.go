@@ -20,8 +20,10 @@ import (
 // Every sandbox still gets a fresh namespace: teardown deletes the slot's netns
 // and veth as before and marks the slot unwired, and the wirer rebuilds it from
 // scratch. Readiness does not wait for wiring; a slot the wirer has not reached is
-// built inline by the sandbox that lands on it, as every create did before. A
-// namespace built for a slot no sandbox ever took is cleared by Shutdown.
+// built inline by the sandbox that lands on it, as every create did before.
+// Shutdown clears the namespaces of free slots, best-effort; startup reconcile
+// sweeps whatever that leaves. The slots_wired gauge reports how many slots are
+// built at any moment.
 
 // setupNetwork makes sure the slot's network namespace exists with TAP, veth
 // uplink, and per-netns egress iptables matching the Docker private-CIDR policy.
@@ -36,7 +38,7 @@ func (r *Runtime) setupNetwork(ctx context.Context, slot int) error {
 	s := &r.slots[slot]
 	s.netMu.Lock()
 	defer s.netMu.Unlock()
-	if s.wired {
+	if s.wired.Load() {
 		return nil
 	}
 	if err := r.ensureHostNATReady(ctx); err != nil {
@@ -46,8 +48,20 @@ func (r *Runtime) setupNetwork(ctx context.Context, slot int) error {
 	if err := r.deps.run(ctx, "sudo", "/bin/sh", "-c", script); err != nil {
 		return err
 	}
-	s.wired = true
+	s.wired.Store(true)
 	return nil
+}
+
+// wiredSlots counts the slots whose namespace is currently built, occupied or
+// not. Lock-free, so a scrape never waits behind a build.
+func (r *Runtime) wiredSlots() int {
+	n := 0
+	for i := range r.slots {
+		if r.slots[i].wired.Load() {
+			n++
+		}
+	}
+	return n
 }
 
 // wireSlots builds the namespace of every free slot, then waits for a release
@@ -90,30 +104,38 @@ func (r *Runtime) wireSlots(ctx context.Context) {
 }
 
 // clearSlotNetwork deletes the slot's netns and veth and marks it unwired, unless
-// a sandbox other than owner holds the slot. Teardown passes its own sandbox;
-// Shutdown passes "" to clear only free slots.
+// a sandbox other than state holds the slot. Teardown passes its own sandbox;
+// Shutdown passes nil to clear only free slots.
 //
 // It runs under the slot's netMu so it cannot interleave with a build of the same
 // slot, and re-reads the owner under that lock because the slot a teardown read
 // when it began may have changed hands by the time it gets here: Shutdown does not
 // wait for claims, so it can release a slot from under a concurrent teardown of
-// the same sandbox while the next sandbox takes it. A slot found free is still
-// cleared; only Shutdown produces that, and the namespace on it then has nothing
-// left to keep it. Whatever a skipped cleanup leaves behind is cleared by the next
-// build on the slot, which deletes both names before creating them.
-func (r *Runtime) clearSlotNetwork(ctx context.Context, slot int, owner string) error {
+// the same sandbox while the next sandbox takes it. Ownership is the slot holding
+// state's ID while no other incarnation of that ID is tracked: the ID alone would
+// also match a later sandbox created under it, which is how the API re-creates
+// one a runner lost. A slot found free is still cleared; only Shutdown produces
+// that, and the namespace on it then has nothing left to keep it. Whatever a
+// skipped cleanup leaves behind is cleared by the next build on the slot, which
+// deletes both names before creating them.
+func (r *Runtime) clearSlotNetwork(ctx context.Context, slot int, state *sandboxState) error {
 	s := &r.slots[slot]
 	s.netMu.Lock()
 	defer s.netMu.Unlock()
 	r.mu.Lock()
-	held := s.sandboxID
+	free := !s.occupied()
+	ours := false
+	if state != nil && s.sandboxID == state.id {
+		current, tracked := r.sandboxes[state.id]
+		ours = !tracked || current == state
+	}
 	r.mu.Unlock()
-	if held != "" && held != owner {
+	if !free && !ours {
 		return nil
 	}
 	// Unwired whether or not the script succeeds: a failed cleanup leaves the
 	// namespace in an unknown state, and the next build clears the slot before
 	// building it, so treating it as gone is the safe reading either way.
-	s.wired = false
+	s.wired.Store(false)
 	return r.deps.run(ctx, "sudo", "/bin/sh", "-c", fcnetwork.CleanupScript(slot))
 }

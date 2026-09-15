@@ -60,7 +60,8 @@ startup and rebuilds each slot after release. Activation skips the build on a wi
 slot (`setup_network_ms` ≈ 0), waits on one mid-build, and builds inline on one the
 wirer has not reached. Readiness does not wait for wiring, and teardown still
 deletes the namespace, so every sandbox gets a fresh one. `Shutdown` clears the
-namespaces of wired slots no sandbox took, so a clean exit leaves none behind.
+namespaces of free slots, best-effort; startup reconcile sweeps whatever that
+leaves. `sandbox_slots_wired` reports how many slots are built.
 
 We need slots because Firecracker does not provide Docker-style bridge networking
 or container names for free. Each microVM clone needs its own host network
