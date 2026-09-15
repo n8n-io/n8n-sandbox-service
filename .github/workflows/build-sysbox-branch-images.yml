@@ -1,4 +1,6 @@
-name: Build Branch Images
+# Builds only the images a Docker/sysbox deployment runs. It builds no
+# Firecracker runner image, and no golden-build bundle for one.
+name: Build Sysbox Branch Images
 
 on:
   workflow_dispatch:
@@ -12,10 +14,6 @@ permissions:
   contents: read
   packages: write
 
-concurrency:
-  group: build-branch-images-${{ inputs.branch }}
-  cancel-in-progress: true
-
 jobs:
   tag:
     runs-on: ubuntu-latest
@@ -23,21 +21,25 @@ jobs:
       tag: ${{ steps.tag.outputs.tag }}
     steps:
       # A Docker tag accepts [a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}, so a branch name
-      # like `tomi/my-fix` becomes `tomi-my-fix`.
+      # like `tomi/my-fix` becomes `branch-tomi-my-fix`. The `branch-` prefix keeps
+      # these builds out of the tags a release owns: the same GHCR repositories hold
+      # `latest`, `stable` and every `x.y.z`, and a branch named `stable` would
+      # otherwise overwrite the released image under that tag.
       - name: Derive image tag from branch
         id: tag
         env:
           BRANCH: ${{ inputs.branch }}
         run: |
           set -euo pipefail
-          TAG="$(printf '%s' "$BRANCH" \
+          SLUG="$(printf '%s' "$BRANCH" \
             | tr '[:upper:]' '[:lower:]' \
             | sed -e 's/[^a-z0-9._-]/-/g' -e 's/^[^a-z0-9]*//' \
-            | cut -c1-128)"
-          if [[ -z "$TAG" ]]; then
+            | cut -c1-121)"
+          if [[ -z "$SLUG" ]]; then
             echo "::error::Branch '${BRANCH}' has no characters a Docker tag can use."
             exit 1
           fi
+          TAG="branch-${SLUG}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           {
             echo "Branch \`${BRANCH}\` builds these images:"
@@ -50,6 +52,11 @@ jobs:
   build:
     needs: tag
     runs-on: ${{ vars.RUNNER_PROVIDER == 'github' && 'ubuntu-latest' || 'blacksmith-4vcpu-ubuntu-2204' }}
+    # Keyed on the derived tag, not on the input: `feature/foo` and `feature-foo`
+    # are different inputs that push the same tag, so only this serializes them.
+    concurrency:
+      group: ${{ github.workflow }}-${{ needs.tag.outputs.tag }}-${{ matrix.image }}
+      cancel-in-progress: true
     strategy:
       fail-fast: false
       matrix:
