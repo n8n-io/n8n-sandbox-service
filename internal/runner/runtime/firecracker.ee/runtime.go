@@ -178,7 +178,6 @@ type sandboxState struct {
 	slot              int
 	info              *runnerruntime.SandboxInfo
 	netnsName         string
-	hostVeth          string
 	socketPath        string
 	daemonURL         string
 	dataDir           string
@@ -519,7 +518,8 @@ func (r *Runtime) DaemonURL(_ context.Context, sandboxID string) (string, error)
 	return state.daemonURL, nil
 }
 
-// Shutdown best-effort deletes every sandbox currently tracked by this runtime.
+// Shutdown best-effort deletes every sandbox currently tracked by this runtime,
+// then clears the namespaces the wirer built for slots no sandbox took.
 func (r *Runtime) Shutdown(ctx context.Context) {
 	r.mu.Lock()
 	states := make([]*sandboxState, 0, len(r.sandboxes))
@@ -539,6 +539,13 @@ func (r *Runtime) Shutdown(ctx context.Context) {
 
 	for _, state := range states {
 		_ = r.deleteSandbox(ctx, state)
+	}
+	// A slot still held here belongs to a delete that failed or is in flight and
+	// is that delete's to clean; startup reconcile backstops the rest.
+	for slot := range r.slots {
+		if err := r.clearSlotNetwork(ctx, slot, ""); err != nil {
+			slog.Warn("firecracker free slot cleanup failed on shutdown", "slot", slot, "err", err)
+		}
 	}
 }
 
@@ -591,7 +598,6 @@ func (r *Runtime) reserveSandbox(sandboxID string) (*sandboxState, error) {
 		vmID:              vmID,
 		slot:              slot,
 		netnsName:         netnsName,
-		hostVeth:          fcnetwork.HostVethName(slot),
 		socketPath:        socketPath,
 		daemonURL:         daemonURL,
 		dataDir:           dataDir,
@@ -810,38 +816,26 @@ func (r *Runtime) waitForSocket(ctx context.Context, socketPath string) error {
 	return fmt.Errorf("timed out waiting for %s", socketPath)
 }
 
-// cleanupHost removes the bind mounts and jail directory created for a sandbox,
-// and, when ownsSlot is set, the slot's network namespace and host veth. It is
-// intentionally best-effort at the shell level.
+// cleanupHost removes the bind mounts and jail directory created for a sandbox.
+// It is intentionally best-effort at the shell level. The slot's network is
+// clearSlotNetwork's job: the names on the state outlive the reservation, so it
+// cannot be keyed to the state.
 //
 // It has to undo every mount prepareJail made, the kernel's included: the final
 // rm cannot delete a live mountpoint, so one mount left behind fails the whole
 // cleanup, and a failed cleanup is what keeps a sandbox holding its slot.
-//
-// The network part is gated on the sandbox still holding its slot because the
-// names on the state outlive the reservation: a stopped sandbox keeps the netns
-// and veth names of the slot it gave back, and by the time it is deleted that slot
-// may carry a namespace the wirer rebuilt or another sandbox is running in.
-// Deleting it by name would take that namespace away from its current owner.
-// Whatever a sandbox without its slot leaves behind is cleared by the next build
-// on the slot, which deletes both names before creating them.
-func (r *Runtime) cleanupHost(ctx context.Context, state *sandboxState, ownsSlot bool) error {
+func (r *Runtime) cleanupHost(ctx context.Context, state *sandboxState) error {
 	jailDir := filepath.Join(r.config.JailerBaseDir, "firecracker", state.vmID)
 	rootfsTarget := filepath.Join(jailDir, "root", strings.TrimPrefix(state.bootParams.RootfsDrivePath, "/"))
 	kernelTarget := filepath.Join(jailDir, "root", strings.TrimPrefix(state.bootParams.KernelImagePath, "/"))
-	networkCleanup := ""
-	if ownsSlot {
-		networkCleanup = strings.TrimSpace(fcnetwork.CleanupScript(state.netnsName, state.hostVeth))
-	}
 	script := fmt.Sprintf(`
 set -eu
 umount -l %[1]s/root/snapshot_mem 2>/dev/null || true
 umount -l %[1]s/root/snapshot_state 2>/dev/null || true
 umount -l %[2]s 2>/dev/null || true
 umount -l %[3]s 2>/dev/null || true
-%[4]s
 rm -rf %[1]s
-`, shellquote.Quote(jailDir), shellquote.Quote(rootfsTarget), shellquote.Quote(kernelTarget), networkCleanup)
+`, shellquote.Quote(jailDir), shellquote.Quote(rootfsTarget), shellquote.Quote(kernelTarget))
 	return r.deps.run(ctx, "sudo", "/bin/sh", "-c", script)
 }
 

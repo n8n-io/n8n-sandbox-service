@@ -226,3 +226,101 @@ func TestDeletingAStoppedSandboxLeavesItsFormerSlotAlone(t *testing.T) {
 		t.Fatalf("DaemonURL() of the sandbox on the slot: %v", err)
 	}
 }
+
+// hookProxy runs a function from Stop, which teardownRunningVM calls between
+// reading the sandbox's slot and cleaning the host. It stands in for a concurrent
+// teardown of the same sandbox winning that window.
+type hookProxy struct{ onStop func() }
+
+func (p *hookProxy) Stop() error {
+	p.onStop()
+	return nil
+}
+
+// Shutdown does not wait for claims, so two teardowns of one sandbox can overlap.
+// The loser read its slot while it still held it, but by the time its cleanup runs
+// the winner may have released the slot and a new sandbox taken it. Ownership has
+// to be re-read under the slot's lock at that point, not trusted from the top.
+func TestTeardownRechecksSlotOwnershipBeforeClearingTheNamespace(t *testing.T) {
+	rt := testRuntimeT(t, 1)
+	stubCreateDeps(rt)
+	log := &scriptLog{}
+	rt.deps.run = log.run
+
+	const sandboxID = "sandbox-id-123456"
+	const nextID = "sandbox-id-abcdef"
+	rt.deps.newProxy = func(context.Context, string, string, string) (daemonProxy, error) {
+		return &hookProxy{onStop: func() {
+			// The winning teardown released slot 0 and the next sandbox reserved it.
+			rt.mu.Lock()
+			rt.slots[0].sandboxID = nextID
+			rt.mu.Unlock()
+		}}, nil
+	}
+	if _, err := rt.CreateSandbox(context.Background(), sandboxID, nil); err != nil {
+		t.Fatalf("CreateSandbox() failed: %v", err)
+	}
+
+	cleanupsBefore := len(log.matching("ip netns delete"))
+	if err := rt.DeleteSandbox(context.Background(), sandboxID); err != nil {
+		t.Fatalf("DeleteSandbox() failed: %v", err)
+	}
+	if got := len(log.matching("ip netns delete")); got != cleanupsBefore {
+		t.Fatal("teardown deleted the namespace of a slot another sandbox had taken")
+	}
+	if !slotWired(rt, 0) {
+		t.Fatal("teardown unwired a slot another sandbox had taken")
+	}
+	if got := log.matching("umount -l"); len(got) == 0 || !strings.Contains(got[len(got)-1], "rm -rf") {
+		t.Fatal("teardown skipped its own jail cleanup")
+	}
+	rt.mu.Lock()
+	owner := rt.slots[0].sandboxID
+	rt.mu.Unlock()
+	if owner != nextID {
+		t.Fatalf("slot 0 owner = %q after the delete, want %q left in place", owner, nextID)
+	}
+}
+
+// A runner that exits must not leave the namespaces the wirer built for idle
+// slots on the host. A slot still occupied after the sandboxes are deleted belongs
+// to a delete that failed and kept it, and is left for that delete or for startup
+// reconcile.
+func TestShutdownClearsPreWiredFreeSlots(t *testing.T) {
+	rt := testRuntimeT(t, 3)
+	stubCreateDeps(rt)
+	log := &scriptLog{}
+	rt.deps.run = log.run
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go rt.wireSlots(ctx)
+	waitSlotWired(t, rt, 0, true)
+	waitSlotWired(t, rt, 1, true)
+	waitSlotWired(t, rt, 2, true)
+	cancel()
+
+	// A sandbox whose delete failed keeps its slot and is no longer tracked.
+	rt.slots[2].sandboxID = "sandbox-id-occupied"
+
+	// Each build clears its slot first, so only what Shutdown adds counts.
+	before := len(log.matching("ip netns delete"))
+	rt.Shutdown(context.Background())
+
+	for _, slot := range []int{0, 1} {
+		if slotWired(rt, slot) {
+			t.Errorf("slot %d still wired after shutdown", slot)
+		}
+	}
+	if !slotWired(rt, 2) {
+		t.Error("shutdown cleared a slot a sandbox still holds")
+	}
+	cleanups := log.matching("ip netns delete")[before:]
+	if len(cleanups) != 2 {
+		t.Fatalf("namespace deletions = %d, want one per free wired slot", len(cleanups))
+	}
+	for _, script := range cleanups {
+		if strings.Contains(script, "'fc-sb-2'") {
+			t.Fatal("shutdown deleted the namespace of an occupied slot")
+		}
+	}
+}

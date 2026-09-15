@@ -66,11 +66,12 @@ iptables -C FORWARD -i fc-veth+ -j ACCEPT 2>/dev/null \
 // wirer builds namespaces concurrently with inline builds, and without it a
 // contended /run/xtables.lock fails the script outright. The wait is bounded so
 // a lock held by something stuck fails the build rather than stalling it.
-func SetupScript(slot int, netnsName, tapDevice, tapCIDR string) string {
+func SetupScript(slot int, tapDevice, tapCIDR string) string {
 	q := shellquote.Quote
 	if tapDevice == "" {
 		tapDevice = defaultTapIface
 	}
+	netnsName := NetnsName(slot)
 	hostVeth := HostVethName(slot)
 	hostIP, netnsIP, prefix := uplinkSubnet(slot)
 
@@ -102,12 +103,12 @@ func SetupScript(slot int, netnsName, tapDevice, tapCIDR string) string {
 	return b.String()
 }
 
-// CleanupScript removes host veth and the sandbox netns.
-func CleanupScript(netnsName, hostVeth string) string {
+// CleanupScript removes the slot's host veth and netns.
+func CleanupScript(slot int) string {
 	q := shellquote.Quote
 	return fmt.Sprintf(`
 set -eu
 ip link delete %s 2>/dev/null || true
 ip netns delete %s 2>/dev/null || true
-`, q(hostVeth), q(netnsName))
+`, q(HostVethName(slot)), q(NetnsName(slot)))
 }

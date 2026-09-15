@@ -480,8 +480,8 @@ func TestRuntimeCreateSandboxCleansUpOnFailure(t *testing.T) {
 	if !proxy.stopped {
 		t.Fatal("expected proxy to be stopped during cleanup")
 	}
-	if runCount != 4 {
-		t.Fatalf("runCount = %d, want prepare, host NAT, network, and cleanup", runCount)
+	if runCount != 5 {
+		t.Fatalf("runCount = %d, want prepare, host NAT, network, jail cleanup, and network cleanup", runCount)
 	}
 
 	capacity, err := rt.Capacity(context.Background())

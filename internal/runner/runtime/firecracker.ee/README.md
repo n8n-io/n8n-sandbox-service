@@ -59,7 +59,8 @@ background wirer (`wire.go`, started from `Prepare`) builds every free slot at
 startup and rebuilds each slot after release. Activation skips the build on a wired
 slot (`setup_network_ms` ≈ 0), waits on one mid-build, and builds inline on one the
 wirer has not reached. Readiness does not wait for wiring, and teardown still
-deletes the namespace, so every sandbox gets a fresh one.
+deletes the namespace, so every sandbox gets a fresh one. `Shutdown` clears the
+namespaces of wired slots no sandbox took, so a clean exit leaves none behind.
 
 We need slots because Firecracker does not provide Docker-style bridge networking
 or container names for free. Each microVM clone needs its own host network
@@ -100,18 +101,20 @@ bound, the next create on the slot would fail loudly on bind rather than share i
 The jail directory is keyed to the `vmID`, so it collides with nothing and startup
 reconcile sweeps it.
 
-Only the slot's current holder tears down its netns and veth: a stopped sandbox
-keeps the names of the slot it gave back, and by the time it is deleted that slot
-may hold the wirer's rebuild or another sandbox. Its jail cleanup is keyed to its
-own `vmID` and runs regardless.
+A teardown never touches a slot another sandbox holds. `clearSlotNetwork` runs
+under the slot's network lock, which serialises it with a build of the same slot,
+and re-reads the owner under that lock, because the slot a teardown read when it
+began can change hands before its cleanup runs: `Shutdown` does not wait for
+claims (see below). A stopped sandbox has no slot at all by the time it is deleted,
+so only its jail, keyed to its own `vmID`, is cleaned.
 
 A failed **delete** keeps its slot, which looks inconsistent with that but is not.
-Cleanup runs as a single shell command, so a failure that is not the jail directory
-it removes last — an expired context, a `sudo` that never ran — leaves it unknown
-whether the netns is really gone. Delete can afford that caution where stop cannot,
-because a delete retry does arrive: the API keeps the sandbox row when the runner
-reports a delete failure, and the idle sweeper retries every sweep interval. The
-retry repeats host cleanup, removes the data directory, and releases the slot.
+Host cleanup is shell commands whose failure — an expired context, a `sudo` that
+never ran — leaves it unknown whether the netns is really gone. Delete can afford
+that caution where stop cannot, because a delete retry does arrive: the API keeps
+the sandbox row when the runner reports a delete failure, and the idle sweeper
+retries every sweep interval. The retry repeats host cleanup, removes the data
+directory, and releases the slot.
 
 Host cleanup on delete runs whether or not the sandbox still has process and proxy
 handles, which matters because a stop or crash whose cleanup failed marks the sandbox
@@ -151,8 +154,10 @@ sandbox's `process` and `proxy` handles: `Shutdown` can be tearing down the same
 microVM as the claim holder. So `teardownRunningVM` takes both handles off the
 state in the same critical section that bumps the generation, and every other
 read and write of them holds `r.mu` too. Whoever takes the handles owns the stop
-and the kill, and the loser finds nil and repeats only `cleanupHost`, which is
-written to be repeatable.
+and the kill, and the loser finds nil and repeats only the host cleanup, which is
+written to be repeatable; its network half re-reads slot ownership so a loser that
+outlives the winner's release does not clear the namespace of the slot's next
+sandbox.
 
 An activation is the other side of that: `Shutdown` decides whether to kill a
 microVM by reading handles a create or wake has not published yet, so it can find

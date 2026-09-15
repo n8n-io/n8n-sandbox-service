@@ -349,17 +349,15 @@ func (r *Runtime) startGuest(ctx context.Context, state *sandboxState, t *stepTi
 // past the runner. Whoever takes the handles owns the stop and the kill; the other
 // caller finds nil and only repeats cleanupHost, which is written to be repeatable.
 //
-// Slot ownership is read in that same critical section and decides whether the
-// slot's namespace is torn down and unwired (see cleanupHost). Reading it once up
-// front rather than at the point of use matters for the same racing-teardown
-// reason: the loser may see the slot released between the two.
+// The slot is read in that same critical section, for the same reason: the loser
+// of that race can find it already released and set to -1 by the time it gets
+// here. clearSlotNetwork re-checks who owns it before touching its namespace.
 func (r *Runtime) teardownRunningVM(ctx context.Context, state *sandboxState) error {
 	r.mu.Lock()
 	state.generation++
 	proxy, process := state.proxy, state.process
 	state.proxy, state.process = nil, nil
 	slot := state.slot
-	ownsSlot := slot >= 0 && r.slotOwnedByLocked(slot, state.id)
 	r.mu.Unlock()
 
 	var errs []error
@@ -373,14 +371,13 @@ func (r *Runtime) teardownRunningVM(ctx context.Context, state *sandboxState) er
 			errs = append(errs, fmt.Errorf("kill firecracker process: %w", err))
 		}
 	}
-	if err := r.cleanupHost(ctx, state, ownsSlot); err != nil {
+	if err := r.cleanupHost(ctx, state); err != nil {
 		errs = append(errs, fmt.Errorf("cleanup firecracker host state: %w", err))
 	}
-	// Unwired whether or not cleanup succeeded: a failed cleanup leaves the
-	// namespace in an unknown state, and the rebuild clears the slot before
-	// building it, so treating it as gone is the safe reading either way.
-	if ownsSlot {
-		r.unwireSlot(slot)
+	if slot >= 0 {
+		if err := r.clearSlotNetwork(ctx, slot, state.id); err != nil {
+			errs = append(errs, fmt.Errorf("clear slot %d network: %w", slot, err))
+		}
 	}
 	return joinErrors(errs)
 }
@@ -445,7 +442,6 @@ func (r *Runtime) reserveWakeSlot(state *sandboxState) error {
 	}
 	state.slot = slot
 	state.netnsName = fcnetwork.NetnsName(slot)
-	state.hostVeth = fcnetwork.HostVethName(slot)
 	state.socketPath = filepath.Join(r.config.JailerBaseDir, "firecracker", state.vmID, "root", "firecracker.socket")
 	state.daemonURL = fmt.Sprintf("http://%s", net.JoinHostPort(r.config.ProxyListenIP, fmt.Sprintf("%d", r.config.ProxyPortStart+slot)))
 	return nil

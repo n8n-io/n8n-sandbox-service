@@ -10,8 +10,10 @@ import {
   docker,
   exec,
   execWithTransientRetry,
+  scrapeRunnerMetrics,
   siblingOf,
 } from './helpers';
+import { parseCounter, parseGauge } from './metrics-helpers';
 import { DOCKER_ONLY, FIRECRACKER_ONLY } from './tags';
 import type { SandboxClient } from '@n8n/sandbox-client';
 
@@ -294,16 +296,48 @@ test.describe('Network isolation', () => {
 
 // The Firecracker runner builds each slot's network namespace in the background
 // and rebuilds it after every release, so the second sandbox on a slot runs in a
-// namespace nobody built on its behalf. This checks that the rebuilt namespace
-// carries the same egress policy as a first build. With `workers: 1` and
-// first-free slot allocation, B lands on A's slot deterministically.
+// namespace the wirer built. Slots are not in the API, so the runner's metrics
+// stand in: an empty runner (no slot-blocking sandbox) hands out slot 0 first, so
+// A and B share a slot when both are created into one; and a create that finds
+// its slot built spends no measurable time in setup_network, where an inline
+// build takes 85–105 ms (docs/performance.md).
 test.describe('Reused slot', FIRECRACKER_ONLY, () => {
-  test('egress policy holds on a reused slot', async () => {
+  const ACTIVE = 'sandbox_containers_active';
+  const STEP = 'sandbox_lifecycle_step_duration_seconds';
+  const SETUP_NETWORK = { role: 'runner', operation: 'create', step: 'setup_network' };
+  const PREWIRED_MAX_SECONDS = 0.04;
+
+  const setupNetworkOfCreates = (body: string) => ({
+    count: parseCounter(body, `${STEP}_count`, SETUP_NETWORK),
+    sum: parseCounter(body, `${STEP}_sum`, SETUP_NETWORK),
+  });
+
+  test('the second sandbox on a slot gets the rebuilt namespace, egress policy intact', async () => {
+    test.skip(
+      !process.env.E2E_RUNNER_HTTP_ADDR && !process.env.E2E_RUNNER_CONTAINER_NAME,
+      'needs runner metrics (E2E_RUNNER_HTTP_ADDR from e2e/run-firecracker.sh)',
+    );
+    test.skip(
+      parseGauge(scrapeRunnerMetrics(), ACTIVE) !== 0,
+      'runner is not empty, so A and B are not guaranteed the same slot',
+    );
+
     const first = await createSandbox();
     await deleteSandbox(first);
+    expect(parseGauge(scrapeRunnerMetrics(), ACTIVE), 'A did not give its slot back').toBe(0);
+    // The rebuild costs one inline build; a second later it is long finished.
+    await new Promise((r) => setTimeout(r, 1000));
 
+    const before = setupNetworkOfCreates(scrapeRunnerMetrics());
     const id = await createSandbox();
     try {
+      const after = setupNetworkOfCreates(scrapeRunnerMetrics());
+      expect(after.count, 'expected B to be the only create between the scrapes').toBe(before.count + 1);
+      expect(
+        after.sum - before.sum,
+        'B built its own namespace, so the wirer did not rebuild the slot after A',
+      ).toBeLessThan(PREWIRED_MAX_SECONDS);
+
       const blocked = await execWithTransientRetry(id, tcpConnect('169.254.169.254', 80, 3), {
         timeoutMs: 10_000,
       });

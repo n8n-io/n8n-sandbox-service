@@ -20,7 +20,8 @@ import (
 // Every sandbox still gets a fresh namespace: teardown deletes the slot's netns
 // and veth as before and marks the slot unwired, and the wirer rebuilds it from
 // scratch. Readiness does not wait for wiring; a slot the wirer has not reached is
-// built inline by the sandbox that lands on it, as every create did before.
+// built inline by the sandbox that lands on it, as every create did before. A
+// namespace built for a slot no sandbox ever took is cleared by Shutdown.
 
 // setupNetwork makes sure the slot's network namespace exists with TAP, veth
 // uplink, and per-netns egress iptables matching the Docker private-CIDR policy.
@@ -41,7 +42,7 @@ func (r *Runtime) setupNetwork(ctx context.Context, slot int) error {
 	if err := r.ensureHostNATReady(ctx); err != nil {
 		return fmt.Errorf("host NAT not configured: %w", err)
 	}
-	script := fcnetwork.SetupScript(slot, fcnetwork.NetnsName(slot), r.config.HostTapDeviceName, r.config.HostTapIPCIDR)
+	script := fcnetwork.SetupScript(slot, r.config.HostTapDeviceName, r.config.HostTapIPCIDR)
 	if err := r.deps.run(ctx, "sudo", "/bin/sh", "-c", script); err != nil {
 		return err
 	}
@@ -88,12 +89,31 @@ func (r *Runtime) wireSlots(ctx context.Context) {
 	}
 }
 
-// unwireSlot records that the slot's namespace has been deleted, so the next
-// setupNetwork on it builds rather than skips. Called from teardownRunningVM
-// after cleanupHost; the release that follows is what wakes the wirer.
-func (r *Runtime) unwireSlot(slot int) {
+// clearSlotNetwork deletes the slot's netns and veth and marks it unwired, unless
+// a sandbox other than owner holds the slot. Teardown passes its own sandbox;
+// Shutdown passes "" to clear only free slots.
+//
+// It runs under the slot's netMu so it cannot interleave with a build of the same
+// slot, and re-reads the owner under that lock because the slot a teardown read
+// when it began may have changed hands by the time it gets here: Shutdown does not
+// wait for claims, so it can release a slot from under a concurrent teardown of
+// the same sandbox while the next sandbox takes it. A slot found free is still
+// cleared; only Shutdown produces that, and the namespace on it then has nothing
+// left to keep it. Whatever a skipped cleanup leaves behind is cleared by the next
+// build on the slot, which deletes both names before creating them.
+func (r *Runtime) clearSlotNetwork(ctx context.Context, slot int, owner string) error {
 	s := &r.slots[slot]
 	s.netMu.Lock()
+	defer s.netMu.Unlock()
+	r.mu.Lock()
+	held := s.sandboxID
+	r.mu.Unlock()
+	if held != "" && held != owner {
+		return nil
+	}
+	// Unwired whether or not the script succeeds: a failed cleanup leaves the
+	// namespace in an unknown state, and the next build clears the slot before
+	// building it, so treating it as gone is the safe reading either way.
 	s.wired = false
-	s.netMu.Unlock()
+	return r.deps.run(ctx, "sudo", "/bin/sh", "-c", fcnetwork.CleanupScript(slot))
 }

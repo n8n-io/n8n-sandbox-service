@@ -25,7 +25,7 @@ func TestUplinkSubnet(t *testing.T) {
 }
 
 func TestSetupScriptIncludesTopologyAndPolicy(t *testing.T) {
-	script := SetupScript(0, "fc-sb-0", "fc-tap-0", "172.16.0.1/24")
+	script := SetupScript(0, "fc-tap-0", "172.16.0.1/24")
 	for _, want := range []string{"fc-veth-0", "fc-uplink", "172.16.0.0/12", "MASQUERADE"} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("setup script missing %q", want)
@@ -37,7 +37,7 @@ func TestSetupScriptIncludesTopologyAndPolicy(t *testing.T) {
 // setup has to clear both of the per-slot host names it goes on to create. Missing
 // either one fails the whole script under `set -eu` and strands the slot.
 func TestSetupScriptClearsSlotBeforeCreatingIt(t *testing.T) {
-	script := SetupScript(3, "fc-sb-3", "fc-tap-0", "172.16.0.1/24")
+	script := SetupScript(3, "fc-tap-0", "172.16.0.1/24")
 	for _, want := range []string{
 		"ip link delete 'fc-veth-3' 2>/dev/null || true",
 		"ip netns delete 'fc-sb-3' 2>/dev/null || true",
@@ -56,7 +56,7 @@ func TestSetupScriptClearsSlotBeforeCreatingIt(t *testing.T) {
 // Without -w the loser fails immediately instead of waiting; without a bound on
 // it, a lock held by something stuck would stall the build for its whole budget.
 func TestSetupScriptWaitsForTheXtablesLock(t *testing.T) {
-	for _, line := range strings.Split(SetupScript(0, "fc-sb-0", "fc-tap-0", "172.16.0.1/24"), "\n") {
+	for _, line := range strings.Split(SetupScript(0, "fc-tap-0", "172.16.0.1/24"), "\n") {
 		if strings.Contains(line, "iptables") && !strings.Contains(line, "iptables -w 5 ") {
 			t.Errorf("iptables call does not wait (bounded) for the xtables lock: %s", line)
 		}
