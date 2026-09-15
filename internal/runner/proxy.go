@@ -33,17 +33,9 @@ func UploadProxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metri
 }
 
 // DeleteExecutionHandler serves DELETE /sandboxes/{id}/executions/{exec_id}, the
-// one sandbox route that answers without waking.
-//
-// An execution lives only in the guest's memory, so a sandbox that is stopped, or
-// that came back from a crash, has already lost the one this names and the delete
-// has nothing left to do. It gets 204.
-//
-// Not waking is what keeps the crash report honest. A recovery reports the restart
-// to the single request that wakes the sandbox, and this delete is not a client
-// asking to use it: the SDK sends one in the background after every command and
-// discards the answer. Letting it spend the report would hide the crash from the
-// request that comes next.
+// one sandbox route that answers without waking: a stopped or crashed sandbox has
+// already lost the execution, so the delete gets 204 (writeExecutionGone) and does
+// not spend the one-shot 409 restart report. Rationale in docs/API.md under DELETE /sandboxes/{id}/executions/{exec_id}.
 func DeleteExecutionHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder) http.HandlerFunc {
 	return proxyHandler(rt, cfg, rec, false, false)
 }

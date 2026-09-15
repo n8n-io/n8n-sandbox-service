@@ -1,3 +1,5 @@
+// Package registry tracks registered runners (in memory or in Postgres) and
+// picks a runner for new sandboxes.
 package registry
 
 import (

@@ -1,34 +1,33 @@
-# n8n Sandbox Service — Documentation
+# Documentation
 
-The n8n Sandbox Service provides isolated execution environments via a REST API. Each sandbox is a Debian-based Docker container managed by an in-container Docker daemon, with a per-sandbox HTTP daemon that handles exec and file operations.
-
-## Getting Started
+## Getting started
 
 | Platform | Use case | Guide |
-|----------|----------|-------|
-| Linux | Production (sysbox-runc isolation) | [quickstart-linux.md](quickstart-linux.md) |
-| Linux | Firecracker runner (KVM host) | [quickstart-firecracker-linux.md](quickstart-firecracker-linux.md) |
-| macOS | Local development (privileged containers) | [quickstart-macos.md](quickstart-macos.md) |
-| Kubernetes | Production cluster deployment | [quickstart-k8s.md](quickstart-k8s.md) |
-
-> Both platform guides share common [prerequisites](prerequisites.md).
+| --- | --- | --- |
+| Linux | Production, Docker runner with Sysbox isolation | [quickstart-linux.md](quickstart-linux.md) |
+| Linux + KVM | Production, Firecracker runner | [quickstart-firecracker-linux.md](quickstart-firecracker-linux.md) |
+| Kubernetes | Production cluster deployment (Helm) | [quickstart-k8s.md](quickstart-k8s.md) · [chart README](../charts/n8n-sandbox-service/README.md) |
+| macOS | Local development, privileged containers | [quickstart-macos.md](quickstart-macos.md) |
 
 ## Reference
 
-- [Architecture](architecture.md) — system design, component overview, communication patterns, and deployment
-- [Security model](security-model.md) — trust boundaries, what is enforced where, and non-guarantees
-- [Configuration](configuration.md) — environment variables for API, Runner, and Daemon
-- [gRPC mTLS](../README.md#runner-registration-grpc-mtls) — certificate bootstrap, rotation, and trust model
-- [REST API](API.md) — endpoint reference
+- [Architecture](architecture.md) — components, communication, data flows, storage
+- [Security model](security-model.md) — trust boundaries, what is enforced where, non-guarantees
+- [Configuration](configuration.md) — every environment variable for API, runner and daemon; metrics; disk quotas
+- [REST API](API.md) — endpoint reference and error contract
 - [TypeScript SDK](../sdk/README.md) — client library
-
-## Development
-
-- [Development guide](development.md) — building, testing, playground, formatting
+- Runtime internals: [Docker/Sysbox](../internal/runner/runtime/docker/README.md) · [Firecracker](../internal/runner/runtime/firecracker.ee/README.md)
 
 ## Operations
 
-- [Observability](observability.md) — trace ids, the per-request and per-lifecycle events, and how to query them
+- [Observability](observability.md) — trace ids, canonical log events, how to query them
 - [Performance baseline](performance.md) — recorded numbers and how to reproduce them
+- [mTLS on Kubernetes with cert-manager](cert-manager-k8s.md) — certificate roles and the env vars they map to
 - [Debugging gRPC with grpcurl](grpcurl-debug.md)
-- [cert-manager on Kubernetes](cert-manager-k8s.md)
+
+## Development and release
+
+- [Development guide](development.md) — building, running locally, tests, playground, SDK, formatting
+- [Release process](RELEASE.md) — service and SDK release pipelines
+- [Firecracker golden-build bundle](../BUNDLE.md) — tarball contract and rollout order for Firecracker hosts
+- [End-to-end tests](../e2e/README.md) · [Benchmarks](../benchmarks/README.md)

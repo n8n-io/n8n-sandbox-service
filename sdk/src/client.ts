@@ -57,7 +57,7 @@ export class SandboxClient {
   }
 
   /**
-   * Deletes a sandbox by ID.
+   * Deletes a sandbox by ID. A 404 (already gone) is treated as success.
    */
   async deleteSandbox(id: string): Promise<void> {
     return deleteSandbox(this.http, id);

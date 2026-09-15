@@ -114,31 +114,13 @@ monitoring:
 
 ## Immutable-rootfs distributions (privileged isolation)
 
-Sysbox cannot install on distributions with a read-only root filesystem and machine-managed containerd configuration. Verified on Talos; the same constraint applies to Bottlerocket, Flatcar, and Fedora CoreOS. Use `runner.isolation: privileged` there. It runs the same Docker-in-Docker runner with `privileged: true` instead of the sysbox runtime, so any node can run it.
-
-The security boundary is weaker than sysbox: an escape from the runner container reaches the node. The chart refuses to render until you acknowledge this:
-
-```yaml
-dataPlane:
-  mode: in-cluster
-
-runner:
-  isolation: privileged
-  acknowledgePrivileged: true
-```
-
-The namespace needs Pod Security Admission level `privileged`:
+Sysbox cannot install on distributions with a read-only root filesystem and machine-managed containerd configuration (verified on Talos; the same applies to Bottlerocket, Flatcar and Fedora CoreOS). Use `runner.isolation: privileged` there: the same Docker-in-Docker runner with `privileged: true`, which any node can run but with a weaker boundary (an escape from the runner container reaches the node). The chart refuses to render until you set `runner.acknowledgePrivileged: true`, and the namespace needs Pod Security Admission level `privileged`:
 
 ```bash
 kubectl label namespace <namespace> pod-security.kubernetes.io/enforce=privileged
 ```
 
-Prefer a dedicated node pool via `runner.privileged.scheduling`, and keep NetworkPolicy enabled. Platforms that block privileged containers (for example GKE Autopilot) cannot use this isolation.
-
-Two hardening options, both described in the chart [README](../charts/n8n-sandbox-service/README.md#privileged-isolation):
-
-- `runner.privileged.runtime.hostUsers: false` on Kubernetes ≥ 1.33 with containerd ≥ 2.0. This scopes the privileged capabilities to a pod user namespace. Verify sandbox creation and resource limits on your platform first.
-- `runner.privileged.runtime.runtimeClassName` set to a VM runtime such as Kata Containers, so `privileged: true` applies inside a guest VM. Talos ships an official kata-containers system extension.
+Requirements, scheduling and the two hardening options (pod user namespaces, VM-based RuntimeClass) are in the chart README under [Privileged Isolation](../charts/n8n-sandbox-service/README.md#privileged-isolation).
 
 ## Troubleshooting
 

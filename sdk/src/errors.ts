@@ -1,5 +1,6 @@
 /**
  * Error thrown when the sandbox service returns a failed response.
+ * `status` is the HTTP status, or 0 for transport errors.
  */
 export class SandboxServiceError extends Error {
   /**
@@ -16,22 +17,13 @@ export class SandboxServiceError extends Error {
 }
 
 /**
- * Error thrown when the sandbox's guest crashed while the request was in flight, and
- * the service restarted it.
+ * Error thrown when the sandbox's guest crashed while the request was in flight and
+ * the service restarted it (HTTP 409 `sandbox_restarted`).
  *
- * The sandbox is running again by the time this is thrown, and its files are intact,
- * so retrying the request once is the right response. What did not survive is
- * everything that was in memory:
- *
- * - processes started by earlier executions are gone, and nothing restarts them;
- * - completed executions are no longer readable, so `getExecution` returns a
- *   not-found error even for a command that succeeded before the restart;
- * - file writes that were not persisted to disk are lost;
- * - a client-supplied `execId` is no longer idempotent — re-posting one that ran
- *   before the restart runs the command again rather than replaying its result.
- *
- * This is deliberately not retried automatically: a silent retry would hide the loss,
- * which is the one thing this error exists to prevent.
+ * The sandbox is running again and its files are intact, so retry the request once.
+ * Everything that was in memory is gone: background processes, unflushed writes, and
+ * completed executions (`resumeExecution` returns not-found for them). Never retried
+ * automatically; see README "Sandbox restarts".
  */
 export class SandboxCrashedError extends SandboxServiceError {
   constructor(message: string, code?: number) {

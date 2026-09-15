@@ -33,6 +33,10 @@ All services are configured via environment variables.
 | `SANDBOX_API_ENABLE_CORS` | `false` | Enable CORS headers (allow all origins); needed for the browser playground |
 | `SANDBOX_API_METRICS_ENABLED` | `false` | When true, expose Prometheus `/metrics` on the public listener (no `X-Api-Key`; firewall the port). See [Metrics](#metrics). |
 | `SANDBOX_API_RUNNER_HEARTBEAT_GRACE` | `45s` | How long after the last gRPC heartbeat a runner remains eligible for placement (Go [`time.ParseDuration`](https://pkg.go.dev/time#ParseDuration) syntax, e.g. `45s`, `2m`) |
+| `SANDBOX_API_IDLE_STOP_AFTER` | `1h` | Idle time after which the sweeper stops a sandbox (deletes it if `ephemeral`). `0` disables |
+| `SANDBOX_API_IDLE_DELETE_AFTER` | `24h` | Idle time after which the sweeper deletes a sandbox; wakes are refused past this window. `0` disables |
+| `SANDBOX_API_IDLE_DELETE_SAFETY_BUFFER` | `1m` | Added to a sandbox's idle window before deletion as a race guard (applied when either window above is > 0) |
+| `SANDBOX_API_IDLE_SWEEP_INTERVAL` | `1m` | How often the idle sweeper runs |
 | `SANDBOX_API_ORPHAN_REAP_BUFFER` | `5m` | How long after a runner deregisters before the idle sweeper removes its orphaned sandbox rows from the store |
 | `SANDBOX_API_GRPC_TLS_CERT_FILE` | *(required)* | Server certificate (PEM) for the registration gRPC listener |
 | `SANDBOX_API_GRPC_TLS_KEY_FILE` | *(required)* | Server private key (PEM) |
@@ -90,6 +94,7 @@ These variables are parsed by the Docker/sysbox runner entrypoint.
 | `SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB` | `0` | Per-sandbox writable-layer quota in MB (`--storage-opt size=`). Effective only when the storage pool mounts successfully — see [Disk quotas](#disk-quotas). `0` means no quota. |
 | `SANDBOX_RUNNER_DISK_QUOTA_POOL_SIZE_GB` | *(derived)* | Size of the xfs+prjquota storage pool backing the inner dockerd. Defaults to `ceil(SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB × SANDBOX_RUNNER_CAPACITY_TOTAL × 1.2 / 1024)` (per-sandbox quota times runner capacity, plus 20% headroom for sandbox image layers). Set explicitly to override. |
 | `SANDBOX_RUNNER_DOCKER_INSECURE_REGISTRIES` | *(empty)* | Comma-separated insecure registries passed to dockerd |
+| `SANDBOX_RUNNER_DOCKER_STORAGE_DRIVER` | *(dockerd default)* | Storage driver for the inner dockerd when disk quotas are off (e.g. `vfs` where nested overlayfs is unavailable). Ignored with quotas on, which always use `overlay2`. Read by `scripts/start-runner.sh`. |
 
 ### Firecracker runner backend config
 
@@ -127,25 +132,17 @@ Slots give the host-side Firecracker resources stable names without exposing tho
 | `SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT` | _(empty)_ | Absolute path to `create-golden-snapshot.sh`. When set and any of `snapshot_mem`, `snapshot_state` or `boot.json` is missing, Prepare runs it (mem/state paths must share a directory). Production Firecracker hosts set this so the runner owns host-local snapshot creation. Empty = do not auto-create |
 | `SANDBOX_RUNNER_FIRECRACKER_DAEMON_BIN` | `/srv/firecracker/bin/sandbox-daemon` | Host path to `sandbox-daemon` used for golden snapshot create and optional manifest checksum |
 
-On startup, `Prepare` configures host NAT (retried on transient failure), verifies guest assets are present (binaries, `rootfs.ext4`, `vmlinux`, optional manifest checksums), ensures the host-local golden snapshot exists (create via script when configured), runs an admission canary (restore + `/healthz` + exec + files + successful canary delete), then marks the runner healthy. Until that succeeds, heartbeats report `Healthy=false` and `/readyz` fails.
+The runner reports healthy only after `Prepare` has verified these assets, created the snapshot if needed, and passed an admission canary — see [the runtime README](../internal/runner/runtime/firecracker.ee/README.md#admission-prepare--ready).
 
 #### Golden snapshot boot parameters (`boot.json`)
 
-`create-golden-snapshot.sh` writes `boot.json` into its `--out` directory alongside `snapshot_mem` and `snapshot_state`, recording the exact values it sent to the Firecracker API: `vcpu_count`, `mem_size_mib`, `kernel_image_path`, the verbatim `boot_args`, `rootfs_drive_path`, `guest_mac`, `guest_ip`, `host_tap_device_name` and `daemon_port`. Paths are as Firecracker sees them inside the jail.
+`create-golden-snapshot.sh` writes `boot.json` next to `snapshot_mem` and `snapshot_state`, recording what it sent to the Firecracker API: `vcpu_count`, `mem_size_mib`, `kernel_image_path`, `boot_args`, `rootfs_drive_path`, `guest_mac`, `guest_ip`, `host_tap_device_name`, `daemon_port`. Paths are as Firecracker sees them inside the jail. The runner has no configuration for most of these; it replays them when it cold boots a sandbox after a guest crash, so recovery stays faithful to how the snapshot was built.
 
-`kernel_image_path` and `rootfs_drive_path` are where the runner bind-mounts those two assets into each sandbox's jail, so there is no environment variable for either: the snapshot was built with the drive at the path it records, and a cold boot asks Firecracker to open the paths it records, so a runner-side setting could only ever agree with them by coincidence. Both must be absolute and free of `.` or `..` segments, since each is a mount target under the jail root.
-
-Because `kernel_image_path` names the mount target rather than the host file, the runner pins that file separately: creating a sandbox records the size and modification time of `TemplateDir/vmlinux`, and a later cold boot of that sandbox is refused if they no longer match. Rebuilding the template under a running runner is what trips this, and roll a new kernel out by replacing the runner instead. A wake that restores a snapshot is unaffected, since it takes the kernel from the memory image.
-
-The sidecar exists because most of these have no equivalent in the runner's own configuration. Memory and vCPU count in particular are chosen by the create script (via its `MEM_MIB` and `VCPUS` environment variables) and the runner never learns them, which is fine while it only ever restores the snapshot but not once it has to boot a replacement VM for a guest that died. Recording them at build time keeps recovery pinned to how the snapshot was actually built rather than to whatever the runner's configuration happens to say later, which also lets a host serve several snapshot flavours.
-
-Admission fails if `boot.json` contradicts the runner on `guest_ip`, `host_tap_device_name`, `daemon_port`, or the gateway in `boot_args` (the third field of the kernel `ip=` parameter, which must equal the host address in `SANDBOX_RUNNER_FIRECRACKER_HOST_TAP_IP_CIDR`). Each of those is baked into the guest or the restored device model, so a mismatch produces sandboxes that never answer rather than ones that fail visibly; failing at startup turns that into one clear error. A gateway mismatch is the quietest: a tap address in the snapshot's subnet still lets the admission canary reach the guest, but the guest routes egress to a host address nobody answers for, so every sandbox comes up without a route off the tap.
-
-Auto-create passes the runner's `GUEST_IP`, `HOST_TAP_IP_CIDR`, `HOST_TAP_DEVICE_NAME` and `DAEMON_PORT` to `create-golden-snapshot.sh`, so a runner configured off the script's defaults still gets a snapshot admission accepts. Run the script by hand with those same variables set, or admission rejects the snapshot it produces. `MEM_MIB` and `VCPUS` have no runner equivalent and stay script-owned.
-
-These checks only mean something while `boot.json` describes the snapshot the runner actually restores, so with auto-create enabled `SNAPSHOT_MEM_PATH` and `SNAPSHOT_STATE_PATH` must be the generated `snapshot_mem`/`snapshot_state` themselves or symlinks to them (as in the quickstart). Auto-create rewrites only those two files, so a configured path holding an independent copy of an earlier snapshot would keep it while the regenerated `boot.json` describes the new build; admission rejects that instead of certifying a snapshot the runner does not restore.
-
-**Upgrading a host whose snapshot predates the sidecar:** the three files must describe the same build, so a missing `boot.json` is treated as an incomplete snapshot rather than something to reconstruct from current configuration. Where `SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT` is set, `Prepare` rebuilds the whole set automatically on first admission. Where it is not, admission fails with an error naming the script and `--out` directory to re-run by hand.
+- `kernel_image_path` and `rootfs_drive_path` are where the runner bind-mounts those assets into each jail (absolute, no `.`/`..` segments). Because the kernel path names a mount target, the runner also records the size and mtime of `TemplateDir/vmlinux` at create and refuses a later cold boot if they changed — roll a new kernel out by replacing the runner, not by rebuilding the template underneath it.
+- Admission fails if `boot.json` contradicts the runner on `guest_ip`, `host_tap_device_name`, `daemon_port` or the gateway in `boot_args` (third field of the kernel `ip=` parameter; must equal the host address in `SANDBOX_RUNNER_FIRECRACKER_HOST_TAP_IP_CIDR`). These are baked into the guest, so a mismatch would otherwise yield sandboxes that never answer.
+- Auto-create passes the runner's `GUEST_IP`, `HOST_TAP_IP_CIDR`, `HOST_TAP_DEVICE_NAME` and `DAEMON_PORT` to the script. When running it by hand, set the same variables. `MEM_MIB` and `VCPUS` are script-owned.
+- With auto-create enabled, `SNAPSHOT_MEM_PATH`/`SNAPSHOT_STATE_PATH` must be the generated files or symlinks to them; an independent copy would keep serving an old snapshot under a `boot.json` describing the new one, and admission rejects that.
+- The three files describe one build. A missing `boot.json` is an incomplete snapshot: with the create script configured, `Prepare` rebuilds the set; otherwise admission fails naming the script and `--out` directory to re-run.
 
 #### Resource limits
 

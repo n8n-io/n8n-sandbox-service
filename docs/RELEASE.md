@@ -1,26 +1,8 @@
 # Release Process
 
-This repository has two release pipelines: the service release, which publishes
-every deployable image under one version, and the SDK.
+Two release pipelines: the service release, which publishes every deployable image under one version, and the SDK.
 
-One version — tracked in `VERSION` and mirrored into the chart's `appVersion` —
-covers the API, both runners, and the sandbox image. Those four images are built
-from the same commit and are only supported together: the sandbox image embeds
-`cmd/daemon`, the runners speak an internal contract to that daemon, and the
-Firecracker guest rootfs is packed from the sandbox image pinned in the
-golden-build bundle. The SDK is versioned independently in `sdk/package.json`
-because it is a client library whose consumers do not deploy this service.
-
-> **Migration note.** Before unification the service and sandbox trains drifted, so
-> no released version has a complete image set: the sandbox image stops at `1.1.0`
-> while the service went on to `1.1.1` and beyond, and `runner-firecracker:1.1.0`
-> was never published. The chart's `appVersion` is therefore pinned to `1.1.0` — the
-> newest version where every image the chart deploys (`api`, `runner-dind`,
-> `sandbox`) exists — and deliberately lags `VERSION` until the first unified
-> release, so that a default `helm install` cannot resolve a tag that was never
-> pushed. Release validate only compares the two on `service/release/**` PRs, where
-> `scripts/set-release-version.sh` has already written both. From the first unified
-> release on they always match; delete this note then.
+One version — `VERSION`, mirrored into the chart's `appVersion` — covers the API, both runners and the sandbox image. The four images are built from the same commit and only supported together: the sandbox image embeds `cmd/daemon`, the runners speak an internal contract to that daemon, and the Firecracker guest rootfs is packed from the sandbox image pinned in the golden-build bundle. The SDK is versioned independently in `sdk/package.json` because its consumers do not deploy this service.
 
 ```mermaid
 flowchart TD
@@ -50,241 +32,74 @@ flowchart TD
     end
 ```
 
-## Alpha Releases
+## Alpha releases
 
-On every push to `main`, the `release-alpha` workflow builds and pushes the alpha images to the private container registry:
+Every push to `main` runs `release-alpha`, which pushes `n8n-sandbox-service-{api,runner-dind,runner-firecracker,sandbox}` to the private container registry tagged `:alpha` and `:<full_sha>`. The Firecracker runner image is `linux/amd64` only.
 
-- `n8n-sandbox-service-api:alpha`
-- `n8n-sandbox-service-runner-dind:alpha`
-- `n8n-sandbox-service-runner-firecracker:alpha`
-- `n8n-sandbox-service-sandbox:alpha`
+## Service release (Docker Hub)
 
-Each image is also tagged with the full commit SHA.
-
-The Firecracker runner alpha image is published for `linux/amd64` only.
-
-## Service Release (Docker Hub)
-
-Publishes every deployable image to Docker Hub under the version in `VERSION`.
-
-Images:
+Publishes to Docker Hub under the version in `VERSION`, tagged `{version}`, `latest` and `stable`:
 
 - `n8nio/n8n-sandbox-service-api`
 - `n8nio/n8n-sandbox-service-runner-dind`
-- `n8nio/n8n-sandbox-service-runner-firecracker` (linux/amd64 only; requires KVM on the host)
+- `n8nio/n8n-sandbox-service-runner-firecracker` (`linux/amd64` only; needs KVM on the host)
 - `n8nio/n8n-sandbox-service-sandbox`
 
-Tags: `{version}`, `latest`, `stable`
+Deploy the same `{version}` for all four. There is no compatibility matrix; the runner/daemon contract can change on any commit.
 
-Deploy the same `{version}` for all four. Mixing versions is unsupported — there is
-no compatibility matrix, because the runner/daemon contract can change on any
-commit.
+### Steps
+
+1. Actions → **Service Release Prep**, choosing `patch`, `minor` or `major`. The optional `version` input releases an exact `x.y.z` instead (use it to skip a number a past release burned).
+2. The workflow bumps `VERSION` and the chart `appVersion` (`scripts/set-release-version.sh`), then rejects the version unless it is unused (no `service/v{version}` tag, no `service/release/{version}` branch) and strictly newer than every version already released or in flight — the highest of all `service/v*` tags and `service/release/*` branches. Releases build from the tip of `main`, so a lower number would ship newer code while moving `latest`/`stable` backwards. Staging candidates carry a suffix and do not raise the floor. It then creates `service/release/{version}` and opens a PR.
+
+   This orders the *starts* of releases, not their merges. If two release PRs are open, merge them in ascending version order.
+3. **Service Release Validate** runs CI on the PR, fails if `VERSION` and `appVersion` disagree, and runs the Sysbox and Firecracker e2e suites on Azure VMs (the same workflows the `e2e-sysbox` / `e2e-firecracker` PR labels trigger). CI on `main` only exercises the privileged-Docker lane, so this is where both shipped runners are covered. Allow about an hour; re-run a flaky lane from the validate run rather than re-prepping.
+4. Merge the PR. **Service Publish** runs tests, then builds and pushes the multi-arch images to Docker Hub.
+
+   Jobs build from the PR's merge commit and take the version from the branch name (`service/release/{version}`), cross-checked against `VERSION`, so a PR that bumps to a different number fails before anything is pushed. Publishing also aborts up front if `service/v{version}` already exists.
+
+   Two jobs then run in parallel:
+   - `mirror-to-acr` copies the images into the private registry (see below).
+   - `release-metadata` packages `firecracker-golden-build-{version}.tar.gz` and attaches it to the GitHub Release, creates the `service/v{version}` tag, and opens a post-release PR syncing `VERSION` and `appVersion` back to `main`.
+5. Merge the post-release PR. The chart publish workflow then ships a chart whose default image tags already exist.
 
 ### Private registry mirror
 
-Cloud environments pull from the private container registry, not Docker Hub, so
-the publish workflow also copies all four images into it under `{version}`. It
-copies the published manifests instead of rebuilding them, so the private
-registry's `{version}` resolves to the same digests as Docker Hub's.
+Cloud environments pull from the private registry, so `mirror-to-acr` copies all four published manifests into it under `{version}` (`docker buildx imagetools create` after `az acr login`; same digests as Docker Hub). Images are copied by digest and an existing `{version}` is never replaced — a rebuild that produces a different manifest fails instead of swapping content behind a tag deployments may run. Re-copying an identical manifest is a no-op, so the job is re-runnable.
 
-The copy runs over the registry API with `docker buildx imagetools create`, after
-the same `az acr login` the alpha and staging workflows use, so it needs nothing
-beyond push access to the registry. `az acr import` is the more obvious tool but
-needs the registry readable as an ARM resource plus `importImage` on it — control
-plane access nothing else in this repository requires.
+The mirror depends only on the image publish, and `release-metadata` does not wait on it. A release can therefore end with tag, GitHub Release and Docker Hub published while the private registry lacks `{version}`; the run is red and the version is not cloud-deployable until `mirror-to-acr` is re-run. Mirroring makes a version deployable; deployments still move their own tags (`prod`) or pin `{version}`.
 
-Each image is copied by digest rather than by tag, and an existing `{version}` is
-never replaced. If a rebuild of the same version produces a different manifest,
-the copy fails instead of swapping the content behind a tag that deployments may
-already be running. Re-copying an identical manifest is a no-op, so a partially
-mirrored run stays re-runnable.
+### Firecracker golden-build asset
 
-This only makes the version deployable; it rolls nothing out. Deployments still
-move their own tags (`prod`) or pin `{version}` explicitly.
-
-The copy is gated on the image publish alone, not on tagging or release creation,
-so a failure in those steps can never skip it — the registries cannot diverge
-because of work the mirror does not depend on.
-
-The mirror can still fail on its own, whether from a transient Azure error or the
-digest refusal above, and `release-metadata` runs in parallel rather than waiting
-on it. A release can therefore end with the git tag, the GitHub Release, and Docker
-Hub all published while the private registry lacks `{version}`. The publish run is
-red in that case, and the version is not cloud-deployable until the mirror
-succeeds — re-run `mirror-to-acr`, which is idempotent. Metadata does not wait on
-the mirror by design: the golden-build tarball ships only as a release asset and
-the tag is the only record of what was published, so withholding both over an
-Azure hiccup would leave already-public images untraceable and Firecracker hosts
-unable to rebuild their snapshot.
-
-### Steps
-
-1. Go to Actions → Service Release Prep and run the workflow, choosing `patch`, `minor`, or `major`.
-   Set the optional `version` input to release an exact `x.y.z` instead, which
-   ignores `bump`. Use it to skip a version number that a past release burned —
-   `bump` derives from `VERSION`, so an abandoned version stays reachable by it.
-2. The workflow bumps `VERSION` and the chart's `appVersion` (via
-   `scripts/set-release-version.sh`), then rejects the version unless it is both
-   unused — no `service/v{version}` tag and no `service/release/{version}` branch,
-   so nothing is ever published twice — and strictly newer than every version
-   already released or in flight. That floor is the highest of all `service/v*`
-   tags and all `service/release/*` branches; branches count because a version is
-   claimed at prep and only tagged at the end of publishing, so a tag-only floor
-   would be blind to a release still under way. Releases always build from the tip
-   of `main`, so a lower number would ship newer code while moving `latest` and
-   `stable` backwards. Staging and prod candidates carry a suffix and do not raise
-   the floor. It then creates a release branch (`service/release/{version}`) and
-   opens a PR.
-
-   This orders the *starts* of releases, not their merges. Two releases can still
-   be in flight at once (prep 1.3.0, then prep 1.4.0), and merging them out of
-   order would move `latest` and `stable` backwards. Until publish enforces that
-   itself, merge open release PRs in ascending version order.
-3. The `Service Release Validate` workflow runs CI on the PR and fails if `VERSION`
-   and the chart `appVersion` disagree. It also runs the Sysbox and Firecracker
-   e2e suites on Azure VMs — the same workflows the `e2e-sysbox` and
-   `e2e-firecracker` labels trigger on ordinary PRs, called as jobs of the
-   validate run. CI on `main` only exercises the privileged-Docker lane, so this
-   is where both shipped runners get covered before their images are built. The
-   Azure lanes run in parallel with the unit tests and image builds and are the
-   long pole: allow about an hour. To retry a flaky lane, re-run the failed job
-   from the validate run; there is no need to re-prep.
-4. Merge the PR. This triggers the `Service Publish` workflow, whose
-   `publish-images` job runs tests and then builds and pushes the multi-arch images
-   to Docker Hub, sandbox image included.
-
-   Every job builds from the PR's merge commit rather than from the base branch by
-   name, and takes the version from the base branch name (`service/release/{version}`)
-   rather than from the `VERSION` file. Merging the release PR is what puts the new
-   version on that branch, so a job that resolves the branch name can still read the
-   pre-merge tip and publish the *previous* release's version on top of itself.
-   `VERSION` is only cross-checked against the branch name, so a release PR that
-   bumps to a different number fails before anything is pushed. As a second line of
-   defence, publishing aborts if `service/v{version}` already exists — checked up
-   front, because the tag is otherwise only created at the very end, long after the
-   images are public.
-
-   Two jobs then run in parallel off that push, neither waiting on the other:
-   - `mirror-to-acr` copies those images into the private container registry under
-     `{version}`
-   - `release-metadata` packages `firecracker-golden-build-{version}.tar.gz` and
-     attaches it to the release, creates a git tag (`service/v{version}`) and GitHub
-     Release, and opens a post-release PR to sync `VERSION` and the chart
-     `appVersion` back to `main`
-5. Merge the post-release PR. The chart publish workflow then ships a chart whose
-   default image tags point at images that already exist.
-
-### Firecracker golden build asset
-
-Each service release (and staging prerelease) includes
-`firecracker-golden-build-{version}.tar.gz` on the GitHub Release. The tarball
-(schema v3) contains `install-runner-host.sh`, `firecracker-ci-assets.sh`,
-`build-rootfs-template.sh`, `configure-host-nat.sh`, `create-golden-snapshot.sh`, a pre-built `bin/sandbox-daemon`, and a
-`MANIFEST.json` with entrypoints, the pinned sandbox image (`sandbox_image`), and versions.
-
-Schema v3 replaces the manifest's `service_version` and `sandbox_version` fields
-with a single `version`, matching the one version all images now share.
-
-Package locally:
-
-```bash
-./scripts/package-firecracker-golden-build.sh --version "$(tr -d '[:space:]' < VERSION)"
-```
-
-`sandbox_image.ref` defaults to `n8nio/n8n-sandbox-service-sandbox:{VERSION}`, so
-the bundle and the sandbox image always carry the same version. Set
-`SANDBOX_IMAGE_REF` to point elsewhere — a digest ref (`{repository}@sha256:...`)
-for a reproducible bundle, or another registry, which is what the staging workflow
-does to pin its ACR candidate. `repository` and `tag` in the manifest are derived
-from whatever `ref` you pass.
-
-#### Copy-on-release contract
-
-Deployments should consume golden-build scripts only from the release
-tarball for the exact service version they deploy — never a separate copy. This
-keeps a single source of truth so the snapshot scripts and the runner binary
-can't drift apart.
-
-Deploy sequence (per environment):
-
-1. Download and unpack `firecracker-golden-build-{version}.tar.gz`; read `MANIFEST.json`.
-2. Assert the golden build and the runner image you deploy came from the same
-   commit: compare `git_sha` in `MANIFEST.json` against the runner image's SHA
-   tag (every image is tagged with its full commit SHA).
-3. Rebuild the golden snapshot on every runner VM using the bundle entrypoints
-   (`create-golden-snapshot.sh`; rootfs template is baked into the gallery image —
-   rebake it first when `sandbox_image.ref` changed since the last bake)
-   or the full e2e bootstrap (`setup-firecracker-e2e-vm.sh`).
-4. Roll the `runner-firecracker` image to `{version}` — after step 3, never before.
-5. Roll the API, dind, and sandbox images to the same `{version}`.
-6. Gate the rollout on `SMOKE_ENV={env} ./scripts/smoke-sandbox.sh`.
+Each service release and staging prerelease attaches `firecracker-golden-build-{version}.tar.gz`. Contents, `MANIFEST.json` fields, packaging and the rollout order for Firecracker hosts are in [BUNDLE.md](../BUNDLE.md). The rule that matters for releases: rebuild the golden snapshot on every runner VM from the bundle for the exact version you ship, roll `runner-firecracker` to that version only afterwards, then roll API, dind and sandbox to the same version, and gate on `SMOKE_ENV={env} ./scripts/smoke-sandbox.sh`.
 
 ## Staging candidates (pre-merge)
 
-Use Actions → Publish Service Staging on your feature branch before merging
-to `main`. The workflow:
+Actions → **Publish Service Staging** on a feature branch:
 
-1. Optionally runs unit tests
-2. Builds and pushes the API, runner-dind, Firecracker runner, and sandbox images
-   to the private container registry tagged `{VERSION}-staging.{short_sha}`
-   (override with the `version` input)
-3. Creates a GitHub prerelease (`service/v{version}`) with the golden-build tarball,
-   which pins the ACR sandbox candidate by its commit-SHA tag (the `version` label is
-   caller-supplied and may be reused by a later run)
+1. Optionally runs unit tests.
+2. Builds and pushes all four images to the private registry tagged `{VERSION}-staging.{short_sha}` (override with the `version` input).
+3. Creates a GitHub prerelease `service/v{version}` with the golden-build tarball, which pins the ACR sandbox candidate by its commit-SHA tag.
 
-The `version` input is rejected if it is a bare `x.y.z`. Candidates and releases
-share the `service/v*` tag namespace, and release prep reads it to order releases,
-so a candidate tagged `service/v1.3.0` would block the real v1.3.0 and every
-version below it. Keep a suffix, as the default label does.
+A bare `x.y.z` `version` input is rejected: candidates and releases share the `service/v*` namespace, which release prep reads to order releases, so a candidate tagged `service/v1.3.0` would block the real 1.3.0. Keep a suffix.
 
-After deploying those image tags to staging, run:
-
-```bash
-SMOKE_ENV=stage ./scripts/smoke-sandbox.sh
-```
-
-On Firecracker runner VMs, download the prerelease tarball and rebuild the
-golden snapshot before rolling out the new `runner-firecracker` image (see the
-copy-on-release contract above).
+After deploying, run `SMOKE_ENV=stage ./scripts/smoke-sandbox.sh`. Firecracker VMs need the prerelease tarball and a snapshot rebuild before the new `runner-firecracker` image rolls out.
 
 ## Sandbox image
 
-The sandbox image ships as part of the service release above; it has no separate
-version or workflow. It embeds `cmd/daemon` built from the same commit, which is
-why an independent version was never meaningful.
+Ships with the service release; no separate version or workflow. Firecracker runners consume it at build time, not run time: the guest rootfs is packed from the image pinned as `sandbox_image.ref` in the bundle `MANIFEST.json`, so shipping a new sandbox image to Firecracker hosts needs a rootfs rebake and snapshot rebuild. Rolling the sandbox image tag alone only affects the Docker/sysbox runner.
 
-### Firecracker runners consume this image at build time, not at run time
+## SDK release (npm)
 
-The Firecracker guest rootfs is built from `Dockerfile.sandbox`, so a release
-changes the Firecracker guest userspace too. Firecracker runners never pull the
-sandbox image; they boot `rootfs.ext4`, which was packed from the image pinned as
-`sandbox_image.ref` in the golden-build `MANIFEST.json`.
+Publishes `@n8n/sandbox-client`. Version in `sdk/package.json`, independent of `VERSION`.
 
-Shipping a new sandbox image to Firecracker hosts therefore requires a rootfs
-template rebake and golden snapshot rebuild on the runner VMs. Rolling the sandbox
-image tag alone only affects the Docker/sysbox runner.
-
-## SDK Release (npm)
-
-Publishes `@n8n/sandbox-client` to npm. Version tracked in `sdk/package.json`, and
-deliberately independent of `VERSION`: it is a client library whose version
-communicates HTTP API compatibility to consumers who do not deploy this service.
-
-### Steps
-
-1. Go to Actions → SDK Release Prep and run the workflow, choosing `patch`, `minor`, or `major`.
-2. Merge the release PR. This triggers the `SDK Publish` workflow, which publishes to npm, creates a git tag (`sdk/v{version}`) and GitHub Release, and opens a post-release PR.
+1. Actions → **SDK Release Prep**, choosing `patch`, `minor` or `major`.
+2. Merge the release PR. **SDK Publish** publishes to npm, creates the `sdk/v{version}` tag and GitHub Release, and opens a post-release PR.
 3. Merge the post-release PR.
 
-## Git Tag Namespaces
+## Git tag namespaces
 
-- Service: `service/v{version}` (e.g. `service/v1.0.0`) — covers all four images
-- SDK: `sdk/v{version}` (e.g. `sdk/v0.0.4`)
+- Service: `service/v{version}` — covers all four images
+- SDK: `sdk/v{version}`
 
-Release tags are immutable: publish creates them unforced, so a tag always points
-at the commit its images and release assets were built from — both jobs check out
-the release PR's merge commit, so they cannot diverge. That is what makes the
-`git_sha` assertion in the copy-on-release contract meaningful.
-
-`sandbox/v{version}` tags exist for releases made before versions were unified and
-are not created anymore.
+Tags are created unforced and always point at the merge commit the images and assets were built from, which is what makes the `git_sha` check in [BUNDLE.md](../BUNDLE.md) meaningful. `sandbox/v{version}` tags predate version unification and are no longer created.

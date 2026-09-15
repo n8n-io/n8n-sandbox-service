@@ -40,14 +40,9 @@ func newRunnerTransport(cfg *config.APIConfig) (http.RoundTripper, error) {
 	if cfg.RunnerControlGRPCClientCAFile == "" {
 		return nil, nil
 	}
-	// Deliberately no ServerName, unlike the control gRPC client. One transport
-	// serves every runner, and net/http derives the verification name from the
-	// dialled host only while ServerName is empty. Setting it would verify each
-	// runner against that single name and never against the host in its own
-	// advertised base URL, so any runner holding a certificate for the pinned
-	// name could answer for another. Runners must already advertise a host
-	// covered by their certificate, so per-host verification is what the
-	// deployment contract expects.
+	// Deliberately no ServerName: one transport serves every runner, and with
+	// ServerName empty net/http verifies each runner against the host in its own
+	// advertised base URL (docs/security-model.md, "API to runner").
 	tlsConf, err := grpctls.NewClientTLSConfig(
 		cfg.RunnerControlGRPCClientCAFile,
 		cfg.RunnerControlGRPCClientCertFile,

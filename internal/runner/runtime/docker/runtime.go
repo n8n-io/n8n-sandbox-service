@@ -1,3 +1,5 @@
+// Package docker implements the sandbox runtime on Docker containers. Behaviour
+// overview in README.md of this directory.
 package docker
 
 import (
@@ -18,15 +20,12 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-// ErrSandboxNotFound is returned when a sandbox ID is not found.
-var ErrSandboxNotFound = runnerruntime.ErrSandboxNotFound
-
-// ErrSandboxNetworkUnavailable is returned when a container exists but has no
-// network attachment/IP yet.
-var ErrSandboxNetworkUnavailable = runnerruntime.ErrSandboxNetworkUnavailable
-
-// ErrSandboxNotRunning is returned when a sandbox container exists but is not running.
-var ErrSandboxNotRunning = runnerruntime.ErrSandboxNotRunning
+// Aliases of the runnerruntime sentinel errors, kept for this package's callers.
+var (
+	ErrSandboxNotFound           = runnerruntime.ErrSandboxNotFound
+	ErrSandboxNetworkUnavailable = runnerruntime.ErrSandboxNetworkUnavailable
+	ErrSandboxNotRunning         = runnerruntime.ErrSandboxNotRunning
+)
 
 const (
 	containerStatusRunning    = "running"
@@ -197,7 +196,8 @@ func (m *Runtime) ReadyCh() <-chan struct{} {
 	return m.ImageReadyCh()
 }
 
-// Capacity reports how many Docker-backed sandboxes are active on this runner.
+// Capacity reports how many managed containers exist on this runner. Stopped
+// containers are counted: on Docker they keep their slot until deleted.
 func (m *Runtime) Capacity(ctx context.Context) (runnerruntime.Capacity, error) {
 	n, err := m.ManagedContainerCount(ctx)
 	if err != nil {

@@ -1,3 +1,5 @@
+// Package register keeps the runner registered with the API over the
+// RunnerRegistry gRPC stream and sends capacity heartbeats.
 package register
 
 import (

@@ -118,27 +118,17 @@ or a reboot from inside the guest. It has no `trace_id`: nothing requested it.
 | `sandbox_id`, `vm_id`, `slot` | Identity of the sandbox and the slot it was on |
 | `err` | The wait error of the exited process, or null on a clean exit |
 
-The runner then tears the dead microVM down and hands its slot back, so the
-sandbox goes on to report as stopped with its files intact. Nothing is recovered
-until a request arrives; that request cold boots the sandbox's own rootfs — never
-its snapshot, which the guest wrote past — and is then failed with
-`409 sandbox_restarted`. The recovery is the `firecracker sandbox woke` event with
-`op=recover`.
+The recovery that follows on the next request is the `firecracker sandbox woke`
+event with `op=recover` (behavior in
+[architecture.md](architecture.md#recovering-a-crashed-guest)).
 
-On the Docker runner the same crash reads differently, because Docker's restart
-policy has already brought the container back:
-
-| Field | Notes |
-| --- | --- |
-| `sandbox_id`, `container_id` | Identity of the sandbox and the container that died |
-
-`docker guest died` comes from the runner's `docker events` stream rather than
-from a process it waits on, so a `docker event stream ended, reconnecting`
-warning is worth alerting on: while it is down, crashes go unreported and
-restarted sandboxes are served without their `409`. Neither gauge moves for a
-Docker crash — the container never leaves — so the death counter is the only
-signal. The repair is `docker sandbox recovered`, emitted once the restarted
-container's network policy has been reapplied for the address it came back on.
+On the Docker runner, `docker guest died` (`sandbox_id`, `container_id`) comes
+from the runner's `docker events` stream, so a `docker event stream ended,
+reconnecting` warning is worth alerting on: while it is down, crashes go
+unreported and restarted sandboxes are served without their `409`. Neither gauge
+moves for a Docker crash — the container never leaves — so the death counter is
+the only signal. The repair is `docker sandbox recovered`, emitted once the
+restarted container's network policy has been reapplied.
 
 ## Metrics
 

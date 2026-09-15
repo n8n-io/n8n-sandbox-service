@@ -1,3 +1,5 @@
+// Package grpctls builds the mTLS configurations shared by the gRPC and HTTP
+// listeners and clients of the API and the runner.
 package grpctls
 
 import (
@@ -12,12 +14,9 @@ import (
 // NewServerTLSConfig builds an mTLS server config that presents serverCertFile
 // and verifies client certificates against clientCAFile.
 //
-// clientAuth selects how strict that verification is. Use
-// tls.RequireAndVerifyClientCert to reject an unauthenticated peer during the
-// handshake. Use tls.VerifyClientCertIfGiven when some routes must stay
-// reachable without a certificate, such as health probes that cannot present
-// one; the handler is then responsible for requiring a peer certificate on
-// every route that needs it.
+// clientAuth selects how strict that verification is: RequireAndVerifyClientCert
+// rejects an unauthenticated peer in the handshake; with VerifyClientCertIfGiven
+// the handler must require a peer certificate on every route that needs one.
 func NewServerTLSConfig(serverCertFile, serverKeyFile, clientCAFile string, clientAuth tls.ClientAuthType) (*tls.Config, error) {
 	caPEM, err := os.ReadFile(clientCAFile)
 	if err != nil {
@@ -41,8 +40,9 @@ func NewServerTLSConfig(serverCertFile, serverKeyFile, clientCAFile string, clie
 	}, nil
 }
 
-// NewServerTransportCredentials builds mTLS server credentials for the runner registry.
-// clientCAFile must contain PEM certificate(s) for the CA that signs runner client certificates.
+// NewServerTransportCredentials builds mTLS server credentials that require a
+// verified client certificate. clientCAFile must contain PEM certificate(s) for
+// the CA that signs the peer's client certificates.
 func NewServerTransportCredentials(serverCertFile, serverKeyFile, clientCAFile string) (credentials.TransportCredentials, error) {
 	tlsConf, err := NewServerTLSConfig(serverCertFile, serverKeyFile, clientCAFile, tls.RequireAndVerifyClientCert)
 	if err != nil {

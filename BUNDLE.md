@@ -132,9 +132,7 @@ separate container image.
 
 ## Consumer workflow
 
-See [docs/quickstart-firecracker-linux.md](docs/quickstart-firecracker-linux.md) for a
-step-by-step host setup. Tarball `README.md` lists the same entrypoints for operators
-on a runner VM.
+Step-by-step host setup: [docs/quickstart-firecracker-linux.md](docs/quickstart-firecracker-linux.md). The tarball's `README.md` ([source](scripts/firecracker-golden-build/README.md)) carries the same commands for operators without a checkout.
 
 ## Packaging and CI
 
@@ -143,6 +141,8 @@ Package locally:
 ```sh
 ./scripts/package-firecracker-golden-build.sh --version "$(tr -d '[:space:]' < VERSION)"
 ```
+
+`sandbox_image.ref` defaults to `n8nio/n8n-sandbox-service-sandbox:{VERSION}`. Set `SANDBOX_IMAGE_REF` to pin elsewhere — a digest ref for a reproducible bundle, or another registry (the staging workflow pins its ACR candidate this way); `repository` and `tag` in the manifest derive from it.
 
 CI runs `scripts/test-firecracker-golden-build-bundle.sh` (rootfs build, resolv.conf
 check, tarball layout, executable entrypoints). Release workflows attach the tarball
@@ -154,17 +154,22 @@ Deploy golden-build scripts only from the tarball for the exact service version
 you ship. Do not fork rootfs/NAT/snapshot logic in consumer repos — call bundle
 entrypoints or fail loudly when they are missing.
 
-Rollout order on Firecracker runners:
+Rollout order per environment:
 
-1. Install/replace bundle on the host (or bake into a new gallery image).
+1. Install/replace the bundle on each runner host (or bake it into a new gallery
+   image). Assert `git_sha` in `MANIFEST.json` matches the runner image's
+   full-SHA tag.
 2. Ensure the rootfs template exists (`build_rootfs_template` at gallery bake;
-   first-boot skips when `/srv/firecracker/template/rootfs.ext4` is present).
+   rebake when `sandbox_image.ref` changed; first-boot skips when
+   `/srv/firecracker/template/rootfs.ext4` is present).
 3. Set `SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT` (and
    `SANDBOX_RUNNER_FIRECRACKER_DAEMON_BIN`) so the runner creates the host-local
-   golden snapshot on first `Prepare` when mem/state are missing.
-4. Roll `runner-firecracker` to the matching commit/version.
-5. Gate on admission: runner stays unhealthy until pin + snapshot + canary pass
-   (`/readyz` and registration `Healthy`).
+   golden snapshot on first `Prepare`, or run `create-golden-snapshot.sh` by hand.
+4. Roll `runner-firecracker` to the matching version — after step 3, never before.
+   The runner stays unhealthy (`/readyz`, registration `Healthy=false`) until pin,
+   snapshot and canary pass.
+5. Roll API, dind and sandbox images to the same version.
+6. Gate on `SMOKE_ENV={env} ./scripts/smoke-sandbox.sh`.
 
 ## Cloud-specific notes (Azure)
 
@@ -173,5 +178,4 @@ Sandbox netns egress is forwarded traffic (`fc-veth*` → default NIC). Linux
 `enable_ip_forwarding = true`. Host-originated `curl` can work while guest egress
 fails without it.
 
-See infra `terraform/.../sandbox-firecracker.tf` and
-`charts/firecracker-sandbox-service/README.md` (network topology).
+See `terraform/.../sandbox-firecracker.tf` in the infra repository.

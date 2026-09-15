@@ -160,7 +160,6 @@ wait_for_http "API" "http://127.0.0.1:${PORT}/healthz"
 echo "Starting Firecracker runner host process..."
 RUNNER_ENV=(
 	PATH="/usr/local/go/bin:$PATH"
-	SANDBOX_RUNNER_BACKEND=firecracker
 	SANDBOX_RUNNER_LISTEN_ADDR="$RUNNER_ADDR"
 	SANDBOX_RUNNER_DATA_DIR="$RUNNER_DATA_DIR"
 	SANDBOX_RUNNER_API_KEYS="$RUNNER_INTERNAL_API_KEY"

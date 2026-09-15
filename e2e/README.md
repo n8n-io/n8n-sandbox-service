@@ -1,51 +1,40 @@
 # End-to-end tests
 
-Playwright drives the HTTP API. Shell scripts start Docker networks, the API, and one or more sandbox runners (Docker-in-Docker `n8n-sandbox-service-runner-dind` containers).
+Playwright drives the HTTP API. Shell scripts start Docker networks, the API, and one or more runners.
 
-Run with `e2e/run-all.sh` (SQLite API by default, plus a required Postgres API phase at the end).
+## Docker lane
 
-Idle TTL: The default `e2e/run.sh` API uses production defaults for `SANDBOX_API_IDLE_*`. Run **`e2e/run-idle-ttl.sh`** for a dedicated stack with short idle timers and only the idle specs, `tests/sandbox-idle-ttl.spec.ts` and `tests/sandbox-ephemeral.spec.ts` (also used as phase 4 of `run-all.sh`).
+`e2e/run-all.sh` builds the images and SDK once, then runs five phases:
 
-Postgres API: Phase 5 of `run-all.sh` runs **`e2e/run-postgres.sh`** (idle TTL, two-runner placement, and multi-pod API specs against Postgres with the Docker runner). Run it alone with `e2e/run-postgres.sh`.
+| Phase | Script | Covers |
+| --- | --- | --- |
+| 1 | `run-no-runner.sh` | API only |
+| 2 | `run-two-runners.sh` | Placement and resilience across two runners |
+| 3 | `run.sh` | Full suite, single runner (excludes idle specs) |
+| 4 | `run-idle-ttl.sh` | `sandbox-idle-ttl.spec.ts` and `sandbox-ephemeral.spec.ts` on a dedicated stack with short `SANDBOX_API_IDLE_*` timers |
+| 5 | `run-postgres.sh` | Idle TTL, two-runner placement and multi-pod API specs against Postgres |
 
-Multi-pod failover: `e2e/run-postgres-multi-pod.sh` fronts both API pods with an nginx gRPC TCP proxy (like a k8s Service), then runs `@multi-pod-failover` tests that stop the lead API pod and assert runner re-registration and idle sweeping on the surviving pod.
+Each script also runs alone. `e2e/run-postgres-multi-pod.sh` fronts two API pods with an nginx gRPC TCP proxy (like a k8s Service) and runs the `@multi-pod-failover` specs, which stop the lead pod and assert runner re-registration and idle sweeping on the survivor.
 
-## Backend tags
+## Firecracker lane
 
-Specs run on every runner lane by default. Apply a marker
-from `tests/tags.ts` only to a spec (or `describe`) that is backend-specific:
-
-- `DOCKER_ONLY` (`@docker-only`) — e.g. inner-container recovery, capability
-  policy, and xfs disk quota.
-- `FIRECRACKER_ONLY` (`@firecracker-only`) — e.g. rootfs capacity checks.
-
-Each lane excludes the other lane's marker via `--grep-invert`: the Docker lane
-(`e2e/run.sh`) skips `@firecracker-only`, and the Firecracker lane
-(`e2e/run-firecracker.sh`) skips `@docker-only`. A new untagged spec therefore
-runs on both backends automatically.
-
-From a local machine, run the full Azure Firecracker flow with:
+Needs a Linux host with KVM; from a local machine, `e2e/run-firecracker-azure.sh` provisions an Azure VM, runs the suite over SSH, collects logs on failure and destroys the VM on exit:
 
 ```bash
 RESOURCE_GROUP=my-resource-group bash e2e/run-firecracker-azure.sh
 ```
 
-The wrapper provisions the VM, runs the Firecracker e2e tests over SSH, collects
-logs on failure, and destroys the VM resources on exit.
+On the VM:
 
-Idle TTL (Firecracker): Like Docker, the default `e2e/run-firecracker.sh` uses
-production `SANDBOX_API_IDLE_*` defaults and excludes the idle specs
-(`tests/sandbox-idle-ttl.spec.ts`, `tests/sandbox-ephemeral.spec.ts`).
-Run `e2e/run-firecracker-idle-ttl.sh` for a dedicated stack with short idle
-timers and only those specs (uses its own HTTP/gRPC/control ports so it can run
-back-to-back with the main suite on the same VM).
+- `run-firecracker.sh` — full suite (excludes idle specs). Runner on `127.0.0.1:18082`, per-sandbox daemon proxies from `18100`; keep those ranges apart when overriding `RUNNER_ADDR` or `FIRECRACKER_PROXY_PORT_START`.
+- `run-firecracker-idle-ttl.sh` — idle specs on a dedicated stack with its own ports, so it can run back-to-back with the main suite.
+- `run-firecracker-two-runners-azure.sh` — Firecracker runners cannot share a host network namespace, so two-runner specs use a control VM (API + runner 1) and a peer VM (runner 2). Provision with `E2E_PEER_VM_ENABLED=true`; the full Azure flow includes this phase.
 
-Two runners (Firecracker): Firecracker runners cannot share one host network
-namespace, so two-runner placement/resilience tests use a control VM (API +
-runner 1) and a peer VM (runner 2). Provision with `E2E_PEER_VM_ENABLED=true`
-and run `e2e/run-firecracker-two-runners-azure.sh` (or the full
-`e2e/run-firecracker-azure.sh` flow, which includes this phase).
+## Backend tags
 
-`e2e/run-firecracker.sh` starts the runner on `127.0.0.1:18082` and starts
-per-sandbox Firecracker daemon proxies at `18100` by default. Keep those port
-ranges separate when overriding `RUNNER_ADDR` or `FIRECRACKER_PROXY_PORT_START`.
+Specs run on both lanes by default. Tag only backend-specific specs (or `describe` blocks) with a marker from `tests/tags.ts`:
+
+- `DOCKER_ONLY` (`@docker-only`) — e.g. inner-container recovery, capability policy, xfs disk quota.
+- `FIRECRACKER_ONLY` (`@firecracker-only`) — e.g. rootfs capacity checks.
+
+Each lane excludes the other's marker via `--grep-invert`.

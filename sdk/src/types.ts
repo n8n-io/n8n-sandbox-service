@@ -2,7 +2,7 @@
 export interface SandboxClientOptions {
   /** API key for authenticating with the sandbox service. */
   apiKey?: string;
-  /** Base URL of the sandbox service API. */
+  /** Base URL of the sandbox service API. Required at runtime: the client throws if it is empty. */
   baseUrl?: string;
   /**
    * Retry policy for **transient** HTTP failures (see README).
@@ -46,6 +46,7 @@ export interface RetryOptions {
 /** Metadata for a sandbox instance. */
 export interface SandboxRecord {
   id: string;
+  /** `running` or `stopped` (idle-stopped; the next request wakes it). */
   status: string;
   /** Unix timestamp (seconds) when the sandbox was created. */
   createdAt: number;

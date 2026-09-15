@@ -1,3 +1,4 @@
+// Command runner-docker runs a sandbox runner backed by Docker containers.
 package main
 
 import (
