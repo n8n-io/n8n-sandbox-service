@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds the Firecracker rootfs template (rootfs.ext4 + vmlinux) from a sandbox
 # OCI image (same userspace as Dockerfile.sandbox) plus a Firecracker CI kernel.
-# Used by e2e VM setup, golden-build bundle consumers, and gallery bake.
+# Used by e2e VM setup and golden-build bundle consumers.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

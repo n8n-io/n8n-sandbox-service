@@ -21,7 +21,6 @@
 ## Operations
 
 - [Observability](observability.md) — trace ids, canonical log events, how to query them
-- [Performance baseline](performance.md) — recorded numbers and how to reproduce them
 - [mTLS on Kubernetes with cert-manager](cert-manager-k8s.md) — certificate roles and the env vars they map to
 - [Debugging gRPC with grpcurl](grpcurl-debug.md)
 

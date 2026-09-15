@@ -175,9 +175,8 @@ grep -a '"firecracker sandbox woke"' runner.log \
   | jq -s 'sort_by(-.total_ms) | .[:10]'
 ```
 
-Percentiles for every step of an operation, which is what a baseline entry
-needs. This runs on a stream of any size and prints a summary small enough to
-come back through `az vmss run-command`:
+Percentiles for every step of an operation. This runs on a stream of any size
+and prints a summary small enough to read over a remote shell:
 
 ```sh
 grep -a '"firecracker sandbox created"' runner.log | jq -s '

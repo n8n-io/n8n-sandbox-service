@@ -65,13 +65,13 @@ Deploy the same `{version}` for all four. There is no compatibility matrix; the 
 
 ### Private registry mirror
 
-Cloud environments pull from the private registry, so `mirror-to-acr` copies all four published manifests into it under `{version}` (`docker buildx imagetools create` after `az acr login`; same digests as Docker Hub). Images are copied by digest and an existing `{version}` is never replaced — a rebuild that produces a different manifest fails instead of swapping content behind a tag deployments may run. Re-copying an identical manifest is a no-op, so the job is re-runnable.
+`mirror-to-acr` copies all four published manifests by digest into n8n's private registry under `{version}` (`docker buildx imagetools create`; same digests as Docker Hub). An existing `{version}` is never replaced — a rebuild that produces a different manifest fails instead of swapping content behind a tag. Re-copying an identical manifest is a no-op, so the job is re-runnable.
 
-The mirror depends only on the image publish, and `release-metadata` does not wait on it. A release can therefore end with tag, GitHub Release and Docker Hub published while the private registry lacks `{version}`; the run is red and the version is not cloud-deployable until `mirror-to-acr` is re-run. Mirroring makes a version deployable; deployments still move their own tags (`prod`) or pin `{version}`.
+The mirror depends only on the image publish, and `release-metadata` does not wait on it. A release can therefore end with tag, GitHub Release and Docker Hub published while the mirror is missing; the run is red until `mirror-to-acr` is re-run.
 
 ### Firecracker golden-build asset
 
-Each service release and staging prerelease attaches `firecracker-golden-build-{version}.tar.gz`. Contents, `MANIFEST.json` fields, packaging and the rollout order for Firecracker hosts are in [BUNDLE.md](../BUNDLE.md). The rule that matters for releases: rebuild the golden snapshot on every runner VM from the bundle for the exact version you ship, roll `runner-firecracker` to that version only afterwards, then roll API, dind and sandbox to the same version, and gate on `SMOKE_ENV={env} ./scripts/smoke-sandbox.sh`.
+Each service release and staging prerelease attaches `firecracker-golden-build-{version}.tar.gz`. Contents, `MANIFEST.json` fields, packaging and the rollout order for Firecracker hosts are in [BUNDLE.md](../BUNDLE.md). The rule that matters for releases: rebuild the golden snapshot on every runner VM from the bundle for the exact version you ship, roll `runner-firecracker` to that version only afterwards, then roll API, dind and sandbox to the same version, and gate on `scripts/smoke-sandbox.sh`.
 
 ## Staging candidates (pre-merge)
 
@@ -83,7 +83,7 @@ Actions → **Publish Service Staging** on a feature branch:
 
 A bare `x.y.z` `version` input is rejected: candidates and releases share the `service/v*` namespace, which release prep reads to order releases, so a candidate tagged `service/v1.3.0` would block the real 1.3.0. Keep a suffix.
 
-After deploying, run `SMOKE_ENV=stage ./scripts/smoke-sandbox.sh`. Firecracker VMs need the prerelease tarball and a snapshot rebuild before the new `runner-firecracker` image rolls out.
+After deploying a candidate, run `scripts/smoke-sandbox.sh` against it. Firecracker hosts need the prerelease tarball and a snapshot rebuild before the new `runner-firecracker` image rolls out.
 
 ## Sandbox image
 

@@ -66,19 +66,12 @@ Quick smoke test (create, exec, resolv.conf, DNS, HTTPS, file write/read, delete
 make smoke
 ```
 
-For Firecracker staging, also exercise a second sandbox create (snapshot restore path):
+Against a deployed environment, copy `scripts/smoke-sandbox.env.example` to
+`scripts/smoke-sandbox.<env>.env` (gitignored) and run:
 
 ```bash
-SMOKE_ENV=stage SMOKE_EXTENDED=1 sh scripts/smoke-sandbox.sh
-```
-
-Deployed environments (copy `scripts/smoke-sandbox.env.example` to
-`scripts/smoke-sandbox.<env>.env` or `scripts/smoke-dev-sandbox.env`):
-
-```bash
-SMOKE_ENV=dev sh scripts/smoke-sandbox.sh
-SMOKE_ENV=stage sh scripts/smoke-sandbox.sh
-# or: sh scripts/smoke-dev-sandbox.sh
+SMOKE_ENV=<env> sh scripts/smoke-sandbox.sh
+SMOKE_ENV=<env> SMOKE_EXTENDED=1 sh scripts/smoke-sandbox.sh   # Firecracker: also a second create (snapshot restore path)
 ```
 
 ## Tests

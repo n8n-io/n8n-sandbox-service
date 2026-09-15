@@ -27,11 +27,13 @@ Load run (`SCENARIO=load`, the default: ramp to 50 VUs over 30s, hold 1m, ramp d
 k6 run benchmarks/k6-sandbox-lifecycle.js
 ```
 
-Baseline run (one operation at a time, which is what [docs/performance.md](../docs/performance.md) records):
+Baseline run (one operation at a time):
 
 ```sh
 k6 run -e SCENARIO=baseline -e ITERATIONS=30 benchmarks/k6-sandbox-lifecycle.js
 ```
+
+Against a cluster, run k6 from inside it (`kubectl run --rm -i --image=grafana/k6:latest ... -- run - < benchmarks/k6-sandbox-lifecycle.js`) so client-side numbers are not dominated by the trip to the ingress. Baselines are only comparable within the same runtime, host shape and commit.
 
 ## Measuring wake
 

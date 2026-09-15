@@ -4,10 +4,6 @@ The sandbox service publishes `firecracker-golden-build-<version>.tar.gz` on eac
 `service/v*` GitHub Release (and staging prereleases). This document is the
 source of truth for what the tarball contains and how consumers should use it.
 
-Infra-specific wiring (Azure VMSS, Key Vault, gallery images) lives in
-[n8n-cloud-infrastructure-next](https://github.com/n8n-io/n8n-cloud-infrastructure-next)
-under `vm-images/firecracker-sandbox-runner/`.
-
 ## Container images vs tarball
 
 | Artifact | Registry | When | Images |
@@ -24,10 +20,9 @@ the next service release; pin the golden-build tarball `git_sha` to the image ta
 Pin everything to the same commit: compare `MANIFEST.json` `git_sha` with the
 container image's full-SHA tag.
 
-## Ownership split
+## Scope
 
-This repository owns (ship in the tarball and/or release docs; sources under
-`scripts/firecracker.ee/`):
+The bundle ships (sources under `scripts/firecracker.ee/`):
 
 - Generic runner host install (`install-runner-host.sh`)
 - Firecracker CI kernel download (`firecracker-ci-assets.sh`)
@@ -38,13 +33,8 @@ This repository owns (ship in the tarball and/or release docs; sources under
 - `MANIFEST.json` with entrypoints, sandbox image pin, versions, and checksums
 - E2e full bootstrap (`setup-firecracker-e2e-vm.sh`, shipped for reference)
 
-Infra repo owns (not in the bundle):
-
-- Azure Compute Gallery image build and publish
-- Cloud-init, Key Vault, TLS, systemd units
-- Baking `vmlinux` + `rootfs.ext4` at gallery publish time (crane export of pinned sandbox image)
-- Runner subnet / NAT Gateway / NSG / NIC IP forwarding
-- Pulling `runner-firecracker` from ACR for n8n staging (or building gallery images)
+Not in the bundle: VM image builds, secret and TLS material, systemd units, and
+cloud network setup. Those are the operator's.
 
 ## Bundle layout (schema v3)
 
@@ -95,8 +85,8 @@ persistent `net.ipv4.ip_forward`, and delegates to `configure-host-nat.sh`.
 
 Options: `--skip-packages`, `--skip-firecracker`, `--download-ci-assets`.
 
-Out of scope: crane, registry pulls, systemd, Key Vault, golden-build install,
-baked `runner-firecracker` binary.
+Out of scope: registry pulls, systemd units, secrets, installing the bundle
+itself, the `runner-firecracker` binary.
 
 ### `build-rootfs-template.sh`
 
@@ -124,11 +114,13 @@ Idempotent shell equivalent of `EnsureHostNAT` in
 - `MASQUERADE` on the default-route interface
 - `FORWARD` accept for `fc-veth+` and `ESTABLISHED,RELATED`
 
+On cloud VMs the NIC may also need IP forwarding enabled at the cloud level;
+without it host-originated traffic works while guest egress fails.
+
 ### `bin/sandbox-daemon`
 
 linux/amd64 binary built at package time. `MANIFEST.json` includes `sha256` for
-verification. Infra may bake this onto gallery images instead of pulling a
-separate container image.
+verification.
 
 ## Consumer workflow
 
@@ -156,12 +148,10 @@ entrypoints or fail loudly when they are missing.
 
 Rollout order per environment:
 
-1. Install/replace the bundle on each runner host (or bake it into a new gallery
-   image). Assert `git_sha` in `MANIFEST.json` matches the runner image's
-   full-SHA tag.
-2. Ensure the rootfs template exists (`build_rootfs_template` at gallery bake;
-   rebake when `sandbox_image.ref` changed; first-boot skips when
-   `/srv/firecracker/template/rootfs.ext4` is present).
+1. Install/replace the bundle on each runner host. Assert `git_sha` in
+   `MANIFEST.json` matches the runner image's full-SHA tag.
+2. Ensure the rootfs template exists (`build_rootfs_template`; rebuild it when
+   `sandbox_image.ref` changed).
 3. Set `SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT` (and
    `SANDBOX_RUNNER_FIRECRACKER_DAEMON_BIN`) so the runner creates the host-local
    golden snapshot on first `Prepare`, or run `create-golden-snapshot.sh` by hand.
@@ -169,13 +159,4 @@ Rollout order per environment:
    The runner stays unhealthy (`/readyz`, registration `Healthy=false`) until pin,
    snapshot and canary pass.
 5. Roll API, dind and sandbox images to the same version.
-6. Gate on `SMOKE_ENV={env} ./scripts/smoke-sandbox.sh`.
-
-## Cloud-specific notes (Azure)
-
-Sandbox netns egress is forwarded traffic (`fc-veth*` → default NIC). Linux
-`ip_forward` and iptables alone are not enough on Azure — the VM NIC needs
-`enable_ip_forwarding = true`. Host-originated `curl` can work while guest egress
-fails without it.
-
-See `terraform/.../sandbox-firecracker.tf` in the infra repository.
+6. Gate on `scripts/smoke-sandbox.sh` against the deployed API.
