@@ -33,7 +33,16 @@ Baseline run (one operation at a time):
 k6 run -e SCENARIO=baseline -e ITERATIONS=30 benchmarks/k6-sandbox-lifecycle.js
 ```
 
-Against a cluster, run k6 from inside it (`kubectl run --rm -i --image=grafana/k6:latest ... -- run - < benchmarks/k6-sandbox-lifecycle.js`) so client-side numbers are not dominated by the trip to the ingress. Baselines are only comparable within the same runtime, host shape and commit.
+Against a cluster, run k6 from inside it so client-side numbers are not dominated by the trip to the ingress. `kubectl run` does not forward the host's environment, so pass the variables explicitly:
+
+```sh
+kubectl run k6 --rm -i --restart=Never --image=grafana/k6:latest \
+  --env BASE_URL=http://<api service>:8080 --env API_KEY=<key> \
+  --env SCENARIO=baseline --env ITERATIONS=30 \
+  -- run - < benchmarks/k6-sandbox-lifecycle.js
+```
+
+Baselines are only comparable within the same runtime, host shape and commit.
 
 ## Measuring wake
 

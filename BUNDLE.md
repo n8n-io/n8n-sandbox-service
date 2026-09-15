@@ -18,7 +18,8 @@ versioned releases. Alpha/staging Firecracker images remain on the private regis
 the next service release; pin the golden-build tarball `git_sha` to the image tag SHA.
 
 Pin everything to the same commit: compare `MANIFEST.json` `git_sha` with the
-container image's full-SHA tag.
+commit the images were built from — the `service/v{version}` tag for a release,
+the image's full-SHA tag for alpha and staging.
 
 ## Scope
 
@@ -59,7 +60,7 @@ firecracker-golden-build/
 | --- | --- |
 | `version` | Release version of the tree the bundle was built from (the `VERSION` file). On a service release this is the tag all four images carry. |
 | `bundle_version` | Label of this tarball. Equals `version` on a service release; on a staging prerelease it is the staging label (`{version}-staging.{sha}`). |
-| `git_sha` | Commit the bundle was built from. This, not `version`, is the pin to correlate with a container image's full-SHA tag. |
+| `git_sha` | Commit the bundle was built from. This, not `version`, is the pin to correlate with the commit the container images were built from. |
 | `sandbox_image.ref` | Authoritative pin for the guest rootfs. Staging pins the ACR commit-SHA tag, so it does not carry the release version. |
 
 Staging bundles are the case to be careful with: nothing is published at `version`
@@ -134,7 +135,7 @@ Package locally:
 ./scripts/package-firecracker-golden-build.sh --version "$(tr -d '[:space:]' < VERSION)"
 ```
 
-`sandbox_image.ref` defaults to `n8nio/n8n-sandbox-service-sandbox:{VERSION}`. Set `SANDBOX_IMAGE_REF` to pin elsewhere — a digest ref for a reproducible bundle, or another registry (the staging workflow pins its ACR candidate this way); `repository` and `tag` in the manifest derive from it.
+`sandbox_image.ref` defaults to `n8nio/n8n-sandbox-service-sandbox:{VERSION}`. Set `SANDBOX_IMAGE_REF` to pin elsewhere — a digest ref for a reproducible bundle, or another registry (the staging workflow pins its candidate this way); `repository` and `tag` in the manifest derive from it, with `tag` empty for a digest ref.
 
 CI runs `scripts/test-firecracker-golden-build-bundle.sh` (rootfs build, resolv.conf
 check, tarball layout, executable entrypoints). Release workflows attach the tarball
@@ -149,7 +150,8 @@ entrypoints or fail loudly when they are missing.
 Rollout order per environment:
 
 1. Install/replace the bundle on each runner host. Assert `git_sha` in
-   `MANIFEST.json` matches the runner image's full-SHA tag.
+   `MANIFEST.json` matches the commit the runner image was built from (see
+   above).
 2. Ensure the rootfs template exists (`build_rootfs_template`; rebuild it when
    `sandbox_image.ref` changed).
 3. Set `SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT` (and

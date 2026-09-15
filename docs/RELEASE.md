@@ -83,7 +83,7 @@ Actions → **Publish Service Staging** on a feature branch:
 
 A bare `x.y.z` `version` input is rejected: candidates and releases share the `service/v*` namespace, which release prep reads to order releases, so a candidate tagged `service/v1.3.0` would block the real 1.3.0. Keep a suffix.
 
-After deploying a candidate, run `scripts/smoke-sandbox.sh` against it. Firecracker hosts need the prerelease tarball and a snapshot rebuild before the new `runner-firecracker` image rolls out.
+After deploying a candidate, run `SMOKE_ENV=<env> scripts/smoke-sandbox.sh` against it (the preset file is described in [development.md](development.md#tests)). Firecracker hosts need the prerelease tarball and a snapshot rebuild before the new `runner-firecracker` image rolls out.
 
 ## Sandbox image
 
@@ -102,4 +102,4 @@ Publishes `@n8n/sandbox-client`. Version in `sdk/package.json`, independent of `
 - Service: `service/v{version}` — covers all four images
 - SDK: `sdk/v{version}`
 
-Tags are created unforced and always point at the merge commit the images and assets were built from, which is what makes the `git_sha` check in [BUNDLE.md](../BUNDLE.md) meaningful. `sandbox/v{version}` tags predate version unification and are no longer created.
+`service/v{version}` is created unforced and always points at the merge commit the images and assets were built from, which is what makes the `git_sha` check in [BUNDLE.md](../BUNDLE.md) meaningful (`sdk/v{version}` is force-pushed by SDK Publish). `sandbox/v{version}` tags predate version unification and are no longer created.

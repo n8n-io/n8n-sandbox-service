@@ -28,7 +28,8 @@ On the VM:
 
 - `run-firecracker.sh` — full suite (excludes idle specs). Runner on `127.0.0.1:18082`, per-sandbox daemon proxies from `18100`; keep those ranges apart when overriding `RUNNER_ADDR` or `FIRECRACKER_PROXY_PORT_START`.
 - `run-firecracker-idle-ttl.sh` — idle specs on a dedicated stack with its own ports, so it can run back-to-back with the main suite.
-- `run-firecracker-two-runners-azure.sh` — Firecracker runners cannot share a host network namespace, so two-runner specs use a control VM (API + runner 1) and a peer VM (runner 2). Provision with `E2E_PEER_VM_ENABLED=true`; the full Azure flow includes this phase.
+
+Two runners: Firecracker runners cannot share a host network namespace, so two-runner specs use a control VM (API + runner 1) and a peer VM (runner 2). Provision with `E2E_PEER_VM_ENABLED=true`, then run `run-firecracker-two-runners-azure.sh` from the local machine; it drives both VMs over SSH. The full Azure flow includes this phase.
 
 ## Backend tags
 

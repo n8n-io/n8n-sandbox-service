@@ -87,7 +87,7 @@ docker-local: docker-api-$(ARCH) docker-runner-$(ARCH) docker-sandbox-$(ARCH)
 ## docker-arm64: Build API, runner, and sandbox images for linux/arm64.
 docker-arm64: docker-api-arm64 docker-runner-arm64 docker-sandbox-arm64
 
-## docker-amd64: Build API, both runner, and sandbox images for linux/amd64.
+## docker-amd64: Build API, Docker runner, Firecracker runner, and sandbox images for linux/amd64.
 docker-amd64: docker-api-amd64 docker-runner-amd64 docker-firecracker-runner-amd64 docker-sandbox-amd64
 
 ## docker-api-arm64: Build the API image for linux/arm64.

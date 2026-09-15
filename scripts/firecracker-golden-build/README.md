@@ -17,13 +17,9 @@ Scripts to build the Firecracker rootfs template and golden snapshot on a sandbo
 
 ## Usage on a runner host
 
-```bash
-VERSION=1.3.4
-curl -fsSL -o firecracker-golden-build.tar.gz \
-  "https://github.com/n8n-io/n8n-sandbox-service/releases/download/service/v${VERSION}/firecracker-golden-build-${VERSION}.tar.gz"
-tar xzf firecracker-golden-build.tar.gz
-cd firecracker-golden-build
+Run from the extracted tarball root. `MANIFEST.json` records the version and `git_sha` this bundle was built from; the runner image must be built from the same commit.
 
+```bash
 # 1. Host prerequisites. Omit --download-ci-assets when vmlinux is already under /srv/firecracker/ci-assets.
 sudo ./scripts/install-runner-host.sh --download-ci-assets
 
@@ -44,6 +40,10 @@ sudo ./scripts/create-golden-snapshot.sh \
   --ext4 /srv/firecracker/template/rootfs.ext4 \
   --daemon-bin ./bin/sandbox-daemon \
   --out /srv/firecracker/snapshots
+
+# 4. The runner's default snapshot paths are .../snapshots/mem and .../snapshots/state.
+sudo ln -sf snapshot_mem /srv/firecracker/snapshots/mem
+sudo ln -sf snapshot_state /srv/firecracker/snapshots/state
 ```
 
 `snapshot_mem`, `snapshot_state` and `boot.json` describe one build; keep them together and rebuild the set rather than editing `boot.json`. Alternatively point the runner at this bundle via `SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT` and `SANDBOX_RUNNER_FIRECRACKER_DAEMON_BIN` and it creates the snapshot itself on first start.

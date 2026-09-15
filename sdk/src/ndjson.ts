@@ -89,7 +89,8 @@ function decodeChunk(decoder: TextDecoder, chunk: unknown, options?: TextDecodeO
  */
 export function parseExecEvent(line: string): ExecEvent {
   try {
-    const json = JSON.parse(line) as JsonObject;
+    const json = JSON.parse(line) as JsonObject | null;
+    if (json === null) return { type: "error", error: `Invalid exec event payload: ${line}` };
 
     if (isStartedEvent(json)) return json;
     if (isStdoutEvent(json)) return json;

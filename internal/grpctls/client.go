@@ -37,7 +37,7 @@ func NewClientTLSConfig(serverCAFile, clientCertFile, clientKeyFile, serverName 
 
 // NewClientTransportCredentials builds mTLS client credentials for a gRPC channel
 // (runner → API registration, API → runner SandboxControl).
-// serverCAFile must contain PEM certificate(s) for the CA that signed the API server certificate.
+// serverCAFile must contain PEM certificate(s) for the CA that signed the peer's server certificate.
 // serverName is used for certificate verification (SNI / hostname); may be empty to use the dial target host.
 func NewClientTransportCredentials(serverCAFile, clientCertFile, clientKeyFile, serverName string) (credentials.TransportCredentials, error) {
 	tlsConf, err := NewClientTLSConfig(serverCAFile, clientCertFile, clientKeyFile, serverName)
