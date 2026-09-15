@@ -185,46 +185,17 @@ File read, write, list, stat, copy, move, and delete follow the same two-hop rev
 
 ### Recovering a Crashed Guest
 
-A sandbox can lose its guest without losing its files: the Firecracker guest daemon runs as PID 1 with `panic=1 reboot=k`, so a dead daemon or a panicking kernel resets the CPU and exits the VMM.
+A sandbox can lose its guest (daemon exit, kernel panic, OOM) without losing its files. Both backends bring it back on the next request and answer that request with `409 sandbox_restarted` instead of proxying it, because memory — running processes, execution history — is gone; the retry succeeds ([API.md](API.md#http-409-sandbox_restarted--the-sandbox-came-back-without-its-memory)). Each recovery increments `sandbox_recoveries_total`.
 
-1. The runner waits on the VMM process — jailer execs Firecracker in place, so that process lives exactly as long as the guest — and reads its exit as a crash unless a generation counter, bumped before every deliberate kill, says the runner asked for it
-2. The dead sandbox is torn down and hands its slot back immediately, leaving what an idle stop leaves minus a usable snapshot: stopped, no slot, files intact. Nothing is recovered until a request arrives, so a crashed sandbox nobody touches again costs only disk
-3. The next request finds it not running and drives the ordinary wake path, which cold boots the sandbox's own rootfs instead of restoring its snapshot, replaying the boot parameters recorded at create
-4. That request then fails with `409 sandbox_restarted` rather than being proxied, because the recovery cannot restore what was in memory: processes an earlier execution started, and the daemon's execution history. The retry succeeds. See [API.md](API.md#http-409-sandbox_restarted--the-sandbox-came-back-without-its-memory)
+**Firecracker.** The guest daemon is PID 1 with `panic=1 reboot=k`, and jailer execs Firecracker in place, so the process the runner waits on exits when the guest dies. A generation counter bumped before every deliberate kill tells that apart from a runner-initiated stop. The dead sandbox is torn down and releases its slot immediately (stopped, files intact, no usable snapshot), so an untouched crashed sandbox costs only disk. The next request wakes it by cold booting its own rootfs with the boot parameters recorded at create. Its stale snapshot is never restored: a memory image whose cached filesystem metadata predates later disk writes would corrupt the rootfs silently. A sandbox is pinned to cold boot from the moment its snapshot is restored, and only a clean stop (pause, then snapshot) lifts the pin. Cold boot keeps the files and skips the rootfs/snapshot clones that dominate a create.
 
-A stale snapshot is never restored. Restoring a memory image onto a rootfs the guest has written to since corrupts the filesystem silently: the image carries the guest's cached filesystem metadata, the checksum covers only the state file, and nothing detects the mismatch. So a sandbox is pinned to cold boot from the moment its snapshot is restored, and only a clean stop — which pauses the guest before snapshotting it — pairs a fresh snapshot with the disk again and lifts the pin.
+**Docker.** Containers run with `--restart unless-stopped`, so Docker restarts the container itself. The runner learns of the death from a `docker events` stream filtered to `die`; deliberate stops and removes are recorded before the call and matched against events, and exit codes are ignored (an exit `0` still lost everything running). The sandbox is reported not running until the wake path reapplies network policy to the possibly new container IP, waits for the daemon, and reports the restart. If the event stream drops, the watcher reconnects; a death missed meanwhile is served without its `409`.
 
-Cold boot beats recreating the sandbox from the golden snapshot: it keeps the files, skips the rootfs and snapshot clones that are ~72% of a create, and unlike a restore does not scale with the flavor's memory size. Recreating remains the fallback if cold boot ever measures worse.
-
-The Docker backend reaches the same `409` by a different route, because there the recovery is not the runner's to perform:
-
-1. Containers carry `--restart unless-stopped`, so Docker has the container back up — with its writable layer, and usually before any request notices
-2. The runner learns of the death from a `docker events` stream filtered to `die` on its own containers. Every deliberate stop and remove is recorded before the call that causes it and matched against the event; exit codes are never consulted, because a guest that exits `0` on its own has still lost everything it was running
-3. A sandbox marked that way is reported as not running until the runner re-admits it, which is what drives a container that already looks healthy through the wake path. The restarted container may hold a new IP its network policy still does not know about
-4. The wake reapplies the policy, waits for the daemon, and reports the restart — the same `409` for the request that found it, and the same `sandbox_recoveries_total`
-
-Losing the event stream is the silent failure here, since containers keep working while crashes stop being reported, so the watcher reconnects for the life of the runner. A death missed while it was down is served without its `409`.
-
-On both backends the report is spent by the first request that wakes the sandbox, so a request that carries no client intent must not be one. `DELETE /sandboxes/{id}/executions/{exec_id}` is the case that arises: the SDK sends it in the background after every command and discards the answer. The runner answers it `204` without waking a sandbox that is not running — an execution lives only in the guest's memory, so the crash already did what the delete asks for — and the `409` waits for the next request a client reads.
+The report is spent by the first request that wakes the sandbox, so `DELETE /sandboxes/{id}/executions/{exec_id}` — which the SDK sends in the background after every command — returns `204` without waking a stopped sandbox, leaving the `409` for the next request a client reads.
 
 ## Security Model
 
-See [security-model.md](security-model.md) for the trust boundaries behind these mechanisms and the non-guarantees that come with them.
-
-| Layer | Mechanism | Purpose |
-| --- | --- | --- |
-| Client → API | `X-Api-Key` (admin env keys or hashed tenant keys) | Authenticate and authorize API consumers |
-| API ↔ Runner registration | mTLS + bearer token | Authenticate runners during gRPC registration |
-| API → Runner control | mTLS + API key in gRPC metadata | Authenticate control-plane RPCs |
-| API → Runner HTTP | mTLS + `X-Api-Key` | Authenticate proxied exec and file traffic |
-| Network isolation | iptables rules on runner | Block sandbox access to private IP ranges |
-| Resource limits | Docker: cgroups + optional xfs quota; Firecracker: snapshot vCPU/memory + fixed-size rootfs | Bound memory, CPU, process count, and disk per sandbox |
-| Request size | Configurable body size limits | Prevent oversized uploads |
-| File operations | In-guest daemon running as uid 1000; paths are cleaned and anchored at the guest root | Confine file access to what uid 1000 can reach inside the sandbox |
-| Error sanitization | API-generated error bodies have runner-side sandbox paths stripped; proxied runner responses pass through unchanged | Keep runner filesystem layout out of API errors |
-| Build inputs | Checksums, digest-pinned release images, optional manifest pin | Detect substituted dependencies and guest assets |
-
-TLS certificates can be bootstrapped locally with `scripts/bootstrap-mtls.sh` or managed in Kubernetes with cert-manager (see [cert-manager-k8s.md](cert-manager-k8s.md)).
+Trust boundaries, the mechanism enforcing each, and the non-guarantees are in [security-model.md](security-model.md). Certificates are bootstrapped locally with `scripts/bootstrap-mtls.sh` or managed in Kubernetes with cert-manager ([cert-manager-k8s.md](cert-manager-k8s.md)).
 
 ## Data Storage
 

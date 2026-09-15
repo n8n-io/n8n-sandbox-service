@@ -1,3 +1,5 @@
+// Package app wires a runtime, the runner HTTP and gRPC servers, registration
+// and metrics into one runner process.
 package app
 
 import (

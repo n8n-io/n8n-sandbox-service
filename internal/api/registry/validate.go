@@ -6,7 +6,7 @@ import (
 )
 
 // IsValidRunnerHTTPBaseURL reports whether s is an absolute https URL suitable
-// for the API to dial runners (scheme + host required). Use at registration, not on each proxy request.
+// for the API to dial runners (scheme + host required).
 //
 // https is required, not merely preferred: http.Transport applies
 // TLSClientConfig only to https URLs, so an http base would silently downgrade

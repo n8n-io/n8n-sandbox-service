@@ -161,7 +161,7 @@ build_template_assets() {
 	sudo docker build -f "${project_root}/Dockerfile.sandbox" -t "$SANDBOX_IMAGE" "$project_root"
 
 	# Export via sudo: the e2e user cannot talk to docker.sock, but
-	# build-rootfs-template.sh only needs a filesystem tar (gallery bake path).
+	# build-rootfs-template.sh only needs a filesystem tar (SANDBOX_ROOTFS_TAR).
 	local cid="" rootfs_tar="/tmp/sandbox-rootfs-$$.tar"
 	# EXIT (not RETURN): set -e aborts the script without running RETURN traps.
 	trap 'if [[ -n "${cid:-}" ]]; then sudo docker rm -f "$cid" >/dev/null 2>&1 || true; fi; sudo rm -f "$rootfs_tar"' EXIT

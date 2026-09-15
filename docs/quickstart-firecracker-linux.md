@@ -16,11 +16,11 @@ Full tarball contract: [BUNDLE.md](../BUNDLE.md).
 
 ## 1. Golden-build bundle
 
-Pick a [service release](https://github.com/n8n-io/n8n-sandbox-service/releases) version
-(e.g. `1.1.0`). Download its tarball and build the host-local snapshot:
+Pick a [service release](https://github.com/n8n-io/n8n-sandbox-service/releases) version.
+Download its tarball and build the host-local snapshot:
 
 ```bash
-VERSION=1.1.0
+VERSION=1.3.4
 curl -fsSL -o firecracker-golden-build.tar.gz \
   "https://github.com/n8n-io/n8n-sandbox-service/releases/download/service/v${VERSION}/firecracker-golden-build-${VERSION}.tar.gz"
 tar xzf firecracker-golden-build.tar.gz
@@ -49,16 +49,11 @@ sudo ln -sf snapshot_state /srv/firecracker/snapshots/state
 export GIT_SHA="$(jq -r .git_sha MANIFEST.json)"
 ```
 
-The create script also writes `boot.json` next to `snapshot_mem`/`snapshot_state`, recording the vCPU count, memory and kernel command line the snapshot was built with. It needs no symlink — the runner resolves it from the snapshot directory — but it does have to stay next to the snapshot it describes, and the runner refuses to start without it.
+The create script writes `snapshot_mem`, `snapshot_state` and `boot.json` as one set; keep them together (see [configuration.md](configuration.md#golden-snapshot-boot-parameters-bootjson)). Snapshots are not portable, so rebuild on every runner host.
 
-Rebuild the snapshot on each physical runner host (Firecracker snapshots are not portable).
-
-Alternatively, leave mem/state unset and point the runner at the bundle script via
-`SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT` and
-`SANDBOX_RUNNER_FIRECRACKER_DAEMON_BIN`; `Prepare` will create the snapshot once
-and run an admission canary before marking the runner healthy. Production Azure
-VMSS images bake `rootfs.ext4` at gallery publish time; first-boot only creates
-the host-local mem/state snapshot via Prepare.
+Alternatively, set `SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT` and
+`SANDBOX_RUNNER_FIRECRACKER_DAEMON_BIN` and let the runner create the snapshot on
+first start (this is what production VM images do).
 
 ## 2. Runner
 
@@ -125,7 +120,6 @@ issues DNS SANs only, so an IP would fail verification.
 TLS_DIR="$(pwd)/.tls"   # directory that contains api/ and runner/
 
 sudo env \
-  SANDBOX_RUNNER_BACKEND=firecracker \
   SANDBOX_RUNNER_ID="$(hostname)" \
   SANDBOX_RUNNER_LISTEN_ADDR=127.0.0.1:8081 \
   SANDBOX_RUNNER_HTTP_BASE_URL=https://localhost:8081 \

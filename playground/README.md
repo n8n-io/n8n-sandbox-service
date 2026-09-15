@@ -15,11 +15,11 @@ A browser-based UI for interacting with the sandbox service API. Useful for manu
 ## Usage
 
 ```sh
-pnpm install --frozen-lockfile
-pnpm start
+npm install
+npm start          # or: make playground from the repo root
 ```
 
-Then open `http://localhost:5173` in your browser.
+Then open `http://localhost:5173` in your browser. The service must be running with `SANDBOX_API_ENABLE_CORS=true` (`make up` sets this).
 
 Enter the **Base URL** of the sandbox service (default: `http://localhost:8080`) and your **API Key** in the sidebar, then create or select a sandbox to start.
 

@@ -1,14 +1,11 @@
 #!/usr/bin/env bash
 # Installs generic Firecracker runner host prerequisites on Linux amd64.
 #
-# Out of scope (infra / gallery build supplies these):
-#   - ACR image pulls, crane, baked runner/daemon binaries
-#   - Golden-build bundle install, systemd units, Key Vault, cloud-init
+# Out of scope: registry pulls, runner/daemon binaries, golden-build bundle
+# install, systemd units, secrets.
 #
-# Intended callers:
-#   - Infra gallery image build (optionally bake Firecracker CI assets)
-#   - e2e VM setup (setup-firecracker-e2e-vm.sh)
-#   - First-boot on a runner after bundle install
+# Intended callers: e2e VM setup (setup-firecracker-e2e-vm.sh) and first boot of
+# a runner host after bundle install.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -35,7 +32,7 @@ forwarding, and NAT/FORWARD rules for sandbox netns egress.
 Options:
   --skip-packages           Skip apt package install
   --skip-firecracker        Skip Firecracker/jailer install
-  --download-ci-assets      Download Firecracker CI vmlinux into DEST_DIR
+  --download-ci-assets      Download Firecracker CI vmlinux into FIRECRACKER_CI_ASSETS_DIR
   -h, --help                Show this help
 
 Environment:

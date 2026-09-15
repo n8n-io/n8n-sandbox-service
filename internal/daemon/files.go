@@ -10,7 +10,7 @@ import (
 	"syscall"
 )
 
-// resolvePath resolves path from the container root.
+// resolvePath resolves path from the sandbox filesystem root.
 func resolvePath(path string) string {
 	return filepath.Join("/", filepath.Clean("/"+path))
 }

@@ -1,3 +1,5 @@
+// Package config loads the API configuration from SANDBOX_API_* environment
+// variables (defaults and semantics: docs/configuration.md).
 package config
 
 import (
@@ -103,14 +105,15 @@ type APIConfig struct {
 	GRPCClientCAFile   string
 
 	// IdleStopAfter is how long after last activity the API asks the runner to stop
-	// the container (0 = disabled).
+	// the sandbox (0 = disabled).
 	IdleStopAfter time.Duration
 	// IdleDeleteAfter is how long after last activity the API deletes the sandbox
 	// (0 = disabled). Wakes are refused after this window until the row is removed.
 	IdleDeleteAfter time.Duration
 	// IdleDeleteSafetyBuffer is added to a sandbox's idle window before the sweeper
-	// deletes it (race guard). Ephemeral sandboxes are deleted at IdleStopAfter, so
-	// when either window is > 0 and this is unset, it defaults to 1m.
+	// deletes it (race guard). Ephemeral sandboxes use IdleStopAfter as their window
+	// (IdleDeleteAfter when idle stop is disabled), so when either window is > 0 and
+	// this is unset, it defaults to 1m.
 	IdleDeleteSafetyBuffer time.Duration
 	// IdleSweepInterval is how often the idle stop/delete sweeper runs (default 1m).
 	IdleSweepInterval time.Duration

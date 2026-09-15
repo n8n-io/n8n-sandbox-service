@@ -381,5 +381,3 @@ api:
           name: sandbox-api-postgres
           key: password
 ```
-
-Postgres integration tests (optional): run `go test -tags=integration ./internal/api/...` with `SANDBOX_TEST_POSTGRES_HOST` and related env vars set.

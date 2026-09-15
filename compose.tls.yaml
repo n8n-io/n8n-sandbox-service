@@ -1,4 +1,5 @@
-# Overlay: mTLS for runner → API registration gRPC and API → runner SandboxControl gRPC.
+# Overlay: mTLS for runner → API registration gRPC, API → runner SandboxControl gRPC
+# and the runner HTTPS listener the API proxies sandbox requests to.
 # Material is generated under ./.tls by scripts/bootstrap-mtls.sh (idempotent).
 
 services:

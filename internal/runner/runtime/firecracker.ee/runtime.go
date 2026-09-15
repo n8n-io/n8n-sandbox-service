@@ -1,3 +1,6 @@
+// Package firecracker implements the sandbox runtime on Firecracker microVMs.
+// Behaviour overview in README.md of this directory; invariants are documented
+// at the code they protect.
 package firecracker
 
 import (
