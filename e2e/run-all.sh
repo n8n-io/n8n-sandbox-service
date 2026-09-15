@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs all e2e topologies in sequence: no runner → two runners → single runner (full Playwright suite) → idle TTL.
+# Runs all e2e topologies in sequence: no runner → two runners → single runner (full Playwright suite) → idle TTL → Postgres API.
 # Builds Docker images + SDK once up front; phases reuse them (see E2E_SKIP_BUILD in sibling scripts).
 # Extra args are passed through to the Playwright invocation in each phase.
 set -euo pipefail

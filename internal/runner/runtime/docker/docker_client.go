@@ -163,13 +163,7 @@ func dockerContainerCreateArgs(sandboxID, containerName, image string, limits *R
 }
 
 // dockerSandboxSecurityArgs is the single security policy for every Docker-backed
-// sandbox. The container runs as uid 1000, so it holds no effective capability
-// anyway; the empty bounding set stops a setuid binary gaining one.
-//
-// no-new-privileges is what closes the path to root. Without it a setuid-root
-// binary still makes the caller uid 0, and uid 0 owns /usr/local whatever its
-// capabilities. The image ships no sudo and no setuid binary; this flag holds
-// even if one returns.
+// sandbox (rationale: docs/security-model.md, "Guest to host and network").
 //
 // Never create a sandbox container with --privileged. Docker then ignores
 // --cap-drop and voids this policy silently.

@@ -58,8 +58,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# -k so the same helper can poll the runner, which serves TLS with the private
-# CA bootstrapped above; it has no effect on the plain-HTTP API URLs.
+# -k so the same helper can poll the runner, which serves TLS with the e2e
+# private CA in $E2E_TLS_DIR; it has no effect on the plain-HTTP API URLs.
 wait_for_http() {
 	local name=$1 url=$2
 	for _ in $(seq 1 60); do
@@ -128,7 +128,6 @@ wait_for_http "API" "http://127.0.0.1:${PORT}/healthz"
 runner_id="e2e-firecracker-runner-a-$$"
 runner_env=(
 	PATH="/usr/local/go/bin:$PATH"
-	SANDBOX_RUNNER_BACKEND=firecracker
 	SANDBOX_RUNNER_LISTEN_ADDR="$RUNNER1_ADDR"
 	SANDBOX_RUNNER_DATA_DIR="$RUNNER1_DATA_DIR"
 	SANDBOX_RUNNER_API_KEYS="$RUNNER_INTERNAL_API_KEY"

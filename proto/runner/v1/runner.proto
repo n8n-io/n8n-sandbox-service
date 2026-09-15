@@ -8,7 +8,7 @@ service RunnerRegistry {
   rpc Connect(stream RunnerHeartbeat) returns (stream ControlMessage);
 }
 
-// SandboxControl: API → runner for sandbox create/delete (HTTP remains for exec/files proxy).
+// SandboxControl: API → runner for sandbox create/stop/delete (HTTP remains for exec/files proxy).
 service SandboxControl {
   rpc CreateSandbox(CreateSandboxRequest) returns (CreateSandboxResponse);
   rpc StopSandbox(StopSandboxRequest) returns (StopSandboxResponse);

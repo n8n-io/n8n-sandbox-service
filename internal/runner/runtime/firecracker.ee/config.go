@@ -43,7 +43,7 @@ type Config struct {
 	// Parsed from SANDBOX_RUNNER_FIRECRACKER_JAILER_BASE_DIR.
 	JailerBaseDir string
 
-	// TemplateDir contains rootfs.ext4 used by restored snapshots.
+	// TemplateDir holds rootfs.ext4 (cloned per sandbox) and vmlinux (bind-mounted, pinned).
 	// Parsed from SANDBOX_RUNNER_FIRECRACKER_TEMPLATE_DIR.
 	TemplateDir string
 

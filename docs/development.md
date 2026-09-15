@@ -12,7 +12,7 @@
 
 ## Building from source
 
-Build all three service binaries (compiled for Linux):
+Build all four service binaries (compiled for Linux):
 
 ```bash
 make all
@@ -21,9 +21,10 @@ make all
 Or build individually:
 
 ```bash
-make api       # Public API gateway
-make runner    # Container lifecycle manager
-make daemon    # In-container HTTP daemon (static, CGO_ENABLED=0)
+make api                 # Public API gateway
+make runner-docker       # Docker/sysbox runner
+make runner-firecracker  # Firecracker runner (make runner builds both)
+make daemon              # In-container HTTP daemon (static, CGO_ENABLED=0)
 ```
 
 Binaries are written to `bin/`.
@@ -65,19 +66,12 @@ Quick smoke test (create, exec, resolv.conf, DNS, HTTPS, file write/read, delete
 make smoke
 ```
 
-For Firecracker staging, also exercise a second sandbox create (snapshot restore path):
+Against a deployed environment, copy `scripts/smoke-sandbox.env.example` to
+`scripts/smoke-sandbox.<env>.env` (gitignored) and run:
 
 ```bash
-SMOKE_ENV=stage SMOKE_EXTENDED=1 sh scripts/smoke-sandbox.sh
-```
-
-Deployed environments (copy `scripts/smoke-sandbox.env.example` to
-`scripts/smoke-sandbox.<env>.env` or `scripts/smoke-dev-sandbox.env`):
-
-```bash
-SMOKE_ENV=dev sh scripts/smoke-sandbox.sh
-SMOKE_ENV=stage sh scripts/smoke-sandbox.sh
-# or: sh scripts/smoke-dev-sandbox.sh
+SMOKE_ENV=<env> sh scripts/smoke-sandbox.sh
+SMOKE_ENV=<env> SMOKE_EXTENDED=1 sh scripts/smoke-sandbox.sh   # Firecracker: also a second create (snapshot restore path)
 ```
 
 ## Tests
@@ -86,6 +80,12 @@ Run Go unit tests:
 
 ```bash
 make test
+```
+
+Postgres store tests are behind a build tag and skip unless `SANDBOX_TEST_POSTGRES_HOST` is set (`SANDBOX_TEST_POSTGRES_{PORT,USER,PASSWORD,DB,SSLMODE}` are optional):
+
+```bash
+SANDBOX_TEST_POSTGRES_HOST=localhost go test -tags=integration ./internal/api/...
 ```
 
 Run the full end-to-end suite (all topologies sequentially):
@@ -106,7 +106,7 @@ Extra Playwright arguments can be appended (e.g. `./e2e/run-all.sh --grep patter
 
 `run-all.sh` runs `make docker-local` once. Per-topology scripts skip rebuilding when invoked from it (`E2E_SKIP_BUILD=1`). To rebuild before each phase, run topology scripts individually.
 
-See [e2e/README.md](../e2e/README.md) for details on specs, workers, and how `resilience.spec.ts` uses the host Docker CLI.
+Idle-TTL, Postgres, multi-pod and Firecracker lanes: [e2e/README.md](../e2e/README.md).
 
 ## Playground
 

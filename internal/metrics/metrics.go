@@ -322,7 +322,7 @@ func (r *RunnerRecorder) ObserveRecovery(success bool) {
 }
 
 // SetActiveContainers registers a scrape-time gauge that calls f to read the
-// current count of sandbox containers tracked by the runner.
+// current number of slot-blocking sandboxes on the runner.
 func (r *RunnerRecorder) SetActiveContainers(f func() float64) {
 	if r.reg == nil {
 		return

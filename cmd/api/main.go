@@ -1,3 +1,5 @@
+// Command api runs the sandbox service API gateway: the tenant-facing REST API,
+// the runner registration gRPC server and the idle sweeper.
 package main
 
 import (

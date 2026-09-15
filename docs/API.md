@@ -271,8 +271,9 @@ curl -X DELETE http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440
 ### POST /sandboxes/{id}/executions
 
 Execute a command in a sandbox. The command runs in a **daemon-side execution** whose
-lifetime is independent of the HTTP stream — disconnecting does not kill the process.
-Response is streamed as newline-delimited JSON.
+lifetime is independent of the HTTP stream — disconnecting only stops the event stream,
+it does not kill the process; cancel with `DELETE /sandboxes/{id}/executions/{exec_id}`
+(the SDK does this when `abortSignal` fires). Response is streamed as newline-delimited JSON.
 
 **Path Parameters:**
 - `id` — Sandbox UUID
@@ -351,33 +352,21 @@ The `exit` event includes:
 - `timed_out` — `true` if the process was killed due to timeout
 - `killed` — `true` if the process was terminated by a signal
 
-The command runs in a daemon-side execution whose lifetime is independent of the HTTP
-stream. Closing the HTTP connection does **not** kill the running command — it only
-stops the event stream. To cancel a running command, use
-`DELETE /sandboxes/{id}/executions/{exec_id}`. The SDK calls the delete endpoint
-automatically when `abortSignal` fires.
+The runner retries mid-stream disconnects from the daemon transparently (resume via the
+daemon's `GET /executions/{exec_id}?follow=true&after=<seq>`, up to 3 retries with
+exponential backoff from 50 ms). If those retries are exhausted the response body simply
+ends; the status line was already `200 OK`, so **a stream that ends without an `exit` or
+`error` event has not completed** — treat it as a failure, not an empty result. The same
+applies when the client↔API connection drops.
 
-The runner automatically retries mid-stream disconnects from the daemon: if the TCP
-connection drops before the terminal event, the runner resumes via the daemon's
-`GET /executions/{exec_id}?follow=true&after=<seq>` endpoint (up to 3 retries with
-exponential backoff starting at 50 ms). The client sees a seamless NDJSON stream.
-
-If those retries are exhausted, the runner gives up and the response body simply ends.
-The status line was already sent as `200 OK`, so **a stream that ends without an `exit`
-or `error` event has not completed** — treat it as a failure rather than as an empty
-result. The same applies if the connection between the client and the API drops
-mid-stream, which no server-side signal can cover.
-
-Recovery is the client's job, and the execution outlives the stream: reconnect with
-`GET /sandboxes/{id}/executions/{exec_id}?after=<last seq>&follow=true` to pick up where
-the stream stopped. The command is very likely still running. The SDK does this
+Recovery is the client's job: the execution outlives the stream, so reconnect with
+`GET /sandboxes/{id}/executions/{exec_id}?after=<last seq>&follow=true`. The SDK does this
 automatically (up to 10 attempts, 250 ms apart) and throws `SandboxServiceError` if the
 execution still has not produced an `exit` event.
 
-The execution stores events in a bounded buffer (up to 16 MiB). Clients can reconnect
-via `GET /sandboxes/{id}/executions/{exec_id}?after=<seq>&follow=true`. Completed executions
-are retained for 10 minutes. If the buffer is exhausted, old events are discarded and
-stale resume requests return `410 Gone`.
+Events are kept in a bounded buffer (16 MiB per execution; completed executions are
+retained for 10 minutes — see `SANDBOX_EXEC_*` in [configuration.md](configuration.md#sandbox-daemon)).
+When the buffer is exhausted, old events are discarded and stale resume requests return `410 Gone`.
 
 **Errors:** `400` invalid id or missing command, `404` sandbox not found, `410` if execution exists but history is no longer retained. Transient failures use **503**; **502** means the sandbox is not usable without a client-side change — see [HTTP 503 (transient) vs 502 (not retryable)](#http-503-transient-vs-502-not-retryable).
 

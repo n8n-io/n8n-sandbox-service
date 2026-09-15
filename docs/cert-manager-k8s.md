@@ -1,9 +1,10 @@
-# Kubernetes: gRPC mTLS with cert-manager
+# Kubernetes: mTLS with cert-manager
 
-The sandbox service uses two gRPC planes:
+The API and runners authenticate each other with mTLS on three channels:
 
-1. **Runner registration** — runners open a bidirectional stream to the API (`RunnerRegistry`). Runners present a **client** certificate; the API presents a **server** certificate and verifies clients against a CA.
-2. **Sandbox control** — the API calls each runner’s `SandboxControl` service for **create/delete** sandbox lifecycle. The runner hosts the gRPC server; the API is the **client**. Proxied traffic (exec, files, etc.) stays on HTTP.
+1. **Runner registration** (gRPC) — runners open a bidirectional stream to the API (`RunnerRegistry`). Runners present a **client** certificate; the API presents a **server** certificate and verifies clients against a CA.
+2. **Sandbox control** (gRPC) — the API calls each runner's `SandboxControl` service for create/stop/delete. The runner is the server; the API is the client.
+3. **Proxied traffic** (HTTPS) — exec and file requests the API forwards to the runner. The runner's HTTP listener reuses the SandboxControl certificate pair, and the API's control client certificate authenticates both channels.
 
 Use one private CA (for example a cert-manager `ClusterIssuer` of type CA) that signs distinct leaf roles:
 

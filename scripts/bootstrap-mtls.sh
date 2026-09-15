@@ -5,10 +5,10 @@
 #   ca.crt / ca.key                                  — Root CA (top-level)
 #   api/ca.crt                                       — CA copy for API
 #   api/grpc-server.crt / grpc-server.key            — API registration gRPC server
-#   api/control-grpc-api-client.crt / ...key         — API SandboxControl gRPC client
+#   api/control-grpc-api-client.crt / ...key         — API SandboxControl gRPC + HTTP proxy client
 #   runner/ca.crt                                    — CA copy for runners
 #   runner/grpc-client.crt / grpc-client.key         — Runner registration gRPC client
-#   runner/control-grpc-server.crt / ...key          — Runner SandboxControl gRPC server
+#   runner/control-grpc-server.crt / ...key          — Runner SandboxControl gRPC + HTTPS server
 #
 # Requires openssl + bash.
 # Skips generation when the full PEM set already exists (use --force to override).

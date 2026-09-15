@@ -1,8 +1,7 @@
 # Firecracker golden-build scripts (enterprise)
 
 Canonical source for scripts packaged into
-`firecracker-golden-build-<version>.tar.gz` and used by gallery bake / runner
-hosts. The `.ee` directory name marks them as Firecracker enterprise-licensed
+`firecracker-golden-build-<version>.tar.gz` and run on runner hosts. The `.ee` directory name marks them as Firecracker enterprise-licensed
 code (see `AGENTS.md`).
 
 | Script | Role |

@@ -1,3 +1,5 @@
+// Command daemon is the sandbox-daemon that runs inside every sandbox (container
+// or microVM) and serves exec and file operations to the runner.
 package main
 
 import (

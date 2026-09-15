@@ -1,9 +1,8 @@
 # Security Model
 
 What the sandbox service isolates, where each boundary is enforced, and what it
-explicitly does not promise. [architecture.md](architecture.md) has a summary
-table of the same mechanisms; this document is the longer form, aimed at anyone
-reviewing the service or deciding what it is safe to run on it.
+explicitly does not promise. Aimed at anyone reviewing the service or deciding
+what it is safe to run on it.
 
 ## Trust boundaries
 

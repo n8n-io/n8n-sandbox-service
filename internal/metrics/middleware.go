@@ -15,18 +15,10 @@ type HTTPObserver interface {
 // HTTPMiddleware wraps next, recording each request's route pattern, method,
 // status, and duration to obs.
 //
-// The route label is taken from http.Request.Pattern, which the standard
-// library's ServeMux populates while routing. We rely on the mux mutating the
-// request: after next.ServeHTTP returns, Pattern is set to the matched route
-// (e.g. "POST /sandboxes/{id}/executions"). The leading method is stripped so
-// the label is just the path template. Requests that don't match any route
-// are recorded as "unmatched" to keep cardinality bounded.
-//
-// Observation runs in a deferred call so panicking handlers still get
-// recorded — RecoveryMiddleware further up the chain will turn the panic
-// into a 500 response, but our defer runs first while the panic is
-// unwinding, with sw.status holding whatever was written before the
-// panic (or the default 200).
+// The route label is http.Request.Pattern, which ServeMux sets on the request
+// while routing, so it is read after next.ServeHTTP returns. The method prefix
+// is stripped; unmatched requests are labelled "unmatched" to bound cardinality.
+// Observation is deferred so panicking handlers are recorded too.
 func HTTPMiddleware(obs HTTPObserver) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

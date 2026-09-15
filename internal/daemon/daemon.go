@@ -1,3 +1,6 @@
+// Package daemon is the HTTP server inside every sandbox. It runs as an ordinary
+// process in a Docker container and as PID 1 in a Firecracker microVM, and
+// authenticates nobody: only the runner can reach its port.
 package daemon
 
 import (

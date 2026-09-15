@@ -73,7 +73,6 @@ e2e_kill_tcp_listeners \
 runner_id="e2e-firecracker-runner-b-$$"
 runner_env=(
 	PATH="/usr/local/go/bin:$PATH"
-	SANDBOX_RUNNER_BACKEND=firecracker
 	SANDBOX_RUNNER_LISTEN_ADDR="$RUNNER_ADDR"
 	SANDBOX_RUNNER_DATA_DIR="$RUNNER_DATA_DIR"
 	SANDBOX_RUNNER_API_KEYS="$RUNNER_INTERNAL_API_KEY"

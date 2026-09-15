@@ -1,3 +1,4 @@
+// Package logging holds slog helpers shared by the binaries.
 package logging
 
 import (

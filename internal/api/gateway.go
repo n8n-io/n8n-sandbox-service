@@ -1,3 +1,5 @@
+// Package api implements the API gateway: authentication, tenant scoping, sandbox
+// CRUD, proxying of exec and file requests to runners, and the idle sweeper.
 package api
 
 import (

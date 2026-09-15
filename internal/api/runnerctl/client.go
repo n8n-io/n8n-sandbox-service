@@ -1,4 +1,4 @@
-// Package runnerctl dials a runner's SandboxControl gRPC (create/delete sandbox).
+// Package runnerctl dials a runner's SandboxControl gRPC (create/stop/delete sandbox).
 package runnerctl
 
 import (

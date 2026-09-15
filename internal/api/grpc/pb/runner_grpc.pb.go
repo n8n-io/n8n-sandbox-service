@@ -124,7 +124,7 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// SandboxControl: API → runner for sandbox create/delete (HTTP remains for exec/files proxy).
+// SandboxControl: API → runner for sandbox create/stop/delete (HTTP remains for exec/files proxy).
 type SandboxControlClient interface {
 	CreateSandbox(ctx context.Context, in *CreateSandboxRequest, opts ...grpc.CallOption) (*CreateSandboxResponse, error)
 	StopSandbox(ctx context.Context, in *StopSandboxRequest, opts ...grpc.CallOption) (*StopSandboxResponse, error)
@@ -173,7 +173,7 @@ func (c *sandboxControlClient) DeleteSandbox(ctx context.Context, in *DeleteSand
 // All implementations must embed UnimplementedSandboxControlServer
 // for forward compatibility.
 //
-// SandboxControl: API → runner for sandbox create/delete (HTTP remains for exec/files proxy).
+// SandboxControl: API → runner for sandbox create/stop/delete (HTTP remains for exec/files proxy).
 type SandboxControlServer interface {
 	CreateSandbox(context.Context, *CreateSandboxRequest) (*CreateSandboxResponse, error)
 	StopSandbox(context.Context, *StopSandboxRequest) (*StopSandboxResponse, error)

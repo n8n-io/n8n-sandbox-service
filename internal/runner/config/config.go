@@ -1,3 +1,5 @@
+// Package config loads the runner configuration shared by both runtimes from
+// SANDBOX_RUNNER_* environment variables (defaults and semantics: docs/configuration.md).
 package config
 
 import (
@@ -15,7 +17,6 @@ import (
 const (
 	defaultRunnerCapacityTotal int32 = 1000
 
-	defaultIdleTTLSeconds        = 3600
 	defaultMaxFileBytes          = 10 * 1024 * 1024 // 10 MB
 	defaultDataDir               = "/var/sandboxes"
 	defaultListenAddr            = ":8080"
@@ -28,10 +29,6 @@ type Config struct {
 	// APIKeys is the set of valid API keys for authenticating requests.
 	// Parsed from SANDBOX_RUNNER_API_KEYS (comma-separated).
 	APIKeys map[string]struct{}
-
-	// IdleTTLSeconds is how long a sandbox may be idle before it is reaped.
-	// Parsed from SANDBOX_RUNNER_IDLE_TTL_SECONDS (default 3600).
-	IdleTTLSeconds int
 
 	// MaxFileBytes is the maximum size of a single file that may be written
 	// into a sandbox. Parsed from SANDBOX_RUNNER_MAX_FILE_BYTES (default 10 MB).
@@ -61,8 +58,8 @@ type Config struct {
 	// Parsed from SANDBOX_RUNNER_HTTP_BASE_URL.
 	RunnerHTTPBaseURL string
 
-	// CapacityTotal is reported to the API for placement (0 means unlimited).
-	// Parsed from SANDBOX_RUNNER_CAPACITY_TOTAL (default 1000).
+	// CapacityTotal is reported to the API for placement (0 means unlimited;
+	// the Firecracker runtime requires > 0). Parsed from SANDBOX_RUNNER_CAPACITY_TOTAL (default 1000).
 	CapacityTotal int32
 
 	// mTLS for registration gRPC client (required).
@@ -118,7 +115,7 @@ func validateListenAddr(v string) error {
 	return nil
 }
 
-// ResolvedControlGRPCAdvertiseAddr returns the host:port sent in heartbeats when the control server is enabled.
+// ResolvedControlGRPCAdvertiseAddr returns the SandboxControl host:port sent in heartbeats.
 func (c *Config) ResolvedControlGRPCAdvertiseAddr() string {
 	if strings.TrimSpace(c.ControlGRPCListenAddr) == "" {
 		return ""
@@ -142,7 +139,6 @@ func (c *Config) ResolvedControlGRPCAdvertiseAddr() string {
 // It returns an error if any required variable is missing or malformed.
 func Load() (*Config, error) {
 	cfg := &Config{
-		IdleTTLSeconds:        defaultIdleTTLSeconds,
 		MaxFileBytes:          defaultMaxFileBytes,
 		DataDir:               defaultDataDir,
 		ListenAddr:            defaultListenAddr,
@@ -178,15 +174,6 @@ func Load() (*Config, error) {
 	}
 	if len(cfg.APIKeys) == 0 {
 		return nil, fmt.Errorf("SANDBOX_RUNNER_API_KEYS contains no valid keys")
-	}
-
-	// SANDBOX_RUNNER_IDLE_TTL_SECONDS (optional)
-	if v := os.Getenv("SANDBOX_RUNNER_IDLE_TTL_SECONDS"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n <= 0 {
-			return nil, fmt.Errorf("SANDBOX_RUNNER_IDLE_TTL_SECONDS must be a positive integer, got %q", v)
-		}
-		cfg.IdleTTLSeconds = n
 	}
 
 	// SANDBOX_RUNNER_MAX_FILE_BYTES (optional)
