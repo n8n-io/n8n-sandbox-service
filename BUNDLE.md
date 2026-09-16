@@ -123,6 +123,25 @@ without it host-originated traffic works while guest egress fails.
 linux/amd64 binary built at package time. `MANIFEST.json` includes `sha256` for
 verification.
 
+## Verifying the tarball
+
+The bundle runs as root on every runner host and its daemon is PID 1 of every
+guest, and `MANIFEST.json` travels inside the tarball, so its checksums only
+catch corruption, not a swap. Before extracting, check the download against the
+two records kept outside it:
+
+- the SHA-256 pinned in
+  [n8n-cloud-infrastructure-next](https://github.com/n8n-io/n8n-cloud-infrastructure-next)
+  (`vm-images/firecracker-sandbox-runner/golden-build-bundle.sha256`), one line
+  per adopted version, taken from GitHub's asset digest — the file header has
+  the command;
+- `gh release verify-asset service/v{version} <file> --repo n8n-io/n8n-sandbox-service`,
+  GitHub's signed release attestation. Releases published before immutability
+  was enabled have none and rely on the pin alone.
+
+That repo's `bake-golden-build-bundle.sh` checks the pin for every version and
+the attestation for immutable releases, and refuses a missing pin or a mismatch.
+
 ## Consumer workflow
 
 Step-by-step host setup: [docs/quickstart-firecracker-linux.md](docs/quickstart-firecracker-linux.md). The tarball's `README.md` ([source](scripts/firecracker-golden-build/README.md)) carries the same commands for operators without a checkout.
@@ -149,9 +168,9 @@ entrypoints or fail loudly when they are missing.
 
 Rollout order per environment:
 
-1. Install/replace the bundle on each runner host. Assert `git_sha` in
-   `MANIFEST.json` matches the commit the runner image was built from (see
-   above).
+1. Verify the tarball (above), then install/replace the bundle on each runner
+   host. Assert `git_sha` in `MANIFEST.json` matches the commit the runner image
+   was built from (see above).
 2. Ensure the rootfs template exists (`build_rootfs_template`; rebuild it when
    `sandbox_image.ref` changed).
 3. Set `SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT` (and

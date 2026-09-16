@@ -62,6 +62,7 @@ Deploy the same `{version}` for all four. There is no compatibility matrix; the 
    - `mirror-to-acr` copies the images into the private registry (see below).
    - `release-metadata` packages `firecracker-golden-build-{version}.tar.gz` and attaches it to the GitHub Release, creates the `service/v{version}` tag, and opens a post-release PR syncing `VERSION` and `appVersion` back to `main`.
 5. Merge the post-release PR. The chart publish workflow then ships a chart whose default image tags already exist.
+6. Pin the tarball digest before baking a runner image from this version (see [Verifying the tarball](../BUNDLE.md#verifying-the-tarball)).
 
 ### Private registry mirror
 
@@ -79,9 +80,11 @@ Actions → **Publish Service Staging** on a feature branch:
 
 1. Optionally runs unit tests.
 2. Builds and pushes all four images to the private registry tagged `{VERSION}-staging.{short_sha}` (override with the `version` input).
-3. Creates a GitHub prerelease `service/v{version}` with the golden-build tarball, which pins the ACR sandbox candidate by its commit-SHA tag.
+3. Creates a GitHub prerelease `service/v{version}` at the built commit with the golden-build tarball, which pins the ACR sandbox candidate by its commit-SHA tag.
 
 A bare `x.y.z` `version` input is rejected: candidates and releases share the `service/v*` namespace, which release prep reads to order releases, so a candidate tagged `service/v1.3.0` would block the real 1.3.0. Keep a suffix.
+
+A label is also single-use: prereleases are immutable, so the workflow reserves the `service/v{version}` tag before pushing any image and fails if it already exists — a run that fails later has still spent its label. Publish the same commit again under a new label, for example `1.3.5-staging.abc1234.2`.
 
 After deploying a candidate, run `SMOKE_ENV=<env> scripts/smoke-sandbox.sh` against it (the preset file is described in [development.md](development.md#tests)). Firecracker hosts need the prerelease tarball and a snapshot rebuild before the new `runner-firecracker` image rolls out.
 
@@ -102,4 +105,4 @@ Publishes `@n8n/sandbox-client`. Version in `sdk/package.json`, independent of `
 - Service: `service/v{version}` — covers all four images
 - SDK: `sdk/v{version}`
 
-`service/v{version}` is created unforced and always points at the merge commit the images and assets were built from, which is what makes the `git_sha` check in [BUNDLE.md](../BUNDLE.md) meaningful (`sdk/v{version}` is force-pushed by SDK Publish). `sandbox/v{version}` tags predate version unification and are no longer created.
+Release tags are immutable. Both are created unforced with the release GitHub App's token, so a tag always points at the commit its images and assets were built from, which is what makes the `git_sha` check in [BUNDLE.md](../BUNDLE.md) meaningful. A tag ruleset on `service/v*` and `sdk/v*` blocks moving and deleting them and only lets the app create them, and release immutability is enabled on the repository: a published release or prerelease keeps its assets and tag for good, and its tag name can never be reused, so the tarball is attached in the `gh release create` call itself. Releases made before the setting was enabled stay mutable. `sandbox/v{version}` tags predate version unification and are no longer created.
