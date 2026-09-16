@@ -36,6 +36,9 @@ networkPolicy:
     # Additional peers allowed to reach the runner registration gRPC port.
     # The in-cluster runner is allowed automatically.
     grpcIngressFrom: []
+    # Peers allowed to reach the dedicated metrics port, if
+    # api.config.metricsListenAddr sets one. Empty allows all sources.
+    metricsIngressFrom: []
   runner:
     # Additional peers allowed to reach runner HTTP/control ports.
     # The in-chart API is allowed automatically.
@@ -137,6 +140,12 @@ api:
   config:
     listenAddr: ":8080"
     grpcListenAddr: ":9090"
+    # Where the API serves /metrics. Empty, or the same port as listenAddr,
+    # keeps it on the API's HTTP port (the default). Any other port moves it to
+    # a dedicated listener, and the chart follows with a `metrics` port, scrape
+    # and NetworkPolicy rule. Must not use the grpcListenAddr port.
+    # See the chart README section 'Prometheus Metrics'.
+    metricsListenAddr: ""
     store: sqlite
     dataDir: /tmp/sandbox-api
     maxFileBytes: "10485760"

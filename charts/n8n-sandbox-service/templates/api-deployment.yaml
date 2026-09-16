@@ -38,6 +38,10 @@ spec:
               containerPort: 8080
             - name: grpc
               containerPort: 9090
+            {{- with (include "n8n-sandbox-service.apiMetricsPort" .) }}
+            - name: metrics
+              containerPort: {{ . }}
+            {{- end }}
           envFrom:
             - configMapRef:
                 name: {{ include "n8n-sandbox-service.apiName" . }}-config

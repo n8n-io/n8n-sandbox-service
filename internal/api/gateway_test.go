@@ -134,3 +134,40 @@ func TestGatewayMetricsEndpointDisabledReturns404(t *testing.T) {
 		t.Fatalf("expected %d, got %d", http.StatusNotFound, rr.Code)
 	}
 }
+
+func TestGatewayOmitsMetricsWhenOnDedicatedListener(t *testing.T) {
+	s, err := store.New(":memory:")
+	if err != nil {
+		t.Fatalf("create store: %v", err)
+	}
+	defer s.Close()
+
+	router, err := NewGatewayRouter(s, &config.APIConfig{
+		APIKeys:           map[string]struct{}{"public-key": {}},
+		MaxFileBytes:      1024,
+		ListenAddr:        ":8080",
+		MetricsListenAddr: ":9100",
+	}, registry.New(45*time.Second), metrics.NewAPIRecorder(true))
+	if err != nil {
+		t.Fatalf("create gateway router: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req.Header.Set("X-Api-Key", "public-key")
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("/metrics: expected %d, got %d", http.StatusNotFound, rr.Code)
+	}
+
+	// The rest of the gateway is untouched.
+	list := httptest.NewRequest(http.MethodGet, "/sandboxes", nil)
+	list.Header.Set("X-Api-Key", "public-key")
+	listRR := httptest.NewRecorder()
+	router.ServeHTTP(listRR, list)
+
+	if listRR.Code != http.StatusOK {
+		t.Fatalf("/sandboxes: expected %d, got %d", http.StatusOK, listRR.Code)
+	}
+}
