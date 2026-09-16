@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	fcnetwork "github.com/n8n-io/sandbox-service/internal/runner/runtime/firecracker.ee/network"
 )
 
 const (
@@ -279,6 +281,9 @@ func validateConfig(cfg Config, capacityTotal int32) error {
 	}
 	if int64(cfg.ProxyPortStart)+int64(capacityTotal)-1 > 65535 {
 		return fmt.Errorf("firecracker proxy port range starting at %d exceeds 65535 for capacity %d", cfg.ProxyPortStart, capacityTotal)
+	}
+	if int64(capacityTotal) > fcnetwork.MaxSlots {
+		return fmt.Errorf("SANDBOX_RUNNER_CAPACITY_TOTAL %d exceeds the %d slots the firecracker uplink addressing covers", capacityTotal, fcnetwork.MaxSlots)
 	}
 	if cfg.ManifestPath != "" && !strings.HasPrefix(cfg.ManifestPath, "/") {
 		return fmt.Errorf("SANDBOX_RUNNER_FIRECRACKER_MANIFEST_PATH must be an absolute path, got %q", cfg.ManifestPath)

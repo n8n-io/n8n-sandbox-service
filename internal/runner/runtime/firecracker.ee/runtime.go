@@ -47,7 +47,7 @@ type Runtime struct {
 	hostNATMu   sync.Mutex
 	hostNATOK   bool
 
-	// wireCh wakes the slot wirer (wire.go). Buffered by one and written with a
+	// wireCh wakes the slot wirer (network_wirer.go). Buffered by one and written with a
 	// non-blocking send, so a release never waits on it and a burst of releases
 	// collapses into one pass over the slots.
 	wireCh chan struct{}
@@ -780,7 +780,7 @@ chmod 0664 %[1]s/snapshot_mem %[1]s/snapshot_state %[6]s
 	return r.deps.run(ctx, "sudo", "/bin/sh", "-c", script)
 }
 
-// setupNetwork is implemented in wire.go alongside the slot wirer.
+// setupNetwork is implemented in network_wirer.go alongside the slot wirer.
 
 // startJailer starts Firecracker through jailer inside the sandbox netns.
 // onExit fires once the microVM is gone: jailer execs Firecracker in place, so

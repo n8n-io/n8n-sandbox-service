@@ -26,8 +26,15 @@ func HostVethName(slot int) string {
 	return fmt.Sprintf("fc-veth-%d", slot)
 }
 
+// MaxSlots is how many slots the uplink addressing covers: 10.200.0.0/16 carved
+// into /30 links, one per slot. Config validation caps capacity at it.
+const MaxSlots = 64 * 256
+
+// uplinkSubnet is the /30 link between the host and the slot's namespace: 64 per
+// third octet, host on the first usable address, namespace on the second.
 func uplinkSubnet(slot int) (hostIP, netnsIP, prefix string) {
-	return fmt.Sprintf("10.200.%d.1", slot), fmt.Sprintf("10.200.%d.2", slot), "24"
+	octet, base := slot/64, (slot%64)*4
+	return fmt.Sprintf("10.200.%d.%d", octet, base+1), fmt.Sprintf("10.200.%d.%d", octet, base+2), "30"
 }
 
 // EnsureHostNAT enables IPv4 forwarding and idempotent host NAT/forward rules

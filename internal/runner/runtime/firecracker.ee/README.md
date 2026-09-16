@@ -40,9 +40,9 @@ API/exec: 127.0.0.1 proxy ── setns ── guest:8081
 
 A slot ties one netns, TAP, veth and proxy port together. Slots are in-memory, runner-local and not stable across restarts: a stopped sandbox releases its slot and may wake onto another.
 
-Nothing in the namespace build depends on the sandbox that will use it, so a background wirer (`wire.go`, started from `Prepare`) builds every free slot at startup and rebuilds each slot after release. Activation skips the build on a wired slot (`setup_network_ms` ≈ 0), waits on one mid-build, and builds inline on one the wirer has not reached. Readiness does not wait for wiring, and teardown still deletes the namespace, so every sandbox gets a fresh one. `Shutdown` clears the namespaces of free slots, best-effort; startup reconcile sweeps whatever that leaves. `sandbox_slots_unwired` reports how many slots are not built; zero in steady state.
+Nothing in the namespace build depends on the sandbox that will use it, so a background wirer (`network_wirer.go`, started from `Prepare`) builds every free slot at startup and rebuilds each slot after release. Activation skips the build on a wired slot (`setup_network_ms` ≈ 0), waits on one mid-build, and builds inline on one the wirer has not reached. Readiness does not wait for wiring, and teardown still deletes the namespace, so every sandbox gets a fresh one. `Shutdown` clears the namespaces of free slots, best-effort; startup reconcile sweeps whatever that leaves. `sandbox_slots_unwired` reports how many slots are not built; zero in steady state.
 
-Invariants (rationale in the code comments of `stop_wake.go`, `crash.go`, `wire.go`, `runtime.go`):
+Invariants (rationale in the code comments of `stop_wake.go`, `crash.go`, `network_wirer.go`, `runtime.go`):
 
 - Create, stop, wake and delete are mutually exclusive per sandbox (`beginTransition`). Each claim runs under a fixed budget detached from the caller's cancellation, so a disconnected client or wedged host command cannot leave a sandbox half torn down. `Shutdown` is the one operation that does not wait.
 - A stop releases its slot even if host cleanup fails; the sandbox becomes an ordinary stopped one. A failed delete keeps its slot because the API retries deletes every sweep; a failed create releases it because nothing will ever retry.

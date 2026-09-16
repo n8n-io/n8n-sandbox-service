@@ -46,7 +46,7 @@ type releaseManifest struct {
 // and runs an admission canary before marking the runtime ready. Failures
 // (including transient host NAT) retry with backoff via runAdmissionLoop.
 //
-// It also starts the slot wirer (wire.go), which builds free slots' network
+// It also starts the slot wirer (network_wirer.go), which builds free slots' network
 // namespaces in the background. Admission does not wait for it.
 func (r *Runtime) Prepare(ctx context.Context) {
 	go r.wireSlots(ctx)
