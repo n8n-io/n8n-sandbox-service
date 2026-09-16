@@ -3,6 +3,8 @@ package firecracker
 import (
 	"strings"
 	"testing"
+
+	fcnetwork "github.com/n8n-io/sandbox-service/internal/runner/runtime/firecracker.ee/network"
 )
 
 func TestLoadConfigParsesDefaults(t *testing.T) {
@@ -102,5 +104,17 @@ func TestLoadConfigAllowsSplitSnapshotDirsWithoutCreateScript(t *testing.T) {
 func TestLoadConfigRejectsZeroCapacity(t *testing.T) {
 	if _, err := LoadConfig(0); err == nil {
 		t.Fatal("expected LoadConfig to reject zero capacity")
+	}
+}
+
+// The wirer builds every slot at startup, so a slot the uplink addressing cannot
+// name has to be refused at config time rather than fail on every pass.
+func TestLoadConfigBoundsCapacityByUplinkAddressing(t *testing.T) {
+	if _, err := LoadConfig(fcnetwork.MaxSlots); err != nil {
+		t.Fatalf("LoadConfig(%d) failed at the addressing ceiling: %v", fcnetwork.MaxSlots, err)
+	}
+	_, err := LoadConfig(fcnetwork.MaxSlots + 1)
+	if err == nil || !strings.Contains(err.Error(), "uplink addressing") {
+		t.Fatalf("LoadConfig(%d) error = %v, want the uplink addressing ceiling", fcnetwork.MaxSlots+1, err)
 	}
 }

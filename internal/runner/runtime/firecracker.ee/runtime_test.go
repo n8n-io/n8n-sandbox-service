@@ -115,6 +115,7 @@ func newTestRuntime(capacity int32) *Runtime {
 		slots:        make([]slotState, capacity),
 		sandboxes:    make(map[string]*sandboxState),
 		readyCh:      make(chan struct{}),
+		wireCh:       make(chan struct{}, 1),
 	}
 	// Part of the runtime's environment rather than a per-test stub: every sandbox
 	// is reserved against the sidecar of the snapshot it is created from, so without
@@ -479,8 +480,8 @@ func TestRuntimeCreateSandboxCleansUpOnFailure(t *testing.T) {
 	if !proxy.stopped {
 		t.Fatal("expected proxy to be stopped during cleanup")
 	}
-	if runCount != 4 {
-		t.Fatalf("runCount = %d, want prepare, host NAT, network, and cleanup", runCount)
+	if runCount != 5 {
+		t.Fatalf("runCount = %d, want prepare, host NAT, network, jail cleanup, and network cleanup", runCount)
 	}
 
 	capacity, err := rt.Capacity(context.Background())

@@ -10,9 +10,11 @@ import {
   docker,
   exec,
   execWithTransientRetry,
+  scrapeRunnerMetrics,
   siblingOf,
 } from './helpers';
-import { DOCKER_ONLY } from './tags';
+import { parseCounter, parseGauge } from './metrics-helpers';
+import { DOCKER_ONLY, FIRECRACKER_ONLY } from './tags';
 import type { SandboxClient } from '@n8n/sandbox-client';
 
 const tcpConnect = (ip: string, port: number = 80, timeout: number = 3) =>
@@ -286,6 +288,88 @@ test.describe('Network isolation', () => {
       expect(result).toHaveSucceeded();
       // Should resolve to an IP address
       expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
+    } finally {
+      await deleteSandbox(id);
+    }
+  });
+});
+
+// The Firecracker runner builds each slot's network namespace in the background
+// and rebuilds it after every release, so the second sandbox on a slot runs in a
+// namespace the wirer built. Slots are not in the API, so the runner's metrics
+// stand in: an empty runner (no slot-blocking sandbox) hands out slot 0 first, so
+// A and B share a slot when both are created into one; sandbox_slots_unwired is
+// zero once the wirer has nothing left to build, A's slot included; and a create
+// that finds its slot built spends no measurable time in setup_network, where an
+// inline build takes 85–105 ms (docs/performance.md).
+test.describe('Reused slot', FIRECRACKER_ONLY, () => {
+  const ACTIVE = 'sandbox_containers_active';
+  const UNWIRED = 'sandbox_slots_unwired';
+  const STEP = 'sandbox_lifecycle_step_duration_seconds';
+  const SETUP_NETWORK = { role: 'runner', operation: 'create', step: 'setup_network' };
+  const PREWIRED_MAX_SECONDS = 0.04;
+
+  const setupNetworkOfCreates = (body: string) => ({
+    count: parseCounter(body, `${STEP}_count`, SETUP_NETWORK),
+    sum: parseCounter(body, `${STEP}_sum`, SETUP_NETWORK),
+  });
+
+  // Every slot built, not a count that came back: mid-pass — the startup pass on
+  // a fresh runner, say — another slot's build could restore a count while A's
+  // slot is still waiting its turn. Only once nothing is left to build does B's
+  // setup_network time say whether B found its slot built rather than how long
+  // it queued behind the build.
+  async function waitForWirerIdle(timeoutMs = 10_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    let unwired = parseGauge(scrapeRunnerMetrics(), UNWIRED);
+    while (unwired !== 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 100));
+      unwired = parseGauge(scrapeRunnerMetrics(), UNWIRED);
+    }
+    if (unwired !== 0) {
+      throw new Error(`${UNWIRED} = ${unwired} after ${timeoutMs}ms — the wirer left slots unbuilt`);
+    }
+  }
+
+  test('the second sandbox on a slot gets the rebuilt namespace, egress policy intact', async () => {
+    test.skip(
+      !process.env.E2E_RUNNER_HTTP_ADDR && !process.env.E2E_RUNNER_CONTAINER_NAME,
+      'needs runner metrics (E2E_RUNNER_HTTP_ADDR from e2e/run-firecracker.sh)',
+    );
+    test.skip(
+      parseGauge(scrapeRunnerMetrics(), ACTIVE) !== 0,
+      'runner is not empty, so A and B are not guaranteed the same slot',
+    );
+
+    const first = await createSandbox();
+    await deleteSandbox(first);
+    expect(parseGauge(scrapeRunnerMetrics(), ACTIVE), 'A did not give its slot back').toBe(0);
+    await waitForWirerIdle();
+
+    const before = setupNetworkOfCreates(scrapeRunnerMetrics());
+    const id = await createSandbox();
+    try {
+      const after = setupNetworkOfCreates(scrapeRunnerMetrics());
+      expect(after.count, 'expected B to be the only create between the scrapes').toBe(before.count + 1);
+      expect(
+        after.sum - before.sum,
+        'B built its own namespace, so the wirer did not rebuild the slot after A',
+      ).toBeLessThan(PREWIRED_MAX_SECONDS);
+
+      const blocked = await execWithTransientRetry(id, tcpConnect('169.254.169.254', 80, 3), {
+        timeoutMs: 10_000,
+      });
+      expect(blocked.exitCode, 'expected the metadata endpoint to be unreachable on a reused slot').not.toBe(
+        0,
+      );
+
+      const allowed = await exec(
+        id,
+        `curl -fsSL -o /dev/null -w '%{http_code}' --max-time 15 https://example.com/`,
+        { timeoutMs: 30_000 },
+      );
+      expect(allowed, 'expected public egress to work on a reused slot').toHaveSucceeded();
+      expect(allowed.stdout.trim()).toBe('200');
     } finally {
       await deleteSandbox(id);
     }

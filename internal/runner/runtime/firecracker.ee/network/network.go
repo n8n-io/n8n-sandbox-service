@@ -16,13 +16,25 @@ const (
 	guestSubnetCIDR = "172.16.0.0/24"
 )
 
+// NetnsName returns the network namespace for a runner slot.
+func NetnsName(slot int) string {
+	return fmt.Sprintf("fc-sb-%d", slot)
+}
+
 // HostVethName returns the host-side veth for a runner slot.
 func HostVethName(slot int) string {
 	return fmt.Sprintf("fc-veth-%d", slot)
 }
 
+// MaxSlots is how many slots the uplink addressing covers: 10.200.0.0/16 carved
+// into /30 links, one per slot. Config validation caps capacity at it.
+const MaxSlots = 64 * 256
+
+// uplinkSubnet is the /30 link between the host and the slot's namespace: 64 per
+// third octet, host on the first usable address, namespace on the second.
 func uplinkSubnet(slot int) (hostIP, netnsIP, prefix string) {
-	return fmt.Sprintf("10.200.%d.1", slot), fmt.Sprintf("10.200.%d.2", slot), "24"
+	octet, base := slot/64, (slot%64)*4
+	return fmt.Sprintf("10.200.%d.%d", octet, base+1), fmt.Sprintf("10.200.%d.%d", octet, base+2), "30"
 }
 
 // EnsureHostNAT enables IPv4 forwarding and idempotent host NAT/forward rules
@@ -58,11 +70,17 @@ iptables -C FORWARD -i fc-veth+ -j ACCEPT 2>/dev/null \
 // still running inside it, because the kernel keeps that namespace alive for the
 // process while the name is freed, so the new sandbox gets an empty namespace and
 // the stale guest is left isolated in an unnamed one.
-func SetupScript(slot int, netnsName, tapDevice, tapCIDR string) string {
+//
+// The netns iptables calls wait for the xtables lock (-w 5): the background slot
+// wirer builds namespaces concurrently with inline builds, and without it a
+// contended /run/xtables.lock fails the script outright. The wait is bounded so
+// a lock held by something stuck fails the build rather than stalling it.
+func SetupScript(slot int, tapDevice, tapCIDR string) string {
 	q := shellquote.Quote
 	if tapDevice == "" {
 		tapDevice = defaultTapIface
 	}
+	netnsName := NetnsName(slot)
 	hostVeth := HostVethName(slot)
 	hostIP, netnsIP, prefix := uplinkSubnet(slot)
 
@@ -85,7 +103,7 @@ func SetupScript(slot int, netnsName, tapDevice, tapCIDR string) string {
 	fmt.Fprintf(&b, "ip netns exec %s ip route add default via %s dev %s\n",
 		q(netnsName), q(hostIP), q(uplinkIfaceName))
 	fmt.Fprintf(&b, "ip netns exec %s sysctl -w net.ipv4.ip_forward=1\n", q(netnsName))
-	fmt.Fprintf(&b, "ip netns exec %s iptables -t nat -A POSTROUTING -s %s -o %s -j MASQUERADE\n",
+	fmt.Fprintf(&b, "ip netns exec %s iptables -w 5 -t nat -A POSTROUTING -s %s -o %s -j MASQUERADE\n",
 		q(netnsName), guestSubnetCIDR, q(uplinkIfaceName))
 	for _, line := range forwardEgressRules(netnsName, tapDevice) {
 		b.WriteString(line)
@@ -94,12 +112,12 @@ func SetupScript(slot int, netnsName, tapDevice, tapCIDR string) string {
 	return b.String()
 }
 
-// CleanupScript removes host veth and the sandbox netns.
-func CleanupScript(netnsName, hostVeth string) string {
+// CleanupScript removes the slot's host veth and netns.
+func CleanupScript(slot int) string {
 	q := shellquote.Quote
 	return fmt.Sprintf(`
 set -eu
 ip link delete %s 2>/dev/null || true
 ip netns delete %s 2>/dev/null || true
-`, q(hostVeth), q(netnsName))
+`, q(HostVethName(slot)), q(NetnsName(slot)))
 }

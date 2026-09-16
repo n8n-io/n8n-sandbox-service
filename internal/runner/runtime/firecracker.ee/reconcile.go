@@ -70,8 +70,7 @@ func startupNetworkCleanupScript(capacity int) string {
 	var b strings.Builder
 	b.WriteString("set -eu\n")
 	for slot := 0; slot < capacity; slot++ {
-		netnsName := fmt.Sprintf("fc-sb-%d", slot)
-		b.WriteString(strings.TrimSpace(fcnetwork.CleanupScript(netnsName, fcnetwork.HostVethName(slot))))
+		b.WriteString(strings.TrimSpace(fcnetwork.CleanupScript(slot)))
 		b.WriteByte('\n')
 	}
 	b.WriteString("ip netns list | awk '{print $1}' | grep '^fc-sb-' | xargs -r -n1 ip netns delete 2>/dev/null || true\n")

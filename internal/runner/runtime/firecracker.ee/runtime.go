@@ -46,6 +46,11 @@ type Runtime struct {
 	admissionOK atomic.Bool
 	hostNATMu   sync.Mutex
 	hostNATOK   bool
+
+	// wireCh wakes the slot wirer (network_wirer.go). Buffered by one and written with a
+	// non-blocking send, so a release never waits on it and a burst of releases
+	// collapses into one pass over the slots.
+	wireCh chan struct{}
 }
 
 var _ runnerruntime.Runtime = (*Runtime)(nil)
@@ -54,6 +59,7 @@ var _ runnerruntime.Runtime = (*Runtime)(nil)
 // complete inside the runtime (for example LRU evictions).
 func (r *Runtime) SetMetricsRecorder(rec *metrics.RunnerRecorder) {
 	r.metrics = rec
+	rec.SetUnwiredSlots(func() float64 { return float64(r.unwiredSlots()) })
 }
 
 func New(runnerConfig *config.Config, cfg Config) *Runtime {
@@ -64,6 +70,7 @@ func New(runnerConfig *config.Config, cfg Config) *Runtime {
 		slots:        make([]slotState, maxInt32(runnerConfig.CapacityTotal, 0)),
 		sandboxes:    make(map[string]*sandboxState),
 		readyCh:      make(chan struct{}),
+		wireCh:       make(chan struct{}, 1),
 	}
 	ctx, cancel := reconcileContext()
 	defer cancel()
@@ -73,11 +80,24 @@ func New(runnerConfig *config.Config, cfg Config) *Runtime {
 
 // slotState tracks one runner-local Firecracker slot. A slot reserves the host
 // resources derived from its index: netns name and daemon proxy port.
+//
+// sandboxID is guarded by r.mu. The network fields are guarded by netMu instead,
+// because building a namespace is a host command that must not be run under the
+// runtime-wide lock: netMu is held for the whole build, so a sandbox activating
+// on the slot and the background wirer cannot both build it, and whichever waits
+// finds it wired when the lock is handed over. wired means the slot's netns and
+// veth exist as SetupScript leaves them. It is written under netMu and goes false
+// only when clearSlotNetwork deletes them, so nothing rebuilds a namespace a live
+// microVM is still in; it is atomic so the slots_unwired gauge can read it
+// without waiting behind a build.
 type slotState struct {
 	sandboxID string
+
+	netMu sync.Mutex
+	wired atomic.Bool
 }
 
-func (s slotState) occupied() bool {
+func (s *slotState) occupied() bool {
 	return s.sandboxID != ""
 }
 
@@ -164,7 +184,6 @@ type sandboxState struct {
 	slot              int
 	info              *runnerruntime.SandboxInfo
 	netnsName         string
-	hostVeth          string
 	socketPath        string
 	daemonURL         string
 	dataDir           string
@@ -408,9 +427,10 @@ func (r *Runtime) CreateSandbox(ctx context.Context, sandboxID string, _ *runner
 			// would strand runner capacity until the process restarts.
 			//
 			// So it goes back on the same terms a failed stop hands its slot back. What
-			// makes that safe is that the next sandbox here clears the slot before
-			// building it: setupNetwork deletes both per-slot host names, netns and
-			// veth, whatever state they were left in. The jail directory is keyed to
+			// makes that safe is that the slot is unwired and the next build on it —
+			// the wirer's, or the next sandbox's — clears it first: SetupScript deletes
+			// both per-slot host names, netns and veth, whatever state they were left
+			// in. The jail directory is keyed to
 			// this vmID, so it collides with nothing and startup reconcile sweeps it.
 			// The proxy port is per-slot and freed by the Stop that teardown performs on
 			// every handle it claims; if that ever left the port bound, the next create
@@ -504,7 +524,8 @@ func (r *Runtime) DaemonURL(_ context.Context, sandboxID string) (string, error)
 	return state.daemonURL, nil
 }
 
-// Shutdown best-effort deletes every sandbox currently tracked by this runtime.
+// Shutdown best-effort deletes every sandbox currently tracked by this runtime,
+// then, equally best-effort, clears the namespaces of the slots left free.
 func (r *Runtime) Shutdown(ctx context.Context) {
 	r.mu.Lock()
 	states := make([]*sandboxState, 0, len(r.sandboxes))
@@ -524,6 +545,13 @@ func (r *Runtime) Shutdown(ctx context.Context) {
 
 	for _, state := range states {
 		_ = r.deleteSandbox(ctx, state)
+	}
+	// A slot still held here belongs to a delete that failed or is in flight and
+	// is that delete's to clean; startup reconcile backstops the rest.
+	for slot := range r.slots {
+		if err := r.clearSlotNetwork(ctx, slot, nil); err != nil {
+			slog.Warn("firecracker free slot cleanup failed on shutdown", "slot", slot, "err", err)
+		}
 	}
 }
 
@@ -567,7 +595,7 @@ func (r *Runtime) reserveSandbox(sandboxID string) (*sandboxState, error) {
 	}
 
 	vmID := "sandbox-" + shortID(sandboxID)
-	netnsName := fmt.Sprintf("fc-sb-%d", slot)
+	netnsName := fcnetwork.NetnsName(slot)
 	socketPath := filepath.Join(r.config.JailerBaseDir, "firecracker", vmID, "root", "firecracker.socket")
 	daemonURL := fmt.Sprintf("http://%s", net.JoinHostPort(r.config.ProxyListenIP, fmt.Sprintf("%d", r.config.ProxyPortStart+slot)))
 	dataDir := sandboxDataDir(r.runnerConfig.DataDir, sandboxID)
@@ -576,7 +604,6 @@ func (r *Runtime) reserveSandbox(sandboxID string) (*sandboxState, error) {
 		vmID:              vmID,
 		slot:              slot,
 		netnsName:         netnsName,
-		hostVeth:          fcnetwork.HostVethName(slot),
 		socketPath:        socketPath,
 		daemonURL:         daemonURL,
 		dataDir:           dataDir,
@@ -684,13 +711,23 @@ func (r *Runtime) occupiedSlotsLocked() int {
 	return used
 }
 
-// releaseSlotLocked marks a Firecracker slot as free. r.mu must be held by the
-// caller.
+// releaseSlotLocked marks a Firecracker slot as free and wakes the wirer. r.mu
+// must be held by the caller.
+//
+// The wake is here rather than where the namespace is deleted because a slot
+// only becomes the wirer's to build once it is free: teardown unwires it first
+// and the slot is released after, so a wirer poked at unwire time can run its
+// pass in between, find the slot still occupied, and go back to sleep with the
+// slot unbuilt until something else releases.
 func (r *Runtime) releaseSlotLocked(slot int) {
 	if slot < 0 || slot >= len(r.slots) {
 		panic(fmt.Sprintf("firecracker slot index out of range: %d", slot))
 	}
-	r.slots[slot] = slotState{}
+	r.slots[slot].sandboxID = ""
+	select {
+	case r.wireCh <- struct{}{}:
+	default:
+	}
 }
 
 // slotOwnedByLocked reports whether the slot is still reserved for the sandbox
@@ -743,15 +780,7 @@ chmod 0664 %[1]s/snapshot_mem %[1]s/snapshot_state %[6]s
 	return r.deps.run(ctx, "sudo", "/bin/sh", "-c", script)
 }
 
-// setupNetwork creates one network namespace per sandbox slot with TAP, veth
-// uplink, and per-netns egress iptables matching Docker private-CIDR policy.
-func (r *Runtime) setupNetwork(ctx context.Context, state *sandboxState) error {
-	if err := r.ensureHostNATReady(ctx); err != nil {
-		return fmt.Errorf("host NAT not configured: %w", err)
-	}
-	script := fcnetwork.SetupScript(state.slot, state.netnsName, r.config.HostTapDeviceName, r.config.HostTapIPCIDR)
-	return r.deps.run(ctx, "sudo", "/bin/sh", "-c", script)
-}
+// setupNetwork is implemented in network_wirer.go alongside the slot wirer.
 
 // startJailer starts Firecracker through jailer inside the sandbox netns.
 // onExit fires once the microVM is gone: jailer execs Firecracker in place, so
@@ -793,18 +822,14 @@ func (r *Runtime) waitForSocket(ctx context.Context, socketPath string) error {
 	return fmt.Errorf("timed out waiting for %s", socketPath)
 }
 
-// cleanupHost removes the bind mounts, network namespace, and jail directory
-// created for a sandbox. It is intentionally best-effort at the shell level.
+// cleanupHost removes the bind mounts and jail directory created for a sandbox.
+// It is intentionally best-effort at the shell level. The slot's network is
+// clearSlotNetwork's job: the names on the state outlive the reservation, so it
+// cannot be keyed to the state.
 //
 // It has to undo every mount prepareJail made, the kernel's included: the final
 // rm cannot delete a live mountpoint, so one mount left behind fails the whole
 // cleanup, and a failed cleanup is what keeps a sandbox holding its slot.
-//
-// Every name it needs is one the slot reservation wrote and no teardown touches,
-// which is why hostVeth is carried on the state rather than derived from the slot
-// here: two teardowns can run this concurrently — a guest death racing shutdown —
-// and the one that arrives second would otherwise read a slot the first has already
-// released and set to -1, naming a device that does not exist.
 func (r *Runtime) cleanupHost(ctx context.Context, state *sandboxState) error {
 	jailDir := filepath.Join(r.config.JailerBaseDir, "firecracker", state.vmID)
 	rootfsTarget := filepath.Join(jailDir, "root", strings.TrimPrefix(state.bootParams.RootfsDrivePath, "/"))
@@ -813,12 +838,10 @@ func (r *Runtime) cleanupHost(ctx context.Context, state *sandboxState) error {
 set -eu
 umount -l %[1]s/root/snapshot_mem 2>/dev/null || true
 umount -l %[1]s/root/snapshot_state 2>/dev/null || true
+umount -l %[2]s 2>/dev/null || true
 umount -l %[3]s 2>/dev/null || true
-umount -l %[5]s 2>/dev/null || true
-%[4]s
 rm -rf %[1]s
-`, shellquote.Quote(jailDir), shellquote.Quote(state.netnsName), shellquote.Quote(rootfsTarget),
-		strings.TrimSpace(fcnetwork.CleanupScript(state.netnsName, state.hostVeth)), shellquote.Quote(kernelTarget))
+`, shellquote.Quote(jailDir), shellquote.Quote(rootfsTarget), shellquote.Quote(kernelTarget))
 	return r.deps.run(ctx, "sudo", "/bin/sh", "-c", script)
 }
 
