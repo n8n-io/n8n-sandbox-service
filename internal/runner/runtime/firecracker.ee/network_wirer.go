@@ -15,7 +15,9 @@ import (
 // derive from runner config or the slot index. So a slot's namespace can be built
 // before any sandbox is assigned to it. wireSlots builds every free slot at
 // startup and rebuilds a slot after each release; setupNetwork, which activation
-// still calls, finds the slot wired and returns without running anything.
+// still calls, finds the slot wired and skips the build. The one sandbox-specific
+// rule, the egress "none" DROP, is added by activation on top of the built
+// namespace and deleted with it, so the pool only holds the default policy.
 //
 // Every sandbox still gets a fresh namespace: teardown deletes the slot's netns
 // and veth as before and marks the slot unwired, and the wirer rebuilds it from
@@ -26,29 +28,36 @@ import (
 // are not built at any moment; zero means the wirer has nothing left to do.
 
 // setupNetwork makes sure the slot's network namespace exists with TAP, veth
-// uplink, and per-netns egress iptables matching the Docker private-CIDR policy.
-// It builds the namespace if the slot is unwired and returns at once if it is
-// wired, so calling it on a slot the wirer already built costs one lock.
+// uplink, and per-netns egress iptables matching the Docker private-CIDR policy,
+// building it if the slot is unwired. With blockEgress it then inserts the DROP
+// ahead of those rules; on a wired slot that insert is all it runs.
 //
-// The slot's netMu is held for the whole build. That is what keeps two builders
-// off one slot, and what makes the wired flag trustworthy to whoever waits: a
-// sandbox that blocks here behind the wirer is handed the lock with the flag set
-// and the namespace in place.
-func (r *Runtime) setupNetwork(ctx context.Context, slot int) error {
+// The slot's netMu is held throughout. That is what keeps two builders off one
+// slot, and what makes the wired flag trustworthy to whoever waits: a sandbox
+// that blocks here behind the wirer is handed the lock with the flag set and the
+// namespace in place. Holding it through the DROP means nothing can rebuild the
+// namespace in between.
+func (r *Runtime) setupNetwork(ctx context.Context, slot int, blockEgress bool) error {
 	s := &r.slots[slot]
 	s.netMu.Lock()
 	defer s.netMu.Unlock()
-	if s.wired.Load() {
+	if !s.wired.Load() {
+		if err := r.ensureHostNATReady(ctx); err != nil {
+			return fmt.Errorf("host NAT not configured: %w", err)
+		}
+		script := fcnetwork.SetupScript(slot, r.config.HostTapDeviceName, r.config.HostTapIPCIDR)
+		if err := r.deps.run(ctx, "sudo", "/bin/sh", "-c", script); err != nil {
+			return err
+		}
+		s.wired.Store(true)
+	}
+	if !blockEgress {
 		return nil
 	}
-	if err := r.ensureHostNATReady(ctx); err != nil {
-		return fmt.Errorf("host NAT not configured: %w", err)
-	}
-	script := fcnetwork.SetupScript(slot, r.config.HostTapDeviceName, r.config.HostTapIPCIDR)
+	script := fcnetwork.BlockEgressScript(slot, r.config.HostTapDeviceName)
 	if err := r.deps.run(ctx, "sudo", "/bin/sh", "-c", script); err != nil {
-		return err
+		return fmt.Errorf("block egress: %w", err)
 	}
-	s.wired.Store(true)
 	return nil
 }
 
@@ -89,7 +98,7 @@ func (r *Runtime) wireSlots(ctx context.Context) {
 				continue
 			}
 			buildCtx, cancel := context.WithTimeout(ctx, transitionBudget)
-			err := r.setupNetwork(buildCtx, slot)
+			err := r.setupNetwork(buildCtx, slot, false)
 			cancel()
 			if err != nil && ctx.Err() == nil {
 				slog.Warn("firecracker slot pre-wire failed; the next sandbox on it builds inline", "slot", slot, "err", err)

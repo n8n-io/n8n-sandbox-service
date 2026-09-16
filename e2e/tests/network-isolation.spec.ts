@@ -5,6 +5,7 @@ import {
   BASE_URL,
   addAddress,
   apiClient,
+  client,
   createSandbox,
   deleteSandbox,
   docker,
@@ -12,6 +13,7 @@ import {
   execWithTransientRetry,
   scrapeRunnerMetrics,
   siblingOf,
+  stopSandboxViaRunner,
 } from './helpers';
 import { parseCounter, parseGauge } from './metrics-helpers';
 import { DOCKER_ONLY, FIRECRACKER_ONLY } from './tags';
@@ -123,7 +125,7 @@ test.describe('Network isolation', () => {
       otherTenantId = otherBody.tenant.id as string;
       otherClient = apiClient(BASE_URL, otherBody.key.api_key as string);
 
-      id2 = (await otherClient.createSandbox()).id;
+      id2 = (await otherClient.createSandbox({ egress: 'public' })).id;
 
       const ipResult = await execWithTransientRetry(id2, 'hostname -I', { timeoutMs: 5_000 }, otherClient);
       expect(ipResult).toHaveSucceeded();
@@ -294,6 +296,79 @@ test.describe('Network isolation', () => {
   });
 });
 
+test.describe('Egress none', () => {
+  // The same three probes run against a public and a sealed sandbox on the same
+  // runner, so a failure on the sealed side is the policy, not a runner without
+  // internet: a public address dialled directly, so the check does not depend on
+  // DNS; DNS itself, since a resolver reachable from a sealed sandbox would be a
+  // covert channel out; and a name over HTTPS.
+  const PUBLIC_IP = '1.1.1.1';
+  const PUBLIC_HOST = 'example.com';
+
+  const probe = async (id: string) => {
+    const direct = await execWithTransientRetry(id, tcpConnect(PUBLIC_IP, 80, 3), { timeoutMs: 10_000 });
+    const dns = await execWithTransientRetry(id, resolve(PUBLIC_HOST), { timeoutMs: 15_000 });
+    const named = await execWithTransientRetry(id, `curl -sS -o /dev/null --max-time 10 https://${PUBLIC_HOST}/`, {
+      timeoutMs: 20_000,
+    });
+    return { direct: direct.exitCode === 0, dns: dns.stdout.trim() !== '', named: named.exitCode === 0 };
+  };
+
+  const expectOpen = async (id: string) =>
+    expect(await probe(id), 'expected the public sandbox to reach everything').toEqual({
+      direct: true,
+      dns: true,
+      named: true,
+    });
+
+  const expectSealed = async (id: string) =>
+    expect(await probe(id), 'expected the sealed sandbox to reach nothing').toEqual({
+      direct: false,
+      dns: false,
+      named: false,
+    });
+
+  test('sandbox reaches nothing a public sandbox reaches, and reports its mode', async () => {
+    const open = await createSandbox({ egress: 'public' });
+    let sealed: string | undefined;
+    try {
+      sealed = await createSandbox({ egress: 'none' });
+      expect((await client.getSandbox(open)).egress).toBe('public');
+      expect((await client.getSandbox(sealed)).egress).toBe('none');
+
+      // The sealed sandbox itself is fine: the daemon answers, only the way out is shut.
+      const alive = await execWithTransientRetry(sealed, 'echo sealed', { timeoutMs: 5_000 });
+      expect(alive).toHaveSucceeded();
+
+      await expectOpen(open);
+      await expectSealed(sealed);
+    } finally {
+      if (sealed) await cleanUpSandbox(sealed);
+      await cleanUpSandbox(open);
+    }
+  });
+
+  test('the mode survives a stop and wake', async () => {
+    test.skip(
+      !process.env.E2E_RUNNER_CONTROL_GRPC_ADDR || !process.env.E2E_RUNNER_API_KEY,
+      'needs the runner control address (from e2e/run.sh)',
+    );
+    const id = await createSandbox({ egress: 'none' });
+    try {
+      await expectSealed(id);
+      stopSandboxViaRunner(id);
+      // The exec wakes the sandbox. On Firecracker that is a fresh slot with a
+      // fresh namespace, so this is where a policy that only lived in the first
+      // namespace would be lost.
+      const woke = await execWithTransientRetry(id, 'echo after-wake', { timeoutMs: 30_000 });
+      expect(woke).toHaveSucceeded();
+      await expectSealed(id);
+    } finally {
+      await deleteSandbox(id);
+    }
+  });
+});
+
 // The Firecracker runner builds each slot's network namespace in the background
 // and rebuilds it after every release, so the second sandbox on a slot runs in a
 // namespace the wirer built. Slots are not in the API, so the runner's metrics
@@ -374,6 +449,38 @@ test.describe('Reused slot', FIRECRACKER_ONLY, () => {
       await deleteSandbox(id);
     }
   });
+
+  // The egress none rule is applied to a slot's namespace at activation, so the
+  // question is whether it goes with the namespace when the slot is released.
+  // A public sandbox on the slot a sealed one just left must have its egress.
+  test('a sealed sandbox leaves no policy behind on its slot', async () => {
+    test.skip(
+      !process.env.E2E_RUNNER_HTTP_ADDR && !process.env.E2E_RUNNER_CONTAINER_NAME,
+      'needs runner metrics (E2E_RUNNER_HTTP_ADDR from e2e/run-firecracker.sh)',
+    );
+    test.skip(
+      parseGauge(scrapeRunnerMetrics(), ACTIVE) !== 0,
+      'runner is not empty, so A and B are not guaranteed the same slot',
+    );
+
+    const sealed = await createSandbox({ egress: 'none' });
+    await deleteSandbox(sealed);
+    expect(parseGauge(scrapeRunnerMetrics(), ACTIVE), 'A did not give its slot back').toBe(0);
+    await waitForWirerIdle();
+
+    const id = await createSandbox();
+    try {
+      const allowed = await exec(
+        id,
+        `curl -fsSL -o /dev/null -w '%{http_code}' --max-time 15 https://example.com/`,
+        { timeoutMs: 30_000 },
+      );
+      expect(allowed, "expected the sealed sandbox's DROP to have gone with its namespace").toHaveSucceeded();
+      expect(allowed.stdout.trim()).toBe('200');
+    } finally {
+      await deleteSandbox(id);
+    }
+  });
 });
 
 // These assert the installed rules rather than connectivity, which the tests
@@ -436,6 +543,44 @@ test.describe('Runner bridge policy', DOCKER_ONLY, () => {
         egressRules[egressRules.length - 1],
         'expected the terminal accept to be the last rule',
       ).toBe('-A N8N-SB-BR-EGRESS -j ACCEPT');
+    } finally {
+      await deleteSandbox(id);
+    }
+  });
+
+  // The no-egress bridge never reaches the shared egress chain: its DOCKER-USER
+  // rule is a plain drop, keyed on the interface, and the network is internal so
+  // Docker's own isolation and the missing default route back it up.
+  test('the no-egress bridge drops in DOCKER-USER and is an internal network', async () => {
+    test.skip(
+      !process.env.E2E_RUNNER_CONTAINER_NAME,
+      'needs E2E_RUNNER_CONTAINER_NAME (from e2e/run.sh)',
+    );
+    const runnerContainer = process.env.E2E_RUNNER_CONTAINER_NAME!;
+
+    const id = await createSandbox({ egress: 'none' });
+    try {
+      const network = JSON.parse(
+        docker(['exec', runnerContainer, 'docker', 'network', 'inspect', 'runner-no-egress']),
+      )[0] as { Internal: boolean; Options: Record<string, string>; Containers: Record<string, unknown> };
+      expect(network.Internal, 'expected runner-no-egress to be an internal network').toBe(true);
+      expect(network.Options['com.docker.network.bridge.enable_icc']).toBe('false');
+      expect(
+        Object.keys(network.Containers).length,
+        'expected the sealed sandbox to be attached to runner-no-egress',
+      ).toBeGreaterThan(0);
+      const bridgeIface = network.Options['com.docker.network.bridge.name'];
+      expect(bridgeIface).toBe('br-no-egress');
+
+      const rules = docker(['exec', runnerContainer, 'iptables', '-S'])
+        .split('\n')
+        .map((line) => line.trim());
+      expect(rules).toContain(`-A DOCKER-USER -i ${bridgeIface} -j DROP`);
+      expect(
+        rules.filter((line) => line.startsWith(`-A DOCKER-USER -i ${bridgeIface} `)),
+        'expected the drop to be the only DOCKER-USER rule for the no-egress bridge',
+      ).toEqual([`-A DOCKER-USER -i ${bridgeIface} -j DROP`]);
+      expect(rules).toContain(`-A INPUT -i ${bridgeIface} -j N8N-SB-BR-HOST`);
     } finally {
       await deleteSandbox(id);
     }

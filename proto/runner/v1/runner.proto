@@ -38,6 +38,9 @@ message CreateSandboxRequest {
 message CreateSandboxResponse {
   string sandbox_id = 1;
   string container_ip = 2;
+  // The options the runner applied, encoded like create_json. Empty from a
+  // runner that predates it, which applied the defaults.
+  string applied_create_json = 3;
 }
 
 message StopSandboxRequest {

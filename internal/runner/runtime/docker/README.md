@@ -9,11 +9,14 @@ containers direct access to the host Docker daemon.
 
 - Uses the Docker CLI against `SANDBOX_RUNNER_DOCKER_HOST`.
 - Starts sandbox containers from `SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE`.
-- Connects containers to the runner bridge network. The host must have
-  `br_netfilter` loaded with `bridge-nf-call-iptables=1`, or bridged sandbox
-  traffic bypasses the iptables rules. `scripts/setup-sysbox.sh` loads the
-  module; the sysctl defaults to `1` once it is loaded, so only a host that
-  overrides it needs attention.
+- Connects containers to a runner bridge network by egress mode:
+  `runner-bridge` for `public`, `runner-no-egress` for `none` (a Docker
+  `--internal` network; its bridge device is `br-no-egress`, the name being
+  over the 15-character interface limit). The host must have `br_netfilter`
+  loaded with `bridge-nf-call-iptables=1`, or bridged sandbox traffic bypasses
+  the iptables rules. `scripts/setup-sysbox.sh` loads the module; the sysctl
+  defaults to `1` once it is loaded, so only a host that overrides it needs
+  attention.
 - Proxies API traffic to the sandbox daemon on port `8081`.
 
 ## Supported Features
@@ -33,7 +36,9 @@ containers direct access to the host Docker daemon.
   every sandbox container gets the same policy. Never create a sandbox container
   with `--privileged`: Docker then ignores `--cap-drop` and the policy has no
   effect.
-- Applies Docker-specific network isolation rules through `netrules`.
+- Applies network isolation rules through `netrules`, keyed on the bridge
+  interface: the private-range denylist on `runner-bridge`, a plain
+  `DOCKER-USER` DROP on `br-no-egress`, and the host block on both.
 - Waits for daemon `/healthz` and a tiny `/executions` round trip before
   returning a sandbox as ready.
 - Wakes stopped containers on proxy access, reapplies network rules, and waits

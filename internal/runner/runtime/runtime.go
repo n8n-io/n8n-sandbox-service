@@ -4,7 +4,10 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 )
 
@@ -25,8 +28,55 @@ var ErrSandboxNetworkUnavailable = errors.New("sandbox network unavailable")
 // ErrSandboxNotRunning is returned when a sandbox exists but is not running.
 var ErrSandboxNotRunning = errors.New("sandbox not running")
 
-// CreateOptions holds optional parameters for sandbox creation.
-type CreateOptions struct{}
+// Egress is a sandbox's outbound network policy.
+type Egress string
+
+const (
+	// EgressPublic allows the public internet; the private ranges in netpolicy stay
+	// blocked. The default, and the value an empty field means.
+	EgressPublic Egress = "public"
+	// EgressNone lets no guest-initiated connection leave the sandbox, DNS included.
+	EgressNone Egress = "none"
+)
+
+// ParseEgress maps the wire value to an Egress, treating empty as EgressPublic.
+func ParseEgress(s string) (Egress, error) {
+	switch Egress(s) {
+	case "", EgressPublic:
+		return EgressPublic, nil
+	case EgressNone:
+		return EgressNone, nil
+	}
+	return "", fmt.Errorf("invalid egress %q", s)
+}
+
+// CreateOptions holds optional parameters for sandbox creation. It is also the
+// JSON shape of the create RPC's create_json and applied_create_json fields.
+type CreateOptions struct {
+	Egress Egress `json:"egress,omitempty"`
+}
+
+// ParseCreateOptions decodes the wire form of CreateOptions. Empty means the
+// defaults; Egress is validated with ParseEgress.
+func ParseCreateOptions(s string) (*CreateOptions, error) {
+	opts := &CreateOptions{}
+	if strings.TrimSpace(s) != "" {
+		if err := json.Unmarshal([]byte(s), opts); err != nil {
+			return nil, err
+		}
+	}
+	egress, err := ParseEgress(string(opts.Egress))
+	if err != nil {
+		return nil, err
+	}
+	opts.Egress = egress
+	return opts, nil
+}
+
+// BlockEgress reports whether the sandbox gets no egress at all.
+func (o *CreateOptions) BlockEgress() bool {
+	return o != nil && o.Egress == EgressNone
+}
 
 // SandboxInfo represents information about a created sandbox.
 type SandboxInfo struct {

@@ -3,6 +3,7 @@ export { SandboxServiceError, SandboxCrashedError } from "./errors";
 export type {
   SandboxClientOptions,
   CreateSandboxOptions,
+  EgressMode,
   RetryOptions,
   SandboxRecord,
   FileEntry,

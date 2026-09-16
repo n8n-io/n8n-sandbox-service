@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 )
 
 // scriptLog records every host script a runtime runs. Safe to share between the
@@ -93,6 +95,53 @@ func TestWirerBuildsFreeSlotsAndActivationSkipsTheBuild(t *testing.T) {
 	}
 	if after := len(log.matching("ip netns add")); after != before {
 		t.Fatalf("create on a wired slot ran %d network build(s), want none", after-before)
+	}
+}
+
+// The pool is policy-agnostic: the wirer never applies a sandbox's egress "none"
+// rule, and a blocked sandbox landing on a pre-wired slot runs only that rule,
+// not a rebuild. On an unwired slot it builds first, then applies the rule.
+func TestBlockedEgressIsAppliedByActivationNotTheWirer(t *testing.T) {
+	rt := testRuntimeT(t, 2)
+	stubCreateDeps(rt)
+	log := &scriptLog{}
+	rt.deps.run = log.run
+	blocked := &runnerruntime.CreateOptions{Egress: runnerruntime.EgressNone}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go rt.wireSlots(ctx)
+	waitSlotWired(t, rt, 0, true)
+	waitSlotWired(t, rt, 1, true)
+	cancel()
+	const blockRule = "-I FORWARD 1 -i 'fc-tap-0' -j DROP"
+	if drops := log.matching(blockRule); len(drops) != 0 {
+		t.Fatalf("wirer applied %d egress block(s), want none", len(drops))
+	}
+
+	// Slot 0 is pre-wired: one DROP insert, no build.
+	builds := len(log.matching("ip netns add"))
+	if _, err := rt.CreateSandbox(context.Background(), "sandbox-id-123456", blocked); err != nil {
+		t.Fatalf("CreateSandbox() failed: %v", err)
+	}
+	if got := len(log.matching("ip netns add")); got != builds {
+		t.Fatalf("blocked create on a wired slot ran %d network build(s), want none", got-builds)
+	}
+	drops := log.matching(blockRule)
+	if len(drops) != 1 || !strings.Contains(drops[0], "'fc-sb-0'") {
+		t.Fatalf("egress blocks = %q, want one on slot 0", drops)
+	}
+
+	// Slot 1 unwired by hand: build then DROP, in that order.
+	rt.slots[1].wired.Store(false)
+	if _, err := rt.CreateSandbox(context.Background(), "sandbox-id-abcdef", blocked); err != nil {
+		t.Fatalf("CreateSandbox() on the unwired slot failed: %v", err)
+	}
+	log.mu.Lock()
+	tail := log.scripts[len(log.scripts)-2:]
+	log.mu.Unlock()
+	if !strings.Contains(tail[0], "ip netns add 'fc-sb-1'") || !strings.Contains(tail[1], "'fc-sb-1' iptables -w 5 -I FORWARD 1") {
+		t.Fatalf("blocked create on an unwired slot ran %q, want the build then the block", tail)
 	}
 }
 

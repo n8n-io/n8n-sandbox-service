@@ -53,6 +53,7 @@ type SandboxRecord struct {
 	RunnerControlGRPCAddr string // host:port for SandboxControl gRPC
 	TenantID              string // AdminTenantID = admin-owned; otherwise a tenants.id UUID
 	Ephemeral             bool   // Deleted instead of stopped when idle; never enters "stopped"
+	Egress                string // Outbound network policy: "public" or "none"; fixed at creation
 }
 
 // Tenant is a provisioned consumer of the sandbox API (e.g. an n8n instance).
@@ -108,6 +109,15 @@ type SandboxStore interface {
 	RevokeAPIKey(id string) error
 }
 
+// egressColumn is what insertSandbox stores for a record's Egress: "public",
+// the default, when the caller left it empty, so every row carries a value.
+func egressColumn(egress string) string {
+	if egress == "" {
+		return "public"
+	}
+	return egress
+}
+
 // scanner is the common interface satisfied by both *sql.Row and *sql.Rows.
 type scanner interface {
 	Scan(dest ...any) error
@@ -130,6 +140,7 @@ func scanRecord(row scanner) (*SandboxRecord, error) {
 		&r.RunnerControlGRPCAddr,
 		&r.TenantID,
 		&r.Ephemeral,
+		&r.Egress,
 	)
 	if err != nil {
 		return nil, err

@@ -11,6 +11,13 @@ export interface SandboxClientOptions {
   retry?: RetryOptions;
 }
 
+/**
+ * Outbound network policy of a sandbox.
+ * - `public`: the public internet; private and link-local ranges are blocked.
+ * - `none`: no guest-initiated connection leaves the sandbox, DNS included.
+ */
+export type EgressMode = "public" | "none";
+
 /** Options for creating a sandbox. */
 export interface CreateSandboxOptions {
   /** UUID to create or reuse. The service generates one when omitted. */
@@ -21,6 +28,12 @@ export interface CreateSandboxOptions {
    * fixed at creation. Windows are documented under `POST /sandboxes` in API.md.
    */
   ephemeral?: boolean;
+  /**
+   * Outbound network policy, fixed at creation. Required so the choice is made
+   * deliberately: code that runs untrusted input should ask for `none`.
+   * Reconnecting to an existing `id` keeps the mode it was created with.
+   */
+  egress: EgressMode;
 }
 
 /** Retry policy for transient HTTP failures. */
@@ -54,6 +67,8 @@ export interface SandboxRecord {
   lastActiveAt: number;
   /** Whether the sandbox is deleted, rather than stopped, when it goes idle. */
   ephemeral: boolean;
+  /** Outbound network policy the sandbox was created with. */
+  egress: EgressMode;
 }
 
 /** Directory entry returned by the file listing API. */
@@ -156,6 +171,8 @@ export type SandboxWireResponse = {
   last_active_at: number;
   /** Absent from services that predate the ephemeral flag; mapped to `false`. */
   ephemeral?: boolean;
+  /** Absent from services that predate egress modes; mapped to `public`, the only policy they had. */
+  egress?: EgressMode;
 };
 
 export type FileEntryWireResponse = {

@@ -75,7 +75,7 @@ test.describe('multi-pod API (Postgres)', () => {
     await ensureTenantAuth(BASE_URL_A);
     const clientB = tenantClient(BASE_URL_B);
 
-    const record = await clientB.createSandbox();
+    const record = await clientB.createSandbox({ egress: 'public' });
     try {
       const result = await execWithTransientRetry(record.id, 'echo multi-pod', undefined, clientB);
       expect(result.stdout).toBe('multi-pod\n');
@@ -90,7 +90,7 @@ test.describe('multi-pod API (Postgres)', () => {
     const clientA = tenantClient(BASE_URL_A);
     const clientB = tenantClient(BASE_URL_B);
 
-    const record = await clientB.createSandbox();
+    const record = await clientB.createSandbox({ egress: 'public' });
     try {
       const got = await clientA.getSandbox(record.id);
       expect(got.id).toBe(record.id);
@@ -123,7 +123,7 @@ test.describe.serial('multi-pod API failover @multi-pod-failover', () => {
     // Pod A is down; mint against the surviving pod (shared Postgres).
     await ensureTenantAuth(BASE_URL_B);
     const clientB = tenantClient(BASE_URL_B);
-    const record = await clientB.createSandbox();
+    const record = await clientB.createSandbox({ egress: 'public' });
     try {
       const result = await execWithTransientRetry(record.id, 'echo failover', undefined, clientB);
       expect(result.stdout).toBe('failover\n');
@@ -139,7 +139,7 @@ test.describe.serial('multi-pod API failover @multi-pod-failover', () => {
     await ensureTenantAuth(BASE_URL_B);
     const key = await getApiKey();
     const clientB = tenantClient(BASE_URL_B);
-    const record = await clientB.createSandbox();
+    const record = await clientB.createSandbox({ egress: 'public' });
 
     const reqB = await playwrightRequest.newContext({
       baseURL: BASE_URL_B,

@@ -211,11 +211,14 @@ func (x *CreateSandboxRequest) GetCreateJson() string {
 }
 
 type CreateSandboxResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SandboxId     string                 `protobuf:"bytes,1,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
-	ContainerIp   string                 `protobuf:"bytes,2,opt,name=container_ip,json=containerIp,proto3" json:"container_ip,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	SandboxId   string                 `protobuf:"bytes,1,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
+	ContainerIp string                 `protobuf:"bytes,2,opt,name=container_ip,json=containerIp,proto3" json:"container_ip,omitempty"`
+	// The options the runner applied, encoded like create_json. Empty from a
+	// runner that predates it, which applied the defaults.
+	AppliedCreateJson string `protobuf:"bytes,3,opt,name=applied_create_json,json=appliedCreateJson,proto3" json:"applied_create_json,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *CreateSandboxResponse) Reset() {
@@ -258,6 +261,13 @@ func (x *CreateSandboxResponse) GetSandboxId() string {
 func (x *CreateSandboxResponse) GetContainerIp() string {
 	if x != nil {
 		return x.ContainerIp
+	}
+	return ""
+}
+
+func (x *CreateSandboxResponse) GetAppliedCreateJson() string {
+	if x != nil {
+		return x.AppliedCreateJson
 	}
 	return ""
 }
@@ -441,11 +451,12 @@ const file_proto_runner_v1_runner_proto_rawDesc = "" +
 	"\n" +
 	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\x12\x1f\n" +
 	"\vcreate_json\x18\x02 \x01(\tR\n" +
-	"createJson\"Y\n" +
+	"createJson\"\x89\x01\n" +
 	"\x15CreateSandboxResponse\x12\x1d\n" +
 	"\n" +
 	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\x12!\n" +
-	"\fcontainer_ip\x18\x02 \x01(\tR\vcontainerIp\"3\n" +
+	"\fcontainer_ip\x18\x02 \x01(\tR\vcontainerIp\x12.\n" +
+	"\x13applied_create_json\x18\x03 \x01(\tR\x11appliedCreateJson\"3\n" +
 	"\x12StopSandboxRequest\x12\x1d\n" +
 	"\n" +
 	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\"\x15\n" +

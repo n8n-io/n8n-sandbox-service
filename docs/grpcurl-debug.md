@@ -31,6 +31,8 @@ grpcurl \
   runner.v1.SandboxControl/CreateSandbox
 ```
 
+`create_json` is a JSON `CreateOptions` (`internal/runner/runtime`): `{}` for the defaults, `{"egress":"none"}` for no egress. Unknown values are `InvalidArgument`. The response echoes what was applied in `applied_create_json`; the API refuses a sandbox whose echo does not match.
+
 The bootstrap script puts **both** compose runner hostnames in the **same** control server certificate SAN list, so one `control-grpc-server` cert works on every local runner.
 
 ## API: `RunnerRegistry` (bidirectional stream)

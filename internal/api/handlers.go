@@ -127,20 +127,29 @@ type SandboxResponse struct {
 	CreatedAt    int64  `json:"created_at"`
 	LastActiveAt int64  `json:"last_active_at"`
 	Ephemeral    bool   `json:"ephemeral"`
+	Egress       string `json:"egress"`
 }
 
 type createSandboxRequest struct {
 	ID        *string `json:"id"`
 	Ephemeral bool    `json:"ephemeral"`
+	Egress    string  `json:"egress"`
 }
 
 func sandboxResponse(rec *store.SandboxRecord) *SandboxResponse {
+	egress := rec.Egress
+	if egress == "" {
+		// Rows from before the column existed carry no value; they were created
+		// with the only policy there was.
+		egress = string(runnerruntime.EgressPublic)
+	}
 	return &SandboxResponse{
 		ID:           rec.ID,
 		Status:       rec.Status,
 		CreatedAt:    rec.CreatedAt,
 		LastActiveAt: rec.LastActiveAt,
 		Ephemeral:    rec.Ephemeral,
+		Egress:       egress,
 	}
 }
 
@@ -247,6 +256,11 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
+		egress, err := runnerruntime.ParseEgress(req.Egress)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid egress: must be \"public\" or \"none\"")
+			return
+		}
 
 		sandboxID := generateUUID()
 		if req.ID != nil {
@@ -341,10 +355,17 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 			"runner_capacity_stopped", run.CapacityStopped,
 			"tenant_id", tenantID,
 			"ephemeral", req.Ephemeral,
+			"egress", egress,
 		)
+		requested := runnerruntime.CreateOptions{Egress: egress}
+		createJSON, err := json.Marshal(requested)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 		createCtx, cancelCreate := context.WithTimeout(context.WithoutCancel(r.Context()), runnerCreateBudget)
 		defer cancelCreate()
-		gresp, err := runnerctl.CreateSandbox(createCtx, controlAddr, cfg.RunnerAPIKey, tlsCfg, sandboxID, "{}")
+		gresp, err := runnerctl.CreateSandbox(createCtx, controlAddr, cfg.RunnerAPIKey, tlsCfg, sandboxID, string(createJSON))
 		if err != nil {
 			slog.ErrorContext(
 				r.Context(),
@@ -355,6 +376,43 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 				"error", err,
 			)
 			writeError(w, http.StatusInternalServerError, "failed to create container: "+err.Error())
+			return
+		}
+		// Undoes the runner create when the sandbox cannot be tracked as asked.
+		// Fresh deadline: the create may have used up most of createCtx.
+		rollbackRunnerCreate := func() {
+			deleteCtx, cancelDelete := context.WithTimeout(context.WithoutCancel(r.Context()), runnerCreateBudget)
+			delErr := runnerctl.DeleteSandbox(deleteCtx, controlAddr, cfg.RunnerAPIKey, tlsCfg, sandboxID)
+			cancelDelete()
+			if delErr != nil {
+				slog.ErrorContext(
+					r.Context(),
+					"create sandbox failed: compensating runner delete, sandbox is untracked",
+					"sandbox_id", sandboxID,
+					"runner_id", run.ID,
+					"runner_control_grpc_addr", controlAddr,
+					"error", delErr,
+				)
+			}
+		}
+
+		// The runner echoes the options it applied; a runner from before egress
+		// modes echoes nothing and applied the defaults. Anything but what was
+		// asked for would leave the record saying one thing and the network
+		// another, so the sandbox is removed rather than tracked.
+		applied, err := runnerruntime.ParseCreateOptions(gresp.GetAppliedCreateJson())
+		if err != nil || *applied != requested {
+			rollbackRunnerCreate()
+			slog.ErrorContext(
+				r.Context(),
+				"create sandbox failed: runner did not apply the requested egress",
+				"sandbox_id", sandboxID,
+				"runner_id", run.ID,
+				"requested_egress", egress,
+				"applied_create_json", gresp.GetAppliedCreateJson(),
+				"error", err,
+			)
+			writeError(w, http.StatusBadGateway, "runner did not apply the requested egress")
 			return
 		}
 		containerIP := gresp.GetContainerIp()
@@ -371,22 +429,10 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 			RunnerControlGRPCAddr: controlAddr,
 			TenantID:              tenantID,
 			Ephemeral:             req.Ephemeral,
+			Egress:                string(egress),
 		}
 		if err := s.Create(record); err != nil {
-			// Fresh deadline: the create may have used up most of createCtx.
-			deleteCtx, cancelDelete := context.WithTimeout(context.WithoutCancel(r.Context()), runnerCreateBudget)
-			delErr := runnerctl.DeleteSandbox(deleteCtx, controlAddr, cfg.RunnerAPIKey, tlsCfg, sandboxID)
-			cancelDelete()
-			if delErr != nil {
-				slog.ErrorContext(
-					r.Context(),
-					"create sandbox failed: compensating runner delete, sandbox is untracked",
-					"sandbox_id", sandboxID,
-					"runner_id", run.ID,
-					"runner_control_grpc_addr", controlAddr,
-					"error", delErr,
-				)
-			}
+			rollbackRunnerCreate()
 			if existing, getErr := s.Get(sandboxID); getErr == nil && existing != nil {
 				if canAccessSandbox(r, existing) {
 					writeJSON(w, http.StatusOK, sandboxResponse(existing))

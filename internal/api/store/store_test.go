@@ -21,6 +21,7 @@ func TestStorePersistsDockerMetadata(t *testing.T) {
 		ContainerIP:  "172.30.0.2",
 		DaemonPort:   8081,
 		Ephemeral:    true,
+		Egress:       "none",
 	}
 	if err := s.Create(rec); err != nil {
 		t.Fatalf("create record: %v", err)
@@ -33,8 +34,17 @@ func TestStorePersistsDockerMetadata(t *testing.T) {
 	if got == nil {
 		t.Fatal("expected record")
 	}
-	if got.ContainerIP != rec.ContainerIP || got.DaemonPort != rec.DaemonPort || !got.Ephemeral {
+	if got.ContainerIP != rec.ContainerIP || got.DaemonPort != rec.DaemonPort || !got.Ephemeral || got.Egress != "none" {
 		t.Fatalf("unexpected docker metadata: %+v", got)
+	}
+
+	// A record stored without a mode reads back as public, like rows from
+	// before the column existed.
+	if err := s.Create(&SandboxRecord{ID: "sandbox-2", Status: "running", CreatedAt: 1, LastActiveAt: 2}); err != nil {
+		t.Fatalf("create record without egress: %v", err)
+	}
+	if got, err := s.Get("sandbox-2"); err != nil || got == nil || got.Egress != "public" {
+		t.Fatalf("record without egress = %+v err=%v, want public", got, err)
 	}
 }
 

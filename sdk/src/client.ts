@@ -43,9 +43,9 @@ export class SandboxClient {
   // #region Sandbox lifecycle
 
   /**
-   * Creates a new sandbox.
+   * Creates a new sandbox. `options.egress` is required.
    */
-  async createSandbox(options?: CreateSandboxOptions): Promise<SandboxRecord> {
+  async createSandbox(options: CreateSandboxOptions): Promise<SandboxRecord> {
     return createSandbox(this.http, options);
   }
 

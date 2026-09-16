@@ -137,7 +137,8 @@ Sandboxes past their idle-delete window stay listed until the sweeper removes th
     "status": "string",
     "created_at": 1700000000,
     "last_active_at": 1700000000,
-    "ephemeral": false
+    "ephemeral": false,
+    "egress": "public"
   }
 ]
 ```
@@ -176,11 +177,13 @@ Disconnecting before the response does not cancel the create: the sandbox is sti
 }
 ```
 
+- `egress` (string, default `"public"`) — outbound network policy. `"public"`: the internet, minus private and other non-public IPv4 ranges ([security-model.md](security-model.md#guest-to-host-and-network)). `"none"`: nothing leaves the sandbox, DNS included; the API still reaches it. Fixed at creation: reconnecting to an existing `id` keeps and echoes the mode it was created with.
+
 With a tenant key, the sandbox is owned by that tenant and counts toward the tenant's `max_sandboxes` quota (`403` when exceeded). With an admin key, the sandbox is stored with `tenant_id` `__admin__` (admin-owned; not visible to tenant keys; admins see all sandboxes in list).
 
 Quota enforcement is a soft check-then-act (`CountByTenant` before create). Concurrent `POST /sandboxes` from the same tenant can exceed `max_sandboxes` by up to the number of creates in flight and consume shared runner capacity. Treat the limit as a soft ceiling, not a hard atomic reservation.
 
-Resource limits (memory, CPU, process count) are configured on the runner via environment variables. Network policy blocks all private IP ranges and allows public internet access.
+Resource limits (memory, CPU, process count) are configured on the runner via environment variables.
 
 **Response:** `201 Created` for a new sandbox, or `200 OK` when returning an existing caller-supplied sandbox
 
@@ -190,11 +193,12 @@ Resource limits (memory, CPU, process count) are configured on the runner via en
   "status": "string",
   "created_at": 1700000000,
   "last_active_at": 1700000000,
-  "ephemeral": false
+  "ephemeral": false,
+  "egress": "public"
 }
 ```
 
-**Errors:** `400` invalid request body or supplied id, `403` tenant sandbox quota exceeded, `409` if the supplied id is owned by another tenant/admin or the tenant was deleted before the sandbox row could be stored (runner create is rolled back), `502` stale sandbox cleanup failed, `503` no sandbox runners are registered or available
+**Errors:** `400` invalid request body, supplied id or `egress` value, `403` tenant sandbox quota exceeded, `409` if the supplied id is owned by another tenant/admin or the tenant was deleted before the sandbox row could be stored (runner create is rolled back), `502` stale sandbox cleanup failed, or the runner did not confirm the requested `egress` (runner create is rolled back; a runner from before egress modes only serves `public`), `503` no sandbox runners are registered or available
 
 **Examples:**
 
@@ -214,6 +218,12 @@ curl -X POST http://localhost:8080/sandboxes \
   -H "X-Api-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"ephemeral":true}'
+
+# No egress
+curl -X POST http://localhost:8080/sandboxes \
+  -H "X-Api-Key: YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"egress":"none"}'
 ```
 
 ---
@@ -235,11 +245,12 @@ This is a read-only status check: it does not update `last_active_at` or extend 
   "status": "string",
   "created_at": 1700000000,
   "last_active_at": 1700000000,
-  "ephemeral": false
+  "ephemeral": false,
+  "egress": "public"
 }
 ```
 
-`status` is `running` or `stopped`; an ephemeral sandbox is only ever `running`.
+`status` is `running` or `stopped`; an ephemeral sandbox is only ever `running`. `egress` is the mode the sandbox was created with.
 
 **Errors:** `400` invalid id, `404` not found
 

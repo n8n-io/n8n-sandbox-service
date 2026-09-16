@@ -910,7 +910,7 @@ test.describe('Tenant isolation', () => {
 
   test('admin key can create and list without minting a tenant key', async ({ request }) => {
     const admin = adminClient();
-    const record = await admin.createSandbox();
+    const record = await admin.createSandbox({ egress: 'public' });
     try {
       expect(record.id).toBeTruthy();
 

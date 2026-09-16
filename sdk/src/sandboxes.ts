@@ -4,13 +4,13 @@ import type { CreateSandboxOptions, SandboxRecord, SandboxWireResponse } from ".
 
 export async function createSandbox(
   http: HttpClient,
-  options?: CreateSandboxOptions,
+  options: CreateSandboxOptions,
 ): Promise<SandboxRecord> {
   const response = await http.requestJson<SandboxWireResponse>("POST", "/sandboxes", {
-    data: { id: options?.id, ephemeral: options?.ephemeral },
+    data: { id: options.id, ephemeral: options.ephemeral, egress: options.egress },
     // Only a caller-supplied id makes a repeated POST idempotent; retrying an
     // anonymous create would provision a second sandbox.
-    isSafeToRetry: options?.id !== undefined,
+    isSafeToRetry: options.id !== undefined,
   });
   return mapSandboxRecord(response);
 }
@@ -37,5 +37,6 @@ function mapSandboxRecord(wire: SandboxWireResponse): SandboxRecord {
     createdAt: wire.created_at,
     lastActiveAt: wire.last_active_at,
     ephemeral: wire.ephemeral === true,
+    egress: wire.egress ?? "public",
   };
 }

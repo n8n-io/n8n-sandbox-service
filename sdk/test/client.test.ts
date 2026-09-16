@@ -54,13 +54,14 @@ describe("SandboxClient", () => {
       created_at: 1000,
       last_active_at: 1000,
       ephemeral: false,
+      egress: "public",
     });
 
-    const result = await client.createSandbox();
+    const result = await client.createSandbox({ egress: "public" });
 
-    // No options serialises to `{}`; an anonymous create is never retry-safe.
+    // Only the egress mode goes on the wire; an anonymous create is never retry-safe.
     expect(mock.requestJson).toHaveBeenCalledWith("POST", "/sandboxes", {
-      data: {},
+      data: { egress: "public" },
       isSafeToRetry: false,
     });
     expect(result).toEqual({
@@ -69,7 +70,28 @@ describe("SandboxClient", () => {
       createdAt: 1000,
       lastActiveAt: 1000,
       ephemeral: false,
+      egress: "public",
     });
+  });
+
+  it("createSandbox with egress none sends the mode and maps it back", async () => {
+    const mock = getMockHttp(client);
+    mock.requestJson.mockResolvedValue({
+      id: "abc",
+      status: "running",
+      created_at: 1000,
+      last_active_at: 1000,
+      ephemeral: false,
+      egress: "none",
+    });
+
+    const result = await client.createSandbox({ egress: "none" });
+
+    expect(mock.requestJson).toHaveBeenCalledWith("POST", "/sandboxes", {
+      data: { egress: "none" },
+      isSafeToRetry: false,
+    });
+    expect(result.egress).toBe("none");
   });
 
   it("createSandbox with ephemeral sends the flag without marking the POST retry-safe", async () => {
@@ -80,12 +102,13 @@ describe("SandboxClient", () => {
       created_at: 1000,
       last_active_at: 1000,
       ephemeral: true,
+      egress: "public",
     });
 
-    const result = await client.createSandbox({ ephemeral: true });
+    const result = await client.createSandbox({ ephemeral: true, egress: "public" });
 
     expect(mock.requestJson).toHaveBeenCalledWith("POST", "/sandboxes", {
-      data: { ephemeral: true },
+      data: { ephemeral: true, egress: "public" },
       isSafeToRetry: false,
     });
     expect(result.ephemeral).toBe(true);
@@ -99,17 +122,22 @@ describe("SandboxClient", () => {
       created_at: 1000,
       last_active_at: 1000,
       ephemeral: true,
+      egress: "public",
     });
 
-    await client.createSandbox({ id: "11111111-1111-4111-8111-111111111111", ephemeral: true });
+    await client.createSandbox({
+      id: "11111111-1111-4111-8111-111111111111",
+      ephemeral: true,
+      egress: "public",
+    });
 
     expect(mock.requestJson).toHaveBeenCalledWith("POST", "/sandboxes", {
-      data: { id: "11111111-1111-4111-8111-111111111111", ephemeral: true },
+      data: { id: "11111111-1111-4111-8111-111111111111", ephemeral: true, egress: "public" },
       isSafeToRetry: true,
     });
   });
 
-  it("maps a missing ephemeral field to false", async () => {
+  it("maps missing ephemeral and egress fields to their pre-flag values", async () => {
     const mock = getMockHttp(client);
     mock.requestJson.mockResolvedValue({
       id: "abc",
@@ -121,6 +149,7 @@ describe("SandboxClient", () => {
     const result = await client.getSandbox("abc");
 
     expect(result.ephemeral).toBe(false);
+    expect(result.egress).toBe("public");
   });
 
   it("creates or reuses a caller-supplied sandbox ID", async () => {
@@ -131,12 +160,16 @@ describe("SandboxClient", () => {
       created_at: 1000,
       last_active_at: 1000,
       ephemeral: false,
+      egress: "public",
     });
 
-    const result = await client.createSandbox({ id: "11111111-1111-4111-8111-111111111111" });
+    const result = await client.createSandbox({
+      id: "11111111-1111-4111-8111-111111111111",
+      egress: "public",
+    });
 
     expect(mock.requestJson).toHaveBeenCalledWith("POST", "/sandboxes", {
-      data: { id: "11111111-1111-4111-8111-111111111111" },
+      data: { id: "11111111-1111-4111-8111-111111111111", egress: "public" },
       isSafeToRetry: true,
     });
     expect(result.id).toBe("11111111-1111-4111-8111-111111111111");

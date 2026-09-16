@@ -232,8 +232,9 @@ func (r *Runtime) activateSandboxVM(ctx context.Context, state *sandboxState, t 
 	}
 	// Still a timed step on a slot the wirer already built, where it only takes the
 	// slot's lock: setup_network_ms then reads near zero, which is how the pre-wire
-	// hit rate shows up in the create and wake events.
-	if err := t.step(stepSetupNetwork, func() error { return r.setupNetwork(ctx, state.slot) }); err != nil {
+	// hit rate shows up in the create and wake events. Egress "none" adds one
+	// iptables insert, on create and on every wake: the slot it wakes on is fresh.
+	if err := t.step(stepSetupNetwork, func() error { return r.setupNetwork(ctx, state.slot, state.blockEgress) }); err != nil {
 		return fmt.Errorf("setup firecracker network: %w", err)
 	}
 	r.mu.Lock()

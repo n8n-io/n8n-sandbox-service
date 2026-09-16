@@ -5,6 +5,7 @@ import {
   SandboxClient,
   SandboxServiceError,
   type CreateSandboxOptions,
+  type EgressMode,
   type ExecResult,
 } from '@n8n/sandbox-client';
 import { execFileSync } from 'node:child_process';
@@ -86,9 +87,23 @@ async function headers(extra?: Record<string, string>): Promise<Record<string, s
   return { 'X-Api-Key': await getApiKey(), ...extra };
 }
 
-export async function createSandbox(options?: CreateSandboxOptions): Promise<string> {
+/**
+ * Options for the e2e createSandbox helpers. The SDK requires `egress`; the
+ * suite defaults it to `public`, the policy every test predating egress modes
+ * was written against.
+ */
+export type E2ECreateSandboxOptions = Omit<CreateSandboxOptions, 'egress'> & {
+  egress?: EgressMode;
+};
+
+export const withDefaultEgress = (options?: E2ECreateSandboxOptions): CreateSandboxOptions => ({
+  ...options,
+  egress: options?.egress ?? 'public',
+});
+
+export async function createSandbox(options?: E2ECreateSandboxOptions): Promise<string> {
   await ensureTenantAuth();
-  const record = await client.createSandbox(options);
+  const record = await client.createSandbox(withDefaultEgress(options));
   return record.id;
 }
 

@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -84,9 +85,21 @@ func (s *SandboxControlGRPC) CreateSandbox(ctx context.Context, req *pb.CreateSa
 	if !isValidID(sandboxID) {
 		return nil, status.Error(codes.InvalidArgument, "invalid sandbox id")
 	}
+	// An unknown egress is refused rather than defaulted, so an API ahead of this
+	// runner cannot have a policy it asked for silently dropped.
+	opts, err := runnerruntime.ParseCreateOptions(req.GetCreateJson())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid create options: "+err.Error())
+	}
+	// Echoed so the API can tell a runner that applied the options from one that
+	// ignored them. Marshalled here, before anything is created.
+	applied, err := json.Marshal(opts)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 	ctx = withTrace(ctx)
 	start := time.Now()
-	info, err := s.Runtime.CreateSandbox(ctx, sandboxID, &runnerruntime.CreateOptions{})
+	info, err := s.Runtime.CreateSandbox(ctx, sandboxID, opts)
 	s.Rec.ObserveContainerOp(metrics.OpCreate, err == nil && info != nil, time.Since(start))
 	if err != nil {
 		return nil, toGRPCError(err)
@@ -94,7 +107,7 @@ func (s *SandboxControlGRPC) CreateSandbox(ctx context.Context, req *pb.CreateSa
 	if info == nil {
 		return nil, status.Error(codes.Internal, "create sandbox returned nil info")
 	}
-	return &pb.CreateSandboxResponse{SandboxId: sandboxID, ContainerIp: info.IP}, nil
+	return &pb.CreateSandboxResponse{SandboxId: sandboxID, ContainerIp: info.IP, AppliedCreateJson: string(applied)}, nil
 }
 
 // StopSandbox stops the sandbox without removing it.
