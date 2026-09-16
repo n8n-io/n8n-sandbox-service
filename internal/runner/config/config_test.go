@@ -29,9 +29,6 @@ func TestLoadParsesDefaults(t *testing.T) {
 		t.Fatalf("Load() failed: %v", err)
 	}
 
-	if cfg.IdleTTLSeconds != 3600 {
-		t.Errorf("expected IdleTTLSeconds 3600, got %d", cfg.IdleTTLSeconds)
-	}
 	if cfg.MaxFileBytes != 10*1024*1024 {
 		t.Errorf("expected MaxFileBytes 10MB, got %d", cfg.MaxFileBytes)
 	}

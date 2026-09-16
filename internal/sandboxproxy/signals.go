@@ -1,3 +1,5 @@
+// Package sandboxproxy defines the response headers the runner uses to signal
+// sandbox state to the API and the client across the two proxy hops.
 package sandboxproxy
 
 import (

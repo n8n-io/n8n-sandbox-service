@@ -94,7 +94,7 @@ func sqliteDSN(dbPath string) string {
 	return dbPath + "?" + fk
 }
 
-// New opens SQLite at dbPath. It is an alias for NewSQLite for backward compatibility.
+// New opens SQLite at dbPath. It is an alias for NewSQLite.
 func New(dbPath string) (*SQLiteStore, error) {
 	return NewSQLite(dbPath)
 }

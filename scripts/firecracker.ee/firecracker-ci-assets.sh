@@ -14,7 +14,7 @@ Usage:
   firecracker-ci-assets.sh verify [DEST_DIR]
 
 Download Firecracker CI vmlinux into DEST_DIR and write manifest.env for rootfs
-template / snapshot builds. Ubuntu squashfs is no longer used for guest userspace.
+template / snapshot builds.
 EOF
 }
 

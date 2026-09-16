@@ -83,10 +83,14 @@ function decodeChunk(decoder: TextDecoder, chunk: unknown, options?: TextDecodeO
   return decoder.decode(Buffer.from(String(chunk), "utf-8"), options);
 }
 
-/** Parses a single NDJSON line into a typed exec event. Returns an error event on invalid input. */
+/**
+ * Parses a single NDJSON line into a typed exec event. Well-formed JSON of an unknown
+ * shape becomes an error event; malformed JSON throws InvalidStreamEventError.
+ */
 export function parseExecEvent(line: string): ExecEvent {
   try {
-    const json = JSON.parse(line) as JsonObject;
+    const json = JSON.parse(line) as JsonObject | null;
+    if (json === null) return { type: "error", error: `Invalid exec event payload: ${line}` };
 
     if (isStartedEvent(json)) return json;
     if (isStdoutEvent(json)) return json;

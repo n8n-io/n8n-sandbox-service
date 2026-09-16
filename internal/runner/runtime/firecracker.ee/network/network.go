@@ -1,3 +1,5 @@
+// Package network sets up the per-sandbox network namespace, veth pair and
+// egress rules for Firecracker sandboxes.
 package network
 
 import (

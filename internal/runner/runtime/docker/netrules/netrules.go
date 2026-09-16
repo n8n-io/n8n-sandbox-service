@@ -1,3 +1,5 @@
+// Package netrules manages the iptables rules on the Docker runner bridge:
+// egress denylist, host block and per-container daemon-port protection.
 package netrules
 
 import (
@@ -109,23 +111,11 @@ func ApplyPolicy(bridgeIface, containerID, sourceIP, gatewayIP string, daemonPor
 }
 
 // ensureBridgePolicy installs the rules that hold for every container on the
-// runner bridge: egress filtering on forwarded traffic, and a block on reaching
-// the runner host itself.
-//
-// Both match on the bridge interface rather than on a container address,
-// so the policy does not depend on an address remaining fixed. Docker-backed
-// sandboxes are created without CAP_NET_ADMIN and cannot normally change their
-// interface addresses; interface matching remains defense in depth if that
-// capability boundary or another networking assumption regresses. The
-// interface a packet arrives on is not something the container can choose.
-//
-// The host block lives in INPUT because DOCKER-USER is only consulted for
-// forwarded packets: anything addressed to a host-local address (the bridge
-// gateway, the host's own private IP) is delivered locally and never reaches
-// the egress chain. Everything arriving in INPUT is locally destined by
-// definition, so one drop covers every host address at once. Established
-// traffic is exempt, because the runner dials the sandbox daemon and the
-// replies arrive here.
+// runner bridge: an egress chain in DOCKER-USER (forwarded traffic) and a block
+// in INPUT on reaching the runner host itself, both keyed on the bridge
+// interface. Established traffic is exempt from the INPUT block because the
+// runner dials the daemon and the replies arrive here. Why INPUT and why
+// interface matching: docs/security-model.md, "Guest to host and network".
 func ensureBridgePolicy(bridgeIface string) error {
 	if bridgeIface == "" {
 		return fmt.Errorf("bridge interface is required")

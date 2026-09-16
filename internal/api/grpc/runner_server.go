@@ -1,3 +1,5 @@
+// Package grpcapi serves the RunnerRegistry gRPC stream on which runners register
+// and send heartbeats.
 package grpcapi
 
 import (

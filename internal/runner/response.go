@@ -20,8 +20,7 @@ func writeSandboxNotFound(w http.ResponseWriter) {
 // act on it. It is also deliberately not 503, which the SDK retries and which would
 // swallow the signal, and not 404, which makes the API drop its store row.
 //
-// No Retry-After, because there is nothing to wait for. That changes the day
-// recovery moves to the background rather than blocking this request.
+// No Retry-After, because there is nothing to wait for.
 func writeSandboxRestarted(w http.ResponseWriter) {
 	sandboxproxy.MarkSandboxRestarted(w.Header())
 	writeJSON(w, http.StatusConflict, map[string]string{

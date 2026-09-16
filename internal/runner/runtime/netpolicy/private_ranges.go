@@ -1,3 +1,4 @@
+// Package netpolicy holds the egress denylist shared by both runtimes.
 package netpolicy
 
 // PrivateRangesV4 lists IPv4 destinations blocked for sandbox egress. Matches

@@ -224,6 +224,13 @@ describe("parseExecEvent", () => {
     }).toThrow(InvalidStreamEventError);
   });
 
+  it("returns error for a JSON null", () => {
+    expect(parseExecEvent("null")).toEqual({
+      type: "error",
+      error: "Invalid exec event payload: null",
+    });
+  });
+
   it("returns error for exit event with wrong field types", () => {
     expect(
       parseExecEvent(

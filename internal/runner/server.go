@@ -1,3 +1,5 @@
+// Package runner is the runtime-agnostic runner process: the HTTP router the API
+// proxies sandbox requests to, and the SandboxControl gRPC server.
 package runner
 
 import (
@@ -11,7 +13,7 @@ import (
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 )
 
-// NewRouter creates the HTTP handler for container operations. If rec is
+// NewRouter creates the HTTP handler for sandbox operations. If rec is
 // enabled, its /metrics handler is mounted and HTTPMiddleware wraps the chain.
 func NewRouter(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder) http.Handler {
 	mux := http.NewServeMux()

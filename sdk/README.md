@@ -27,7 +27,7 @@ By default the client retries transient failures: 3 extra attempts (four tries t
 - Tune backoff: `retry: { attempts: 5, baseDelayMs: 100, maxDelayMs: 30_000, jitter: false }`.
 - Also retry other statuses (only if you accept the risk): `retry: { retryOnStatuses: [429, 502, 503] }`.
 - Idempotent methods (`GET`, `HEAD`, `OPTIONS`, `PUT`, `DELETE`) use this policy automatically.
-- `POST` is not retried unless you set `isSafeToRetry: true` on that specific request (for example when the server makes the operation idempotent, as with `exec_id` on exec).
+- `POST` is retried only where the service makes it idempotent: `createSandbox` with an explicit `id`. `exec` has its own resume loop instead (below).
 
 `exec` still has its own stream resume loop (`exec_id`, `POST` then `GET` follow). Constructor `retry` applies to each underlying HTTP call (so `GET` resume lines benefit from the default policy). It does not replace the exec event/state machine.
 
@@ -181,9 +181,9 @@ try {
 }
 ```
 
-It is never retried automatically, by design: an invisible retry would hand back a working sandbox and hide the loss. Two consequences to plan for — a completed execution is no longer readable (`getExecution` returns 404), and a caller-supplied `execId` is no longer idempotent, so re-posting one that ran before the restart runs the command again.
+It is never retried automatically: an invisible retry would hide the loss. After a restart, a completed execution is no longer readable (`resumeExecution` throws a 404 `SandboxServiceError`).
 
-A crash is not the only way memory goes, so do not treat this error as the only signal for it. A sandbox left idle long enough is stopped by the service, and depending on the deployment's runtime, waking it can cost the same three things — with no `SandboxCrashedError`, because an idle stop is reported through `status` instead: `getSandbox` returns `stopped` for it, while a crash leaves `running`. So checking `status` before relying on background processes is what catches the idle stop in advance. A crash cannot be caught that way — `status` stays `running` right through it — and the `SandboxCrashedError` above is its only notice.
+An idle stop can also lose memory (on the Docker runtime a stopped container is restarted, not resumed) but raises no `SandboxCrashedError`; it shows as `status: "stopped"` in `getSandbox`, whereas a crash leaves `status` at `running`. Details: [API.md](https://github.com/n8n-io/n8n-sandbox-service/blob/main/docs/API.md#http-409-sandbox_restarted--the-sandbox-came-back-without-its-memory).
 
 ## Development
 

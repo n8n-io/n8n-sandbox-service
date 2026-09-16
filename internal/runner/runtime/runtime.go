@@ -1,3 +1,5 @@
+// Package runtime defines the Runtime contract a sandbox backend implements and
+// the types shared by the Docker and Firecracker implementations.
 package runtime
 
 import (
@@ -52,7 +54,7 @@ type WakeResult struct {
 // Capacity reports concurrent slot usage and optionally how many managed
 // sandboxes are stopped (not slot-blocking).
 type Capacity struct {
-	Used    int32 // slot-blocking sandboxes (running microVMs / active containers)
+	Used    int32 // slot-blocking sandboxes (Firecracker: running microVMs; Docker: all managed containers, stopped included)
 	Total   int32
 	Stopped int32 // managed but not slot-blocking (Firecracker stopped snapshots)
 }

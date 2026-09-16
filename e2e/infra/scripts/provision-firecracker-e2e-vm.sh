@@ -2,7 +2,8 @@
 # Provisions an Azure VM for Firecracker e2e tests using Terraform, transfers
 # the project source, and builds Firecracker host dependencies plus test assets.
 # Requires: RESOURCE_GROUP env var.
-# Outputs: vm_name, vm_ip, ssh_key_path (to $GITHUB_OUTPUT when running in CI).
+# Outputs: vm_name, vm_ip, vm_private_ip, ssh_key_path and, with a peer VM,
+# peer_vm_public_ip, peer_vm_private_ip (to $GITHUB_OUTPUT when running in CI).
 set -euo pipefail
 
 cd "$(dirname "$0")/../../.."

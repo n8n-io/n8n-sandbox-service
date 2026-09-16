@@ -15,8 +15,10 @@ on:
         default: true
         type: boolean
 
+# The prerelease and its tag are created with the release app's token, not
+# GITHUB_TOKEN, so this token only needs to read the checkout.
 permissions:
-  contents: write
+  contents: read
   id-token: write
 
 concurrency:
@@ -30,10 +32,21 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - name: Resolve version
+      # The service/v* tag ruleset only lets the release app create tags. This
+      # token reserves the tag; the release step mints its own, since app tokens
+      # expire after an hour and the image builds sit in between.
+      - name: Generate GitHub App Token for the tag
+        id: reserve-token
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
+        with:
+          app-id: ${{ secrets.N8N_ASSISTANT_APP_ID }}
+          private-key: ${{ secrets.N8N_ASSISTANT_PRIVATE_KEY }}
+
+      - name: Resolve version and reserve its tag
         id: meta
         env:
           VERSION_INPUT: ${{ inputs.version }}
+          GH_TOKEN: ${{ steps.reserve-token.outputs.token }}
         run: |
           BASE="$(tr -d '[:space:]' < VERSION)"
           SHA="$(git rev-parse --short HEAD)"
@@ -48,8 +61,31 @@ jobs:
           elif [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::version '${VERSION}' is a release version, which a staging candidate must not claim. Add a suffix, for example '${VERSION}-rc.1'."
             exit 1
+          # The label becomes a tag, an asset name and image tags, and later steps
+          # splice it into shell commands, so it is restricted to tag-safe characters.
+          elif [[ ! "$VERSION" =~ ^[0-9A-Za-z][0-9A-Za-z._-]*$ ]]; then
+            echo "::error::version '${VERSION}' may only contain letters, digits, '.', '_' and '-', and must start with a letter or digit."
+            exit 1
+          # The character class still admits names git rejects ('..', a trailing '.' or '.lock').
+          elif ! git check-ref-format "refs/tags/service/v${VERSION}"; then
+            echo "::error::version '${VERSION}' is not a valid git tag name."
+            exit 1
           fi
           TAG="service/v${VERSION}"
+          # Releases are immutable: a published prerelease cannot have its asset
+          # replaced, and its tag can never be reused, so a label is single-use.
+          # Creating the ref is atomic and fails if it exists, so a repeat or a
+          # concurrent run with the same label stops here, before any image is
+          # pushed under it. A run that fails later leaves the tag behind and the
+          # label is spent; the next run needs a new one.
+          if ! out=$(gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" -f ref="refs/tags/${TAG}" -f sha="${FULL_SHA}" 2>&1); then
+            if [[ "$out" == *"Reference already exists"* ]]; then
+              echo "::error::${TAG} already exists. Releases are immutable, so a label cannot be published twice; pass a new 'version' label, for example '${VERSION}.2'."
+            else
+              echo "::error::Could not create ${TAG}: ${out}"
+            fi
+            exit 1
+          fi
           TARBALL="dist/firecracker-golden-build-${VERSION}.tar.gz"
           {
             echo "version=${VERSION}"
@@ -63,20 +99,20 @@ jobs:
         uses: ./.github/actions/sandbox-service-test
 
       # Staging pins the ACR sandbox candidate, not Docker Hub: the guest userspace
-      # must match the images this run publishes. Pin the commit-SHA tag rather than
-      # the version label, which is caller-supplied and can be reused by a later run
-      # from another commit — the rootfs would then drift from the manifest git_sha.
+      # must match the images this run publishes. Pin the commit-SHA tag, which names
+      # exactly the image this run pushed, rather than the caller-supplied label.
       - name: Package Firecracker golden build tarball
         env:
           ACR_NAME: ${{ secrets.AZURE_ACR_NAME }}
           VERSION: ${{ steps.meta.outputs.version }}
           FULL_SHA: ${{ steps.meta.outputs.full_sha }}
+          TARBALL: ${{ steps.meta.outputs.tarball }}
         run: |
           chmod +x scripts/package-firecracker-golden-build.sh
           SANDBOX_IMAGE_REF="${ACR_NAME}.azurecr.io/n8n-sandbox-service-sandbox:${FULL_SHA}" \
             ./scripts/package-firecracker-golden-build.sh \
             --version "${VERSION}" \
-            --output "${{ steps.meta.outputs.tarball }}"
+            --output "${TARBALL}"
 
       - name: Azure Service Principal login (OIDC)
         uses: azure/login@cb79c773a3cfa27f31f25eb3f677781210c9ce3d # v1
@@ -117,9 +153,16 @@ jobs:
           build_push Dockerfile.ee.runner-firecracker n8n-sandbox-service-runner-firecracker linux/amd64
           build_push Dockerfile.sandbox n8n-sandbox-service-sandbox
 
+      - name: Generate GitHub App Token for the release
+        id: release-token
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
+        with:
+          app-id: ${{ secrets.N8N_ASSISTANT_APP_ID }}
+          private-key: ${{ secrets.N8N_ASSISTANT_PRIVATE_KEY }}
+
       - name: Create GitHub prerelease
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.release-token.outputs.token }}
           VERSION: ${{ steps.meta.outputs.version }}
           TAG: ${{ steps.meta.outputs.tag }}
           TARBALL: ${{ steps.meta.outputs.tarball }}
@@ -158,13 +201,11 @@ jobs:
           \`\`\`
           EOF
 
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$TARBALL" --clobber
-            gh release edit "$TAG" --prerelease --title "Service staging ${VERSION}" --notes-file "$NOTES_FILE"
-          else
-            gh release create "$TAG" \
-              --prerelease \
-              --title "Service staging ${VERSION}" \
-              --notes-file "$NOTES_FILE" \
-              "$TARBALL"
-          fi
+          # The tarball goes in this one call: gh creates a draft, uploads, then
+          # publishes, and nothing can be attached once the release is immutable.
+          # The release lands on the tag reserved above, at the built commit.
+          gh release create "$TAG" \
+            --prerelease \
+            --title "Service staging ${VERSION}" \
+            --notes-file "$NOTES_FILE" \
+            "$TARBALL"
