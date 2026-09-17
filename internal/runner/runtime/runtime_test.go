@@ -8,9 +8,9 @@ func TestBlockEgress(t *testing.T) {
 		opts *CreateOptions
 		want bool
 	}{
-		{name: "nil", opts: nil},
-		{name: "empty", opts: &CreateOptions{}},
-		{name: "public", opts: &CreateOptions{Egress: EgressPublic}},
+		{name: "nil", opts: nil, want: false},
+		{name: "empty", opts: &CreateOptions{}, want: false},
+		{name: "public", opts: &CreateOptions{Egress: EgressPublic}, want: false},
 		{name: "none", opts: &CreateOptions{Egress: EgressNone}, want: true},
 	} {
 		if got := tc.opts.BlockEgress(); got != tc.want {
