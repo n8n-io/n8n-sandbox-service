@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { SandboxClient } from "../src/client.js";
-import { SandboxServiceError } from "../src/errors.js";
+import { EgressMismatchError, SandboxServiceError } from "../src/errors.js";
 import { HttpClient } from "../src/http.js";
 
 vi.mock("../src/http.js", () => {
@@ -135,6 +135,26 @@ describe("SandboxClient", () => {
       data: { id: "11111111-1111-4111-8111-111111111111", ephemeral: true, egress: "public" },
       isSafeToRetry: true,
     });
+  });
+
+  it("createSandbox rejects a sandbox whose egress is not the one requested", async () => {
+    const mock = getMockHttp(client);
+    const record = { id: "abc", status: "running", created_at: 1000, last_active_at: 1000 };
+
+    // No mode reported (old API): only public can be trusted.
+    mock.requestJson.mockResolvedValue(record);
+    await expect(client.createSandbox({ egress: "public" })).resolves.toMatchObject({
+      egress: "public",
+    });
+    const err = await client.createSandbox({ egress: "none" }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(EgressMismatchError);
+    expect(err).toMatchObject({ sandboxId: "abc", requested: "none", actual: "public" });
+
+    // Reconnect to a sandbox created with the other mode.
+    mock.requestJson.mockResolvedValue({ ...record, egress: "none" });
+    await expect(client.createSandbox({ id: "abc", egress: "public" })).rejects.toBeInstanceOf(
+      EgressMismatchError,
+    );
   });
 
   it("maps missing ephemeral and egress fields to their pre-flag values", async () => {

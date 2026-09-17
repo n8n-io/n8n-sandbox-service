@@ -57,12 +57,16 @@ type CreateOptions struct {
 }
 
 // ParseCreateOptions decodes the wire form of CreateOptions. Empty means the
-// defaults; Egress is validated with ParseEgress.
+// defaults; otherwise it must be an object with a valid Egress.
 func ParseCreateOptions(s string) (*CreateOptions, error) {
 	opts := &CreateOptions{}
 	if strings.TrimSpace(s) != "" {
-		if err := json.Unmarshal([]byte(s), opts); err != nil {
+		// Via &opts so a JSON null shows up as nil rather than as the defaults.
+		if err := json.Unmarshal([]byte(s), &opts); err != nil {
 			return nil, err
+		}
+		if opts == nil {
+			return nil, errors.New("create options: null")
 		}
 	}
 	egress, err := ParseEgress(string(opts.Egress))

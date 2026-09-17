@@ -120,9 +120,10 @@ metadata service address), carrier-grade NAT, benchmarking and reserved space.
 That is egress `public`, the default. Egress `none` drops every forwarded
 packet from the sandbox's interface instead, DNS included. The mode is fixed
 at creation and re-applied on every wake. The runner echoes the mode it
-applied, and the API removes a sandbox whose echo does not match the request
-rather than track it, so a runner from before egress modes cannot hand out a
-public sandbox recorded as `none`.
+applied; on a mismatch the API fails the create, stores no record, and asks
+the runner to remove the sandbox (best effort; a leftover is logged as
+untracked and unreachable through the API). So a runner from before egress
+modes cannot hand out a public sandbox recorded as `none`.
 
 The Firecracker runtime gives every slot its own network namespace with a
 dedicated TAP device and veth uplink. The guest subnet is identical in every

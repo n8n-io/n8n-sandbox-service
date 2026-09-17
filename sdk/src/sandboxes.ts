@@ -1,5 +1,5 @@
 import type { HttpClient } from "./http";
-import { SandboxServiceError } from "./errors";
+import { EgressMismatchError, SandboxServiceError } from "./errors";
 import type { CreateSandboxOptions, SandboxRecord, SandboxWireResponse } from "./types";
 
 export async function createSandbox(
@@ -12,7 +12,13 @@ export async function createSandbox(
     // anonymous create would provision a second sandbox.
     isSafeToRetry: options.id !== undefined,
   });
-  return mapSandboxRecord(response);
+  const record = mapSandboxRecord(response);
+  // An API from before egress modes reports none (read as public), and a
+  // reconnect by id reports the mode the sandbox was created with.
+  if (record.egress !== options.egress) {
+    throw new EgressMismatchError(record.id, options.egress, record.egress);
+  }
+  return record;
 }
 
 export async function getSandbox(http: HttpClient, id: string): Promise<SandboxRecord> {

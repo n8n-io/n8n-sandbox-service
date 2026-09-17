@@ -55,6 +55,8 @@ func TestSandboxControlGRPCCreateSandboxParsesOptions(t *testing.T) {
 		{name: "none", createJSON: `{"egress":"none"}`, want: runnerruntime.EgressNone, wantApplied: `{"egress":"none"}`},
 		{name: "unknown egress", createJSON: `{"egress":"allow-all"}`, wantErr: true},
 		{name: "malformed", createJSON: `{"egress":`, wantErr: true},
+		{name: "null", createJSON: "null", wantErr: true},
+		{name: "not an object", createJSON: "[]", wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rt := &createOptsRuntime{}
