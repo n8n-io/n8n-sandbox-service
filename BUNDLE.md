@@ -61,7 +61,7 @@ firecracker-golden-build/
 | `version` | Release version of the tree the bundle was built from (the `VERSION` file). On a service release this is the tag all four images carry. |
 | `bundle_version` | Label of this tarball. Equals `version` on a service release; on a staging prerelease it is the staging label (`{version}-staging.{sha}`). |
 | `git_sha` | Commit the bundle was built from. This, not `version`, is the pin to correlate with the commit the container images were built from. |
-| `sandbox_image.ref` | Authoritative pin for the guest rootfs. Staging pins the ACR commit-SHA tag, so it does not carry the release version. |
+| `sandbox_image.ref` | Authoritative pin for the guest rootfs: a digest ref (`repository@sha256:…`) of the image the publishing run pushed, so `tag` is empty. Release bundles pin the Docker Hub repository, staging bundles the ACR one. |
 
 Staging bundles are the case to be careful with: nothing is published at `version`
 during a staging run, so use `bundle_version`, `git_sha`, and `sandbox_image.ref`
@@ -72,7 +72,7 @@ to identify what that candidate actually contains.
 | Key | Script | Purpose |
 | --- | --- | --- |
 | `install_runner_host` | `scripts/install-runner-host.sh` | apt packages, Firecracker/jailer, dirs, sysctl, NAT |
-| `firecracker_ci_assets` | `scripts/firecracker-ci-assets.sh` | Download/verify CI `vmlinux` |
+| `firecracker_ci_assets` | `scripts/firecracker-ci-assets.sh` | Download the pinned CI `vmlinux` and verify its SHA-256 |
 | `build_rootfs_template` | `scripts/build-rootfs-template.sh` | Build `rootfs.ext4` from sandbox image + install `vmlinux` |
 | `create_snapshot` | `scripts/create-golden-snapshot.sh` | Host-local golden snapshot |
 | `configure_host_nat` | `scripts/configure-host-nat.sh` | iptables MASQUERADE + FORWARD for `fc-veth+` |
@@ -154,7 +154,7 @@ Package locally:
 ./scripts/package-firecracker-golden-build.sh --version "$(tr -d '[:space:]' < VERSION)"
 ```
 
-`sandbox_image.ref` defaults to `n8nio/n8n-sandbox-service-sandbox:{VERSION}`. Set `SANDBOX_IMAGE_REF` to pin elsewhere — a digest ref for a reproducible bundle, or another registry (the staging workflow pins its candidate this way); `repository` and `tag` in the manifest derive from it, with `tag` empty for a digest ref.
+`sandbox_image.ref` defaults to `n8nio/n8n-sandbox-service-sandbox:{VERSION}` for local packaging. The release and staging workflows set `SANDBOX_IMAGE_REF` to the digest ref of the sandbox image they just pushed; `repository` and `tag` in the manifest derive from it, with `tag` empty for a digest ref, and anything after `@` that is not a full `sha256:` digest is rejected.
 
 CI runs `scripts/test-firecracker-golden-build-bundle.sh` (rootfs build, resolv.conf
 check, tarball layout, executable entrypoints). Release workflows attach the tarball

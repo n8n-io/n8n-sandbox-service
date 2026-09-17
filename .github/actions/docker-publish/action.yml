@@ -41,6 +41,11 @@ inputs:
     default: ""
     description: Token with packages:write, for pushing the ghcr-image mirror
 
+outputs:
+  digest:
+    description: Digest of the pushed image (the index digest for multi-arch); identical on every registry it was pushed to
+    value: ${{ steps.build.outputs.digest }}
+
 runs:
   using: composite
   steps:
@@ -100,6 +105,7 @@ runs:
         } >> "$GITHUB_OUTPUT"
 
     - name: Build and push
+      id: build
       uses: useblacksmith/build-push-action@30c71162f16ea2c27c3e21523255d209b8b538c1 # v2
       with:
         context: .

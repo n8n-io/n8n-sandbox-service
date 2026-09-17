@@ -57,7 +57,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 \
     && rm /tmp/node.tar.xz \
     && node -v && npm -v \
-    && npm install -g typescript \
+    && npm install -g typescript@7.0.2 \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 
@@ -85,7 +85,7 @@ RUN python3 -m venv venv \
 
 RUN mkdir -p workspace/src workspace/chunks workspace/node-types
 COPY --chown=1000:1000 sandbox-workspace/ workspace/
-RUN cd workspace && npm install --ignore-scripts
+RUN cd workspace && npm ci --ignore-scripts
 
 EXPOSE 8081
 

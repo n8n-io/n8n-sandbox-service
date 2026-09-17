@@ -53,6 +53,12 @@ SANDBOX_IMAGE_TAG="${SANDBOX_IMAGE_TAG:-${RELEASE_VERSION}}"
 SANDBOX_IMAGE_REF="${SANDBOX_IMAGE_REF:-${SANDBOX_IMAGE_REPOSITORY}:${SANDBOX_IMAGE_TAG}}"
 # Manifest repository/tag must describe the same image as ref (the pin consumers pull).
 if [[ "$SANDBOX_IMAGE_REF" == *@* ]]; then
+	# A digest ref is what the release workflows pass; anything after @ that is not
+	# a full sha256 (an empty digest from a failed lookup, say) must not be packaged.
+	if [[ ! "${SANDBOX_IMAGE_REF##*@}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+		echo "ERROR: SANDBOX_IMAGE_REF digest must be sha256:<64 hex>: ${SANDBOX_IMAGE_REF}" >&2
+		exit 1
+	fi
 	SANDBOX_IMAGE_REPOSITORY="${SANDBOX_IMAGE_REF%@*}"
 	SANDBOX_IMAGE_TAG=""
 elif [[ "${SANDBOX_IMAGE_REF##*/}" == *:* ]]; then
