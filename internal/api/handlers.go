@@ -133,7 +133,7 @@ type SandboxResponse struct {
 type createSandboxRequest struct {
 	ID        *string `json:"id"`
 	Ephemeral bool    `json:"ephemeral"`
-	Egress    string  `json:"egress"`
+	Egress    *string `json:"egress"` // nil when left out; "" is the default, as on create
 }
 
 func sandboxResponse(rec *store.SandboxRecord) *SandboxResponse {
@@ -250,7 +250,11 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
-		egress, err := runnerruntime.ParseEgress(req.Egress)
+		egressField := ""
+		if req.Egress != nil {
+			egressField = *req.Egress
+		}
+		egress, err := runnerruntime.ParseEgress(egressField)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
@@ -282,7 +286,7 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 					return
 				}
 				if !isPastIdleDeleteWindow(existing, cfg, time.Now().Unix()) {
-					success = reconnectSandbox(w, existing, req.Egress)
+					success = reconnectSandbox(w, existing, egress, req.Egress != nil)
 					return
 				}
 				if !deleteSandboxRecord(w, r, s, cfg, existing) {
@@ -431,7 +435,7 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 					writeError(w, http.StatusConflict, "sandbox id unavailable")
 					return
 				}
-				success = reconnectSandbox(w, existing, req.Egress)
+				success = reconnectSandbox(w, existing, egress, req.Egress != nil)
 				return
 			}
 			slog.ErrorContext(
@@ -465,10 +469,10 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 // reconnectSandbox answers a create whose id the caller already owns. Egress is
 // fixed at creation, so a mode the request names has to be the sandbox's: a
 // caller asking for none must not get an open sandbox back and take it for
-// sealed. requestedEgress is the request's own, already validated value; empty
-// when the request left it out, in which case whatever the sandbox has is fine.
-func reconnectSandbox(w http.ResponseWriter, existing *store.SandboxRecord, requestedEgress string) bool {
-	if requestedEgress != "" && requestedEgress != existing.Egress {
+// sealed. egress is the request's parsed mode and named whether the request
+// spelled it out; a request that left it out gets whatever the sandbox has.
+func reconnectSandbox(w http.ResponseWriter, existing *store.SandboxRecord, egress runnerruntime.Egress, named bool) bool {
+	if named && string(egress) != existing.Egress {
 		writeError(w, http.StatusConflict, "sandbox exists with egress "+existing.Egress)
 		return false
 	}

@@ -432,20 +432,23 @@ func TestCreateSandboxEgress(t *testing.T) {
 
 // Egress is fixed at creation, so a reconnect that names a different mode is
 // refused rather than answered with a sandbox in the other mode; one that names
-// no mode gets whatever the sandbox has. Both places that answer a reconnect
-// enforce this: the lookup before the create, and the fallback after a store
-// insert lost a race to a concurrent create of the same id.
+// no mode gets whatever the sandbox has, and an empty mode is the default,
+// public, not left out. Both places that answer a reconnect enforce this: the
+// lookup before the create, and the fallback after a store insert lost a race
+// to a concurrent create of the same id.
 func TestCreateSandboxReconnectRefusesOtherEgress(t *testing.T) {
 	const sid = "cdcdcdcd-cdcd-4cdc-8cdc-cdcdcdcdcdcd"
 	for _, tc := range []struct {
-		name   string
-		body   string
-		want   int
-		egress string
+		name     string
+		existing string // mode the sandbox was created with
+		body     string
+		want     int
+		egress   string // mode a 200 must report
 	}{
-		{name: "same mode", body: `{"id":"` + sid + `","egress":"public"}`, want: http.StatusOK, egress: "public"},
-		{name: "no mode", body: `{"id":"` + sid + `"}`, want: http.StatusOK, egress: "public"},
-		{name: "other mode", body: `{"id":"` + sid + `","egress":"none"}`, want: http.StatusConflict},
+		{name: "same mode", existing: "public", body: `{"id":"` + sid + `","egress":"public"}`, want: http.StatusOK, egress: "public"},
+		{name: "no mode", existing: "none", body: `{"id":"` + sid + `"}`, want: http.StatusOK, egress: "none"},
+		{name: "empty mode", existing: "none", body: `{"id":"` + sid + `","egress":""}`, want: http.StatusConflict},
+		{name: "other mode", existing: "public", body: `{"id":"` + sid + `","egress":"none"}`, want: http.StatusConflict},
 	} {
 		check := func(t *testing.T, rr *httptest.ResponseRecorder) {
 			t.Helper()
@@ -459,7 +462,7 @@ func TestCreateSandboxReconnectRefusesOtherEgress(t *testing.T) {
 		t.Run("existing/"+tc.name, func(t *testing.T) {
 			ctl := &fakeSandboxControl{}
 			router, _, _ := newIdleTestGateway(t, "admin-key", ctl)
-			if rr := postCreateSandbox(t, router, "admin-key", `{"id":"`+sid+`","egress":"public"}`); rr.Code != http.StatusCreated {
+			if rr := postCreateSandbox(t, router, "admin-key", `{"id":"`+sid+`","egress":"`+tc.existing+`"}`); rr.Code != http.StatusCreated {
 				t.Fatalf("create: got %d body=%s", rr.Code, rr.Body.String())
 			}
 			check(t, postCreateSandbox(t, router, "admin-key", tc.body))
@@ -469,7 +472,7 @@ func TestCreateSandboxReconnectRefusesOtherEgress(t *testing.T) {
 			router, s, _ := newIdleTestGateway(t, "admin-key", ctl)
 			// A concurrent create of the same id wins while this one is at the runner.
 			ctl.createHook = func(context.Context) {
-				if err := s.Create(&store.SandboxRecord{ID: sid, Status: "running", TenantID: store.AdminTenantID, Egress: "public"}); err != nil {
+				if err := s.Create(&store.SandboxRecord{ID: sid, Status: "running", TenantID: store.AdminTenantID, Egress: tc.existing}); err != nil {
 					t.Errorf("plant existing row: %v", err)
 				}
 			}
