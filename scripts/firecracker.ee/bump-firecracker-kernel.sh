@@ -44,7 +44,8 @@ source "$FIRECRACKER_CI_ASSETS_BIN"
 
 current="$FIRECRACKER_CI_DEFAULT_KERNEL_VERSION"
 line="${current%.*}"
-prefix="firecracker-ci/${FIRECRACKER_CI_VERSION}/${ARCH}/vmlinux-"
+ci_version="$FIRECRACKER_CI_DEFAULT_VERSION"
+prefix="firecracker-ci/${ci_version}/${ARCH}/vmlinux-"
 
 keys="$(
 	curl -fsSL "${FIRECRACKER_CI_S3_BASE}/?prefix=${prefix}&list-type=2" |
@@ -74,6 +75,14 @@ fi
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 url="${FIRECRACKER_CI_S3_BASE}/${prefix}${newest}"
+changelog_url="https://cdn.kernel.org/pub/linux/kernel/v${newest%%.*}.x/ChangeLog-${newest}"
+
+# The bucket cannot vouch for itself, so require the version to exist upstream
+# before trusting anything else about the artifact.
+if ! curl -fsSI "$changelog_url" -o /dev/null; then
+	echo "ERROR: ${newest} is not a stable release on kernel.org (${changelog_url})" >&2
+	exit 1
+fi
 
 # Firecracker publishes the kernel config next to each vmlinux; its header names
 # the version the binary was built from.
@@ -108,10 +117,15 @@ if [[ -n "$PR_BODY" ]]; then
 	cat >"$PR_BODY" <<EOF
 Bumps the pinned Firecracker CI guest kernel ${current} -> ${newest}.
 
-SHA-256 \`${sha256}\` computed from the artifact below; CI re-downloads and re-verifies it on linux/amd64.
+**Review is the gate.** Firecracker publishes no checksum or signature for these
+kernels, so the new pin \`${sha256}\` is the SHA-256 of the artifact as the bucket
+served it today: it freezes that artifact, it does not prove its origin. CI
+re-downloads it against the pin, which only catches the object changing after this
+run. Before merging, check the evidence below is consistent (config header, a
+Firecracker PR that introduced the version, the same version in Amazon Linux).
 
 Evidence:
-- Artifact in Firecracker's CI bucket for ${FIRECRACKER_CI_VERSION} (what Firecracker's own ${FIRECRACKER_CI_VERSION} test suite boots):
+- Artifact in Firecracker's CI bucket for ${ci_version} (what Firecracker's own ${ci_version} test suite boots):
   ${url}
   Last-Modified: ${last_modified}, ${size} bytes
 - Its kernel config, header \`${config_header}\`:
@@ -120,7 +134,7 @@ Evidence:
   https://github.com/amazonlinux/linux/tags?q=microvm-kernel-${newest}
 - Firecracker PRs mentioning the version:
   https://github.com/firecracker-microvm/firecracker/pulls?q=is%3Apr+${newest}
-- Upstream stable release: https://cdn.kernel.org/pub/linux/kernel/v${newest%%.*}.x/ChangeLog-${newest}
+- Upstream stable release (existence checked by this script): ${changelog_url}
 
 Kernels currently under ${prefix%vmlinux-}: ${candidates}
 EOF
