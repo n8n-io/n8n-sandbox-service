@@ -54,7 +54,7 @@ func withCallMetadata(ctx context.Context, apiKey string) context.Context {
 }
 
 // CreateSandbox calls SandboxControl.CreateSandbox and closes the connection.
-func CreateSandbox(ctx context.Context, target, apiKey string, tlsCfg *TLS, sandboxID, createJSON string) (*pb.CreateSandboxResponse, error) {
+func CreateSandbox(ctx context.Context, target, apiKey string, tlsCfg *TLS, sandboxID, createOptionsJSON string) (*pb.CreateSandboxResponse, error) {
 	opts, err := dialOpts(target, tlsCfg)
 	if err != nil {
 		return nil, err
@@ -68,7 +68,7 @@ func CreateSandbox(ctx context.Context, target, apiKey string, tlsCfg *TLS, sand
 	cli := pb.NewSandboxControlClient(conn)
 	return cli.CreateSandbox(withCallMetadata(ctx, apiKey), &pb.CreateSandboxRequest{
 		SandboxId:  sandboxID,
-		CreateJson: createJSON,
+		CreateJson: createOptionsJSON,
 	})
 }
 

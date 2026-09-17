@@ -13,8 +13,8 @@ export async function createSandbox(
     isSafeToRetry: options.id !== undefined,
   });
   const record = mapSandboxRecord(response);
-  // An API from before egress modes reports none (read as public), and a
-  // reconnect by id reports the mode the sandbox was created with.
+  // An API from before egress modes ignores the field and reports none, read as
+  // public; a current one refuses a reconnect in another mode itself (409).
   if (record.egress !== options.egress) {
     throw new EgressMismatchError(record.id, options.egress, record.egress);
   }

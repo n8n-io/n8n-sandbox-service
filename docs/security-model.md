@@ -119,7 +119,8 @@ and covering RFC1918 space, loopback, link-local (which includes the instance
 metadata service address), carrier-grade NAT, benchmarking and reserved space.
 That is egress `public`, the default. Egress `none` drops every forwarded
 packet from the sandbox's interface instead, DNS included. The mode is fixed
-at creation and re-applied on every wake. The runner echoes the mode it
+at creation and re-applied on every wake; a reconnect by id that names another
+mode is refused. The runner echoes the mode it
 applied; on a mismatch the API fails the create, stores no record, and asks
 the runner to remove the sandbox (best effort; a leftover is logged as
 untracked and unreachable through the API). So a runner from before egress

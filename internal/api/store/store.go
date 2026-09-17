@@ -109,15 +109,6 @@ type SandboxStore interface {
 	RevokeAPIKey(id string) error
 }
 
-// egressColumn is what insertSandbox stores for a record's Egress: "public",
-// the default, when the caller left it empty, so every row carries a value.
-func egressColumn(egress string) string {
-	if egress == "" {
-		return "public"
-	}
-	return egress
-}
-
 // scanner is the common interface satisfied by both *sql.Row and *sql.Rows.
 type scanner interface {
 	Scan(dest ...any) error

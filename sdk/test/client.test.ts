@@ -150,7 +150,7 @@ describe("SandboxClient", () => {
     expect(err).toBeInstanceOf(EgressMismatchError);
     expect(err).toMatchObject({ sandboxId: "abc", requested: "none", actual: "public" });
 
-    // Reconnect to a sandbox created with the other mode.
+    // An API that answers a reconnect with the sandbox's own, different mode.
     mock.requestJson.mockResolvedValue({ ...record, egress: "none" });
     await expect(client.createSandbox({ id: "abc", egress: "public" })).rejects.toBeInstanceOf(
       EgressMismatchError,

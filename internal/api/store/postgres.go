@@ -119,7 +119,7 @@ func (s *PostgresStore) insertSandbox(e pgExecer, record *SandboxRecord) error {
 		record.RunnerControlGRPCAddr,
 		record.TenantID,
 		record.Ephemeral,
-		egressColumn(record.Egress),
+		record.Egress,
 	)
 	if err != nil {
 		return fmt.Errorf("store: create sandbox %s: %w", record.ID, err)

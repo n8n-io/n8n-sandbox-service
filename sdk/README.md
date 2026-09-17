@@ -33,7 +33,7 @@ By default the client retries transient failures: 3 extra attempts (four tries t
 
 ### Sandbox lifecycle
 
-`createSandbox` requires an `egress` mode: `'public'` (the internet, minus private ranges) or `'none'` (no outbound connection, DNS included). It is fixed at creation and echoed on every sandbox record. If the sandbox returned is not in the requested mode (the API predates egress modes, or the `id` was created with the other mode), `createSandbox` throws `EgressMismatchError` with its `sandboxId`.
+`createSandbox` requires an `egress` mode: `'public'` (the internet, minus private ranges) or `'none'` (no outbound connection, DNS included). It is fixed at creation and echoed on every sandbox record. Reconnecting by `id` with a different mode is refused by the API (`409`). If the API returns a sandbox that is not in the requested mode (it predates egress modes and ignored the field), `createSandbox` throws `EgressMismatchError` with its `sandboxId`.
 
 ```ts
 // Create a sandbox
@@ -194,7 +194,7 @@ An idle stop can also lose memory (on the Docker runtime a stopped container is 
 
 ## Breaking change in 1.0
 
-`createSandbox(options)` now requires `options.egress`. Pass `egress: 'public'` to keep the 0.x behaviour. `SandboxRecord` gains `egress`. Reconnecting by `id` with a different `egress` throws `EgressMismatchError`.
+`createSandbox(options)` now requires `options.egress`. Pass `egress: 'public'` to keep the 0.x behaviour. `SandboxRecord` gains `egress`. Reconnecting by `id` with a different `egress` fails (`409`).
 
 ## Development
 

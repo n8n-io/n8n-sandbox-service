@@ -137,19 +137,13 @@ type createSandboxRequest struct {
 }
 
 func sandboxResponse(rec *store.SandboxRecord) *SandboxResponse {
-	egress := rec.Egress
-	if egress == "" {
-		// Rows from before the column existed carry no value; they were created
-		// with the only policy there was.
-		egress = string(runnerruntime.EgressPublic)
-	}
 	return &SandboxResponse{
 		ID:           rec.ID,
 		Status:       rec.Status,
 		CreatedAt:    rec.CreatedAt,
 		LastActiveAt: rec.LastActiveAt,
 		Ephemeral:    rec.Ephemeral,
-		Egress:       egress,
+		Egress:       rec.Egress,
 	}
 }
 
@@ -258,7 +252,7 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 		}
 		egress, err := runnerruntime.ParseEgress(req.Egress)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid egress: must be \"public\" or \"none\"")
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 
@@ -288,8 +282,7 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 					return
 				}
 				if !isPastIdleDeleteWindow(existing, cfg, time.Now().Unix()) {
-					writeJSON(w, http.StatusOK, sandboxResponse(existing))
-					success = true
+					success = reconnectSandbox(w, existing, req.Egress)
 					return
 				}
 				if !deleteSandboxRecord(w, r, s, cfg, existing) {
@@ -358,14 +351,14 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 			"egress", egress,
 		)
 		requested := runnerruntime.CreateOptions{Egress: egress}
-		createJSON, err := json.Marshal(requested)
+		createOptionsJSON, err := json.Marshal(requested)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		createCtx, cancelCreate := context.WithTimeout(context.WithoutCancel(r.Context()), runnerCreateBudget)
 		defer cancelCreate()
-		gresp, err := runnerctl.CreateSandbox(createCtx, controlAddr, cfg.RunnerAPIKey, tlsCfg, sandboxID, string(createJSON))
+		gresp, err := runnerctl.CreateSandbox(createCtx, controlAddr, cfg.RunnerAPIKey, tlsCfg, sandboxID, string(createOptionsJSON))
 		if err != nil {
 			slog.ErrorContext(
 				r.Context(),
@@ -434,12 +427,11 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 		if err := s.Create(record); err != nil {
 			rollbackRunnerCreate()
 			if existing, getErr := s.Get(sandboxID); getErr == nil && existing != nil {
-				if canAccessSandbox(r, existing) {
-					writeJSON(w, http.StatusOK, sandboxResponse(existing))
-					success = true
+				if !canAccessSandbox(r, existing) {
+					writeError(w, http.StatusConflict, "sandbox id unavailable")
 					return
 				}
-				writeError(w, http.StatusConflict, "sandbox id unavailable")
+				success = reconnectSandbox(w, existing, req.Egress)
 				return
 			}
 			slog.ErrorContext(
@@ -468,6 +460,20 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 		writeJSON(w, http.StatusCreated, sandboxResponse(record))
 		success = true
 	}
+}
+
+// reconnectSandbox answers a create whose id the caller already owns. Egress is
+// fixed at creation, so a mode the request names has to be the sandbox's: a
+// caller asking for none must not get an open sandbox back and take it for
+// sealed. requestedEgress is the request's own, already validated value; empty
+// when the request left it out, in which case whatever the sandbox has is fine.
+func reconnectSandbox(w http.ResponseWriter, existing *store.SandboxRecord, requestedEgress string) bool {
+	if requestedEgress != "" && requestedEgress != existing.Egress {
+		writeError(w, http.StatusConflict, "sandbox exists with egress "+existing.Egress)
+		return false
+	}
+	writeJSON(w, http.StatusOK, sandboxResponse(existing))
+	return true
 }
 
 func deleteSandboxRecord(w http.ResponseWriter, r *http.Request, s store.SandboxStore, cfg *config.APIConfig, rec *store.SandboxRecord) bool {

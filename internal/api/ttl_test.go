@@ -29,10 +29,10 @@ type fakeSandboxControl struct {
 	deleted   []string
 	deleteErr error
 	// create_json of every create RPC, in order.
-	createJSON []string
+	createOptionsJSON []string
 	// What the create response reports as applied, given create_json. Nil echoes
 	// the request, as a current runner does.
-	applied func(createJSON string) string
+	applied func(createOptionsJSON string) string
 	// Run at the start of the RPC, on the server-side context, when set.
 	createHook func(ctx context.Context)
 	deleteHook func(ctx context.Context)
@@ -43,7 +43,7 @@ func (f *fakeSandboxControl) CreateSandbox(ctx context.Context, req *pb.CreateSa
 		f.createHook(ctx)
 	}
 	f.mu.Lock()
-	f.createJSON = append(f.createJSON, req.GetCreateJson())
+	f.createOptionsJSON = append(f.createOptionsJSON, req.GetCreateJson())
 	f.mu.Unlock()
 	applied := req.GetCreateJson()
 	if f.applied != nil {

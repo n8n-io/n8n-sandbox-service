@@ -33,7 +33,7 @@ type Egress string
 
 const (
 	// EgressPublic allows the public internet; the private ranges in netpolicy stay
-	// blocked. The default, and the value an empty field means.
+	// blocked. Default when field is omitted or empty.
 	EgressPublic Egress = "public"
 	// EgressNone lets no guest-initiated connection leave the sandbox, DNS included.
 	EgressNone Egress = "none"
@@ -47,7 +47,7 @@ func ParseEgress(s string) (Egress, error) {
 	case EgressNone:
 		return EgressNone, nil
 	}
-	return "", fmt.Errorf("invalid egress %q", s)
+	return "", fmt.Errorf("invalid egress %q: must be %q or %q", s, EgressPublic, EgressNone)
 }
 
 // CreateOptions holds optional parameters for sandbox creation. It is also the
@@ -77,9 +77,19 @@ func ParseCreateOptions(s string) (*CreateOptions, error) {
 	return opts, nil
 }
 
-// BlockEgress reports whether the sandbox gets no egress at all.
+// BlockEgress reports whether the sandbox gets no egress at all. Options reach a
+// runtime through ParseCreateOptions, so any other value is a bug, not input.
 func (o *CreateOptions) BlockEgress() bool {
-	return o != nil && o.Egress == EgressNone
+	if o == nil {
+		return false
+	}
+	switch o.Egress {
+	case "", EgressPublic:
+		return false
+	case EgressNone:
+		return true
+	}
+	panic(fmt.Sprintf("unvalidated egress %q", o.Egress))
 }
 
 // SandboxInfo represents information about a created sandbox.

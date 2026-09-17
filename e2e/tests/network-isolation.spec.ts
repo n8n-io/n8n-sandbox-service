@@ -64,7 +64,7 @@ test.describe('Network isolation', () => {
   test('sandbox can reach public internet', async () => {
     const id = await createSandbox();
     try {
-      const result = await exec(id, `curl -fsSL -o /dev/null -w '%{http_code}' --max-time 15 https://example.com/`, {
+      const result = await exec(id, `curl -fsSL -o /dev/null -w '%{http_code}' --max-time 15 https://n8n.io/`, {
         timeoutMs: 30_000,
       });
       expect(result).toHaveSucceeded();
@@ -240,7 +240,7 @@ test.describe('Network isolation', () => {
       // left the sandbox.
       const publicResult = await execWithTransientRetry(
         id,
-        `curl --interface ${extraIP} -fsS -o /dev/null --max-time 15 https://example.com/`,
+        `curl --interface ${extraIP} -fsS -o /dev/null --max-time 15 https://n8n.io/`,
         { timeoutMs: 30_000 },
       );
       expect(publicResult, `expected ${extraIP} to work as a source address`).toHaveSucceeded();
@@ -286,7 +286,7 @@ test.describe('Network isolation', () => {
   test('DNS resolution works', async () => {
     const id = await createSandbox();
     try {
-      const result = await execWithTransientRetry(id, resolve('example.com'), { timeoutMs: 10_000 });
+      const result = await execWithTransientRetry(id, resolve('n8n.io'), { timeoutMs: 10_000 });
       expect(result).toHaveSucceeded();
       // Should resolve to an IP address
       expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
@@ -303,7 +303,7 @@ test.describe('Egress none', () => {
   // DNS; DNS itself, since a resolver reachable from a sealed sandbox would be a
   // covert channel out; and a name over HTTPS.
   const PUBLIC_IP = '1.1.1.1';
-  const PUBLIC_HOST = 'example.com';
+  const PUBLIC_HOST = 'n8n.io';
 
   const probe = async (id: string) => {
     const direct = await execWithTransientRetry(id, tcpConnect(PUBLIC_IP, 80, 3), { timeoutMs: 10_000 });
@@ -440,7 +440,7 @@ test.describe('Reused slot', FIRECRACKER_ONLY, () => {
 
       const allowed = await exec(
         id,
-        `curl -fsSL -o /dev/null -w '%{http_code}' --max-time 15 https://example.com/`,
+        `curl -fsSL -o /dev/null -w '%{http_code}' --max-time 15 https://n8n.io/`,
         { timeoutMs: 30_000 },
       );
       expect(allowed, 'expected public egress to work on a reused slot').toHaveSucceeded();
@@ -472,7 +472,7 @@ test.describe('Reused slot', FIRECRACKER_ONLY, () => {
     try {
       const allowed = await exec(
         id,
-        `curl -fsSL -o /dev/null -w '%{http_code}' --max-time 15 https://example.com/`,
+        `curl -fsSL -o /dev/null -w '%{http_code}' --max-time 15 https://n8n.io/`,
         { timeoutMs: 30_000 },
       );
       expect(allowed, "expected the sealed sandbox's DROP to have gone with its namespace").toHaveSucceeded();

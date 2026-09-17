@@ -44,19 +44,19 @@ func TestSandboxControlGRPCCreateSandboxParsesOptions(t *testing.T) {
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-api-key", "runner-key"))
 
 	for _, tc := range []struct {
-		name        string
-		createJSON  string
-		want        runnerruntime.Egress
-		wantApplied string
-		wantErr     bool
+		name              string
+		createOptionsJSON string
+		want              runnerruntime.Egress
+		wantApplied       string
+		wantErr           bool
 	}{
-		{name: "empty", createJSON: "", want: runnerruntime.EgressPublic, wantApplied: `{"egress":"public"}`},
-		{name: "empty object", createJSON: "{}", want: runnerruntime.EgressPublic, wantApplied: `{"egress":"public"}`},
-		{name: "none", createJSON: `{"egress":"none"}`, want: runnerruntime.EgressNone, wantApplied: `{"egress":"none"}`},
-		{name: "unknown egress", createJSON: `{"egress":"allow-all"}`, wantErr: true},
-		{name: "malformed", createJSON: `{"egress":`, wantErr: true},
-		{name: "null", createJSON: "null", wantErr: true},
-		{name: "not an object", createJSON: "[]", wantErr: true},
+		{name: "empty", createOptionsJSON: "", want: runnerruntime.EgressPublic, wantApplied: `{"egress":"public"}`},
+		{name: "empty object", createOptionsJSON: "{}", want: runnerruntime.EgressPublic, wantApplied: `{"egress":"public"}`},
+		{name: "none", createOptionsJSON: `{"egress":"none"}`, want: runnerruntime.EgressNone, wantApplied: `{"egress":"none"}`},
+		{name: "unknown egress", createOptionsJSON: `{"egress":"allow-all"}`, wantErr: true},
+		{name: "malformed", createOptionsJSON: `{"egress":`, wantErr: true},
+		{name: "null", createOptionsJSON: "null", wantErr: true},
+		{name: "not an object", createOptionsJSON: "[]", wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rt := &createOptsRuntime{}
@@ -65,7 +65,7 @@ func TestSandboxControlGRPCCreateSandboxParsesOptions(t *testing.T) {
 				Cfg:     &config.Config{APIKeys: map[string]struct{}{"runner-key": {}}},
 				Rec:     metrics.NewRunnerRecorder(true),
 			}
-			resp, err := srv.CreateSandbox(ctx, &pb.CreateSandboxRequest{SandboxId: id, CreateJson: tc.createJSON})
+			resp, err := srv.CreateSandbox(ctx, &pb.CreateSandboxRequest{SandboxId: id, CreateJson: tc.createOptionsJSON})
 			if tc.wantErr {
 				if status.Code(err) != codes.InvalidArgument {
 					t.Fatalf("CreateSandbox() error = %v, want InvalidArgument", err)
