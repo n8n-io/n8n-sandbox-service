@@ -1,0 +1,52 @@
+name: Bump Firecracker kernel
+
+on:
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+# The PR branch and commit are written with the release app's token, so
+# GITHUB_TOKEN only needs to read the checkout.
+permissions:
+  contents: read
+
+concurrency:
+  group: bump-firecracker-kernel
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: main
+
+      - name: Move the kernel pin to the newest same-line kernel
+        id: bump
+        run: bash scripts/firecracker.ee/bump-firecracker-kernel.sh --pr-body /tmp/pr-body.md
+
+      - name: Generate GitHub App Token
+        if: steps.bump.outputs.changed == 'true'
+        id: generate-token
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
+        with:
+          app-id: ${{ secrets.N8N_ASSISTANT_APP_ID }}
+          private-key: ${{ secrets.N8N_ASSISTANT_PRIVATE_KEY }}
+
+      # Re-runs with a newer kernel update the open PR in place: the script
+      # resets the branch to main and lays down one fresh signed commit.
+      - name: Open or update the bump PR
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+          NEW: ${{ steps.bump.outputs.new }}
+        run: |
+          npm ci --prefix .github/scripts
+          node .github/scripts/create-signed-commit-pr.mjs \
+            --base main \
+            --branch chore/bump-firecracker-kernel \
+            --title "chore: bump Firecracker CI kernel to ${NEW}" \
+            --body-file /tmp/pr-body.md \
+            --message "chore: bump Firecracker CI kernel to ${NEW}" \
+            -- scripts/firecracker.ee/firecracker-ci-assets.sh
