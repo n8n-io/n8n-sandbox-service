@@ -26,12 +26,12 @@ grpcurl \
   -cert "$TLS_API_DIR/control-grpc-api-client.crt" \
   -key "$TLS_API_DIR/control-grpc-api-client.key" \
   -H "x-api-key: ${RUNNER_API_KEY:-runner-local-key}" \
-  -d "{\"sandbox_id\":\"$(uuidgen | tr '[:upper:]' '[:lower:]')\",\"create_json\":\"{}\"}" \
+  -d "{\"sandbox_id\":\"$(uuidgen | tr '[:upper:]' '[:lower:]')\",\"create_options_json\":\"{}\"}" \
   n8n-sandbox-service-runner-dind-local-1:9091 \
   runner.v1.SandboxControl/CreateSandbox
 ```
 
-`create_json` is a JSON `CreateOptions` (`internal/runner/runtime`): `{}` for the defaults, `{"egress":"none"}` for no egress. Unknown values are `InvalidArgument`. The response echoes what was applied in `applied_create_json`; the API refuses a sandbox whose echo does not match.
+`create_options_json` is a JSON `CreateOptions` (`internal/runner/runtime`): `{}` for the defaults, `{"egress":"none"}` for no egress. Unknown values are `InvalidArgument`. The response echoes what was applied in `applied_create_options_json`; the API refuses a sandbox whose echo does not match.
 
 The bootstrap script puts **both** compose runner hostnames in the **same** control server certificate SAN list, so one `control-grpc-server` cert works on every local runner.
 

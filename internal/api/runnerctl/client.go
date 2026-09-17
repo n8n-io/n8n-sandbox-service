@@ -67,8 +67,8 @@ func CreateSandbox(ctx context.Context, target, apiKey string, tlsCfg *TLS, sand
 
 	cli := pb.NewSandboxControlClient(conn)
 	return cli.CreateSandbox(withCallMetadata(ctx, apiKey), &pb.CreateSandboxRequest{
-		SandboxId:  sandboxID,
-		CreateJson: createOptionsJSON,
+		SandboxId:         sandboxID,
+		CreateOptionsJson: createOptionsJSON,
 	})
 }
 

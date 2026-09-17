@@ -36,7 +36,7 @@ func (c *createOptsRuntime) CreateSandbox(_ context.Context, sandboxID string, o
 	return &runnerruntime.SandboxInfo{ID: sandboxID, IP: "10.0.0.2"}, nil
 }
 
-// create_json reaches the runtime as CreateOptions and the response echoes what
+// create_options_json reaches the runtime as CreateOptions and the response echoes what
 // was applied; an empty field is the default policy and an unknown egress is
 // refused, not defaulted.
 func TestSandboxControlGRPCCreateSandboxParsesOptions(t *testing.T) {
@@ -65,7 +65,7 @@ func TestSandboxControlGRPCCreateSandboxParsesOptions(t *testing.T) {
 				Cfg:     &config.Config{APIKeys: map[string]struct{}{"runner-key": {}}},
 				Rec:     metrics.NewRunnerRecorder(true),
 			}
-			resp, err := srv.CreateSandbox(ctx, &pb.CreateSandboxRequest{SandboxId: id, CreateJson: tc.createOptionsJSON})
+			resp, err := srv.CreateSandbox(ctx, &pb.CreateSandboxRequest{SandboxId: id, CreateOptionsJson: tc.createOptionsJSON})
 			if tc.wantErr {
 				if status.Code(err) != codes.InvalidArgument {
 					t.Fatalf("CreateSandbox() error = %v, want InvalidArgument", err)
@@ -81,8 +81,8 @@ func TestSandboxControlGRPCCreateSandboxParsesOptions(t *testing.T) {
 			if rt.opts == nil || rt.opts.Egress != tc.want {
 				t.Fatalf("runtime options = %+v, want egress %q", rt.opts, tc.want)
 			}
-			if got := resp.GetAppliedCreateJson(); got != tc.wantApplied {
-				t.Fatalf("applied_create_json = %q, want %q", got, tc.wantApplied)
+			if got := resp.GetAppliedCreateOptionsJson(); got != tc.wantApplied {
+				t.Fatalf("applied_create_options_json = %q, want %q", got, tc.wantApplied)
 			}
 		})
 	}

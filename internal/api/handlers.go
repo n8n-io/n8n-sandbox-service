@@ -393,7 +393,7 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 		// modes echoes nothing and applied the defaults. Anything but what was
 		// asked for would leave the record saying one thing and the network
 		// another, so the sandbox is removed rather than tracked.
-		applied, err := runnerruntime.ParseCreateOptions(gresp.GetAppliedCreateJson())
+		applied, err := runnerruntime.ParseCreateOptions(gresp.GetAppliedCreateOptionsJson())
 		if err != nil || *applied != requested {
 			rollbackRunnerCreate()
 			slog.ErrorContext(
@@ -402,7 +402,7 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 				"sandbox_id", sandboxID,
 				"runner_id", run.ID,
 				"requested_egress", egress,
-				"applied_create_json", gresp.GetAppliedCreateJson(),
+				"applied_create_options_json", gresp.GetAppliedCreateOptionsJson(),
 				"error", err,
 			)
 			writeError(w, http.StatusBadGateway, "runner did not apply the requested egress")

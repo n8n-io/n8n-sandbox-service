@@ -87,7 +87,7 @@ func (s *SandboxControlGRPC) CreateSandbox(ctx context.Context, req *pb.CreateSa
 	}
 	// An unknown egress is refused rather than defaulted, so an API ahead of this
 	// runner cannot have a policy it asked for silently dropped.
-	opts, err := runnerruntime.ParseCreateOptions(req.GetCreateJson())
+	opts, err := runnerruntime.ParseCreateOptions(req.GetCreateOptionsJson())
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid create options: "+err.Error())
 	}
@@ -107,7 +107,7 @@ func (s *SandboxControlGRPC) CreateSandbox(ctx context.Context, req *pb.CreateSa
 	if info == nil {
 		return nil, status.Error(codes.Internal, "create sandbox returned nil info")
 	}
-	return &pb.CreateSandboxResponse{SandboxId: sandboxID, ContainerIp: info.IP, AppliedCreateJson: string(applied)}, nil
+	return &pb.CreateSandboxResponse{SandboxId: sandboxID, ContainerIp: info.IP, AppliedCreateOptionsJson: string(applied)}, nil
 }
 
 // StopSandbox stops the sandbox without removing it.

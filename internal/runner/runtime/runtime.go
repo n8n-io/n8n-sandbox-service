@@ -51,7 +51,8 @@ func ParseEgress(s string) (Egress, error) {
 }
 
 // CreateOptions holds optional parameters for sandbox creation. It is also the
-// JSON shape of the create RPC's create_json and applied_create_json fields.
+// JSON shape of the create RPC's create_options_json and
+// applied_create_options_json fields.
 type CreateOptions struct {
 	Egress Egress `json:"egress,omitempty"`
 }

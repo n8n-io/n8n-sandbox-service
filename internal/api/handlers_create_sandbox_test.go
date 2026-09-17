@@ -373,7 +373,7 @@ func TestCreateSandboxPersistsEphemeral(t *testing.T) {
 	}
 }
 
-// The egress mode reaches the runner in create_json, is stored, and is echoed
+// The egress mode reaches the runner in create_options_json, is stored, and is echoed
 // on create and on a reconnect to the same id; an unknown value is refused
 // before anything is created.
 func TestCreateSandboxEgress(t *testing.T) {
@@ -399,7 +399,7 @@ func TestCreateSandboxEgress(t *testing.T) {
 	sent := append([]string(nil), ctl.createOptionsJSON...)
 	ctl.mu.Unlock()
 	if len(sent) != 1 || sent[0] != `{"egress":"none"}` {
-		t.Fatalf("runner create_json = %q, want [{\"egress\":\"none\"}]", sent)
+		t.Fatalf("runner create_options_json = %q, want [{\"egress\":\"none\"}]", sent)
 	}
 
 	// Reconnecting to the id reports the mode it was created with.
@@ -417,7 +417,7 @@ func TestCreateSandboxEgress(t *testing.T) {
 	last := ctl.createOptionsJSON[len(ctl.createOptionsJSON)-1]
 	ctl.mu.Unlock()
 	if last != `{"egress":"public"}` {
-		t.Fatalf("default create_json = %q, want {\"egress\":\"public\"}", last)
+		t.Fatalf("default create_options_json = %q, want {\"egress\":\"public\"}", last)
 	}
 
 	before, _ := s.Count()

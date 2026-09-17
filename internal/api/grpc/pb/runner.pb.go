@@ -159,11 +159,11 @@ func (x *ControlMessage) GetAck() bool {
 }
 
 type CreateSandboxRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SandboxId     string                 `protobuf:"bytes,1,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
-	CreateJson    string                 `protobuf:"bytes,2,opt,name=create_json,json=createJson,proto3" json:"create_json,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	SandboxId         string                 `protobuf:"bytes,1,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
+	CreateOptionsJson string                 `protobuf:"bytes,2,opt,name=create_options_json,json=createOptionsJson,proto3" json:"create_options_json,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *CreateSandboxRequest) Reset() {
@@ -203,9 +203,9 @@ func (x *CreateSandboxRequest) GetSandboxId() string {
 	return ""
 }
 
-func (x *CreateSandboxRequest) GetCreateJson() string {
+func (x *CreateSandboxRequest) GetCreateOptionsJson() string {
 	if x != nil {
-		return x.CreateJson
+		return x.CreateOptionsJson
 	}
 	return ""
 }
@@ -214,11 +214,11 @@ type CreateSandboxResponse struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
 	SandboxId   string                 `protobuf:"bytes,1,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
 	ContainerIp string                 `protobuf:"bytes,2,opt,name=container_ip,json=containerIp,proto3" json:"container_ip,omitempty"`
-	// The options the runner applied, encoded like create_json. Empty from a
-	// runner that predates it, which applied the defaults.
-	AppliedCreateJson string `protobuf:"bytes,3,opt,name=applied_create_json,json=appliedCreateJson,proto3" json:"applied_create_json,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// The options the runner applied, encoded like create_options_json. Empty
+	// from a runner that predates it, which applied the defaults.
+	AppliedCreateOptionsJson string `protobuf:"bytes,3,opt,name=applied_create_options_json,json=appliedCreateOptionsJson,proto3" json:"applied_create_options_json,omitempty"`
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
 }
 
 func (x *CreateSandboxResponse) Reset() {
@@ -265,9 +265,9 @@ func (x *CreateSandboxResponse) GetContainerIp() string {
 	return ""
 }
 
-func (x *CreateSandboxResponse) GetAppliedCreateJson() string {
+func (x *CreateSandboxResponse) GetAppliedCreateOptionsJson() string {
 	if x != nil {
-		return x.AppliedCreateJson
+		return x.AppliedCreateOptionsJson
 	}
 	return ""
 }
@@ -446,17 +446,16 @@ const file_proto_runner_v1_runner_proto_rawDesc = "" +
 	"\x11control_grpc_addr\x18\x06 \x01(\tR\x0fcontrolGrpcAddr\x12)\n" +
 	"\x10capacity_stopped\x18\a \x01(\x05R\x0fcapacityStopped\"\"\n" +
 	"\x0eControlMessage\x12\x10\n" +
-	"\x03ack\x18\x01 \x01(\bR\x03ack\"V\n" +
+	"\x03ack\x18\x01 \x01(\bR\x03ack\"e\n" +
 	"\x14CreateSandboxRequest\x12\x1d\n" +
 	"\n" +
-	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\x12\x1f\n" +
-	"\vcreate_json\x18\x02 \x01(\tR\n" +
-	"createJson\"\x89\x01\n" +
+	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\x12.\n" +
+	"\x13create_options_json\x18\x02 \x01(\tR\x11createOptionsJson\"\x98\x01\n" +
 	"\x15CreateSandboxResponse\x12\x1d\n" +
 	"\n" +
 	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\x12!\n" +
-	"\fcontainer_ip\x18\x02 \x01(\tR\vcontainerIp\x12.\n" +
-	"\x13applied_create_json\x18\x03 \x01(\tR\x11appliedCreateJson\"3\n" +
+	"\fcontainer_ip\x18\x02 \x01(\tR\vcontainerIp\x12=\n" +
+	"\x1bapplied_create_options_json\x18\x03 \x01(\tR\x18appliedCreateOptionsJson\"3\n" +
 	"\x12StopSandboxRequest\x12\x1d\n" +
 	"\n" +
 	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\"\x15\n" +
