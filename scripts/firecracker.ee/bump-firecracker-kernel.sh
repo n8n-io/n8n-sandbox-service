@@ -71,6 +71,12 @@ if [[ "$newest" == "$current" ]]; then
 	emit false
 	exit 0
 fi
+# The pinned kernel has gone from the listing (removed, rolled back, or a bad
+# listing). Never turn that into a downgrade PR.
+if [[ "$(printf '%s\n' "$current" "$newest" | sort -V | tail -n 1)" != "$newest" ]]; then
+	echo "ERROR: newest ${line}.* kernel in the bucket is ${newest}, older than the pinned ${current}; refusing to downgrade" >&2
+	exit 1
+fi
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
