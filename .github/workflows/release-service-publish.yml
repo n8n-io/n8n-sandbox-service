@@ -19,6 +19,7 @@ jobs:
     environment: docker-release
     outputs:
       version: ${{ steps.version.outputs.version }}
+      sandbox_digest: ${{ steps.sandbox-image.outputs.digest }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
@@ -92,6 +93,7 @@ jobs:
           ghcr-token: ${{ github.token }}
 
       - name: Publish sandbox image
+        id: sandbox-image
         uses: ./.github/actions/docker-publish
         with:
           image: n8nio/n8n-sandbox-service-sandbox
@@ -143,10 +145,14 @@ jobs:
           git tag "${TAG}"
           git push origin "${TAG}"
 
+      # The bundle pins the guest userspace by the digest the publish job pushed,
+      # so a later move of the version tag cannot change what hosts bake.
       - name: Package Firecracker golden build tarball
+        env:
+          SANDBOX_DIGEST: ${{ needs.publish-images.outputs.sandbox_digest }}
         run: |
-          chmod +x scripts/package-firecracker-golden-build.sh
-          ./scripts/package-firecracker-golden-build.sh \
+          SANDBOX_IMAGE_REF="n8nio/n8n-sandbox-service-sandbox@${SANDBOX_DIGEST}" \
+            ./scripts/package-firecracker-golden-build.sh \
             --version "${VERSION}" \
             --output "dist/firecracker-golden-build-${VERSION}.tar.gz"
 

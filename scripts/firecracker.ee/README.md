@@ -7,7 +7,8 @@ code (see `AGENTS.md`).
 | Script | Role |
 |--------|------|
 | `install-runner-host.sh` | Host packages, Firecracker/jailer, dirs, NAT |
-| `firecracker-ci-assets.sh` | Download/verify CI `vmlinux` |
+| `firecracker-ci-assets.sh` | Download the pinned CI `vmlinux`, verify its SHA-256 |
+| `bump-firecracker-kernel.sh` | Move that pin to the newest same-line kernel (weekly workflow, not in the bundle) |
 | `build-rootfs-template.sh` | `rootfs.ext4` from sandbox OCI image + `vmlinux` |
 | `configure-host-nat.sh` | Host MASQUERADE / FORWARD for `fc-veth+` |
 | `create-golden-snapshot.sh` | Host-local golden snapshot (injects daemon as PID 1) |

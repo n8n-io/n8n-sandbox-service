@@ -8,7 +8,7 @@ Scripts to build the Firecracker rootfs template and golden snapshot on a sandbo
 |------|---------|
 | `MANIFEST.json` | Release version, `git_sha`, sandbox image pin, entrypoints, checksums |
 | `scripts/install-runner-host.sh` | Host packages, Firecracker/jailer, dirs, NAT |
-| `scripts/firecracker-ci-assets.sh` | Download/verify Firecracker CI `vmlinux` |
+| `scripts/firecracker-ci-assets.sh` | Download the pinned Firecracker CI `vmlinux`, verify its SHA-256 |
 | `scripts/build-rootfs-template.sh` | Build `rootfs.ext4` from the sandbox OCI image + install `vmlinux` |
 | `scripts/configure-host-nat.sh` | IPv4 forwarding and MASQUERADE/FORWARD rules for sandbox egress |
 | `scripts/create-golden-snapshot.sh` | Build the golden snapshot (`snapshot_mem`, `snapshot_state`, `boot.json`) |

@@ -80,7 +80,7 @@ Actions → **Publish Service Staging** on a feature branch:
 
 1. Optionally runs unit tests.
 2. Builds and pushes all four images to the private registry tagged `{VERSION}-staging.{short_sha}` (override with the `version` input).
-3. Creates a GitHub prerelease `service/v{version}` at the built commit with the golden-build tarball, which pins the ACR sandbox candidate by its commit-SHA tag.
+3. Creates a GitHub prerelease `service/v{version}` at the built commit with the golden-build tarball, which pins the ACR sandbox candidate by digest.
 
 A bare `x.y.z` `version` input is rejected: candidates and releases share the `service/v*` namespace, which release prep reads to order releases, so a candidate tagged `service/v1.3.0` would block the real 1.3.0. Keep a suffix.
 
