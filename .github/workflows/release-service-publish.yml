@@ -151,7 +151,6 @@ jobs:
         env:
           SANDBOX_DIGEST: ${{ needs.publish-images.outputs.sandbox_digest }}
         run: |
-          chmod +x scripts/package-firecracker-golden-build.sh
           SANDBOX_IMAGE_REF="n8nio/n8n-sandbox-service-sandbox@${SANDBOX_DIGEST}" \
             ./scripts/package-firecracker-golden-build.sh \
             --version "${VERSION}" \

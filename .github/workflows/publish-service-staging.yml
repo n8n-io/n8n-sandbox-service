@@ -153,7 +153,6 @@ jobs:
           SANDBOX_DIGEST: ${{ steps.publish.outputs.sandbox_digest }}
           TARBALL: ${{ steps.meta.outputs.tarball }}
         run: |
-          chmod +x scripts/package-firecracker-golden-build.sh
           SANDBOX_IMAGE_REF="${ACR_NAME}.azurecr.io/n8n-sandbox-service-sandbox@${SANDBOX_DIGEST}" \
             ./scripts/package-firecracker-golden-build.sh \
             --version "${VERSION}" \
