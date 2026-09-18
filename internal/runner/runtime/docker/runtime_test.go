@@ -433,8 +433,8 @@ func TestCreateAndWakeApplyTheNetworkPolicyOfTheSandboxEgress(t *testing.T) {
 			events := []string{}
 			backend := &fakeDockerBackend{events: &events, containerID: "container-1", ip: "172.18.0.2"}
 			m := newRuntime(&config.Config{}, Config{}, backend)
-			m.public.iface, m.public.gatewayIP = "runner-bridge", "172.18.0.1"
-			m.noEgress.iface, m.noEgress.gatewayIP = runnerNoEgressBridge, "172.19.0.1"
+			m.publicNetwork.iface, m.publicNetwork.gatewayIP = "runner-bridge", "172.18.0.1"
+			m.noEgressNetwork.iface, m.noEgressNetwork.gatewayIP = runnerNoEgressBridge, "172.19.0.1"
 			m.imageReady.Store(true)
 			var policies []policyCall
 			m.applyPolicy = func(bridgeIface, _, _, gatewayIP string, _ int, blockEgress bool) error {
