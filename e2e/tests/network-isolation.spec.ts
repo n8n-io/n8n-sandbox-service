@@ -305,12 +305,22 @@ test.describe('Egress none', () => {
   const PUBLIC_IP = '1.1.1.1';
   const PUBLIC_HOST = 'example.com';
 
+  // A sealed Firecracker sandbox drops packets rather than refusing them, so its
+  // probes only end when something gives up: with glibc's defaults (5 s, two
+  // attempts, two nameservers) the DNS lookup alone runs 20 s, and a test that
+  // probes twice cannot fit its 60 s budget. Bounding the resolver ends a sealed
+  // lookup in about 4 s; a public resolver answers in milliseconds either way.
+  // Sysbox seals with an internal network, where the same probes fail at once.
+  const BOUNDED_RESOLVER = `RES_OPTIONS='timeout:1 attempts:2'`;
+
   const probe = async (id: string) => {
     const direct = await execWithTransientRetry(id, tcpConnect(PUBLIC_IP, 80, 3), { timeoutMs: 10_000 });
-    const dns = await execWithTransientRetry(id, resolve(PUBLIC_HOST), { timeoutMs: 15_000 });
-    const named = await execWithTransientRetry(id, `curl -sS -o /dev/null --max-time 10 https://${PUBLIC_HOST}/`, {
-      timeoutMs: 20_000,
-    });
+    const dns = await execWithTransientRetry(id, `${BOUNDED_RESOLVER} ${resolve(PUBLIC_HOST)}`, { timeoutMs: 15_000 });
+    const named = await execWithTransientRetry(
+      id,
+      `${BOUNDED_RESOLVER} curl -sS -o /dev/null --max-time 10 https://${PUBLIC_HOST}/`,
+      { timeoutMs: 20_000 },
+    );
     return { direct: direct.exitCode === 0, dns: dns.stdout.trim() !== '', named: named.exitCode === 0 };
   };
 
