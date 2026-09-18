@@ -75,6 +75,14 @@ func TestLoadAPIParsesDefaults(t *testing.T) {
 		t.Errorf("expected OrphanReapBuffer 5m, got %s", cfg.OrphanReapBuffer)
 	}
 
+	if cfg.IdleSweepConcurrency != 8 {
+		t.Errorf("expected IdleSweepConcurrency 8, got %d", cfg.IdleSweepConcurrency)
+	}
+
+	if cfg.Postgres.LockPoolSize != 8+sandboxLockRequestHeadroom {
+		t.Errorf("expected Postgres.LockPoolSize %d, got %d", 8+sandboxLockRequestHeadroom, cfg.Postgres.LockPoolSize)
+	}
+
 	if cfg.LogLevel != slog.LevelInfo {
 		t.Errorf("expected LogLevel info, got %v", cfg.LogLevel)
 	}
@@ -278,6 +286,39 @@ func TestLoadAPIRejectsNegativeIdleDeleteAfter(t *testing.T) {
 
 	if _, err := LoadAPI(); err == nil {
 		t.Fatal("expected LoadAPI to reject negative SANDBOX_API_IDLE_DELETE_AFTER")
+	}
+}
+
+func TestLoadAPIIdleSweepConcurrencySizesLockPool(t *testing.T) {
+	t.Setenv("SANDBOX_API_KEYS", "test-key")
+	t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	t.Setenv("SANDBOX_API_IDLE_SWEEP_CONCURRENCY", "3")
+	setRequiredGRPCMTLS(t)
+
+	cfg, err := LoadAPI()
+	if err != nil {
+		t.Fatalf("LoadAPI() failed: %v", err)
+	}
+	if cfg.IdleSweepConcurrency != 3 {
+		t.Fatalf("IdleSweepConcurrency: want 3, got %d", cfg.IdleSweepConcurrency)
+	}
+	if cfg.Postgres.LockPoolSize != 3+sandboxLockRequestHeadroom {
+		t.Fatalf("Postgres.LockPoolSize: want %d, got %d", 3+sandboxLockRequestHeadroom, cfg.Postgres.LockPoolSize)
+	}
+}
+
+func TestLoadAPIRejectsNonPositiveIdleSweepConcurrency(t *testing.T) {
+	for _, v := range []string{"0", "-1", "two"} {
+		t.Run(v, func(t *testing.T) {
+			t.Setenv("SANDBOX_API_KEYS", "test-key")
+			t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+			t.Setenv("SANDBOX_API_IDLE_SWEEP_CONCURRENCY", v)
+			setRequiredGRPCMTLS(t)
+
+			if _, err := LoadAPI(); err == nil {
+				t.Fatalf("expected LoadAPI to reject SANDBOX_API_IDLE_SWEEP_CONCURRENCY=%q", v)
+			}
+		})
 	}
 }
 
