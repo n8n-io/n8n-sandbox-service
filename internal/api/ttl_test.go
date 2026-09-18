@@ -413,31 +413,9 @@ func staleID(n int) string {
 	return strings.Repeat(string(c), 8) + "-" + strings.Repeat(string(c), 4) + "-4" + strings.Repeat(string(c), 3) + "-8" + strings.Repeat(string(c), 3) + "-" + strings.Repeat(string(c), 12)
 }
 
-func TestInterleaveByRunner(t *testing.T) {
-	rec := func(id, runner string) *store.SandboxRecord {
-		return &store.SandboxRecord{ID: id, RunnerID: runner}
-	}
-	in := []*store.SandboxRecord{
-		rec("a1", "A"), rec("a2", "A"), rec("a3", "A"),
-		nil,
-		rec("b1", "B"),
-		rec("c1", ""), // no runner id: keyed by its stored control address
-	}
-	in[5].RunnerControlGRPCAddr = "c:9091"
-
-	var got []string
-	for _, r := range interleaveByRunner(in) {
-		got = append(got, r.ID)
-	}
-	want := []string{"a1", "b1", "c1", "a2", "a3"}
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("order = %v, want %v", got, want)
-	}
-}
-
 // Exactly the configured number of runner calls are in flight: no fewer, no more.
 func TestIdleStopSweepBoundsConcurrency(t *testing.T) {
-	const limit, candidates = 3, 6
+	const limit, runners, candidates = 3, 3, 6
 
 	var inFlight, peak atomic.Int32
 	release := make(chan struct{})
@@ -455,7 +433,11 @@ func TestIdleStopSweepBoundsConcurrency(t *testing.T) {
 		case <-ctx.Done():
 		}
 	}}
-	addr := startFakeRunnerControl(t, fake)
+	// Several runners, so the per-runner probes can fill the pool.
+	var addrs []string
+	for i := 0; i < runners; i++ {
+		addrs = append(addrs, startFakeRunnerControl(t, fake))
+	}
 	s := newSweepStore(t)
 	cfg := idleSweepConfig()
 	cfg.IdleSweepConcurrency = limit
@@ -463,7 +445,7 @@ func TestIdleStopSweepBoundsConcurrency(t *testing.T) {
 	now := time.Now()
 	stale := now.Add(-cfg.IdleStopAfter - time.Second).Unix()
 	for i := 0; i < candidates; i++ {
-		seedRunningSandbox(t, s, staleID(i), addr, stale, false)
+		seedRunningSandbox(t, s, staleID(i), addrs[i%runners], stale, false)
 	}
 
 	done := make(chan sweepStats, 1)
@@ -555,7 +537,8 @@ func TestIdleStopSweepIsolatesHangingRunner(t *testing.T) {
 	}
 }
 
-// An unreachable runner is dialled once per sweep; its other candidates are skipped.
+// An unreachable runner is dialled once per sweep, even with spare workers;
+// its other candidates are skipped.
 func TestIdleStopSweepSkipsUnreachableRunnerAfterFirstFailure(t *testing.T) {
 	healthy := &fakeSandboxControl{}
 	healthyAddr := startFakeRunnerControl(t, healthy)
@@ -569,7 +552,7 @@ func TestIdleStopSweepSkipsUnreachableRunnerAfterFirstFailure(t *testing.T) {
 
 	s := newSweepStore(t)
 	cfg := idleSweepConfig()
-	cfg.IdleSweepConcurrency = 1 // serial, so the skip count is exact
+	cfg.IdleSweepConcurrency = 4
 
 	now := time.Now()
 	stale := now.Add(-cfg.IdleStopAfter - time.Second).Unix()

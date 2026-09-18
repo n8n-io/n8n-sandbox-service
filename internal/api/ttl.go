@@ -205,33 +205,15 @@ func runnerKey(rec *store.SandboxRecord) string {
 	return rec.RunnerControlGRPCAddr
 }
 
-// interleaveByRunner round-robins candidates across runners so the pool's
-// in-flight snapshot writes spread over hosts instead of stacking on one.
-func interleaveByRunner(records []*store.SandboxRecord) []*store.SandboxRecord {
-	var order []string
+func groupByRunner(records []*store.SandboxRecord) map[string][]*store.SandboxRecord {
 	groups := make(map[string][]*store.SandboxRecord)
-	total := 0
 	for _, rec := range records {
-		if rec == nil {
-			continue
-		}
-		key := runnerKey(rec)
-		if _, seen := groups[key]; !seen {
-			order = append(order, key)
-		}
-		groups[key] = append(groups[key], rec)
-		total++
-	}
-	out := make([]*store.SandboxRecord, 0, total)
-	for len(out) < total {
-		for _, key := range order {
-			if g := groups[key]; len(g) > 0 {
-				out = append(out, g[0])
-				groups[key] = g[1:]
-			}
+		if rec != nil {
+			key := runnerKey(rec)
+			groups[key] = append(groups[key], rec)
 		}
 	}
-	return out
+	return groups
 }
 
 // grpc-go returns Unavailable for connection failures; the runner maps its own
@@ -240,60 +222,86 @@ func runnerUnreachable(err error) bool {
 	return status.Code(err) == codes.Unavailable
 }
 
-// sweepConcurrently runs act over records with a bounded pool. Once a runner
-// proves unreachable its remaining candidates are skipped until the next sweep.
+// sweepConcurrently runs act over records with a bounded pool. Each runner has
+// its own submitter whose first candidate is a probe; the rest are submitted
+// only after it returns from a reachable host, so a dead runner costs one dial
+// per sweep. Submitters blocked on the pool are admitted FIFO, which spreads
+// in-flight calls across runners.
 func sweepConcurrently(ctx context.Context, s store.SandboxStore, cfg *config.APIConfig, phase string, records []*store.SandboxRecord, act sweepAction) sweepStats {
 	start := time.Now()
-	ordered := interleaveByRunner(records)
+	groups := groupByRunner(records)
 
 	var (
 		mu          sync.Mutex
 		unreachable = make(map[string]struct{})
-		stats       = sweepStats{candidates: len(ordered)}
+		stats       sweepStats
 	)
-
-	g := new(errgroup.Group)
-	g.SetLimit(sweepConcurrency(cfg))
-	for _, rec := range ordered {
-		if ctx.Err() != nil {
-			break
-		}
-		g.Go(func() error {
-			key := runnerKey(rec)
-			mu.Lock()
-			if _, skip := unreachable[key]; skip {
-				stats.skippedUnreachable++
-				mu.Unlock()
-				return nil
-			}
-			mu.Unlock()
-
-			var acted bool
-			var actErr error
-			lockErr := withLockedSandbox(ctx, s, rec.ID, func(fresh *store.SandboxRecord) {
-				acted, actErr = act(ctx, fresh)
-			})
-
-			mu.Lock()
-			defer mu.Unlock()
-			switch {
-			case lockErr != nil:
-				if ctx.Err() == nil {
-					slog.Error("idle sweep lock or refresh failed", "phase", phase, "sandbox_id", rec.ID, "err", lockErr)
-				}
-				stats.failed++
-			case actErr != nil:
-				if runnerUnreachable(actErr) {
-					unreachable[key] = struct{}{}
-				}
-				stats.failed++
-			case acted:
-				stats.acted++
-			}
-			return nil
-		})
+	for _, group := range groups {
+		stats.candidates += len(group)
 	}
-	_ = g.Wait()
+
+	run := func(rec *store.SandboxRecord) {
+		var acted bool
+		var actErr error
+		lockErr := withLockedSandbox(ctx, s, rec.ID, func(fresh *store.SandboxRecord) {
+			acted, actErr = act(ctx, fresh)
+		})
+
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case lockErr != nil:
+			if ctx.Err() == nil {
+				slog.Error("idle sweep lock or refresh failed", "phase", phase, "sandbox_id", rec.ID, "err", lockErr)
+			}
+			stats.failed++
+		case actErr != nil:
+			if runnerUnreachable(actErr) {
+				unreachable[runnerKey(rec)] = struct{}{}
+			}
+			stats.failed++
+		case acted:
+			stats.acted++
+		}
+	}
+
+	pool := new(errgroup.Group)
+	pool.SetLimit(sweepConcurrency(cfg))
+	var submitters sync.WaitGroup
+	for key, group := range groups {
+		submitters.Add(1)
+		go func() {
+			defer submitters.Done()
+			probed := make(chan struct{})
+			pool.Go(func() error {
+				run(group[0])
+				close(probed)
+				return nil
+			})
+			<-probed
+			rest := group[1:]
+			for i, rec := range rest {
+				if ctx.Err() != nil {
+					return
+				}
+				mu.Lock()
+				_, dead := unreachable[key]
+				if dead {
+					stats.skippedUnreachable += len(rest) - i
+				}
+				mu.Unlock()
+				if dead {
+					return
+				}
+				pool.Go(func() error {
+					run(rec)
+					return nil
+				})
+			}
+		}()
+	}
+	submitters.Wait()
+	_ = pool.Wait()
 
 	if stats.candidates > 0 {
 		slog.Info("idle sweep phase done",
