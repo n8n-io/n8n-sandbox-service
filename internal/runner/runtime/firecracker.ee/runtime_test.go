@@ -69,7 +69,7 @@ func stubCreateDeps(rt *Runtime) {
 	rt.deps.createSnapshot = func(context.Context, string) error { return nil }
 	rt.deps.loadSnapshot = func(context.Context, string, Config) error { return nil }
 	rt.deps.coldBoot = func(context.Context, string, *bootParams) error { return nil }
-	rt.deps.newProxy = func(context.Context, string, string, string) (daemonProxy, error) { return &fakeProxy{}, nil }
+	rt.deps.newProxy = func(context.Context, string, string, string, string) (daemonProxy, error) { return &fakeProxy{}, nil }
 	rt.deps.probeDaemon = func(context.Context, string) error { return nil }
 	rt.deps.freeBytesInDir = freeBytesInDir
 }
@@ -196,7 +196,7 @@ func TestRuntimeCreateSandboxStartsFirecrackerAndProxy(t *testing.T) {
 		loadedSocket = socketPath
 		return nil
 	}
-	rt.deps.newProxy = func(_ context.Context, listenAddr string, netnsName string, guestAddr string) (daemonProxy, error) {
+	rt.deps.newProxy = func(_ context.Context, _ string, listenAddr string, netnsName string, guestAddr string) (daemonProxy, error) {
 		proxyListenAddr = listenAddr
 		proxyNetNS = netnsName
 		proxyGuestAddr = guestAddr
@@ -317,7 +317,7 @@ func TestRuntimeDeleteHoldsSlotUntilCleanupCompletes(t *testing.T) {
 	rt.deps.cloneRootfs = func(context.Context, string, string) error { return nil }
 	rt.deps.cloneGoldenSnapshot = func(context.Context, string, string, string) error { return nil }
 	rt.deps.loadSnapshot = func(context.Context, string, Config) error { return nil }
-	rt.deps.newProxy = func(context.Context, string, string, string) (daemonProxy, error) { return proxy, nil }
+	rt.deps.newProxy = func(context.Context, string, string, string, string) (daemonProxy, error) { return proxy, nil }
 	rt.deps.probeDaemon = func(context.Context, string) error { return nil }
 
 	if _, err := rt.CreateSandbox(context.Background(), "sandbox-id-123456", nil); err != nil {
@@ -361,7 +361,7 @@ func TestRuntimeDeleteSandboxWaitsForCreate(t *testing.T) {
 	proc := &fakeProcess{}
 	proxy := &fakeProxy{}
 	rt.deps.start = func(context.Context, func(error), string, ...string) (process, error) { return proc, nil }
-	rt.deps.newProxy = func(context.Context, string, string, string) (daemonProxy, error) { return proxy, nil }
+	rt.deps.newProxy = func(context.Context, string, string, string, string) (daemonProxy, error) { return proxy, nil }
 
 	createReachedSnapshot := make(chan struct{})
 	allowCreateSnapshot := make(chan struct{})
@@ -468,7 +468,7 @@ func TestRuntimeCreateSandboxCleansUpOnFailure(t *testing.T) {
 	rt.deps.cloneRootfs = func(context.Context, string, string) error { return nil }
 	rt.deps.cloneGoldenSnapshot = func(context.Context, string, string, string) error { return nil }
 	rt.deps.loadSnapshot = func(context.Context, string, Config) error { return nil }
-	rt.deps.newProxy = func(context.Context, string, string, string) (daemonProxy, error) { return proxy, nil }
+	rt.deps.newProxy = func(context.Context, string, string, string, string) (daemonProxy, error) { return proxy, nil }
 	rt.deps.probeDaemon = func(context.Context, string) error { return errors.New("daemon down") }
 
 	if _, err := rt.CreateSandbox(context.Background(), "sandbox-id-123456", nil); err == nil {

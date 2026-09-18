@@ -88,6 +88,7 @@ func ExecProxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics
 
 		upResp, err := client.Do(upReq)
 		if err != nil {
+			logDaemonUnreachable(r, "exec proxy", err)
 			writeError(w, http.StatusServiceUnavailable, "daemon temporarily unavailable")
 			return
 		}

@@ -112,7 +112,7 @@ func TestShutdownRacingGuestDeathTearsDownTheMicroVMOnce(t *testing.T) {
 	proxy := &countingProxy{blockFirstStop: make(chan struct{}), firstStop: make(chan struct{})}
 	exits := &guestExitStub{}
 	exits.install(rt, proc)
-	rt.deps.newProxy = func(context.Context, string, string, string) (daemonProxy, error) { return proxy, nil }
+	rt.deps.newProxy = func(context.Context, string, string, string, string) (daemonProxy, error) { return proxy, nil }
 
 	const sandboxID = "sandbox-id-123456"
 	if _, err := rt.CreateSandbox(context.Background(), sandboxID, nil); err != nil {
@@ -167,7 +167,7 @@ func TestShutdownDuringActivationDoesNotLeaveTheMicroVMRunning(t *testing.T) {
 		return proc, nil
 	}
 	proxy := &countingProxy{}
-	rt.deps.newProxy = func(context.Context, string, string, string) (daemonProxy, error) { return proxy, nil }
+	rt.deps.newProxy = func(context.Context, string, string, string, string) (daemonProxy, error) { return proxy, nil }
 
 	// Parks the create before it starts the microVM, so shutdown runs while both
 	// handles are still nil — the case where shutdown finds nothing to tear down.
@@ -233,7 +233,7 @@ func TestGuestDeathFreesSlotAndPinsSandboxToColdBoot(t *testing.T) {
 	proxy := &fakeProxy{}
 	exits := &guestExitStub{}
 	exits.install(rt, proc)
-	rt.deps.newProxy = func(context.Context, string, string, string) (daemonProxy, error) { return proxy, nil }
+	rt.deps.newProxy = func(context.Context, string, string, string, string) (daemonProxy, error) { return proxy, nil }
 
 	const sandboxID = "sandbox-id-123456"
 	if _, err := rt.CreateSandbox(context.Background(), sandboxID, nil); err != nil {
