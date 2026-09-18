@@ -12,6 +12,8 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/config"
 )
 
+const defaultLockPoolSize = 5
+
 // PostgresStore wraps a *sql.DB backed by Postgres.
 type PostgresStore struct {
 	db     *sql.DB
@@ -68,7 +70,11 @@ func NewPostgres(cfg config.PostgresConfig) (*PostgresStore, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: open postgres lock pool: %w", err)
 	}
-	lockDB.SetMaxOpenConns(5)
+	lockPoolSize := cfg.LockPoolSize
+	if lockPoolSize <= 0 {
+		lockPoolSize = defaultLockPoolSize
+	}
+	lockDB.SetMaxOpenConns(lockPoolSize)
 	lockDB.SetMaxIdleConns(1)
 	lockDB.SetConnMaxLifetime(30 * time.Minute)
 	if err := lockDB.Ping(); err != nil {
