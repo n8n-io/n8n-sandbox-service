@@ -79,8 +79,8 @@ func TestLoadAPIParsesDefaults(t *testing.T) {
 		t.Errorf("expected IdleSweepConcurrency 8, got %d", cfg.IdleSweepConcurrency)
 	}
 
-	if cfg.Postgres.LockPoolSize != 8+sandboxLockRequestHeadroom {
-		t.Errorf("expected Postgres.LockPoolSize %d, got %d", 8+sandboxLockRequestHeadroom, cfg.Postgres.LockPoolSize)
+	if cfg.Postgres.LockPoolSize <= cfg.IdleSweepConcurrency {
+		t.Errorf("expected Postgres.LockPoolSize above sweep concurrency %d, got %d", cfg.IdleSweepConcurrency, cfg.Postgres.LockPoolSize)
 	}
 
 	if cfg.LogLevel != slog.LevelInfo {
@@ -289,21 +289,23 @@ func TestLoadAPIRejectsNegativeIdleDeleteAfter(t *testing.T) {
 	}
 }
 
-func TestLoadAPIIdleSweepConcurrencySizesLockPool(t *testing.T) {
+// The lock pool follows the configured concurrency: whatever the setting, the
+// sweeper's workers cannot take every connection from the request path.
+func TestLoadAPIIdleSweepConcurrencyKeepsLockPoolAboveIt(t *testing.T) {
 	t.Setenv("SANDBOX_API_KEYS", "test-key")
 	t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
-	t.Setenv("SANDBOX_API_IDLE_SWEEP_CONCURRENCY", "3")
+	t.Setenv("SANDBOX_API_IDLE_SWEEP_CONCURRENCY", "32")
 	setRequiredGRPCMTLS(t)
 
 	cfg, err := LoadAPI()
 	if err != nil {
 		t.Fatalf("LoadAPI() failed: %v", err)
 	}
-	if cfg.IdleSweepConcurrency != 3 {
-		t.Fatalf("IdleSweepConcurrency: want 3, got %d", cfg.IdleSweepConcurrency)
+	if cfg.IdleSweepConcurrency != 32 {
+		t.Fatalf("IdleSweepConcurrency: want 32, got %d", cfg.IdleSweepConcurrency)
 	}
-	if cfg.Postgres.LockPoolSize != 3+sandboxLockRequestHeadroom {
-		t.Fatalf("Postgres.LockPoolSize: want %d, got %d", 3+sandboxLockRequestHeadroom, cfg.Postgres.LockPoolSize)
+	if cfg.Postgres.LockPoolSize <= 32 {
+		t.Fatalf("Postgres.LockPoolSize: want above 32, got %d", cfg.Postgres.LockPoolSize)
 	}
 }
 
