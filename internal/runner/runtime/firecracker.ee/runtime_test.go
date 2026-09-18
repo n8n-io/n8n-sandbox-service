@@ -869,3 +869,39 @@ func TestRuntimeEnsureSandboxRunningWakesStoppedSandbox(t *testing.T) {
 		t.Fatalf("DaemonURL() = %s", url)
 	}
 }
+
+// The egress mode is fixed at creation and follows the sandbox: a blocked sandbox
+// re-applies its DROP on every wake, since the slot it wakes on is freshly built
+// and not the one it left; a default sandbox never runs it.
+func TestRuntimeBlockedEgressIsReappliedOnWake(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		opts      *runnerruntime.CreateOptions
+		wantDrops int
+	}{
+		{name: "default", opts: nil, wantDrops: 0},
+		{name: "egress none", opts: &runnerruntime.CreateOptions{Egress: runnerruntime.EgressNone}, wantDrops: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := testRuntimeT(t, 1)
+			stubCreateDeps(rt)
+			log := &scriptLog{}
+			rt.deps.run = log.run
+
+			const sandboxID = "sandbox-id-123456"
+			if _, err := rt.CreateSandbox(context.Background(), sandboxID, tc.opts); err != nil {
+				t.Fatalf("CreateSandbox() failed: %v", err)
+			}
+			if err := rt.StopSandbox(context.Background(), sandboxID); err != nil {
+				t.Fatalf("StopSandbox() failed: %v", err)
+			}
+			if _, err := rt.EnsureSandboxRunning(context.Background(), sandboxID); err != nil {
+				t.Fatalf("EnsureSandboxRunning() failed: %v", err)
+			}
+			drops := log.matching("-I FORWARD 1 -i 'fc-tap-0' -j DROP")
+			if len(drops) != tc.wantDrops {
+				t.Fatalf("egress block scripts = %d, want %d (create + wake)", len(drops), tc.wantDrops)
+			}
+		})
+	}
+}

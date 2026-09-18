@@ -33,18 +33,25 @@ By default the client retries transient failures: 3 extra attempts (four tries t
 
 ### Sandbox lifecycle
 
+`createSandbox` requires an `egress` mode: `'public'` (the internet, minus private ranges) or `'none'` (no outbound connection, DNS included). It is fixed at creation and echoed on every sandbox record. Reconnecting by `id` with a different mode is refused by the API (`409`). If the API returns a sandbox that is not in the requested mode (it predates egress modes and ignored the field), `createSandbox` throws `EgressMismatchError` with its `sandboxId`.
+
 ```ts
 // Create a sandbox
-const sandbox = await client.createSandbox();
+const sandbox = await client.createSandbox({ egress: 'public' });
 console.log(sandbox.id); // UUID
 
-// Create or reconnect to a deterministic sandbox
+// Create or reconnect to a deterministic sandbox (pass the egress it was created with)
 const stableSandbox = await client.createSandbox({
   id: '550e8400-e29b-41d4-a716-446655440000',
+  egress: 'public',
 });
 
+// No egress
+const sealed = await client.createSandbox({ egress: 'none' });
+console.log(sealed.egress); // "none"
+
 // Ephemeral: deleted instead of stopped when idle (see API.md, POST /sandboxes)
-const scratch = await client.createSandbox({ ephemeral: true });
+const scratch = await client.createSandbox({ ephemeral: true, egress: 'public' });
 console.log(scratch.ephemeral); // true
 
 // Get sandbox info
@@ -184,6 +191,10 @@ try {
 It is never retried automatically: an invisible retry would hide the loss. After a restart, a completed execution is no longer readable (`resumeExecution` throws a 404 `SandboxServiceError`).
 
 An idle stop can also lose memory (on the Docker runtime a stopped container is restarted, not resumed) but raises no `SandboxCrashedError`; it shows as `status: "stopped"` in `getSandbox`, whereas a crash leaves `status` at `running`. Details: [API.md](https://github.com/n8n-io/n8n-sandbox-service/blob/main/docs/API.md#http-409-sandbox_restarted--the-sandbox-came-back-without-its-memory).
+
+## Breaking change in 1.0
+
+`createSandbox(options)` now requires `options.egress`. Pass `egress: 'public'` to keep the 0.x behaviour. `SandboxRecord` gains `egress`. Reconnecting by `id` with a different `egress` fails (`409`).
 
 ## Development
 

@@ -28,16 +28,28 @@ type fakeSandboxControl struct {
 	stopped   []string
 	deleted   []string
 	deleteErr error
+	// create_options_json of every create RPC, in order.
+	createOptionsJSON []string
+	// What the create response reports as applied, given create_options_json. Nil echoes
+	// the request, as a current runner does.
+	applied func(createOptionsJSON string) string
 	// Run at the start of the RPC, on the server-side context, when set.
 	createHook func(ctx context.Context)
 	deleteHook func(ctx context.Context)
 }
 
-func (f *fakeSandboxControl) CreateSandbox(ctx context.Context, _ *pb.CreateSandboxRequest) (*pb.CreateSandboxResponse, error) {
+func (f *fakeSandboxControl) CreateSandbox(ctx context.Context, req *pb.CreateSandboxRequest) (*pb.CreateSandboxResponse, error) {
 	if f.createHook != nil {
 		f.createHook(ctx)
 	}
-	return &pb.CreateSandboxResponse{ContainerIp: "10.0.0.2"}, nil
+	f.mu.Lock()
+	f.createOptionsJSON = append(f.createOptionsJSON, req.GetCreateOptionsJson())
+	f.mu.Unlock()
+	applied := req.GetCreateOptionsJson()
+	if f.applied != nil {
+		applied = f.applied(req.GetCreateOptionsJson())
+	}
+	return &pb.CreateSandboxResponse{ContainerIp: "10.0.0.2", AppliedCreateOptionsJson: applied}, nil
 }
 
 func (f *fakeSandboxControl) StopSandbox(_ context.Context, req *pb.StopSandboxRequest) (*pb.StopSandboxResponse, error) {

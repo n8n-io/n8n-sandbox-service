@@ -151,7 +151,7 @@ async function createSandbox() {
     setStatus('Creating sandbox...');
     appendOutput('Creating sandbox...', 'info');
     const t0 = performance.now();
-    const sb = await getClient().createSandbox();
+    const sb = await getClient().createSandbox({ egress: 'public' });
     const elapsed = ((performance.now() - t0) / 1000).toFixed(2);
     appendOutput(`Sandbox created: ${sb.id} (${sb.status}) in ${elapsed}s`, 'info');
     setStatus(`Created: ${sb.id.slice(0, 12)} (${elapsed}s)`);

@@ -81,7 +81,7 @@ func (f *crashBackend) removeContainer(context.Context, string) error {
 	defer f.mu.Unlock()
 	return f.removeErr
 }
-func (f *crashBackend) createContainer(context.Context, string, string, string, *ResourceLimits, bool) (string, error) {
+func (f *crashBackend) createContainer(context.Context, string, string, string, string, *ResourceLimits, bool) (string, error) {
 	return "", errors.New("unexpected createContainer")
 }
 func (f *crashBackend) inspectNetwork(context.Context, string) (*networkInspect, error) {
@@ -99,7 +99,7 @@ func newCrashRuntime(t *testing.T, backend *crashBackend) (*Runtime, *[]string) 
 	t.Helper()
 	m := newRuntime(&config.Config{}, Config{}, backend)
 	policyIPs := &[]string{}
-	m.applyPolicy = func(_, _, sourceIP, _ string, _ int) error {
+	m.applyPolicy = func(_, _, sourceIP, _ string, _ int, _ bool) error {
 		*policyIPs = append(*policyIPs, sourceIP)
 		return nil
 	}
@@ -164,7 +164,7 @@ func TestAWakeThatCannotRepairARestartedSandboxLeavesItForTheNextRequest(t *test
 	m, _ := newCrashRuntime(t, backend)
 	rec := metrics.NewRunnerRecorder(true)
 	m.SetMetricsRecorder(rec)
-	m.applyPolicy = func(string, string, string, string, int) error {
+	m.applyPolicy = func(string, string, string, string, int, bool) error {
 		return errors.New("iptables failed")
 	}
 

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
+	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 )
 
 type fakeDockerBackend struct {
@@ -16,14 +17,17 @@ type fakeDockerBackend struct {
 	ip             string
 	containerIPErr error
 	stopErr        error
+	// network the container was created on, and the one inspect reports.
+	network string
 }
 
 func (f *fakeDockerBackend) ping(context.Context) error {
 	return errors.New("unexpected ping")
 }
 
-func (f *fakeDockerBackend) createContainer(context.Context, string, string, string, *ResourceLimits, bool) (string, error) {
+func (f *fakeDockerBackend) createContainer(_ context.Context, _, _, _, network string, _ *ResourceLimits, _ bool) (string, error) {
 	*f.events = append(*f.events, "create")
+	f.network = network
 	return f.containerID, nil
 }
 
@@ -55,10 +59,17 @@ func (f *fakeDockerBackend) containerIP(context.Context, string) (string, error)
 
 func (f *fakeDockerBackend) inspectContainer(context.Context, string) (*containerInspect, error) {
 	*f.events = append(*f.events, "inspect")
-	return &containerInspect{
+	inspect := &containerInspect{
 		ID:    f.containerID,
 		State: containerState{Status: containerStatusExited},
-	}, nil
+	}
+	if f.network != "" {
+		// A stopped container keeps its network attachment; only the address is gone.
+		inspect.NetworkSettings.Networks = map[string]struct {
+			IPAddress string `json:"IPAddress"`
+		}{f.network: {}}
+	}
+	return inspect, nil
 }
 
 func (f *fakeDockerBackend) inspectNetwork(context.Context, string) (*networkInspect, error) {
@@ -123,13 +134,13 @@ func TestDockerContainerCreateArgs(t *testing.T) {
 		DiskMB:     1024,
 	}
 
-	got := dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", limits, true)
+	got := dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerNoEgressNetwork, limits, true)
 	want := []string{
 		"container", "create",
 		"--name", "sandbox-name",
 		"--hostname", "sandbox",
 		"--restart", "unless-stopped",
-		"--network", runnerBridgeNetwork,
+		"--network", runnerNoEgressNetwork,
 		"--label", containerLabelManaged + "=" + containerLabelManagedVal,
 		"--label", containerLabelSandboxID + "=sandbox-id",
 		"--user", "1000:1000",
@@ -160,7 +171,7 @@ func TestDockerContainerCreateArgsAlwaysApplySecurityPolicy(t *testing.T) {
 	}
 
 	for _, enableCgroups := range []bool{false, true} {
-		gotArgs := dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", nil, enableCgroups)
+		gotArgs := dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerBridgeNetwork, nil, enableCgroups)
 		var got []string
 		for i := 0; i < len(gotArgs); i++ {
 			if gotArgs[i] != "--cap-drop" && gotArgs[i] != "--cap-add" && gotArgs[i] != "--security-opt" {
@@ -324,7 +335,7 @@ func TestEnsureSandboxRunningCleansUpStartedContainerOnWakeFailures(t *testing.T
 				ip:             tc.containerIP,
 				containerIPErr: tc.ipErr,
 			})
-			m.applyPolicy = func(bridgeIface, gotID, sourceIP, gatewayIP string, port int) error {
+			m.applyPolicy = func(bridgeIface, gotID, sourceIP, gatewayIP string, port int, _ bool) error {
 				events = append(events, "applyPolicy")
 				if gotID != containerID {
 					t.Fatalf("applyPolicy containerID = %q, want %q", gotID, containerID)
@@ -366,7 +377,7 @@ func TestCreateContainerCleansUpAfterContextCancellation(t *testing.T) {
 		ip:          "172.18.0.2",
 	})
 	m.imageReady.Store(true)
-	m.applyPolicy = func(string, string, string, string, int) error {
+	m.applyPolicy = func(string, string, string, string, int, bool) error {
 		events = append(events, "applyPolicy")
 		return nil
 	}
@@ -391,6 +402,65 @@ func TestCreateContainerCleansUpAfterContextCancellation(t *testing.T) {
 	}
 }
 
+// The egress mode picks the network a container is created on, and the policy
+// applied on create and again on wake is that network's: the bridge the wake
+// reads from the stopped container's attachment, not a runner-wide default.
+func TestCreateAndWakeApplyTheNetworkPolicyOfTheSandboxEgress(t *testing.T) {
+	type policyCall struct {
+		bridgeIface, gatewayIP string
+		blockEgress            bool
+	}
+	for _, tc := range []struct {
+		name        string
+		opts        *runnerruntime.CreateOptions
+		wantNetwork string
+		wantPolicy  policyCall
+	}{
+		{
+			name:        "default is the public bridge",
+			opts:        nil,
+			wantNetwork: runnerBridgeNetwork,
+			wantPolicy:  policyCall{"runner-bridge", "172.18.0.1", false},
+		},
+		{
+			name:        "egress none is the no-egress bridge",
+			opts:        &runnerruntime.CreateOptions{Egress: runnerruntime.EgressNone},
+			wantNetwork: runnerNoEgressNetwork,
+			wantPolicy:  policyCall{runnerNoEgressBridge, "172.19.0.1", true},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			events := []string{}
+			backend := &fakeDockerBackend{events: &events, containerID: "container-1", ip: "172.18.0.2"}
+			m := newRuntime(&config.Config{}, Config{}, backend)
+			m.publicNetwork.iface, m.publicNetwork.gatewayIP = "runner-bridge", "172.18.0.1"
+			m.noEgressNetwork.iface, m.noEgressNetwork.gatewayIP = runnerNoEgressBridge, "172.19.0.1"
+			m.imageReady.Store(true)
+			var policies []policyCall
+			m.applyPolicy = func(bridgeIface, _, _, gatewayIP string, _ int, blockEgress bool) error {
+				policies = append(policies, policyCall{bridgeIface, gatewayIP, blockEgress})
+				return nil
+			}
+			m.teardownRules = func(string) error { return nil }
+			m.waitForDaemon = func(context.Context, string) error { return nil }
+
+			if _, err := m.CreateContainer(context.Background(), "sandbox-id-1234", tc.opts); err != nil {
+				t.Fatalf("CreateContainer() failed: %v", err)
+			}
+			if backend.network != tc.wantNetwork {
+				t.Fatalf("created on network %q, want %q", backend.network, tc.wantNetwork)
+			}
+			if _, err := m.ensureSandboxRunningOnce(context.Background(), "sandbox-id-1234"); err != nil {
+				t.Fatalf("ensureSandboxRunningOnce() failed: %v", err)
+			}
+			want := []policyCall{tc.wantPolicy, tc.wantPolicy}
+			if !reflect.DeepEqual(policies, want) {
+				t.Fatalf("policies applied = %+v, want %+v", policies, want)
+			}
+		})
+	}
+}
+
 func TestEnsureSandboxRunningFailedWakeAfterNetworkDetachStopsContainerAndRemovesRules(t *testing.T) {
 	events := []string{}
 	const containerID = "container-1"
@@ -398,13 +468,12 @@ func TestEnsureSandboxRunningFailedWakeAfterNetworkDetachStopsContainerAndRemove
 		events:      &events,
 		containerID: containerID,
 		containerIPErr: fmt.Errorf(
-			"%w: container %s has no IP on %s",
+			"%w: container %s has no IP on a runner network",
 			ErrSandboxNetworkUnavailable,
 			containerID,
-			runnerBridgeNetwork,
 		),
 	})
-	m.applyPolicy = func(string, string, string, string, int) error {
+	m.applyPolicy = func(string, string, string, string, int, bool) error {
 		return fmt.Errorf("unexpected applyPolicy")
 	}
 	m.teardownRules = func(gotID string) error {
@@ -460,7 +529,7 @@ func TestEnsureSandboxRunningDoesNotCleanUpAfterSuccessfulWake(t *testing.T) {
 		containerID: containerID,
 		ip:          "172.18.0.2",
 	})
-	m.applyPolicy = func(string, string, string, string, int) error {
+	m.applyPolicy = func(string, string, string, string, int, bool) error {
 		events = append(events, "applyPolicy")
 		return nil
 	}

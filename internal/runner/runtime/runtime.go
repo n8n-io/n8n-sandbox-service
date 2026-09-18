@@ -4,7 +4,10 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 )
 
@@ -25,8 +28,70 @@ var ErrSandboxNetworkUnavailable = errors.New("sandbox network unavailable")
 // ErrSandboxNotRunning is returned when a sandbox exists but is not running.
 var ErrSandboxNotRunning = errors.New("sandbox not running")
 
-// CreateOptions holds optional parameters for sandbox creation.
-type CreateOptions struct{}
+// Egress is a sandbox's outbound network policy.
+type Egress string
+
+const (
+	// EgressPublic allows the public internet; the private ranges in netpolicy stay
+	// blocked. Default when field is omitted or empty.
+	EgressPublic Egress = "public"
+	// EgressNone lets no guest-initiated connection leave the sandbox, DNS included.
+	EgressNone Egress = "none"
+)
+
+// ParseEgress maps the wire value to an Egress, treating empty as EgressPublic.
+func ParseEgress(s string) (Egress, error) {
+	switch Egress(s) {
+	case "", EgressPublic:
+		return EgressPublic, nil
+	case EgressNone:
+		return EgressNone, nil
+	}
+	return "", fmt.Errorf("invalid egress %q: must be %q or %q", s, EgressPublic, EgressNone)
+}
+
+// CreateOptions holds optional parameters for sandbox creation. It is also the
+// JSON shape of the create RPC's create_options_json and
+// applied_create_options_json fields.
+type CreateOptions struct {
+	Egress Egress `json:"egress,omitempty"`
+}
+
+// ParseCreateOptions decodes the wire form of CreateOptions. Empty means the
+// defaults; otherwise it must be an object with a valid Egress.
+func ParseCreateOptions(s string) (*CreateOptions, error) {
+	opts := &CreateOptions{}
+	if strings.TrimSpace(s) != "" {
+		// Via &opts so a JSON null shows up as nil rather than as the defaults.
+		if err := json.Unmarshal([]byte(s), &opts); err != nil {
+			return nil, err
+		}
+		if opts == nil {
+			return nil, errors.New("create options: null")
+		}
+	}
+	egress, err := ParseEgress(string(opts.Egress))
+	if err != nil {
+		return nil, err
+	}
+	opts.Egress = egress
+	return opts, nil
+}
+
+// BlockEgress reports whether the sandbox gets no egress at all. Options reach a
+// runtime through ParseCreateOptions, so any other value is a bug, not input.
+func (o *CreateOptions) BlockEgress() bool {
+	if o == nil {
+		return false
+	}
+	switch o.Egress {
+	case "", EgressPublic:
+		return false
+	case EgressNone:
+		return true
+	}
+	panic(fmt.Sprintf("unvalidated egress %q", o.Egress))
+}
 
 // SandboxInfo represents information about a created sandbox.
 type SandboxInfo struct {

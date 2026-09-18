@@ -3,7 +3,9 @@
 #
 # Uses SANDBOX_API_KEY as an admin key to mint a tenant API key, then runs
 # create (ephemeral) → exec → resolv.conf → DNS → HTTPS → file write/read → delete
-# with that tenant key (not the admin key).
+# with that tenant key (not the admin key). It then creates one sandbox with
+# egress "public" (same network checks) and one with egress "none" (direct IP,
+# DNS and HTTPS must all be blocked while exec still works).
 #
 # Environment:
 #   SANDBOX_API_BASE       — API base URL (required unless set in env file)
@@ -209,12 +211,20 @@ assert_exec() {
 
 create_sandbox() {
 	local label="$1"
-	local create_json="" attempt=0 new_sid="" ephemeral=""
+	# Optional egress mode; omitted from the request when empty, in which case
+	# the API default (public) is expected back.
+	local egress="${2:-}"
+	local body='{"ephemeral":true}'
+	local create_json="" attempt=0 new_sid="" ephemeral="" got_egress=""
+
+	if [ -n "${egress}" ]; then
+		body="{\"ephemeral\":true,\"egress\":\"${egress}\"}"
+	fi
 
 	printf '==> %s\n' "${label}" >&2
 	while [ "${attempt}" -lt 5 ]; do
 		attempt=$((attempt + 1))
-		if create_json="$(api_json -X POST "${BASE}/sandboxes" -d '{"ephemeral":true}' 2>/dev/null)"; then
+		if create_json="$(api_json -X POST "${BASE}/sandboxes" -d "${body}" 2>/dev/null)"; then
 			break
 		fi
 		sleep 2
@@ -230,7 +240,11 @@ create_sandbox() {
 	if [ "${ephemeral}" != "true" ]; then
 		fail "${label}: ephemeral ${ephemeral:-<missing>}, want true"
 	fi
-	printf '    sandbox_id: %s (ephemeral)\n' "${new_sid}" >&2
+	got_egress="$(printf '%s' "${create_json}" | jq -r .egress)"
+	if [ "${got_egress}" != "${egress:-public}" ]; then
+		fail "${label}: egress ${got_egress:-<missing>}, want ${egress:-public}"
+	fi
+	printf '    sandbox_id: %s (ephemeral, egress: %s)\n' "${new_sid}" "${got_egress}" >&2
 	printf '%s' "${new_sid}"
 }
 
@@ -287,6 +301,20 @@ run_core_guest_checks() {
 	assert_exec "${prefix}https example.com" "curl -fsSL -o /dev/null --max-time 20 https://example.com/" 0 "${target_sid}"
 }
 
+# A sealed sandbox must still answer exec, but reach nothing outside: a public
+# address dialled directly (independent of DNS), DNS itself, and a name over
+# HTTPS. Each probe is inverted so exit 0 means "blocked", which is what
+# assert_exec retries towards.
+run_no_egress_guest_checks() {
+	local target_sid="$1"
+	local prefix="${2:-}"
+
+	assert_exec "${prefix}exec still works" "echo sealed" 0 "${target_sid}"
+	assert_exec "${prefix}direct ip blocked" "! curl -s -o /dev/null --connect-timeout 3 http://1.1.1.1:80/" 0 "${target_sid}"
+	assert_exec "${prefix}dns blocked" "! getent ahostsv4 example.com >/dev/null" 0 "${target_sid}"
+	assert_exec "${prefix}https blocked" "! curl -s -o /dev/null --max-time 10 https://example.com/" 0 "${target_sid}"
+}
+
 step "healthz"
 # shellcheck disable=SC2086
 curl ${CURL_COMMON} "${BASE}/healthz" >/dev/null
@@ -321,6 +349,14 @@ printf '    file write/read: ok\n'
 assert_exec "exec reads uploaded file" "cat ${SMOKE_FILE_PATH}"
 
 delete_sandbox "${sid}" "delete sandbox"
+
+sid="$(create_sandbox "create sandbox (egress: public)" public)"
+run_core_guest_checks "${sid}" "egress public: "
+delete_sandbox "${sid}" "delete sandbox (egress: public)"
+
+sid="$(create_sandbox "create sandbox (egress: none)" none)"
+run_no_egress_guest_checks "${sid}" "egress none: "
+delete_sandbox "${sid}" "delete sandbox (egress: none)"
 
 if [ "${SMOKE_EXTENDED:-0}" = "1" ]; then
 	sid2="$(create_sandbox "extended: create second sandbox")"
