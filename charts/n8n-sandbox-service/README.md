@@ -196,10 +196,13 @@ auth:
   existingSecret: n8n-sandbox-auth
   secretKeys:
     apiKeys: api-keys
+    provisionerKeys: provisioner-api-keys
     runnerRegistrationToken: runner-registration-token
     runnerApiKey: runner-api-key
     runnerApiKeys: runner-api-keys
 ```
+
+`provisionerKeys` is optional: the API reads it as `SANDBOX_API_PROVISIONER_KEYS` with `secretKeyRef.optional: true`, so a Secret without that key runs with no provisioner keys.
 
 If `auth.existingSecret` is empty, the chart creates an opaque Secret from `auth.generated`:
 
@@ -208,14 +211,15 @@ auth:
   existingSecret: ""
   generated:
     apiKeys: replace-with-random-api-key
+    provisionerKeys: "" # optional; empty leaves the key out
     runnerRegistrationToken: replace-with-random-registration-token
     runnerApiKey: replace-with-random-runner-api-key
     runnerApiKeys: replace-with-random-runner-api-key
 ```
 
-The chart fails rendering when any generated auth value is empty or `changeme`. Do not expose the API with placeholder credentials.
+The chart fails rendering when any required generated auth value is empty or `changeme`. Do not expose the API with placeholder credentials.
 
-The API uses `apiKeys`, `runnerRegistrationToken`, and `runnerApiKey`. The runner uses `runnerApiKeys` and `runnerRegistrationToken`.
+The API uses `apiKeys`, `provisionerKeys`, `runnerRegistrationToken`, and `runnerApiKey`. The runner uses `runnerApiKeys` and `runnerRegistrationToken`.
 
 ## TLS Secrets
 

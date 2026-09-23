@@ -4,9 +4,11 @@ All endpoints except `/healthz` and `/metrics` require the `X-Api-Key` header fo
 
 ### API keys and tenants
 
-`SANDBOX_API_KEYS` are admin keys. An admin key can create/list/delete any sandbox, manage tenants and mint tenant API keys via the admin API.
+There are three key classes:
 
-A tenant key may only create sandboxes for that tenant and may only list/get/delete/proxy its own sandboxes. Self-hosted operators can ignore tenant APIs entirely and keep using the admin key.
+- `SANDBOX_API_KEYS` are admin keys. An admin key can create/list/delete any sandbox, manage tenants and mint tenant API keys via the admin API.
+- `SANDBOX_API_PROVISIONER_KEYS` are provisioner keys: `POST /admin/tenants` and `DELETE /admin/tenants/{id}` only, `403` everywhere else. Why the class exists and what it does not protect: [security-model.md](security-model.md#provisioner-keys).
+- Tenant keys are minted by an admin (or returned when a tenant is created). A tenant key may only create sandboxes for that tenant and may only list/get/delete/proxy its own sandboxes. Self-hosted operators can ignore tenant APIs entirely and keep using the admin key.
 
 Tenant keys are returned in plaintext once on create; only a hash is stored.
 
@@ -750,11 +752,11 @@ curl "http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/stat?
 
 ## Admin: tenants and API keys
 
-All `/admin/*` routes require an admin API key (`SANDBOX_API_KEYS`). Tenant keys receive `403`.
+All `/admin/*` routes require an admin API key (`SANDBOX_API_KEYS`) unless marked "Admin or provisioner". Any other key receives `403`.
 
 ### GET /admin/tenants
 
-List tenants.
+Admin only. List tenants.
 
 **Response:** `200 OK`
 
@@ -772,7 +774,7 @@ List tenants.
 
 ### POST /admin/tenants
 
-Create a tenant. By default also mints one API key (`create_key` defaults to `true`).
+Admin or provisioner. Create a tenant. By default also mints one API key (`create_key` defaults to `true`).
 
 **Request body (optional):**
 
@@ -794,7 +796,7 @@ Create a tenant. By default also mints one API key (`create_key` defaults to `tr
 
 `name` is an optional human-readable label. `external_ref` is an optional opaque id from the caller (for example an n8n instance id); the API does not enforce uniqueness.
 
-`max_sandboxes` is the per-tenant sandbox quota (`0` = unlimited). Must be between `0` and `2147483647`. When omitted, the service default applies.
+`max_sandboxes` is the per-tenant sandbox quota (`0` = unlimited). Must be between `0` and `2147483647`. When omitted, the service default applies. With a provisioner key an explicit value must be between `1` and `SANDBOX_API_DEFAULT_MAX_SANDBOXES`; `0` and larger values return `400`.
 
 **Response:** `201 Created`
 
@@ -830,24 +832,24 @@ curl -X POST http://localhost:8080/admin/tenants \
 
 ### GET /admin/tenants/{id}
 
-Get a tenant by id.
+Admin only. Get a tenant by id.
 
 ### DELETE /admin/tenants/{id}
 
-Delete a tenant and its API keys (`204`).
+Admin or provisioner. Delete a tenant and its API keys (`204`).
 
-Fails with `409 Conflict` if the tenant still owns sandboxes — delete those first (admin can delete any sandbox). This avoids orphaning running sandboxes after credentials are removed.
+Fails with `409 Conflict` if the tenant still owns sandboxes — delete those first. This avoids orphaning running sandboxes after credentials are removed.
 
 `DeleteTenant` locks the tenant row while checking ownership and deleting, and tenant sandbox `Create` takes the same lock before insert. That closes the race where a sandbox create is in flight (runner VM already started, store row not yet written) while delete sees an empty count.
 
 ### GET /admin/tenants/{id}/keys
 
-List API key metadata for a tenant (no plaintext secrets).
+Admin only. List API key metadata for a tenant (no plaintext secrets).
 
 ### POST /admin/tenants/{id}/keys
 
-Mint an additional API key for the tenant. Returns plaintext `api_key` once (`201`).
+Admin only. Mint an additional API key for the tenant. Returns plaintext `api_key` once (`201`).
 
 ### DELETE /admin/tenants/{id}/keys/{keyId}
 
-Revoke an API key (`204`). Revoked keys are rejected from the next request on.
+Admin only. Revoke an API key (`204`). Revoked keys are rejected from the next request on.

@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"net/http"
+	"strings"
 
 	"github.com/n8n-io/sandbox-service/internal/api/store"
 	"github.com/n8n-io/sandbox-service/internal/obs"
@@ -14,9 +15,16 @@ import (
 type authRole string
 
 const (
-	roleAdmin  authRole = "admin"
-	roleTenant authRole = "tenant"
+	roleAdmin authRole = "admin"
+	// roleProvisioner: tenant create and delete only. See
+	// docs/security-model.md, "Provisioner keys".
+	roleProvisioner authRole = "provisioner"
+	roleTenant      authRole = "tenant"
 )
+
+// provisionerPathPrefix confines provisioner keys; the handlers under it other
+// than tenant create and delete require admin.
+const provisionerPathPrefix = "/admin/tenants"
 
 type authIdentity struct {
 	Role     authRole
@@ -51,9 +59,10 @@ func apiKeyPrefix(plaintext string) string {
 	return plaintext
 }
 
-// AuthMiddleware checks X-Api-Key against env admin keys, then DB-backed tenant keys.
-// /healthz and /metrics are always allowed through.
-func AuthMiddleware(adminKeys map[string]struct{}, s store.SandboxStore) func(http.Handler) http.Handler {
+// AuthMiddleware checks X-Api-Key against env admin keys, then env provisioner
+// keys, then DB-backed tenant keys. /healthz and /metrics are always allowed
+// through.
+func AuthMiddleware(adminKeys, provisionerKeys map[string]struct{}, s store.SandboxStore) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/healthz" || r.URL.Path == "/metrics" {
@@ -69,6 +78,15 @@ func AuthMiddleware(adminKeys map[string]struct{}, s store.SandboxStore) func(ht
 
 			if constantTimeContains(adminKeys, key) {
 				next.ServeHTTP(w, r.WithContext(withAuthIdentity(r.Context(), authIdentity{Role: roleAdmin})))
+				return
+			}
+
+			if constantTimeContains(provisionerKeys, key) {
+				if !strings.HasPrefix(r.URL.Path, provisionerPathPrefix) {
+					writeError(w, http.StatusForbidden, "provisioner API key may only manage tenants")
+					return
+				}
+				next.ServeHTTP(w, r.WithContext(withAuthIdentity(r.Context(), authIdentity{Role: roleProvisioner})))
 				return
 			}
 
@@ -112,6 +130,17 @@ func requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	return true
+}
+
+// requireAdminOrProvisioner gates the two tenant routes a provisioner may call.
+// Returns the caller's role so the handler can apply provisioner-only limits.
+func requireAdminOrProvisioner(w http.ResponseWriter, r *http.Request) (authRole, bool) {
+	id, ok := authFromContext(r.Context())
+	if !ok || (id.Role != roleAdmin && id.Role != roleProvisioner) {
+		writeError(w, http.StatusForbidden, "admin or provisioner API key required")
+		return "", false
+	}
+	return id.Role, true
 }
 
 // canAccessSandbox reports whether the caller may see/mutate the sandbox.

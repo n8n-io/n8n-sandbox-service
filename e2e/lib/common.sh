@@ -2,6 +2,11 @@
 # Shared helpers for e2e/run-*.sh (source from scripts in e2e/).
 # Expects: set -euo pipefail in the caller.
 
+# Provisioner key every lane hands the API (SANDBOX_API_PROVISIONER_KEYS).
+# tests/helpers.ts defaults PROVISIONER_API_KEY to the same value.
+# shellcheck disable=SC2034  # read by the run-*.sh callers
+E2E_PROVISIONER_API_KEY="provisioner-test"
+
 # Maps host uname -m to Docker image arch tag (amd64/arm64).
 e2e_docker_arch() {
 	uname -m | sed 's/aarch64/arm64/' | sed 's/x86_64/amd64/'
@@ -396,6 +401,7 @@ e2e_api_container_env_args() {
 	E2E_API_CONTAINER_ENV_ARGS=(
 		-v "$tls_dir/api:/grpc-tls:ro"
 		-e "SANDBOX_API_KEYS=$api_key"
+		-e "SANDBOX_API_PROVISIONER_KEYS=$E2E_PROVISIONER_API_KEY"
 		-e "SANDBOX_API_METRICS_ENABLED=true"
 		-e "SANDBOX_API_RUNNER_REGISTRATION_TOKEN=$reg_token"
 		-e "SANDBOX_API_RUNNER_API_KEY=$runner_api_key"

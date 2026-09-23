@@ -23,11 +23,45 @@ Everything trusts the layer above it. Sandboxes trust nothing.
 The API is the only component that knows about tenants. Every other component
 trusts it to have made the decision correctly.
 
-Requests carry an `X-Api-Key` header. Keys listed in `SANDBOX_API_KEYS` are
-admin keys with full access. All other keys are tenant keys, minted by an admin
-and stored only as a SHA-256 hash alongside an 8-character lookup prefix, so a
-database read does not yield usable credentials. Revocation sets `revoked_at`,
-which the lookup query filters on.
+Requests carry an `X-Api-Key` header. There are three key classes:
+
+- Admin keys, listed in `SANDBOX_API_KEYS`: full access.
+- Provisioner keys, listed in `SANDBOX_API_PROVISIONER_KEYS`: tenant create
+  and delete only, see below.
+- Tenant keys, minted by an admin or returned on tenant create, stored only as
+  a SHA-256 hash alongside an 8-character lookup prefix, so a database read
+  does not yield usable credentials. Revocation sets `revoked_at`, which the
+  lookup query filters on.
+
+### Provisioner keys
+
+The class exists for automation that creates and tears down tenants without a
+human in the path. Such automation needs a key with tenant-create rights, and
+without this class the only one is an admin key, which would then be copied
+into every deployment, config store and developer machine of that automation.
+Credentials mostly leak by accident (a log line, a committed config file, a
+laptop, an over-broad secret-store reader) and the odds grow with the number
+of copies. The class makes those copies cheap to lose.
+
+A provisioner key may `POST /admin/tenants` with `max_sandboxes` between `1`
+and `SANDBOX_API_DEFAULT_MAX_SANDBOXES` (startup refuses the class when that
+default is unlimited), and `DELETE /admin/tenants/{id}` for a tenant that owns
+no sandboxes (`409` otherwise; the key cannot delete sandboxes). Everything
+else returns `403`: the middleware confines the key to `/admin/tenants`, and
+every other handler there requires admin. Withholding `POST
+/admin/tenants/{id}/keys` is what keeps existing tenants out of reach: it
+returns a plaintext key for that tenant's sandboxes, and tenant ids are not
+secrets. The two env sets must not overlap; startup fails if they do, because
+admin keys are checked first and the key would silently be admin.
+
+Two limits of that guarantee. It bounds what the key grants. Automation that
+provisions tenants usually stores the tenant keys it receives, so whoever
+fully compromises it holds those keys regardless; the class still keeps the
+admin surface and tenants that automation never created out of reach. And the
+quota bounds each tenant; a leaked key can create any number of tenants.
+
+A consequence worth keeping in mind: any key on a tenant that was not created
+together with the tenant was minted by an admin.
 
 Authorization runs on every sandbox request through `canAccessSandbox` in
 [internal/api/middleware_auth.go](../internal/api/middleware_auth.go):
@@ -37,9 +71,12 @@ Authorization runs on every sandbox request through `canAccessSandbox` in
   check for every sandbox, whoever owns it.
 - List is scoped at the query level with `ListByTenant`.
 - Create sets `tenant_id` from the authenticated identity. A caller cannot
-  assign a sandbox to another tenant.
+  assign a sandbox to another tenant. Create and list switch on the role
+  explicitly and refuse anything but admin or tenant, so a new role can never
+  fall through to the admin pseudo-tenant.
 - Sandboxes owned by the admin pseudo-tenant are not visible to tenant keys.
-- Admin routes under `/admin` require an admin key.
+- Admin routes under `/admin` require an admin key, except the two provisioner
+  routes above.
 
 Cross-tenant and non-existent sandboxes both return `404`, so a tenant cannot
 use the status code to learn whether an ID exists.

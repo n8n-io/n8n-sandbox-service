@@ -174,6 +174,70 @@ func TestLoadAPIRejectsInvalidLogLevel(t *testing.T) {
 	}
 }
 
+func TestLoadAPIParsesProvisionerKeys(t *testing.T) {
+	t.Setenv("SANDBOX_API_KEYS", "admin-a, admin-b")
+	t.Setenv("SANDBOX_API_PROVISIONER_KEYS", " prov-a,,prov-b ")
+	t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	setRequiredGRPCMTLS(t)
+
+	cfg, err := LoadAPI()
+	if err != nil {
+		t.Fatalf("LoadAPI() failed: %v", err)
+	}
+	if len(cfg.ProvisionerKeys) != 2 {
+		t.Fatalf("expected 2 provisioner keys, got %v", cfg.ProvisionerKeys)
+	}
+	for _, k := range []string{"prov-a", "prov-b"} {
+		if _, ok := cfg.ProvisionerKeys[k]; !ok {
+			t.Errorf("expected %q in ProvisionerKeys", k)
+		}
+	}
+}
+
+func TestLoadAPIProvisionerKeysOptional(t *testing.T) {
+	t.Setenv("SANDBOX_API_KEYS", "test-key")
+	t.Setenv("SANDBOX_API_PROVISIONER_KEYS", "")
+	t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	setRequiredGRPCMTLS(t)
+
+	cfg, err := LoadAPI()
+	if err != nil {
+		t.Fatalf("LoadAPI() failed: %v", err)
+	}
+	if len(cfg.ProvisionerKeys) != 0 {
+		t.Fatalf("expected no provisioner keys, got %v", cfg.ProvisionerKeys)
+	}
+}
+
+func TestLoadAPIRejectsProvisionerKeyThatIsAlsoAdmin(t *testing.T) {
+	t.Setenv("SANDBOX_API_KEYS", "shared,admin-only")
+	t.Setenv("SANDBOX_API_PROVISIONER_KEYS", "prov-only,shared")
+	t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	setRequiredGRPCMTLS(t)
+
+	if _, err := LoadAPI(); err == nil {
+		t.Fatal("expected LoadAPI() to fail when a key is both admin and provisioner")
+	}
+}
+
+func TestLoadAPIRejectsProvisionerKeysWithUnlimitedDefaultQuota(t *testing.T) {
+	t.Setenv("SANDBOX_API_KEYS", "admin-key")
+	t.Setenv("SANDBOX_API_PROVISIONER_KEYS", "prov-key")
+	t.Setenv("SANDBOX_API_DEFAULT_MAX_SANDBOXES", "0")
+	t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	setRequiredGRPCMTLS(t)
+
+	if _, err := LoadAPI(); err == nil {
+		t.Fatal("expected LoadAPI() to fail when provisioner keys are set and the default quota is unlimited")
+	}
+
+	// Without provisioner keys, unlimited stays allowed.
+	t.Setenv("SANDBOX_API_PROVISIONER_KEYS", "")
+	if _, err := LoadAPI(); err != nil {
+		t.Fatalf("LoadAPI() without provisioner keys: %v", err)
+	}
+}
+
 func TestLoadAPIRequiresAPIKeys(t *testing.T) {
 	os.Unsetenv("SANDBOX_API_KEYS")
 	os.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "x")
