@@ -286,10 +286,11 @@ echo "==> provisioner keys are an optional Secret key"
 # The env var always renders, marked optional, so an existing Secret without
 # the key still starts the API.
 api=$(render --show-only templates/api-deployment.yaml)
-provisioner_env=$(grep -A5 'name: SANDBOX_API_PROVISIONER_KEYS' <<<"$api")
+# The whole env entry, from its name to the next one.
+provisioner_env=$(awk '/name: SANDBOX_API_PROVISIONER_KEYS/{f=1; next} f && /- name:/{exit} f' <<<"$api")
 grep -q 'key: provisioner-api-keys' <<<"$provisioner_env"
 grep -q 'optional: true' <<<"$provisioner_env"
-# The generated Secret carries the key only when a value is given.
+# The generated Secret carries the key only when a non-blank value is given.
 generated=(
 	--set auth.existingSecret=""
 	--set auth.generated.apiKeys=admin-secret
@@ -297,11 +298,13 @@ generated=(
 	--set auth.generated.runnerApiKey=runner-secret
 	--set auth.generated.runnerApiKeys=runner-secret
 )
-secret=$(render "${generated[@]}" --show-only templates/secrets.yaml)
-if grep -q 'provisioner-api-keys' <<<"$secret"; then
-	echo "an empty auth.generated.provisionerKeys must not render a Secret key" >&2
-	exit 1
-fi
+for blank in "" "  "; do
+	secret=$(render "${generated[@]}" --set auth.generated.provisionerKeys="$blank" --show-only templates/secrets.yaml)
+	if grep -q 'provisioner-api-keys' <<<"$secret"; then
+		echo "a blank auth.generated.provisionerKeys must not render a Secret key" >&2
+		exit 1
+	fi
+done
 render "${generated[@]}" --set auth.generated.provisionerKeys=prov-secret \
 	--show-only templates/secrets.yaml | grep -q 'provisioner-api-keys: "prov-secret"'
 must_fail "auth.generated.provisionerKeys must not be a placeholder" \

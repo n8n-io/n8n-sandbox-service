@@ -202,7 +202,7 @@ auth:
     runnerApiKeys: runner-api-keys
 ```
 
-`provisionerKeys` is optional: the API reads it as `SANDBOX_API_PROVISIONER_KEYS` with `secretKeyRef.optional: true`, so a Secret without that key runs with no provisioner keys.
+`provisionerKeys` is optional: the API reads it as `SANDBOX_API_PROVISIONER_KEYS` with `secretKeyRef.optional: true`, so a Secret without that key runs with no provisioner keys. When it is set, `api.config.defaultMaxSandboxes` must be above `0` or the API refuses to start.
 
 If `auth.existingSecret` is empty, the chart creates an opaque Secret from `auth.generated`:
 

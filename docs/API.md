@@ -838,7 +838,7 @@ Admin only. Get a tenant by id.
 
 Admin or provisioner. Delete a tenant and its API keys (`204`).
 
-Fails with `409 Conflict` if the tenant still owns sandboxes — delete those first. This avoids orphaning running sandboxes after credentials are removed.
+Fails with `409 Conflict` if the tenant still owns sandboxes — delete those first with an admin key or the tenant's own key; a provisioner key cannot. This avoids orphaning running sandboxes after credentials are removed.
 
 `DeleteTenant` locks the tenant row while checking ownership and deleting, and tenant sandbox `Create` takes the same lock before insert. That closes the race where a sandbox create is in flight (runner VM already started, store row not yet written) while delete sees an empty count.
 

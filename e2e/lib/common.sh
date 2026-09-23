@@ -2,8 +2,8 @@
 # Shared helpers for e2e/run-*.sh (source from scripts in e2e/).
 # Expects: set -euo pipefail in the caller.
 
-# Provisioner key every lane hands the API (SANDBOX_API_PROVISIONER_KEYS).
-# tests/helpers.ts defaults PROVISIONER_API_KEY to the same value.
+# Provisioner key the lanes hand the API (SANDBOX_API_PROVISIONER_KEYS) and
+# Playwright (SANDBOX_API_PROVISIONER_KEY, read by tests/helpers.ts).
 # shellcheck disable=SC2034  # read by the run-*.sh callers
 E2E_PROVISIONER_API_KEY="provisioner-test"
 
