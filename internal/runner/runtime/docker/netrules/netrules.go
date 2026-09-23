@@ -45,24 +45,27 @@ func hostChainName(containerID string) string {
 	return ChainName(containerID) + "-HOST"
 }
 
-// EnsureBridgePolicy builds the chains shared by every container on the runner
-// bridge. Call it at runner startup, before the first sandbox exists: the
-// initial build flushes those chains (see resetSharedChains), and a flush while
-// containers are on the bridge would leave them unfiltered until the
-// replacement rules are back.
-func EnsureBridgePolicy(bridgeIface string) error {
+// EnsureBridgePolicy builds the chains shared by every container on a runner
+// bridge. blockEgress selects the no-egress bridge's policy, which drops every
+// forwarded packet from the bridge instead of filtering it through the shared
+// egress chain. Call it at runner startup, once per bridge, before the first
+// sandbox exists: the initial build flushes the shared chains (see
+// resetSharedChains), and a flush while containers are on a bridge would leave
+// them unfiltered until the replacement rules are back.
+func EnsureBridgePolicy(bridgeIface string, blockEgress bool) error {
 	mu.Lock()
 	defer mu.Unlock()
 
 	if err := ensureDockerUserChain(); err != nil {
 		return err
 	}
-	return ensureBridgePolicy(bridgeIface)
+	return ensureBridgePolicy(bridgeIface, blockEgress)
 }
 
 // ApplyPolicy configures the policy shared by every container on the runner
-// bridge plus ingress protection for this container's daemon port.
-func ApplyPolicy(bridgeIface, containerID, sourceIP, gatewayIP string, daemonPort int) error {
+// bridge the container sits on plus ingress protection for this container's
+// daemon port. blockEgress names that bridge's policy, as for EnsureBridgePolicy.
+func ApplyPolicy(bridgeIface, containerID, sourceIP, gatewayIP string, daemonPort int, blockEgress bool) error {
 	if containerID == "" {
 		return fmt.Errorf("container id is required")
 	}
@@ -78,7 +81,7 @@ func ApplyPolicy(bridgeIface, containerID, sourceIP, gatewayIP string, daemonPor
 	if err := ensureDockerUserChain(); err != nil {
 		return err
 	}
-	if err := ensureBridgePolicy(bridgeIface); err != nil {
+	if err := ensureBridgePolicy(bridgeIface, blockEgress); err != nil {
 		return fmt.Errorf("ensure bridge policy: %w", err)
 	}
 	if err := teardownLocked(containerID); err != nil {
@@ -110,13 +113,18 @@ func ApplyPolicy(bridgeIface, containerID, sourceIP, gatewayIP string, daemonPor
 	return nil
 }
 
-// ensureBridgePolicy installs the rules that hold for every container on the
-// runner bridge: an egress chain in DOCKER-USER (forwarded traffic) and a block
-// in INPUT on reaching the runner host itself, both keyed on the bridge
-// interface. Established traffic is exempt from the INPUT block because the
-// runner dials the daemon and the replies arrive here. Why INPUT and why
-// interface matching: docs/security-model.md, "Guest to host and network".
-func ensureBridgePolicy(bridgeIface string) error {
+// ensureBridgePolicy installs the rules that hold for every container on a
+// runner bridge: in DOCKER-USER (forwarded traffic) either a jump to the shared
+// egress chain or, for the no-egress bridge, a plain DROP; and in INPUT a block
+// on reaching the runner host itself. All keyed on the bridge interface.
+// Established traffic is exempt from the INPUT block because the runner dials
+// the daemon and the replies arrive here. Why INPUT and why interface matching:
+// docs/security-model.md, "Guest to host and network".
+//
+// The no-egress bridge gets its own DROP rather than relying on Docker's
+// internal-network isolation, which runs after DOCKER-USER and would be
+// pre-empted by the shared chain's terminal ACCEPT.
+func ensureBridgePolicy(bridgeIface string, blockEgress bool) error {
 	if bridgeIface == "" {
 		return fmt.Errorf("bridge interface is required")
 	}
@@ -147,19 +155,25 @@ func ensureBridgePolicy(bridgeIface string) error {
 		return err
 	}
 
-	if err := ensureJump("DOCKER-USER", "-i", bridgeIface, "-j", bridgeEgressChain); err != nil {
-		return err
-	}
-	if err := ensureRule(bridgeEgressChain, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"); err != nil {
-		return err
-	}
-	for _, cidr := range netpolicy.PrivateRangesV4 {
-		if err := ensureRule(bridgeEgressChain, "-d", cidr, "-j", "DROP"); err != nil {
+	if blockEgress {
+		if err := ensureJump("DOCKER-USER", "-i", bridgeIface, "-j", "DROP"); err != nil {
 			return err
 		}
-	}
-	if err := ensureRule(bridgeEgressChain, "-j", "ACCEPT"); err != nil {
-		return err
+	} else {
+		if err := ensureJump("DOCKER-USER", "-i", bridgeIface, "-j", bridgeEgressChain); err != nil {
+			return err
+		}
+		if err := ensureRule(bridgeEgressChain, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"); err != nil {
+			return err
+		}
+		for _, cidr := range netpolicy.PrivateRangesV4 {
+			if err := ensureRule(bridgeEgressChain, "-d", cidr, "-j", "DROP"); err != nil {
+				return err
+			}
+		}
+		if err := ensureRule(bridgeEgressChain, "-j", "ACCEPT"); err != nil {
+			return err
+		}
 	}
 
 	if err := ensureJump("INPUT", "-i", bridgeIface, "-j", bridgeHostChain); err != nil {

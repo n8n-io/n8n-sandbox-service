@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -21,6 +22,7 @@ func TestStorePersistsDockerMetadata(t *testing.T) {
 		ContainerIP:  "172.30.0.2",
 		DaemonPort:   8081,
 		Ephemeral:    true,
+		Egress:       "none",
 	}
 	if err := s.Create(rec); err != nil {
 		t.Fatalf("create record: %v", err)
@@ -33,8 +35,41 @@ func TestStorePersistsDockerMetadata(t *testing.T) {
 	if got == nil {
 		t.Fatal("expected record")
 	}
-	if got.ContainerIP != rec.ContainerIP || got.DaemonPort != rec.DaemonPort || !got.Ephemeral {
+	if got.ContainerIP != rec.ContainerIP || got.DaemonPort != rec.DaemonPort || !got.Ephemeral || got.Egress != "none" {
 		t.Fatalf("unexpected docker metadata: %+v", got)
+	}
+}
+
+// Rows from before the egress column existed read back as public.
+func TestEgressMigrationBackfillsPublic(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "api.db")
+	s, err := New(path)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	// Roll the schema back to before the column and plant a row there.
+	if _, err := s.db.Exec(`ALTER TABLE sandboxes DROP COLUMN egress`); err != nil {
+		t.Fatalf("drop egress column: %v", err)
+	}
+	if _, err := s.db.Exec(`INSERT INTO sandboxes (id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip)
+		VALUES ('legacy', 'running', 1, 2, '', '', '')`); err != nil {
+		t.Fatalf("insert legacy row: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	s, err = New(path)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer s.Close()
+	got, err := s.Get("legacy")
+	if err != nil || got == nil {
+		t.Fatalf("get legacy row: got=%v err=%v", got, err)
+	}
+	if got.Egress != "public" {
+		t.Fatalf("legacy egress = %q, want public", got.Egress)
 	}
 }
 

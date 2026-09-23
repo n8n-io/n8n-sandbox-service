@@ -34,13 +34,13 @@ Host fc-veth-{slot} ── FORWARD ── MASQUERADE ── internet
 API/exec: 127.0.0.1 proxy ── setns ── guest:8081
 ```
 
-`network/network.go` owns topology (netns, TAP, veth, routes, NAT); `network/egress.go` owns the private-CIDR `FORWARD` rules (Docker `netpolicy` parity). Guest IPv6 is disabled via `ipv6.disable=1` in the snapshot boot args; changing boot args requires a snapshot rebuild.
+`network/network.go` owns topology (netns, TAP, veth, routes, NAT); `network/egress.go` owns the private-CIDR `FORWARD` rules (Docker `netpolicy` parity) and the egress `none` rule, a `FORWARD -i <tap> -j DROP` inserted ahead of them. Guest IPv6 is disabled via `ipv6.disable=1` in the snapshot boot args; changing boot args requires a snapshot rebuild.
 
 ## Slots and lifecycle
 
 A slot ties one netns, TAP, veth and proxy port together. Slots are in-memory, runner-local and not stable across restarts: a stopped sandbox releases its slot and may wake onto another.
 
-Nothing in the namespace build depends on the sandbox that will use it, so a background wirer (`network_wirer.go`, started from `Prepare`) builds every free slot at startup and rebuilds each slot after release. Activation skips the build on a wired slot (`setup_network_ms` ≈ 0), waits on one mid-build, and builds inline on one the wirer has not reached. Readiness does not wait for wiring, and teardown still deletes the namespace, so every sandbox gets a fresh one. `Shutdown` clears the namespaces of free slots, best-effort; startup reconcile sweeps whatever that leaves. `sandbox_slots_unwired` reports how many slots are not built; zero in steady state.
+Nothing in the namespace build depends on the sandbox that will use it, so a background wirer (`network_wirer.go`, started from `Prepare`) builds every free slot at startup and rebuilds each slot after release. Activation skips the build on a wired slot (`setup_network_ms` ≈ 0), waits on one mid-build, and builds inline on one the wirer has not reached. Readiness does not wait for wiring, and teardown still deletes the namespace, so every sandbox gets a fresh one. `Shutdown` clears the namespaces of free slots, best-effort; startup reconcile sweeps whatever that leaves. `sandbox_slots_unwired` reports how many slots are not built; zero in steady state. The egress `none` DROP is the one sandbox-specific rule, so activation adds it on top of the built namespace, on create and on every wake; pre-wired namespaces only ever carry the default policy.
 
 Invariants (rationale in the code comments of `stop_wake.go`, `crash.go`, `network_wirer.go`, `runtime.go`):
 
@@ -62,4 +62,4 @@ CPU, memory and disk are fixed when the golden snapshot and `rootfs.ext4` are bu
 
 - Sandboxes are not reattached after a runner restart; startup reconcile removes orphaned data directories, jail state and slot namespaces (a jail directory still holding an active bind mount is logged and left in place).
 - LRU eviction of stopped sandboxes when disk is low is runner-local and does not notify the API.
-- Per-sandbox egress uses per-netns iptables, not nftables sets.
+- Egress policy is per-netns iptables, not nftables sets; no per-sandbox allowlists.

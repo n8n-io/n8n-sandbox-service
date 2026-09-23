@@ -373,6 +373,160 @@ func TestCreateSandboxPersistsEphemeral(t *testing.T) {
 	}
 }
 
+// The egress mode reaches the runner in create_options_json, is stored, and is echoed
+// on create and on a reconnect to the same id; an unknown value is refused
+// before anything is created.
+func TestCreateSandboxEgress(t *testing.T) {
+	ctl := &fakeSandboxControl{}
+	router, s, _ := newIdleTestGateway(t, "admin-key", ctl)
+
+	sid := "abababab-abab-4bab-8bab-abababababab"
+	rr := postCreateSandbox(t, router, "admin-key", `{"id":"`+sid+`","egress":"none"}`)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create egress none: expected %d, got %d body=%s", http.StatusCreated, rr.Code, rr.Body.String())
+	}
+	var resp SandboxResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Egress != "none" {
+		t.Fatalf("create response egress = %q, want none: %s", resp.Egress, rr.Body.String())
+	}
+	if rec, err := s.Get(sid); err != nil || rec == nil || rec.Egress != "none" {
+		t.Fatalf("stored row = %+v err=%v, want egress none", rec, err)
+	}
+	ctl.mu.Lock()
+	sent := append([]string(nil), ctl.createOptionsJSON...)
+	ctl.mu.Unlock()
+	if len(sent) != 1 || sent[0] != `{"egress":"none"}` {
+		t.Fatalf("runner create_options_json = %q, want [{\"egress\":\"none\"}]", sent)
+	}
+
+	// Reconnecting to the id reports the mode it was created with.
+	rr = postCreateSandbox(t, router, "admin-key", `{"id":"`+sid+`","egress":"none"}`)
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"egress":"none"`) {
+		t.Fatalf("reconnect: got %d body=%s, want 200 with egress none", rr.Code, rr.Body.String())
+	}
+
+	// Default is public, and is sent to the runner explicitly.
+	rr = postCreateSandbox(t, router, "admin-key", "")
+	if rr.Code != http.StatusCreated || !strings.Contains(rr.Body.String(), `"egress":"public"`) {
+		t.Fatalf("default create: got %d body=%s, want 201 with egress public", rr.Code, rr.Body.String())
+	}
+	ctl.mu.Lock()
+	last := ctl.createOptionsJSON[len(ctl.createOptionsJSON)-1]
+	ctl.mu.Unlock()
+	if last != `{"egress":"public"}` {
+		t.Fatalf("default create_options_json = %q, want {\"egress\":\"public\"}", last)
+	}
+
+	before, _ := s.Count()
+	rr = postCreateSandbox(t, router, "admin-key", `{"egress":"allow-all"}`)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("invalid egress: expected %d, got %d body=%s", http.StatusBadRequest, rr.Code, rr.Body.String())
+	}
+	if after, _ := s.Count(); after != before {
+		t.Fatalf("invalid egress created a sandbox: count %d -> %d", before, after)
+	}
+}
+
+// Egress is fixed at creation, so a reconnect that names a different mode is
+// refused rather than answered with a sandbox in the other mode; one that names
+// no mode gets whatever the sandbox has, and an empty mode is the default,
+// public, not left out. Both places that answer a reconnect enforce this: the
+// lookup before the create, and the fallback after a store insert lost a race
+// to a concurrent create of the same id.
+func TestCreateSandboxReconnectRefusesOtherEgress(t *testing.T) {
+	const sid = "cdcdcdcd-cdcd-4cdc-8cdc-cdcdcdcdcdcd"
+	for _, tc := range []struct {
+		name     string
+		existing string // mode the sandbox was created with
+		body     string
+		want     int
+		egress   string // mode a 200 must report
+	}{
+		{name: "same mode", existing: "public", body: `{"id":"` + sid + `","egress":"public"}`, want: http.StatusOK, egress: "public"},
+		{name: "no mode", existing: "none", body: `{"id":"` + sid + `"}`, want: http.StatusOK, egress: "none"},
+		{name: "empty mode", existing: "none", body: `{"id":"` + sid + `","egress":""}`, want: http.StatusConflict},
+		{name: "other mode", existing: "public", body: `{"id":"` + sid + `","egress":"none"}`, want: http.StatusConflict},
+	} {
+		check := func(t *testing.T, rr *httptest.ResponseRecorder) {
+			t.Helper()
+			if rr.Code != tc.want {
+				t.Fatalf("got %d body=%s, want %d", rr.Code, rr.Body.String(), tc.want)
+			}
+			if tc.egress != "" && !strings.Contains(rr.Body.String(), `"egress":"`+tc.egress+`"`) {
+				t.Fatalf("body=%s, want egress %s", rr.Body.String(), tc.egress)
+			}
+		}
+		t.Run("existing/"+tc.name, func(t *testing.T) {
+			ctl := &fakeSandboxControl{}
+			router, _, _ := newIdleTestGateway(t, "admin-key", ctl)
+			if rr := postCreateSandbox(t, router, "admin-key", `{"id":"`+sid+`","egress":"`+tc.existing+`"}`); rr.Code != http.StatusCreated {
+				t.Fatalf("create: got %d body=%s", rr.Code, rr.Body.String())
+			}
+			check(t, postCreateSandbox(t, router, "admin-key", tc.body))
+		})
+		t.Run("raced/"+tc.name, func(t *testing.T) {
+			ctl := &fakeSandboxControl{}
+			router, s, _ := newIdleTestGateway(t, "admin-key", ctl)
+			// A concurrent create of the same id wins while this one is at the runner.
+			ctl.createHook = func(context.Context) {
+				if err := s.Create(&store.SandboxRecord{ID: sid, Status: "running", TenantID: store.AdminTenantID, Egress: tc.existing}); err != nil {
+					t.Errorf("plant existing row: %v", err)
+				}
+			}
+			check(t, postCreateSandbox(t, router, "admin-key", tc.body))
+			if _, deleted := ctl.calls(); len(deleted) != 1 {
+				t.Fatalf("runner deletes = %v, want the losing create rolled back", deleted)
+			}
+		})
+	}
+}
+
+// A sandbox is only tracked when the runner confirms the egress asked for. A
+// runner from before egress modes confirms nothing and applied public, so it can
+// still serve public sandboxes but not none; a runner reporting a different mode
+// is refused too. Either way the runner create is undone and nothing is stored.
+func TestCreateSandboxRefusesUnconfirmedEgress(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		applied func(string) string
+		body    string
+		want    int
+	}{
+		{name: "old runner, none", applied: func(string) string { return "" }, body: `{"egress":"none"}`, want: http.StatusBadGateway},
+		{name: "old runner, public", applied: func(string) string { return "" }, body: `{"egress":"public"}`, want: http.StatusCreated},
+		{name: "runner applied public for none", applied: func(string) string { return `{"egress":"public"}` }, body: `{"egress":"none"}`, want: http.StatusBadGateway},
+		{name: "runner applied none for public", applied: func(string) string { return `{"egress":"none"}` }, body: `{"egress":"public"}`, want: http.StatusBadGateway},
+		{name: "unreadable echo", applied: func(string) string { return `{"egress":` }, body: `{"egress":"public"}`, want: http.StatusBadGateway},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctl := &fakeSandboxControl{applied: tc.applied}
+			router, s, _ := newIdleTestGateway(t, "admin-key", ctl)
+
+			rr := postCreateSandbox(t, router, "admin-key", tc.body)
+			if rr.Code != tc.want {
+				t.Fatalf("expected %d, got %d body=%s", tc.want, rr.Code, rr.Body.String())
+			}
+			n, _ := s.Count()
+			_, deleted := ctl.calls()
+			if tc.want == http.StatusCreated {
+				if n != 1 || len(deleted) != 0 {
+					t.Fatalf("stored %d sandboxes, runner deletes %v; want 1 and none", n, deleted)
+				}
+				return
+			}
+			if n != 0 {
+				t.Fatalf("stored %d sandboxes, want none", n)
+			}
+			if len(deleted) != 1 {
+				t.Fatalf("runner deletes = %v, want the refused sandbox removed", deleted)
+			}
+		})
+	}
+}
+
 func TestGetSandboxFencesEphemeralAtStopWindow(t *testing.T) {
 	router, s, cfg := newIdleTestGateway(t, "admin-key", &fakeSandboxControl{})
 

@@ -15,7 +15,15 @@ import (
 )
 
 const (
-	runnerBridgeNetwork      = "runner-bridge"
+	// runnerBridgeNetwork carries egress "public" sandboxes; its bridge device
+	// shares the name.
+	runnerBridgeNetwork = "runner-bridge"
+	// runnerNoEgressNetwork carries egress "none" sandboxes. A Docker internal
+	// network, with netrules' interface-keyed DROP on top.
+	runnerNoEgressNetwork = "runner-no-egress"
+	// runnerNoEgressBridge is that network's bridge device: the network name is
+	// one over the 15-character interface limit.
+	runnerNoEgressBridge     = "br-no-egress"
 	bridgeNameOption         = "com.docker.network.bridge.name"
 	containerLabelManaged    = "sandbox-service.managed"
 	containerLabelManagedVal = "true"
@@ -70,9 +78,22 @@ type networkInspect struct {
 	} `json:"IPAM"`
 }
 
+// sandboxAttachment returns the runner network a sandbox container is attached
+// to and its address there. The address is empty while the container is
+// stopped; the network is known from creation on. Both are empty for a
+// container on neither runner network.
+func sandboxAttachment(inspect *containerInspect) (network, ip string) {
+	for _, name := range []string{runnerBridgeNetwork, runnerNoEgressNetwork} {
+		if n, ok := inspect.NetworkSettings.Networks[name]; ok {
+			return name, n.IPAddress
+		}
+	}
+	return "", ""
+}
+
 type dockerBackend interface {
 	ping(ctx context.Context) error
-	createContainer(ctx context.Context, sandboxID, containerName, image string, limits *ResourceLimits, enableCgroups bool) (string, error)
+	createContainer(ctx context.Context, sandboxID, containerName, image, network string, limits *ResourceLimits, enableCgroups bool) (string, error)
 	startContainer(ctx context.Context, containerID string) error
 	stopContainer(ctx context.Context, containerID string) error
 	removeContainer(ctx context.Context, containerID string) error
@@ -121,8 +142,8 @@ func (dc *dockerClient) ping(ctx context.Context) error {
 	return err
 }
 
-func (dc *dockerClient) createContainer(ctx context.Context, sandboxID, containerName, image string, limits *ResourceLimits, enableCgroups bool) (string, error) {
-	args := dockerContainerCreateArgs(sandboxID, containerName, image, limits, enableCgroups)
+func (dc *dockerClient) createContainer(ctx context.Context, sandboxID, containerName, image, network string, limits *ResourceLimits, enableCgroups bool) (string, error) {
+	args := dockerContainerCreateArgs(sandboxID, containerName, image, network, limits, enableCgroups)
 
 	out, err := dc.run(ctx, args...)
 	if err != nil {
@@ -131,13 +152,13 @@ func (dc *dockerClient) createContainer(ctx context.Context, sandboxID, containe
 	return strings.TrimSpace(out), nil
 }
 
-func dockerContainerCreateArgs(sandboxID, containerName, image string, limits *ResourceLimits, enableCgroups bool) []string {
+func dockerContainerCreateArgs(sandboxID, containerName, image, network string, limits *ResourceLimits, enableCgroups bool) []string {
 	args := []string{
 		"container", "create",
 		"--name", containerName,
 		"--hostname", "sandbox",
 		"--restart", "unless-stopped",
-		"--network", runnerBridgeNetwork,
+		"--network", network,
 		"--label", containerLabelManaged + "=" + containerLabelManagedVal,
 		"--label", containerLabelSandboxID + "=" + sandboxID,
 		"--user", "1000:1000",
@@ -200,11 +221,10 @@ func (dc *dockerClient) containerIP(ctx context.Context, containerID string) (st
 	if err != nil {
 		return "", err
 	}
-	network, ok := inspect.NetworkSettings.Networks[runnerBridgeNetwork]
-	if !ok || network.IPAddress == "" {
-		return "", fmt.Errorf("container %s has no IP on %s", containerID, runnerBridgeNetwork)
+	if _, ip := sandboxAttachment(inspect); ip != "" {
+		return ip, nil
 	}
-	return network.IPAddress, nil
+	return "", fmt.Errorf("container %s has no IP on a runner network", containerID)
 }
 
 func (dc *dockerClient) inspectContainer(ctx context.Context, containerID string) (*containerInspect, error) {

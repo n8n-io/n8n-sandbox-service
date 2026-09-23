@@ -110,6 +110,7 @@ Slots give the host-side Firecracker resources stable names without exposing tho
 
 - Network namespace: `fc-sb-n`
 - TAP name inside the namespace: `SANDBOX_RUNNER_FIRECRACKER_HOST_TAP_DEVICE_NAME`
+- Host veth `fc-veth-n` with a `/30` uplink carved from `10.200.0.0/16`, which caps capacity at 16384
 - Host-local daemon proxy port: `SANDBOX_RUNNER_FIRECRACKER_PROXY_PORT_START + n`
 
 | Variable | Default | Description |

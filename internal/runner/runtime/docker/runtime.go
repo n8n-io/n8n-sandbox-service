@@ -48,21 +48,37 @@ type CreateOptions = runnerruntime.CreateOptions
 // ContainerInfo represents information about a created container.
 type ContainerInfo = runnerruntime.SandboxInfo
 
+// runnerNetwork is a Docker network sandboxes attach to, one per egress mode. A
+// sandbox joins one at creation and stays there for life.
+type runnerNetwork struct {
+	// Docker network name; what containers are attached to.
+	networkName string
+	// Host bridge device to create the network with. Interface names are capped
+	// at 15 characters, so it cannot always equal the network name.
+	bridgeName string
+	// Docker internal network with a DROP policy: egress none.
+	blockEgress bool
+	// Read back from Docker by New: the device the network actually has
+	// (bridgeName, unless an earlier runner version created the network without
+	// naming one) and its gateway.
+	iface, gatewayIP string
+}
+
 // Runtime orchestrates container lifecycle without persistent state.
 type Runtime struct {
-	runnerConfig  *config.Config
-	config        Config
-	gatewayIP     string
-	bridgeIface   string
-	wakeGroup     singleflight.Group
-	docker        dockerBackend
-	applyPolicy   func(bridgeIface, containerID, sourceIP, gatewayIP string, daemonPort int) error
-	teardownRules func(containerID string) error
-	waitForDaemon func(ctx context.Context, baseURL string) error
-	imageReady    atomic.Bool
-	imageReadyCh  chan struct{}
-	metrics       *metrics.RunnerRecorder
-	watchBackoff  time.Duration
+	runnerConfig    *config.Config
+	config          Config
+	publicNetwork   runnerNetwork
+	noEgressNetwork runnerNetwork
+	wakeGroup       singleflight.Group
+	docker          dockerBackend
+	applyPolicy     func(bridgeIface, containerID, sourceIP, gatewayIP string, daemonPort int, blockEgress bool) error
+	teardownRules   func(containerID string) error
+	waitForDaemon   func(ctx context.Context, baseURL string) error
+	imageReady      atomic.Bool
+	imageReadyCh    chan struct{}
+	metrics         *metrics.RunnerRecorder
+	watchBackoff    time.Duration
 
 	// mu guards what the event watcher and request-serving goroutines share: which
 	// containers the runner is stopping on purpose, and which sandboxes Docker
@@ -76,7 +92,7 @@ type Runtime struct {
 var _ runnerruntime.Runtime = (*Runtime)(nil)
 
 // New creates a new Docker runtime. It reconciles any previous containers and ensures
-// the runner bridge exists.
+// the runner networks exist.
 func New(runnerConfig *config.Config, cfg Config) (*Runtime, error) {
 	m := newRuntime(runnerConfig, cfg, &dockerClient{host: cfg.Host})
 
@@ -87,41 +103,58 @@ func New(runnerConfig *config.Config, cfg Config) (*Runtime, error) {
 		return nil, fmt.Errorf("reconcile managed containers: %w", err)
 	}
 
-	bridge, err := m.ensureRunnerBridge(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("ensure runner bridge: %w", err)
-	}
-	m.gatewayIP = firstGateway(bridge)
-	m.bridgeIface = bridgeInterface(bridge)
-	if m.bridgeIface == "" {
-		return nil, fmt.Errorf("cannot determine host interface for network %s", runnerBridgeNetwork)
-	}
-
-	// Here, and not on the first sandbox: building the shared chains starts by
-	// flushing whatever an earlier runner process left in them, which must
-	// happen while the bridge has no container on it. reconcileContainers above
-	// has just removed them all, and none can be created before New returns.
-	if err := netrules.EnsureBridgePolicy(m.bridgeIface); err != nil {
-		return nil, fmt.Errorf("ensure bridge policy: %w", err)
+	// Policies here, and not on the first sandbox: building the shared chains
+	// starts by flushing whatever an earlier runner process left in them, which
+	// must happen while the bridges have no container on them. reconcileContainers
+	// above has just removed them all, and none can be created before New returns.
+	for _, n := range []*runnerNetwork{&m.publicNetwork, &m.noEgressNetwork} {
+		if err := m.ensureRunnerNetwork(ctx, n); err != nil {
+			return nil, fmt.Errorf("ensure network %s: %w", n.networkName, err)
+		}
+		if err := netrules.EnsureBridgePolicy(n.iface, n.blockEgress); err != nil {
+			return nil, fmt.Errorf("ensure network %s policy: %w", n.networkName, err)
+		}
 	}
 
 	return m, nil
+}
+
+// networkFor returns the runner network for an egress mode.
+func (m *Runtime) networkFor(blockEgress bool) *runnerNetwork {
+	if blockEgress {
+		return &m.noEgressNetwork
+	}
+	return &m.publicNetwork
+}
+
+// networkNamed returns the runner network a container is attached to. An unknown
+// name resolves to the public one; nothing managed can be on neither, since
+// reconcile removes every container the runner did not create in this configuration.
+func (m *Runtime) networkNamed(name string) *runnerNetwork {
+	return m.networkFor(name == m.noEgressNetwork.networkName)
+}
+
+// applyNetworkPolicy installs the per-container rules of the network it is on.
+func (m *Runtime) applyNetworkPolicy(n *runnerNetwork, containerID, containerIP string) error {
+	return m.applyPolicy(n.iface, containerID, containerIP, n.gatewayIP, daemonPort, n.blockEgress)
 }
 
 // newRuntime centralizes Runtime dependency wiring so tests can override Docker,
 // network policy, or daemon readiness behavior without nil defaults.
 func newRuntime(runnerConfig *config.Config, cfg Config, docker dockerBackend) *Runtime {
 	return &Runtime{
-		runnerConfig:  runnerConfig,
-		config:        cfg,
-		docker:        docker,
-		applyPolicy:   netrules.ApplyPolicy,
-		teardownRules: netrules.Teardown,
-		waitForDaemon: waitForDaemon,
-		imageReadyCh:  make(chan struct{}),
-		watchBackoff:  2 * time.Second,
-		expectedStops: make(map[string]expectedStop),
-		restarted:     make(map[string]struct{}),
+		runnerConfig:    runnerConfig,
+		config:          cfg,
+		publicNetwork:   runnerNetwork{networkName: runnerBridgeNetwork, bridgeName: runnerBridgeNetwork},
+		noEgressNetwork: runnerNetwork{networkName: runnerNoEgressNetwork, bridgeName: runnerNoEgressBridge, blockEgress: true},
+		docker:          docker,
+		applyPolicy:     netrules.ApplyPolicy,
+		teardownRules:   netrules.Teardown,
+		waitForDaemon:   waitForDaemon,
+		imageReadyCh:    make(chan struct{}),
+		watchBackoff:    2 * time.Second,
+		expectedStops:   make(map[string]expectedStop),
+		restarted:       make(map[string]struct{}),
 	}
 }
 
@@ -255,8 +288,9 @@ func (m *Runtime) CreateContainer(ctx context.Context, sandboxID string, opts *C
 
 	containerName := "sandbox-" + sandboxID[:12]
 	limits := m.defaultLimits()
+	n := m.networkFor(opts.BlockEgress())
 
-	containerID, err := m.docker.createContainer(ctx, sandboxID, containerName, m.config.SandboxImage, limits, m.config.EnableCgroups)
+	containerID, err := m.docker.createContainer(ctx, sandboxID, containerName, m.config.SandboxImage, n.networkName, limits, m.config.EnableCgroups)
 	if err != nil {
 		return nil, fmt.Errorf("create container: %w", err)
 	}
@@ -278,7 +312,7 @@ func (m *Runtime) CreateContainer(ctx context.Context, sandboxID string, opts *C
 		return nil, fmt.Errorf("inspect container ip: %w", err)
 	}
 
-	if err := m.applyPolicy(m.bridgeIface, containerID, containerIP, m.gatewayIP, daemonPort); err != nil {
+	if err := m.applyNetworkPolicy(n, containerID, containerIP); err != nil {
 		cleanupOnError()
 		return nil, fmt.Errorf("apply network rules: %w", err)
 	}
@@ -295,7 +329,7 @@ func (m *Runtime) CreateContainer(ctx context.Context, sandboxID string, opts *C
 		IP:   containerIP,
 	}
 
-	slog.Info("container created", "sandbox_id", sandboxID, "container_id", containerID, "ip", containerIP)
+	slog.Info("container created", "sandbox_id", sandboxID, "container_id", containerID, "ip", containerIP, "network", n.networkName)
 	return containerInfo, nil
 }
 
@@ -314,15 +348,15 @@ func (m *Runtime) GetContainerInfo(ctx context.Context, containerID string) (*Co
 		return nil, err
 	}
 
-	network, ok := inspect.NetworkSettings.Networks[runnerBridgeNetwork]
-	if !ok || network.IPAddress == "" {
-		return nil, fmt.Errorf("%w: container %s has no IP on %s", ErrSandboxNetworkUnavailable, containerID, runnerBridgeNetwork)
+	_, ip := sandboxAttachment(inspect)
+	if ip == "" {
+		return nil, fmt.Errorf("%w: container %s has no IP on a runner network", ErrSandboxNetworkUnavailable, containerID)
 	}
 
 	return &ContainerInfo{
 		ID:   inspect.ID,
 		Name: inspect.Name,
-		IP:   network.IPAddress,
+		IP:   ip,
 	}, nil
 }
 
@@ -405,7 +439,11 @@ func (m *Runtime) ensureSandboxRunningOnce(ctx context.Context, sandboxID string
 		m.cleanupWakeFailure(containerID)
 		return recovering, err
 	}
-	if err := m.applyPolicy(m.bridgeIface, containerID, containerIP, m.gatewayIP, daemonPort); err != nil {
+	// The network is fixed at creation and stays on the container while it is
+	// stopped, so the inspect from before the start names it even though the
+	// address there is only assigned by the start.
+	network, _ := sandboxAttachment(inspect)
+	if err := m.applyNetworkPolicy(m.networkNamed(network), containerID, containerIP); err != nil {
 		m.cleanupWakeFailure(containerID)
 		return recovering, fmt.Errorf("apply network rules: %w", err)
 	}
@@ -530,12 +568,12 @@ func (m *Runtime) DaemonURL(ctx context.Context, sandboxID string) (string, erro
 		return "", ErrSandboxNotRunning
 	}
 
-	network, ok := inspect.NetworkSettings.Networks[runnerBridgeNetwork]
-	if !ok || network.IPAddress == "" {
-		return "", fmt.Errorf("%w: container %s has no IP on %s", ErrSandboxNetworkUnavailable, containerID, runnerBridgeNetwork)
+	_, ip := sandboxAttachment(inspect)
+	if ip == "" {
+		return "", fmt.Errorf("%w: container %s has no IP on a runner network", ErrSandboxNetworkUnavailable, containerID)
 	}
 
-	baseURL := fmt.Sprintf("http://%s:%d", network.IPAddress, daemonPort)
+	baseURL := fmt.Sprintf("http://%s:%d", ip, daemonPort)
 	return baseURL, nil
 }
 
@@ -685,26 +723,41 @@ func (m *Runtime) reconcileContainers(ctx context.Context) error {
 	return nil
 }
 
-func (m *Runtime) ensureRunnerBridge(ctx context.Context) (*networkInspect, error) {
-	inspect, err := m.docker.inspectNetwork(ctx, runnerBridgeNetwork)
-	if err != nil {
-		if !isDockerNotFound(err) {
-			return nil, err
-		}
-		return m.createRunnerBridge(ctx)
+// ensureRunnerNetwork creates n if Docker does not have it and reads back its
+// bridge device and gateway.
+func (m *Runtime) ensureRunnerNetwork(ctx context.Context, n *runnerNetwork) error {
+	inspect, err := m.docker.inspectNetwork(ctx, n.networkName)
+	if isDockerNotFound(err) {
+		inspect, err = m.createRunnerNetwork(ctx, n)
 	}
-
-	return inspect, nil
+	if err != nil {
+		return err
+	}
+	n.gatewayIP = firstGateway(inspect)
+	n.iface = bridgeInterface(inspect)
+	if n.iface == "" {
+		return fmt.Errorf("cannot determine host interface")
+	}
+	return nil
 }
 
-func (m *Runtime) createRunnerBridge(ctx context.Context) (*networkInspect, error) {
-	if _, err := m.docker.run(ctx, "network", "create", "--driver", "bridge",
+// createRunnerNetwork creates n's Docker network. A no-egress network is a
+// Docker internal network: no default route in its containers, no NAT, and an
+// embedded DNS that does not forward upstream. Every runner network disables
+// inter-container communication.
+func (m *Runtime) createRunnerNetwork(ctx context.Context, n *runnerNetwork) (*networkInspect, error) {
+	args := []string{"network", "create", "--driver", "bridge"}
+	if n.blockEgress {
+		args = append(args, "--internal")
+	}
+	args = append(args,
 		"--opt", "com.docker.network.bridge.enable_icc=false",
-		"--opt", bridgeNameOption+"="+runnerBridgeNetwork,
-		runnerBridgeNetwork); err != nil {
+		"--opt", bridgeNameOption+"="+n.bridgeName,
+		n.networkName)
+	if _, err := m.docker.run(ctx, args...); err != nil {
 		return nil, err
 	}
-	return m.docker.inspectNetwork(ctx, runnerBridgeNetwork)
+	return m.docker.inspectNetwork(ctx, n.networkName)
 }
 
 // ManagedContainerCount returns how many sandbox containers this runner is managing.

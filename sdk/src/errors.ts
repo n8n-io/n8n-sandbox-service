@@ -33,6 +33,21 @@ export class SandboxCrashedError extends SandboxServiceError {
 }
 
 /**
+ * Error thrown by `createSandbox` when the sandbox does not have the requested egress
+ * mode. The sandbox exists; `sandboxId` lets the caller delete it.
+ */
+export class EgressMismatchError extends Error {
+  constructor(
+    readonly sandboxId: string,
+    readonly requested: string,
+    readonly actual: string,
+  ) {
+    super(`Sandbox ${sandboxId} has egress "${actual}", requested "${requested}"`);
+    this.name = "EgressMismatchError";
+  }
+}
+
+/**
  * Error thrown when an invalid stream event is encountered, such as when a truncated
  * JSON record is encountered. This might indicate a transient connectivity issue with
  * the stream.

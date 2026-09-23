@@ -1,8 +1,9 @@
 export { SandboxClient } from "./client";
-export { SandboxServiceError, SandboxCrashedError } from "./errors";
+export { SandboxServiceError, SandboxCrashedError, EgressMismatchError } from "./errors";
 export type {
   SandboxClientOptions,
   CreateSandboxOptions,
+  EgressMode,
   RetryOptions,
   SandboxRecord,
   FileEntry,

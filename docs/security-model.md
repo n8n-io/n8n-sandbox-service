@@ -117,36 +117,50 @@ IPv4 destinations, defined once in
 [internal/runner/runtime/netpolicy/private_ranges.go](../internal/runner/runtime/netpolicy/private_ranges.go)
 and covering RFC1918 space, loopback, link-local (which includes the instance
 metadata service address), carrier-grade NAT, benchmarking and reserved space.
+That is egress `public`, the default. Egress `none` drops every forwarded
+packet from the sandbox's interface instead, DNS included. The mode is fixed
+at creation and re-applied on every wake; a reconnect by id that names another
+mode is refused. The runner echoes the mode it
+applied; on a mismatch the API fails the create, stores no record, and asks
+the runner to remove the sandbox (best effort; a leftover is logged as
+untracked and unreachable through the API). So a runner from before egress
+modes cannot hand out a public sandbox recorded as `none`.
 
 The Firecracker runtime gives every slot its own network namespace with a
 dedicated TAP device and veth uplink. The guest subnet is identical in every
 namespace, and there is no bridge between them, so guests have no layer-2 path
 to each other. The blocked ranges are dropped by iptables FORWARD rules inside
 each namespace, which also covers the uplink addresses of other slots and the
-runner's own addresses. Guest kernels boot with IPv6 disabled.
+runner's own addresses. Egress `none` is a `FORWARD` drop on the TAP inserted
+ahead of those rules at activation; it goes with the namespace at teardown, so
+it never carries over to the next sandbox on the slot. Guest kernels boot with
+IPv6 disabled.
 
-The Sysbox runtime puts sandboxes on a shared Docker bridge created with
-inter-container communication disabled, and adds two chains covering every
-container on that bridge: an egress chain in `DOCKER-USER` dropping the same
-ranges, and a chain in `INPUT` dropping the connections a container opens to the
-runner host itself. The second is needed because `DOCKER-USER` is only consulted
-for forwarded packets, while anything addressed to a host-local address is
-delivered locally and never reaches the egress chain. Both match on the bridge
-interface rather than on the address the runner assigned. Sandboxes cannot
-normally change their interface configuration without `CAP_NET_ADMIN`, but
-interface matching keeps the network policy independent of that capability
-boundary as defense in depth. A per-container chain, keyed on the container's
-address as a destination, drops connections to its daemon port. The runner's
-own connections are unaffected, being locally generated and so never subject to
-a chain that only sees forwarded packets; the exception for the gateway address
-applies only to packets that did not arrive on the bridge, for the same reason
-the rules above avoid matching on addresses. The two shared chains are rebuilt
-from empty at runner startup, after stale containers are removed and before any
-sandbox can be created, so an upgraded runner replacing the rules of an earlier
-version never does so with a container on the bridge. Containers are created
-with IPv6 disabled. Every rule above, and Docker's own inter-container block,
-applies to bridged traffic only on a host running `br_netfilter` with
-`bridge-nf-call-iptables` enabled.
+The Sysbox runtime puts sandboxes on one of two Docker bridges, both with
+inter-container communication disabled: `runner-bridge` for `public`, and
+`runner-no-egress` (a Docker internal network; bridge device `br-no-egress`)
+for `none`. Two chains cover every container on a bridge: one in `DOCKER-USER`
+for forwarded traffic, dropping the blocked ranges on the public bridge and
+everything on the no-egress bridge, where Docker's internal-network isolation
+sits behind it as defense in depth; and one in `INPUT` dropping the connections
+a container opens to the runner host itself. The `INPUT` chain is needed
+because `DOCKER-USER` is only consulted for forwarded packets, while anything
+addressed to a host-local address is delivered locally and never reaches the
+egress chain. Both match on the bridge interface rather than on the address the
+runner assigned. Sandboxes cannot normally change their interface configuration
+without `CAP_NET_ADMIN`, but interface matching keeps the network policy
+independent of that capability boundary as defense in depth. A per-container
+chain, keyed on the container's address as a destination, drops connections to
+its daemon port. The runner's own connections are unaffected, being locally
+generated and so never subject to a chain that only sees forwarded packets; the
+exception for the gateway address applies only to packets that did not arrive
+on the bridge, for the same reason the rules above avoid matching on addresses.
+The two shared chains are rebuilt from empty at runner startup, after stale
+containers are removed and before any sandbox can be created, so an upgraded
+runner replacing the rules of an earlier version never does so with a container
+on the bridge. Containers are created with IPv6 disabled. Every rule above, and
+Docker's own inter-container block, applies to bridged traffic only on a host
+running `br_netfilter` with `bridge-nf-call-iptables` enabled.
 [scripts/setup-sysbox.sh](../scripts/setup-sysbox.sh) loads the module, and the
 kernel enables the sysctl by default once it is loaded; a host that overrides
 that default, or was not prepared by the script, must provide both.
@@ -208,10 +222,10 @@ every sandbox built from it. What is verified today:
 These are known and accepted. Do not read the section above as implying any of
 them.
 
-**Egress is not restricted to an allowlist.** Sandboxes can reach any address
-outside the blocked ranges. Those ranges cover private and special-purpose IPv4
-space; they are not a definition of what is internal, and anything outside them
-is reachable. Per-sandbox allowlists are not implemented.
+**Egress is `public` or `none`.** A `public` sandbox can reach any address
+outside the blocked ranges, which cover private and special-purpose IPv4 space
+and are not a definition of what is internal. Per-sandbox allowlists are not
+implemented.
 
 **The runner does not enforce tenancy.** It has no tenant concept at all. Anyone
 holding a runner API key and a client certificate the CA has signed can operate
@@ -285,10 +299,11 @@ The boundaries above are covered by tests rather than asserted on paper.
 | Client-supplied ID conflicts | [internal/api/handlers_create_sandbox_test.go](../internal/api/handlers_create_sandbox_test.go) |
 | Admin route gating and key revocation | [internal/api/handlers_tenants_test.go](../internal/api/handlers_tenants_test.go) |
 | Runner listeners require a CA-signed client certificate; the API verifies each runner's host name and refuses a non-https base | [internal/runner/mtls_test.go](../internal/runner/mtls_test.go), [internal/api/runnertls_test.go](../internal/api/runnertls_test.go), [internal/api/registry/validate_test.go](../internal/api/registry/validate_test.go) |
-| Sandbox-to-sandbox and blocked-range egress | [e2e/tests/network-isolation.spec.ts](../e2e/tests/network-isolation.spec.ts) |
+| Sandbox-to-sandbox and blocked-range egress; egress `none` across stop/wake and slot reuse | [e2e/tests/network-isolation.spec.ts](../e2e/tests/network-isolation.spec.ts) |
 | Docker capability policy, absence of a root path, and denied network administration | [e2e/tests/sandbox-capabilities.spec.ts](../e2e/tests/sandbox-capabilities.spec.ts) |
 | Unprivileged npm and PyPI installation, and the build toolchain | [e2e/tests/sandbox-packages.spec.ts](../e2e/tests/sandbox-packages.spec.ts) |
 | Egress rule generation | [internal/runner/runtime/firecracker.ee/network/egress_test.go](../internal/runner/runtime/firecracker.ee/network/egress_test.go) |
+| Egress mode: API to runner to network and rules, refused when the runner does not confirm it | [internal/api/handlers_create_sandbox_test.go](../internal/api/handlers_create_sandbox_test.go), [internal/runner/grpc_control_test.go](../internal/runner/grpc_control_test.go), [internal/runner/runtime/docker/runtime_test.go](../internal/runner/runtime/docker/runtime_test.go), [internal/runner/runtime/firecracker.ee/network_wirer_test.go](../internal/runner/runtime/firecracker.ee/network_wirer_test.go) |
 
 The network isolation suite is untagged, so it runs against both the Sysbox and
 the Firecracker runner. Its blocked-range test probes one address per listed

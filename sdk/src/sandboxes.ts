@@ -1,18 +1,24 @@
 import type { HttpClient } from "./http";
-import { SandboxServiceError } from "./errors";
+import { EgressMismatchError, SandboxServiceError } from "./errors";
 import type { CreateSandboxOptions, SandboxRecord, SandboxWireResponse } from "./types";
 
 export async function createSandbox(
   http: HttpClient,
-  options?: CreateSandboxOptions,
+  options: CreateSandboxOptions,
 ): Promise<SandboxRecord> {
   const response = await http.requestJson<SandboxWireResponse>("POST", "/sandboxes", {
-    data: { id: options?.id, ephemeral: options?.ephemeral },
+    data: { id: options.id, ephemeral: options.ephemeral, egress: options.egress },
     // Only a caller-supplied id makes a repeated POST idempotent; retrying an
     // anonymous create would provision a second sandbox.
-    isSafeToRetry: options?.id !== undefined,
+    isSafeToRetry: options.id !== undefined,
   });
-  return mapSandboxRecord(response);
+  const record = mapSandboxRecord(response);
+  // An API from before egress modes ignores the field and reports none, read as
+  // public; a current one refuses a reconnect in another mode itself (409).
+  if (record.egress !== options.egress) {
+    throw new EgressMismatchError(record.id, options.egress, record.egress);
+  }
+  return record;
 }
 
 export async function getSandbox(http: HttpClient, id: string): Promise<SandboxRecord> {
@@ -37,5 +43,6 @@ function mapSandboxRecord(wire: SandboxWireResponse): SandboxRecord {
     createdAt: wire.created_at,
     lastActiveAt: wire.last_active_at,
     ephemeral: wire.ephemeral === true,
+    egress: wire.egress ?? "public",
   };
 }

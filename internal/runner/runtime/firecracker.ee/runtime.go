@@ -191,6 +191,10 @@ type sandboxState struct {
 	snapshotMemPath   string
 	snapshotStatePath string
 
+	// blockEgress is the sandbox's egress "none" mode, fixed at creation. Every
+	// activation applies it to whatever slot the sandbox lands on.
+	blockEgress bool
+
 	// bootParams is the sidecar of the golden snapshot this sandbox was created
 	// from, resolved once at reservation and never re-read. Recovery replays it, so
 	// re-resolving would boot a different guest than the one this sandbox is a
@@ -396,7 +400,7 @@ func (r *Runtime) Capacity(context.Context) (runnerruntime.Capacity, error) {
 
 // CreateSandbox restores one microVM snapshot into a per-slot jail and netns,
 // then exposes the guest daemon through a host-local TCP proxy.
-func (r *Runtime) CreateSandbox(ctx context.Context, sandboxID string, _ *runnerruntime.CreateOptions) (*runnerruntime.SandboxInfo, error) {
+func (r *Runtime) CreateSandbox(ctx context.Context, sandboxID string, opts *runnerruntime.CreateOptions) (*runnerruntime.SandboxInfo, error) {
 	if len(sandboxID) < 12 {
 		return nil, fmt.Errorf("sandbox ID must be at least 12 characters, got %d", len(sandboxID))
 	}
@@ -404,7 +408,7 @@ func (r *Runtime) CreateSandbox(ctx context.Context, sandboxID string, _ *runner
 	ctx, cancel := withLifecycleBudget(ctx, createBudget)
 	defer cancel()
 
-	state, err := r.reserveSandbox(sandboxID)
+	state, err := r.reserveSandbox(sandboxID, opts.BlockEgress())
 	if err != nil {
 		return nil, err
 	}
@@ -415,6 +419,7 @@ func (r *Runtime) CreateSandbox(ctx context.Context, sandboxID string, _ *runner
 		"slot", state.slot,
 		"netns", state.netnsName,
 		"daemon_url", state.daemonURL,
+		"block_egress", state.blockEgress,
 	)
 	cleanupOnError := func() {
 		cleanupCtx, cancelCleanup := withCleanupBudget(ctx)
@@ -559,7 +564,7 @@ func (r *Runtime) Shutdown(ctx context.Context) {
 // deterministic per-slot host resources used for the VM. The new sandbox starts
 // out claimed for creation so a delete arriving mid-create waits for the microVM
 // to be published instead of tearing down around it.
-func (r *Runtime) reserveSandbox(sandboxID string) (*sandboxState, error) {
+func (r *Runtime) reserveSandbox(sandboxID string, blockEgress bool) (*sandboxState, error) {
 	// Resolved here, at the one moment a sandbox is tied to a golden snapshot, and
 	// carried on the state from then on. Admission has already read and validated
 	// this file, so a failure here means it changed under a running runner — worth
@@ -610,6 +615,7 @@ func (r *Runtime) reserveSandbox(sandboxID string) (*sandboxState, error) {
 		rootfsPath:        sandboxRootfsPath(r.runnerConfig.DataDir, sandboxID),
 		snapshotMemPath:   sandboxSnapshotMemPath(dataDir),
 		snapshotStatePath: sandboxSnapshotStatePath(dataDir),
+		blockEgress:       blockEgress,
 		bootParams:        params,
 		kernel:            kernel,
 		transition:        transitionCreating,

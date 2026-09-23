@@ -21,11 +21,17 @@ const deleteDuration = new Trend("sandbox_delete_duration", true);
 // maxDuration is set explicitly because k6 would otherwise cut the run off
 // after 10 minutes and report fewer iterations than asked for, which is easy
 // to miss when WAKE_AFTER makes each iteration take the better part of a
-// minute.
+// minute. It is a scenario option, not a top-level one: at the top level k6
+// only warns about an unknown field and keeps the 10 minute default.
 const baselineOptions = {
-  vus: 1,
-  iterations: ITERATIONS,
-  maxDuration: __ENV.MAX_DURATION || "30m",
+  scenarios: {
+    default: {
+      executor: "shared-iterations",
+      vus: 1,
+      iterations: ITERATIONS,
+      maxDuration: __ENV.MAX_DURATION || "30m",
+    },
+  },
   thresholds: {
     http_req_failed: ["rate<0.01"],
   },
