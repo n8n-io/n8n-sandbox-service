@@ -217,7 +217,10 @@ func groupByRunner(records []*store.SandboxRecord) map[string][]*store.SandboxRe
 }
 
 // grpc-go returns Unavailable for connection failures; the runner maps its own
-// failures to Internal, and our deadline surfaces as DeadlineExceeded.
+// failures to Internal, and our deadline surfaces as DeadlineExceeded. A
+// blackholed host is Unavailable too: grpc-go caps the connect phase at its own
+// 20s MinConnectTimeout, far below runnerLifecycleBudget, so DeadlineExceeded
+// means the connection was up and the runner's lifecycle operation hung.
 func runnerUnreachable(err error) bool {
 	return status.Code(err) == codes.Unavailable
 }

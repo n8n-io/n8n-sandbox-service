@@ -31,6 +31,10 @@ const (
 
 const (
 	defaultIdleSweepConcurrency = 8
+	// Each in-flight sweeper call holds a Postgres lock connection and drives a
+	// full-RAM snapshot write on a runner; past this the pool outgrows what a
+	// stock Postgres serves and the sweep is I/O-bound anyway.
+	maxIdleSweepConcurrency = 256
 	// Postgres sandbox-lock connections kept free for the request path while
 	// the sweeper holds its full concurrency worth.
 	sandboxLockRequestHeadroom = 5
@@ -343,8 +347,8 @@ func LoadAPI() (*APIConfig, error) {
 	cfg.IdleSweepConcurrency = defaultIdleSweepConcurrency
 	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_IDLE_SWEEP_CONCURRENCY")); v != "" {
 		n, err := strconv.Atoi(v)
-		if err != nil || n < 1 {
-			return nil, fmt.Errorf("SANDBOX_API_IDLE_SWEEP_CONCURRENCY must be a positive integer, got %q", v)
+		if err != nil || n < 1 || n > maxIdleSweepConcurrency {
+			return nil, fmt.Errorf("SANDBOX_API_IDLE_SWEEP_CONCURRENCY must be an integer between 1 and %d, got %q", maxIdleSweepConcurrency, v)
 		}
 		cfg.IdleSweepConcurrency = n
 	}
