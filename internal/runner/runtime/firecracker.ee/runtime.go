@@ -305,7 +305,7 @@ type dependencies struct {
 	coldBoot            func(ctx context.Context, socketPath string, params *bootParams) error
 	loadBootParams      func(path string) (*bootParams, error)
 	statTemplateKernel  func(path string) (kernelPin, error)
-	newProxy            func(ctx context.Context, listenAddr string, netnsName string, guestAddr string) (daemonProxy, error)
+	newProxy            func(ctx context.Context, sandboxID string, listenAddr string, netnsName string, guestAddr string) (daemonProxy, error)
 	probeDaemon         func(ctx context.Context, baseURL string) error
 	freeBytesInDir      func(path string) (int64, error)
 }
@@ -323,8 +323,8 @@ func defaultDependencies(fc Config) dependencies {
 		coldBoot:            coldBoot,
 		loadBootParams:      loadBootParams,
 		statTemplateKernel:  statTemplateKernel,
-		newProxy: func(ctx context.Context, listenAddr string, netnsName string, guestAddr string) (daemonProxy, error) {
-			return startDaemonProxy(ctx, listenAddr, netnsName, guestAddr)
+		newProxy: func(ctx context.Context, sandboxID string, listenAddr string, netnsName string, guestAddr string) (daemonProxy, error) {
+			return startDaemonProxy(ctx, sandboxID, listenAddr, netnsName, guestAddr)
 		},
 		probeDaemon: func(ctx context.Context, baseURL string) error {
 			return probeDaemon(ctx, baseURL, fc.DaemonWaitTimeout)

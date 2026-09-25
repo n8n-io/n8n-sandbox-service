@@ -271,7 +271,7 @@ func (r *Runtime) activateSandboxVM(ctx context.Context, state *sandboxState, t 
 	var proxy daemonProxy
 	err = t.step(stepStartProxy, func() error {
 		var proxyErr error
-		proxy, proxyErr = r.deps.newProxy(ctx, state.daemonURLAddr(), state.netnsName, guestAddr)
+		proxy, proxyErr = r.deps.newProxy(ctx, state.id, state.daemonURLAddr(), state.netnsName, guestAddr)
 		return proxyErr
 	})
 	if err != nil {

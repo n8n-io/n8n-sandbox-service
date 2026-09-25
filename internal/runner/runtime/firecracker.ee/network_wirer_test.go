@@ -298,7 +298,7 @@ func TestTeardownRechecksSlotOwnershipBeforeClearingTheNamespace(t *testing.T) {
 
 	const sandboxID = "sandbox-id-123456"
 	const nextID = "sandbox-id-abcdef"
-	rt.deps.newProxy = func(context.Context, string, string, string) (daemonProxy, error) {
+	rt.deps.newProxy = func(context.Context, string, string, string, string) (daemonProxy, error) {
 		return &hookProxy{onStop: func() {
 			// The winning teardown released slot 0 and the next sandbox reserved it.
 			rt.mu.Lock()
@@ -343,7 +343,7 @@ func TestTeardownOfAnUntrackedIncarnationLeavesItsSuccessorsSlotAlone(t *testing
 
 	const sandboxID = "sandbox-id-123456"
 	var old *sandboxState
-	rt.deps.newProxy = func(context.Context, string, string, string) (daemonProxy, error) {
+	rt.deps.newProxy = func(context.Context, string, string, string, string) (daemonProxy, error) {
 		return &hookProxy{onStop: func() {
 			// Shutdown untracked and released the old incarnation; a create under
 			// the same ID reserved slot 0 and is now the tracked one.

@@ -12,12 +12,16 @@ import (
 
 // tcpDaemonProxy forwards host-local TCP connections into a sandbox network namespace.
 type tcpDaemonProxy struct {
-	listener net.Listener
-	done     chan struct{}
-	ctx      context.Context
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
-	dial     netnsDialFunc
+	// sandboxID is carried for the logs alone: a dial failure here is the only
+	// runner-side trace of a sandbox whose guest cannot be reached, and the netns
+	// name identifies a slot, which changes hands, not the sandbox on it.
+	sandboxID string
+	listener  net.Listener
+	done      chan struct{}
+	ctx       context.Context
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
+	dial      netnsDialFunc
 }
 
 type netnsDialFunc func(ctx context.Context, netnsPath string, network string, address string) (net.Conn, error)
@@ -28,7 +32,7 @@ const daemonProxyDialTimeout = 5 * time.Second
 
 // startDaemonProxy exposes one sandbox daemon on a host-local TCP port. Each
 // accepted connection is forwarded from inside the sandbox's network namespace.
-func startDaemonProxy(ctx context.Context, listenAddr string, netnsName string, guestAddr string) (daemonProxy, error) {
+func startDaemonProxy(ctx context.Context, sandboxID string, listenAddr string, netnsName string, guestAddr string) (daemonProxy, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -38,11 +42,12 @@ func startDaemonProxy(ctx context.Context, listenAddr string, netnsName string, 
 	}
 	proxyCtx, cancel := context.WithCancel(context.Background())
 	proxy := &tcpDaemonProxy{
-		listener: listener,
-		done:     make(chan struct{}),
-		ctx:      proxyCtx,
-		cancel:   cancel,
-		dial:     dialContextInNetNS,
+		sandboxID: sandboxID,
+		listener:  listener,
+		done:      make(chan struct{}),
+		ctx:       proxyCtx,
+		cancel:    cancel,
+		dial:      dialContextInNetNS,
 	}
 	go proxy.serve(netnsName, guestAddr)
 	return proxy, nil
@@ -58,7 +63,7 @@ func (p *tcpDaemonProxy) serve(netnsName string, guestAddr string) {
 			p.wg.Done()
 			return
 		}
-		slog.Debug("firecracker daemon proxy accepted connection", "local_addr", clientConn.LocalAddr().String(), "remote_addr", clientConn.RemoteAddr().String(), "netns", netnsName, "guest_addr", guestAddr)
+		slog.Debug("firecracker daemon proxy accepted connection", "sandbox_id", p.sandboxID, "local_addr", clientConn.LocalAddr().String(), "remote_addr", clientConn.RemoteAddr().String(), "netns", netnsName, "guest_addr", guestAddr)
 		go func() {
 			defer p.wg.Done()
 			p.handle(clientConn, netnsName, guestAddr)
@@ -74,7 +79,7 @@ func (p *tcpDaemonProxy) handle(clientConn net.Conn, netnsName string, guestAddr
 	defer cancelDial()
 	guestConn, err := p.dial(dialCtx, filepath.Join("/run/netns", netnsName), "tcp", guestAddr)
 	if err != nil {
-		slog.Warn("firecracker daemon proxy guest dial failed", "netns", netnsName, "guest_addr", guestAddr, "client_remote_addr", clientConn.RemoteAddr().String(), "err", err)
+		slog.Warn("firecracker daemon proxy guest dial failed", "sandbox_id", p.sandboxID, "netns", netnsName, "guest_addr", guestAddr, "client_remote_addr", clientConn.RemoteAddr().String(), "err", err)
 		return
 	}
 	defer guestConn.Close()
