@@ -51,6 +51,14 @@ spec:
                 secretKeyRef:
                   name: {{ include "n8n-sandbox-service.authSecretName" . }}
                   key: {{ .Values.auth.secretKeys.apiKeys }}
+            # optional: the Secret may predate provisioner keys; the API treats
+            # an unset variable as "no provisioner keys".
+            - name: SANDBOX_API_PROVISIONER_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "n8n-sandbox-service.authSecretName" . }}
+                  key: {{ .Values.auth.secretKeys.provisionerKeys }}
+                  optional: true
             - name: SANDBOX_API_RUNNER_REGISTRATION_TOKEN
               valueFrom:
                 secretKeyRef:

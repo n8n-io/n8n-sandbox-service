@@ -140,4 +140,7 @@ a loopback API fails its readiness probe long before metrics matter.
 {{- fail (printf "auth.generated.%s must be set to a non-placeholder value when auth.existingSecret is empty" $key) -}}
 {{- end -}}
 {{- end -}}
+{{- if eq (lower (trim (toString .Values.auth.generated.provisionerKeys))) "changeme" -}}
+{{- fail "auth.generated.provisionerKeys must not be a placeholder value; leave it empty to run without provisioner keys" -}}
+{{- end -}}
 {{- end -}}

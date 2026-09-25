@@ -70,8 +70,12 @@ func (p PostgresConfig) DSN() string {
 
 // APIConfig contains configuration for the public API gateway.
 type APIConfig struct {
-	// APIKeys is the set of valid API keys for authenticating public requests.
+	// APIKeys is the set of admin API keys: full access to every route.
 	APIKeys map[string]struct{}
+
+	// ProvisionerKeys is parsed from SANDBOX_API_PROVISIONER_KEYS; may be
+	// empty. See docs/security-model.md, "Provisioner keys".
+	ProvisionerKeys map[string]struct{}
 
 	// ListenAddr is the TCP address the API gateway listens on.
 	ListenAddr string
@@ -184,15 +188,18 @@ func LoadAPI() (*APIConfig, error) {
 	if rawKeys == "" {
 		return nil, fmt.Errorf("SANDBOX_API_KEYS must be set")
 	}
-	cfg.APIKeys = make(map[string]struct{})
-	for _, k := range strings.Split(rawKeys, ",") {
-		k = strings.TrimSpace(k)
-		if k != "" {
-			cfg.APIKeys[k] = struct{}{}
-		}
-	}
+	cfg.APIKeys = parseKeySet(rawKeys)
 	if len(cfg.APIKeys) == 0 {
 		return nil, fmt.Errorf("SANDBOX_API_KEYS contains no valid keys")
+	}
+
+	// A key in both sets would silently be admin, because admin keys are
+	// checked first.
+	cfg.ProvisionerKeys = parseKeySet(os.Getenv("SANDBOX_API_PROVISIONER_KEYS"))
+	for k := range cfg.ProvisionerKeys {
+		if _, isAdmin := cfg.APIKeys[k]; isAdmin {
+			return nil, fmt.Errorf("SANDBOX_API_PROVISIONER_KEYS must not share a key with SANDBOX_API_KEYS")
+		}
 	}
 
 	if v := os.Getenv("SANDBOX_API_LISTEN_ADDR"); v != "" {
@@ -241,6 +248,11 @@ func LoadAPI() (*APIConfig, error) {
 			return nil, fmt.Errorf("SANDBOX_API_DEFAULT_MAX_SANDBOXES must be an integer between 0 and %d, got %q", math.MaxInt32, v)
 		}
 		cfg.DefaultMaxSandboxes = n
+	}
+	// Provisioner tenants are bounded to 1..DefaultMaxSandboxes; with 0
+	// (unlimited) an omitted max_sandboxes would yield an unlimited tenant.
+	if len(cfg.ProvisionerKeys) > 0 && cfg.DefaultMaxSandboxes == 0 {
+		return nil, fmt.Errorf("SANDBOX_API_PROVISIONER_KEYS requires SANDBOX_API_DEFAULT_MAX_SANDBOXES to be at least 1")
 	}
 
 	cfg.RunnerAPIKey = os.Getenv("SANDBOX_API_RUNNER_API_KEY")
@@ -471,4 +483,15 @@ func isWildcardHost(host string) bool {
 		return true
 	}
 	return false
+}
+
+// parseKeySet splits a comma-separated list of API keys, dropping blanks.
+func parseKeySet(raw string) map[string]struct{} {
+	keys := make(map[string]struct{})
+	for _, k := range strings.Split(raw, ",") {
+		if k = strings.TrimSpace(k); k != "" {
+			keys[k] = struct{}{}
+		}
+	}
+	return keys
 }

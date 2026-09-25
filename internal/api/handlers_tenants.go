@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -88,12 +89,13 @@ func handleListTenants(s store.SandboxStore) http.HandlerFunc {
 
 func handleCreateTenant(s store.SandboxStore, cfg *config.APIConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !requireAdmin(w, r) {
+		role, ok := requireAdminOrProvisioner(w, r)
+		if !ok {
 			return
 		}
 		var req createTenantRequest
 		if r.Body != nil && r.ContentLength != 0 {
-			dec := json.NewDecoder(r.Body)
+			dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
 			if err := dec.Decode(&req); err != nil {
 				writeError(w, http.StatusBadRequest, "invalid JSON body")
 				return
@@ -107,6 +109,10 @@ func handleCreateTenant(s store.SandboxStore, cfg *config.APIConfig) http.Handle
 		if req.MaxSandboxes != nil {
 			if *req.MaxSandboxes < 0 || *req.MaxSandboxes > math.MaxInt32 {
 				writeError(w, http.StatusBadRequest, "max_sandboxes must be between 0 and 2147483647")
+				return
+			}
+			if role == roleProvisioner && (*req.MaxSandboxes < 1 || *req.MaxSandboxes > cfg.DefaultMaxSandboxes) {
+				writeError(w, http.StatusBadRequest, "max_sandboxes must be between 1 and "+strconv.Itoa(cfg.DefaultMaxSandboxes)+" for a provisioner key")
 				return
 			}
 			maxSandboxes = *req.MaxSandboxes
@@ -169,9 +175,10 @@ func handleGetTenant(s store.SandboxStore) http.HandlerFunc {
 	}
 }
 
+// handleDeleteTenant is safe for provisioners because of the 409 below.
 func handleDeleteTenant(s store.SandboxStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !requireAdmin(w, r) {
+		if _, ok := requireAdminOrProvisioner(w, r); !ok {
 			return
 		}
 		id := r.PathValue("id")

@@ -158,10 +158,16 @@ func handleListSandboxes(s store.SandboxStore) http.HandlerFunc {
 			records []*store.SandboxRecord
 			err     error
 		)
-		if id.Role == roleAdmin {
+		// Explicit per role: a fallthrough here would hand a new role the
+		// tenant listing (or, in create, the admin pseudo-tenant).
+		switch id.Role {
+		case roleAdmin:
 			records, err = s.List()
-		} else {
+		case roleTenant:
 			records, err = s.ListByTenant(id.TenantID)
+		default:
+			writeError(w, http.StatusForbidden, "sandbox access requires an admin or tenant API key")
+			return
 		}
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
@@ -237,6 +243,12 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 		authID, ok := authFromContext(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, "invalid API key")
+			return
+		}
+		// Before any work: the tenant resolution below defaults to the admin
+		// pseudo-tenant, which must never apply to a role other than admin.
+		if authID.Role != roleAdmin && authID.Role != roleTenant {
+			writeError(w, http.StatusForbidden, "sandbox access requires an admin or tenant API key")
 			return
 		}
 

@@ -132,7 +132,7 @@ A lightweight HTTP server embedded in every sandbox container. It is the only pr
 
 ### Client → API (REST + API Key)
 
-All client requests go through the API gateway over HTTP. Authentication uses an `X-Api-Key` header. Keys in `SANDBOX_API_KEYS` are admin keys (full access). Admin-minted tenant keys (stored hashed in the API database) are scoped to that tenant's sandboxes.
+All client requests go through the API gateway over HTTP. Authentication uses an `X-Api-Key` header. Keys in `SANDBOX_API_KEYS` are admin keys (full access). Keys in `SANDBOX_API_PROVISIONER_KEYS` are provisioner keys (see [security-model.md](security-model.md#provisioner-keys)). Admin-minted tenant keys (stored hashed in the API database) are scoped to that tenant's sandboxes.
 
 Per-tenant `max_sandboxes` is enforced with a soft check-then-act before create. Concurrent creates can exceed the quota by up to the number in flight and burn shared runner capacity; the limit is not an atomic reservation.
 
