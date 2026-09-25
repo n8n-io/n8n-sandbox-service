@@ -5,7 +5,9 @@ import (
 	"crypto/tls"
 	"math"
 	"net"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,6 +37,7 @@ type fakeSandboxControl struct {
 	applied func(createOptionsJSON string) string
 	// Run at the start of the RPC, on the server-side context, when set.
 	createHook func(ctx context.Context)
+	stopHook   func(ctx context.Context)
 	deleteHook func(ctx context.Context)
 }
 
@@ -52,7 +55,10 @@ func (f *fakeSandboxControl) CreateSandbox(ctx context.Context, req *pb.CreateSa
 	return &pb.CreateSandboxResponse{ContainerIp: "10.0.0.2", AppliedCreateOptionsJson: applied}, nil
 }
 
-func (f *fakeSandboxControl) StopSandbox(_ context.Context, req *pb.StopSandboxRequest) (*pb.StopSandboxResponse, error) {
+func (f *fakeSandboxControl) StopSandbox(ctx context.Context, req *pb.StopSandboxRequest) (*pb.StopSandboxResponse, error) {
+	if f.stopHook != nil {
+		f.stopHook(ctx)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.stopped = append(f.stopped, req.GetSandboxId())
@@ -379,5 +385,197 @@ func TestIsPastIdleDeleteWindow(t *testing.T) {
 				t.Fatalf("isPastIdleDeleteWindow = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func shrinkRunnerLifecycleBudget(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := runnerLifecycleBudget
+	runnerLifecycleBudget = d
+	t.Cleanup(func() { runnerLifecycleBudget = prev })
+}
+
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+func staleID(n int) string {
+	const hex = "0123456789abcdef"
+	c := hex[n%len(hex)]
+	return strings.Repeat(string(c), 8) + "-" + strings.Repeat(string(c), 4) + "-4" + strings.Repeat(string(c), 3) + "-8" + strings.Repeat(string(c), 3) + "-" + strings.Repeat(string(c), 12)
+}
+
+// Exactly the configured number of runner calls are in flight: no fewer, no more.
+func TestIdleStopSweepBoundsConcurrency(t *testing.T) {
+	const limit, runners, candidates = 3, 3, 6
+
+	var inFlight, peak atomic.Int32
+	release := make(chan struct{})
+	fake := &fakeSandboxControl{stopHook: func(ctx context.Context) {
+		n := inFlight.Add(1)
+		defer inFlight.Add(-1)
+		for {
+			p := peak.Load()
+			if n <= p || peak.CompareAndSwap(p, n) {
+				break
+			}
+		}
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+	}}
+	// Several runners, so the per-runner probes can fill the pool.
+	var addrs []string
+	for i := 0; i < runners; i++ {
+		addrs = append(addrs, startFakeRunnerControl(t, fake))
+	}
+	s := newSweepStore(t)
+	cfg := idleSweepConfig()
+	cfg.IdleSweepConcurrency = limit
+
+	now := time.Now()
+	stale := now.Add(-cfg.IdleStopAfter - time.Second).Unix()
+	for i := 0; i < candidates; i++ {
+		seedRunningSandbox(t, s, staleID(i), addrs[i%runners], stale, false)
+	}
+
+	done := make(chan sweepStats, 1)
+	go func() {
+		done <- sweepIdleStopSandboxes(context.Background(), s, registry.New(45*time.Second), cfg, runnerControlTLS(cfg), now)
+	}()
+
+	waitFor(t, "the pool to fill", func() bool { return inFlight.Load() == limit })
+	time.Sleep(100 * time.Millisecond) // room for a fourth call to arrive if unbounded
+	if got := peak.Load(); got != limit {
+		t.Fatalf("peak in-flight stops = %d, want %d", got, limit)
+	}
+	close(release)
+
+	stats := <-done
+	if stats.candidates != candidates || stats.acted != candidates {
+		t.Fatalf("stats = %+v, want %d candidates all acted", stats, candidates)
+	}
+	if got := peak.Load(); got != limit {
+		t.Fatalf("peak in-flight stops after drain = %d, want %d", got, limit)
+	}
+	for i := 0; i < candidates; i++ {
+		if rec := mustGet(t, s, staleID(i)); rec == nil || rec.Status != "stopped" {
+			t.Fatalf("row %d = %+v, want stopped", i, rec)
+		}
+	}
+}
+
+// A hanging runner does not hold up the healthy one; its stops are abandoned at
+// the deadline and retried next sweep.
+func TestIdleStopSweepIsolatesHangingRunner(t *testing.T) {
+	shrinkRunnerLifecycleBudget(t, 300*time.Millisecond)
+
+	healthy := &fakeSandboxControl{}
+	healthyAddr := startFakeRunnerControl(t, healthy)
+
+	var hang atomic.Bool
+	hang.Store(true)
+	hanging := &fakeSandboxControl{stopHook: func(ctx context.Context) {
+		if hang.Load() {
+			<-ctx.Done()
+		}
+	}}
+	hangingAddr := startFakeRunnerControl(t, hanging)
+
+	s := newSweepStore(t)
+	cfg := idleSweepConfig()
+	cfg.IdleSweepConcurrency = 4
+
+	now := time.Now()
+	stale := now.Add(-cfg.IdleStopAfter - time.Second).Unix()
+	healthyIDs := []string{staleID(0), staleID(1)}
+	hangingIDs := []string{staleID(2), staleID(3)}
+	for _, id := range healthyIDs {
+		seedRunningSandbox(t, s, id, healthyAddr, stale, false)
+	}
+	for _, id := range hangingIDs {
+		seedRunningSandbox(t, s, id, hangingAddr, stale, false)
+	}
+
+	start := time.Now()
+	stats := sweepIdleStopSandboxes(context.Background(), s, registry.New(45*time.Second), cfg, runnerControlTLS(cfg), now)
+	if elapsed := time.Since(start); elapsed > 10*runnerLifecycleBudget {
+		t.Fatalf("sweep took %s with a %s per-call budget: the hanging runner held the sweep", elapsed, runnerLifecycleBudget)
+	}
+	if stats.acted != 2 || stats.failed != 2 || stats.skippedUnreachable != 0 {
+		t.Fatalf("stats = %+v, want 2 acted, 2 failed (deadline), 0 skipped", stats)
+	}
+	for _, id := range healthyIDs {
+		if rec := mustGet(t, s, id); rec == nil || rec.Status != "stopped" {
+			t.Fatalf("healthy runner row %s = %+v, want stopped in the same sweep", id, rec)
+		}
+	}
+	for _, id := range hangingIDs {
+		if rec := mustGet(t, s, id); rec == nil || rec.Status != "running" {
+			t.Fatalf("hanging runner row %s = %+v, want left running for retry", id, rec)
+		}
+	}
+
+	hang.Store(false)
+	stats = sweepIdleStopSandboxes(context.Background(), s, registry.New(45*time.Second), cfg, runnerControlTLS(cfg), now.Add(cfg.IdleSweepInterval))
+	if stats.acted != 2 || stats.failed != 0 {
+		t.Fatalf("retry stats = %+v, want the 2 abandoned stops to succeed", stats)
+	}
+	for _, id := range hangingIDs {
+		if rec := mustGet(t, s, id); rec == nil || rec.Status != "stopped" {
+			t.Fatalf("row %s after retry = %+v, want stopped", id, rec)
+		}
+	}
+}
+
+// An unreachable runner is dialled once per sweep, even with spare workers;
+// its other candidates are skipped.
+func TestIdleStopSweepSkipsUnreachableRunnerAfterFirstFailure(t *testing.T) {
+	healthy := &fakeSandboxControl{}
+	healthyAddr := startFakeRunnerControl(t, healthy)
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	deadAddr := lis.Addr().String()
+	_ = lis.Close()
+
+	s := newSweepStore(t)
+	cfg := idleSweepConfig()
+	cfg.IdleSweepConcurrency = 4
+
+	now := time.Now()
+	stale := now.Add(-cfg.IdleStopAfter - time.Second).Unix()
+	deadIDs := []string{staleID(0), staleID(1), staleID(2)}
+	for _, id := range deadIDs {
+		seedRunningSandbox(t, s, id, deadAddr, stale, false)
+	}
+	healthyID := staleID(3)
+	seedRunningSandbox(t, s, healthyID, healthyAddr, stale, false)
+
+	stats := sweepIdleStopSandboxes(context.Background(), s, registry.New(45*time.Second), cfg, runnerControlTLS(cfg), now)
+	if stats.failed != 1 || stats.skippedUnreachable != 2 || stats.acted != 1 {
+		t.Fatalf("stats = %+v, want 1 failed (the probe), 2 skipped, 1 acted", stats)
+	}
+	if rec := mustGet(t, s, healthyID); rec == nil || rec.Status != "stopped" {
+		t.Fatalf("healthy row = %+v, want stopped", rec)
+	}
+	for _, id := range deadIDs {
+		if rec := mustGet(t, s, id); rec == nil || rec.Status != "running" {
+			t.Fatalf("dead runner row %s = %+v, want left running for retry", id, rec)
+		}
+	}
+	if stopped, _ := healthy.calls(); len(stopped) != 1 || stopped[0] != healthyID {
+		t.Fatalf("healthy runner stops = %v, want [%s]", stopped, healthyID)
 	}
 }

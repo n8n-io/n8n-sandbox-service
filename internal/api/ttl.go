@@ -5,13 +5,24 @@ import (
 	"database/sql"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/n8n-io/sandbox-service/internal/api/config"
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
 	"github.com/n8n-io/sandbox-service/internal/api/runnerctl"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
+	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 )
+
+// runnerLifecycleBudget bounds each sweeper RPC: the runner's own budget plus a
+// round-trip margin. An abandoned call is retried next sweep; the runner
+// finishes it regardless, and stop/delete are idempotent. Var so tests can shrink it.
+var runnerLifecycleBudget = runnerruntime.TransitionBudget + time.Minute
 
 // LogIdleSweepConfig logs whether the idle sweeper runs and with which settings.
 func LogIdleSweepConfig(cfg *config.APIConfig) {
@@ -24,7 +35,15 @@ func LogIdleSweepConfig(cfg *config.APIConfig) {
 		"idle_delete_after", formatIdleDur(cfg.IdleDeleteAfter),
 		"idle_delete_safety_buffer", cfg.IdleDeleteSafetyBuffer.String(),
 		"orphan_reap_buffer", orphanReapBuffer(cfg).String(),
-		"sweep_interval", cfg.IdleSweepInterval.String())
+		"sweep_interval", cfg.IdleSweepInterval.String(),
+		"sweep_concurrency", sweepConcurrency(cfg))
+}
+
+func sweepConcurrency(cfg *config.APIConfig) int {
+	if cfg == nil || cfg.IdleSweepConcurrency <= 0 {
+		return 1
+	}
+	return cfg.IdleSweepConcurrency
 }
 
 func formatIdleDur(d time.Duration) string {
@@ -171,25 +190,158 @@ func withLockedSandbox(ctx context.Context, s store.SandboxStore, id string, fn 
 	return nil
 }
 
+// sweepAction runs under the sandbox lock with the record re-read. err is the
+// RPC error, so the sweep can tell an unreachable runner from a per-sandbox failure.
+type sweepAction func(ctx context.Context, rec *store.SandboxRecord) (acted bool, err error)
+
+type sweepStats struct {
+	candidates, acted, skippedUnreachable, failed int
+}
+
+func runnerKey(rec *store.SandboxRecord) string {
+	if rec.RunnerID != "" {
+		return rec.RunnerID
+	}
+	return rec.RunnerControlGRPCAddr
+}
+
+func groupByRunner(records []*store.SandboxRecord) map[string][]*store.SandboxRecord {
+	groups := make(map[string][]*store.SandboxRecord)
+	for _, rec := range records {
+		if rec != nil {
+			key := runnerKey(rec)
+			groups[key] = append(groups[key], rec)
+		}
+	}
+	return groups
+}
+
+// grpc-go returns Unavailable for connection failures; the runner maps its own
+// failures to Internal, and our deadline surfaces as DeadlineExceeded. A
+// blackholed host is Unavailable too: grpc-go caps the connect phase at its own
+// 20s MinConnectTimeout, far below runnerLifecycleBudget, so DeadlineExceeded
+// means the connection was up and the runner's lifecycle operation hung.
+func runnerUnreachable(err error) bool {
+	return status.Code(err) == codes.Unavailable
+}
+
+// sweepConcurrently runs act over records with a bounded pool. Each runner has
+// its own submitter whose first candidate is a probe; the rest are submitted
+// only after it returns from a reachable host, so a dead runner costs one dial
+// per sweep. Submitters blocked on the pool are admitted FIFO, which spreads
+// in-flight calls across runners.
+func sweepConcurrently(ctx context.Context, s store.SandboxStore, cfg *config.APIConfig, phase string, records []*store.SandboxRecord, act sweepAction) sweepStats {
+	start := time.Now()
+	groups := groupByRunner(records)
+
+	var (
+		mu          sync.Mutex
+		unreachable = make(map[string]struct{})
+		stats       sweepStats
+	)
+	for _, group := range groups {
+		stats.candidates += len(group)
+	}
+
+	run := func(rec *store.SandboxRecord) {
+		var acted bool
+		var actErr error
+		lockErr := withLockedSandbox(ctx, s, rec.ID, func(fresh *store.SandboxRecord) {
+			acted, actErr = act(ctx, fresh)
+		})
+
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case lockErr != nil:
+			if ctx.Err() == nil {
+				slog.Error("idle sweep lock or refresh failed", "phase", phase, "sandbox_id", rec.ID, "err", lockErr)
+			}
+			stats.failed++
+		case actErr != nil:
+			if runnerUnreachable(actErr) {
+				unreachable[runnerKey(rec)] = struct{}{}
+			}
+			stats.failed++
+		case acted:
+			stats.acted++
+		}
+	}
+
+	pool := new(errgroup.Group)
+	pool.SetLimit(sweepConcurrency(cfg))
+	var submitters sync.WaitGroup
+	for key, group := range groups {
+		submitters.Add(1)
+		go func() {
+			defer submitters.Done()
+			probed := make(chan struct{})
+			pool.Go(func() error {
+				run(group[0])
+				close(probed)
+				return nil
+			})
+			<-probed
+			rest := group[1:]
+			for i, rec := range rest {
+				if ctx.Err() != nil {
+					return
+				}
+				mu.Lock()
+				_, dead := unreachable[key]
+				if dead {
+					stats.skippedUnreachable += len(rest) - i
+				}
+				mu.Unlock()
+				if dead {
+					return
+				}
+				pool.Go(func() error {
+					run(rec)
+					return nil
+				})
+			}
+		}()
+	}
+	submitters.Wait()
+	_ = pool.Wait()
+
+	if stats.candidates > 0 {
+		slog.Info("idle sweep phase done",
+			"phase", phase,
+			"candidates", stats.candidates,
+			"acted", stats.acted,
+			"skipped_unreachable", stats.skippedUnreachable,
+			"failed", stats.failed,
+			"unreachable_runners", len(unreachable),
+			"elapsed", time.Since(start).String())
+	}
+	return stats
+}
+
 // deleteIdleSandbox deletes rec on the runner, then in the store. Callers hold
 // the sandbox lock. Any failure leaves the row in place so the next sweep retries.
-func deleteIdleSandbox(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, rec *store.SandboxRecord, now time.Time, reason string) {
+func deleteIdleSandbox(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, rec *store.SandboxRecord, now time.Time, reason string) (bool, error) {
 	if orphanReapDue(reg, rec.RunnerID, cfg, now) {
 		reapOrphanSandbox(s, rec, rec.RunnerID)
-		return
+		return true, nil
 	}
 	controlAddr := resolveControlAddr(rec, reg)
-	if err := runnerctl.DeleteSandbox(ctx, controlAddr, cfg.RunnerAPIKey, tlsCfg, rec.ID); err != nil {
+	rpcCtx, cancel := context.WithTimeout(ctx, runnerLifecycleBudget)
+	err := runnerctl.DeleteSandbox(rpcCtx, controlAddr, cfg.RunnerAPIKey, tlsCfg, rec.ID)
+	cancel()
+	if err != nil {
 		if ctx.Err() == nil {
 			slog.Error("idle delete failed", "sandbox_id", rec.ID, "reason", reason, "err", err)
 		}
-		return
+		return false, err
 	}
 	if err := s.Delete(rec.ID); err != nil {
 		slog.Error("idle delete store failed", "sandbox_id", rec.ID, "reason", reason, "err", err)
-		return
+		return false, err
 	}
 	logSandboxDeleted(rec.ID, rec.RunnerID, reason)
+	return true, nil
 }
 
 // idleSeconds converts an idle window or buffer to whole seconds, rounding up so
@@ -203,107 +355,75 @@ func idleSeconds(d time.Duration) int64 {
 	return secs
 }
 
-func sweepIdleDeleteSandboxes(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) {
+func sweepIdleDeleteSandboxes(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) sweepStats {
 	deleteCutoff := now.Unix() - idleSeconds(cfg.IdleDeleteAfter) - idleSeconds(cfg.IdleDeleteSafetyBuffer)
 
 	records, err := s.ListForIdleReapDelete(deleteCutoff)
 	if err != nil {
 		slog.Error("idle sweep list delete candidates failed", "err", err)
-		return
+		return sweepStats{}
 	}
 
-	for _, rec := range records {
-		if rec == nil {
-			continue
+	return sweepConcurrently(ctx, s, cfg, "delete", records, func(ctx context.Context, rec *store.SandboxRecord) (bool, error) {
+		if rec.Status != "stopped" || rec.LastActiveAt > deleteCutoff {
+			return false, nil
 		}
-		id := rec.ID
-		err := withLockedSandbox(ctx, s, id, func(rec *store.SandboxRecord) {
-			if rec.Status != "stopped" || rec.LastActiveAt > deleteCutoff {
-				return
-			}
-			deleteIdleSandbox(ctx, s, reg, cfg, tlsCfg, rec, now, "idle")
-		})
-		if err != nil && ctx.Err() == nil {
-			slog.Error("idle delete lock or refresh failed", "sandbox_id", id, "err", err)
-		}
-		if ctx.Err() != nil {
-			return
-		}
-	}
+		return deleteIdleSandbox(ctx, s, reg, cfg, tlsCfg, rec, now, "idle")
+	})
 }
 
 // sweepEphemeralSandboxes deletes running ephemeral sandboxes idle past their
 // window plus the safety buffer. The request path already refuses them past the
 // window, so the fence is up before the irreversible delete.
-func sweepEphemeralSandboxes(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) {
+func sweepEphemeralSandboxes(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) sweepStats {
 	cutoff := now.Unix() - idleSeconds(ephemeralIdleWindow(cfg)) - idleSeconds(cfg.IdleDeleteSafetyBuffer)
 
 	records, err := s.ListForIdleReapStop(cutoff, true)
 	if err != nil {
 		slog.Error("idle sweep list ephemeral candidates failed", "err", err)
-		return
+		return sweepStats{}
 	}
 
-	for _, rec := range records {
-		if rec == nil {
-			continue
+	return sweepConcurrently(ctx, s, cfg, "ephemeral", records, func(ctx context.Context, rec *store.SandboxRecord) (bool, error) {
+		if rec.Status != "running" || rec.LastActiveAt > cutoff {
+			return false, nil
 		}
-		id := rec.ID
-		err := withLockedSandbox(ctx, s, id, func(rec *store.SandboxRecord) {
-			if rec.Status != "running" || rec.LastActiveAt > cutoff {
-				return
-			}
-			deleteIdleSandbox(ctx, s, reg, cfg, tlsCfg, rec, now, "ephemeral")
-		})
-		if err != nil && ctx.Err() == nil {
-			slog.Error("ephemeral delete lock or refresh failed", "sandbox_id", id, "err", err)
-		}
-		if ctx.Err() != nil {
-			return
-		}
-	}
+		return deleteIdleSandbox(ctx, s, reg, cfg, tlsCfg, rec, now, "ephemeral")
+	})
 }
 
-func sweepIdleStopSandboxes(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) {
+func sweepIdleStopSandboxes(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) sweepStats {
 	stopCutoff := now.Unix() - idleSeconds(cfg.IdleStopAfter)
 
 	records, err := s.ListForIdleReapStop(stopCutoff, false)
 	if err != nil {
 		slog.Error("idle sweep list stop candidates failed", "err", err)
-		return
+		return sweepStats{}
 	}
 
-	for _, rec := range records {
-		if rec == nil {
-			continue
+	return sweepConcurrently(ctx, s, cfg, "stop", records, func(ctx context.Context, rec *store.SandboxRecord) (bool, error) {
+		if rec.Status != "running" || rec.LastActiveAt > stopCutoff {
+			return false, nil
 		}
-		id := rec.ID
-		err := withLockedSandbox(ctx, s, id, func(rec *store.SandboxRecord) {
-			if rec.Status != "running" || rec.LastActiveAt > stopCutoff {
-				return
-			}
-			if orphanReapDue(reg, rec.RunnerID, cfg, now) {
-				reapOrphanSandbox(s, rec, rec.RunnerID)
-				return
-			}
-			controlAddr := resolveControlAddr(rec, reg)
-			if err := runnerctl.StopSandbox(ctx, controlAddr, cfg.RunnerAPIKey, tlsCfg, rec.ID); err != nil {
-				if ctx.Err() == nil {
-					slog.Error("idle stop failed", "sandbox_id", rec.ID, "err", err)
-				}
-				return
-			}
-			if err := s.UpdateStatus(rec.ID, "stopped"); err != nil {
-				slog.Error("idle stop status update failed", "sandbox_id", rec.ID, "err", err)
-				return
-			}
-			logSandboxStopped(rec.ID, rec.RunnerID, "idle")
-		})
-		if err != nil && ctx.Err() == nil {
-			slog.Error("idle stop lock or refresh failed", "sandbox_id", id, "err", err)
+		if orphanReapDue(reg, rec.RunnerID, cfg, now) {
+			reapOrphanSandbox(s, rec, rec.RunnerID)
+			return true, nil
 		}
-		if ctx.Err() != nil {
-			return
+		controlAddr := resolveControlAddr(rec, reg)
+		rpcCtx, cancel := context.WithTimeout(ctx, runnerLifecycleBudget)
+		err := runnerctl.StopSandbox(rpcCtx, controlAddr, cfg.RunnerAPIKey, tlsCfg, rec.ID)
+		cancel()
+		if err != nil {
+			if ctx.Err() == nil {
+				slog.Error("idle stop failed", "sandbox_id", rec.ID, "err", err)
+			}
+			return false, err
 		}
-	}
+		if err := s.UpdateStatus(rec.ID, "stopped"); err != nil {
+			slog.Error("idle stop status update failed", "sandbox_id", rec.ID, "err", err)
+			return false, err
+		}
+		logSandboxStopped(rec.ID, rec.RunnerID, "idle")
+		return true, nil
+	})
 }

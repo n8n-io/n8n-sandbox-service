@@ -75,6 +75,14 @@ func TestLoadAPIParsesDefaults(t *testing.T) {
 		t.Errorf("expected OrphanReapBuffer 5m, got %s", cfg.OrphanReapBuffer)
 	}
 
+	if cfg.IdleSweepConcurrency != 8 {
+		t.Errorf("expected IdleSweepConcurrency 8, got %d", cfg.IdleSweepConcurrency)
+	}
+
+	if cfg.Postgres.LockPoolSize != 13 {
+		t.Errorf("expected Postgres.LockPoolSize 13 (concurrency 8 + 5 request-path connections), got %d", cfg.Postgres.LockPoolSize)
+	}
+
 	if cfg.LogLevel != slog.LevelInfo {
 		t.Errorf("expected LogLevel info, got %v", cfg.LogLevel)
 	}
@@ -342,6 +350,41 @@ func TestLoadAPIRejectsNegativeIdleDeleteAfter(t *testing.T) {
 
 	if _, err := LoadAPI(); err == nil {
 		t.Fatal("expected LoadAPI to reject negative SANDBOX_API_IDLE_DELETE_AFTER")
+	}
+}
+
+// The lock pool follows the configured concurrency plus five connections the
+// sweeper's workers can never take from the request path.
+func TestLoadAPIIdleSweepConcurrencyKeepsLockPoolAboveIt(t *testing.T) {
+	t.Setenv("SANDBOX_API_KEYS", "test-key")
+	t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	t.Setenv("SANDBOX_API_IDLE_SWEEP_CONCURRENCY", "32")
+	setRequiredGRPCMTLS(t)
+
+	cfg, err := LoadAPI()
+	if err != nil {
+		t.Fatalf("LoadAPI() failed: %v", err)
+	}
+	if cfg.IdleSweepConcurrency != 32 {
+		t.Fatalf("IdleSweepConcurrency: want 32, got %d", cfg.IdleSweepConcurrency)
+	}
+	if cfg.Postgres.LockPoolSize != 37 {
+		t.Fatalf("Postgres.LockPoolSize: want 37 (32 + 5 request-path connections), got %d", cfg.Postgres.LockPoolSize)
+	}
+}
+
+func TestLoadAPIRejectsOutOfRangeIdleSweepConcurrency(t *testing.T) {
+	for _, v := range []string{"0", "-1", "two", "257", "9223372036854775807"} {
+		t.Run(v, func(t *testing.T) {
+			t.Setenv("SANDBOX_API_KEYS", "test-key")
+			t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+			t.Setenv("SANDBOX_API_IDLE_SWEEP_CONCURRENCY", v)
+			setRequiredGRPCMTLS(t)
+
+			if _, err := LoadAPI(); err == nil {
+				t.Fatalf("expected LoadAPI to reject SANDBOX_API_IDLE_SWEEP_CONCURRENCY=%q", v)
+			}
+		})
 	}
 }
 
