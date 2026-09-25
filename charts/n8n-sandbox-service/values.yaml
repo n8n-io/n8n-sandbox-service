@@ -9,12 +9,17 @@ auth:
   existingSecret: ""
   secretKeys:
     apiKeys: api-keys
+    # Optional (SANDBOX_API_PROVISIONER_KEYS, see docs/security-model.md).
+    # The API starts without it when the Secret has no such key.
+    provisionerKeys: provisioner-api-keys
     runnerRegistrationToken: runner-registration-token
     runnerApiKey: runner-api-key
     runnerApiKeys: runner-api-keys
   # Used only when existingSecret is empty.
   generated:
     apiKeys: changeme
+    # Empty leaves provisioner keys out of the generated Secret.
+    provisionerKeys: ""
     runnerRegistrationToken: changeme
     runnerApiKey: changeme
     runnerApiKeys: changeme
