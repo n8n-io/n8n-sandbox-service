@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -69,6 +70,7 @@ func proxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.Run
 				writeError(w, http.StatusBadRequest, "failed to read request body: http: request body too large")
 				return
 			}
+			logDaemonUnreachable(r, "proxy", err)
 			writeError(w, http.StatusServiceUnavailable, "daemon temporarily unavailable")
 		},
 	}
@@ -103,6 +105,19 @@ func proxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.Run
 		})
 		proxy.ServeHTTP(w, r.WithContext(ctx))
 	}
+}
+
+// logDaemonUnreachable records why a request the runtime considered proxyable
+// still failed to reach the guest daemon, since the 503 it turns into carries no
+// detail. It logs under the request's context so the line joins the runner's
+// request event on trace id, and with the sandbox id, which the runtime's own
+// diagnostics key on. A client that has already gone is not a daemon that could
+// not be reached, so that case is left out rather than counted as an incident.
+func logDaemonUnreachable(r *http.Request, component string, err error) {
+	if r.Context().Err() != nil {
+		return
+	}
+	slog.WarnContext(r.Context(), component+": daemon request failed", "sandbox_id", r.PathValue("id"), "err", err)
 }
 
 // resolveDaemonURL validates the sandbox ID, looks up the daemon URL, and
