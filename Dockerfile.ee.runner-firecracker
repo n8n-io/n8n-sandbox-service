@@ -30,8 +30,7 @@ RUN apt-get update \
 COPY scripts/firecracker.ee/firecracker-release.sh /tmp/firecracker-release.sh
 RUN set -eux; \
     test "${TARGETARCH}" = "amd64"; \
-    bash /tmp/firecracker-release.sh install /opt/firecracker/bin; \
-    rm -f /tmp/firecracker-release.sh
+    bash /tmp/firecracker-release.sh install /opt/firecracker/bin
 
 # =============================================================================
 # Stage 3: Firecracker runner image
