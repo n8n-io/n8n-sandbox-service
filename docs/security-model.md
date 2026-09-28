@@ -256,7 +256,8 @@ every sandbox built from it. What is verified today:
   [firecracker-upstream](../.github/workflows/firecracker-upstream.yml)
   workflow opens a PR when a newer patch of the pinned line exists and opens or
   updates an issue when a published advisory has no fix at or below the pin, or
-  when the pinned line has left upstream's patch window. Rolling a bump
+  when the pinned line has left upstream's patch window; a run that clears
+  closes the issue. Rolling a bump
   restarts the runner, which drops stopped sandboxes (they are never reattached
   after a restart); the golden snapshot is rebuilt in the order
   [BUNDLE.md](../BUNDLE.md) gives and admission canaries it before the runner

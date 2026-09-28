@@ -75,21 +75,29 @@ jobs:
         run: bash scripts/firecracker.ee/check-firecracker-advisories.sh --report /tmp/advisories.md
 
       # One issue with a fixed title carries the current report; each run
-      # rewrites its body, so the issue always shows the latest state. Only an
-      # issue this workflow opened qualifies, so nobody can plant a same-titled
-      # issue and have the report land there instead.
-      - name: Open or update the review issue
-        if: steps.check.outputs.flagged == 'true'
+      # rewrites its body, so the issue always shows the latest state, and a
+      # run that clears closes it with the clearing report. Only an issue this
+      # workflow opened qualifies, so nobody can plant a same-titled issue and
+      # have the report land there instead.
+      - name: Open, update or close the review issue
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          FLAGGED: ${{ steps.check.outputs.flagged }}
         run: |
           number="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
             --search "author:app/github-actions in:title \"${ISSUE_TITLE}\"" --json number,title |
             jq -r --arg title "$ISSUE_TITLE" '.[] | select(.title == $title) | .number' | head -n 1)"
           if [[ -n "$number" ]]; then
             gh issue edit "$number" --repo "$GITHUB_REPOSITORY" --body-file /tmp/advisories.md
-            echo "updated issue #${number}"
-          else
+            if [[ "$FLAGGED" == "true" ]]; then
+              echo "updated issue #${number}"
+            else
+              gh issue close "$number" --repo "$GITHUB_REPOSITORY" --comment "Nothing is flagged any more; the body holds the clearing report."
+              echo "closed issue #${number}"
+            fi
+          elif [[ "$FLAGGED" == "true" ]]; then
             gh issue create --repo "$GITHUB_REPOSITORY" --title "$ISSUE_TITLE" --body-file /tmp/advisories.md
+          else
+            echo "nothing flagged and no open issue"
           fi

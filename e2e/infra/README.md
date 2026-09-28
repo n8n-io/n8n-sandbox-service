@@ -84,7 +84,7 @@ The setup writes `/srv/firecracker/manifest.json` for diagnostics:
 
 ```json
 {
-  "firecracker_version": "<pinned release without the v>",
+  "firecracker_version": "<configured release without the v>",
   "firecracker_ci_version": "v1.14",
   "azure_vm_size": "Standard_D4as_v5",
   "cpu_model": "Intel(R) Xeon(R) Platinum ...",

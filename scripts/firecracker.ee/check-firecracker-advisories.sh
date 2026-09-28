@@ -113,7 +113,7 @@ while IFS=$'\t' read -r ghsa cve severity url patched; do
 	if [[ -n "$verdict" ]]; then
 		status="assessed: ${verdict}"
 	elif [[ -z "$newest" ]]; then
-		status="**flagged**: no fix published in the ${line} line"
+		status="**flagged**: no ${line} fix listed; check whether the pin is in the vulnerable range"
 		advisory_flagged=$((advisory_flagged + 1))
 	elif [[ "$(printf '%s\n' "$pin" "$newest" | sort -V | tail -n 1)" != "$pin" ]]; then
 		status="**flagged**: fixed in ${newest}, pin is ${pin}"

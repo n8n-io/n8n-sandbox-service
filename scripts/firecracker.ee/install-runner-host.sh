@@ -18,15 +18,6 @@ CONFIGURE_HOST_NAT_SCRIPT="${CONFIGURE_HOST_NAT_SCRIPT:-${SCRIPT_DIR}/configure-
 FIRECRACKER_CI_ASSETS_BIN="${FIRECRACKER_CI_ASSETS_BIN:-${SCRIPT_DIR}/firecracker-ci-assets.sh}"
 FIRECRACKER_RELEASE_BIN="${FIRECRACKER_RELEASE_BIN:-${SCRIPT_DIR}/firecracker-release.sh}"
 
-if [[ ! -f "$FIRECRACKER_RELEASE_BIN" ]]; then
-	echo "ERROR: missing firecracker-release script: ${FIRECRACKER_RELEASE_BIN}" >&2
-	exit 1
-fi
-# Guarded by BASH_SOURCE, so this only defines variables and functions. It
-# resolves FIRECRACKER_VERSION / FIRECRACKER_TARBALL_SHA256 (env or the pin).
-# shellcheck source=scripts/firecracker.ee/firecracker-release.sh
-source "$FIRECRACKER_RELEASE_BIN"
-
 SKIP_PACKAGES=0
 SKIP_FIRECRACKER=0
 
@@ -171,6 +162,14 @@ if [[ "$SKIP_PACKAGES" -eq 0 ]]; then
 fi
 
 if [[ "$SKIP_FIRECRACKER" -eq 0 ]]; then
+	if [[ ! -f "$FIRECRACKER_RELEASE_BIN" ]]; then
+		echo "ERROR: missing firecracker-release script: ${FIRECRACKER_RELEASE_BIN}" >&2
+		exit 1
+	fi
+	# Guarded by BASH_SOURCE, so this only defines variables and functions. It
+	# resolves FIRECRACKER_VERSION / FIRECRACKER_TARBALL_SHA256 (env or the pin).
+	# shellcheck source=scripts/firecracker.ee/firecracker-release.sh
+	source "$FIRECRACKER_RELEASE_BIN"
 	firecracker_release_install /opt/firecracker/bin
 fi
 
