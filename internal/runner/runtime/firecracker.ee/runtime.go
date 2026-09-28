@@ -791,6 +791,8 @@ chmod 0664 %[1]s/snapshot_mem %[1]s/snapshot_state %[6]s
 // startJailer starts Firecracker through jailer inside the sandbox netns.
 // onExit fires once the microVM is gone: jailer execs Firecracker in place, so
 // the process started here lives exactly as long as the guest does.
+// Firecracker gets no --enable-pci: virtio stays on MMIO by design, see
+// docs/security-model.md ("Guest to host and network") before adding it.
 func (r *Runtime) startJailer(ctx context.Context, state *sandboxState, onExit func(error)) (process, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

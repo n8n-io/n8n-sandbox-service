@@ -75,7 +75,11 @@ if [[ "$GIT_REF" == "HEAD" ]]; then
 	GIT_REF="$(git -C "$ROOT" describe --tags --always --dirty 2>/dev/null || echo "$GIT_SHA_SHORT")"
 fi
 
-FIRECRACKER_VERSION="${FIRECRACKER_VERSION:-v1.14.1}"
+FC_SCRIPTS="${ROOT}/scripts/firecracker.ee"
+# Guarded by BASH_SOURCE, so this only defines variables and functions. It
+# resolves FIRECRACKER_VERSION (env or the pin) for the manifest.
+# shellcheck source=scripts/firecracker.ee/firecracker-release.sh
+source "${FC_SCRIPTS}/firecracker-release.sh"
 GO_VERSION="${GO_VERSION:-1.25.0}"
 FIRECRACKER_ROOTFS_SIZE_MB="${FIRECRACKER_ROOTFS_SIZE_MB:-2048}"
 PACKAGED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
@@ -87,11 +91,11 @@ BUNDLE="${WORKDIR}/firecracker-golden-build"
 mkdir -p "${BUNDLE}/scripts" "${BUNDLE}/bin"
 
 cp "${ROOT}/scripts/firecracker-golden-build/README.md" "${BUNDLE}/README.md"
-FC_SCRIPTS="${ROOT}/scripts/firecracker.ee"
 install -m 0755 "${FC_SCRIPTS}/create-golden-snapshot.sh" "${BUNDLE}/scripts/"
 install -m 0755 "${FC_SCRIPTS}/build-rootfs-template.sh" "${BUNDLE}/scripts/"
 install -m 0755 "${FC_SCRIPTS}/configure-host-nat.sh" "${BUNDLE}/scripts/"
 install -m 0755 "${FC_SCRIPTS}/install-runner-host.sh" "${BUNDLE}/scripts/"
+install -m 0755 "${FC_SCRIPTS}/firecracker-release.sh" "${BUNDLE}/scripts/"
 install -m 0755 "${FC_SCRIPTS}/firecracker-ci-assets.sh" "${BUNDLE}/scripts/"
 install -m 0755 "${FC_SCRIPTS}/setup-firecracker-e2e-vm.sh" "${BUNDLE}/scripts/"
 
@@ -133,6 +137,7 @@ cat >"${BUNDLE}/MANIFEST.json" <<EOF
     "README.md",
     "MANIFEST.json",
     "scripts/install-runner-host.sh",
+    "scripts/firecracker-release.sh",
     "scripts/firecracker-ci-assets.sh",
     "scripts/build-rootfs-template.sh",
     "scripts/configure-host-nat.sh",
