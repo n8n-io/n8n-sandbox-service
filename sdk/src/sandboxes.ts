@@ -37,7 +37,7 @@ export async function deleteSandbox(http: HttpClient, id: string): Promise<void>
 }
 
 function mapSandboxRecord(wire: SandboxWireResponse): SandboxRecord {
-  return {
+  const record: SandboxRecord = {
     id: wire.id,
     status: wire.status,
     createdAt: wire.created_at,
@@ -45,4 +45,8 @@ function mapSandboxRecord(wire: SandboxWireResponse): SandboxRecord {
     ephemeral: wire.ephemeral === true,
     egress: wire.egress ?? "public",
   };
+  // Left out rather than set to undefined so `toEqual` comparisons and JSON
+  // output of records from older services stay unchanged.
+  if (wire.tenant_id !== undefined) record.tenantId = wire.tenant_id;
+  return record;
 }
