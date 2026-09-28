@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"log/slog"
 	"strings"
 	"sync"
@@ -190,8 +191,8 @@ func withLockedSandbox(ctx context.Context, s store.SandboxStore, id string, fn 
 	return nil
 }
 
-// sweepAction runs under the sandbox lock with the record re-read. err is the
-// RPC error, so the sweep can tell an unreachable runner from a per-sandbox failure.
+// sweepAction runs under the sandbox lock with the record re-read. err is a
+// runner RPC failure (*runnerCallError) or a store failure.
 type sweepAction func(ctx context.Context, rec *store.SandboxRecord) (acted bool, err error)
 
 type sweepStats struct {
@@ -216,95 +217,151 @@ func groupByRunner(records []*store.SandboxRecord) map[string][]*store.SandboxRe
 	return groups
 }
 
-// grpc-go returns Unavailable for connection failures; the runner maps its own
-// failures to Internal, and our deadline surfaces as DeadlineExceeded. A
-// blackholed host is Unavailable too: grpc-go caps the connect phase at its own
-// 20s MinConnectTimeout, far below runnerLifecycleBudget, so DeadlineExceeded
-// means the connection was up and the runner's lifecycle operation hung.
+// runnerCallError marks a runner RPC failure so the sweep can tell it from a
+// store failure.
+type runnerCallError struct{ err error }
+
+func (e *runnerCallError) Error() string { return e.err.Error() }
+func (e *runnerCallError) Unwrap() error { return e.err }
+
+// runnerUnreachable reports whether a runner call could not reach the runner.
+// grpc-go returns Unavailable for connect failures, including hosts that
+// silently drop packets: its 20s MinConnectTimeout is far below
+// runnerLifecycleBudget, so DeadlineExceeded means the call connected and hung.
 func runnerUnreachable(err error) bool {
-	return status.Code(err) == codes.Unavailable
+	var rpcErr *runnerCallError
+	return errors.As(err, &rpcErr) && status.Code(rpcErr.err) == codes.Unavailable
 }
 
-// sweepConcurrently runs act over records with a bounded pool. Each runner has
-// its own submitter whose first candidate is a probe; the rest are submitted
-// only after it returns from a reachable host, so a dead runner costs one dial
-// per sweep. Submitters blocked on the pool are admitted FIFO, which spreads
-// in-flight calls across runners.
-func sweepConcurrently(ctx context.Context, s store.SandboxStore, cfg *config.APIConfig, phase string, records []*store.SandboxRecord, act sweepAction) sweepStats {
-	start := time.Now()
-	groups := groupByRunner(records)
+// workPool runs tasks with bounded concurrency. Go blocks while full, so
+// callers queue FIFO.
+type workPool struct{ g *errgroup.Group }
 
-	var (
-		mu          sync.Mutex
-		unreachable = make(map[string]struct{})
-		stats       sweepStats
-	)
-	for _, group := range groups {
-		stats.candidates += len(group)
+func newWorkPool(limit int) *workPool {
+	g := new(errgroup.Group)
+	g.SetLimit(limit)
+	return &workPool{g: g}
+}
+
+func (w *workPool) Go(fn func()) { w.g.Go(func() error { fn(); return nil }) }
+
+func (w *workPool) Wait() { _ = w.g.Wait() }
+
+// sweepPool runs a phase's candidates with bounded concurrency and skips a
+// runner's remaining candidates once one call proves it unreachable.
+type sweepPool struct {
+	ctx   context.Context
+	store store.SandboxStore
+	phase string
+	act   sweepAction
+	pool  *workPool
+
+	mu          sync.Mutex
+	unreachable map[string]struct{}
+	stats       sweepStats
+}
+
+func newSweepPool(ctx context.Context, s store.SandboxStore, phase string, limit, candidates int, act sweepAction) *sweepPool {
+	return &sweepPool{
+		ctx:         ctx,
+		store:       s,
+		phase:       phase,
+		act:         act,
+		pool:        newWorkPool(limit),
+		unreachable: make(map[string]struct{}),
+		stats:       sweepStats{candidates: candidates},
 	}
+}
 
-	run := func(rec *store.SandboxRecord) {
-		var acted bool
-		var actErr error
-		lockErr := withLockedSandbox(ctx, s, rec.ID, func(fresh *store.SandboxRecord) {
-			acted, actErr = act(ctx, fresh)
-		})
+// run executes one candidate under its sandbox lock and records the outcome.
+func (p *sweepPool) run(rec *store.SandboxRecord) {
+	var acted bool
+	var actErr error
+	lockErr := withLockedSandbox(p.ctx, p.store, rec.ID, func(fresh *store.SandboxRecord) {
+		acted, actErr = p.act(p.ctx, fresh)
+	})
 
-		mu.Lock()
-		defer mu.Unlock()
-		switch {
-		case lockErr != nil:
-			if ctx.Err() == nil {
-				slog.Error("idle sweep lock or refresh failed", "phase", phase, "sandbox_id", rec.ID, "err", lockErr)
-			}
-			stats.failed++
-		case actErr != nil:
-			if runnerUnreachable(actErr) {
-				unreachable[runnerKey(rec)] = struct{}{}
-			}
-			stats.failed++
-		case acted:
-			stats.acted++
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	switch {
+	case lockErr != nil:
+		if p.ctx.Err() == nil {
+			slog.Error("idle sweep lock or refresh failed", "phase", p.phase, "sandbox_id", rec.ID, "err", lockErr)
 		}
+		p.stats.failed++
+	case actErr != nil:
+		if runnerUnreachable(actErr) {
+			p.unreachable[runnerKey(rec)] = struct{}{}
+		}
+		p.stats.failed++
+	case acted:
+		p.stats.acted++
 	}
+}
 
-	pool := new(errgroup.Group)
-	pool.SetLimit(sweepConcurrency(cfg))
+// submit runs every runner's candidates and returns once all submitters are
+// scheduled.
+func (p *sweepPool) submit(groups map[string][]*store.SandboxRecord) {
 	var submitters sync.WaitGroup
 	for key, group := range groups {
 		submitters.Add(1)
-		go func() {
+		go func(key string, group []*store.SandboxRecord) {
 			defer submitters.Done()
-			probed := make(chan struct{})
-			pool.Go(func() error {
-				run(group[0])
-				close(probed)
-				return nil
-			})
-			<-probed
-			rest := group[1:]
-			for i, rec := range rest {
-				if ctx.Err() != nil {
-					return
-				}
-				mu.Lock()
-				_, dead := unreachable[key]
-				if dead {
-					stats.skippedUnreachable += len(rest) - i
-				}
-				mu.Unlock()
-				if dead {
-					return
-				}
-				pool.Go(func() error {
-					run(rec)
-					return nil
-				})
-			}
-		}()
+			p.submitRunner(key, group)
+		}(key, group)
 	}
 	submitters.Wait()
-	_ = pool.Wait()
+}
+
+// submitRunner probes the runner with the first candidate and submits the rest
+// only if the probe reached it, so a dead runner costs one call per sweep.
+func (p *sweepPool) submitRunner(key string, group []*store.SandboxRecord) {
+	probed := make(chan struct{})
+	p.pool.Go(func() {
+		p.run(group[0])
+		close(probed)
+	})
+	<-probed
+
+	rest := group[1:]
+	for i, rec := range rest {
+		if p.ctx.Err() != nil {
+			return
+		}
+		p.mu.Lock()
+		_, down := p.unreachable[key]
+		if down {
+			p.stats.skippedUnreachable += len(rest) - i
+		}
+		p.mu.Unlock()
+		if down {
+			return
+		}
+		p.pool.Go(func() { p.run(rec) })
+	}
+}
+
+// wait blocks until every submitted call is done and returns the stats.
+func (p *sweepPool) wait() sweepStats {
+	p.pool.Wait()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.stats
+}
+
+// unreachableCount returns the number of runners marked unreachable.
+func (p *sweepPool) unreachableCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.unreachable)
+}
+
+// sweepConcurrently runs act over records with a bounded, runner-aware pool.
+func sweepConcurrently(ctx context.Context, s store.SandboxStore, cfg *config.APIConfig, phase string, records []*store.SandboxRecord, act sweepAction) sweepStats {
+	start := time.Now()
+	p := newSweepPool(ctx, s, phase, sweepConcurrency(cfg), len(records), act)
+	p.submit(groupByRunner(records))
+	stats := p.wait()
 
 	if stats.candidates > 0 {
 		slog.Info("idle sweep phase done",
@@ -313,7 +370,7 @@ func sweepConcurrently(ctx context.Context, s store.SandboxStore, cfg *config.AP
 			"acted", stats.acted,
 			"skipped_unreachable", stats.skippedUnreachable,
 			"failed", stats.failed,
-			"unreachable_runners", len(unreachable),
+			"unreachable_runners", p.unreachableCount(),
 			"elapsed", time.Since(start).String())
 	}
 	return stats
@@ -334,7 +391,7 @@ func deleteIdleSandbox(ctx context.Context, s store.SandboxStore, reg registry.R
 		if ctx.Err() == nil {
 			slog.Error("idle delete failed", "sandbox_id", rec.ID, "reason", reason, "err", err)
 		}
-		return false, err
+		return false, &runnerCallError{err}
 	}
 	if err := s.Delete(rec.ID); err != nil {
 		slog.Error("idle delete store failed", "sandbox_id", rec.ID, "reason", reason, "err", err)
@@ -417,7 +474,7 @@ func sweepIdleStopSandboxes(ctx context.Context, s store.SandboxStore, reg regis
 			if ctx.Err() == nil {
 				slog.Error("idle stop failed", "sandbox_id", rec.ID, "err", err)
 			}
-			return false, err
+			return false, &runnerCallError{err}
 		}
 		if err := s.UpdateStatus(rec.ID, "stopped"); err != nil {
 			slog.Error("idle stop status update failed", "sandbox_id", rec.ID, "err", err)

@@ -374,7 +374,7 @@ func TestLoadAPIIdleSweepConcurrencyKeepsLockPoolAboveIt(t *testing.T) {
 }
 
 func TestLoadAPIRejectsOutOfRangeIdleSweepConcurrency(t *testing.T) {
-	for _, v := range []string{"0", "-1", "two", "257", "9223372036854775807"} {
+	for _, v := range []string{"0", "-1", "two", "65", "9223372036854775807"} {
 		t.Run(v, func(t *testing.T) {
 			t.Setenv("SANDBOX_API_KEYS", "test-key")
 			t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")

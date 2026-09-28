@@ -31,10 +31,10 @@ const (
 
 const (
 	defaultIdleSweepConcurrency = 8
-	// Each in-flight sweeper call holds a Postgres lock connection and drives a
-	// full-RAM snapshot write on a runner; past this the pool outgrows what a
-	// stock Postgres serves and the sweep is I/O-bound anyway.
-	maxIdleSweepConcurrency = 256
+	// Keeps the Postgres lock pool (concurrency + headroom) plus the
+	// 25-connection store pool below the default max_connections=100:
+	// 64 + 5 + 25 = 94.
+	maxIdleSweepConcurrency = 64
 	// Postgres sandbox-lock connections kept free for the request path while
 	// the sweeper holds its full concurrency worth.
 	sandboxLockRequestHeadroom = 5
