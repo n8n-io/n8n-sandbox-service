@@ -121,6 +121,7 @@ fi
 
 for path in \
 	"scripts/install-runner-host.sh" \
+	"scripts/firecracker-release.sh" \
 	"scripts/firecracker-ci-assets.sh" \
 	"scripts/build-rootfs-template.sh" \
 	"scripts/configure-host-nat.sh" \

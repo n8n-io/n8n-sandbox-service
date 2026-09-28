@@ -34,7 +34,7 @@ Host fc-veth-{slot} ── FORWARD ── MASQUERADE ── internet
 API/exec: 127.0.0.1 proxy ── setns ── guest:8081
 ```
 
-`network/network.go` owns topology (netns, TAP, veth, routes, NAT); `network/egress.go` owns the private-CIDR `FORWARD` rules (Docker `netpolicy` parity) and the egress `none` rule, a `FORWARD -i <tap> -j DROP` inserted ahead of them. Guest IPv6 is disabled via `ipv6.disable=1` in the snapshot boot args; changing boot args requires a snapshot rebuild.
+`network/network.go` owns topology (netns, TAP, veth, routes, NAT); `network/egress.go` owns the private-CIDR `FORWARD` rules (Docker `netpolicy` parity) and the egress `none` rule, a `FORWARD -i <tap> -j DROP` inserted ahead of them. Guest IPv6 is disabled via `ipv6.disable=1` in the snapshot boot args, and `pci=off` keeps virtio on MMIO (why: [docs/security-model.md](../../../../docs/security-model.md), "Guest to host and network"); changing boot args requires a snapshot rebuild.
 
 ## Slots and lifecycle
 

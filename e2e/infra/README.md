@@ -48,9 +48,9 @@ Firecracker e2e provisioning allows overriding:
 - `FIRECRACKER_E2E_VM_SIZE`: optional VM size override; Firecracker runs default
   to `Standard_D4s_v3`.
 - `FIRECRACKER_VERSION`: optional Firecracker release override; defaults to
-  `v1.14.1`.
+  the pin in `scripts/firecracker.ee/firecracker-release.sh`.
 - `FIRECRACKER_TARBALL_SHA256`: required when overriding to a Firecracker
-  release that is not checksum-pinned by the setup script.
+  release other than the pinned one.
 - `FIRECRACKER_CI_VERSION`: optional Firecracker CI asset line override;
   defaults to the configured Firecracker release line, for example `v1.14`.
 - `FIRECRACKER_E2E_ROOTFS_SIZE_MB`: optional ext4 rootfs size; defaults to
@@ -84,7 +84,7 @@ The setup writes `/srv/firecracker/manifest.json` for diagnostics:
 
 ```json
 {
-  "firecracker_version": "1.14.1",
+  "firecracker_version": "<configured release without the v>",
   "firecracker_ci_version": "v1.14",
   "azure_vm_size": "Standard_D4as_v5",
   "cpu_model": "Intel(R) Xeon(R) Platinum ...",

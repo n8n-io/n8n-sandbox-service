@@ -10,14 +10,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-FIRECRACKER_VERSION="${FIRECRACKER_VERSION:-v1.14.1}"
-FIRECRACKER_TARBALL_SHA256="${FIRECRACKER_TARBALL_SHA256:-}"
 JAILER_TMPFS_SIZE="${JAILER_TMPFS_SIZE:-8G}"
 FIRECRACKER_CI_ASSETS_DIR="${FIRECRACKER_CI_ASSETS_DIR:-/srv/firecracker/ci-assets}"
 FIRECRACKER_CI_VERSION="${FIRECRACKER_CI_VERSION:-v1.14}"
 DOWNLOAD_FIRECRACKER_CI_ASSETS="${DOWNLOAD_FIRECRACKER_CI_ASSETS:-0}"
 CONFIGURE_HOST_NAT_SCRIPT="${CONFIGURE_HOST_NAT_SCRIPT:-${SCRIPT_DIR}/configure-host-nat.sh}"
 FIRECRACKER_CI_ASSETS_BIN="${FIRECRACKER_CI_ASSETS_BIN:-${SCRIPT_DIR}/firecracker-ci-assets.sh}"
+FIRECRACKER_RELEASE_BIN="${FIRECRACKER_RELEASE_BIN:-${SCRIPT_DIR}/firecracker-release.sh}"
 
 SKIP_PACKAGES=0
 SKIP_FIRECRACKER=0
@@ -36,14 +35,15 @@ Options:
   -h, --help                Show this help
 
 Environment:
-  FIRECRACKER_VERSION           Firecracker release tag (default: v1.14.1)
-  FIRECRACKER_TARBALL_SHA256    Required when version has no built-in checksum
+  FIRECRACKER_VERSION           Firecracker release tag (default: pinned in firecracker-release.sh)
+  FIRECRACKER_TARBALL_SHA256    Required when FIRECRACKER_VERSION is not the pinned default
   JAILER_TMPFS_SIZE             tmpfs size for /srv/jailer (default: 8G)
   FIRECRACKER_CI_ASSETS_DIR     CI asset directory (default: /srv/firecracker/ci-assets)
   FIRECRACKER_CI_VERSION        CI bucket version for --download-ci-assets
   DOWNLOAD_FIRECRACKER_CI_ASSETS  Set to 1 to download CI assets (same as flag)
   CONFIGURE_HOST_NAT_SCRIPT     Path to configure-host-nat.sh
   FIRECRACKER_CI_ASSETS_BIN     Path to firecracker-ci-assets.sh
+  FIRECRACKER_RELEASE_BIN       Path to firecracker-release.sh
 EOF
 }
 
@@ -52,21 +52,6 @@ require_root() {
 		echo "ERROR: $0 must run as root" >&2
 		exit 1
 	fi
-}
-
-resolve_firecracker_tarball_sha256() {
-	if [[ -n "$FIRECRACKER_TARBALL_SHA256" ]]; then
-		return 0
-	fi
-	case "$FIRECRACKER_VERSION" in
-	v1.14.1)
-		FIRECRACKER_TARBALL_SHA256="ea66dc1fbdb2473bbb95a1e822ae7884cd575a891a8f801258723258d36b7c7c"
-		;;
-	*)
-		echo "ERROR: FIRECRACKER_TARBALL_SHA256 is required for ${FIRECRACKER_VERSION}" >&2
-		exit 1
-		;;
-	esac
 }
 
 install_host_packages() {
@@ -87,25 +72,6 @@ install_host_packages() {
 		sudo \
 		tar \
 		util-linux
-}
-
-install_firecracker_release() {
-	local tmp_fc
-	echo "==> Installing Firecracker ${FIRECRACKER_VERSION}..."
-	tmp_fc="$(mktemp -d)"
-	trap 'rm -rf "$tmp_fc"' RETURN
-	curl -fsSL \
-		"https://github.com/firecracker-microvm/firecracker/releases/download/${FIRECRACKER_VERSION}/firecracker-${FIRECRACKER_VERSION}-x86_64.tgz" \
-		-o "$tmp_fc/firecracker.tgz"
-	echo "${FIRECRACKER_TARBALL_SHA256}  $tmp_fc/firecracker.tgz" | sha256sum -c -
-	tar -xzf "$tmp_fc/firecracker.tgz" -C "$tmp_fc"
-	install -m 0755 -d /opt/firecracker/bin
-	install -m 0755 \
-		"$tmp_fc/release-${FIRECRACKER_VERSION}-x86_64/firecracker-${FIRECRACKER_VERSION}-x86_64" \
-		/opt/firecracker/bin/firecracker
-	install -m 0755 \
-		"$tmp_fc/release-${FIRECRACKER_VERSION}-x86_64/jailer-${FIRECRACKER_VERSION}-x86_64" \
-		/opt/firecracker/bin/jailer
 }
 
 prepare_firecracker_dirs() {
@@ -191,17 +157,20 @@ if [[ "$(uname -m)" != "x86_64" ]]; then
 	exit 1
 fi
 
-if [[ "$FIRECRACKER_VERSION" != v* ]]; then
-	FIRECRACKER_VERSION="v${FIRECRACKER_VERSION}"
-fi
-
 if [[ "$SKIP_PACKAGES" -eq 0 ]]; then
 	install_host_packages
 fi
 
 if [[ "$SKIP_FIRECRACKER" -eq 0 ]]; then
-	resolve_firecracker_tarball_sha256
-	install_firecracker_release
+	if [[ ! -f "$FIRECRACKER_RELEASE_BIN" ]]; then
+		echo "ERROR: missing firecracker-release script: ${FIRECRACKER_RELEASE_BIN}" >&2
+		exit 1
+	fi
+	# Guarded by BASH_SOURCE, so this only defines variables and functions. It
+	# resolves FIRECRACKER_VERSION / FIRECRACKER_TARBALL_SHA256 (env or the pin).
+	# shellcheck source=scripts/firecracker.ee/firecracker-release.sh
+	source "$FIRECRACKER_RELEASE_BIN"
+	firecracker_release_install /opt/firecracker/bin
 fi
 
 prepare_firecracker_dirs

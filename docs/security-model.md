@@ -173,6 +173,16 @@ ahead of those rules at activation; it goes with the namespace at teardown, so
 it never carries over to the next sandbox on the slot. Guest kernels boot with
 IPv6 disabled.
 
+Guests also boot with `pci=off`, and the runner never passes `--enable-pci` to
+Firecracker, so every virtio device is on the MMIO transport. That is a
+deliberate choice, not an omission: the PCI transport carried CVE-2026-5747, a
+guest-root out-of-bounds write in Firecracker 1.13.0 to 1.14.3 and 1.15.0.
+Turning PCI on for throughput has to be weighed against that history; the two
+places it would be added are the `boot_args` in
+[scripts/firecracker.ee/create-golden-snapshot.sh](../scripts/firecracker.ee/create-golden-snapshot.sh)
+and the jailer arguments in
+[internal/runner/runtime/firecracker.ee/runtime.go](../internal/runner/runtime/firecracker.ee/runtime.go).
+
 The Sysbox runtime puts sandboxes on one of two Docker bridges, both with
 inter-container communication disabled: `runner-bridge` for `public`, and
 `runner-no-egress` (a Docker internal network; bridge device `br-no-egress`)
@@ -238,10 +248,20 @@ The service images, the sandbox image and the Firecracker guest assets are
 built from inputs fetched at build time, and a substituted input would reach
 every sandbox built from it. What is verified today:
 
-- The Firecracker release tarball is checked against a SHA-256 that
-  [scripts/firecracker.ee/install-runner-host.sh](../scripts/firecracker.ee/install-runner-host.sh)
-  carries for the versions it knows; any other version needs
-  `FIRECRACKER_TARBALL_SHA256`.
+- The Firecracker release is pinned once, in
+  [scripts/firecracker.ee/firecracker-release.sh](../scripts/firecracker.ee/firecracker-release.sh):
+  the runner image, the host installer, the e2e VM and the golden-build bundle
+  all install that version and check the tarball against that upstream
+  SHA-256; any other version needs `FIRECRACKER_TARBALL_SHA256`. The weekly
+  [firecracker-upstream](../.github/workflows/firecracker-upstream.yml)
+  workflow opens a PR when a newer patch of the pinned line exists and opens or
+  updates an issue when a published advisory has no fix at or below the pin, or
+  when the pinned line has left upstream's patch window; a run that clears
+  closes the issue. Rolling a bump
+  restarts the runner, which drops stopped sandboxes (they are never reattached
+  after a restart); the golden snapshot is rebuilt in the order
+  [BUNDLE.md](../BUNDLE.md) gives and admission canaries it before the runner
+  reports healthy.
 - The Node.js tarball in the sandbox image is checked against the SHA-256
   values recorded in [Dockerfile.sandbox](../Dockerfile.sandbox).
 - Service images are published by version. The release workflow mirrors each

@@ -1,0 +1,103 @@
+name: Firecracker upstream
+
+on:
+  schedule:
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+
+# The bump PR branch and commit are written with the release app's token; the
+# advisories job raises its own permission to write issues.
+permissions:
+  contents: read
+
+concurrency:
+  group: firecracker-upstream
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Move the Firecracker pin to the newest same-line release
+        id: bump
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/firecracker.ee/bump-firecracker.sh --pr-body /tmp/pr-body.md
+
+      - name: Generate GitHub App Token
+        if: steps.bump.outputs.changed == 'true'
+        id: generate-token
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
+        with:
+          app-id: ${{ secrets.N8N_ASSISTANT_APP_ID }}
+          private-key: ${{ secrets.N8N_ASSISTANT_PRIVATE_KEY }}
+
+      # Re-runs with a newer release update the open PR in place: the script
+      # resets the branch to main and lays down one fresh signed commit. The
+      # reviewer labels the PR e2e-firecracker to run the Azure lane against it.
+      - name: Open or update the bump PR
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+          NEW: ${{ steps.bump.outputs.new }}
+        run: |
+          npm ci --prefix .github/scripts
+          node .github/scripts/create-signed-commit-pr.mjs \
+            --base main \
+            --branch chore/bump-firecracker \
+            --title "chore: bump Firecracker to ${NEW}" \
+            --body-file /tmp/pr-body.md \
+            --message "chore: bump Firecracker to ${NEW}" \
+            -- scripts/firecracker.ee/firecracker-release.sh
+
+  advisories:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    env:
+      ISSUE_TITLE: "Firecracker: advisories or support window need review"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Check advisories and the support window against the pin
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/firecracker.ee/check-firecracker-advisories.sh --report /tmp/advisories.md
+
+      # One issue with a fixed title carries the current report; each run
+      # rewrites its body, so the issue always shows the latest state, and a
+      # run that clears closes it with the clearing report. Only an issue this
+      # workflow opened qualifies, so nobody can plant a same-titled issue and
+      # have the report land there instead.
+      - name: Open, update or close the review issue
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FLAGGED: ${{ steps.check.outputs.flagged }}
+        run: |
+          number="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search "author:app/github-actions in:title \"${ISSUE_TITLE}\"" --json number,title |
+            jq -r --arg title "$ISSUE_TITLE" '.[] | select(.title == $title) | .number' | head -n 1)"
+          if [[ -n "$number" ]]; then
+            gh issue edit "$number" --repo "$GITHUB_REPOSITORY" --body-file /tmp/advisories.md
+            if [[ "$FLAGGED" == "true" ]]; then
+              echo "updated issue #${number}"
+            else
+              gh issue close "$number" --repo "$GITHUB_REPOSITORY" --comment "Nothing is flagged any more; the body holds the clearing report."
+              echo "closed issue #${number}"
+            fi
+          elif [[ "$FLAGGED" == "true" ]]; then
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$ISSUE_TITLE" --body-file /tmp/advisories.md
+          else
+            echo "nothing flagged and no open issue"
+          fi
