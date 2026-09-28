@@ -4,11 +4,16 @@
 # Intended to run ON the VM after the project source has been copied to ~/project.
 set -euxo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Guarded by BASH_SOURCE, so this only defines variables and functions. It
+# resolves FIRECRACKER_VERSION / FIRECRACKER_TARBALL_SHA256 (env or the pin).
+# shellcheck source=scripts/firecracker.ee/firecracker-release.sh
+source "${SCRIPT_DIR}/firecracker-release.sh"
+
 GO_VERSION="${GO_VERSION:-1.25.0}"
 NODE_MAJOR="${NODE_MAJOR:-24}"
 PNPM_VERSION="${PNPM_VERSION:-10}"
-FIRECRACKER_VERSION="${FIRECRACKER_VERSION:-v1.14.1}"
-FIRECRACKER_TARBALL_SHA256="${FIRECRACKER_TARBALL_SHA256:-}"
 JAILER_TMPFS_SIZE="${JAILER_TMPFS_SIZE:-8G}"
 FIRECRACKER_CI_VERSION="${FIRECRACKER_CI_VERSION:-${FIRECRACKER_VERSION%.*}}"
 FIRECRACKER_E2E_ROOTFS_SIZE_MB="${FIRECRACKER_E2E_ROOTFS_SIZE_MB:-2048}"
@@ -20,10 +25,6 @@ SANDBOX_ROOTFS_TAR="${SANDBOX_ROOTFS_TAR:-}"
 if [[ "$(uname -m)" != "x86_64" ]]; then
 	echo "Firecracker e2e assets are currently amd64/x86_64 only; got $(uname -m)" >&2
 	exit 1
-fi
-
-if [[ "$FIRECRACKER_VERSION" != v* ]]; then
-	FIRECRACKER_VERSION="v${FIRECRACKER_VERSION}"
 fi
 
 # Reads the Azure VM size from the instance metadata service for diagnostics.
@@ -125,8 +126,6 @@ json_escape() {
 	node -e 'process.stdout.write(JSON.stringify(process.argv[1] ?? ""))' "$1"
 }
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
 # Ensures docker is available so we can build/export Dockerfile.sandbox on the VM.
 ensure_docker_for_sandbox_image() {
 	if command -v docker >/dev/null 2>&1; then
@@ -205,11 +204,12 @@ firecracker_host_preflight
 
 sudo env \
 	FIRECRACKER_VERSION="$FIRECRACKER_VERSION" \
-	FIRECRACKER_TARBALL_SHA256="${FIRECRACKER_TARBALL_SHA256:-}" \
+	FIRECRACKER_TARBALL_SHA256="$FIRECRACKER_TARBALL_SHA256" \
 	JAILER_TMPFS_SIZE="$JAILER_TMPFS_SIZE" \
 	FIRECRACKER_CI_VERSION="$FIRECRACKER_CI_VERSION" \
 	CONFIGURE_HOST_NAT_SCRIPT="${SCRIPT_DIR}/configure-host-nat.sh" \
 	FIRECRACKER_CI_ASSETS_BIN="${SCRIPT_DIR}/firecracker-ci-assets.sh" \
+	FIRECRACKER_RELEASE_BIN="${SCRIPT_DIR}/firecracker-release.sh" \
 	bash "${SCRIPT_DIR}/install-runner-host.sh"
 
 echo "==> Installing Go ${GO_VERSION}..."

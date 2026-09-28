@@ -26,6 +26,8 @@ the image's full-SHA tag for alpha and staging.
 The bundle ships (sources under `scripts/firecracker.ee/`):
 
 - Generic runner host install (`install-runner-host.sh`)
+- Firecracker release pin and install (`firecracker-release.sh`, sourced by the
+  installer; the runner image installs from the same file)
 - Firecracker CI kernel download (`firecracker-ci-assets.sh`)
 - Rootfs template build from sandbox OCI image (`build-rootfs-template.sh`)
 - Golden snapshot creation (`create-golden-snapshot.sh`)
@@ -45,6 +47,7 @@ firecracker-golden-build/
   README.md
   scripts/
     install-runner-host.sh
+    firecracker-release.sh
     firecracker-ci-assets.sh
     build-rootfs-template.sh
     configure-host-nat.sh
@@ -81,8 +84,9 @@ All scripts in the tarball are packaged with mode `0755`.
 
 ### `install-runner-host.sh`
 
-Runs as root. Installs host packages, Firecracker/jailer, runtime directories,
-persistent `net.ipv4.ip_forward`, and delegates to `configure-host-nat.sh`.
+Runs as root. Installs host packages, Firecracker/jailer (version and checksum
+from `firecracker-release.sh`), runtime directories, persistent
+`net.ipv4.ip_forward`, and delegates to `configure-host-nat.sh`.
 
 Options: `--skip-packages`, `--skip-firecracker`, `--download-ci-assets`.
 
