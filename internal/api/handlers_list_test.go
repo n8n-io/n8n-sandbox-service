@@ -111,6 +111,43 @@ func TestSandboxResponseCanonicalisesAdminTenantID(t *testing.T) {
 	}
 }
 
+// Same promise end-to-end: the store keeps whatever tenant_id it is given, so
+// a row seeded with "" is a legacy row, and both list and get must still report
+// the admin marker over the wire.
+func TestListAndGetSandboxCanonicaliseLegacyTenantID(t *testing.T) {
+	router, s := newTestGateway(t, "admin-key")
+	const legacy = "dddddddd-0000-4000-8000-000000000004"
+	if err := s.Create(&store.SandboxRecord{
+		ID: legacy, Status: "running", CreatedAt: 1, LastActiveAt: 1,
+		TenantID: "", Egress: "public", RunnerHTTPBase: "http://127.0.0.1:9",
+	}); err != nil {
+		t.Fatalf("create legacy sandbox: %v", err)
+	}
+
+	rr, rows := listSandboxes(t, router, "/sandboxes", "admin-key")
+	if rr.Code != http.StatusOK || len(rows) != 1 || rows[0].ID != legacy {
+		t.Fatalf("list: got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if rows[0].TenantID != store.AdminTenantID {
+		t.Fatalf("list tenant_id: got %q, want %q", rows[0].TenantID, store.AdminTenantID)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/sandboxes/"+legacy, nil)
+	req.Header.Set("X-Api-Key", "admin-key")
+	getRR := httptest.NewRecorder()
+	router.ServeHTTP(getRR, req)
+	if getRR.Code != http.StatusOK {
+		t.Fatalf("get: %d %s", getRR.Code, getRR.Body.String())
+	}
+	var one SandboxResponse
+	if err := json.Unmarshal(getRR.Body.Bytes(), &one); err != nil {
+		t.Fatalf("decode get: %v", err)
+	}
+	if one.TenantID != store.AdminTenantID {
+		t.Fatalf("get tenant_id: got %q, want %q", one.TenantID, store.AdminTenantID)
+	}
+}
+
 func TestAdminCanFilterSandboxesByTenant(t *testing.T) {
 	router, tenantA, _, _, _ := newListFixture(t)
 
