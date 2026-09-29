@@ -16,7 +16,7 @@ import (
 // contribute fields through the *obs.Fields pointer instead.
 func LoggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/healthz" || r.URL.Path == "/metrics" {
+		if publicPaths.Public(r) {
 			next.ServeHTTP(w, r)
 			return
 		}

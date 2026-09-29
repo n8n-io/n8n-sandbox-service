@@ -171,7 +171,7 @@ The API and runner can each expose a Prometheus `/metrics` endpoint. Set `SANDBO
 
 - Bypasses `X-Api-Key`, matching the n8n core operator model. Operators are expected to firewall the port it lands on or front it with a private LB; otherwise anyone reaching the listener can read the metrics.
 - Uses the `sandbox_` namespace, with a `role` label (`api` or `runner`) on every metric so series from both binaries can live in one Prometheus.
-- Bounds cardinality by labeling HTTP series with the route pattern (e.g. `/sandboxes/{id}/executions`), not the raw path.
+- Bounds cardinality by labeling HTTP series with the route pattern (e.g. `/sandboxes/{id}/executions`), not the raw path, and with the method only if it is a standard one (`other` otherwise).
 
 ### A dedicated metrics port for the API
 

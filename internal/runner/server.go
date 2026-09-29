@@ -69,6 +69,7 @@ func NewRouter(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.Runner
 		handler = metrics.HTTPMiddleware(rec)(handler)
 	}
 	handler = AuthMiddleware(cfg.APIKeys)(handler)
+	handler = publicPaths.RejectOtherMethods(handler)
 	handler = LoggingMiddleware(handler)
 	handler = RecoveryMiddleware(handler)
 

@@ -201,6 +201,46 @@ func TestRouteFromPattern(t *testing.T) {
 	}
 }
 
+func TestMethodLabel(t *testing.T) {
+	cases := map[string]string{
+		http.MethodGet:     http.MethodGet,
+		http.MethodHead:    http.MethodHead,
+		http.MethodPost:    http.MethodPost,
+		http.MethodPut:     http.MethodPut,
+		http.MethodPatch:   http.MethodPatch,
+		http.MethodDelete:  http.MethodDelete,
+		http.MethodConnect: http.MethodConnect,
+		http.MethodOptions: http.MethodOptions,
+		http.MethodTrace:   http.MethodTrace,
+		"FOO":              "other",
+		"get":              "other",
+		"":                 "other",
+	}
+	for in, want := range cases {
+		if got := methodLabel(in); got != want {
+			t.Errorf("methodLabel(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestHTTPMiddlewareBoundsMethodLabel(t *testing.T) {
+	r := NewAPIRecorder(true)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /x", func(http.ResponseWriter, *http.Request) {})
+	handler := HTTPMiddleware(r)(mux)
+
+	for _, method := range []string{"FOO", "BAR"} {
+		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(method, "/x", nil))
+	}
+
+	if got := testutil.CollectAndCount(r.httpRequests); got != 1 {
+		t.Errorf("series = %d, want 1", got)
+	}
+	if got := testutil.ToFloat64(r.httpRequests.WithLabelValues("unmatched", "other", "405")); got != 2 {
+		t.Errorf("counter for method=other = %v, want 2", got)
+	}
+}
+
 func TestHTTPMiddlewareRecordsRoutePattern(t *testing.T) {
 	r := NewAPIRecorder(true)
 	mux := http.NewServeMux()

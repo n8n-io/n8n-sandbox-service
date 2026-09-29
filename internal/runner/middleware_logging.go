@@ -13,8 +13,7 @@ import (
 // trace id, and logs one line per request.
 func LoggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/healthz", "/livez", "/readyz", "/metrics":
+		if publicPaths.Public(r) {
 			next.ServeHTTP(w, r)
 			return
 		}

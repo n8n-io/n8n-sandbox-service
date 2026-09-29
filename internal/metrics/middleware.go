@@ -18,6 +18,7 @@ type HTTPObserver interface {
 // The route label is http.Request.Pattern, which ServeMux sets on the request
 // while routing, so it is read after next.ServeHTTP returns. The method prefix
 // is stripped; unmatched requests are labelled "unmatched" to bound cardinality.
+// The method label is bounded the same way by methodLabel.
 // Observation is deferred so panicking handlers are recorded too.
 func HTTPMiddleware(obs HTTPObserver) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
@@ -25,11 +26,22 @@ func HTTPMiddleware(obs HTTPObserver) func(http.Handler) http.Handler {
 			sw := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 			start := time.Now()
 			defer func() {
-				obs.ObserveHTTP(routeFromPattern(r.Pattern), r.Method, sw.status, time.Since(start))
+				obs.ObserveHTTP(routeFromPattern(r.Pattern), methodLabel(r.Method), sw.status, time.Since(start))
 			}()
 			next.ServeHTTP(sw, r)
 		})
 	}
+}
+
+// methodLabel maps any method outside the standard set to "other". net/http
+// accepts any token as a method, so the raw value would be caller-chosen.
+func methodLabel(method string) string {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch,
+		http.MethodDelete, http.MethodConnect, http.MethodOptions, http.MethodTrace:
+		return method
+	}
+	return "other"
 }
 
 // routeFromPattern strips the "METHOD " prefix from a ServeMux pattern.

@@ -159,6 +159,34 @@ func TestRunnerMetricsEndpointEnabledBypassesAuth(t *testing.T) {
 	}
 }
 
+// A public path with another method is refused before auth and metrics run, so
+// the caller-chosen method never becomes a series.
+func TestRunnerRejectsOtherMethodsOnPublicPaths(t *testing.T) {
+	cfg := &config.Config{APIKeys: map[string]struct{}{"k": {}}}
+	router := NewRouter(&fakeRuntime{}, cfg, metrics.NewRunnerRecorder(true))
+
+	for _, path := range []string{"/healthz", "/livez", "/readyz", "/metrics"} {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest("FOO", path, nil))
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Errorf("FOO %s: status = %d, want %d", path, rec.Code, http.StatusMethodNotAllowed)
+		}
+	}
+
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := rec.Body.String()
+	if !strings.Contains(body, `route="/healthz"`) {
+		t.Errorf("metrics body missing the GET /healthz series:\n%s", body)
+	}
+	for _, unwanted := range []string{`route="unmatched"`, `method="FOO"`, `method="other"`} {
+		if strings.Contains(body, unwanted) {
+			t.Errorf("metrics body contains %q", unwanted)
+		}
+	}
+}
+
 func TestRunnerMetricsEndpointDisabledReturns404(t *testing.T) {
 	cfg := &config.Config{APIKeys: map[string]struct{}{"k": {}}}
 	router := NewRouter(&fakeRuntime{}, cfg, metrics.NewRunnerRecorder(false))
