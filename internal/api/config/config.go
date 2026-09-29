@@ -31,10 +31,10 @@ const (
 
 const (
 	defaultIdleSweepConcurrency = 8
-	// Keeps the Postgres lock pool (concurrency + headroom) plus the
-	// 25-connection store pool below the default max_connections=100:
-	// 64 + 5 + 25 = 94.
-	maxIdleSweepConcurrency = 64
+	// Caps sweep connections per replica. The documented two-replica
+	// deployment stays under the default max_connections=100 with 8 left for
+	// other clients: 2 * (25 store + 5 lock headroom + 16) = 92.
+	maxIdleSweepConcurrency = 16
 	// Postgres sandbox-lock connections kept free for the request path while
 	// the sweeper holds its full concurrency worth.
 	sandboxLockRequestHeadroom = 5

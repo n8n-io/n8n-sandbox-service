@@ -358,23 +358,23 @@ func TestLoadAPIRejectsNegativeIdleDeleteAfter(t *testing.T) {
 func TestLoadAPIIdleSweepConcurrencyKeepsLockPoolAboveIt(t *testing.T) {
 	t.Setenv("SANDBOX_API_KEYS", "test-key")
 	t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
-	t.Setenv("SANDBOX_API_IDLE_SWEEP_CONCURRENCY", "32")
+	t.Setenv("SANDBOX_API_IDLE_SWEEP_CONCURRENCY", "16")
 	setRequiredGRPCMTLS(t)
 
 	cfg, err := LoadAPI()
 	if err != nil {
 		t.Fatalf("LoadAPI() failed: %v", err)
 	}
-	if cfg.IdleSweepConcurrency != 32 {
-		t.Fatalf("IdleSweepConcurrency: want 32, got %d", cfg.IdleSweepConcurrency)
+	if cfg.IdleSweepConcurrency != 16 {
+		t.Fatalf("IdleSweepConcurrency: want 16, got %d", cfg.IdleSweepConcurrency)
 	}
-	if cfg.Postgres.LockPoolSize != 37 {
-		t.Fatalf("Postgres.LockPoolSize: want 37 (32 + 5 request-path connections), got %d", cfg.Postgres.LockPoolSize)
+	if cfg.Postgres.LockPoolSize != 21 {
+		t.Fatalf("Postgres.LockPoolSize: want 21 (16 + 5 request-path connections), got %d", cfg.Postgres.LockPoolSize)
 	}
 }
 
 func TestLoadAPIRejectsOutOfRangeIdleSweepConcurrency(t *testing.T) {
-	for _, v := range []string{"0", "-1", "two", "65", "9223372036854775807"} {
+	for _, v := range []string{"0", "-1", "two", "17", "9223372036854775807"} {
 		t.Run(v, func(t *testing.T) {
 			t.Setenv("SANDBOX_API_KEYS", "test-key")
 			t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
