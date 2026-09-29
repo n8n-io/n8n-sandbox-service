@@ -54,6 +54,10 @@ console.log(sealed.egress); // "none"
 const scratch = await client.createSandbox({ ephemeral: true, egress: 'public' });
 console.log(scratch.ephemeral); // true
 
+// Owner: the tenant id the key belongs to, or "__admin__" with an admin key.
+// Undefined against a service from before the field existed.
+console.log(scratch.tenantId);
+
 // Get sandbox info
 const info = await client.getSandbox(sandbox.id);
 

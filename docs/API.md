@@ -125,10 +125,14 @@ curl http://127.0.0.1:9100/metrics
 
 List sandboxes, ordered by creation time (newest first).
 
-- Admin key: all sandboxes
+- Admin key: all sandboxes, or one owner's with `?tenant_id=`
 - Tenant key: only sandboxes owned by that tenant
 
 Sandboxes past their idle-delete window stay listed until the sweeper removes them, even though `GET /sandboxes/{id}` already returns `404` for them.
+
+**Query parameters:**
+
+- `tenant_id` (admin only) — a tenant UUID, or `__admin__` for sandboxes created with an admin key. An unknown tenant yields `[]`.
 
 **Response:** `200 OK`
 
@@ -140,16 +144,25 @@ Sandboxes past their idle-delete window stay listed until the sweeper removes th
     "created_at": 1700000000,
     "last_active_at": 1700000000,
     "ephemeral": false,
-    "egress": "public"
+    "egress": "public",
+    "tenant_id": "uuid"
   }
 ]
 ```
 
-**Example:**
+`tenant_id` is the owning tenant, or `__admin__` for an admin-owned sandbox. A tenant key only ever sees its own id.
+
+**Errors:** `400` `tenant_id` is neither a UUID nor `__admin__`, or is given more than once, `403` `tenant_id` sent with a tenant key
+
+**Examples:**
 
 ```bash
 curl http://localhost:8080/sandboxes \
   -H "X-Api-Key: YOUR_API_KEY"
+
+# One tenant's sandboxes (admin key)
+curl "http://localhost:8080/sandboxes?tenant_id=0f0e0d0c-0000-4000-8000-000000000001" \
+  -H "X-Api-Key: ADMIN_KEY"
 ```
 
 ---
@@ -196,7 +209,8 @@ Resource limits (memory, CPU, process count) are configured on the runner via en
   "created_at": 1700000000,
   "last_active_at": 1700000000,
   "ephemeral": false,
-  "egress": "public"
+  "egress": "public",
+  "tenant_id": "uuid"
 }
 ```
 
@@ -248,11 +262,12 @@ This is a read-only status check: it does not update `last_active_at` or extend 
   "created_at": 1700000000,
   "last_active_at": 1700000000,
   "ephemeral": false,
-  "egress": "public"
+  "egress": "public",
+  "tenant_id": "uuid"
 }
 ```
 
-`status` is `running` or `stopped`; an ephemeral sandbox is only ever `running`. `egress` is the mode the sandbox was created with.
+`status` is `running` or `stopped`; an ephemeral sandbox is only ever `running`. `egress` is the mode the sandbox was created with. `tenant_id` is the owner, `__admin__` for an admin-owned sandbox.
 
 **Errors:** `400` invalid id, `404` not found
 

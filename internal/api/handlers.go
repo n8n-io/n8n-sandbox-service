@@ -128,6 +128,9 @@ type SandboxResponse struct {
 	LastActiveAt int64  `json:"last_active_at"`
 	Ephemeral    bool   `json:"ephemeral"`
 	Egress       string `json:"egress"`
+	// TenantID is the owning tenant, or store.AdminTenantID for a sandbox
+	// created with an admin key. A tenant only ever sees its own id here.
+	TenantID string `json:"tenant_id"`
 }
 
 type createSandboxRequest struct {
@@ -137,6 +140,12 @@ type createSandboxRequest struct {
 }
 
 func sandboxResponse(rec *store.SandboxRecord) *SandboxResponse {
+	tenantID := rec.TenantID
+	if store.IsAdminTenantID(tenantID) {
+		// Rows from before tenants exist are backfilled on startup, but keep the
+		// wire value canonical regardless of what the store holds.
+		tenantID = store.AdminTenantID
+	}
 	return &SandboxResponse{
 		ID:           rec.ID,
 		Status:       rec.Status,
@@ -144,7 +153,36 @@ func sandboxResponse(rec *store.SandboxRecord) *SandboxResponse {
 		LastActiveAt: rec.LastActiveAt,
 		Ephemeral:    rec.Ephemeral,
 		Egress:       rec.Egress,
+		TenantID:     tenantID,
 	}
+}
+
+// listTenantFilter reads the admin-only `tenant_id` query parameter of
+// GET /sandboxes. ok is false when a response has already been written.
+func listTenantFilter(w http.ResponseWriter, r *http.Request, role authRole) (tenantID string, ok bool) {
+	values := r.URL.Query()["tenant_id"]
+	if len(values) == 0 {
+		return "", true
+	}
+	// A tenant key's listing is already scoped to itself; accepting the
+	// parameter from it would only offer a way to probe other tenants' ids.
+	if role != roleAdmin {
+		writeError(w, http.StatusForbidden, "filtering by tenant_id requires an admin API key")
+		return "", false
+	}
+	if len(values) != 1 {
+		writeError(w, http.StatusBadRequest, "tenant_id may be given once")
+		return "", false
+	}
+	tenantID = values[0]
+	if tenantID == store.AdminTenantID {
+		return tenantID, true
+	}
+	if !isValidUUID(tenantID) {
+		writeError(w, http.StatusBadRequest, "invalid tenant_id: expected a tenant UUID or "+store.AdminTenantID)
+		return "", false
+	}
+	return tenantID, true
 }
 
 func handleListSandboxes(s store.SandboxStore) http.HandlerFunc {
@@ -154,20 +192,27 @@ func handleListSandboxes(s store.SandboxStore) http.HandlerFunc {
 			writeError(w, http.StatusUnauthorized, "invalid API key")
 			return
 		}
+		// Explicit per role: a fallthrough here would hand a new role the
+		// tenant listing (or, in create, the admin pseudo-tenant).
+		if id.Role != roleAdmin && id.Role != roleTenant {
+			writeError(w, http.StatusForbidden, "sandbox access requires an admin or tenant API key")
+			return
+		}
+		filter, ok := listTenantFilter(w, r, id.Role)
+		if !ok {
+			return
+		}
 		var (
 			records []*store.SandboxRecord
 			err     error
 		)
-		// Explicit per role: a fallthrough here would hand a new role the
-		// tenant listing (or, in create, the admin pseudo-tenant).
-		switch id.Role {
-		case roleAdmin:
-			records, err = s.List()
-		case roleTenant:
+		switch {
+		case id.Role == roleTenant:
 			records, err = s.ListByTenant(id.TenantID)
+		case filter != "":
+			records, err = s.ListByTenant(filter)
 		default:
-			writeError(w, http.StatusForbidden, "sandbox access requires an admin or tenant API key")
-			return
+			records, err = s.List()
 		}
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
