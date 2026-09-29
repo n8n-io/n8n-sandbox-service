@@ -209,6 +209,25 @@ describe("SandboxClient", () => {
 
     expect(mock.requestJson).toHaveBeenCalledWith("GET", "/sandboxes/xyz");
     expect(result.id).toBe("xyz");
+    // A service from before ownership was reported leaves the field out entirely.
+    expect("tenantId" in result).toBe(false);
+  });
+
+  it("maps tenant_id to tenantId when the service reports it", async () => {
+    const mock = getMockHttp(client);
+    mock.requestJson.mockResolvedValue({
+      id: "xyz",
+      status: "running",
+      created_at: 2000,
+      last_active_at: 2000,
+      ephemeral: false,
+      egress: "public",
+      tenant_id: "0f0e0d0c-0000-4000-8000-000000000001",
+    });
+
+    const result = await client.getSandbox("xyz");
+
+    expect(result.tenantId).toBe("0f0e0d0c-0000-4000-8000-000000000001");
   });
 
   it("deleteSandbox sends DELETE /sandboxes/{id}", async () => {

@@ -69,7 +69,10 @@ Authorization runs on every sandbox request through `canAccessSandbox` in
 - Read, delete and all proxied routes (exec and files) load the sandbox record
   and compare its `tenant_id` against the caller's. An admin key passes this
   check for every sandbox, whoever owns it.
-- List is scoped at the query level with `ListByTenant`.
+- List is scoped at the query level with `ListByTenant`. The `tenant_id` query
+  parameter that narrows an admin's listing is refused with `403` for tenant
+  keys, so it cannot be used to probe other tenants' ids. Every sandbox
+  response names its owner in `tenant_id`; for a tenant that is always its own.
 - Create sets `tenant_id` from the authenticated identity. A caller cannot
   assign a sandbox to another tenant. Create and list switch on the role
   explicitly and refuse anything but admin or tenant, so a new role can never
