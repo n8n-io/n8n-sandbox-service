@@ -337,9 +337,10 @@ startup; it defaults to `0`, and sandboxes then share the runner's storage with
 no per-sandbox limit. The Firecracker runtime gives each sandbox a fixed-size
 root filesystem image.
 
-**Health and metrics endpoints are unauthenticated.** `/healthz` and `/metrics`
-bypass auth on both the API and the runner, as do the runner's `/livez` and
-`/readyz`. Requests to them are not access-logged. They expose fleet-level
+**Health and metrics endpoints are unauthenticated.** `GET` and `HEAD` on
+`/healthz` and `/metrics` bypass auth and the access log on both the API and the
+runner, as do the runner's `/livez` and `/readyz`; other methods never reach
+their handlers. The endpoints expose fleet-level
 counters — sandbox and runner counts, capacity, request and operation rates —
 and carry no tenant or sandbox identifiers. Sandboxes cannot reach the runner's,
 per the section above; the API serves its own on the public HTTP port by default,

@@ -1,8 +1,10 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -106,6 +108,65 @@ func TestGatewayMetricsEndpointEnabledBypassesAuth(t *testing.T) {
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("metrics body missing %q", want)
+		}
+	}
+}
+
+// A public path with another method is refused before auth and metrics run, so
+// the caller-chosen method is logged but never becomes a series.
+func TestGatewayRejectsOtherMethodsOnPublicPaths(t *testing.T) {
+	logs := captureLogs(t)
+	s, err := store.New(":memory:")
+	if err != nil {
+		t.Fatalf("create store: %v", err)
+	}
+	defer s.Close()
+
+	router, err := NewGatewayRouter(s, &config.APIConfig{
+		APIKeys:      map[string]struct{}{"public-key": {}},
+		MaxFileBytes: 1024,
+	}, registry.New(45*time.Second), metrics.NewAPIRecorder(true))
+	if err != nil {
+		t.Fatalf("create gateway router: %v", err)
+	}
+
+	for _, req := range []*http.Request{
+		httptest.NewRequest(http.MethodPost, "/healthz", nil),
+		httptest.NewRequest("FOO", "/metrics", nil),
+	} {
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusMethodNotAllowed {
+			t.Errorf("%s %s: status = %d, want %d", req.Method, req.URL.Path, rr.Code, http.StatusMethodNotAllowed)
+		}
+		if got := rr.Header().Get("Allow"); got != "GET, HEAD" {
+			t.Errorf("%s %s: Allow = %q, want %q", req.Method, req.URL.Path, got, "GET, HEAD")
+		}
+	}
+
+	head := httptest.NewRecorder()
+	router.ServeHTTP(head, httptest.NewRequest(http.MethodHead, "/healthz", nil))
+	if head.Code != http.StatusOK {
+		t.Errorf("HEAD /healthz: status = %d, want %d", head.Code, http.StatusOK)
+	}
+
+	var logged []string
+	for _, e := range logs() {
+		logged = append(logged, fmt.Sprintf("%v %v %v", e["method"], e["path"], e["status"]))
+	}
+	if want := []string{"POST /healthz 405", "FOO /metrics 405"}; !slices.Equal(logged, want) {
+		t.Errorf("logged requests = %q, want %q", logged, want)
+	}
+
+	scrape := httptest.NewRecorder()
+	router.ServeHTTP(scrape, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := scrape.Body.String()
+	if !strings.Contains(body, `route="/healthz",status="200"`) {
+		t.Errorf("metrics body missing the HEAD /healthz series:\n%s", body)
+	}
+	for _, unwanted := range []string{`route="unmatched"`, `method="FOO"`, `method="other"`, `method="POST"`} {
+		if strings.Contains(body, unwanted) {
+			t.Errorf("metrics body contains %q", unwanted)
 		}
 	}
 }

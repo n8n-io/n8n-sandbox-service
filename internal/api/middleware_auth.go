@@ -10,6 +10,7 @@ import (
 
 	"github.com/n8n-io/sandbox-service/internal/api/store"
 	"github.com/n8n-io/sandbox-service/internal/obs"
+	"github.com/n8n-io/sandbox-service/internal/probes"
 )
 
 type authRole string
@@ -25,6 +26,9 @@ const (
 // provisionerPathPrefix confines provisioner keys; the handlers under it other
 // than tenant create and delete require admin.
 const provisionerPathPrefix = "/admin/tenants"
+
+// publicPaths skip auth and the access log.
+var publicPaths = probes.New("/healthz", "/metrics")
 
 type authIdentity struct {
 	Role     authRole
@@ -60,12 +64,12 @@ func apiKeyPrefix(plaintext string) string {
 }
 
 // AuthMiddleware checks X-Api-Key against env admin keys, then env provisioner
-// keys, then DB-backed tenant keys. /healthz and /metrics are always allowed
-// through.
+// keys, then DB-backed tenant keys. GET and HEAD on /healthz and /metrics are
+// always allowed through.
 func AuthMiddleware(adminKeys, provisionerKeys map[string]struct{}, s store.SandboxStore) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/healthz" || r.URL.Path == "/metrics" {
+			if publicPaths.Public(r) {
 				next.ServeHTTP(w, r)
 				return
 			}

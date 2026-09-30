@@ -1,20 +1,27 @@
 package runner
 
-import "net/http"
+import (
+	"net/http"
+
+	"github.com/n8n-io/sandbox-service/internal/probes"
+)
+
+// publicPaths skip auth and the access log.
+var publicPaths = probes.New("/healthz", "/livez", "/readyz", "/metrics")
 
 // AuthMiddleware requires a client certificate signed by the configured CA, and
 // a valid API key.
 //
 // The listener negotiates TLS with VerifyClientCertIfGiven, so a peer that sent
 // no certificate still completes the handshake and reaches here; requiring one
-// is this middleware's job. Health endpoints are always allowed through, since
-// probes cannot present a certificate; /metrics is also unauthenticated when
-// it's mounted (operators are expected to firewall the port).
+// is this middleware's job. GET and HEAD on the health endpoints are always
+// allowed through, since probes cannot present a certificate; /metrics is also
+// unauthenticated when it's mounted (operators are expected to firewall the
+// port).
 func AuthMiddleware(apiKeys map[string]struct{}) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			switch r.URL.Path {
-			case "/healthz", "/livez", "/readyz", "/metrics":
+			if publicPaths.Public(r) {
 				next.ServeHTTP(w, r)
 				return
 			}
