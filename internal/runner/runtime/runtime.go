@@ -18,6 +18,10 @@ import (
 // Docker inherits the caller's deadline.
 const CreateBudget = 3 * time.Minute
 
+// TransitionBudget is how long a runtime may spend on stop, wake, or delete.
+// The idle sweeper derives its RPC deadline from it.
+const TransitionBudget = 2 * time.Minute
+
 // ErrSandboxNotFound is returned when a sandbox ID is not found.
 var ErrSandboxNotFound = errors.New("sandbox not found")
 

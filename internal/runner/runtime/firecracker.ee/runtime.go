@@ -135,7 +135,7 @@ const (
 // shrink them.
 var (
 	createBudget     = runnerruntime.CreateBudget
-	transitionBudget = 2 * time.Minute
+	transitionBudget = runnerruntime.TransitionBudget
 )
 
 // transitionWaitBudget bounds how long an operation waits for another one to

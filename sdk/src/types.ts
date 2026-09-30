@@ -69,6 +69,12 @@ export interface SandboxRecord {
   ephemeral: boolean;
   /** Outbound network policy the sandbox was created with. */
   egress: EgressMode;
+  /**
+   * Owning tenant id, or `__admin__` for a sandbox created with an admin key.
+   * A tenant key only ever sees its own id. Undefined against services that
+   * predate the field.
+   */
+  tenantId?: string;
 }
 
 /** Directory entry returned by the file listing API. */
@@ -173,6 +179,8 @@ export type SandboxWireResponse = {
   ephemeral?: boolean;
   /** Absent from services that predate egress modes; mapped to `public`, the only policy they had. */
   egress?: EgressMode;
+  /** Absent from services that predate sandbox ownership in responses. */
+  tenant_id?: string;
 };
 
 export type FileEntryWireResponse = {

@@ -31,6 +31,17 @@ const (
 	defaultMaxInflightPerTenant = 512
 )
 
+const (
+	defaultIdleSweepConcurrency = 8
+	// Caps sweep connections per replica. The documented two-replica
+	// deployment stays under the default max_connections=100 with 8 left for
+	// other clients: 2 * (25 store + 5 lock headroom + 16) = 92.
+	maxIdleSweepConcurrency = 16
+	// Postgres sandbox-lock connections kept free for the request path while
+	// the sweeper holds its full concurrency worth.
+	sandboxLockRequestHeadroom = 5
+)
+
 // StoreBackend selects the API sandbox store implementation.
 type StoreBackend string
 
@@ -47,6 +58,8 @@ type PostgresConfig struct {
 	Password string
 	Database string
 	SSLMode  string
+	// LockPoolSize caps the per-sandbox advisory lock pool (0 = store default).
+	LockPoolSize int
 }
 
 // DSN returns a libpq connection string for pgx/stdlib.
@@ -134,6 +147,8 @@ type APIConfig struct {
 	IdleDeleteSafetyBuffer time.Duration
 	// IdleSweepInterval is how often the idle stop/delete sweeper runs (default 1m).
 	IdleSweepInterval time.Duration
+	// IdleSweepConcurrency is how many runner calls one sweep keeps in flight (default 8).
+	IdleSweepConcurrency int
 	// OrphanReapBuffer is how long after a runner deregisters before the idle
 	// sweeper removes its orphaned sandbox rows from the store.
 	OrphanReapBuffer time.Duration
@@ -351,6 +366,16 @@ func LoadAPI() (*APIConfig, error) {
 		}
 		cfg.IdleSweepInterval = d
 	}
+
+	cfg.IdleSweepConcurrency = defaultIdleSweepConcurrency
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_IDLE_SWEEP_CONCURRENCY")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > maxIdleSweepConcurrency {
+			return nil, fmt.Errorf("SANDBOX_API_IDLE_SWEEP_CONCURRENCY must be an integer between 1 and %d, got %q", maxIdleSweepConcurrency, v)
+		}
+		cfg.IdleSweepConcurrency = n
+	}
+	cfg.Postgres.LockPoolSize = cfg.IdleSweepConcurrency + sandboxLockRequestHeadroom
 
 	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_ORPHAN_REAP_BUFFER")); v != "" {
 		d, err := time.ParseDuration(v)
