@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/n8n-io/sandbox-service/internal/daemon"
 	"github.com/n8n-io/sandbox-service/internal/logging"
 )
 
@@ -27,10 +28,6 @@ const (
 
 	defaultMaxInflightPerSandbox = 64
 	defaultMaxExecTimeout        = 30 * time.Minute
-
-	// daemonDefaultExecTimeout is the timeout the sandbox daemon applies when
-	// an exec request leaves timeout_ms out (internal/daemon).
-	daemonDefaultExecTimeout = 5 * time.Minute
 )
 
 // ExecutionDeleteReserve is how many execution DELETEs a sandbox may have in
@@ -240,8 +237,10 @@ func Load() (*Config, error) {
 	// cap below that default would not hold for it.
 	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_MAX_EXEC_TIMEOUT")); v != "" {
 		d, err := time.ParseDuration(v)
-		if err != nil || d < 0 || (d > 0 && d < daemonDefaultExecTimeout) {
-			return nil, fmt.Errorf("SANDBOX_RUNNER_MAX_EXEC_TIMEOUT must be 0 or a duration of at least %s (the default exec timeout), got %q", daemonDefaultExecTimeout, v)
+		// A value that rounds down to zero, such as 0.5ns, is not a request for no limit.
+		roundedToZero := d == 0 && strings.ContainsAny(v, "123456789")
+		if err != nil || d < 0 || roundedToZero || (d > 0 && d < daemon.DefaultExecTimeout) {
+			return nil, fmt.Errorf("SANDBOX_RUNNER_MAX_EXEC_TIMEOUT must be 0 or a duration of at least %s (the default exec timeout), got %q", daemon.DefaultExecTimeout, v)
 		}
 		cfg.MaxExecTimeout = d
 	}

@@ -92,12 +92,14 @@ before they are returned.
 A request that runs a command or reads a file stays open through the API, the
 runner and the sandbox until it finishes, and every open request uses memory
 and connections on machines all tenants share. Without a bound, one tenant
-could open thousands of them and exhaust those machines for everyone. So the
-API caps the requests a tenant can have in progress at once, the runner caps
-them per sandbox, and the runner caps how long a command can run. Over a request
-limit the answer is `429` ([API.md](API.md#http-429--too-many-requests-in-progress)),
-which the SDK retries on its own; the sizes are in
-[configuration.md](configuration.md).
+could open thousands of them and exhaust those machines for everyone. So by
+default the API caps the requests a tenant can have in progress at once, the
+runner caps them per sandbox, and the runner caps how long a command can run.
+Over a request limit the answer is `429`
+([API.md](API.md#http-429--too-many-requests-in-progress)), which the SDK
+retries for requests that are safe to repeat; other `429`s reach the caller.
+The sizes are in [configuration.md](configuration.md), where setting one to `0`
+turns it off.
 
 ## API to runner
 
@@ -325,7 +327,8 @@ than its quota until it deletes sandboxes.
 
 **Tenant request limits are per API replica.** Each replica counts a tenant's
 requests in its own memory, so across replicas a tenant can hold up to
-`SANDBOX_API_MAX_INFLIGHT_PER_TENANT` on each.
+`SANDBOX_API_MAX_INFLIGHT_PER_TENANT`, plus the execution `DELETE` reserve
+([API.md](API.md#http-429--too-many-requests-in-progress)), on each.
 
 **Per-sandbox disk usage is not bounded by default.** On the Sysbox runtime a
 per-sandbox disk quota applies only when `SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB`

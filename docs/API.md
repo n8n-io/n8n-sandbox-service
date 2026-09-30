@@ -232,7 +232,7 @@ Resource limits (memory, CPU, process count) are configured on the runner via en
 }
 ```
 
-**Errors:** `400` invalid request body, supplied id or `egress` value, `403` tenant sandbox quota exceeded, `409` if the supplied id is owned by another tenant/admin, exists with a different `egress` than requested, or the tenant was deleted before the sandbox row could be stored (runner create is rolled back), `502` stale sandbox cleanup failed, or the runner did not confirm the requested `egress` (runner create is rolled back; a runner from before egress modes only serves `public`), `503` no sandbox runners are registered or available
+**Errors:** `400` invalid request body, supplied id or `egress` value, `403` tenant sandbox quota exceeded, `409` if the supplied id is owned by another tenant/admin, exists with a different `egress` than requested, or the tenant was deleted before the sandbox row could be stored (runner create is rolled back), `429` [too many requests in progress](#http-429--too-many-requests-in-progress), `502` stale sandbox cleanup failed, or the runner did not confirm the requested `egress` (runner create is rolled back; a runner from before egress modes only serves `public`), `503` no sandbox runners are registered or available
 
 **Examples:**
 
@@ -454,7 +454,7 @@ or the client disconnects.
 
 Same NDJSON event format as `POST /sandboxes/{id}/executions`.
 
-**Errors:** `400` invalid parameters, `404` execution not found, `410` requested history is no longer retained
+**Errors:** `400` invalid parameters, `404` execution not found, `410` requested history is no longer retained, `429` [too many requests in progress](#http-429--too-many-requests-in-progress)
 
 **Example:**
 
@@ -524,7 +524,7 @@ List files in a sandbox directory.
 ]
 ```
 
-**Errors:** `400` invalid id, `404` directory not found
+**Errors:** `400` invalid id, `404` directory not found, `429` [too many requests in progress](#http-429--too-many-requests-in-progress)
 
 **Example:**
 
@@ -549,7 +549,7 @@ Download a file from a sandbox.
 
 Raw file contents.
 
-**Errors:** `400` invalid id or missing path, `404` file not found
+**Errors:** `400` invalid id or missing path, `404` file not found, `429` [too many requests in progress](#http-429--too-many-requests-in-progress)
 
 **Example:**
 
@@ -579,7 +579,7 @@ Upload (write) a file to a sandbox.
 
 **Response:** `200 OK`
 
-**Errors:** `400` invalid id or missing path, `409` file exists (when `overwrite=false`)
+**Errors:** `400` invalid id or missing path, `409` file exists (when `overwrite=false`), `429` [too many requests in progress](#http-429--too-many-requests-in-progress)
 
 **Example:**
 
@@ -609,7 +609,7 @@ Append data to a file in a sandbox. Creates the file if it doesn't exist.
 
 **Response:** `200 OK`
 
-**Errors:** `400` invalid id or missing path, `404` path not found
+**Errors:** `400` invalid id or missing path, `404` path not found, `429` [too many requests in progress](#http-429--too-many-requests-in-progress)
 
 **Example:**
 
@@ -636,7 +636,7 @@ Delete a file or directory from a sandbox.
 
 **Response:** `204 No Content`
 
-**Errors:** `400` invalid id or missing path
+**Errors:** `400` invalid id or missing path, `429` [too many requests in progress](#http-429--too-many-requests-in-progress)
 
 **Example:**
 
@@ -674,7 +674,7 @@ Copy a file or directory within a sandbox.
 
 **Response:** `200 OK`
 
-**Errors:** `400` invalid id, missing src/dest, `404` source not found, `409` destination exists
+**Errors:** `400` invalid id, missing src/dest, `404` source not found, `409` destination exists, `429` [too many requests in progress](#http-429--too-many-requests-in-progress)
 
 **Example:**
 
@@ -712,7 +712,7 @@ Move (rename) a file or directory within a sandbox.
 
 **Response:** `200 OK`
 
-**Errors:** `400` invalid id, missing src/dest, `404` source not found, `409` destination exists
+**Errors:** `400` invalid id, missing src/dest, `404` source not found, `409` destination exists, `429` [too many requests in progress](#http-429--too-many-requests-in-progress)
 
 **Example:**
 
@@ -738,7 +738,7 @@ Create a directory in a sandbox.
 
 **Response:** `201 Created`
 
-**Errors:** `400` invalid id or missing path, `409` directory already exists
+**Errors:** `400` invalid id or missing path, `409` directory already exists, `429` [too many requests in progress](#http-429--too-many-requests-in-progress)
 
 **Example:**
 
@@ -774,7 +774,7 @@ Get file or directory metadata.
 
 `exists()` can be derived: a `200` means the file exists, a `404` means it doesn't.
 
-**Errors:** `400` invalid id or missing path, `404` file not found
+**Errors:** `400` invalid id or missing path, `404` file not found, `429` [too many requests in progress](#http-429--too-many-requests-in-progress)
 
 **Example:**
 

@@ -23,7 +23,11 @@ const (
 	maxJSONBodyBytes = 1 << 20
 )
 
-var defaultExecTimeout = 5 * time.Minute
+// DefaultExecTimeout is the timeout an execution gets when its request leaves
+// timeout_ms out.
+const DefaultExecTimeout = 5 * time.Minute
+
+var defaultExecTimeout = DefaultExecTimeout
 
 type execRequest struct {
 	Command   string            `json:"command"`

@@ -220,8 +220,7 @@ export class HttpClient {
     const base = this.retry.baseDelayMs * 2 ** attempt;
     const capped = Math.min(base, this.retry.maxDelayMs);
     const backoff = this.retry.jitter ? Math.floor(capped * (0.5 + Math.random())) : capped; // [0.5, 1.5)
-    const retryAfter = Math.min(error?.retryAfterMs ?? 0, this.retry.maxDelayMs);
-    return Math.max(backoff, retryAfter);
+    return Math.min(Math.max(backoff, error?.retryAfterMs ?? 0), this.retry.maxDelayMs);
   }
 
   private sleep(ms: number, signal?: AbortSignal): Promise<void> {

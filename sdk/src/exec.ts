@@ -24,6 +24,9 @@ export async function exec(
   const consumer = new ExecStreamConsumer(request.onStdout, request.onStderr);
   let retries = 0;
   let limitedRetries = 0;
+  // Whether a POST may have reached the sandbox: one returned a stream, or failed without
+  // showing how far it got. A 429 only proves that the refused request started nothing.
+  let mayHaveStarted = false;
 
   const onError = async (error: unknown) => {
     if (request.abortSignal?.aborted) {
@@ -34,6 +37,13 @@ export async function exec(
     if (!isTransientError(error)) throw error;
     if (++retries > MAX_RESUME_RETRIES) throw error;
     await delay(RESUME_DELAY_MS);
+  };
+
+  // Out of retries on a 429. If the command may be running, cancel it rather than leave it
+  // running with nobody following it; an execution DELETE may go over a full limit.
+  const giveUpLimited = async (error: SandboxServiceError): Promise<never> => {
+    if (mayHaveStarted) deleteExecution(http, id, execId).catch(() => {});
+    throw error;
   };
 
   // Phase 1: Start command via POST (idempotent via exec_id)
@@ -49,6 +59,7 @@ export async function exec(
         },
         signal: request.abortSignal,
       });
+      mayHaveStarted = true;
       await consumer.consume(stream);
       if (consumer.isDone) break;
       // Stream ended without a terminal event (e.g. load-balancer timeout).
@@ -57,15 +68,19 @@ export async function exec(
       if (++retries > MAX_RESUME_RETRIES) break;
       await delay(RESUME_DELAY_MS);
     } catch (error) {
-      // A 429 refuses the request before anything starts, so posting the same exec_id
-      // again is safe. The client's retry policy decides how often and how long to wait.
-      const wait = limitedRetryDelay(http, error, limitedRetries);
-      if (wait !== undefined && !request.abortSignal?.aborted) {
-        limitedRetries++;
+      if (isLimited(error)) {
+        // Posting the same exec_id again starts the command if nothing has yet, and
+        // follows it if an earlier POST did. The retry policy decides how often and how
+        // long to wait.
+        const wait = http.retryDelayFor(error, limitedRetries++);
+        if (wait === undefined) return await giveUpLimited(error);
         await delay(wait, request.abortSignal);
+        if (request.abortSignal?.aborted)
+          await onError(new SandboxServiceError("Request aborted", 0));
         continue;
       }
       await onError(error);
+      mayHaveStarted = true;
       if (consumer.lastSeq >= 0) break; // Received events, switch to resume
     }
   }
@@ -84,6 +99,8 @@ export async function exec(
       if (++retries > MAX_RESUME_RETRIES) break;
       await delay(RESUME_DELAY_MS);
     } catch (error) {
+      // The client has already retried this GET as its policy allows.
+      if (isLimited(error) && !request.abortSignal?.aborted) return await giveUpLimited(error);
       await onError(error);
     }
   }
@@ -141,10 +158,8 @@ function isTransientError(error: unknown): boolean {
   return false;
 }
 
-/** Delay before re-posting after a 429, or undefined when the error is not one or the policy says stop. */
-function limitedRetryDelay(http: HttpClient, error: unknown, attempt: number): number | undefined {
-  if (!(error instanceof SandboxServiceError) || error.status !== 429) return undefined;
-  return http.retryDelayFor(error, attempt);
+function isLimited(error: unknown): error is SandboxServiceError {
+  return error instanceof SandboxServiceError && error.status === 429;
 }
 
 /** Resolves after `ms`, or as soon as `signal` aborts. */

@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { SandboxServiceError } from "../src/errors.js";
 import { HttpClient } from "../src/http.js";
 import { startTestServer, type TestServer } from "./helpers.js";
@@ -300,6 +300,21 @@ describe("HttpClient", () => {
     it("stops for statuses outside retryOnStatuses and after the last attempt", () => {
       expect(client.retryDelayFor(new SandboxServiceError("bad", 400), 0)).toBeUndefined();
       expect(client.retryDelayFor(new SandboxServiceError("limited", 429), 3)).toBeUndefined();
+    });
+
+    it("keeps jitter within maxDelayMs", () => {
+      const jittery = new HttpClient("http://localhost", undefined, {
+        attempts: 3,
+        baseDelayMs: 10_000,
+        maxDelayMs: 1000,
+        jitter: true,
+      });
+      const random = vi.spyOn(Math, "random").mockReturnValue(0.99);
+      try {
+        expect(jittery.retryDelayFor(new SandboxServiceError("limited", 429), 0)).toBe(1000);
+      } finally {
+        random.mockRestore();
+      }
     });
   });
 

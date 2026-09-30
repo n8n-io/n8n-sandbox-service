@@ -161,7 +161,7 @@ assets (see [`internal/runner/runtime/firecracker.ee/README.md`](../internal/run
 
 #### File descriptors
 
-Every request the runner passes to a sandbox holds a few open files on the runner host while it runs. The per-sandbox limit caps those requests, so the runner's open files grow with the number of sandboxes it runs, not with traffic. Set the runner's open-file limit (`LimitNOFILE` in its systemd unit) for a full runner: about 200 per slot with the default per-sandbox limit.
+Every request the runner passes to a sandbox holds a few open files on the runner host while it runs. The per-sandbox limit caps those requests, so the runner's open files grow with the number of sandboxes it runs, not with traffic. Set the runner's open-file limit (`LimitNOFILE` in its systemd unit) for a full runner: about 200 per slot with the default per-sandbox limit, plus headroom for connections to the runner itself, which stay open for up to 120 seconds when idle.
 
 ## Sandbox daemon
 

@@ -229,9 +229,10 @@ func TestLoadRejectsInvalidRequestLimit(t *testing.T) {
 }
 
 // Below the daemon's 5m default, a request that leaves timeout_ms out would
-// run longer than the cap allows one that sets it.
+// run longer than the cap allows one that sets it. A positive value that rounds
+// down to zero must not be read as 0, which turns the cap off.
 func TestLoadRejectsInvalidMaxExecTimeout(t *testing.T) {
-	for _, value := range []string{"-1m", "forever", "1s", "4m59s"} {
+	for _, value := range []string{"-1m", "forever", "1s", "4m59s", "0.5ns"} {
 		t.Run(value, func(t *testing.T) {
 			setRequiredEnv(t)
 			t.Setenv("SANDBOX_RUNNER_MAX_EXEC_TIMEOUT", value)
@@ -241,13 +242,17 @@ func TestLoadRejectsInvalidMaxExecTimeout(t *testing.T) {
 		})
 	}
 
-	setRequiredEnv(t)
-	t.Setenv("SANDBOX_RUNNER_MAX_EXEC_TIMEOUT", "5m")
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() with 5m failed: %v", err)
-	}
-	if cfg.MaxExecTimeout != 5*time.Minute {
-		t.Errorf("MaxExecTimeout = %s, want 5m", cfg.MaxExecTimeout)
+	for value, want := range map[string]time.Duration{"5m": 5 * time.Minute, "0": 0, "0s": 0} {
+		t.Run("accepts "+value, func(t *testing.T) {
+			setRequiredEnv(t)
+			t.Setenv("SANDBOX_RUNNER_MAX_EXEC_TIMEOUT", value)
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() with %s failed: %v", value, err)
+			}
+			if cfg.MaxExecTimeout != want {
+				t.Errorf("MaxExecTimeout = %s, want %s", cfg.MaxExecTimeout, want)
+			}
+		})
 	}
 }

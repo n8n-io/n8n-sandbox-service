@@ -17,16 +17,28 @@ async function postExec(id: string, body: object, signal?: AbortSignal): Promise
   });
 }
 
+// Waits until the sandbox runs a command. Unlike the SDK, which deletes each
+// execution in the background, this leaves no request of its own holding one
+// of the sandbox's slots: the body is read to its end, and the API and runner
+// release a request's slot before they end its response.
+async function waitUntilRunsCommands(id: string): Promise<void> {
+  const deadline = Date.now() + 12_000;
+  for (;;) {
+    const res = await postExec(id, { command: 'true', timeout_ms: 5_000 });
+    const body = await res.text();
+    if (res.ok && body.includes('"type":"exit"')) return;
+    if (Date.now() > deadline) throw new Error(`sandbox ${id} did not run a command: ${res.status} ${body}`);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+}
+
 // Raw fetch rather than the SDK, which retries a 429 and would hide it.
 test.describe('request limits', () => {
   test('a sandbox refuses requests beyond its limit on requests in progress', async () => {
     const id = await createSandbox();
     const controllers: AbortController[] = [];
     try {
-      await execWithTransientRetry(id, 'true', { timeoutMs: 5_000 });
-      // The SDK deletes that execution in the background, and a DELETE in
-      // progress takes one of the sandbox's slots, so let it finish first.
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      await waitUntilRunsCommands(id);
 
       // fetch resolves on the response headers, so each 200 is a stream that is
       // still open, holding its slot, when the others arrive.
