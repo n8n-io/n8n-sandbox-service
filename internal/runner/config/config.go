@@ -5,11 +5,13 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/n8n-io/sandbox-service/internal/logging"
 )
@@ -22,7 +24,19 @@ const (
 	defaultListenAddr            = ":8080"
 	defaultControlGRPCListenAddr = ":9091"
 	defaultLogLevel              = slog.LevelInfo
+
+	defaultMaxInflightPerSandbox = 64
+	defaultMaxExecTimeout        = 30 * time.Minute
+
+	// daemonDefaultExecTimeout is the timeout the sandbox daemon applies when
+	// an exec request leaves timeout_ms out (internal/daemon).
+	daemonDefaultExecTimeout = 5 * time.Minute
 )
+
+// ExecutionDeleteReserve is how many execution DELETEs a sandbox may have in
+// progress beyond MaxInflightPerSandbox, so work can still be cancelled once
+// the limit is full.
+const ExecutionDeleteReserve = 4
 
 // Config holds shared runner configuration parsed from environment variables.
 type Config struct {
@@ -84,6 +98,14 @@ type Config struct {
 	// /metrics is exposed on the public HTTP listener and bypasses X-Api-Key
 	// authentication; operators are expected to firewall the port.
 	MetricsEnabled bool
+
+	// MaxInflightPerSandbox caps one sandbox's requests in progress (0 = no
+	// cap). Parsed from SANDBOX_RUNNER_MAX_INFLIGHT_PER_SANDBOX.
+	MaxInflightPerSandbox int
+
+	// MaxExecTimeout is the largest timeout_ms an exec request may ask for
+	// (0 = no limit). Parsed from SANDBOX_RUNNER_MAX_EXEC_TIMEOUT.
+	MaxExecTimeout time.Duration
 }
 
 func validateHostPort(v string) error {
@@ -145,6 +167,8 @@ func Load() (*Config, error) {
 		CapacityTotal:         defaultRunnerCapacityTotal,
 		ControlGRPCListenAddr: defaultControlGRPCListenAddr,
 		LogLevel:              defaultLogLevel,
+		MaxInflightPerSandbox: defaultMaxInflightPerSandbox,
+		MaxExecTimeout:        defaultMaxExecTimeout,
 	}
 
 	if h, err := os.Hostname(); err == nil && h != "" {
@@ -202,6 +226,24 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("SANDBOX_RUNNER_METRICS_ENABLED must be a boolean, got %q", v)
 		}
 		cfg.MetricsEnabled = enabled
+	}
+
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_MAX_INFLIGHT_PER_SANDBOX")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 || n > math.MaxInt32 {
+			return nil, fmt.Errorf("SANDBOX_RUNNER_MAX_INFLIGHT_PER_SANDBOX must be an integer between 0 and %d, got %q", math.MaxInt32, v)
+		}
+		cfg.MaxInflightPerSandbox = n
+	}
+
+	// A request that leaves timeout_ms out runs for the daemon's default, so a
+	// cap below that default would not hold for it.
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_MAX_EXEC_TIMEOUT")); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d < 0 || (d > 0 && d < daemonDefaultExecTimeout) {
+			return nil, fmt.Errorf("SANDBOX_RUNNER_MAX_EXEC_TIMEOUT must be 0 or a duration of at least %s (the default exec timeout), got %q", daemonDefaultExecTimeout, v)
+		}
+		cfg.MaxExecTimeout = d
 	}
 
 	cfg.APIGRPCAddr = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_API_GRPC_ADDR"))

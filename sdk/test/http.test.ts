@@ -251,6 +251,58 @@ describe("HttpClient", () => {
     }
   });
 
+  it("retries a 429 and reads its Retry-After", async () => {
+    let hits = 0;
+    const limitedServer = await startTestServer((req, res) => {
+      hits += 1;
+      if (hits === 1) {
+        res.writeHead(429, { "Content-Type": "application/json", "Retry-After": "0" });
+        res.end(JSON.stringify({ error: "too many requests in progress for this sandbox" }));
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+
+    try {
+      const client = new HttpClient(limitedServer.baseUrl, undefined, { baseDelayMs: 1 });
+      const out = await client.requestJson<{ ok: boolean }>("GET", "/limited");
+      expect(out).toEqual({ ok: true });
+      expect(hits).toBe(2);
+    } finally {
+      await limitedServer.close();
+    }
+  });
+
+  describe("retryDelayFor", () => {
+    const client = new HttpClient("http://localhost", undefined, {
+      attempts: 3,
+      baseDelayMs: 10,
+      maxDelayMs: 1000,
+      jitter: false,
+    });
+
+    it("backs off exponentially", () => {
+      const error = new SandboxServiceError("limited", 429);
+      expect(client.retryDelayFor(error, 0)).toBe(10);
+      expect(client.retryDelayFor(error, 2)).toBe(40);
+    });
+
+    it("waits at least as long as Retry-After asks, up to maxDelayMs", () => {
+      expect(client.retryDelayFor(new SandboxServiceError("limited", 429, undefined, 500), 0)).toBe(
+        500,
+      );
+      expect(
+        client.retryDelayFor(new SandboxServiceError("limited", 429, undefined, 60_000), 0),
+      ).toBe(1000);
+    });
+
+    it("stops for statuses outside retryOnStatuses and after the last attempt", () => {
+      expect(client.retryDelayFor(new SandboxServiceError("bad", 400), 0)).toBeUndefined();
+      expect(client.retryDelayFor(new SandboxServiceError("limited", 429), 3)).toBeUndefined();
+    });
+  });
+
   it("never follows a redirect, so the API key never reaches another origin", async () => {
     let targetHits = 0;
     const target = await startTestServer((_req, res) => {

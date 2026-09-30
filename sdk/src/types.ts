@@ -45,7 +45,7 @@ export interface RetryOptions {
   attempts?: number;
   /** Initial backoff delay in milliseconds. Defaults to 200. */
   baseDelayMs?: number;
-  /** Maximum backoff delay in milliseconds. Defaults to 10000. */
+  /** Maximum backoff delay in milliseconds, also capping a server's Retry-After. Defaults to 10000. */
   maxDelayMs?: number;
   /**
    * HTTP statuses that should be retried. Defaults to [429, 503] (transient; see API.md).

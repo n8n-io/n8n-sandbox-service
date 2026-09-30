@@ -10,10 +10,12 @@ import (
 
 var sandboxPathRe = regexp.MustCompile(`/var/sandboxes/[0-9a-f-]+/(?:rootfs|merged|upper|work|socket)`)
 
-// APIError is the JSON body returned for error responses.
+// APIError is the JSON body returned for error responses. Reason is set only
+// on errors a client has to tell apart from others with the same status.
 type APIError struct {
-	Error string `json:"error"`
-	Code  int    `json:"code"`
+	Error  string `json:"error"`
+	Code   int    `json:"code"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // sanitizeError strips internal filesystem paths from error messages so they
@@ -27,13 +29,18 @@ func sanitizeError(msg string) string {
 }
 
 func writeError(w http.ResponseWriter, code int, msg string) {
+	writeErrorReason(w, code, msg, "")
+}
+
+// writeErrorReason is writeError with a machine-readable reason in the body.
+func writeErrorReason(w http.ResponseWriter, code int, msg, reason string) {
 	sanitized := sanitizeError(msg)
 	if sanitized != msg {
 		slog.Debug("sanitized error message", "original", msg, "sanitized", sanitized)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	if err := json.NewEncoder(w).Encode(APIError{Error: sanitized, Code: code}); err != nil {
+	if err := json.NewEncoder(w).Encode(APIError{Error: sanitized, Code: code, Reason: reason}); err != nil {
 		slog.Warn("write error response", "err", err)
 	}
 }

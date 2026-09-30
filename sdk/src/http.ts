@@ -177,11 +177,23 @@ export class HttpClient {
           throw serviceError;
         }
 
-        const delayMs = this.retryDelayMs(attempt);
+        const delayMs = this.retryDelayMs(attempt, serviceError);
         await this.sleep(delayMs, signal);
         attempt += 1;
       }
     }
+  }
+
+  /**
+   * Delay before retry `attempt` (0-based) of a request that failed with `error`, or
+   * undefined when the retry policy says to stop. For callers that loop over a request
+   * this client does not retry on its own, such as a POST that is safe to repeat after a
+   * particular status.
+   */
+  retryDelayFor(error: SandboxServiceError, attempt: number): number | undefined {
+    if (attempt >= this.retry.attempts) return undefined;
+    if (!this.retry.retryOnStatuses.has(error.status)) return undefined;
+    return this.retryDelayMs(attempt, error);
   }
 
   private shouldRetry(
@@ -203,12 +215,13 @@ export class HttpClient {
     return m === "GET" || m === "HEAD" || m === "OPTIONS" || m === "PUT" || m === "DELETE";
   }
 
-  private retryDelayMs(attempt: number): number {
+  /** Exponential backoff, stretched to the server's Retry-After but never past maxDelayMs. */
+  private retryDelayMs(attempt: number, error?: SandboxServiceError): number {
     const base = this.retry.baseDelayMs * 2 ** attempt;
     const capped = Math.min(base, this.retry.maxDelayMs);
-    if (!this.retry.jitter) return capped;
-    const factor = 0.5 + Math.random(); // [0.5, 1.5)
-    return Math.floor(capped * factor);
+    const backoff = this.retry.jitter ? Math.floor(capped * (0.5 + Math.random())) : capped; // [0.5, 1.5)
+    const retryAfter = Math.min(error?.retryAfterMs ?? 0, this.retry.maxDelayMs);
+    return Math.max(backoff, retryAfter);
   }
 
   private sleep(ms: number, signal?: AbortSignal): Promise<void> {

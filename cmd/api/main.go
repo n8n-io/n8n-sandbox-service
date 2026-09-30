@@ -149,7 +149,11 @@ func main() {
 	// One slot per listener, so a second failure never blocks its goroutine.
 	serverErr := make(chan error, 3)
 	go func() {
-		slog.Info("api listening", "addr", cfg.ListenAddr, "grpc_addr", cfg.GRPCListenAddr, "store", cfg.Store)
+		slog.Info("api listening",
+			"addr", cfg.ListenAddr,
+			"grpc_addr", cfg.GRPCListenAddr,
+			"store", cfg.Store,
+			"max_inflight_per_tenant", cfg.MaxInflightPerTenant)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			serverErr <- err
 		}

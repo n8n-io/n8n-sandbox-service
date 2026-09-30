@@ -35,4 +35,29 @@ describe("createErrorFromResponse", () => {
       "Sandbox service request failed with status 503",
     );
   });
+
+  it("reads Retry-After given in seconds", () => {
+    const error = createErrorFromResponse(
+      429,
+      { error: "too many requests in progress for this sandbox" },
+      { "Retry-After": "2" },
+    );
+
+    expect(error.retryAfterMs).toBe(2000);
+  });
+
+  it("reads Retry-After given as an HTTP date", () => {
+    const at = new Date(Date.now() + 60_000).toUTCString();
+    const error = createErrorFromResponse(503, {}, { "retry-after": at });
+
+    expect(error.retryAfterMs).toBeGreaterThan(50_000);
+    expect(error.retryAfterMs).toBeLessThanOrEqual(60_000);
+  });
+
+  it("leaves retryAfterMs unset for a missing or unreadable Retry-After", () => {
+    expect(createErrorFromResponse(429, {}).retryAfterMs).toBeUndefined();
+    expect(
+      createErrorFromResponse(429, {}, { "retry-after": "soon" }).retryAfterMs,
+    ).toBeUndefined();
+  });
 });

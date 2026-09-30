@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/n8n-io/sandbox-service/internal/limits"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
@@ -47,12 +48,15 @@ func NewRouter(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.Runner
 	mux.HandleFunc("GET /sandboxes/{id}", GetSandbox(rt))
 
 	// Proxy exec, files, mkdir, stat to daemon
-	proxy := ProxyHandler(rt, cfg, rec)
-	uploadProxy := UploadProxyHandler(rt, cfg, rec)
+	sandboxSlots := limits.NewKeyed(cfg.MaxInflightPerSandbox)
+	limitSandbox := sandboxLimit(sandboxSlots, 0, rec)
+	proxy := limitSandbox(ProxyHandler(rt, cfg, rec))
+	uploadProxy := limitSandbox(UploadProxyHandler(rt, cfg, rec))
 
-	mux.HandleFunc("POST /sandboxes/{id}/executions", ExecProxyHandler(rt, cfg, rec))
+	mux.HandleFunc("POST /sandboxes/{id}/executions", limitSandbox(ExecProxyHandler(rt, cfg, rec)))
 	mux.HandleFunc("GET /sandboxes/{id}/executions/{exec_id}", proxy)
-	mux.HandleFunc("DELETE /sandboxes/{id}/executions/{exec_id}", DeleteExecutionHandler(rt, cfg, rec))
+	mux.HandleFunc("DELETE /sandboxes/{id}/executions/{exec_id}",
+		sandboxLimit(sandboxSlots, config.ExecutionDeleteReserve, rec)(DeleteExecutionHandler(rt, cfg, rec)))
 	mux.HandleFunc("POST /sandboxes/{id}/files/copy", proxy)
 	mux.HandleFunc("POST /sandboxes/{id}/files/move", proxy)
 	mux.HandleFunc("GET /sandboxes/{id}/files", proxy)

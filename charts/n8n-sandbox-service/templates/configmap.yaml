@@ -13,6 +13,7 @@ data:
   SANDBOX_API_DATA_DIR: {{ .Values.api.config.dataDir | quote }}
   SANDBOX_API_MAX_FILE_BYTES: {{ .Values.api.config.maxFileBytes | quote }}
   SANDBOX_API_DEFAULT_MAX_SANDBOXES: {{ .Values.api.config.defaultMaxSandboxes | quote }}
+  SANDBOX_API_MAX_INFLIGHT_PER_TENANT: {{ .Values.api.config.maxInflightPerTenant | quote }}
   SANDBOX_API_ENABLE_CORS: {{ .Values.api.config.enableCors | quote }}
   SANDBOX_API_METRICS_ENABLED: {{ and .Values.monitoring.serviceMonitor.enabled .Values.monitoring.serviceMonitor.api.enabled | quote }}
   SANDBOX_API_RUNNER_HEARTBEAT_GRACE: {{ .Values.api.config.runnerHeartbeatGrace | quote }}
@@ -38,6 +39,8 @@ data:
   SANDBOX_RUNNER_DATA_DIR: {{ $runner.config.dataDir | quote }}
   SANDBOX_RUNNER_CAPACITY_TOTAL: {{ $runner.config.capacityTotal | quote }}
   SANDBOX_RUNNER_MAX_FILE_BYTES: {{ $runner.config.maxFileBytes | quote }}
+  SANDBOX_RUNNER_MAX_INFLIGHT_PER_SANDBOX: {{ $runner.config.maxInflightPerSandbox | quote }}
+  SANDBOX_RUNNER_MAX_EXEC_TIMEOUT: {{ $runner.config.maxExecTimeout | quote }}
   SANDBOX_RUNNER_METRICS_ENABLED: {{ and .Values.monitoring.serviceMonitor.enabled .Values.monitoring.serviceMonitor.runner.enabled | quote }}
   SANDBOX_RUNNER_DEFAULT_MEMORY_MB: {{ $runner.config.defaultMemoryMb | quote }}
   SANDBOX_RUNNER_DEFAULT_CPU_PERCENT: {{ $runner.config.defaultCpuPercent | quote }}

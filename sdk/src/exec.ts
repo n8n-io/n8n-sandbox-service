@@ -23,6 +23,7 @@ export async function exec(
   const execId = randomUUID();
   const consumer = new ExecStreamConsumer(request.onStdout, request.onStderr);
   let retries = 0;
+  let limitedRetries = 0;
 
   const onError = async (error: unknown) => {
     if (request.abortSignal?.aborted) {
@@ -56,6 +57,14 @@ export async function exec(
       if (++retries > MAX_RESUME_RETRIES) break;
       await delay(RESUME_DELAY_MS);
     } catch (error) {
+      // A 429 refuses the request before anything starts, so posting the same exec_id
+      // again is safe. The client's retry policy decides how often and how long to wait.
+      const wait = limitedRetryDelay(http, error, limitedRetries);
+      if (wait !== undefined && !request.abortSignal?.aborted) {
+        limitedRetries++;
+        await delay(wait, request.abortSignal);
+        continue;
+      }
       await onError(error);
       if (consumer.lastSeq >= 0) break; // Received events, switch to resume
     }
@@ -132,6 +141,25 @@ function isTransientError(error: unknown): boolean {
   return false;
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+/** Delay before re-posting after a 429, or undefined when the error is not one or the policy says stop. */
+function limitedRetryDelay(http: HttpClient, error: unknown, attempt: number): number | undefined {
+  if (!(error instanceof SandboxServiceError) || error.status !== 429) return undefined;
+  return http.retryDelayFor(error, attempt);
+}
+
+/** Resolves after `ms`, or as soon as `signal` aborts. */
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+    const done = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener("abort", done);
+  });
 }

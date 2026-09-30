@@ -37,6 +37,14 @@ const (
 	OpRecover = "recover"
 )
 
+// Limit label values used with ObserveRequestLimited.
+const (
+	// LimitTenant is the API's per-tenant cap.
+	LimitTenant = "tenant"
+	// LimitSandbox is the runner's per-sandbox cap.
+	LimitSandbox = "sandbox"
+)
+
 // Handler returns the http.Handler that serves the registry's metrics in
 // Prometheus exposition format.
 func Handler(reg *prometheus.Registry) http.Handler {
@@ -80,6 +88,36 @@ func buildHTTPMetrics(reg *prometheus.Registry, role string) (*prometheus.Counte
 	return requests, duration
 }
 
+// buildLimitMetrics registers the counter of requests a concurrency limit
+// turned away. http_requests_total cannot tell which limit refused a 429: the
+// API passes the runner's per-sandbox 429 through unchanged.
+func buildLimitMetrics(reg *prometheus.Registry, role string) *prometheus.CounterVec {
+	limited := prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   Namespace,
+			Name:        "http_requests_limited_total",
+			Help:        "HTTP requests turned away by a concurrency limit, labeled by the limit that refused them.",
+			ConstLabels: prometheus.Labels{"role": role},
+		},
+		[]string{"limit"},
+	)
+	reg.MustRegister(limited)
+	return limited
+}
+
+// buildInflightGauge registers the gauge of HTTP requests in progress, which
+// HTTPMiddleware moves.
+func buildInflightGauge(reg *prometheus.Registry, role string) prometheus.Gauge {
+	inflight := prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace:   Namespace,
+		Name:        "http_requests_in_flight",
+		Help:        "HTTP requests in progress.",
+		ConstLabels: prometheus.Labels{"role": role},
+	})
+	reg.MustRegister(inflight)
+	return inflight
+}
+
 // APIRecorder owns the metric instruments emitted by the API binary.
 //
 // A recorder built with NewAPIRecorder(false) is a no-op: every observation
@@ -88,6 +126,8 @@ type APIRecorder struct {
 	reg          *prometheus.Registry
 	httpRequests *prometheus.CounterVec
 	httpDuration *prometheus.HistogramVec
+	httpInflight prometheus.Gauge
+	httpLimited  *prometheus.CounterVec
 	sandboxOps   *prometheus.CounterVec
 }
 
@@ -113,6 +153,8 @@ func NewAPIRecorder(enabled bool) *APIRecorder {
 		reg:          reg,
 		httpRequests: httpReq,
 		httpDuration: httpDur,
+		httpInflight: buildInflightGauge(reg, RoleAPI),
+		httpLimited:  buildLimitMetrics(reg, RoleAPI),
 		sandboxOps:   sandboxOps,
 	}
 }
@@ -132,12 +174,38 @@ func (r *APIRecorder) ObserveHTTP(route, method string, status int, dur time.Dur
 	r.httpDuration.WithLabelValues(route, method).Observe(dur.Seconds())
 }
 
+// AddHTTPInFlight moves the gauge of HTTP requests in progress by delta.
+func (r *APIRecorder) AddHTTPInFlight(delta float64) {
+	if r.reg == nil {
+		return
+	}
+	r.httpInflight.Add(delta)
+}
+
 // ObserveSandboxOp records a sandbox lifecycle operation result.
 func (r *APIRecorder) ObserveSandboxOp(operation string, success bool) {
 	if r.reg == nil {
 		return
 	}
 	r.sandboxOps.WithLabelValues(operation, resultLabel(success)).Inc()
+}
+
+// ObserveRequestLimited records a request turned away by the given limit
+// (LimitTenant).
+func (r *APIRecorder) ObserveRequestLimited(limit string) {
+	if r.reg == nil {
+		return
+	}
+	r.httpLimited.WithLabelValues(limit).Inc()
+}
+
+// RequestsLimitedCount returns the counter value for requests turned away by
+// the given limit. Intended for tests in other packages.
+func (r *APIRecorder) RequestsLimitedCount(limit string) float64 {
+	if r.reg == nil {
+		return 0
+	}
+	return testutil.ToFloat64(r.httpLimited.WithLabelValues(limit))
 }
 
 // SetActiveSandboxes registers a scrape-time gauge that calls f to read the
@@ -191,6 +259,8 @@ type RunnerRecorder struct {
 	reg                 *prometheus.Registry
 	httpRequests        *prometheus.CounterVec
 	httpDuration        *prometheus.HistogramVec
+	httpInflight        prometheus.Gauge
+	httpLimited         *prometheus.CounterVec
 	containerOps        *prometheus.CounterVec
 	containerOpDuration *prometheus.HistogramVec
 	lifecycleSteps      *prometheus.HistogramVec
@@ -257,6 +327,8 @@ func NewRunnerRecorder(enabled bool) *RunnerRecorder {
 		reg:                 reg,
 		httpRequests:        httpReq,
 		httpDuration:        httpDur,
+		httpInflight:        buildInflightGauge(reg, RoleRunner),
+		httpLimited:         buildLimitMetrics(reg, RoleRunner),
 		containerOps:        containerOps,
 		containerOpDuration: containerOpDuration,
 		lifecycleSteps:      lifecycleSteps,
@@ -278,6 +350,32 @@ func (r *RunnerRecorder) ObserveHTTP(route, method string, status int, dur time.
 	}
 	r.httpRequests.WithLabelValues(route, method, strconv.Itoa(status)).Inc()
 	r.httpDuration.WithLabelValues(route, method).Observe(dur.Seconds())
+}
+
+// AddHTTPInFlight moves the gauge of HTTP requests in progress by delta.
+func (r *RunnerRecorder) AddHTTPInFlight(delta float64) {
+	if r.reg == nil {
+		return
+	}
+	r.httpInflight.Add(delta)
+}
+
+// ObserveRequestLimited records a request turned away by the given limit
+// (LimitSandbox).
+func (r *RunnerRecorder) ObserveRequestLimited(limit string) {
+	if r == nil || r.reg == nil {
+		return
+	}
+	r.httpLimited.WithLabelValues(limit).Inc()
+}
+
+// RequestsLimitedCount returns the counter value for requests turned away by
+// the given limit. Intended for tests in other packages.
+func (r *RunnerRecorder) RequestsLimitedCount(limit string) float64 {
+	if r == nil || r.reg == nil {
+		return 0
+	}
+	return testutil.ToFloat64(r.httpLimited.WithLabelValues(limit))
 }
 
 // ObserveContainerOp records the outcome and duration of a container
