@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -246,5 +247,82 @@ func TestDeleteExecutionIsProxiedWhenTheSandboxIsRunning(t *testing.T) {
 	}
 	if got := daemonHits.Load(); got != 1 {
 		t.Errorf("daemon hits = %d, want 1", got)
+	}
+}
+
+// A daemon's answers are the guest's to choose. Following its redirect would point
+// the runner, and on a 307 or 308 the exec body, at anything the runner can reach;
+// relaying it would hand the choice to the API and its client.
+func TestProxyHandlersRefuseDaemonRedirects(t *testing.T) {
+	for name, newHandler := range wakingHandlers {
+		for _, code := range []int{301, 302, 303, 307, 308} {
+			t.Run(fmt.Sprintf("%s %d", name, code), func(t *testing.T) {
+				var targetHits atomic.Int32
+				target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+					targetHits.Add(1)
+				}))
+				defer target.Close()
+
+				var daemonHits atomic.Int32
+				daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					daemonHits.Add(1)
+					http.Redirect(w, r, target.URL+r.URL.Path, code)
+				}))
+				defer daemon.Close()
+
+				rec := httptest.NewRecorder()
+				newHandler(&fakeRuntime{daemonURL: daemon.URL}, proxyTestConfig(), metrics.NewRunnerRecorder(false)).ServeHTTP(rec, proxyTestRequest())
+
+				if rec.Code != http.StatusBadGateway {
+					t.Fatalf("status = %d, want 502: %s", rec.Code, rec.Body.String())
+				}
+				if loc := rec.Header().Get("Location"); loc != "" {
+					t.Errorf("Location relayed: %q", loc)
+				}
+				var payload struct {
+					Error string `json:"error"`
+				}
+				if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil || payload.Error != errDaemonRedirect.Error() {
+					t.Errorf("body = %s, want error %q", rec.Body.String(), errDaemonRedirect.Error())
+				}
+				if got := daemonHits.Load(); got != 1 {
+					t.Errorf("daemon hits = %d, want 1", got)
+				}
+				if got := targetHits.Load(); got != 0 {
+					t.Fatalf("redirect target hits = %d, want 0: the redirect was followed", got)
+				}
+			})
+		}
+	}
+}
+
+// Only the runner may send its signals: the API drops its store row on
+// X-Sandbox-Gone, and a client treats X-Sandbox-Restarted as lost state. The
+// daemon's status and body still reach the caller.
+func TestProxyHandlersStripDaemonSignalHeaders(t *testing.T) {
+	const body = `{"error":"sandbox not found"}`
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		sandboxproxy.MarkSandboxGone(w.Header())
+		sandboxproxy.MarkSandboxRestarted(w.Header())
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(body))
+	}))
+	defer daemon.Close()
+
+	for name, newHandler := range wakingHandlers {
+		t.Run(name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			newHandler(&fakeRuntime{daemonURL: daemon.URL}, proxyTestConfig(), metrics.NewRunnerRecorder(false)).ServeHTTP(rec, proxyTestRequest())
+
+			if rec.Code != http.StatusNotFound || rec.Body.String() != body {
+				t.Fatalf("got %d %q, want the daemon's 404 %q", rec.Code, rec.Body.String(), body)
+			}
+			for _, h := range []string{sandboxproxy.SandboxGoneHeader, sandboxproxy.SandboxRestartedHeader} {
+				if got := rec.Header().Get(h); got != "" {
+					t.Errorf("%s = %q relayed from the daemon", h, got)
+				}
+			}
+		})
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -703,6 +704,36 @@ func TestProbeDaemonRejectsUnhealthyStatus(t *testing.T) {
 	defer cancel()
 	if err := probeDaemon(ctx, server.URL, time.Second); err == nil {
 		t.Fatal("expected unhealthy status to fail readiness probe")
+	}
+}
+
+// redirectToCountingTarget starts a daemon that redirects every request to a
+// healthy-looking target counting what reaches it, with a 307 so a followed POST
+// would carry its body along.
+func redirectToCountingTarget(t *testing.T) (string, *atomic.Int32) {
+	t.Helper()
+	hits := &atomic.Int32{}
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		hits.Add(1)
+	}))
+	t.Cleanup(target.Close)
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(daemon.Close)
+	return daemon.URL, hits
+}
+
+func TestProbeDaemonRefusesRedirects(t *testing.T) {
+	daemonURL, targetHits := redirectToCountingTarget(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := probeDaemon(ctx, daemonURL, time.Second); err == nil {
+		t.Fatal("expected a redirect to fail readiness probe")
+	}
+	if got := targetHits.Load(); got != 0 {
+		t.Fatalf("redirect target hits = %d, want 0", got)
 	}
 }
 

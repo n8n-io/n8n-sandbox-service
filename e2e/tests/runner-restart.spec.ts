@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { test, expect } from '@playwright/test';
-import { apiRequest, createSandbox, deleteSandbox, exec, getApiKey, restartRunnerForE2E, waitRunnerHttpReady } from './helpers';
+import { apiRequest, createSandbox, deleteSandbox, exec, restartRunnerForE2E, waitRunnerHttpReady } from './helpers';
 async function waitDockerRunnerReady(container: string, deadlineMs = 75_000): Promise<void> {
   const deadline = Date.now() + deadlineMs;
   while (Date.now() < deadline) {
@@ -43,14 +43,18 @@ test.describe('Runner restart', () => {
         await waitDockerRunnerReady(process.env.E2E_RUNNER_CONTAINER_NAME);
       }
 
-      const execRes = await request.post(`/sandboxes/${id}/executions`, {
-        headers: {
-          'X-Api-Key': await getApiKey(),
-          'Content-Type': 'application/json',
-        },
-        data: { command: 'true' },
-      });
-      expect([404, 502, 503]).toContain(execRes.status());
+      // The restarted runner no longer knows the sandbox and says so with
+      // X-Sandbox-Gone, the only signal the API drops its row on. Polled because
+      // the runner may still answer 502 or 503 while it settles.
+      await expect
+        .poll(
+          async () =>
+            (await apiRequest(request, 'POST', `/sandboxes/${id}/executions`, { data: { command: 'true' } }))
+              .status,
+          { timeout: 30_000, intervals: [500] },
+        )
+        .toBe(404);
+      expect((await apiRequest(request, 'GET', `/sandboxes/${id}`)).status).toBe(404);
     } finally {
       await deleteSandbox(id).catch(() => undefined);
     }

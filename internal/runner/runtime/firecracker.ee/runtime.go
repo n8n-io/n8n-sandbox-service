@@ -923,7 +923,7 @@ func joinErrors(errs []error) error {
 // guest daemon after snapshot restore.
 func probeDaemon(ctx context.Context, baseURL string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
-	client := http.Client{Timeout: 2 * time.Second}
+	client := http.Client{Timeout: 2 * time.Second, CheckRedirect: runnerruntime.RefuseRedirect}
 	for {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/healthz", nil)
 		if err != nil {

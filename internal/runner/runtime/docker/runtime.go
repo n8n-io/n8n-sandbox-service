@@ -650,7 +650,7 @@ func canStartContainer(state containerState) bool {
 }
 
 func waitForDaemon(ctx context.Context, baseURL string) error {
-	httpClient := &http.Client{Timeout: 3 * time.Second}
+	httpClient := &http.Client{Timeout: 3 * time.Second, CheckRedirect: runnerruntime.RefuseRedirect}
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
 	deadline := time.After(60 * time.Second)

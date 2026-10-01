@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,8 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
+	runnerhttp "github.com/n8n-io/sandbox-service/internal/runner"
+	runnerconfig "github.com/n8n-io/sandbox-service/internal/runner/config"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 	"github.com/n8n-io/sandbox-service/internal/sandboxproxy"
 )
@@ -199,5 +202,67 @@ func TestSandboxProxyKeepsStoreOnRunnerExecutionNotFound(t *testing.T) {
 	}
 	if rec == nil {
 		t.Fatal("expected sandbox record to remain after execution not found")
+	}
+}
+
+// daemonAt is a runtime whose sandbox is up at url. A proxied request to a running
+// sandbox asks nothing else of it.
+type daemonAt struct {
+	runnerruntime.Runtime
+	url string
+}
+
+func (d daemonAt) DaemonURL(context.Context, string) (string, error) {
+	return d.url, nil
+}
+
+// The daemon is the guest's to control, so it can answer with the runner's
+// sandbox-gone signal, as header and body. If the API took that for the runner's
+// word, the guest could have its row deleted and keep running, untracked and
+// outside its tenant's quota. The real runner handlers sit in between, since
+// stripping the header is theirs to do and ignoring the body is the API's.
+func TestSandboxProxyKeepsStoreOnDaemonForgedSandboxGone(t *testing.T) {
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		sandboxproxy.MarkSandboxGone(w.Header())
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"` + runnerruntime.ErrSandboxNotFound.Error() + `"}`))
+	}))
+	defer daemon.Close()
+
+	rt := daemonAt{url: daemon.URL}
+	runnerCfg := &runnerconfig.Config{MaxFileBytes: 1024}
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /sandboxes/{id}/executions", runnerhttp.ExecProxyHandler(rt, runnerCfg, nil))
+	mux.HandleFunc("GET /sandboxes/{id}/files", runnerhttp.ProxyHandler(rt, runnerCfg, nil))
+	runner := newTestRunnerServer(t, mux)
+
+	router, s := newTestGateway(t, "admin-key")
+	sandboxID := "55555555-5555-4555-8555-555555555555"
+	if err := s.Create(&store.SandboxRecord{
+		ID: sandboxID, Status: "running", CreatedAt: 1, LastActiveAt: 1, RunnerHTTPBase: runner.URL,
+	}); err != nil {
+		t.Fatalf("Create() failed: %v", err)
+	}
+
+	for _, route := range []struct{ method, path, body string }{
+		{http.MethodPost, "/executions", `{"command":"echo hi"}`},
+		{http.MethodGet, "/files?path=/tmp", ""},
+	} {
+		req := httptest.NewRequest(route.method, "/sandboxes/"+sandboxID+route.path, strings.NewReader(route.body))
+		req.Header.Set("X-Api-Key", "admin-key")
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusNotFound {
+			t.Fatalf("%s %s: status = %d, want the daemon's 404: %s", route.method, route.path, rr.Code, rr.Body.String())
+		}
+		rec, err := s.Get(sandboxID)
+		if err != nil {
+			t.Fatalf("Get() failed: %v", err)
+		}
+		if rec == nil {
+			t.Fatalf("%s %s: store row deleted on the daemon's word", route.method, route.path)
+		}
 	}
 }
