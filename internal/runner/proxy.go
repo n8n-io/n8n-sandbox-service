@@ -51,6 +51,15 @@ func DeleteExecutionHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *m
 func proxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder, limitBody bool, wake bool) http.HandlerFunc {
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
+			// The daemon runs in the guest and reads no request headers, so it
+			// gets Content-Type alone: never the fleet X-Api-Key the API sends,
+			// nor anything else a caller set.
+			pr.Out.Header = http.Header{}
+			pr.Out.Trailer = nil
+			if ct := pr.In.Header.Get("Content-Type"); ct != "" {
+				pr.Out.Header.Set("Content-Type", ct)
+			}
+
 			// Comma-ok assertion: the context key is missing when
 			// httputil.ReverseProxy replays Rewrite on a internally-constructed
 			// request (e.g. 100-continue handshake, connection-level retry after

@@ -326,3 +326,56 @@ func TestProxyHandlersStripDaemonSignalHeaders(t *testing.T) {
 		})
 	}
 }
+
+// The daemon runs in the guest, so the fleet key the API puts on every request,
+// and anything else a caller set, must stop at the runner. What the daemon may
+// see besides Content-Type is what Go's client adds on its own.
+func TestProxyHandlersForwardOnlyContentTypeToDaemon(t *testing.T) {
+	allowed := map[string]bool{"Content-Type": true, "Content-Length": true, "Accept-Encoding": true, "User-Agent": true}
+	type route struct {
+		handler func(runnerruntime.Runtime, *config.Config, *metrics.RunnerRecorder) http.HandlerFunc
+		request func() *http.Request
+	}
+	cases := map[string]route{"delete execution": {DeleteExecutionHandler, deleteExecutionRequest}}
+	for name, h := range wakingHandlers {
+		cases[name] = route{h, proxyTestRequest}
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			var got, gotTrailer http.Header
+			daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				got, gotTrailer = r.Header.Clone(), r.Trailer.Clone()
+				w.Header().Set("Content-Type", "application/x-ndjson")
+				_, _ = w.Write([]byte(exitEvent(1) + "\n"))
+			}))
+			defer daemon.Close()
+
+			req := tc.request()
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-Api-Key", "fleet-runner-key")
+			req.Header.Set("X-Forwarded-For", "203.0.113.7")
+			req.Header.Set("X-Injected", "1")
+			req.Header.Set("Traceparent", "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01")
+			// Trailers only travel on a chunked body.
+			req.ContentLength = -1
+			req.Trailer = http.Header{"X-Injected-Trailer": nil}
+			tc.handler(&fakeRuntime{daemonURL: daemon.URL}, proxyTestConfig(), metrics.NewRunnerRecorder(false)).ServeHTTP(httptest.NewRecorder(), req)
+
+			if got == nil {
+				t.Fatal("request never reached the daemon")
+			}
+			if ct := got.Get("Content-Type"); ct != "application/json" {
+				t.Errorf("Content-Type = %q, want application/json", ct)
+			}
+			for h, v := range got {
+				if !allowed[h] {
+					t.Errorf("%s = %q reached the daemon", h, v)
+				}
+			}
+			if len(gotTrailer) != 0 {
+				t.Errorf("trailers %v reached the daemon", gotTrailer)
+			}
+		})
+	}
+}
