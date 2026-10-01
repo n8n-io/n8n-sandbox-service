@@ -134,12 +134,13 @@ for path in \
 	fi
 done
 
-# The daemon is PID 1 of every guest, so it must carry the stdlib fixes of the
-# Go that go.mod pins, and the manifest must name that Go.
+# The daemon is PID 1 of every guest. CI installs exactly the Go in go.mod, so
+# require an exact match, not just the go line's minimum, and require the
+# manifest to name the same Go.
 go_pin="go$(awk '$1 == "go" { print $2; exit }' "${ROOT}/go.mod")"
 daemon_go="$(go version "${bundle_dir}/bin/sandbox-daemon")"
 if [[ "$daemon_go" != *": ${go_pin}" ]]; then
-	echo "ERROR: bin/sandbox-daemon must be built with ${go_pin} from go.mod; got ${daemon_go}" >&2
+	echo "ERROR: bin/sandbox-daemon must be built with exactly ${go_pin} (go.mod); got ${daemon_go}" >&2
 	exit 1
 fi
 if [[ "go$(jq -r .go_version "$manifest")" != "$go_pin" ]]; then

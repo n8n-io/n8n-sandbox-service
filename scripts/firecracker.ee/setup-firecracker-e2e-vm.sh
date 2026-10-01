@@ -25,7 +25,7 @@ SANDBOX_IMAGE="${SANDBOX_IMAGE:-n8n-sandbox:e2e-firecracker}"
 SANDBOX_ROOTFS_TAR="${SANDBOX_ROOTFS_TAR:-}"
 
 # GO_VERSION goes into a download URL whose archive root unpacks into /usr/local.
-if [[ ! "$GO_VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+if [[ ! "$GO_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 	echo "ERROR: GO_VERSION must be a Go release such as 1.27.1; got '${GO_VERSION}'" >&2
 	exit 1
 fi

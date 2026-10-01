@@ -105,7 +105,7 @@ DAEMON_SHA256="$(sha256sum "${BUNDLE}/bin/sandbox-daemon" | awk '{print $1}')"
 # "go version FILE" prints "FILE: go1.N.P".
 GO_VERSION="$(go version "${BUNDLE}/bin/sandbox-daemon")"
 GO_VERSION="${GO_VERSION##*: go}"
-if [[ ! "$GO_VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+if [[ ! "$GO_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 	echo "ERROR: bin/sandbox-daemon was not built by a Go release: ${GO_VERSION}" >&2
 	exit 1
 fi

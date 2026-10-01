@@ -9,7 +9,7 @@ DOCKER_VERSION="5:29.4.1-1~ubuntu.24.04~noble"
 GO_VERSION="$(awk '$1 == "go" { print $2; exit }' ~/project/go.mod)"
 
 # GO_VERSION goes into a download URL whose archive root unpacks into /usr/local.
-if [[ ! "$GO_VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+if [[ ! "$GO_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 	echo "ERROR: go.mod must name a Go release such as 1.27.1; got '${GO_VERSION}'" >&2
 	exit 1
 fi
