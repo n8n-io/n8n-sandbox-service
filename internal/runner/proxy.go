@@ -51,9 +51,9 @@ func DeleteExecutionHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *m
 func proxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder, limitBody bool, wake bool) http.HandlerFunc {
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
-			// The daemon runs in the guest and reads no request headers, so it
-			// gets Content-Type alone: never the fleet X-Api-Key the API sends,
-			// nor anything else a caller set.
+			// The daemon runs in the guest and reads no request headers, so of the
+			// incoming ones it gets Content-Type alone: never the fleet X-Api-Key
+			// the API sends, nor anything else a caller set.
 			pr.Out.Header = http.Header{}
 			pr.Out.Trailer = nil
 			if ct := pr.In.Header.Get("Content-Type"); ct != "" {
