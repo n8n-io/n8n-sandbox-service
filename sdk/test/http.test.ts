@@ -251,12 +251,12 @@ describe("HttpClient", () => {
     }
   });
 
-  it("retries a 429 and reads its Retry-After", async () => {
+  it("retries a 429", async () => {
     let hits = 0;
     const limitedServer = await startTestServer((req, res) => {
       hits += 1;
       if (hits === 1) {
-        res.writeHead(429, { "Content-Type": "application/json", "Retry-After": "0" });
+        res.writeHead(429, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "too many requests in progress for this sandbox" }));
         return;
       }
@@ -286,15 +286,6 @@ describe("HttpClient", () => {
       const error = new SandboxServiceError("limited", 429);
       expect(client.retryDelayFor(error, 0)).toBe(10);
       expect(client.retryDelayFor(error, 2)).toBe(40);
-    });
-
-    it("waits at least as long as Retry-After asks, up to maxDelayMs", () => {
-      expect(client.retryDelayFor(new SandboxServiceError("limited", 429, undefined, 500), 0)).toBe(
-        500,
-      );
-      expect(
-        client.retryDelayFor(new SandboxServiceError("limited", 429, undefined, 60_000), 0),
-      ).toBe(1000);
     });
 
     it("stops for statuses outside retryOnStatuses and after the last attempt", () => {

@@ -16,18 +16,19 @@ const reasonTenantRequestLimit = "tenant_request_limit"
 // asking a client to wait longer.
 const limitRetryAfter = "1"
 
-// executionDeleteReserve is how many execution DELETEs a tenant may have in
-// progress beyond its limit, so it can still cancel work once the limit is
-// full. Bounded, because a DELETE to a stalled daemon holds its slot too.
-const executionDeleteReserve = 16
+// maxExecutionDeletesPerTenant caps a tenant's execution DELETEs in progress
+// on this replica. They are counted apart from its other requests, so it can
+// still cancel work when its limit is full. Bounded, because a DELETE to a
+// stalled daemon holds its slot too.
+const maxExecutionDeletesPerTenant = 16
 
-// tenantLimit wraps a route in the per-tenant cap, counted per replica, with
-// reserve slots allowed over it. Only tenant keys count: an admin key is the
-// operator's own and a self-hosted deployment may use nothing else.
+// tenantLimit wraps a route in a per-tenant cap held in l, counted per
+// replica. Only tenant keys count: an admin key is the operator's own and a
+// self-hosted deployment may use nothing else.
 //
 // The slot is taken before the sandbox lookup and keyed on the caller's own
 // tenant, so a 429 says nothing about a sandbox the caller may not see.
-func tenantLimit(l *limits.Keyed, reserve int, rec *metrics.APIRecorder) func(http.HandlerFunc) http.HandlerFunc {
+func tenantLimit(l *limits.KeyedLimiter, rec *metrics.APIRecorder) func(http.HandlerFunc) http.HandlerFunc {
 	return func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			id, ok := authFromContext(r.Context())
@@ -35,7 +36,7 @@ func tenantLimit(l *limits.Keyed, reserve int, rec *metrics.APIRecorder) func(ht
 				next(w, r)
 				return
 			}
-			if !l.TryAcquireReserve(id.TenantID, reserve) {
+			if !l.TryAcquire(id.TenantID) {
 				rec.ObserveRequestLimited(metrics.LimitTenant)
 				w.Header().Set("Retry-After", limitRetryAfter)
 				writeErrorReason(w, http.StatusTooManyRequests, "too many requests in progress for this tenant", reasonTenantRequestLimit)

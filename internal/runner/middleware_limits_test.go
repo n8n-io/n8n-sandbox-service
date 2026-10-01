@@ -153,18 +153,28 @@ func TestSandboxLimitRefusesRequestsOverCap(t *testing.T) {
 	release()
 }
 
-// Execution DELETE is how work in a sandbox is stopped, so it gets through
-// while the sandbox is at its cap, up to a bounded reserve.
-func TestSandboxLimitGivesExecutionDeleteABoundedReserve(t *testing.T) {
+// Execution DELETE is how work in a sandbox is stopped, so it is counted apart
+// from the sandbox's other requests: it gets through while they fill their
+// limit, and takes none of their slots. Its own limit is bounded.
+func TestSandboxLimitCountsExecutionDeletesApart(t *testing.T) {
 	lr := newLimitTestRunner(t, func(c *config.Config) { c.MaxInflightPerSandbox = 1 })
 	sandbox := "/sandboxes/" + proxyTestSandboxID
 
-	lr.hold(t, 1, http.MethodPost, sandbox+"/executions", `{"command":"sleep 60"}`)
-	lr.hold(t, config.ExecutionDeleteReserve, http.MethodDelete, sandbox+"/executions/exec-1", "")
+	releaseExec := lr.hold(t, 1, http.MethodPost, sandbox+"/executions", `{"command":"sleep 60"}`)
+	lr.hold(t, maxExecutionDeletesPerSandbox, http.MethodDelete, sandbox+"/executions/exec-1", "")
 
 	if rr := lr.call(http.MethodDelete, sandbox+"/executions/exec-1", ""); rr.Code != http.StatusTooManyRequests {
-		t.Fatalf("DELETE past the reserve: status = %d, want 429: %s", rr.Code, rr.Body.String())
+		t.Fatalf("DELETE past its own limit: status = %d, want 429: %s", rr.Code, rr.Body.String())
 	}
+
+	releaseExec()
+	lr.hold(t, 1, http.MethodPost, sandbox+"/executions", `{"command":"sleep 60"}`)
+}
+
+func TestSandboxLimitOffLeavesExecutionDeletesUnlimited(t *testing.T) {
+	lr := newLimitTestRunner(t, func(c *config.Config) { c.MaxInflightPerSandbox = 0 })
+
+	lr.hold(t, maxExecutionDeletesPerSandbox+1, http.MethodDelete, "/sandboxes/"+proxyTestSandboxID+"/executions/exec-1", "")
 }
 
 // A guest can starve its own daemon, and a DELETE waiting on it holds a slot
@@ -219,12 +229,12 @@ func TestSandboxLimitFreesSlotWhenRequestEnds(t *testing.T) {
 // The slot is taken before the wrapped handler runs, and that handler is what
 // wakes a stopped sandbox, so a refused request never costs a wake.
 func TestSandboxLimitRefusesBeforeTheHandlerRuns(t *testing.T) {
-	l := limits.NewKeyed(1)
+	l := limits.NewKeyedLimiter(1)
 	if !l.TryAcquire(proxyTestSandboxID) {
 		t.Fatal("setup: could not take the only slot")
 	}
 	var calls atomic.Int32
-	handler := sandboxLimit(l, 0, metrics.NewRunnerRecorder(false))(func(http.ResponseWriter, *http.Request) {
+	handler := sandboxLimit(l, metrics.NewRunnerRecorder(false))(func(http.ResponseWriter, *http.Request) {
 		calls.Add(1)
 	})
 

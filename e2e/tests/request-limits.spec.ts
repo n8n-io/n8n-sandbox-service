@@ -17,10 +17,9 @@ async function postExec(id: string, body: object, signal?: AbortSignal): Promise
   });
 }
 
-// Waits until the sandbox runs a command. Unlike the SDK, which deletes each
-// execution in the background, this leaves no request of its own holding one
-// of the sandbox's slots: the body is read to its end, and the API and runner
-// release a request's slot before they end its response.
+// Waits until the sandbox runs a command. The body is read to its end, and the
+// API and runner release a request's slot before they end its response, so no
+// request of this one holds a slot once it returns.
 async function waitUntilRunsCommands(id: string): Promise<void> {
   const deadline = Date.now() + 12_000;
   for (;;) {
@@ -52,8 +51,8 @@ test.describe('request limits', () => {
 
       const statuses = responses.map((r) => r.status);
       expect(statuses.filter((s) => s === 200), `statuses: ${statuses.join(',')}`).toHaveLength(PER_SANDBOX_LIMIT);
+      expect(statuses.filter((s) => s === 429), `statuses: ${statuses.join(',')}`).toHaveLength(1);
       const refused = responses.find((r) => r.status === 429);
-      expect(refused, `statuses: ${statuses.join(',')}`).toBeDefined();
       expect(refused!.headers.get('retry-after')).toBe('1');
       expect(await refused!.json()).toMatchObject({ reason: 'sandbox_request_limit' });
     } finally {

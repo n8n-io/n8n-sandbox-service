@@ -4,14 +4,12 @@
  */
 export class SandboxServiceError extends Error {
   /**
-   * Creates a sandbox service error with HTTP status, optional API error code, and the
-   * delay a `Retry-After` header asked for, in milliseconds.
+   * Creates a sandbox service error with HTTP status and optional API error code.
    */
   constructor(
     message: string,
     readonly status: number,
     readonly code?: number,
-    readonly retryAfterMs?: number,
   ) {
     super(message);
     this.name = "SandboxServiceError";
@@ -96,22 +94,7 @@ export function createErrorFromResponse(
     return new SandboxCrashedError(message, code);
   }
 
-  return new SandboxServiceError(
-    message,
-    status,
-    code,
-    parseRetryAfter(headerValue(headers, "retry-after")),
-  );
-}
-
-/** Reads a `Retry-After` value, given either in seconds or as an HTTP date, as milliseconds. */
-function parseRetryAfter(value: string | undefined): number | undefined {
-  if (value === undefined) return undefined;
-  const trimmed = value.trim();
-  if (/^\d+$/.test(trimmed)) return Number(trimmed) * 1000;
-  const at = Date.parse(trimmed);
-  if (Number.isNaN(at)) return undefined;
-  return Math.max(0, at - Date.now());
+  return new SandboxServiceError(message, status, code);
 }
 
 /**

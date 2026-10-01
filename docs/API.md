@@ -48,10 +48,10 @@ The API and runner use two buckets so clients (including the SDK) can decide **w
 
 ### HTTP 429 — too many requests in progress
 
-Two limits cap how many requests can be in progress at the same time. Neither is a rate.
+Two limits cap how many requests can be in progress at the same time. Neither is a rate. The endpoints they apply to list `429` under **Errors**.
 
-- **Per tenant**, in the API: a tenant's `POST /sandboxes` and exec and file requests, all its keys together, counted on each API replica separately. Admin keys are not counted.
-- **Per sandbox**, in the runner: exec and file requests to one sandbox, from all API replicas together.
+- **Per tenant**, in the API: all of a tenant's keys together, counted on each API replica. Admin keys are not counted.
+- **Per sandbox**, in the runner: exec and file requests, from all API replicas together.
 
 Their sizes are `SANDBOX_API_MAX_INFLIGHT_PER_TENANT` and `SANDBOX_RUNNER_MAX_INFLIGHT_PER_SANDBOX` in [configuration.md](configuration.md). A request over either is refused before it reaches the sandbox:
 
@@ -62,7 +62,7 @@ Retry-After: 1
 {"error":"too many requests in progress for this tenant","code":429,"reason":"tenant_request_limit"}
 ```
 
-`reason` is `tenant_request_limit` or `sandbox_request_limit`. The per-sandbox body comes from the runner, so like the `409` below it has no `code`. A stream holds its slot until it ends or the client disconnects, and a create until the runner has finished it. `DELETE /sandboxes/{id}/executions/{exec_id}` may go 16 over the per-tenant limit and 4 over the per-sandbox one, so work can be cancelled while either is full. Safe to retry after the delay.
+`reason` is `tenant_request_limit` or `sandbox_request_limit`; the per-sandbox body has no `code`. A stream counts until it ends. Execution `DELETE`s have limits of their own, counted the same way: 16 per tenant and 4 per sandbox, so work can be cancelled while the others are full. Safe to retry after the delay.
 
 ### HTTP 409 `sandbox_restarted` — the sandbox came back without its memory
 
@@ -487,7 +487,7 @@ the background after every command and discards the answer.
 
 **Response:** `204 No Content`
 
-**Errors:** `400` invalid id, `404` sandbox not found, `429` past the limits' reserve for this route (see [HTTP 429](#http-429--too-many-requests-in-progress)), `503` if the sandbox does not answer within 10 seconds
+**Errors:** `400` invalid id, `404` sandbox not found, `429` past this route's own limits (see [HTTP 429](#http-429--too-many-requests-in-progress)), `503` if the sandbox does not answer within 10 seconds
 
 **Example:**
 

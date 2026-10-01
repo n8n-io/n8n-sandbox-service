@@ -30,11 +30,6 @@ const (
 	defaultMaxExecTimeout        = 30 * time.Minute
 )
 
-// ExecutionDeleteReserve is how many execution DELETEs a sandbox may have in
-// progress beyond MaxInflightPerSandbox, so work can still be cancelled once
-// the limit is full.
-const ExecutionDeleteReserve = 4
-
 // Config holds shared runner configuration parsed from environment variables.
 type Config struct {
 	// APIKeys is the set of valid API keys for authenticating requests.

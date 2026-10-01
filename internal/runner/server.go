@@ -48,15 +48,21 @@ func NewRouter(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.Runner
 	mux.HandleFunc("GET /sandboxes/{id}", GetSandbox(rt))
 
 	// Proxy exec, files, mkdir, stat to daemon
-	sandboxSlots := limits.NewKeyed(cfg.MaxInflightPerSandbox)
-	limitSandbox := sandboxLimit(sandboxSlots, 0, rec)
+	limitSandbox := sandboxLimit(limits.NewKeyedLimiter(cfg.MaxInflightPerSandbox), rec)
+	// Execution DELETEs have a limit of their own, so work can be cancelled
+	// while the sandbox's other requests fill theirs. Turning the sandbox limit
+	// off turns this one off too.
+	maxDeletes := 0
+	if cfg.MaxInflightPerSandbox > 0 {
+		maxDeletes = maxExecutionDeletesPerSandbox
+	}
+	limitSandboxDeletes := sandboxLimit(limits.NewKeyedLimiter(maxDeletes), rec)
 	proxy := limitSandbox(ProxyHandler(rt, cfg, rec))
 	uploadProxy := limitSandbox(UploadProxyHandler(rt, cfg, rec))
 
 	mux.HandleFunc("POST /sandboxes/{id}/executions", limitSandbox(ExecProxyHandler(rt, cfg, rec)))
 	mux.HandleFunc("GET /sandboxes/{id}/executions/{exec_id}", proxy)
-	mux.HandleFunc("DELETE /sandboxes/{id}/executions/{exec_id}",
-		sandboxLimit(sandboxSlots, config.ExecutionDeleteReserve, rec)(DeleteExecutionHandler(rt, cfg, rec)))
+	mux.HandleFunc("DELETE /sandboxes/{id}/executions/{exec_id}", limitSandboxDeletes(DeleteExecutionHandler(rt, cfg, rec)))
 	mux.HandleFunc("POST /sandboxes/{id}/files/copy", proxy)
 	mux.HandleFunc("POST /sandboxes/{id}/files/move", proxy)
 	mux.HandleFunc("GET /sandboxes/{id}/files", proxy)

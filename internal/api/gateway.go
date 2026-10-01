@@ -35,8 +35,15 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 		mux.Handle("GET /metrics", metrics.Handler(rec.Registry()))
 	}
 
-	tenantSlots := limits.NewKeyed(cfg.MaxInflightPerTenant)
-	limitTenant := tenantLimit(tenantSlots, 0, rec)
+	limitTenant := tenantLimit(limits.NewKeyedLimiter(cfg.MaxInflightPerTenant), rec)
+	// Execution DELETEs have a limit of their own, so a tenant can cancel work
+	// while its other requests fill theirs. Turning the tenant limit off turns
+	// this one off too.
+	maxDeletes := 0
+	if cfg.MaxInflightPerTenant > 0 {
+		maxDeletes = maxExecutionDeletesPerTenant
+	}
+	limitTenantDeletes := tenantLimit(limits.NewKeyedLimiter(maxDeletes), rec)
 	mux.HandleFunc("GET /sandboxes", handleListSandboxes(s))
 	// A create holds its slot until the runner is done, even after the client
 	// has gone, so a burst of creates is bounded like any other request.
@@ -54,7 +61,7 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 
 	mux.HandleFunc("POST /sandboxes/{id}/executions", limitTenant(sandboxProxy(false)))
 	mux.HandleFunc("GET /sandboxes/{id}/executions/{exec_id}", limitTenant(sandboxProxy(false)))
-	mux.HandleFunc("DELETE /sandboxes/{id}/executions/{exec_id}", tenantLimit(tenantSlots, executionDeleteReserve, rec)(sandboxProxy(false)))
+	mux.HandleFunc("DELETE /sandboxes/{id}/executions/{exec_id}", limitTenantDeletes(sandboxProxy(false)))
 	mux.HandleFunc("POST /sandboxes/{id}/files/copy", limitTenant(sandboxProxy(false)))
 	mux.HandleFunc("POST /sandboxes/{id}/files/move", limitTenant(sandboxProxy(false)))
 	mux.HandleFunc("GET /sandboxes/{id}/files", limitTenant(sandboxProxy(false)))

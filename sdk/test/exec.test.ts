@@ -301,7 +301,7 @@ describe("exec", () => {
   });
 
   it("retries POST with same exec_id after a 429", async () => {
-    const limited = new SandboxServiceError("too many requests", 429, undefined, 1000);
+    const limited = new SandboxServiceError("too many requests", 429);
     const mockHttp = {
       requestStream: vi
         .fn()

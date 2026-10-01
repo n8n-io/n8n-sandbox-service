@@ -39,11 +39,11 @@ export async function exec(
     await delay(RESUME_DELAY_MS);
   };
 
-  // Out of retries on a 429. If the command may be running, cancel it rather than leave it
-  // running with nobody following it; an execution DELETE may go over a full limit.
-  const giveUpLimited = async (error: SandboxServiceError): Promise<never> => {
-    if (mayHaveStarted) deleteExecution(http, id, execId).catch(() => {});
-    throw error;
+  // For when retries on a 429 run out: if the command may be running, cancel it in the
+  // background rather than leave it running with nobody following it. Execution DELETEs
+  // have a limit of their own, so the full limit that refused us does not block this.
+  const cancelIfStarted = () => {
+    if (mayHaveStarted) void deleteExecution(http, id, execId).catch(() => {});
   };
 
   // Phase 1: Start command via POST (idempotent via exec_id)
@@ -73,7 +73,10 @@ export async function exec(
         // follows it if an earlier POST did. The retry policy decides how often and how
         // long to wait.
         const wait = http.retryDelayFor(error, limitedRetries++);
-        if (wait === undefined) return await giveUpLimited(error);
+        if (wait === undefined) {
+          cancelIfStarted();
+          throw error;
+        }
         await delay(wait, request.abortSignal);
         if (request.abortSignal?.aborted)
           await onError(new SandboxServiceError("Request aborted", 0));
@@ -100,12 +103,15 @@ export async function exec(
       await delay(RESUME_DELAY_MS);
     } catch (error) {
       // The client has already retried this GET as its policy allows.
-      if (isLimited(error) && !request.abortSignal?.aborted) return await giveUpLimited(error);
+      if (isLimited(error) && !request.abortSignal?.aborted) {
+        cancelIfStarted();
+        throw error;
+      }
       await onError(error);
     }
   }
 
-  deleteExecution(http, id, execId).catch(() => {});
+  void deleteExecution(http, id, execId).catch(() => {});
   return consumer.result();
 }
 

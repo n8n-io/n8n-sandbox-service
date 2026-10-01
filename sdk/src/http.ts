@@ -177,7 +177,7 @@ export class HttpClient {
           throw serviceError;
         }
 
-        const delayMs = this.retryDelayMs(attempt, serviceError);
+        const delayMs = this.retryDelayMs(attempt);
         await this.sleep(delayMs, signal);
         attempt += 1;
       }
@@ -193,7 +193,7 @@ export class HttpClient {
   retryDelayFor(error: SandboxServiceError, attempt: number): number | undefined {
     if (attempt >= this.retry.attempts) return undefined;
     if (!this.retry.retryOnStatuses.has(error.status)) return undefined;
-    return this.retryDelayMs(attempt, error);
+    return this.retryDelayMs(attempt);
   }
 
   private shouldRetry(
@@ -215,12 +215,13 @@ export class HttpClient {
     return m === "GET" || m === "HEAD" || m === "OPTIONS" || m === "PUT" || m === "DELETE";
   }
 
-  /** Exponential backoff, stretched to the server's Retry-After but never past maxDelayMs. */
-  private retryDelayMs(attempt: number, error?: SandboxServiceError): number {
+  /** Exponential backoff with optional jitter, never past maxDelayMs. */
+  private retryDelayMs(attempt: number): number {
     const base = this.retry.baseDelayMs * 2 ** attempt;
     const capped = Math.min(base, this.retry.maxDelayMs);
-    const backoff = this.retry.jitter ? Math.floor(capped * (0.5 + Math.random())) : capped; // [0.5, 1.5)
-    return Math.min(Math.max(backoff, error?.retryAfterMs ?? 0), this.retry.maxDelayMs);
+    if (!this.retry.jitter) return capped;
+    const factor = 0.5 + Math.random(); // [0.5, 1.5)
+    return Math.min(Math.floor(capped * factor), this.retry.maxDelayMs);
   }
 
   private sleep(ms: number, signal?: AbortSignal): Promise<void> {

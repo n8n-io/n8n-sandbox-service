@@ -9,9 +9,9 @@ import (
 
 // The cap has to hold under contention, not just in sequence: a check-then-add
 // would let a burst of callers all pass the check.
-func TestKeyedNeverAdmitsMoreThanCapConcurrently(t *testing.T) {
+func TestKeyedLimiterNeverAdmitsMoreThanCapConcurrently(t *testing.T) {
 	const max = 5
-	k := NewKeyed(max)
+	k := NewKeyedLimiter(max)
 	var holders, peak atomic.Int64
 	var wg sync.WaitGroup
 	for i := 0; i < 200; i++ {
@@ -42,8 +42,8 @@ func TestKeyedNeverAdmitsMoreThanCapConcurrently(t *testing.T) {
 	}
 }
 
-func TestKeyedCapsEachKeySeparately(t *testing.T) {
-	k := NewKeyed(1)
+func TestKeyedLimiterCapsEachKeySeparately(t *testing.T) {
+	k := NewKeyedLimiter(1)
 	if !k.TryAcquire("a") {
 		t.Fatal("expected the first acquire for a to succeed")
 	}
@@ -59,31 +59,10 @@ func TestKeyedCapsEachKeySeparately(t *testing.T) {
 	}
 }
 
-func TestKeyedReserveAdmitsABoundedNumberOverTheCap(t *testing.T) {
-	k := NewKeyed(1)
-	if !k.TryAcquire("a") {
-		t.Fatal("expected the first acquire to succeed")
-	}
-	if k.TryAcquire("a") {
-		t.Fatal("expected an ordinary acquire over the cap to be turned away")
-	}
-	if !k.TryAcquireReserve("a", 2) || !k.TryAcquireReserve("a", 2) {
-		t.Fatal("expected two reserved acquires over the cap to succeed")
-	}
-	if k.TryAcquireReserve("a", 2) {
-		t.Fatal("expected the reserve to run out after two")
-	}
-	// Reserved slots count toward the key, so ordinary requests wait for them too.
-	k.Release("a")
-	if k.TryAcquire("a") {
-		t.Fatal("ordinary acquire succeeded while the key is still over its cap")
-	}
-}
-
 // Keys are sandbox and tenant IDs, which come and go; a limiter that kept every
 // key it ever saw would grow for the life of the process.
-func TestKeyedForgetsKeysWithNothingInProgress(t *testing.T) {
-	k := NewKeyed(3)
+func TestKeyedLimiterForgetsKeysWithNothingInProgress(t *testing.T) {
+	k := NewKeyedLimiter(3)
 	k.TryAcquire("a")
 	k.TryAcquire("a")
 	k.TryAcquire("b")
@@ -101,8 +80,8 @@ func TestKeyedForgetsKeysWithNothingInProgress(t *testing.T) {
 	}
 }
 
-func TestKeyedWithoutCapTracksNothing(t *testing.T) {
-	k := NewKeyed(0)
+func TestKeyedLimiterWithoutCapTracksNothing(t *testing.T) {
+	k := NewKeyedLimiter(0)
 	for i := 0; i < 10; i++ {
 		if !k.TryAcquire("a") {
 			t.Fatal("turned away with no cap")

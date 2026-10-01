@@ -12,11 +12,17 @@ import (
 // asking a client to wait longer.
 const limitRetryAfter = "1"
 
-// sandboxLimit wraps a sandbox route in the per-sandbox cap, with reserve slots
-// allowed over it. It is exact across API replicas, since every request for a
-// sandbox lands on the runner hosting it. The slot is taken before the handler
-// can wake a stopped sandbox, so a refused request never costs a wake.
-func sandboxLimit(l *limits.Keyed, reserve int, rec *metrics.RunnerRecorder) func(http.HandlerFunc) http.HandlerFunc {
+// maxExecutionDeletesPerSandbox caps a sandbox's execution DELETEs in
+// progress. They are counted apart from its other requests, so work can still
+// be cancelled when the sandbox's limit is full. Bounded, because a DELETE to a
+// stalled daemon holds its slot for up to deleteExecutionTimeout.
+const maxExecutionDeletesPerSandbox = 4
+
+// sandboxLimit wraps a sandbox route in a per-sandbox cap held in l. It is
+// exact across API replicas, since every request for a sandbox lands on the
+// runner hosting it. The slot is taken before the handler can wake a stopped
+// sandbox, so a refused request never costs a wake.
+func sandboxLimit(l *limits.KeyedLimiter, rec *metrics.RunnerRecorder) func(http.HandlerFunc) http.HandlerFunc {
 	return func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			id := r.PathValue("id")
@@ -24,7 +30,7 @@ func sandboxLimit(l *limits.Keyed, reserve int, rec *metrics.RunnerRecorder) fun
 				writeError(w, http.StatusBadRequest, "invalid sandbox id")
 				return
 			}
-			if !l.TryAcquireReserve(id, reserve) {
+			if !l.TryAcquire(id) {
 				rec.ObserveRequestLimited(metrics.LimitSandbox)
 				writeSandboxRequestLimit(w)
 				return

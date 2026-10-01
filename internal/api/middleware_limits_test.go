@@ -193,20 +193,31 @@ func TestTenantLimitRefusesRequestsOverCap(t *testing.T) {
 	release()
 }
 
-// Execution DELETE is how a tenant stops work, so a tenant at its cap can
-// still send it, up to a reserve. The reserve is bounded: a DELETE to a daemon
-// the guest has starved holds its slot too, and without a bound one tenant
-// could fill the process with them.
-func TestTenantLimitGivesExecutionDeleteABoundedReserve(t *testing.T) {
+// Execution DELETE is how a tenant stops work, so it is counted apart from the
+// tenant's other requests: it gets through while they fill their limit, and
+// takes none of their slots. Its own limit is bounded: a DELETE to a daemon the
+// guest has starved holds its slot too, and without a bound one tenant could
+// fill the process with them.
+func TestTenantLimitCountsExecutionDeletesApart(t *testing.T) {
 	runner := newBlockingRunner(t)
 	g := newLimitTestGateway(t, runner, func(c *config.APIConfig) { c.MaxInflightPerTenant = 1 })
 	sandboxA := "/sandboxes/" + limitTestSandboxA
 
-	g.hold(t, runner, 1, http.MethodPost, sandboxA+"/executions", g.keyA)
-	g.hold(t, runner, executionDeleteReserve, http.MethodDelete, sandboxA+"/executions/exec-1", g.keyA)
+	releaseExec := g.hold(t, runner, 1, http.MethodPost, sandboxA+"/executions", g.keyA)
+	g.hold(t, runner, maxExecutionDeletesPerTenant, http.MethodDelete, sandboxA+"/executions/exec-1", g.keyA)
 
 	rr := g.call(context.Background(), http.MethodDelete, sandboxA+"/executions/exec-1", g.keyA)
 	assertLimitResponse(t, rr, http.StatusTooManyRequests, reasonTenantRequestLimit)
+
+	releaseExec()
+	g.hold(t, runner, 1, http.MethodPost, sandboxA+"/executions", g.keyA)
+}
+
+func TestTenantLimitOffLeavesExecutionDeletesUnlimited(t *testing.T) {
+	runner := newBlockingRunner(t)
+	g := newLimitTestGateway(t, runner, func(c *config.APIConfig) { c.MaxInflightPerTenant = 0 })
+
+	g.hold(t, runner, maxExecutionDeletesPerTenant+1, http.MethodDelete, "/sandboxes/"+limitTestSandboxA+"/executions/exec-1", g.keyA)
 }
 
 // A create holds its slot until the runner finishes, even once the client has
