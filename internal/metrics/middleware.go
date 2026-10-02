@@ -10,10 +10,11 @@ import (
 // Both *APIRecorder and *RunnerRecorder satisfy it.
 type HTTPObserver interface {
 	ObserveHTTP(route, method string, status int, dur time.Duration)
+	AddHTTPInFlight(delta float64)
 }
 
-// HTTPMiddleware wraps next, recording each request's route pattern, method,
-// status, and duration to obs.
+// HTTPMiddleware wraps next, counting each request while it is in progress and
+// recording its route pattern, method, status, and duration to obs.
 //
 // The route label is http.Request.Pattern, which ServeMux sets on the request
 // while routing, so it is read after next.ServeHTTP returns. The method prefix
@@ -25,7 +26,9 @@ func HTTPMiddleware(obs HTTPObserver) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			sw := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 			start := time.Now()
+			obs.AddHTTPInFlight(1)
 			defer func() {
+				obs.AddHTTPInFlight(-1)
 				obs.ObserveHTTP(routeFromPattern(r.Pattern), methodLabel(r.Method), sw.status, time.Since(start))
 			}()
 			next.ServeHTTP(sw, r)

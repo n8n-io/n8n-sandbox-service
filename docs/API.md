@@ -46,6 +46,24 @@ The API and runner use two buckets so clients (including the SDK) can decide **w
 - **503 Service Unavailable** — **Transient / retry**: overload, no capacity yet, network or upstream not ready, or the sandbox daemon is not reachable *for the moment* while the container is otherwise expected to be usable. Safe to back off and retry the same operation.
 - **502 Bad Gateway** — **Not retryable as “wait and retry”**: the request does not make sense to repeat unchanged; fix state first (new sandbox, repair registry/routing, or handle the reported error). Examples: stored sandbox has **no runner HTTP base URL** or **delete** failed on the runner control plane.
 
+### HTTP 429 — too many requests in progress
+
+Two limits cap how many requests can be in progress at the same time. Neither is a rate.
+
+- **Per tenant**, in the API: all of a tenant's keys together, counted on each API replica. Admin keys are not counted.
+- **Per sandbox**, in the runner: exec and file requests, from all API replicas together.
+
+Their sizes are `SANDBOX_API_MAX_INFLIGHT_PER_TENANT` and `SANDBOX_RUNNER_MAX_INFLIGHT_PER_SANDBOX` in [configuration.md](configuration.md). A request over either is refused before it reaches the sandbox:
+
+```
+HTTP/1.1 429 Too Many Requests
+Retry-After: 1
+
+{"error":"too many requests in progress for this tenant","code":429,"reason":"tenant_request_limit"}
+```
+
+`reason` is `tenant_request_limit` or `sandbox_request_limit`; the per-sandbox body has no `code`. A stream counts until it ends, a create until the runner has finished it. Execution `DELETE`s have limits of their own, counted the same way: 16 per tenant and 4 per sandbox, so work can be cancelled while the others are full. Safe to retry after the delay.
+
 ### HTTP 409 `sandbox_restarted` — the sandbox came back without its memory
 
 A sandbox whose guest crashed is recovered automatically by booting its existing filesystem. Files survive; everything that was in memory does not. The request that triggered the recovery waits for it, then fails with `409`, so the loss is reported once instead of silently:
@@ -214,7 +232,7 @@ Resource limits (memory, CPU, process count) are configured on the runner via en
 }
 ```
 
-**Errors:** `400` invalid request body, supplied id or `egress` value, `403` tenant sandbox quota exceeded, `409` if the supplied id is owned by another tenant/admin, exists with a different `egress` than requested, or the tenant was deleted before the sandbox row could be stored (runner create is rolled back), `502` stale sandbox cleanup failed, or the runner did not confirm the requested `egress` (runner create is rolled back; a runner from before egress modes only serves `public`), `503` no sandbox runners are registered or available
+**Errors:** `400` invalid request body, supplied id or `egress` value, `403` tenant sandbox quota exceeded, `409` if the supplied id is owned by another tenant/admin, exists with a different `egress` than requested, or the tenant was deleted before the sandbox row could be stored (runner create is rolled back), `429` [too many requests in progress](#http-429--too-many-requests-in-progress), `502` stale sandbox cleanup failed, or the runner did not confirm the requested `egress` (runner create is rolled back; a runner from before egress modes only serves `public`), `503` no sandbox runners are registered or available
 
 **Examples:**
 
@@ -330,6 +348,8 @@ it does not kill the process; cancel with `DELETE /sandboxes/{id}/executions/{ex
 | `timeout_ms`       | int64             | no       | `300000` (5m)  |
 | `exec_id`          | string            | no       | generated UUID |
 
+`timeout_ms` may not exceed `SANDBOX_RUNNER_MAX_EXEC_TIMEOUT` ([configuration.md](configuration.md#shared-runner-config)); a larger value gets `400` naming the maximum.
+
 The command is always executed via `/bin/sh -c` so that shell features (tilde expansion,
 pipes, redirects, etc.) work consistently.
 
@@ -400,7 +420,7 @@ Events are kept in a bounded buffer (16 MiB per execution; completed executions 
 retained for 10 minutes — see `SANDBOX_EXEC_*` in [configuration.md](configuration.md#sandbox-daemon)).
 When the buffer is exhausted, old events are discarded and stale resume requests return `410 Gone`.
 
-**Errors:** `400` invalid id or missing command, `404` sandbox not found, `410` if execution exists but history is no longer retained. Transient failures use **503**; **502** means the sandbox is not usable without a client-side change — see [HTTP 503 (transient) vs 502 (not retryable)](#http-503-transient-vs-502-not-retryable).
+**Errors:** `400` invalid id, missing command or `timeout_ms` above the maximum, `404` sandbox not found, `410` if execution exists but history is no longer retained, `429` too many requests in progress (see [HTTP 429](#http-429--too-many-requests-in-progress)). Transient failures use **503**; **502** means the sandbox is not usable without a client-side change — see [HTTP 503 (transient) vs 502 (not retryable)](#http-503-transient-vs-502-not-retryable).
 
 **Example:**
 
@@ -434,7 +454,7 @@ or the client disconnects.
 
 Same NDJSON event format as `POST /sandboxes/{id}/executions`.
 
-**Errors:** `400` invalid parameters, `404` execution not found, `410` requested history is no longer retained
+**Errors:** `400` invalid parameters, `404` execution not found, `410` requested history is no longer retained, `429` [too many requests in progress](#http-429--too-many-requests-in-progress)
 
 **Example:**
 
@@ -467,7 +487,7 @@ the background after every command and discards the answer.
 
 **Response:** `204 No Content`
 
-**Errors:** `400` invalid id, `404` sandbox not found
+**Errors:** `400` invalid id, `404` sandbox not found, `429` past this route's own limits (see [HTTP 429](#http-429--too-many-requests-in-progress)), `503` if the sandbox does not answer within 10 seconds
 
 **Example:**
 
@@ -504,7 +524,7 @@ List files in a sandbox directory.
 ]
 ```
 
-**Errors:** `400` invalid id, `404` directory not found
+**Errors:** `400` invalid id, `404` directory not found, `429` [too many requests in progress](#http-429--too-many-requests-in-progress)
 
 **Example:**
 
@@ -529,7 +549,7 @@ Download a file from a sandbox.
 
 Raw file contents.
 
-**Errors:** `400` invalid id or missing path, `404` file not found
+**Errors:** `400` invalid id or missing path, `404` file not found, `429` [too many requests in progress](#http-429--too-many-requests-in-progress)
 
 **Example:**
 
@@ -559,7 +579,7 @@ Upload (write) a file to a sandbox.
 
 **Response:** `200 OK`
 
-**Errors:** `400` invalid id or missing path, `409` file exists (when `overwrite=false`)
+**Errors:** `400` invalid id or missing path, `409` file exists (when `overwrite=false`), `429` [too many requests in progress](#http-429--too-many-requests-in-progress)
 
 **Example:**
 
@@ -589,7 +609,7 @@ Append data to a file in a sandbox. Creates the file if it doesn't exist.
 
 **Response:** `200 OK`
 
-**Errors:** `400` invalid id or missing path, `404` path not found
+**Errors:** `400` invalid id or missing path, `404` path not found, `429` [too many requests in progress](#http-429--too-many-requests-in-progress)
 
 **Example:**
 
@@ -616,7 +636,7 @@ Delete a file or directory from a sandbox.
 
 **Response:** `204 No Content`
 
-**Errors:** `400` invalid id or missing path
+**Errors:** `400` invalid id or missing path, `429` [too many requests in progress](#http-429--too-many-requests-in-progress)
 
 **Example:**
 
@@ -654,7 +674,7 @@ Copy a file or directory within a sandbox.
 
 **Response:** `200 OK`
 
-**Errors:** `400` invalid id, missing src/dest, `404` source not found, `409` destination exists
+**Errors:** `400` invalid id, missing src/dest, `404` source not found, `409` destination exists, `429` [too many requests in progress](#http-429--too-many-requests-in-progress)
 
 **Example:**
 
@@ -692,7 +712,7 @@ Move (rename) a file or directory within a sandbox.
 
 **Response:** `200 OK`
 
-**Errors:** `400` invalid id, missing src/dest, `404` source not found, `409` destination exists
+**Errors:** `400` invalid id, missing src/dest, `404` source not found, `409` destination exists, `429` [too many requests in progress](#http-429--too-many-requests-in-progress)
 
 **Example:**
 
@@ -718,7 +738,7 @@ Create a directory in a sandbox.
 
 **Response:** `201 Created`
 
-**Errors:** `400` invalid id or missing path, `409` directory already exists
+**Errors:** `400` invalid id or missing path, `409` directory already exists, `429` [too many requests in progress](#http-429--too-many-requests-in-progress)
 
 **Example:**
 
@@ -754,7 +774,7 @@ Get file or directory metadata.
 
 `exists()` can be derived: a `200` means the file exists, a `404` means it doesn't.
 
-**Errors:** `400` invalid id or missing path, `404` file not found
+**Errors:** `400` invalid id or missing path, `404` file not found, `429` [too many requests in progress](#http-429--too-many-requests-in-progress)
 
 **Example:**
 

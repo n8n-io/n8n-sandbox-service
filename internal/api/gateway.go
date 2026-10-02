@@ -8,6 +8,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/config"
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
+	"github.com/n8n-io/sandbox-service/internal/limits"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 )
 
@@ -34,8 +35,19 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 		mux.Handle("GET /metrics", metrics.Handler(rec.Registry()))
 	}
 
+	limitTenant := tenantLimit(limits.NewKeyedLimiter(cfg.MaxInflightPerTenant), rec)
+	// Execution DELETEs have a limit of their own, so a tenant can cancel work
+	// while its other requests fill theirs. Turning the tenant limit off turns
+	// this one off too.
+	maxDeletes := 0
+	if cfg.MaxInflightPerTenant > 0 {
+		maxDeletes = maxExecutionDeletesPerTenant
+	}
+	limitTenantDeletes := tenantLimit(limits.NewKeyedLimiter(maxDeletes), rec)
 	mux.HandleFunc("GET /sandboxes", handleListSandboxes(s))
-	mux.HandleFunc("POST /sandboxes", handleCreateSandbox(s, reg, cfg, rec))
+	// A create holds its slot until the runner is done, even after the client
+	// has gone, so a burst of creates is bounded like any other request.
+	mux.HandleFunc("POST /sandboxes", limitTenant(handleCreateSandbox(s, reg, cfg, rec)))
 	mux.HandleFunc("GET /sandboxes/{id}", handleGetSandbox(s, cfg))
 	mux.HandleFunc("DELETE /sandboxes/{id}", handleDeleteSandbox(s, cfg, rec))
 
@@ -47,18 +59,18 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	mux.HandleFunc("POST /admin/tenants/{id}/keys", handleCreateTenantKey(s))
 	mux.HandleFunc("DELETE /admin/tenants/{id}/keys/{keyId}", handleRevokeTenantKey(s))
 
-	mux.HandleFunc("POST /sandboxes/{id}/executions", sandboxProxy(false))
-	mux.HandleFunc("GET /sandboxes/{id}/executions/{exec_id}", sandboxProxy(false))
-	mux.HandleFunc("DELETE /sandboxes/{id}/executions/{exec_id}", sandboxProxy(false))
-	mux.HandleFunc("POST /sandboxes/{id}/files/copy", sandboxProxy(false))
-	mux.HandleFunc("POST /sandboxes/{id}/files/move", sandboxProxy(false))
-	mux.HandleFunc("GET /sandboxes/{id}/files", sandboxProxy(false))
-	mux.HandleFunc("GET /sandboxes/{id}/files/content", sandboxProxy(false))
-	mux.HandleFunc("PUT /sandboxes/{id}/files", sandboxProxy(true))
-	mux.HandleFunc("POST /sandboxes/{id}/files", sandboxProxy(true))
-	mux.HandleFunc("DELETE /sandboxes/{id}/files", sandboxProxy(false))
-	mux.HandleFunc("POST /sandboxes/{id}/mkdir", sandboxProxy(false))
-	mux.HandleFunc("GET /sandboxes/{id}/stat", sandboxProxy(false))
+	mux.HandleFunc("POST /sandboxes/{id}/executions", limitTenant(sandboxProxy(false)))
+	mux.HandleFunc("GET /sandboxes/{id}/executions/{exec_id}", limitTenant(sandboxProxy(false)))
+	mux.HandleFunc("DELETE /sandboxes/{id}/executions/{exec_id}", limitTenantDeletes(sandboxProxy(false)))
+	mux.HandleFunc("POST /sandboxes/{id}/files/copy", limitTenant(sandboxProxy(false)))
+	mux.HandleFunc("POST /sandboxes/{id}/files/move", limitTenant(sandboxProxy(false)))
+	mux.HandleFunc("GET /sandboxes/{id}/files", limitTenant(sandboxProxy(false)))
+	mux.HandleFunc("GET /sandboxes/{id}/files/content", limitTenant(sandboxProxy(false)))
+	mux.HandleFunc("PUT /sandboxes/{id}/files", limitTenant(sandboxProxy(true)))
+	mux.HandleFunc("POST /sandboxes/{id}/files", limitTenant(sandboxProxy(true)))
+	mux.HandleFunc("DELETE /sandboxes/{id}/files", limitTenant(sandboxProxy(false)))
+	mux.HandleFunc("POST /sandboxes/{id}/mkdir", limitTenant(sandboxProxy(false)))
+	mux.HandleFunc("GET /sandboxes/{id}/stat", limitTenant(sandboxProxy(false)))
 
 	var handler http.Handler = mux
 	if rec.Enabled() {

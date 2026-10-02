@@ -38,12 +38,22 @@ func UploadProxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metri
 	return proxyHandler(rt, cfg, rec, true, true)
 }
 
+// deleteExecutionTimeout bounds an execution DELETE. The daemon answers one at
+// once when it is healthy; without a bound, a guest that starves its daemon
+// would let each DELETE hold its request slot for as long as the client waits.
+var deleteExecutionTimeout = 10 * time.Second
+
 // DeleteExecutionHandler serves DELETE /sandboxes/{id}/executions/{exec_id}, the
 // one sandbox route that answers without waking: a stopped or crashed sandbox has
 // already lost the execution, so the delete gets 204 (writeExecutionGone) and does
 // not spend the one-shot 409 restart report. Rationale in docs/API.md under DELETE /sandboxes/{id}/executions/{exec_id}.
 func DeleteExecutionHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder) http.HandlerFunc {
-	return proxyHandler(rt, cfg, rec, false, false)
+	proxy := proxyHandler(rt, cfg, rec, false, false)
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), deleteExecutionTimeout)
+		defer cancel()
+		proxy(w, r.WithContext(ctx))
+	}
 }
 
 // wake says whether a sandbox that is not running is started for the request. Only

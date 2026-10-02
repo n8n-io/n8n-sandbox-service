@@ -87,6 +87,20 @@ use the status code to learn whether an ID exists.
 Error bodies the API generates itself have runner-side sandbox paths stripped
 before they are returned.
 
+### Concurrency limits
+
+A request that runs a command or reads a file stays open through the API, the
+runner and the sandbox until it finishes, and every open request uses memory
+and connections on machines all tenants share. Without a bound, one tenant
+could open thousands of them and exhaust those machines for everyone. So by
+default the API caps the requests a tenant can have in progress at once, the
+runner caps them per sandbox, and the runner caps how long a command can run.
+Over a request limit the answer is `429`
+([API.md](API.md#http-429--too-many-requests-in-progress)), which the SDK
+retries for requests that are safe to repeat; other `429`s reach the caller.
+The sizes are in [configuration.md](configuration.md), where setting one to `0`
+turns it off.
+
 ## API to runner
 
 Runners do not know about tenants. A runner authenticates its caller and then
@@ -318,6 +332,11 @@ that all pass the check are all admitted. The excess is bounded by how many
 creates the caller runs in parallel, not by time, and the tenant then holds more
 than its quota until it deletes sandboxes.
 
+**Tenant request limits are per API replica.** Each replica counts a tenant's
+requests in its own memory, so across replicas a tenant can hold up to
+`SANDBOX_API_MAX_INFLIGHT_PER_TENANT`, plus its execution `DELETE` limit
+([API.md](API.md#http-429--too-many-requests-in-progress)), on each.
+
 **Per-sandbox disk usage is not bounded by default.** On the Sysbox runtime a
 per-sandbox disk quota applies only when `SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB`
 is non-zero and the runner's entrypoint managed to mount its quota pool at
@@ -367,6 +386,7 @@ The boundaries above are covered by tests rather than asserted on paper.
 | Client-supplied ID conflicts | [internal/api/handlers_create_sandbox_test.go](../internal/api/handlers_create_sandbox_test.go) |
 | Admin route gating and key revocation | [internal/api/handlers_tenants_test.go](../internal/api/handlers_tenants_test.go) |
 | Provisioner keys: the two allowed routes, `403` on every other route, quota bounds, no fall-through to the admin pseudo-tenant | [internal/api/handlers_provisioner_test.go](../internal/api/handlers_provisioner_test.go), [internal/api/config/config_test.go](../internal/api/config/config_test.go), [e2e/tests/provisioner-key.spec.ts](../e2e/tests/provisioner-key.spec.ts) |
+| Concurrency limits: per tenant (creates included) and per sandbox, the execution `DELETE` limits and timeout, the `timeout_ms` cap | [internal/api/middleware_limits_test.go](../internal/api/middleware_limits_test.go), [internal/runner/middleware_limits_test.go](../internal/runner/middleware_limits_test.go), [internal/limits/limits_test.go](../internal/limits/limits_test.go), [e2e/tests/request-limits.spec.ts](../e2e/tests/request-limits.spec.ts) |
 | Runner listeners require a CA-signed client certificate; the API verifies each runner's host name and refuses a non-https base | [internal/runner/mtls_test.go](../internal/runner/mtls_test.go), [internal/api/runnertls_test.go](../internal/api/runnertls_test.go), [internal/api/registry/validate_test.go](../internal/api/registry/validate_test.go) |
 | No caller-set header but `Content-Type` passed on to the daemon; daemon redirects refused; daemon signal headers stripped, sandbox-gone body ignored | [internal/runner/proxy_test.go](../internal/runner/proxy_test.go), [internal/api/handlers_reap_test.go](../internal/api/handlers_reap_test.go), [e2e/tests/runner-restart.spec.ts](../e2e/tests/runner-restart.spec.ts) |
 | Sandbox-to-sandbox and blocked-range egress; egress `none` across stop/wake and slot reuse | [e2e/tests/network-isolation.spec.ts](../e2e/tests/network-isolation.spec.ts) |
