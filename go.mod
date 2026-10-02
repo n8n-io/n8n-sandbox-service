@@ -1,6 +1,6 @@
 module github.com/n8n-io/sandbox-service
 
-go 1.25.0
+go 1.27.1
 
 require (
 	github.com/google/uuid v1.6.0

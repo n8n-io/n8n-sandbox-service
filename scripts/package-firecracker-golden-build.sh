@@ -80,7 +80,6 @@ FC_SCRIPTS="${ROOT}/scripts/firecracker.ee"
 # resolves FIRECRACKER_VERSION (env or the pin) for the manifest.
 # shellcheck source=scripts/firecracker.ee/firecracker-release.sh
 source "${FC_SCRIPTS}/firecracker-release.sh"
-GO_VERSION="${GO_VERSION:-1.25.0}"
 FIRECRACKER_ROOTFS_SIZE_MB="${FIRECRACKER_ROOTFS_SIZE_MB:-2048}"
 PACKAGED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
@@ -102,6 +101,14 @@ install -m 0755 "${FC_SCRIPTS}/setup-firecracker-e2e-vm.sh" "${BUNDLE}/scripts/"
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "${BUNDLE}/bin/sandbox-daemon" "${ROOT}/cmd/daemon"
 chmod 0755 "${BUNDLE}/bin/sandbox-daemon"
 DAEMON_SHA256="$(sha256sum "${BUNDLE}/bin/sandbox-daemon" | awk '{print $1}')"
+# Read back from the binary, so the manifest names the Go that built it:
+# "go version FILE" prints "FILE: go1.N.P".
+GO_VERSION="$(go version "${BUNDLE}/bin/sandbox-daemon")"
+GO_VERSION="${GO_VERSION##*: go}"
+if [[ ! "$GO_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+	echo "ERROR: bin/sandbox-daemon was not built by a Go release: ${GO_VERSION}" >&2
+	exit 1
+fi
 
 cat >"${BUNDLE}/MANIFEST.json" <<EOF
 {

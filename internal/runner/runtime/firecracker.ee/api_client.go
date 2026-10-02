@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/http"
 	"strings"
+
+	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 )
 
 const maxFirecrackerAPIResponseBodyBytes int64 = 64 << 10
@@ -24,7 +26,7 @@ func newFirecrackerAPIClient(socketPath string) *firecrackerAPIClient {
 			return dialer.DialContext(ctx, "unix", socketPath)
 		},
 	}
-	return &firecrackerAPIClient{client: &http.Client{Transport: transport}}
+	return &firecrackerAPIClient{client: &http.Client{Transport: transport, CheckRedirect: runnerruntime.RefuseRedirect}}
 }
 
 func (c *firecrackerAPIClient) patchJSON(ctx context.Context, path string, body []byte) error {

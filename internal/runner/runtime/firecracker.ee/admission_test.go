@@ -428,6 +428,16 @@ func TestProbeAdmissionDaemon(t *testing.T) {
 	}
 }
 
+func TestProbeAdmissionDaemonRefusesRedirects(t *testing.T) {
+	d := newRedirectingDaemon(t)
+
+	err := probeAdmissionDaemon(context.Background(), d.url)
+	if err == nil || !strings.Contains(err.Error(), "healthz status 307") {
+		t.Fatalf("probeAdmissionDaemon() error = %v, want healthz status 307", err)
+	}
+	d.assertRefused(t)
+}
+
 func TestProbeAdmissionDaemonFailsOnTruncatedBody(t *testing.T) {
 	tests := []struct {
 		name       string

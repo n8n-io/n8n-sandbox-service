@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -704,6 +705,51 @@ func TestProbeDaemonRejectsUnhealthyStatus(t *testing.T) {
 	if err := probeDaemon(ctx, server.URL, time.Second); err == nil {
 		t.Fatal("expected unhealthy status to fail readiness probe")
 	}
+}
+
+// redirectingDaemon redirects every request to a healthy-looking target, with a
+// 307 so a followed POST would carry its body along. Both count the requests
+// they serve, so a test can tell a refused redirect from one never served.
+type redirectingDaemon struct {
+	url        string
+	daemonHits atomic.Int32
+	targetHits atomic.Int32
+}
+
+func newRedirectingDaemon(t *testing.T) *redirectingDaemon {
+	t.Helper()
+	d := &redirectingDaemon{}
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		d.targetHits.Add(1)
+	}))
+	t.Cleanup(target.Close)
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		d.daemonHits.Add(1)
+		http.Redirect(w, r, target.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(daemon.Close)
+	d.url = daemon.URL
+	return d
+}
+
+func (d *redirectingDaemon) assertRefused(t *testing.T) {
+	t.Helper()
+	if got := d.daemonHits.Load(); got == 0 {
+		t.Fatal("daemon served no request, so no redirect was refused")
+	}
+	if got := d.targetHits.Load(); got != 0 {
+		t.Fatalf("redirect target hits = %d, want 0", got)
+	}
+}
+
+func TestProbeDaemonRefusesRedirects(t *testing.T) {
+	d := newRedirectingDaemon(t)
+
+	err := probeDaemon(context.Background(), d.url, time.Nanosecond)
+	if err == nil || !strings.Contains(err.Error(), "did not become healthy") {
+		t.Fatalf("probeDaemon() error = %v, want the daemon's 307 read as unhealthy", err)
+	}
+	d.assertRefused(t)
 }
 
 func TestStartCommandRunsInOwnProcessGroup(t *testing.T) {

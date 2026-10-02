@@ -3,6 +3,10 @@ SHELL := /bin/bash
 MODULE  := github.com/n8n-io/sandbox-service
 BINDIR  := bin
 
+# The gofmt of the Go that go.mod selects. The go command switches to that
+# version on its own; a gofmt found on PATH does not.
+GOFMT = $(shell go env GOROOT)/bin/gofmt
+
 SHELL_FILES := $(shell git ls-files '*.sh')
 
 .PHONY: all daemon runner runner-docker runner-firecracker api test clean docker docker-local docker-arm64 docker-amd64 docker-api-arm64 docker-api-amd64 docker-runner-arm64 docker-runner-amd64 docker-firecracker-runner-amd64 docker-sandbox-arm64 docker-sandbox-amd64 fmt fmt-check vet shell-fmt shell-fmt-check shell-lint check-shell-files playground up down smoke sdk sdk-install sdk-build sdk-typecheck sdk-test sdk-fmt sdk-fmt-check sdk-lint
@@ -11,11 +15,11 @@ all: daemon runner api
 
 ## fmt: Format all Go files.
 fmt:
-	gofmt -w .
+	$(GOFMT) -w .
 
 ## fmt-check: Check that all Go files are gofmt-formatted.
 fmt-check:
-	@unformatted=$$(gofmt -l .); status=$$?; \
+	@unformatted=$$($(GOFMT) -l .); status=$$?; \
 	if [ $$status -ne 0 ]; then \
 		exit $$status; \
 	fi; \

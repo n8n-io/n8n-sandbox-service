@@ -14,7 +14,12 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
+	"github.com/n8n-io/sandbox-service/internal/sandboxproxy"
 )
+
+// errDaemonRedirect marks a 3xx from the daemon, which the proxies answer with
+// 502 rather than relay; see runnerruntime.RefuseRedirect.
+var errDaemonRedirect = errors.New("daemon returned a redirect")
 
 type proxyContextKey struct{}
 
@@ -56,6 +61,15 @@ func DeleteExecutionHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *m
 func proxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder, limitBody bool, wake bool) http.HandlerFunc {
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
+			// The daemon runs in the guest and reads no request headers, so of the
+			// incoming ones it gets Content-Type alone: never the fleet X-Api-Key
+			// the API sends, nor anything else a caller set.
+			pr.Out.Header = http.Header{}
+			pr.Out.Trailer = nil
+			if ct := pr.In.Header.Get("Content-Type"); ct != "" {
+				pr.Out.Header.Set("Content-Type", ct)
+			}
+
 			// Comma-ok assertion: the context key is missing when
 			// httputil.ReverseProxy replays Rewrite on a internally-constructed
 			// request (e.g. 100-continue handshake, connection-level retry after
@@ -69,8 +83,19 @@ func proxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.Run
 			pr.Out.URL.Path = pt.path
 			pr.Out.URL.RawQuery = pr.In.URL.RawQuery
 		},
+		ModifyResponse: func(resp *http.Response) error {
+			if daemonRedirected(resp.Request, resp, "proxy") {
+				return errDaemonRedirect
+			}
+			sandboxproxy.StripSignals(resp.Header)
+			return nil
+		},
 		FlushInterval: -1,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			if errors.Is(err, errDaemonRedirect) {
+				writeError(w, http.StatusBadGateway, err.Error())
+				return
+			}
 			var maxBytesErr *http.MaxBytesError
 			if errors.As(err, &maxBytesErr) {
 				writeError(w, http.StatusBadRequest, "failed to read request body: "+maxBytesErr.Error())
@@ -128,6 +153,20 @@ func logDaemonUnreachable(r *http.Request, component string, err error) {
 		return
 	}
 	slog.WarnContext(r.Context(), component+": daemon request failed", "sandbox_id", r.PathValue("id"), "err", err)
+}
+
+// daemonRedirected reports whether the daemon answered r with a 3xx, and logs
+// it when it did. The daemon chooses the Location, so only a prefix is logged.
+func daemonRedirected(r *http.Request, resp *http.Response, component string) bool {
+	if resp.StatusCode < 300 || resp.StatusCode >= 400 {
+		return false
+	}
+	loc := resp.Header.Get("Location")
+	if len(loc) > 200 {
+		loc = loc[:200]
+	}
+	slog.WarnContext(r.Context(), component+": daemon returned a redirect", "sandbox_id", r.PathValue("id"), "status", resp.StatusCode, "location", loc)
+	return true
 }
 
 // resolveDaemonURL validates the sandbox ID, looks up the daemon URL, and

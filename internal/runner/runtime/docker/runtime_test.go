@@ -4,8 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
@@ -590,5 +594,35 @@ func TestIsDockerNotFound(t *testing.T) {
 				t.Fatalf("isDockerNotFound() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// The target would pass the readiness check, so only an unfollowed redirect keeps
+// waitForDaemon waiting. The 307 would carry the exec body along if followed.
+func TestWaitForDaemonRefusesRedirects(t *testing.T) {
+	var targetHits atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		targetHits.Add(1)
+		_, _ = w.Write([]byte(`{"seq":0,"type":"exit","exit_code":0}` + "\n"))
+	}))
+	defer target.Close()
+	var daemonHits atomic.Int32
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		daemonHits.Add(1)
+		http.Redirect(w, r, target.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	defer daemon.Close()
+
+	// Long enough for a few of waitForDaemon's 200ms polls.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := waitForDaemon(ctx, daemon.URL); err == nil {
+		t.Fatal("waitForDaemon() succeeded through a redirect")
+	}
+	if got := daemonHits.Load(); got == 0 {
+		t.Fatal("daemon served no request, so no redirect was refused")
+	}
+	if got := targetHits.Load(); got != 0 {
+		t.Fatalf("redirect target hits = %d, want 0", got)
 	}
 }

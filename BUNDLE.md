@@ -65,6 +65,7 @@ firecracker-golden-build/
 | `bundle_version` | Label of this tarball. Equals `version` on a service release; on a staging prerelease it is the staging label (`{version}-staging.{sha}`). |
 | `git_sha` | Commit the bundle was built from. This, not `version`, is the pin to correlate with the commit the container images were built from. |
 | `sandbox_image.ref` | Authoritative pin for the guest rootfs: a digest ref (`repository@sha256:…`) of the image the publishing run pushed, so `tag` is empty. Release bundles pin the Docker Hub repository, staging bundles the ACR one. |
+| `go_version` | Go release that built `bin/sandbox-daemon`, read back from the binary (e.g. `1.27.1`). |
 
 Staging bundles are the case to be careful with: nothing is published at `version`
 during a staging run, so use `bundle_version`, `git_sha`, and `sandbox_image.ref`
@@ -161,8 +162,8 @@ Package locally:
 `sandbox_image.ref` defaults to `n8nio/n8n-sandbox-service-sandbox:{VERSION}` for local packaging. The release and staging workflows set `SANDBOX_IMAGE_REF` to the digest ref of the sandbox image they just pushed; `repository` and `tag` in the manifest derive from it, with `tag` empty for a digest ref, and anything after `@` that is not a full `sha256:` digest is rejected.
 
 CI runs `scripts/test-firecracker-golden-build-bundle.sh` (rootfs build, resolv.conf
-check, tarball layout, executable entrypoints). Release workflows attach the tarball
-to `service/v*` GitHub Releases.
+check, tarball layout, executable entrypoints, daemon built with the Go in
+`go.mod`). Release workflows attach the tarball to `service/v*` GitHub Releases.
 
 ## Copy-on-release rule
 

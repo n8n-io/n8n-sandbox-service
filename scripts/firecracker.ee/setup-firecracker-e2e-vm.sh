@@ -11,7 +11,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/firecracker.ee/firecracker-release.sh
 source "${SCRIPT_DIR}/firecracker-release.sh"
 
-GO_VERSION="${GO_VERSION:-1.25.0}"
+# Defaults to the go line of ~/project/go.mod, the tree this script builds and
+# the version CI builds with.
+GO_VERSION="${GO_VERSION:-$(awk '$1 == "go" { print $2; exit }' ~/project/go.mod)}"
 NODE_MAJOR="${NODE_MAJOR:-24}"
 PNPM_VERSION="${PNPM_VERSION:-10}"
 JAILER_TMPFS_SIZE="${JAILER_TMPFS_SIZE:-8G}"
@@ -21,6 +23,12 @@ FIRECRACKER_E2E_SNAPSHOT_MEM_MIB="${FIRECRACKER_E2E_SNAPSHOT_MEM_MIB:-512}"
 FIRECRACKER_E2E_SNAPSHOT_VCPUS="${FIRECRACKER_E2E_SNAPSHOT_VCPUS:-1}"
 SANDBOX_IMAGE="${SANDBOX_IMAGE:-n8n-sandbox:e2e-firecracker}"
 SANDBOX_ROOTFS_TAR="${SANDBOX_ROOTFS_TAR:-}"
+
+# GO_VERSION goes into a download URL whose archive root unpacks into /usr/local.
+if [[ ! "$GO_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+	echo "ERROR: GO_VERSION must be a Go release such as 1.27.1; got '${GO_VERSION}'" >&2
+	exit 1
+fi
 
 if [[ "$(uname -m)" != "x86_64" ]]; then
 	echo "Firecracker e2e assets are currently amd64/x86_64 only; got $(uname -m)" >&2

@@ -259,6 +259,13 @@ read or write in the guest is reachable through the file API. The daemon
 authenticates nobody, so reachability is the whole boundary in front of its
 exec and file APIs, on both runtimes.
 
+The runner treats the daemon as part of the guest. Of a proxied request's
+headers it passes on only `Content-Type`, so the fleet `X-Api-Key` and every
+other header a caller set stay out of the guest. It never follows a daemon
+redirect, and its proxies answer one with `502`. They also strip
+`X-Sandbox-Gone` and `X-Sandbox-Restarted` from daemon responses, and the API
+drops a sandbox's row on that header alone, never on a response body.
+
 ## Build inputs
 
 The service images, the sandbox image and the Firecracker guest assets are
@@ -381,6 +388,7 @@ The boundaries above are covered by tests rather than asserted on paper.
 | Provisioner keys: the two allowed routes, `403` on every other route, quota bounds, no fall-through to the admin pseudo-tenant | [internal/api/handlers_provisioner_test.go](../internal/api/handlers_provisioner_test.go), [internal/api/config/config_test.go](../internal/api/config/config_test.go), [e2e/tests/provisioner-key.spec.ts](../e2e/tests/provisioner-key.spec.ts) |
 | Concurrency limits: per tenant (creates included) and per sandbox, the execution `DELETE` limits and timeout, the `timeout_ms` cap | [internal/api/middleware_limits_test.go](../internal/api/middleware_limits_test.go), [internal/runner/middleware_limits_test.go](../internal/runner/middleware_limits_test.go), [internal/limits/limits_test.go](../internal/limits/limits_test.go), [e2e/tests/request-limits.spec.ts](../e2e/tests/request-limits.spec.ts) |
 | Runner listeners require a CA-signed client certificate; the API verifies each runner's host name and refuses a non-https base | [internal/runner/mtls_test.go](../internal/runner/mtls_test.go), [internal/api/runnertls_test.go](../internal/api/runnertls_test.go), [internal/api/registry/validate_test.go](../internal/api/registry/validate_test.go) |
+| No caller-set header but `Content-Type` passed on to the daemon; daemon redirects refused; daemon signal headers stripped, sandbox-gone body ignored | [internal/runner/proxy_test.go](../internal/runner/proxy_test.go), [internal/api/handlers_reap_test.go](../internal/api/handlers_reap_test.go), [e2e/tests/runner-restart.spec.ts](../e2e/tests/runner-restart.spec.ts) |
 | Sandbox-to-sandbox and blocked-range egress; egress `none` across stop/wake and slot reuse | [e2e/tests/network-isolation.spec.ts](../e2e/tests/network-isolation.spec.ts) |
 | Docker capability policy, absence of a root path, and denied network administration | [e2e/tests/sandbox-capabilities.spec.ts](../e2e/tests/sandbox-capabilities.spec.ts) |
 | Unprivileged npm and PyPI installation, and the build toolchain | [e2e/tests/sandbox-packages.spec.ts](../e2e/tests/sandbox-packages.spec.ts) |

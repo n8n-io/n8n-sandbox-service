@@ -5,6 +5,14 @@
 set -euxo pipefail
 
 DOCKER_VERSION="5:29.4.1-1~ubuntu.24.04~noble"
+# The go line in go.mod, the version CI builds with.
+GO_VERSION="$(awk '$1 == "go" { print $2; exit }' ~/project/go.mod)"
+
+# GO_VERSION goes into a download URL whose archive root unpacks into /usr/local.
+if [[ ! "$GO_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+	echo "ERROR: go.mod must name a Go release such as 1.27.1; got '${GO_VERSION}'" >&2
+	exit 1
+fi
 
 echo "==> Installing Docker ${DOCKER_VERSION}..."
 
@@ -37,9 +45,9 @@ echo "==> Installing sysbox..."
 cd ~/project
 sudo bash scripts/setup-sysbox.sh
 
-echo "==> Installing Go 1.25.0..."
+echo "==> Installing Go ${GO_VERSION}..."
 
-curl -fsSL "https://go.dev/dl/go1.25.0.linux-amd64.tar.gz" -o /tmp/go.tar.gz
+curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tar.gz
 sudo tar -C /usr/local -xzf /tmp/go.tar.gz
 rm /tmp/go.tar.gz
 # Single quotes on purpose: $HOME must stay literal in .bashrc.
