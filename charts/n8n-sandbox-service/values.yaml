@@ -234,9 +234,6 @@ runner:
       storageClass: ""
       accessModes:
         - ReadWriteOnce
-      # Only supported with isolation=privileged and hostUsers not false.
-    # Used when persistence is disabled. Bounds the inner Docker daemon's
-    # image layers and sandbox filesystems.
     emptyDir:
       sizeLimit: 64Gi
 

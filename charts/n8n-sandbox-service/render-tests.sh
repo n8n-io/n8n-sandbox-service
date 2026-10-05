@@ -93,10 +93,6 @@ manifests=$(render "${privileged[@]}" \
 	--set runner.dockerDataRoot.persistence.enabled=true)
 echo "$manifests" | grep -q 'mountPath: "/var/lib/docker"'
 echo "$manifests" | grep -q "volumeClaimTemplates"
-if echo "$manifests" | grep -q 'hostUsers:'; then
-	echo "expected hostUsers to be omitted for privileged persistence" >&2
-	exit 1
-fi
 if echo "$manifests" | grep -q 'emptyDir:'; then
 	echo "expected no emptyDir when persistence is enabled" >&2
 	exit 1
@@ -111,10 +107,10 @@ must_fail "requires runner.isolation=privileged" \
 # Privileged isolation permits persistence.
 render "${privileged[@]}" \
 	--set runner.dockerDataRoot.persistence.enabled=true >/dev/null
-# A privileged runner in a user namespace has the same PVC ownership risk.
-must_fail "runner.privileged.runtime.hostUsers=false" "${privileged[@]}" \
+# The chart does not check hostUsers for privileged isolation.
+render "${privileged[@]}" \
 	--set runner.dockerDataRoot.persistence.enabled=true \
-	--set runner.privileged.runtime.hostUsers=false
+	--set runner.privileged.runtime.hostUsers=false >/dev/null
 # Disk quotas do not allow Sysbox persistence.
 must_fail "requires runner.isolation=privileged" \
 	--set runner.dockerDataRoot.persistence.enabled=true \
@@ -129,11 +125,11 @@ render "${privileged[@]}" \
 	--set runner.dockerDataRoot.persistence.enabled=true \
 	--set runner.config.defaultDiskQuotaMb=2048 \
 	--set runner.config.diskQuotaPoolSizeGb=60 >/dev/null
-must_fail "runner.privileged.runtime.hostUsers=false" "${privileged[@]}" \
+render "${privileged[@]}" \
 	--set runner.dockerDataRoot.persistence.enabled=true \
 	--set runner.privileged.runtime.hostUsers=false \
 	--set runner.config.defaultDiskQuotaMb=2048 \
-	--set runner.config.diskQuotaPoolSizeGb=60
+	--set runner.config.diskQuotaPoolSizeGb=60 >/dev/null
 
 # A missing or unsupported volume size must fail, not skip the guard.
 must_fail "whole number of G or Gi" "${privileged[@]}" \

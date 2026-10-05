@@ -53,9 +53,6 @@
 {{- if and $dockerDataRoot.persistence.enabled (ne .Values.runner.isolation "privileged") -}}
 {{- fail "runner.dockerDataRoot.persistence.enabled requires runner.isolation=privileged. Sysbox uses a bounded emptyDir for the inner Docker data root, even with disk quotas. See the chart README section 'Docker Data Root'" -}}
 {{- end -}}
-{{- if and $dockerDataRoot.persistence.enabled (eq .Values.runner.isolation "privileged") (kindIs "bool" .Values.runner.privileged.runtime.hostUsers) (not .Values.runner.privileged.runtime.hostUsers) -}}
-{{- fail "runner.dockerDataRoot.persistence.enabled with runner.privileged.runtime.hostUsers=false mounts a PVC inside a user namespace. The inner Docker daemon may not own the volume root and can fail with `chmod /var/lib/docker: operation not permitted`. Disable persistence to use the bounded emptyDir, or omit hostUsers from the pod. See the chart README section 'Docker Data Root'" -}}
-{{- end -}}
 {{- end -}}
 {{- if and (eq .Values.dataPlane.mode "in-cluster") (gt (int .Values.runner.config.defaultDiskQuotaMb) 0) -}}
 {{- $dockerDataRoot := .Values.runner.dockerDataRoot -}}

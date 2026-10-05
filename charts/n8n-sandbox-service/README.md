@@ -130,31 +130,16 @@ runner:
 
 ## Docker Data Root
 
-The runner always gets a volume for the inner Docker daemon's data root, so its image layers and sandbox filesystems cannot fill the node disk. The table below shows which configurations render and which volume they use.
+The runner always gets a volume for the inner Docker daemon's data root, so its image layers and sandbox filesystems cannot fill the node disk. The table below shows the volume for each configuration.
 
-The volume mounts at `/var/lib/docker`, or at `/var/lib/docker-pool` when `runner.config.defaultDiskQuotaMb` is above 0, because the quota pool image needs the bounded volume then. See [Disk Quotas](#disk-quotas).
+| `runner.isolation` | `runner.dockerDataRoot.persistence.enabled` | Volume |
+| --- | --- | --- |
+| `sysbox` | `false` | Per-pod `emptyDir`, bounded by `emptyDir.sizeLimit` |
+| `sysbox` | `true` | Unsupported, fails to render |
+| `privileged` | `false` | Per-pod `emptyDir`, bounded by `emptyDir.sizeLimit` |
+| `privileged` | `true` | Per-pod PVC, sized by `persistence.size` |
 
-Persistence buys one thing: a warm image cache. It does not carry sandboxes across a runner restart. The runner deletes every sandbox container it finds when it starts, and again when it shuts down, so no sandbox survives a rollout either way.
-
-### Persistence and user namespaces
-
-Do not enable persistence for a runner in a user namespace. The inner Docker daemon chmods its data root at startup. A `PersistentVolume` root belongs to a UID outside the pod's mapping, so the chmod fails and the daemon exits:
-
-```
-level=info msg="Daemon shutdown complete" error="chmod /var/lib/docker: operation not permitted"
-```
-
-The runner then never becomes ready. The pod's UID range can also change when the pod is recreated, so a runner that works today can fail on the next rollout.
-
-| Isolation | `hostUsers` | Persistence | Render | Volume when allowed |
-| --- | --- | --- | --- | --- |
-| Sysbox | Any | Off | Yes | Per-pod `emptyDir`, bounded by `emptyDir.sizeLimit` |
-| Sysbox | Any | On | No | — |
-| Privileged | Any | Off | Yes | Per-pod `emptyDir`, bounded by `emptyDir.sizeLimit` |
-| Privileged | `false` | On | No | — |
-| Privileged | Omitted (default) or `true` | On | Yes | Per-pod PVC, sized by `persistence.size` |
-
-These rules apply with disk quotas on or off. Sysbox always uses the bounded `emptyDir`. For persistence, use privileged isolation with `runner.acknowledgePrivileged: true` and the default `hostUsers` setting.
+The volume mounts at `/var/lib/docker`, or at `/var/lib/docker-pool` when `runner.config.defaultDiskQuotaMb` is above 0. See [Disk Quotas](#disk-quotas).
 
 ## Disk Quotas
 
