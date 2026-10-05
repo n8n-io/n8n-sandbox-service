@@ -194,11 +194,11 @@ func TestLoadRequestLimitDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() failed: %v", err)
 	}
-	if cfg.MaxInflightPerSandbox != 64 {
-		t.Errorf("MaxInflightPerSandbox = %d, want 64", cfg.MaxInflightPerSandbox)
+	if cfg.MaxInflightPerSandbox != 16 {
+		t.Errorf("MaxInflightPerSandbox = %d, want 16", cfg.MaxInflightPerSandbox)
 	}
-	if cfg.MaxExecTimeout != 30*time.Minute {
-		t.Errorf("MaxExecTimeout = %s, want 30m", cfg.MaxExecTimeout)
+	if cfg.MaxExecTimeout != 15*time.Minute {
+		t.Errorf("MaxExecTimeout = %s, want 15m", cfg.MaxExecTimeout)
 	}
 }
 

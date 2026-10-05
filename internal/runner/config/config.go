@@ -26,8 +26,8 @@ const (
 	defaultControlGRPCListenAddr = ":9091"
 	defaultLogLevel              = slog.LevelInfo
 
-	defaultMaxInflightPerSandbox = 64
-	defaultMaxExecTimeout        = 30 * time.Minute
+	defaultMaxInflightPerSandbox = 16
+	defaultMaxExecTimeout        = 15 * time.Minute
 )
 
 // Config holds shared runner configuration parsed from environment variables.

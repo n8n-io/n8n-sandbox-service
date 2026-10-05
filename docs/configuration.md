@@ -32,7 +32,7 @@ All services are configured via environment variables.
 | `SANDBOX_API_POSTGRES_SSLMODE` | `require` | Postgres TLS mode (`disable`, `require`, `verify-full`, etc.) |
 | `SANDBOX_API_MAX_FILE_BYTES` | `10485760` | Maximum file upload size (10 MB) |
 | `SANDBOX_API_DEFAULT_MAX_SANDBOXES` | `50` | Default per-tenant sandbox quota when `POST /admin/tenants` omits `max_sandboxes` (`0` = unlimited). Must fit Postgres/SQLite `INTEGER` (`0`…`2147483647`). Soft check-then-act: concurrent creates can exceed the limit (see `docs/API.md`). |
-| `SANDBOX_API_MAX_INFLIGHT_PER_TENANT` | `512` | Requests a tenant may have in progress at once on this replica, all its keys together; more get `429` ([what counts](API.md#http-429--too-many-requests-in-progress)). A first estimate: eight sandboxes at the per-sandbox limit. It also bounds what a tenant holds here while requests wait on a slow runner, which the per-sandbox limit cannot see. `0` = no limit, for execution `DELETE`s too |
+| `SANDBOX_API_MAX_INFLIGHT_PER_TENANT` | `512` | Requests a tenant may have in progress at once on this replica, all its keys together; more get `429` ([what counts](API.md#http-429--too-many-requests-in-progress)). A first estimate: 32 sandboxes at the per-sandbox limit. It also bounds what a tenant holds here while requests wait on a slow runner, which the per-sandbox limit cannot see. `0` = no limit, for execution `DELETE`s too |
 | `SANDBOX_API_ENABLE_CORS` | `false` | Enable CORS headers (allow all origins); needed for the browser playground |
 | `SANDBOX_API_METRICS_ENABLED` | `false` | When true, expose Prometheus `/metrics` (no `X-Api-Key`; firewall the port it lands on). `SANDBOX_API_METRICS_LISTEN_ADDR` chooses the listener. See [Metrics](#metrics). |
 | `SANDBOX_API_RUNNER_HEARTBEAT_GRACE` | `45s` | How long after the last gRPC heartbeat a runner remains eligible for placement (Go [`time.ParseDuration`](https://pkg.go.dev/time#ParseDuration) syntax, e.g. `45s`, `2m`) |
@@ -72,8 +72,8 @@ The idle sweeper waits `SANDBOX_API_ORPHAN_REAP_BUFFER` (default `5m`) after a r
 | `SANDBOX_RUNNER_CAPACITY_TOTAL` | `1000` | Reported capacity for placement (`0` = unlimited) |
 | `SANDBOX_RUNNER_DATA_DIR` | `/var/sandboxes` | Per-sandbox data directory (the Firecracker runner keeps each sandbox's rootfs here) |
 | `SANDBOX_RUNNER_MAX_FILE_BYTES` | `10485760` | Maximum body the runner accepts on file write/append (10 MB); the API applies `SANDBOX_API_MAX_FILE_BYTES` first |
-| `SANDBOX_RUNNER_MAX_INFLIGHT_PER_SANDBOX` | `64` | Requests one sandbox may have in progress at once; more get `429` ([what counts](API.md#http-429--too-many-requests-in-progress)). A first estimate: high enough for clients that write many files to a sandbox at once, low enough to bound what one sandbox holds on its runner. `0` = no limit, for execution `DELETE`s too |
-| `SANDBOX_RUNNER_MAX_EXEC_TIMEOUT` | `30m` | Largest `timeout_ms` an exec may ask for; a larger one gets `400`. A first estimate: long enough for builds and test suites, and what ends a forgotten command, which keeps running after its stream closes. `0` (no limit) or at least `5m`, the timeout a command gets when it sets none |
+| `SANDBOX_RUNNER_MAX_INFLIGHT_PER_SANDBOX` | `16` | Requests one sandbox may have in progress at once; more get `429` ([what counts](API.md#http-429--too-many-requests-in-progress)). A first estimate: room for several callers sharing one sandbox, low enough to bound what one sandbox holds on its runner. `0` = no limit, for execution `DELETE`s too |
+| `SANDBOX_RUNNER_MAX_EXEC_TIMEOUT` | `15m` | Largest `timeout_ms` an exec may ask for; a larger one gets `400`. A first estimate: long enough for builds and test suites, and what ends a forgotten command, which keeps running after its stream closes. `0` (no limit) or at least `5m`, the timeout a command gets when it sets none |
 | `SANDBOX_RUNNER_METRICS_ENABLED` | `false` | When true, expose Prometheus `/metrics` on the runner's HTTP listener (no `X-Api-Key` and no client certificate; firewall the port). See [Metrics](#metrics). |
 | `SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE` | *(required)* | CA (PEM) that signed the API registration gRPC server cert |
 | `SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE` | *(required)* | Runner client cert (PEM) for registration mTLS |
@@ -161,7 +161,7 @@ assets (see [`internal/runner/runtime/firecracker.ee/README.md`](../internal/run
 
 #### File descriptors
 
-Every request the runner passes to a sandbox holds a few open files on the runner host while it runs. The per-sandbox limits, including the one for execution `DELETE`s, cap those requests, so the runner's open files grow with the number of sandboxes it runs, not with traffic. Set the runner's open-file limit (`LimitNOFILE` in its systemd unit) for a full runner: about 200 per slot with the default per-sandbox limit, plus headroom for connections to the runner itself, which stay open for up to 120 seconds when idle.
+Every request the runner passes to a sandbox holds a few open files on the runner host while it runs. The per-sandbox limits, including the one for execution `DELETE`s, cap those requests, so the runner's open files grow with the number of sandboxes it runs, not with traffic. Set the runner's open-file limit (`LimitNOFILE` in its systemd unit) for a full runner: about 60 per slot with the default per-sandbox limit, plus headroom for connections to the runner itself, which stay open for up to 120 seconds when idle.
 
 ## Sandbox daemon
 
