@@ -126,7 +126,7 @@ Requirements, scheduling and the two hardening options (pod user namespaces, VM-
 
 ## Troubleshooting
 
-**The runner logs `chmod /var/lib/docker: operation not permitted`.** The inner Docker daemon cannot chmod its data root, so it exits and the runner never becomes ready. A `PersistentVolume` is mounted at `/var/lib/docker` and the pod runs in a user namespace, so the volume root belongs to a UID outside the pod's mapping. Chart 0.8.3 and later fail the render on this combination without disk quotas. Chart 0.8.4 and later also require acknowledgement when disk quotas are on. Disable `runner.dockerDataRoot.persistence.enabled` to use the bounded `emptyDir` instead, and see the chart README section [Docker Data Root](../charts/n8n-sandbox-service/README.md#docker-data-root).
+**The runner logs `chmod /var/lib/docker: operation not permitted`.** The inner Docker daemon cannot chmod its data root, so it exits and the runner never becomes ready. A `PersistentVolume` is mounted at `/var/lib/docker` and the pod runs in a user namespace, so the volume root belongs to a UID outside the pod's mapping. Chart 0.8.5 and later require `runner.sysbox.runtime.hostUsers: null` for Sysbox persistence, even with disk quotas. Disable `runner.dockerDataRoot.persistence.enabled` to use the bounded `emptyDir` instead, and see the chart README section [Docker Data Root](../charts/n8n-sandbox-service/README.md#docker-data-root).
 
 **Install succeeds but no runner pod appears.** Admission denied the pod, so `kubectl get pods` shows nothing and the error lands on the StatefulSet. Inspect the StatefulSet events:
 

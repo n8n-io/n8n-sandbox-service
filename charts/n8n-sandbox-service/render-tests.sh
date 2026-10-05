@@ -56,12 +56,12 @@ manifests=$(render "${privileged[@]}" \
 echo "$manifests" | grep -q 'mountPath: "/var/lib/docker-pool"'
 echo "$manifests" | grep -q 'SANDBOX_RUNNER_DISK_QUOTA_POOL_PATH: "/var/lib/docker-pool/docker.img"'
 
-# Sysbox isolation: the README example with persistence needs acknowledgement.
+# Sysbox isolation: persistence works when hostUsers is omitted.
 manifests=$(render \
 	--set runner.config.defaultDiskQuotaMb=2048 \
 	--set runner.config.diskQuotaPoolSizeGb=60 \
 	--set runner.dockerDataRoot.persistence.enabled=true \
-	--set runner.dockerDataRoot.persistence.acknowledgeUserNamespace=true \
+	--set runner.sysbox.runtime.hostUsers=null \
 	--set runner.dockerDataRoot.persistence.size=64Gi)
 echo "$manifests" | grep -q 'mountPath: "/var/lib/docker-pool"'
 echo "$manifests" | grep -q 'SANDBOX_RUNNER_DISK_QUOTA_POOL_PATH: "/var/lib/docker-pool/docker.img"'
@@ -94,36 +94,41 @@ manifests=$(render \
 	--set runner.sysbox.runtime.hostUsers=null)
 echo "$manifests" | grep -q 'mountPath: "/var/lib/docker"'
 echo "$manifests" | grep -q "volumeClaimTemplates"
+if echo "$manifests" | grep -q 'hostUsers:'; then
+	echo "expected hostUsers to be omitted for sysbox persistence" >&2
+	exit 1
+fi
 if echo "$manifests" | grep -q 'sizeLimit:'; then
 	echo "expected no emptyDir sizeLimit when persistence is enabled" >&2
 	exit 1
 fi
 
-# A PersistentVolume data root inside a user namespace must fail the render:
-# dockerd cannot chmod a volume root it does not own.
-must_fail "operation not permitted" \
+# Sysbox persistence requires hostUsers to be omitted from the pod.
+must_fail "hostUsers=null" \
 	--set runner.dockerDataRoot.persistence.enabled=true
-# The acknowledgement is the way through.
-render \
+must_fail "hostUsers=null" \
 	--set runner.dockerDataRoot.persistence.enabled=true \
-	--set runner.dockerDataRoot.persistence.acknowledgeUserNamespace=true >/dev/null
-# hostUsers=null leaves the shifting to sysbox, so the guard does not apply.
+	--set runner.sysbox.runtime.hostUsers=true
+must_fail "hostUsers=null" \
+	--set runner.dockerDataRoot.persistence.enabled=true \
+	--set runner.dockerDataRoot.persistence.acknowledgeUserNamespace=true
+# hostUsers=null leaves the shifting to sysbox, so persistence can render.
 render \
 	--set runner.dockerDataRoot.persistence.enabled=true \
 	--set runner.sysbox.runtime.hostUsers=null >/dev/null
-# Privileged isolation does not read runner.sysbox, so it is unaffected.
+# Privileged isolation permits persistence.
 render "${privileged[@]}" \
 	--set runner.dockerDataRoot.persistence.enabled=true >/dev/null
-# Disk quotas do not bypass the user-namespace persistence check.
-must_fail "acknowledgeUserNamespace=true" \
+# Disk quotas do not bypass the hostUsers requirement.
+must_fail "hostUsers=null" \
 	--set runner.dockerDataRoot.persistence.enabled=true \
 	--set runner.config.defaultDiskQuotaMb=2048 \
 	--set runner.config.diskQuotaPoolSizeGb=60
-render \
+must_fail "hostUsers=null" \
 	--set runner.dockerDataRoot.persistence.enabled=true \
-	--set runner.dockerDataRoot.persistence.acknowledgeUserNamespace=true \
+	--set runner.sysbox.runtime.hostUsers=true \
 	--set runner.config.defaultDiskQuotaMb=2048 \
-	--set runner.config.diskQuotaPoolSizeGb=60 >/dev/null
+	--set runner.config.diskQuotaPoolSizeGb=60
 render \
 	--set runner.dockerDataRoot.persistence.enabled=true \
 	--set runner.sysbox.runtime.hostUsers=null \

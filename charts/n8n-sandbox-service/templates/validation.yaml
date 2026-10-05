@@ -50,11 +50,8 @@
 {{- end -}}
 {{- if eq .Values.dataPlane.mode "in-cluster" -}}
 {{- $dockerDataRoot := .Values.runner.dockerDataRoot -}}
-{{- $sysboxUserns := and (eq .Values.runner.isolation "sysbox") (kindIs "bool" .Values.runner.sysbox.runtime.hostUsers) (not .Values.runner.sysbox.runtime.hostUsers) -}}
-{{- if and $sysboxUserns $dockerDataRoot.persistence.enabled -}}
-{{- if ne $dockerDataRoot.persistence.acknowledgeUserNamespace true -}}
-{{- fail "runner.dockerDataRoot.persistence.enabled with runner.sysbox.runtime.hostUsers=false needs runner.dockerDataRoot.persistence.acknowledgeUserNamespace=true, even when disk quotas are enabled. Without disk quotas, the inner Docker daemon can exit with `chmod /var/lib/docker: operation not permitted` because it does not own the PersistentVolume root. Disable persistence to use the bounded emptyDir instead, or set runner.sysbox.runtime.hostUsers=null on CRI-O nodes. Set the acknowledgement only if your storage works with this user namespace on your cluster. See the chart README section 'Docker Data Root'" -}}
-{{- end -}}
+{{- if and $dockerDataRoot.persistence.enabled (eq .Values.runner.isolation "sysbox") (ne .Values.runner.sysbox.runtime.hostUsers nil) -}}
+{{- fail "runner.dockerDataRoot.persistence.enabled requires runner.isolation=privileged or runner.sysbox.runtime.hostUsers=null (omit hostUsers from the pod). Sysbox persistence with hostUsers set is unsupported, even with disk quotas. Disable persistence to use the bounded emptyDir instead. See the chart README section 'Docker Data Root'" -}}
 {{- end -}}
 {{- end -}}
 {{- if and (eq .Values.dataPlane.mode "in-cluster") (gt (int .Values.runner.config.defaultDiskQuotaMb) 0) -}}

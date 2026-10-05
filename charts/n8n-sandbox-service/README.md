@@ -109,26 +109,9 @@ runner:
 
 The Sysbox installer labels the nodes `sysbox-install=yes` and taints them `sysbox-runtime=not-running:NoSchedule` until the runtime is ready. The default selector and toleration match that convention.
 
-`hostUsers: false` asks Kubernetes to run the pod in a user namespace rather than the host user namespace. This is required by some Kubernetes/Sysbox setups for the runner pod to start. If your cluster does not support this field, set `runner.sysbox.runtime.hostUsers: null` to omit it.
+`hostUsers: false` asks Kubernetes to run the pod in a user namespace rather than the host user namespace. This is required by some Kubernetes/Sysbox setups for the runner pod to start.
 
 If inner Docker cannot use `overlay2` in that environment, set `runner.config.dockerStorageDriver` to another dockerd storage driver such as `vfs`. This is slower than `overlay2`, but avoids nested overlayfs mounts.
-
-For `overlay2`, the chart mounts a per-runner volume at the inner Docker data root. To keep image layers across pod restarts, enable persistence after you verify that your storage works with the user namespace:
-
-```yaml
-runner:
-  config:
-    dockerStorageDriver: overlay2
-  dockerDataRoot:
-    persistence:
-      enabled: true
-      acknowledgeUserNamespace: true
-      size: 64Gi
-      accessModes:
-        - ReadWriteOnce
-```
-
-The chart renders this as a StatefulSet `volumeClaimTemplates` entry mounted at the inner Docker data root, so each runner replica gets its own Docker data root. Do not share one Docker data root volume across runner pods; the inner Docker daemon requires exclusive access to its graph.
 
 If your cluster uses a dedicated node pool with custom labels and taints, override them through values:
 
@@ -168,13 +151,9 @@ level=info msg="Daemon shutdown complete" error="chmod /var/lib/docker: operatio
 
 The runner then never becomes ready. The pod's UID range can also change when the pod is recreated, so a runner that works today can fail on the next rollout.
 
-The chart fails the render for `runner.isolation: sysbox` with `runner.sysbox.runtime.hostUsers: false` and persistence enabled. This also applies when disk quotas are on. Quotas move the volume to `/var/lib/docker-pool`, but they do not remove the need to check that your storage works with the user namespace.
+The chart fails the render when Sysbox persistence is enabled and `runner.sysbox.runtime.hostUsers` is set to `false` or `true`. This also applies when disk quotas are on. Quotas move the volume to `/var/lib/docker-pool`, but do not change this rule.
 
-Three ways out, best first:
-
-- Leave persistence disabled. The `emptyDir` is created and owned by the kubelet for each pod, so there is no stale ownership, and `sizeLimit` still bounds it. You give up the image cache.
-- Set `runner.sysbox.runtime.hostUsers: null` on CRI-O nodes, and add the annotation Sysbox documents. Sysbox then shifts the volume's ownership itself. On containerd this is not supported; see [quickstart-k8s.md](../../docs/quickstart-k8s.md).
-- Set `runner.dockerDataRoot.persistence.acknowledgeUserNamespace: true` only after you verify that your storage works with the user namespace on your cluster.
+The default Sysbox setup uses a bounded `emptyDir`. Its image cache does not survive a pod restart. To use persistence, select `runner.isolation: privileged` and set `runner.acknowledgePrivileged: true`.
 
 ## Disk Quotas
 

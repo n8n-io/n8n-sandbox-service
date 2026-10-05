@@ -234,13 +234,8 @@ runner:
       storageClass: ""
       accessModes:
         - ReadWriteOnce
-      # Without disk quotas, a PersistentVolume at /var/lib/docker can break
-      # the inner Docker daemon inside a user namespace: the daemon cannot
-      # chmod a volume root it does not own. The render fails for persistence
-      # with isolation=sysbox and sysbox.runtime.hostUsers=false, even when
-      # disk quotas are enabled. Set this to true only after you verify that
-      # your storage works with this user namespace on your cluster.
-      acknowledgeUserNamespace: false
+      # With sysbox isolation, persistence requires sysbox.runtime.hostUsers
+      # to be null so the pod omits hostUsers. This applies with disk quotas.
     # Used when persistence is disabled. Bounds the inner Docker daemon's
     # image layers and sandbox filesystems.
     emptyDir:
