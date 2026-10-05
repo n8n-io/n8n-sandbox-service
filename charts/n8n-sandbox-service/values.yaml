@@ -224,8 +224,8 @@ runner:
   # quota pool image needs the bounded volume then. See the chart README
   # section 'Disk Quotas'.
   #
-  # Both isolations always get a volume: the PersistentVolume below when
-  # persistence is enabled, the emptyDir otherwise. See the chart README
+  # Both isolations get an emptyDir by default. Only privileged isolation can
+  # use persistence, which creates one PVC per runner pod. See the chart README
   # section 'Docker Data Root'.
   dockerDataRoot:
     persistence:
@@ -234,8 +234,7 @@ runner:
       storageClass: ""
       accessModes:
         - ReadWriteOnce
-      # With sysbox isolation, persistence requires sysbox.runtime.hostUsers
-      # to be null so the pod omits hostUsers. This applies with disk quotas.
+      # Only supported with isolation=privileged and hostUsers not false.
     # Used when persistence is disabled. Bounds the inner Docker daemon's
     # image layers and sandbox filesystems.
     emptyDir:

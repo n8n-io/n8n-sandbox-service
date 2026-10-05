@@ -130,12 +130,7 @@ runner:
 
 ## Docker Data Root
 
-The runner always gets a volume for the inner Docker daemon's data root, so its image layers and sandbox filesystems cannot fill the node disk. Which volume depends on `runner.dockerDataRoot.persistence.enabled`:
-
-| `persistence.enabled` | Volume | Bounded by |
-| --- | --- | --- |
-| `false` (default) | `emptyDir`, created fresh for each pod | `runner.dockerDataRoot.emptyDir.sizeLimit` |
-| `true` | `PersistentVolumeClaim`, one per runner pod | `runner.dockerDataRoot.persistence.size` |
+The runner always gets a volume for the inner Docker daemon's data root, so its image layers and sandbox filesystems cannot fill the node disk. The table below shows which configurations render and which volume they use.
 
 The volume mounts at `/var/lib/docker`, or at `/var/lib/docker-pool` when `runner.config.defaultDiskQuotaMb` is above 0, because the quota pool image needs the bounded volume then. See [Disk Quotas](#disk-quotas).
 
@@ -151,9 +146,15 @@ level=info msg="Daemon shutdown complete" error="chmod /var/lib/docker: operatio
 
 The runner then never becomes ready. The pod's UID range can also change when the pod is recreated, so a runner that works today can fail on the next rollout.
 
-The chart fails the render when Sysbox persistence is enabled and `runner.sysbox.runtime.hostUsers` is set to `false` or `true`. This also applies when disk quotas are on. Quotas move the volume to `/var/lib/docker-pool`, but do not change this rule.
+| Isolation | `hostUsers` | Persistence | Render | Volume when allowed |
+| --- | --- | --- | --- | --- |
+| Sysbox | Any | Off | Yes | Per-pod `emptyDir`, bounded by `emptyDir.sizeLimit` |
+| Sysbox | Any | On | No | — |
+| Privileged | Any | Off | Yes | Per-pod `emptyDir`, bounded by `emptyDir.sizeLimit` |
+| Privileged | `false` | On | No | — |
+| Privileged | Omitted (default) or `true` | On | Yes | Per-pod PVC, sized by `persistence.size` |
 
-The default Sysbox setup uses a bounded `emptyDir`. Its image cache does not survive a pod restart. To use persistence, select `runner.isolation: privileged` and set `runner.acknowledgePrivileged: true`.
+These rules apply with disk quotas on or off. Sysbox always uses the bounded `emptyDir`. For persistence, use privileged isolation with `runner.acknowledgePrivileged: true` and the default `hostUsers` setting.
 
 ## Disk Quotas
 

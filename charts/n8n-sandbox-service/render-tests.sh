@@ -56,12 +56,11 @@ manifests=$(render "${privileged[@]}" \
 echo "$manifests" | grep -q 'mountPath: "/var/lib/docker-pool"'
 echo "$manifests" | grep -q 'SANDBOX_RUNNER_DISK_QUOTA_POOL_PATH: "/var/lib/docker-pool/docker.img"'
 
-# Sysbox isolation: persistence works when hostUsers is omitted.
-manifests=$(render \
+# Privileged isolation: the quota pool can live on a PVC.
+manifests=$(render "${privileged[@]}" \
 	--set runner.config.defaultDiskQuotaMb=2048 \
 	--set runner.config.diskQuotaPoolSizeGb=60 \
 	--set runner.dockerDataRoot.persistence.enabled=true \
-	--set runner.sysbox.runtime.hostUsers=null \
 	--set runner.dockerDataRoot.persistence.size=64Gi)
 echo "$manifests" | grep -q 'mountPath: "/var/lib/docker-pool"'
 echo "$manifests" | grep -q 'SANDBOX_RUNNER_DISK_QUOTA_POOL_PATH: "/var/lib/docker-pool/docker.img"'
@@ -89,55 +88,52 @@ echo "$manifests" | grep -q 'sizeLimit: 64Gi'
 
 # Persistence replaces the emptyDir with a volume claim, and the claim is the
 # only data-root volume.
-manifests=$(render \
-	--set runner.dockerDataRoot.persistence.enabled=true \
-	--set runner.sysbox.runtime.hostUsers=null)
+manifests=$(render "${privileged[@]}" \
+	--show-only templates/runner-statefulset.yaml \
+	--set runner.dockerDataRoot.persistence.enabled=true)
 echo "$manifests" | grep -q 'mountPath: "/var/lib/docker"'
 echo "$manifests" | grep -q "volumeClaimTemplates"
 if echo "$manifests" | grep -q 'hostUsers:'; then
-	echo "expected hostUsers to be omitted for sysbox persistence" >&2
+	echo "expected hostUsers to be omitted for privileged persistence" >&2
 	exit 1
 fi
-if echo "$manifests" | grep -q 'sizeLimit:'; then
-	echo "expected no emptyDir sizeLimit when persistence is enabled" >&2
+if echo "$manifests" | grep -q 'emptyDir:'; then
+	echo "expected no emptyDir when persistence is enabled" >&2
 	exit 1
 fi
 
-# Sysbox persistence requires hostUsers to be omitted from the pod.
-must_fail "hostUsers=null" \
+# Sysbox always uses the emptyDir, even when hostUsers is omitted.
+must_fail "requires runner.isolation=privileged" \
 	--set runner.dockerDataRoot.persistence.enabled=true
-must_fail "hostUsers=null" \
+must_fail "requires runner.isolation=privileged" \
 	--set runner.dockerDataRoot.persistence.enabled=true \
-	--set runner.sysbox.runtime.hostUsers=true
-must_fail "hostUsers=null" \
-	--set runner.dockerDataRoot.persistence.enabled=true \
-	--set runner.dockerDataRoot.persistence.acknowledgeUserNamespace=true
-# hostUsers=null leaves the shifting to sysbox, so persistence can render.
-render \
-	--set runner.dockerDataRoot.persistence.enabled=true \
-	--set runner.sysbox.runtime.hostUsers=null >/dev/null
+	--set runner.sysbox.runtime.hostUsers=null
 # Privileged isolation permits persistence.
 render "${privileged[@]}" \
 	--set runner.dockerDataRoot.persistence.enabled=true >/dev/null
-# Disk quotas do not bypass the hostUsers requirement.
-must_fail "hostUsers=null" \
+# A privileged runner in a user namespace has the same PVC ownership risk.
+must_fail "runner.privileged.runtime.hostUsers=false" "${privileged[@]}" \
+	--set runner.dockerDataRoot.persistence.enabled=true \
+	--set runner.privileged.runtime.hostUsers=false
+# Disk quotas do not allow Sysbox persistence.
+must_fail "requires runner.isolation=privileged" \
 	--set runner.dockerDataRoot.persistence.enabled=true \
 	--set runner.config.defaultDiskQuotaMb=2048 \
 	--set runner.config.diskQuotaPoolSizeGb=60
-must_fail "hostUsers=null" \
-	--set runner.dockerDataRoot.persistence.enabled=true \
-	--set runner.sysbox.runtime.hostUsers=true \
-	--set runner.config.defaultDiskQuotaMb=2048 \
-	--set runner.config.diskQuotaPoolSizeGb=60
-render \
+must_fail "requires runner.isolation=privileged" \
 	--set runner.dockerDataRoot.persistence.enabled=true \
 	--set runner.sysbox.runtime.hostUsers=null \
 	--set runner.config.defaultDiskQuotaMb=2048 \
-	--set runner.config.diskQuotaPoolSizeGb=60 >/dev/null
+	--set runner.config.diskQuotaPoolSizeGb=60
 render "${privileged[@]}" \
 	--set runner.dockerDataRoot.persistence.enabled=true \
 	--set runner.config.defaultDiskQuotaMb=2048 \
 	--set runner.config.diskQuotaPoolSizeGb=60 >/dev/null
+must_fail "runner.privileged.runtime.hostUsers=false" "${privileged[@]}" \
+	--set runner.dockerDataRoot.persistence.enabled=true \
+	--set runner.privileged.runtime.hostUsers=false \
+	--set runner.config.defaultDiskQuotaMb=2048 \
+	--set runner.config.diskQuotaPoolSizeGb=60
 
 # A missing or unsupported volume size must fail, not skip the guard.
 must_fail "whole number of G or Gi" "${privileged[@]}" \
@@ -163,6 +159,7 @@ manifests=$(render \
 	--set runner.config.diskQuotaPoolSizeGb=60)
 echo "$manifests" | grep -q 'mountPath: "/var/lib/docker-pool"'
 echo "$manifests" | grep -q 'SANDBOX_RUNNER_DISK_QUOTA_POOL_PATH: "/var/lib/docker-pool/docker.img"'
+echo "$manifests" | grep -q 'sizeLimit: 64Gi'
 # The pool size is still mandatory, and still checked against that volume.
 must_fail "positive whole number" \
 	--set runner.config.defaultDiskQuotaMb=2048
