@@ -56,11 +56,12 @@ manifests=$(render "${privileged[@]}" \
 echo "$manifests" | grep -q 'mountPath: "/var/lib/docker-pool"'
 echo "$manifests" | grep -q 'SANDBOX_RUNNER_DISK_QUOTA_POOL_PATH: "/var/lib/docker-pool/docker.img"'
 
-# Sysbox isolation: the README example with persistence works the same.
+# Sysbox isolation: the README example with persistence needs acknowledgement.
 manifests=$(render \
 	--set runner.config.defaultDiskQuotaMb=2048 \
 	--set runner.config.diskQuotaPoolSizeGb=60 \
 	--set runner.dockerDataRoot.persistence.enabled=true \
+	--set runner.dockerDataRoot.persistence.acknowledgeUserNamespace=true \
 	--set runner.dockerDataRoot.persistence.size=64Gi)
 echo "$manifests" | grep -q 'mountPath: "/var/lib/docker-pool"'
 echo "$manifests" | grep -q 'SANDBOX_RUNNER_DISK_QUOTA_POOL_PATH: "/var/lib/docker-pool/docker.img"'
@@ -113,8 +114,22 @@ render \
 # Privileged isolation does not read runner.sysbox, so it is unaffected.
 render "${privileged[@]}" \
 	--set runner.dockerDataRoot.persistence.enabled=true >/dev/null
-# Disk quotas move the data root onto an xfs image the container owns.
+# Disk quotas do not bypass the user-namespace persistence check.
+must_fail "acknowledgeUserNamespace=true" \
+	--set runner.dockerDataRoot.persistence.enabled=true \
+	--set runner.config.defaultDiskQuotaMb=2048 \
+	--set runner.config.diskQuotaPoolSizeGb=60
 render \
+	--set runner.dockerDataRoot.persistence.enabled=true \
+	--set runner.dockerDataRoot.persistence.acknowledgeUserNamespace=true \
+	--set runner.config.defaultDiskQuotaMb=2048 \
+	--set runner.config.diskQuotaPoolSizeGb=60 >/dev/null
+render \
+	--set runner.dockerDataRoot.persistence.enabled=true \
+	--set runner.sysbox.runtime.hostUsers=null \
+	--set runner.config.defaultDiskQuotaMb=2048 \
+	--set runner.config.diskQuotaPoolSizeGb=60 >/dev/null
+render "${privileged[@]}" \
 	--set runner.dockerDataRoot.persistence.enabled=true \
 	--set runner.config.defaultDiskQuotaMb=2048 \
 	--set runner.config.diskQuotaPoolSizeGb=60 >/dev/null

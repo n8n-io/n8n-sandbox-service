@@ -113,7 +113,7 @@ The Sysbox installer labels the nodes `sysbox-install=yes` and taints them `sysb
 
 If inner Docker cannot use `overlay2` in that environment, set `runner.config.dockerStorageDriver` to another dockerd storage driver such as `vfs`. This is slower than `overlay2`, but avoids nested overlayfs mounts.
 
-For `overlay2`, prefer mounting a dedicated per-runner volume at the inner Docker data root so dockerd does not place its graph on the runner container filesystem:
+For `overlay2`, the chart mounts a per-runner volume at the inner Docker data root. To keep image layers across pod restarts, enable persistence after you verify that your storage works with the user namespace:
 
 ```yaml
 runner:
@@ -122,6 +122,7 @@ runner:
   dockerDataRoot:
     persistence:
       enabled: true
+      acknowledgeUserNamespace: true
       size: 64Gi
       accessModes:
         - ReadWriteOnce
@@ -167,34 +168,30 @@ level=info msg="Daemon shutdown complete" error="chmod /var/lib/docker: operatio
 
 The runner then never becomes ready. The pod's UID range can also change when the pod is recreated, so a runner that works today can fail on the next rollout.
 
-The chart fails the render for `runner.isolation: sysbox` with `runner.sysbox.runtime.hostUsers: false` and persistence enabled, unless disk quotas are on. Quotas move the volume to `/var/lib/docker-pool` and give the daemon a freshly made xfs image as its data root, which the container owns.
+The chart fails the render for `runner.isolation: sysbox` with `runner.sysbox.runtime.hostUsers: false` and persistence enabled. This also applies when disk quotas are on. Quotas move the volume to `/var/lib/docker-pool`, but they do not remove the need to check that your storage works with the user namespace.
 
 Three ways out, best first:
 
 - Leave persistence disabled. The `emptyDir` is created and owned by the kubelet for each pod, so there is no stale ownership, and `sizeLimit` still bounds it. You give up the image cache.
 - Set `runner.sysbox.runtime.hostUsers: null` on CRI-O nodes, and add the annotation Sysbox documents. Sysbox then shifts the volume's ownership itself. On containerd this is not supported; see [quickstart-k8s.md](../../docs/quickstart-k8s.md).
-- Set `runner.dockerDataRoot.persistence.acknowledgeUserNamespace: true` if your CSI driver id-maps volumes and you have verified the combination on your cluster.
+- Set `runner.dockerDataRoot.persistence.acknowledgeUserNamespace: true` only after you verify that your storage works with the user namespace on your cluster.
 
 ## Disk Quotas
 
 `runner.config.defaultDiskQuotaMb` above 0 caps the writable layer of each sandbox. To enforce the cap, the runner allocates a loopback xfs image, mounts it with `prjquota` at `/var/lib/docker`, and runs the inner Docker daemon against that mount.
 
-The mount does not bound the image, so the image needs a bounded volume of its own. When the chart owns a Docker data root volume (`runner.dockerDataRoot.persistence.enabled`, or the `emptyDir` of privileged isolation), it mounts that volume at `/var/lib/docker-pool` instead and puts the image there. Without such a volume the image would land on the container filesystem and could fill the node disk, so the render fails.
+The mount does not bound the image, so the image needs a bounded volume of its own. For both isolations, the chart mounts the Docker data root volume at `/var/lib/docker-pool` and puts the image there. Persistence selects a PVC; otherwise the chart uses a bounded `emptyDir`.
 
-The chart therefore requires an explicit pool size that fits the volume. With the default `sysbox` isolation, enable persistence so the volume exists:
+The chart requires an explicit pool size that fits the volume. The default `sysbox` isolation can use the `emptyDir` without persistence:
 
 ```yaml
 runner:
   config:
     defaultDiskQuotaMb: "2048"
     diskQuotaPoolSizeGb: "60"
-  dockerDataRoot:
-    persistence:
-      enabled: true
-      size: 64Gi
 ```
 
-With `runner.isolation: privileged` and persistence disabled, the `emptyDir` holds the pool image instead. Set `runner.dockerDataRoot.emptyDir.sizeLimit` to at least `diskQuotaPoolSizeGb`:
+The `emptyDir` also holds the pool image with privileged isolation. Set `runner.dockerDataRoot.emptyDir.sizeLimit` to at least `diskQuotaPoolSizeGb`:
 
 ```yaml
 runner:
