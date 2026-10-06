@@ -57,12 +57,20 @@ func ExecProxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics
 	client := &http.Client{CheckRedirect: runnerruntime.RefuseRedirect}
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		daemonBaseURL, ok := resolveDaemonURL(w, r, rt, rec, true)
+		// The body is checked before the sandbox is resolved, so a request that
+		// is refused anyway never wakes a stopped sandbox.
+		body, ok := readAndParseRequestBody(w, r)
 		if !ok {
 			return
 		}
+		// An execution outlives its stream, so timeout_ms is the only bound on
+		// how long its process, and every follow stream on it, can last.
+		if limit := cfg.MaxExecTimeout; limit > 0 && body.TimeoutMs > limit.Milliseconds() {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("timeout_ms must not exceed %d", limit.Milliseconds()))
+			return
+		}
 
-		body, ok := readAndParseRequestBody(w, r)
+		daemonBaseURL, ok := resolveDaemonURL(w, r, rt, rec, true)
 		if !ok {
 			return
 		}

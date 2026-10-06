@@ -27,6 +27,8 @@ const (
 	defaultPostgresPort     = 5432
 	defaultPostgresSSLMode  = "require"
 	defaultMaxSandboxes     = 50
+
+	defaultMaxInflightPerTenant = 512
 )
 
 const (
@@ -92,6 +94,10 @@ type APIConfig struct {
 	// DefaultMaxSandboxes is the default per-tenant sandbox quota when
 	// POST /admin/tenants omits max_sandboxes (0 = unlimited).
 	DefaultMaxSandboxes int
+
+	// MaxInflightPerTenant caps a tenant's sandbox requests in progress on this
+	// replica (0 = no cap). Parsed from SANDBOX_API_MAX_INFLIGHT_PER_TENANT.
+	MaxInflightPerTenant int
 
 	// RunnerAPIKey is the optional API key sent to runner via X-Api-Key.
 	RunnerAPIKey string
@@ -161,18 +167,19 @@ type APIConfig struct {
 // LoadAPI reads API gateway configuration from environment variables.
 func LoadAPI() (*APIConfig, error) {
 	cfg := &APIConfig{
-		ListenAddr:          defaultListenAddr,
-		GRPCListenAddr:      defaultGRPCListenAddr,
-		MaxFileBytes:        defaultMaxFileBytes,
-		DefaultMaxSandboxes: defaultMaxSandboxes,
-		DataDir:             "/var/lib/n8n-sandbox-api",
-		Store:               StoreSQLite,
-		Postgres:            PostgresConfig{Port: defaultPostgresPort, SSLMode: defaultPostgresSSLMode},
-		HeartbeatGrace:      defaultHeartbeatGrace,
-		OrphanReapBuffer:    defaultOrphanReapBuffer,
-		IdleStopAfter:       defaultIdleStopAfter,
-		IdleDeleteAfter:     defaultIdleDeleteAfter,
-		LogLevel:            defaultLogLevel,
+		ListenAddr:           defaultListenAddr,
+		GRPCListenAddr:       defaultGRPCListenAddr,
+		MaxFileBytes:         defaultMaxFileBytes,
+		DefaultMaxSandboxes:  defaultMaxSandboxes,
+		MaxInflightPerTenant: defaultMaxInflightPerTenant,
+		DataDir:              "/var/lib/n8n-sandbox-api",
+		Store:                StoreSQLite,
+		Postgres:             PostgresConfig{Port: defaultPostgresPort, SSLMode: defaultPostgresSSLMode},
+		HeartbeatGrace:       defaultHeartbeatGrace,
+		OrphanReapBuffer:     defaultOrphanReapBuffer,
+		IdleStopAfter:        defaultIdleStopAfter,
+		IdleDeleteAfter:      defaultIdleDeleteAfter,
+		LogLevel:             defaultLogLevel,
 	}
 
 	// SANDBOX_API_LOG_LEVEL (optional)
@@ -253,6 +260,10 @@ func LoadAPI() (*APIConfig, error) {
 	// (unlimited) an omitted max_sandboxes would yield an unlimited tenant.
 	if len(cfg.ProvisionerKeys) > 0 && cfg.DefaultMaxSandboxes == 0 {
 		return nil, fmt.Errorf("SANDBOX_API_PROVISIONER_KEYS requires SANDBOX_API_DEFAULT_MAX_SANDBOXES to be at least 1")
+	}
+
+	if err := parseLimit("SANDBOX_API_MAX_INFLIGHT_PER_TENANT", &cfg.MaxInflightPerTenant); err != nil {
+		return nil, err
 	}
 
 	cfg.RunnerAPIKey = os.Getenv("SANDBOX_API_RUNNER_API_KEY")
@@ -483,6 +494,21 @@ func isWildcardHost(host string) bool {
 		return true
 	}
 	return false
+}
+
+// parseLimit reads a concurrency limit from the environment into dst, leaving
+// the default when the variable is unset. 0 means no limit.
+func parseLimit(name string, dst *int) error {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 || n > math.MaxInt32 {
+		return fmt.Errorf("%s must be an integer between 0 and %d, got %q", name, math.MaxInt32, v)
+	}
+	*dst = n
+	return nil
 }
 
 // parseKeySet splits a comma-separated list of API keys, dropping blanks.

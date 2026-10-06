@@ -23,13 +23,15 @@ const client = new SandboxClient({
 
 By default the client retries transient failures: 3 extra attempts (four tries total), backoff with jitter, and HTTP statuses `429` and `503` (plus transport errors, represented as status `0`). `502` is not in the default retry set — the service uses it when repeating the same request is unlikely to help.
 
+The service answers `429` when a tenant or a sandbox has too many requests in progress at once (see [API.md](https://github.com/n8n-io/n8n-sandbox-service/blob/main/docs/API.md#http-429--too-many-requests-in-progress)).
+
 - Turn off retries: `retry: { attempts: 0 }`.
 - Tune backoff: `retry: { attempts: 5, baseDelayMs: 100, maxDelayMs: 30_000, jitter: false }`.
 - Also retry other statuses (only if you accept the risk): `retry: { retryOnStatuses: [429, 502, 503] }`.
 - Idempotent methods (`GET`, `HEAD`, `OPTIONS`, `PUT`, `DELETE`) use this policy automatically.
-- `POST` is retried only where the service makes it idempotent: `createSandbox` with an explicit `id`. `exec` has its own resume loop instead (below).
+- `POST` is retried only where the service makes it idempotent: `createSandbox` with an explicit `id`, and `exec` after a `429`. Other `POST`s, such as appending to a file, surface a `429` to the caller.
 
-`exec` still has its own stream resume loop (`exec_id`, `POST` then `GET` follow). Constructor `retry` applies to each underlying HTTP call (so `GET` resume lines benefit from the default policy). It does not replace the exec event/state machine.
+`exec` still has its own stream resume loop (`exec_id`, `POST` then `GET` follow). Constructor `retry` applies to each underlying HTTP call (so `GET` resume lines benefit from the default policy), and to re-posting an exec refused with `429`: the same `exec_id` starts the command, or follows it if an earlier attempt started it. When those retries, or the `GET` resume's, run out on a `429` while the command may be running, `exec` cancels it in the background and throws. It does not replace the exec event/state machine.
 
 ### Sandbox lifecycle
 

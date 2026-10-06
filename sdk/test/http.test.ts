@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { SandboxServiceError } from "../src/errors.js";
 import { HttpClient } from "../src/http.js";
 import { startTestServer, type TestServer } from "./helpers.js";
@@ -249,6 +249,64 @@ describe("HttpClient", () => {
     } finally {
       await postServer.close();
     }
+  });
+
+  it("retries a 429", async () => {
+    let hits = 0;
+    const limitedServer = await startTestServer((req, res) => {
+      hits += 1;
+      if (hits === 1) {
+        res.writeHead(429, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "too many requests in progress for this sandbox" }));
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+
+    try {
+      const client = new HttpClient(limitedServer.baseUrl, undefined, { baseDelayMs: 1 });
+      const out = await client.requestJson<{ ok: boolean }>("GET", "/limited");
+      expect(out).toEqual({ ok: true });
+      expect(hits).toBe(2);
+    } finally {
+      await limitedServer.close();
+    }
+  });
+
+  describe("retryDelayFor", () => {
+    const client = new HttpClient("http://localhost", undefined, {
+      attempts: 3,
+      baseDelayMs: 10,
+      maxDelayMs: 1000,
+      jitter: false,
+    });
+
+    it("backs off exponentially", () => {
+      const error = new SandboxServiceError("limited", 429);
+      expect(client.retryDelayFor(error, 0)).toBe(10);
+      expect(client.retryDelayFor(error, 2)).toBe(40);
+    });
+
+    it("stops for statuses outside retryOnStatuses and after the last attempt", () => {
+      expect(client.retryDelayFor(new SandboxServiceError("bad", 400), 0)).toBeUndefined();
+      expect(client.retryDelayFor(new SandboxServiceError("limited", 429), 3)).toBeUndefined();
+    });
+
+    it("keeps jitter within maxDelayMs", () => {
+      const jittery = new HttpClient("http://localhost", undefined, {
+        attempts: 3,
+        baseDelayMs: 10_000,
+        maxDelayMs: 1000,
+        jitter: true,
+      });
+      const random = vi.spyOn(Math, "random").mockReturnValue(0.99);
+      try {
+        expect(jittery.retryDelayFor(new SandboxServiceError("limited", 429), 0)).toBe(1000);
+      } finally {
+        random.mockRestore();
+      }
+    });
   });
 
   it("never follows a redirect, so the API key never reaches another origin", async () => {

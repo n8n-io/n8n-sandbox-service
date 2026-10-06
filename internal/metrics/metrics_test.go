@@ -23,8 +23,42 @@ func TestAPIRecorderDisabled(t *testing.T) {
 	// All observations must be safe to call and have no effect.
 	r.ObserveHTTP("/x", http.MethodGet, http.StatusOK, time.Millisecond)
 	r.ObserveSandboxOp(OpCreate, true)
+	r.ObserveRequestLimited(LimitTenant)
 	r.SetActiveSandboxes(func() float64 { return 1 })
 	r.SetRunnersRegistered(func() float64 { return 1 })
+	r.AddHTTPInFlight(1)
+	if got := r.RequestsLimitedCount(LimitTenant); got != 0 {
+		t.Errorf("RequestsLimitedCount on a disabled recorder = %v, want 0", got)
+	}
+}
+
+func TestRecordersCountLimitedRequestsAndInflight(t *testing.T) {
+	api := NewAPIRecorder(true)
+	api.ObserveRequestLimited(LimitTenant)
+	api.ObserveRequestLimited(LimitTenant)
+	api.AddHTTPInFlight(1)
+	if got := api.RequestsLimitedCount(LimitTenant); got != 2 {
+		t.Errorf("api tenant limited = %v, want 2", got)
+	}
+
+	runner := NewRunnerRecorder(true)
+	runner.ObserveRequestLimited(LimitSandbox)
+	runner.AddHTTPInFlight(1)
+	if got := runner.RequestsLimitedCount(LimitSandbox); got != 1 {
+		t.Errorf("runner sandbox limited = %v, want 1", got)
+	}
+
+	for role, body := range map[string]string{"api": scrape(t, api.Registry()), "runner": scrape(t, runner.Registry())} {
+		for _, want := range []string{
+			"sandbox_http_requests_limited_total",
+			"sandbox_http_requests_in_flight",
+			`role="` + role + `"`,
+		} {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s scrape body missing %q", role, want)
+			}
+		}
+	}
 }
 
 func TestAPIRecorderObservations(t *testing.T) {
@@ -164,8 +198,10 @@ func TestRunnerRecorderDisabled(t *testing.T) {
 	r.ObserveContainerOp(OpCreate, true, time.Second)
 	r.ObserveLifecycleStep(OpCreate, "clone_rootfs", time.Millisecond)
 	r.ObserveGuestDeath()
+	r.ObserveRequestLimited(LimitSandbox)
 	r.SetActiveContainers(func() float64 { return 1 })
 	r.SetUnwiredSlots(func() float64 { return 1 })
+	r.AddHTTPInFlight(1)
 }
 
 func TestRunnerRecorderStoppedGaugeScrape(t *testing.T) {
@@ -257,6 +293,28 @@ func TestHTTPMiddlewareRecordsRoutePattern(t *testing.T) {
 	}
 	if got := testutil.ToFloat64(r.httpRequests.WithLabelValues("/things/{id}", http.MethodGet, "418")); got != 1 {
 		t.Errorf("recorded route label = wrong; counter = %v", got)
+	}
+}
+
+func TestHTTPMiddlewareCountsRequestsInProgress(t *testing.T) {
+	r := NewAPIRecorder(true)
+	inside := make(chan float64, 1)
+	handler := HTTPMiddleware(r)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		inside <- testutil.ToFloat64(r.httpInflight)
+		panic("boom")
+	}))
+
+	func() {
+		defer func() { _ = recover() }()
+		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/x", nil))
+	}()
+
+	if got := <-inside; got != 1 {
+		t.Errorf("in flight during the request = %v, want 1", got)
+	}
+	// A panicking handler must not leave the gauge counting a request forever.
+	if got := testutil.ToFloat64(r.httpInflight); got != 0 {
+		t.Errorf("in flight after the request = %v, want 0", got)
 	}
 }
 

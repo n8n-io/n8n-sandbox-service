@@ -23,6 +23,10 @@ export async function exec(
   const execId = randomUUID();
   const consumer = new ExecStreamConsumer(request.onStdout, request.onStderr);
   let retries = 0;
+  let limitedRetries = 0;
+  // Whether a POST may have reached the sandbox: one returned a stream, or failed without
+  // showing how far it got. A 429 only proves that the refused request started nothing.
+  let mayHaveStarted = false;
 
   const onError = async (error: unknown) => {
     if (request.abortSignal?.aborted) {
@@ -33,6 +37,13 @@ export async function exec(
     if (!isTransientError(error)) throw error;
     if (++retries > MAX_RESUME_RETRIES) throw error;
     await delay(RESUME_DELAY_MS);
+  };
+
+  // For when retries on a 429 run out: if the command may be running, cancel it in the
+  // background rather than leave it running with nobody following it. Execution DELETEs
+  // have a limit of their own, so the full limit that refused us does not block this.
+  const cancelIfStarted = () => {
+    if (mayHaveStarted) void deleteExecution(http, id, execId).catch(() => {});
   };
 
   // Phase 1: Start command via POST (idempotent via exec_id)
@@ -48,6 +59,7 @@ export async function exec(
         },
         signal: request.abortSignal,
       });
+      mayHaveStarted = true;
       await consumer.consume(stream);
       if (consumer.isDone) break;
       // Stream ended without a terminal event (e.g. load-balancer timeout).
@@ -56,7 +68,22 @@ export async function exec(
       if (++retries > MAX_RESUME_RETRIES) break;
       await delay(RESUME_DELAY_MS);
     } catch (error) {
+      if (isLimited(error)) {
+        // Posting the same exec_id again starts the command if nothing has yet, and
+        // follows it if an earlier POST did. The retry policy decides how often and how
+        // long to wait.
+        const wait = http.retryDelayFor(error, limitedRetries++);
+        if (wait === undefined) {
+          cancelIfStarted();
+          throw error;
+        }
+        await delay(wait, request.abortSignal);
+        if (request.abortSignal?.aborted)
+          await onError(new SandboxServiceError("Request aborted", 0));
+        continue;
+      }
       await onError(error);
+      mayHaveStarted = true;
       if (consumer.lastSeq >= 0) break; // Received events, switch to resume
     }
   }
@@ -75,11 +102,16 @@ export async function exec(
       if (++retries > MAX_RESUME_RETRIES) break;
       await delay(RESUME_DELAY_MS);
     } catch (error) {
+      // The client has already retried this GET as its policy allows.
+      if (isLimited(error) && !request.abortSignal?.aborted) {
+        cancelIfStarted();
+        throw error;
+      }
       await onError(error);
     }
   }
 
-  deleteExecution(http, id, execId).catch(() => {});
+  void deleteExecution(http, id, execId).catch(() => {});
   return consumer.result();
 }
 
@@ -132,6 +164,23 @@ function isTransientError(error: unknown): boolean {
   return false;
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function isLimited(error: unknown): error is SandboxServiceError {
+  return error instanceof SandboxServiceError && error.status === 429;
+}
+
+/** Resolves after `ms`, or as soon as `signal` aborts. */
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+    const done = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener("abort", done);
+  });
 }

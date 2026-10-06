@@ -137,7 +137,11 @@ func Run(cfg *config.Config, rt runnerruntime.Runtime) {
 
 	serverErr := make(chan error, 1)
 	go func() {
-		slog.Info("server listening", "addr", cfg.ListenAddr, "tls", true)
+		slog.Info("server listening",
+			"addr", cfg.ListenAddr,
+			"tls", true,
+			"max_inflight_per_sandbox", cfg.MaxInflightPerSandbox,
+			"max_exec_timeout", cfg.MaxExecTimeout.String())
 		// Certificate and key come from srv.TLSConfig.
 		if err := srv.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
 			serverErr <- err

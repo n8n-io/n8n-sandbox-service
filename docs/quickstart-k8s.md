@@ -126,6 +126,8 @@ Requirements, scheduling and the two hardening options (pod user namespaces, VM-
 
 ## Troubleshooting
 
+**The runner logs `chmod /var/lib/docker: operation not permitted`.** The inner Docker daemon cannot chmod its data root, so it exits and the runner never becomes ready. A PVC at `/var/lib/docker` can have a root that the pod does not own in a user namespace. The chart allows runner persistence only with privileged isolation. Disable `runner.dockerDataRoot.persistence.enabled` to use the bounded `emptyDir` instead, and see the chart README section [Docker Data Root](../charts/n8n-sandbox-service/README.md#docker-data-root).
+
 **Install succeeds but no runner pod appears.** Admission denied the pod, so `kubectl get pods` shows nothing and the error lands on the StatefulSet. Inspect the StatefulSet events:
 
 ```bash

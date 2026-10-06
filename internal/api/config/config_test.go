@@ -586,3 +586,51 @@ func TestLoadAPIMetricsListenAddrLoadsWhenMetricsDisabled(t *testing.T) {
 		t.Fatalf("MetricsListenAddr: want :9100, got %s", cfg.MetricsListenAddr)
 	}
 }
+
+func setRequiredAPIEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("SANDBOX_API_KEYS", "test-key")
+	t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	setRequiredGRPCMTLS(t)
+}
+
+func TestLoadAPIRequestLimitDefault(t *testing.T) {
+	setRequiredAPIEnv(t)
+
+	cfg, err := LoadAPI()
+	if err != nil {
+		t.Fatalf("LoadAPI() failed: %v", err)
+	}
+	if cfg.MaxInflightPerTenant != 512 {
+		t.Errorf("MaxInflightPerTenant = %d, want 512", cfg.MaxInflightPerTenant)
+	}
+}
+
+func TestLoadAPIRequestLimitParsesAndAllowsZero(t *testing.T) {
+	for value, want := range map[string]int{"0": 0, "7": 7} {
+		t.Run(value, func(t *testing.T) {
+			setRequiredAPIEnv(t)
+			t.Setenv("SANDBOX_API_MAX_INFLIGHT_PER_TENANT", value)
+
+			cfg, err := LoadAPI()
+			if err != nil {
+				t.Fatalf("LoadAPI() failed: %v", err)
+			}
+			if cfg.MaxInflightPerTenant != want {
+				t.Errorf("MaxInflightPerTenant = %d, want %d", cfg.MaxInflightPerTenant, want)
+			}
+		})
+	}
+}
+
+func TestLoadAPIRejectsInvalidRequestLimit(t *testing.T) {
+	for _, value := range []string{"-1", "lots", "2147483648"} {
+		t.Run(value, func(t *testing.T) {
+			setRequiredAPIEnv(t)
+			t.Setenv("SANDBOX_API_MAX_INFLIGHT_PER_TENANT", value)
+			if _, err := LoadAPI(); err == nil {
+				t.Fatalf("expected LoadAPI() to reject SANDBOX_API_MAX_INFLIGHT_PER_TENANT=%s", value)
+			}
+		})
+	}
+}
