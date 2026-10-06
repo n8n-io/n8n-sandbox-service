@@ -1,0 +1,32 @@
+charts/n8n-sandbox-service/templates/runner-statefulset.yaml
+  s_a0e2b1c40b5fc9::t_1c9078c336b411 6
+charts/n8n-sandbox-service/templates/validation.yaml
+  s_a0e2b1c40b5fc9::t_fb7d7856e48b4e 51,62-64,68
+charts/n8n-sandbox-service/templates/configmap.yaml
+  s_a0e2b1c40b5fc9::t_00c72beeabeade 56
+charts/n8n-sandbox-service/README.md
+  s_a0e2b1c40b5fc9::t_96d1defd88af12 67,147-148,150,173,177,213
+charts/n8n-sandbox-service/values.yaml
+  s_a0e2b1c40b5fc9::t_51db980df13039 226,229
+charts/n8n-sandbox-service/render-tests.sh
+  s_a0e2b1c40b5fc9::t_a62a53495772d4 83-90,94-95,98-100,104,121
+  s_a0e2b1c40b5fc9::t_51664ad4675feb 139-141,143-147,149-151
+docs/quickstart-k8s.md
+  s_a0e2b1c40b5fc9::t_01d587fad4a9e6 130
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "1f18675f5844194c3ae6ccd505ce4997f7fdc40f",
+  "prompts": {},
+  "sessions": {
+    "s_a0e2b1c40b5fc9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f4b15f4f-f3cf-4348-acb9-5caea62a22ed",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
