@@ -135,6 +135,21 @@ a loopback API fails its readiness probe long before metrics matter.
 {{- end -}}
 {{- end -}}
 {{- end -}}
+{{- $autoscaling := .Values.api.autoscaling -}}
+{{- if $autoscaling.enabled -}}
+{{- if ne .Values.api.config.store "postgres" -}}
+{{- fail "api.autoscaling.enabled requires api.config.store=postgres: with sqlite every API pod keeps its own store and runner registry. See the chart README section 'API Autoscaling'" -}}
+{{- end -}}
+{{- if .Values.api.persistence.enabled -}}
+{{- fail "api.autoscaling.enabled requires api.persistence.enabled=false: every API pod would mount the one volume claim, and the postgres store keeps its state in the database. See the chart README section 'API Autoscaling'" -}}
+{{- end -}}
+{{- if not (or $autoscaling.targetCPUUtilizationPercentage $autoscaling.targetMemoryAverageValue) -}}
+{{- fail "api.autoscaling.enabled requires api.autoscaling.targetCPUUtilizationPercentage, api.autoscaling.targetMemoryAverageValue, or both" -}}
+{{- end -}}
+{{- if and $autoscaling.targetCPUUtilizationPercentage (not ((.Values.api.resources | default dict).requests | default dict).cpu) -}}
+{{- fail "api.autoscaling.targetCPUUtilizationPercentage requires api.resources.requests.cpu: the target is a percentage of the CPU request, and the HPA cannot scale on CPU without one" -}}
+{{- end -}}
+{{- end -}}
 {{- if not .Values.auth.existingSecret -}}
 {{- range $key := list "apiKeys" "runnerRegistrationToken" "runnerApiKey" "runnerApiKeys" -}}
 {{- $stringValue := default "" (index $.Values.auth.generated $key) | toString | trim -}}

@@ -367,4 +367,56 @@ render "${generated[@]}" --set auth.generated.provisionerKeys=prov-secret \
 must_fail "auth.generated.provisionerKeys must not be a placeholder" \
 	"${generated[@]}" --set auth.generated.provisionerKeys=changeme
 
+echo "==> API autoscaling is off by default"
+default_api=$(render --show-only templates/api-deployment.yaml)
+grep -q 'replicas: 1' <<<"$default_api"
+default_manifests=$(render)
+if grep -q 'kind: HorizontalPodAutoscaler' <<<"$default_manifests"; then
+	echo "api.autoscaling must be off by default" >&2
+	exit 1
+fi
+
+echo "==> enabled API autoscaling owns the replica count"
+postgres_api=(--set api.config.store=postgres --set api.persistence.enabled=false)
+autoscaling=("${postgres_api[@]}" --set api.autoscaling.enabled=true --set api.resources.requests.cpu=100m)
+scaled_api=$(render "${autoscaling[@]}" --show-only templates/api-deployment.yaml)
+# A rendered spec.replicas is what a GitOps tool resets the HPA's count to.
+if grep -q 'replicas:' <<<"$scaled_api"; then
+	echo "the Deployment must leave spec.replicas to the HPA" >&2
+	exit 1
+fi
+hpa=$(render "${autoscaling[@]}" --show-only templates/api-hpa.yaml)
+api_name=$(awk '/^  name:/{print $2; exit}' <<<"$scaled_api")
+grep -A3 'scaleTargetRef:' <<<"$hpa" | grep -q "name: $api_name\$"
+grep -q 'averageUtilization: 80' <<<"$hpa"
+if grep -q 'name: memory' <<<"$hpa"; then
+	echo "the memory metric must be opt-in" >&2
+	exit 1
+fi
+render "${autoscaling[@]}" --set api.autoscaling.targetMemoryAverageValue=700Mi \
+	--show-only templates/api-hpa.yaml | grep -q 'averageValue: "700Mi"'
+# A memory-only HPA needs no CPU request.
+memory_only=$(render "${postgres_api[@]}" --set api.autoscaling.enabled=true \
+	--set api.autoscaling.targetCPUUtilizationPercentage=null \
+	--set api.autoscaling.targetMemoryAverageValue=700Mi \
+	--show-only templates/api-hpa.yaml)
+grep -q 'name: memory' <<<"$memory_only"
+if grep -q 'name: cpu' <<<"$memory_only"; then
+	echo "a null CPU target must drop the CPU metric" >&2
+	exit 1
+fi
+
+echo "==> API autoscaling refuses setups that cannot run several API pods"
+must_fail "requires api.config.store=postgres" \
+	--set api.persistence.enabled=false \
+	--set api.autoscaling.enabled=true --set api.resources.requests.cpu=100m
+must_fail "requires api.persistence.enabled=false" \
+	--set api.config.store=postgres \
+	--set api.autoscaling.enabled=true --set api.resources.requests.cpu=100m
+must_fail "requires api.resources.requests.cpu" \
+	"${postgres_api[@]}" --set api.autoscaling.enabled=true
+must_fail "targetMemoryAverageValue, or both" \
+	"${postgres_api[@]}" --set api.autoscaling.enabled=true \
+	--set api.autoscaling.targetCPUUtilizationPercentage=null
+
 echo "render tests passed"
