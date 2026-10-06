@@ -13,7 +13,8 @@ set -euo pipefail
 
 ORG=n8n-io
 # Fixed rather than passed in: the token that deletes these can usually delete
-# the release packages, and other repositories' packages, as well.
+# the release packages, and other repositories' packages, as well. These are
+# the packages .github/actions/dev-image-publish pushes; change both together.
 PACKAGES=(
 	n8n-sandbox-service-api-dev
 	n8n-sandbox-service-runner-dind-dev

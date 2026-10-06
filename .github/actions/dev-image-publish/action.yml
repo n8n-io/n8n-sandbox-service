@@ -61,6 +61,8 @@ runs:
           done
         }
 
+        # PACKAGES in .github/scripts/prune-dev-images.sh lists the same four
+        # packages; change both together.
         build_push Dockerfile.api n8n-sandbox-service-api-dev
         build_push Dockerfile.runner-dind n8n-sandbox-service-runner-dind-dev
         build_push Dockerfile.ee.runner-firecracker n8n-sandbox-service-runner-firecracker-dev linux/amd64
