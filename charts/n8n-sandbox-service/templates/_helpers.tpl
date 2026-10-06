@@ -139,3 +139,12 @@ would read a service name as 0 and split a listener the API would share.
 {{- end -}}
 {{- end -}}
 {{- end }}
+
+{{/*
+"true" when an api.autoscaling metric target is set, "" when it is null or
+empty. Not `with`: that also skips a 0, which would drop the metric silently.
+The HPA template and validation.yaml both key off this.
+*/}}
+{{- define "n8n-sandbox-service.autoscalingTargetSet" -}}
+{{- if not (or (kindIs "invalid" .) (eq (toString .) "")) -}}true{{- end -}}
+{{- end }}

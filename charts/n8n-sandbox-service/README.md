@@ -395,7 +395,7 @@ api:
 
 ## API Autoscaling
 
-`api.autoscaling.enabled` adds a HorizontalPodAutoscaler for the API and leaves `spec.replicas` out of the Deployment, so the HPA owns the replica count and `api.replicaCount` is ignored. It needs the Postgres store with persistence disabled, as in [API Persistence](#api-persistence):
+`api.autoscaling.enabled` adds a HorizontalPodAutoscaler for the API and leaves `spec.replicas` out of the Deployment, so the HPA owns the replica count and `api.replicaCount` is ignored. It needs the Postgres store with persistence disabled, as in [API Persistence](#api-persistence), and the Kubernetes metrics API (`metrics.k8s.io`, usually served by metrics-server), without which the HPA cannot read CPU or memory and does not scale on load:
 
 ```yaml
 api:

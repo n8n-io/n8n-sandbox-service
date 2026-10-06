@@ -15,20 +15,20 @@ spec:
   minReplicas: {{ $autoscaling.minReplicas }}
   maxReplicas: {{ $autoscaling.maxReplicas }}
   metrics:
-    {{- with $autoscaling.targetCPUUtilizationPercentage }}
+    {{- if include "n8n-sandbox-service.autoscalingTargetSet" $autoscaling.targetCPUUtilizationPercentage }}
     - type: Resource
       resource:
         name: cpu
         target:
           type: Utilization
-          averageUtilization: {{ . }}
+          averageUtilization: {{ $autoscaling.targetCPUUtilizationPercentage }}
     {{- end }}
-    {{- with $autoscaling.targetMemoryAverageValue }}
+    {{- if include "n8n-sandbox-service.autoscalingTargetSet" $autoscaling.targetMemoryAverageValue }}
     - type: Resource
       resource:
         name: memory
         target:
           type: AverageValue
-          averageValue: {{ . | quote }}
+          averageValue: {{ $autoscaling.targetMemoryAverageValue | quote }}
     {{- end }}
 {{- end }}

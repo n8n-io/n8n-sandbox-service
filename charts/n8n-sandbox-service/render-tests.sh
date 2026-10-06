@@ -395,16 +395,40 @@ if grep -q 'name: memory' <<<"$hpa"; then
 fi
 render "${autoscaling[@]}" --set api.autoscaling.targetMemoryAverageValue=700Mi \
 	--show-only templates/api-hpa.yaml | grep -q 'averageValue: "700Mi"'
-# A memory-only HPA needs no CPU request.
-memory_only=$(render "${postgres_api[@]}" --set api.autoscaling.enabled=true \
-	--set api.autoscaling.targetCPUUtilizationPercentage=null \
-	--set api.autoscaling.targetMemoryAverageValue=700Mi \
-	--show-only templates/api-hpa.yaml)
-grep -q 'name: memory' <<<"$memory_only"
-if grep -q 'name: cpu' <<<"$memory_only"; then
-	echo "a null CPU target must drop the CPU metric" >&2
-	exit 1
-fi
+# A memory-only HPA needs no CPU request. Null and empty both drop the CPU metric.
+for cpu_off in null ""; do
+	memory_only=$(render "${postgres_api[@]}" --set api.autoscaling.enabled=true \
+		--set "api.autoscaling.targetCPUUtilizationPercentage=$cpu_off" \
+		--set api.autoscaling.targetMemoryAverageValue=700Mi \
+		--show-only templates/api-hpa.yaml)
+	grep -q 'name: memory' <<<"$memory_only"
+	if grep -q 'name: cpu' <<<"$memory_only"; then
+		echo "targetCPUUtilizationPercentage=$cpu_off must drop the CPU metric" >&2
+		exit 1
+	fi
+done
+# The API server accepts utilization above 100: use can exceed the request.
+render "${autoscaling[@]}" --set api.autoscaling.targetCPUUtilizationPercentage=150 \
+	--show-only templates/api-hpa.yaml | grep -q 'averageUtilization: 150'
+
+echo "==> API autoscaling values the API server would reject fail the render"
+must_fail "minReplicas must be a whole number of at least 1" \
+	"${autoscaling[@]}" --set api.autoscaling.minReplicas=0
+must_fail "maxReplicas must be a whole number of at least 1" \
+	"${autoscaling[@]}" --set api.autoscaling.maxReplicas=2.5
+must_fail "must not be below api.autoscaling.minReplicas" \
+	"${autoscaling[@]}" --set api.autoscaling.minReplicas=5 --set api.autoscaling.maxReplicas=2
+# A 0 must not quietly drop the CPU metric and leave a memory-only HPA.
+must_fail "targetCPUUtilizationPercentage must be a whole number of at least 1" \
+	"${autoscaling[@]}" --set api.autoscaling.targetCPUUtilizationPercentage=0 \
+	--set api.autoscaling.targetMemoryAverageValue=700Mi
+must_fail "targetCPUUtilizationPercentage must be a whole number of at least 1" \
+	"${autoscaling[@]}" --set api.autoscaling.targetCPUUtilizationPercentage=-5
+must_fail "targetMemoryAverageValue must be a whole number with an optional unit" \
+	"${autoscaling[@]}" --set api.autoscaling.targetMemoryAverageValue=0
+# These values render unquoted, so a newline must not smuggle YAML into the HPA.
+must_fail "minReplicas must be a whole number of at least 1" \
+	"${autoscaling[@]}" --set-string $'api.autoscaling.minReplicas=2\n  behavior: {}'
 
 echo "==> API autoscaling refuses setups that cannot run several API pods"
 must_fail "requires api.config.store=postgres" \
