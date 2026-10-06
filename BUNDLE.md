@@ -9,13 +9,14 @@ source of truth for what the tarball contains and how consumers should use it.
 | Artifact | Registry | When | Images |
 | --- | --- | --- | --- |
 | Versioned release | [Docker Hub](https://hub.docker.com/u/n8nio) | Merge `service/release/*` PR | `n8nio/n8n-sandbox-service-api`, `n8nio/n8n-sandbox-service-runner-dind`, `n8nio/n8n-sandbox-service-runner-firecracker` (amd64), `n8nio/n8n-sandbox-service-sandbox` — all at the same version |
-| Alpha (every push to `main`) | Private ACR | `release-alpha` workflow | `api`, `runner-dind`, `runner-firecracker`, `sandbox` (`:alpha`, `:<full_sha>`) |
-| Staging candidates | Private ACR | Publish Service Staging workflow | Same four images (`:<version>-staging.<sha>`, `:<full_sha>`) |
+| Alpha (every push to `main`) | GHCR `-dev` packages | `release-alpha` workflow | `ghcr.io/n8n-io/n8n-sandbox-service-{api,runner-dind,runner-firecracker,sandbox}-dev` (`:alpha`, `:<full_sha>`) |
+| Staging candidates | GHCR `-dev` packages | Publish Service Staging workflow | Same four images (`:<version>-staging.<sha>`, `:<full_sha>`) |
 | Golden build scripts | GitHub Release asset | Service release / staging | `firecracker-golden-build-{version}.tar.gz` (`bin/sandbox-daemon` + host/snapshot scripts) |
 
 Public adopters pull API, runner-dind, runner-firecracker, and sandbox from Docker Hub on
-versioned releases. Alpha/staging Firecracker images remain on the private registry until
-the next service release; pin the golden-build tarball `git_sha` to the image tag SHA.
+versioned releases. Alpha and staging images only go to the `-dev` packages, which are
+pruned after 30 days (see [docs/RELEASE.md](docs/RELEASE.md#dev-image-retention)); pin the
+golden-build tarball `git_sha` to the image tag SHA.
 
 Pin everything to the same commit: compare `MANIFEST.json` `git_sha` with the
 commit the images were built from — the `service/v{version}` tag for a release,
@@ -64,7 +65,7 @@ firecracker-golden-build/
 | `version` | Release version of the tree the bundle was built from (the `VERSION` file). On a service release this is the tag all four images carry. |
 | `bundle_version` | Label of this tarball. Equals `version` on a service release; on a staging prerelease it is the staging label (`{version}-staging.{sha}`). |
 | `git_sha` | Commit the bundle was built from. This, not `version`, is the pin to correlate with the commit the container images were built from. |
-| `sandbox_image.ref` | Authoritative pin for the guest rootfs: a digest ref (`repository@sha256:…`) of the image the publishing run pushed, so `tag` is empty. Release bundles pin the Docker Hub repository, staging bundles the ACR one. |
+| `sandbox_image.ref` | Authoritative pin for the guest rootfs: a digest ref (`repository@sha256:…`) of the image the publishing run pushed, so `tag` is empty. Release bundles pin the Docker Hub repository, staging bundles the GHCR `-dev` one. |
 | `go_version` | Go release that built `bin/sandbox-daemon`, read back from the binary (e.g. `1.27.1`). |
 
 Staging bundles are the case to be careful with: nothing is published at `version`

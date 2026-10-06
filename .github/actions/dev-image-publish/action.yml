@@ -1,0 +1,75 @@
+name: Publish dev images to GHCR
+description: Build the API, runner, Firecracker runner and sandbox images and push them to the GHCR -dev packages
+inputs:
+  tags:
+    required: true
+    description: >
+      Space-separated tags to push every image under. The sandbox digest is read
+      back under the first one, so make it a tag no other run pushes.
+  ghcr-token:
+    required: true
+    description: Token with packages:write on the -dev packages
+
+outputs:
+  sandbox-digest:
+    description: Digest of the sandbox image this run pushed
+    value: ${{ steps.build.outputs.sandbox_digest }}
+
+runs:
+  using: composite
+  steps:
+    - name: Log in to GHCR
+      uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ inputs.ghcr-token }}
+
+    - name: Build and push images
+      id: build
+      shell: bash
+      env:
+        TAGS: ${{ inputs.tags }}
+      run: |
+        set -euo pipefail
+        REGISTRY=ghcr.io/n8n-io
+
+        read -r -a tag_list <<< "$TAGS"
+        if [[ ${#tag_list[@]} -eq 0 ]]; then
+          echo "::error::No tags given."
+          exit 1
+        fi
+        for tag in "${tag_list[@]}"; do
+          if [[ ! "$tag" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+            echo "::error::'${tag}' is not a valid image tag."
+            exit 1
+          fi
+        done
+
+        build_push() {
+          local file=$1 image=$2 platform=${3:-}
+          local args=(-f "$file")
+          if [[ -n "$platform" ]]; then
+            args+=(--platform "$platform")
+          fi
+          for tag in "${tag_list[@]}"; do
+            args+=(-t "${REGISTRY}/${image}:${tag}")
+          done
+          docker build "${args[@]}" .
+          for tag in "${tag_list[@]}"; do
+            docker push "${REGISTRY}/${image}:${tag}"
+          done
+        }
+
+        build_push Dockerfile.api n8n-sandbox-service-api-dev
+        build_push Dockerfile.runner-dind n8n-sandbox-service-runner-dind-dev
+        build_push Dockerfile.ee.runner-firecracker n8n-sandbox-service-runner-firecracker-dev linux/amd64
+        build_push Dockerfile.sandbox n8n-sandbox-service-sandbox-dev
+
+        sandbox_digest="$(docker buildx imagetools inspect --format '{{json .Manifest}}' \
+          "${REGISTRY}/n8n-sandbox-service-sandbox-dev:${tag_list[0]}" | jq -r '.digest')"
+        if [[ ! "$sandbox_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+          echo "::error::Could not read the digest of n8n-sandbox-service-sandbox-dev:${tag_list[0]}, got '${sandbox_digest}'."
+          exit 1
+        fi
+        echo "sandbox_digest=${sandbox_digest}" >> "$GITHUB_OUTPUT"

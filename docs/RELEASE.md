@@ -8,8 +8,8 @@ One version — `VERSION`, mirrored into the chart's `appVersion` — covers the
 flowchart TD
     subgraph alpha ["Alpha (every push to main)"]
         A[Push to main] --> B[release-alpha]
-        B --> C[Build multi-arch images]
-        C --> D[Push to private registry\napi / runner-dind / runner-firecracker / sandbox\n:alpha + :sha]
+        B --> C[Build images]
+        C --> D[Push to GHCR -dev packages\napi / runner-dind / runner-firecracker / sandbox\n:alpha + :sha]
     end
 
     subgraph versioned ["Versioned Release (all deployable images)"]
@@ -20,7 +20,6 @@ flowchart TD
         I --> J[Build + push multi-arch\nimages to Docker Hub]
         J --> K[Create git tag +\nGitHub Release +\ngolden-build tarball]
         K --> L[Open post-release\nversion-bump PR to main]
-        J --> S[Copy :version into\nprivate registry]
     end
 
     subgraph sdk ["SDK Release"]
@@ -34,7 +33,11 @@ flowchart TD
 
 ## Alpha releases
 
-Every push to `main` runs `release-alpha`, which pushes `n8n-sandbox-service-{api,runner-dind,runner-firecracker,sandbox}` to the private container registry tagged `:alpha` and `:<full_sha>`. The Firecracker runner image is `linux/amd64` only.
+Every push to `main` runs `release-alpha`, which pushes `ghcr.io/n8n-io/n8n-sandbox-service-{api,runner-dind,runner-firecracker,sandbox}-dev` tagged `:alpha` and `:<full_sha>`. The Firecracker runner image is `linux/amd64` only.
+
+### Dev image retention
+
+Alpha and staging candidates share the `-dev` packages. `prune-dev-images` runs daily and deletes versions older than 30 days, except the newest 50 tagged ones, anything tagged `:alpha`, and the platform images and attestations a kept image lists. Run it by hand with `dry_run` to see what it would delete.
 
 ## Service release (Docker Hub)
 
@@ -58,17 +61,9 @@ Deploy the same `{version}` for all four. There is no compatibility matrix; the 
 
    Jobs build from the PR's merge commit and take the version from the branch name (`service/release/{version}`), cross-checked against `VERSION`, so a PR that bumps to a different number fails before anything is pushed. Publishing also aborts up front if `service/v{version}` already exists.
 
-   Two jobs then run in parallel:
-   - `mirror-to-acr` copies the images into the private registry (see below).
-   - `release-metadata` packages `firecracker-golden-build-{version}.tar.gz` and attaches it to the GitHub Release, creates the `service/v{version}` tag, and opens a post-release PR syncing `VERSION` and `appVersion` back to `main`.
+   `release-metadata` then packages `firecracker-golden-build-{version}.tar.gz` and attaches it to the GitHub Release, creates the `service/v{version}` tag, and opens a post-release PR syncing `VERSION` and `appVersion` back to `main`.
 5. Merge the post-release PR. The chart publish workflow then ships a chart whose default image tags already exist.
 6. Pin the tarball digest before baking a runner image from this version (see [Verifying the tarball](../BUNDLE.md#verifying-the-tarball)).
-
-### Private registry mirror
-
-`mirror-to-acr` copies all four published manifests by digest into n8n's private registry under `{version}` (`docker buildx imagetools create`; same digests as Docker Hub). An existing `{version}` is never replaced — a rebuild that produces a different manifest fails instead of swapping content behind a tag. Re-copying an identical manifest is a no-op, so the job is re-runnable.
-
-The mirror depends only on the image publish, and `release-metadata` does not wait on it. A release can therefore end with tag, GitHub Release and Docker Hub published while the mirror is missing; the run is red until `mirror-to-acr` is re-run.
 
 ### Firecracker golden-build asset
 
@@ -79,12 +74,14 @@ Each service release and staging prerelease attaches `firecracker-golden-build-{
 Actions → **Publish Service Staging** on a feature branch:
 
 1. Optionally runs unit tests.
-2. Builds and pushes all four images to the private registry tagged `{VERSION}-staging.{short_sha}` (override with the `version` input).
-3. Creates a GitHub prerelease `service/v{version}` at the built commit with the golden-build tarball, which pins the ACR sandbox candidate by digest.
+2. Builds and pushes all four images to the GHCR `-dev` packages tagged `{VERSION}-staging.{short_sha}` (override with the `version` input) and the full commit SHA.
+3. Creates a GitHub prerelease `service/v{version}` at the built commit with the golden-build tarball, which pins the `-dev` sandbox candidate by digest.
 
-A bare `x.y.z` `version` input is rejected: candidates and releases share the `service/v*` namespace, which release prep reads to order releases, so a candidate tagged `service/v1.3.0` would block the real 1.3.0. Keep a suffix.
+A bare `x.y.z` `version` input is rejected: candidates and releases share the `service/v*` namespace, which release prep reads to order releases, so a candidate tagged `service/v1.3.0` would block the real 1.3.0. Keep a suffix. `latest`, `stable`, `alpha` and full commit SHAs are rejected too, because those tags already mean something else.
 
 A label is also single-use: prereleases are immutable, so the workflow reserves the `service/v{version}` tag before pushing any image and fails if it already exists — a run that fails later has still spent its label. Publish the same commit again under a new label, for example `1.3.5-staging.abc1234.2`.
+
+Candidates fall under [dev image retention](#dev-image-retention), so the images of an old candidate, and the sandbox image its bundle pins, may be gone.
 
 After deploying a candidate, run `SMOKE_ENV=<env> scripts/smoke-sandbox.sh` against it (the preset file is described in [development.md](development.md#tests)). Firecracker hosts need the prerelease tarball and a snapshot rebuild before the new `runner-firecracker` image rolls out.
 

@@ -16,10 +16,10 @@ on:
         type: boolean
 
 # The prerelease and its tag are created with the release app's token, not
-# GITHUB_TOKEN, so this token only needs to read the checkout.
+# GITHUB_TOKEN, so this token only needs to read the checkout and push to GHCR.
 permissions:
   contents: read
-  id-token: write
+  packages: write
 
 concurrency:
   group: publish-service-staging-${{ github.ref }}
@@ -28,9 +28,12 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    environment: ALL
     steps:
+      # The tests run before the publish action logs in, so no token that can
+      # push packages is on disk while they do.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
 
       # The service/v* tag ruleset only lets the release app create tags. This
       # token reserves the tag; the release step mints its own, since app tokens
@@ -56,15 +59,21 @@ jobs:
             VERSION="${BASE}-staging.${SHA}"
           # A bare x.y.z would mint service/v{x.y.z}, the namespace release prep reads
           # to order releases: it would block that version and every version below it.
-          # Rejected rather than given a suffix, because the label also names the ACR
+          # Rejected rather than given a suffix, because the label also names the
           # image tags the caller is about to deploy.
           elif [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::version '${VERSION}' is a release version, which a staging candidate must not claim. Add a suffix, for example '${VERSION}-rc.1'."
             exit 1
+          # Alpha pushes to the same -dev packages under :alpha and full commit SHAs,
+          # and latest/stable name releases; a label must not take over those tags.
+          elif [[ "$VERSION" == latest || "$VERSION" == stable || "$VERSION" == alpha || "$VERSION" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::version '${VERSION}' is a tag the images already use for something else. Pick a label such as '${BASE}-staging.${SHA}'."
+            exit 1
           # The label becomes a tag, an asset name and image tags, and later steps
-          # splice it into shell commands, so it is restricted to tag-safe characters.
-          elif [[ ! "$VERSION" =~ ^[0-9A-Za-z][0-9A-Za-z._-]*$ ]]; then
-            echo "::error::version '${VERSION}' may only contain letters, digits, '.', '_' and '-', and must start with a letter or digit."
+          # splice it into shell commands, so it is restricted to tag-safe characters
+          # and to the 128 characters an image tag can hold.
+          elif [[ ! "$VERSION" =~ ^[0-9A-Za-z][0-9A-Za-z._-]{0,127}$ ]]; then
+            echo "::error::version '${VERSION}' may only contain letters, digits, '.', '_' and '-', must start with a letter or digit, and must be at most 128 characters."
             exit 1
           # The character class still admits names git rejects ('..', a trailing '.' or '.lock').
           elif ! git check-ref-format "refs/tags/service/v${VERSION}"; then
@@ -98,51 +107,14 @@ jobs:
         if: inputs.run_tests
         uses: ./.github/actions/sandbox-service-test
 
-      - name: Azure Service Principal login (OIDC)
-        uses: azure/login@cb79c773a3cfa27f31f25eb3f677781210c9ce3d # v1
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Publish images to ACR
+      # The label goes first: the action reads the sandbox digest back under it,
+      # and only this run can push it, since the label's tag is reserved above.
+      - name: Publish images to GHCR
         id: publish
-        env:
-          ACR_NAME: ${{ secrets.AZURE_ACR_NAME }}
-          VERSION: ${{ steps.meta.outputs.version }}
-          FULL_SHA: ${{ steps.meta.outputs.full_sha }}
-        run: |
-          set -euo pipefail
-          REGISTRY="${ACR_NAME}.azurecr.io"
-          az acr login -n "$ACR_NAME"
-
-          build_push() {
-            local file=$1
-            local image=$2
-            local platform=${3:-}
-            local platform_args=()
-            if [[ -n "$platform" ]]; then
-              platform_args=(--platform "$platform")
-            fi
-            docker build -f "$file" \
-              "${platform_args[@]}" \
-              -t "${REGISTRY}/${image}:${VERSION}" \
-              -t "${REGISTRY}/${image}:${FULL_SHA}" \
-              .
-            docker push "${REGISTRY}/${image}:${VERSION}"
-            docker push "${REGISTRY}/${image}:${FULL_SHA}"
-          }
-
-          build_push Dockerfile.api n8n-sandbox-service-api
-          build_push Dockerfile.runner-dind n8n-sandbox-service-runner-dind
-          build_push Dockerfile.ee.runner-firecracker n8n-sandbox-service-runner-firecracker linux/amd64
-          build_push Dockerfile.sandbox n8n-sandbox-service-sandbox
-
-          # Read back what the registry holds under the commit-SHA tag; the bundle
-          # below pins that digest rather than the tag.
-          sandbox_digest="$(docker buildx imagetools inspect --format '{{json .Manifest}}' \
-            "${REGISTRY}/n8n-sandbox-service-sandbox:${FULL_SHA}" | jq -r '.digest')"
-          echo "sandbox_digest=${sandbox_digest}" >> "$GITHUB_OUTPUT"
+        uses: ./.github/actions/dev-image-publish
+        with:
+          tags: ${{ steps.meta.outputs.version }} ${{ steps.meta.outputs.full_sha }}
+          ghcr-token: ${{ github.token }}
 
       # Packaging the bundle compiles the daemon, and with run_tests off nothing
       # else installs Go. No cache: build it from fresh, go.sum-checked modules.
@@ -151,16 +123,15 @@ jobs:
           go-version-file: go.mod
           cache: false
 
-      # Staging pins the ACR sandbox candidate, not Docker Hub: the guest userspace
-      # must match the images this run publishes.
+      # Staging pins the GHCR -dev sandbox candidate, not Docker Hub: the guest
+      # userspace must match the images this run publishes.
       - name: Package Firecracker golden build tarball
         env:
-          ACR_NAME: ${{ secrets.AZURE_ACR_NAME }}
           VERSION: ${{ steps.meta.outputs.version }}
-          SANDBOX_DIGEST: ${{ steps.publish.outputs.sandbox_digest }}
+          SANDBOX_DIGEST: ${{ steps.publish.outputs.sandbox-digest }}
           TARBALL: ${{ steps.meta.outputs.tarball }}
         run: |
-          SANDBOX_IMAGE_REF="${ACR_NAME}.azurecr.io/n8n-sandbox-service-sandbox@${SANDBOX_DIGEST}" \
+          SANDBOX_IMAGE_REF="ghcr.io/n8n-io/n8n-sandbox-service-sandbox-dev@${SANDBOX_DIGEST}" \
             ./scripts/package-firecracker-golden-build.sh \
             --version "${VERSION}" \
             --output "${TARBALL}"
@@ -179,21 +150,20 @@ jobs:
           TAG: ${{ steps.meta.outputs.tag }}
           TARBALL: ${{ steps.meta.outputs.tarball }}
           FULL_SHA: ${{ steps.meta.outputs.full_sha }}
-          ACR_NAME: ${{ secrets.AZURE_ACR_NAME }}
         run: |
-          REGISTRY="${ACR_NAME}.azurecr.io"
+          REGISTRY=ghcr.io/n8n-io
           NOTES_FILE="$(mktemp)"
           cat > "$NOTES_FILE" <<EOF
           ## Staging candidate \`${VERSION}\`
 
           Built from \`${FULL_SHA}\` on \`${GITHUB_REF_NAME}\`.
 
-          ### Container images (ACR)
+          ### Container images (GHCR)
 
-          - \`${REGISTRY}/n8n-sandbox-service-api:${VERSION}\`
-          - \`${REGISTRY}/n8n-sandbox-service-runner-dind:${VERSION}\`
-          - \`${REGISTRY}/n8n-sandbox-service-runner-firecracker:${VERSION}\`
-          - \`${REGISTRY}/n8n-sandbox-service-sandbox:${VERSION}\`
+          - \`${REGISTRY}/n8n-sandbox-service-api-dev:${VERSION}\`
+          - \`${REGISTRY}/n8n-sandbox-service-runner-dind-dev:${VERSION}\`
+          - \`${REGISTRY}/n8n-sandbox-service-runner-firecracker-dev:${VERSION}\`
+          - \`${REGISTRY}/n8n-sandbox-service-sandbox-dev:${VERSION}\`
 
           Each image is also tagged with the full commit SHA. The golden-build bundle
           pins the sandbox image by digest, so deploy these candidates together.
