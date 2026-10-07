@@ -439,6 +439,16 @@ must_fail "requires api.persistence.enabled=false" \
 	--set api.autoscaling.enabled=true --set api.resources.requests.cpu=100m
 must_fail "requires api.resources.requests.cpu" \
 	"${postgres_api[@]}" --set api.autoscaling.enabled=true
+# The API server accepts a zero CPU request, but the HPA cannot scale on it.
+for cpu_zero in 0 0m 0.0; do
+	must_fail "requires api.resources.requests.cpu above zero" \
+		"${postgres_api[@]}" --set api.autoscaling.enabled=true \
+		--set-string "api.resources.requests.cpu=$cpu_zero"
+done
+for cpu_request in 1 250m 0.5; do
+	render "${postgres_api[@]}" --set api.autoscaling.enabled=true \
+		--set-string "api.resources.requests.cpu=$cpu_request" >/dev/null
+done
 must_fail "targetMemoryAverageValue, or both" \
 	"${postgres_api[@]}" --set api.autoscaling.enabled=true \
 	--set api.autoscaling.targetCPUUtilizationPercentage=null

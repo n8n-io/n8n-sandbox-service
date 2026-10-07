@@ -165,8 +165,10 @@ a loopback API fails its readiness probe long before metrics matter.
 {{- if not (or $cpuSet $memorySet) -}}
 {{- fail "api.autoscaling.enabled requires api.autoscaling.targetCPUUtilizationPercentage, api.autoscaling.targetMemoryAverageValue, or both" -}}
 {{- end -}}
-{{- if and $cpuSet (not ((.Values.api.resources | default dict).requests | default dict).cpu) -}}
-{{- fail "api.autoscaling.targetCPUUtilizationPercentage requires api.resources.requests.cpu: the target is a percentage of the CPU request, and the HPA cannot scale on CPU without one" -}}
+{{- $cpuRequest := ((.Values.api.resources | default dict).requests | default dict).cpu | default "" | toString | trim -}}
+{{/* The API server accepts a zero request such as "0m", but the HPA cannot divide by it. */}}
+{{- if and $cpuSet (not (regexMatch "^[0.]*[1-9]" $cpuRequest)) -}}
+{{- fail (printf "api.autoscaling.targetCPUUtilizationPercentage requires api.resources.requests.cpu above zero (got %q): the target is a percentage of the CPU request, and the HPA cannot scale on CPU without one" $cpuRequest) -}}
 {{- end -}}
 {{- end -}}
 {{- if not .Values.auth.existingSecret -}}
