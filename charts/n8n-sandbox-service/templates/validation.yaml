@@ -135,6 +135,42 @@ a loopback API fails its readiness probe long before metrics matter.
 {{- end -}}
 {{- end -}}
 {{- end -}}
+{{- $autoscaling := .Values.api.autoscaling -}}
+{{- if $autoscaling.enabled -}}
+{{- if ne .Values.api.config.store "postgres" -}}
+{{- fail "api.autoscaling.enabled requires api.config.store=postgres: with sqlite every API pod keeps its own store and runner registry. See the chart README section 'API Autoscaling'" -}}
+{{- end -}}
+{{- if .Values.api.persistence.enabled -}}
+{{- fail "api.autoscaling.enabled requires api.persistence.enabled=false: every API pod would mount the one volume claim, and the postgres store keeps its state in the database. See the chart README section 'API Autoscaling'" -}}
+{{- end -}}
+{{- range $key := list "minReplicas" "maxReplicas" -}}
+{{- if not (regexMatch "^[1-9][0-9]*$" (toString (index $autoscaling $key))) -}}
+{{- fail (printf "api.autoscaling.%s must be a whole number of at least 1 (got %q)" $key (toString (index $autoscaling $key))) -}}
+{{- end -}}
+{{- end -}}
+{{- if lt (int $autoscaling.maxReplicas) (int $autoscaling.minReplicas) -}}
+{{- fail (printf "api.autoscaling.maxReplicas (%v) must not be below api.autoscaling.minReplicas (%v)" $autoscaling.maxReplicas $autoscaling.minReplicas) -}}
+{{- end -}}
+{{- $cpuTarget := $autoscaling.targetCPUUtilizationPercentage -}}
+{{- $cpuSet := include "n8n-sandbox-service.autoscalingTargetSet" $cpuTarget -}}
+{{/* No upper bound: use can exceed the CPU request, and the API server allows targets above 100. */}}
+{{- if and $cpuSet (not (regexMatch "^[1-9][0-9]*$" (toString $cpuTarget))) -}}
+{{- fail (printf "api.autoscaling.targetCPUUtilizationPercentage must be a whole number of at least 1 (got %q): set it to null to drop the CPU metric" (toString $cpuTarget)) -}}
+{{- end -}}
+{{- $memoryTarget := $autoscaling.targetMemoryAverageValue -}}
+{{- $memorySet := include "n8n-sandbox-service.autoscalingTargetSet" $memoryTarget -}}
+{{- if and $memorySet (not (regexMatch "^[1-9][0-9]*(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$" (toString $memoryTarget))) -}}
+{{- fail (printf "api.autoscaling.targetMemoryAverageValue must be a whole number with an optional unit, e.g. 700Mi (got %q): leave it empty to drop the memory metric" (toString $memoryTarget)) -}}
+{{- end -}}
+{{- if not (or $cpuSet $memorySet) -}}
+{{- fail "api.autoscaling.enabled requires api.autoscaling.targetCPUUtilizationPercentage, api.autoscaling.targetMemoryAverageValue, or both" -}}
+{{- end -}}
+{{- $cpuRequest := ((.Values.api.resources | default dict).requests | default dict).cpu | default "" | toString | trim -}}
+{{/* The API server accepts a zero request such as "0m", but the HPA cannot divide by it. */}}
+{{- if and $cpuSet (not (regexMatch "^[0.]*[1-9]" $cpuRequest)) -}}
+{{- fail (printf "api.autoscaling.targetCPUUtilizationPercentage requires api.resources.requests.cpu above zero (got %q): the target is a percentage of the CPU request, and the HPA cannot scale on CPU without one" $cpuRequest) -}}
+{{- end -}}
+{{- end -}}
 {{- if not .Values.auth.existingSecret -}}
 {{- range $key := list "apiKeys" "runnerRegistrationToken" "runnerApiKey" "runnerApiKeys" -}}
 {{- $stringValue := default "" (index $.Values.auth.generated $key) | toString | trim -}}

@@ -119,6 +119,24 @@ tls:
 api:
   replicaCount: 1
 
+  # A HorizontalPodAutoscaler for the API. When enabled, it owns the replica
+  # count: the Deployment leaves out spec.replicas and replicaCount is ignored.
+  # Needs api.config.store=postgres, api.persistence.enabled=false, and the
+  # Kubernetes metrics API (metrics-server). See the chart README section
+  # 'API Autoscaling'.
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 4
+    # Average CPU use as a percentage of api.resources.requests.cpu, which the
+    # render then requires. A whole number of 1 or more; above 100 is valid, as
+    # use can exceed the request. Null or empty drops the CPU metric.
+    targetCPUUtilizationPercentage: 80
+    # Average memory use per pod, as a whole number with an optional unit, e.g.
+    # 700Mi. An absolute value rather than a share of the memory request, so it
+    # can sit just under the memory limit. Null or empty leaves memory out.
+    targetMemoryAverageValue: ""
+
   image:
     repository: n8nio/n8n-sandbox-service-api
     # Defaults to the chart's appVersion, the version all images share.

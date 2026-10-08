@@ -367,4 +367,90 @@ render "${generated[@]}" --set auth.generated.provisionerKeys=prov-secret \
 must_fail "auth.generated.provisionerKeys must not be a placeholder" \
 	"${generated[@]}" --set auth.generated.provisionerKeys=changeme
 
+echo "==> API autoscaling is off by default"
+default_api=$(render --show-only templates/api-deployment.yaml)
+grep -q 'replicas: 1' <<<"$default_api"
+default_manifests=$(render)
+if grep -q 'kind: HorizontalPodAutoscaler' <<<"$default_manifests"; then
+	echo "api.autoscaling must be off by default" >&2
+	exit 1
+fi
+
+echo "==> enabled API autoscaling owns the replica count"
+postgres_api=(--set api.config.store=postgres --set api.persistence.enabled=false)
+autoscaling=("${postgres_api[@]}" --set api.autoscaling.enabled=true --set api.resources.requests.cpu=100m)
+scaled_api=$(render "${autoscaling[@]}" --show-only templates/api-deployment.yaml)
+# A rendered spec.replicas is what a GitOps tool resets the HPA's count to.
+if grep -q 'replicas:' <<<"$scaled_api"; then
+	echo "the Deployment must leave spec.replicas to the HPA" >&2
+	exit 1
+fi
+hpa=$(render "${autoscaling[@]}" --show-only templates/api-hpa.yaml)
+api_name=$(awk '/^  name:/{print $2; exit}' <<<"$scaled_api")
+grep -A3 'scaleTargetRef:' <<<"$hpa" | grep -q "name: $api_name\$"
+grep -q 'averageUtilization: 80' <<<"$hpa"
+if grep -q 'name: memory' <<<"$hpa"; then
+	echo "the memory metric must be opt-in" >&2
+	exit 1
+fi
+render "${autoscaling[@]}" --set api.autoscaling.targetMemoryAverageValue=700Mi \
+	--show-only templates/api-hpa.yaml | grep -q 'averageValue: "700Mi"'
+# A memory-only HPA needs no CPU request. Null and empty both drop the CPU metric.
+for cpu_off in null ""; do
+	memory_only=$(render "${postgres_api[@]}" --set api.autoscaling.enabled=true \
+		--set "api.autoscaling.targetCPUUtilizationPercentage=$cpu_off" \
+		--set api.autoscaling.targetMemoryAverageValue=700Mi \
+		--show-only templates/api-hpa.yaml)
+	grep -q 'name: memory' <<<"$memory_only"
+	if grep -q 'name: cpu' <<<"$memory_only"; then
+		echo "targetCPUUtilizationPercentage=$cpu_off must drop the CPU metric" >&2
+		exit 1
+	fi
+done
+# The API server accepts utilization above 100: use can exceed the request.
+render "${autoscaling[@]}" --set api.autoscaling.targetCPUUtilizationPercentage=150 \
+	--show-only templates/api-hpa.yaml | grep -q 'averageUtilization: 150'
+
+echo "==> API autoscaling values the API server would reject fail the render"
+must_fail "minReplicas must be a whole number of at least 1" \
+	"${autoscaling[@]}" --set api.autoscaling.minReplicas=0
+must_fail "maxReplicas must be a whole number of at least 1" \
+	"${autoscaling[@]}" --set api.autoscaling.maxReplicas=2.5
+must_fail "must not be below api.autoscaling.minReplicas" \
+	"${autoscaling[@]}" --set api.autoscaling.minReplicas=5 --set api.autoscaling.maxReplicas=2
+# A 0 must not quietly drop the CPU metric and leave a memory-only HPA.
+must_fail "targetCPUUtilizationPercentage must be a whole number of at least 1" \
+	"${autoscaling[@]}" --set api.autoscaling.targetCPUUtilizationPercentage=0 \
+	--set api.autoscaling.targetMemoryAverageValue=700Mi
+must_fail "targetCPUUtilizationPercentage must be a whole number of at least 1" \
+	"${autoscaling[@]}" --set api.autoscaling.targetCPUUtilizationPercentage=-5
+must_fail "targetMemoryAverageValue must be a whole number with an optional unit" \
+	"${autoscaling[@]}" --set api.autoscaling.targetMemoryAverageValue=0
+# These values render unquoted, so a newline must not smuggle YAML into the HPA.
+must_fail "minReplicas must be a whole number of at least 1" \
+	"${autoscaling[@]}" --set-string $'api.autoscaling.minReplicas=2\n  behavior: {}'
+
+echo "==> API autoscaling refuses setups that cannot run several API pods"
+must_fail "requires api.config.store=postgres" \
+	--set api.persistence.enabled=false \
+	--set api.autoscaling.enabled=true --set api.resources.requests.cpu=100m
+must_fail "requires api.persistence.enabled=false" \
+	--set api.config.store=postgres \
+	--set api.autoscaling.enabled=true --set api.resources.requests.cpu=100m
+must_fail "requires api.resources.requests.cpu" \
+	"${postgres_api[@]}" --set api.autoscaling.enabled=true
+# The API server accepts a zero CPU request, but the HPA cannot scale on it.
+for cpu_zero in 0 0m 0.0; do
+	must_fail "requires api.resources.requests.cpu above zero" \
+		"${postgres_api[@]}" --set api.autoscaling.enabled=true \
+		--set-string "api.resources.requests.cpu=$cpu_zero"
+done
+for cpu_request in 1 250m 0.5; do
+	render "${postgres_api[@]}" --set api.autoscaling.enabled=true \
+		--set-string "api.resources.requests.cpu=$cpu_request" >/dev/null
+done
+must_fail "targetMemoryAverageValue, or both" \
+	"${postgres_api[@]}" --set api.autoscaling.enabled=true \
+	--set api.autoscaling.targetCPUUtilizationPercentage=null
+
 echo "render tests passed"

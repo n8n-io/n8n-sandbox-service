@@ -1,0 +1,34 @@
+{{- if .Values.api.autoscaling.enabled }}
+{{- $autoscaling := .Values.api.autoscaling }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "n8n-sandbox-service.apiName" . }}
+  labels:
+    {{- include "n8n-sandbox-service.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "n8n-sandbox-service.apiName" . }}
+  minReplicas: {{ $autoscaling.minReplicas }}
+  maxReplicas: {{ $autoscaling.maxReplicas }}
+  metrics:
+    {{- if include "n8n-sandbox-service.autoscalingTargetSet" $autoscaling.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $autoscaling.targetCPUUtilizationPercentage }}
+    {{- end }}
+    {{- if include "n8n-sandbox-service.autoscalingTargetSet" $autoscaling.targetMemoryAverageValue }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: AverageValue
+          averageValue: {{ $autoscaling.targetMemoryAverageValue | quote }}
+    {{- end }}
+{{- end }}

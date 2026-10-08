@@ -370,7 +370,7 @@ If a runner dies, sandboxes on that runner should be treated as lost.
 
 **SQLite (default):** Keep `api.replicaCount: 1`. `api.persistence.enabled` is enabled by default so sandbox routing state survives API pod restarts.
 
-**Postgres (multi-pod):** Set `api.replicaCount` to 2 or more and configure Postgres via environment variables:
+**Postgres (multi-pod):** Set `api.replicaCount` to 2 or more, or enable [API Autoscaling](#api-autoscaling), and configure Postgres via environment variables:
 
 ```yaml
 api:
@@ -392,3 +392,30 @@ api:
           name: sandbox-api-postgres
           key: password
 ```
+
+## API Autoscaling
+
+`api.autoscaling.enabled` adds a HorizontalPodAutoscaler for the API and leaves `spec.replicas` out of the Deployment, so the HPA owns the replica count and `api.replicaCount` is ignored. It needs the Postgres store with persistence disabled, as in [API Persistence](#api-persistence), and the Kubernetes metrics API (`metrics.k8s.io`, usually served by metrics-server), without which the HPA cannot read CPU or memory and does not scale on load:
+
+```yaml
+api:
+  persistence:
+    enabled: false
+  config:
+    store: postgres
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 80
+```
+
+The CPU target is a percentage of `api.resources.requests.cpu`, which the render requires to be above zero while that target is set. The memory target is off by default. It is an average per pod rather than a share of the memory request, so it can sit just under the memory limit. Size Postgres `max_connections` for `maxReplicas` plus the rollout surge: each API pod opens up to 25 store connections plus `SANDBOX_API_IDLE_SWEEP_CONCURRENCY + 5` lock connections. Tenant request limits are counted per pod, so a tenant's total limit grows with the replica count too.
+
+Enabling autoscaling on a running release removes `spec.replicas`, which can drop the Deployment to one pod until the HPA scales it back up. The Kubernetes docs on [migrating to horizontal autoscaling](https://kubernetes.io/docs/concepts/workloads/autoscaling/horizontal-pod-autoscale/#migrating-deployments-and-statefulsets-to-horizontal-autoscaling) show how to avoid that. Turning autoscaling off again sets the Deployment back to `api.replicaCount`, so raise that first.
