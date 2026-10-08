@@ -4,6 +4,7 @@ name: Prune Dev Images
 # and the retention rules are in .github/scripts/prune-dev-images.sh.
 on:
   schedule:
+    # Every day at 04:23 UTC.
     - cron: '23 4 * * *'
   workflow_dispatch:
     inputs:

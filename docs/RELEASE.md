@@ -37,7 +37,7 @@ Every push to `main` runs `release-alpha`, which pushes `ghcr.io/n8n-io/n8n-sand
 
 ### Dev image retention
 
-Alpha and staging candidates share the `-dev` packages. `prune-dev-images` runs daily and deletes versions older than 30 days, except the newest 50 tagged ones, anything tagged `:alpha`, and the platform images and attestations a kept image lists. Run it by hand with `dry_run` to see what it would delete.
+Alpha and staging candidates share the `-dev` packages. They are separate packages rather than extra tags on the GHCR release packages, so the prune, which only lists the `-dev` packages, can never delete a release, and no dev tag can overwrite one. `prune-dev-images` runs daily and deletes versions older than 30 days, except the newest 50 tagged ones, anything tagged `:alpha`, and the platform images and attestations a kept image lists. Run it by hand with `dry_run` to see what it would delete.
 
 ## Service release (Docker Hub)
 

@@ -25,8 +25,8 @@ jobs:
       - name: Run tests
         uses: ./.github/actions/sandbox-service-test
 
-      - name: Publish images
-        uses: ./.github/actions/dev-image-publish
+      - name: Build and push images
+        uses: ./.github/actions/dev-image-build-push
         with:
           tags: ${{ github.sha }} alpha
           ghcr-token: ${{ github.token }}

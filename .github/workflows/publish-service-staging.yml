@@ -29,8 +29,8 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      # The tests run before the publish action logs in, so no token that can
-      # push packages is on disk while they do.
+      # The tests run before the image action logs in, so no token that can push
+      # packages is on disk while they do.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           persist-credentials: false
@@ -109,9 +109,9 @@ jobs:
 
       # The label goes first: the action reads the sandbox digest back under it,
       # and only this run can push it, since the label's tag is reserved above.
-      - name: Publish images to GHCR
+      - name: Build and push images to GHCR
         id: publish
-        uses: ./.github/actions/dev-image-publish
+        uses: ./.github/actions/dev-image-build-push
         with:
           tags: ${{ steps.meta.outputs.version }} ${{ steps.meta.outputs.full_sha }}
           ghcr-token: ${{ github.token }}

@@ -1,4 +1,4 @@
-name: Publish dev images to GHCR
+name: Build and push dev images to GHCR
 description: Build the API, runner, Firecracker runner and sandbox images and push them to the GHCR -dev packages
 inputs:
   tags:
@@ -39,6 +39,8 @@ runs:
           echo "::error::No tags given."
           exit 1
         fi
+        # Besides rejecting invalid tags, this keeps '${', which bake would
+        # interpolate, out of the bake file below.
         for tag in "${tag_list[@]}"; do
           if [[ ! "$tag" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
             echo "::error::'${tag}' is not a valid image tag."
@@ -46,27 +48,27 @@ runs:
           fi
         done
 
-        build_push() {
-          local file=$1 image=$2 platform=${3:-}
-          local args=(-f "$file")
-          if [[ -n "$platform" ]]; then
-            args+=(--platform "$platform")
-          fi
-          for tag in "${tag_list[@]}"; do
-            args+=(-t "${REGISTRY}/${image}:${tag}")
-          done
-          docker build "${args[@]}" .
-          for tag in "${tag_list[@]}"; do
-            docker push "${REGISTRY}/${image}:${tag}"
-          done
-        }
-
+        # Bake builds the four images in parallel and pushes each under every tag.
         # PACKAGES in .github/scripts/prune-dev-images.sh lists the same four
         # packages; change both together.
-        build_push Dockerfile.api n8n-sandbox-service-api-dev
-        build_push Dockerfile.runner-dind n8n-sandbox-service-runner-dind-dev
-        build_push Dockerfile.ee.runner-firecracker n8n-sandbox-service-runner-firecracker-dev linux/amd64
-        build_push Dockerfile.sandbox n8n-sandbox-service-sandbox-dev
+        bake_file="${RUNNER_TEMP}/dev-images.bake.json"
+        jq -n --arg registry "$REGISTRY" '
+          def image($dockerfile; $package): {
+            context: ".",
+            dockerfile: $dockerfile,
+            tags: [$ARGS.positional[] | "\($registry)/\($package):\(.)"]
+          };
+          {
+            group: {default: {targets: ["api", "runner-dind", "runner-firecracker", "sandbox"]}},
+            target: {
+              api: image("Dockerfile.api"; "n8n-sandbox-service-api-dev"),
+              "runner-dind": image("Dockerfile.runner-dind"; "n8n-sandbox-service-runner-dind-dev"),
+              "runner-firecracker": (image("Dockerfile.ee.runner-firecracker"; "n8n-sandbox-service-runner-firecracker-dev")
+                + {platforms: ["linux/amd64"]}),
+              sandbox: image("Dockerfile.sandbox"; "n8n-sandbox-service-sandbox-dev")
+            }
+          }' --args "${tag_list[@]}" > "$bake_file"
+        docker buildx bake --file "$bake_file" --push
 
         sandbox_digest="$(docker buildx imagetools inspect --format '{{json .Manifest}}' \
           "${REGISTRY}/n8n-sandbox-service-sandbox-dev:${tag_list[0]}" | jq -r '.digest')"
