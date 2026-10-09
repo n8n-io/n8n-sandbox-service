@@ -77,6 +77,11 @@ func TestHandleExecPreservesStdoutForBackgroundCommand(t *testing.T) {
 	}
 }
 
+// shellQuote wraps s in single quotes for /bin/sh, escaping any it contains.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // runCatFile writes content to a file and returns what HandleExec streams
 // while it runs cat on that file, so the test controls the exact bytes.
 func runCatFile(t *testing.T, content string, redirect string) (stdout string, stderr string, exit Response) {
@@ -90,7 +95,7 @@ func runCatFile(t *testing.T, content string, redirect string) (stdout string, s
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	err := HandleExec(ctx, "cat '"+path+"'"+redirect, nil, "", func(resp Response) {
+	err := HandleExec(ctx, "cat "+shellQuote(path)+redirect, nil, "", func(resp Response) {
 		switch resp.Type {
 		case ResponseTypeStdout:
 			stdout += resp.Data

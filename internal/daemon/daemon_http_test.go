@@ -59,7 +59,7 @@ func TestExecEndpointKeepsMultibyteCharactersInLongLinesIntact(t *testing.T) {
 	if err := os.WriteFile(path, []byte(line+"\n"), 0o600); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
-	body, _ := json.Marshal(map[string]string{"command": "cat '" + path + "'"})
+	body, _ := json.Marshal(map[string]string{"command": "cat " + shellQuote(path)})
 
 	req := httptest.NewRequest(http.MethodPost, "/executions", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")

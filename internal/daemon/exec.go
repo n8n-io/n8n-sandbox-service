@@ -14,8 +14,9 @@ import (
 	"unicode/utf8"
 )
 
-// streamChunkBytes caps the size of one stdout or stderr event. A longer line
-// is sent as several events, which clients join back together.
+// streamChunkBytes is the read buffer size for stdout and stderr. A line longer
+// than this is sent as several events of about this size, which clients join
+// back together.
 const streamChunkBytes = 64 * 1024
 
 // HandleExec runs a command inside workdir with the given environment. The

@@ -399,8 +399,9 @@ All events include a monotonically increasing `seq` number. The `started` event 
 the `exec_id` needed for the resume and cancel endpoints.
 
 Each `stdout` and `stderr` event usually holds one line. An output line longer than 64 KiB
-is sent as several events, and only the last one ends with `\n`. Join the `data` of
-consecutive events to get the full output.
+is sent as several events, and only the last one ends with `\n`. `stdout` and `stderr`
+events can interleave, so append the `data` of each event to a separate buffer for its
+`type`.
 
 The `exit` event includes:
 - `success` — `true` when `exit_code == 0`
