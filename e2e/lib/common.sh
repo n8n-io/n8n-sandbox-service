@@ -165,6 +165,31 @@ e2e_pack_repo_tarball() {
 		-C "$project_dir" .
 }
 
+# Prints the CIDR the e2e VMs admit SSH from: E2E_SSH_SOURCE_CIDR when set,
+# otherwise this machine's public IPv4 as a /32.
+e2e_ssh_source_cidr() {
+	local octet='(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])'
+	local ipv4="(${octet}\.){3}${octet}"
+	if [[ -n "${E2E_SSH_SOURCE_CIDR:-}" ]]; then
+		if [[ ! "$E2E_SSH_SOURCE_CIDR" =~ ^${ipv4}/(2[4-9]|3[0-2])$ ]]; then
+			echo "ERROR: E2E_SSH_SOURCE_CIDR must be an IPv4 CIDR from /24 to /32, such as 203.0.113.7/32; got '${E2E_SSH_SOURCE_CIDR}'" >&2
+			return 1
+		fi
+		printf '%s' "$E2E_SSH_SOURCE_CIDR"
+		return 0
+	fi
+	local url ip
+	for url in https://api.ipify.org https://checkip.amazonaws.com https://ifconfig.me/ip; do
+		ip=$(curl -4 -fsS --max-time 10 --retry 2 "$url" 2>/dev/null | tr -d '[:space:]') || continue
+		if [[ "$ip" =~ ^${ipv4}$ ]]; then
+			printf '%s/32' "$ip"
+			return 0
+		fi
+	done
+	echo "ERROR: could not determine this machine's public IPv4; set E2E_SSH_SOURCE_CIDR" >&2
+	return 1
+}
+
 # Builds an SSH ProxyCommand that reaches a jump host with an explicit identity.
 # ProxyJump ignores the command-line -i identity for the jump hop, so we spell
 # the jump connection out here to force it to use the ephemeral e2e key.

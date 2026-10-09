@@ -6,6 +6,8 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/../../.."
+# shellcheck source=e2e/lib/common.sh
+source e2e/lib/common.sh
 
 : "${RESOURCE_GROUP:?RESOURCE_GROUP is required}"
 
@@ -30,11 +32,15 @@ else
 	echo "==> Using existing SSH keypair at ${SSH_KEY_PATH}"
 fi
 
+SSH_SOURCE_CIDR=$(e2e_ssh_source_cidr)
+echo "==> Allowing SSH from ${SSH_SOURCE_CIDR}"
+
 cat >"${TF_DIR}/e2e-vm.auto.tfvars.json" <<EOF
 {
   "resource_group_name": "$RESOURCE_GROUP",
   "vm_name": "$VM_NAME",
-  "ssh_public_key_path": "${SSH_KEY_PATH}.pub"
+  "ssh_public_key_path": "${SSH_KEY_PATH}.pub",
+  "ssh_source_address_prefix": "$SSH_SOURCE_CIDR"
 }
 EOF
 
@@ -52,7 +58,7 @@ for i in $(seq 1 30); do
 		break
 	fi
 	if [[ "$i" -eq 30 ]]; then
-		echo "SSH connection failed after 5 minutes"
+		echo "SSH connection failed after 5 minutes (the NSG allows SSH only from ${SSH_SOURCE_CIDR})"
 		exit 1
 	fi
 	echo "Waiting... ($i/30)"
