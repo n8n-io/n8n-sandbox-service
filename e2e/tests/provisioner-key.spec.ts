@@ -1,8 +1,9 @@
 import { test, expect } from '@playwright/test';
 import { ADMIN_API_KEY, PROVISIONER_API_KEY } from './helpers';
 
-// A provisioner key (SANDBOX_API_PROVISIONER_KEYS) may only create tenants and
-// delete empty tenants. It must never reach an existing tenant's sandboxes.
+// A provisioner key (SANDBOX_API_PROVISIONER_KEYS) may only create tenants, set
+// their max_sandboxes and delete empty tenants. It must never reach an existing
+// tenant's sandboxes.
 test.describe('Provisioner key', () => {
   test('creates a tenant it cannot then read, and deletes it once empty', async ({ request }) => {
     const provisioner = { 'X-Api-Key': PROVISIONER_API_KEY };
@@ -34,7 +35,7 @@ test.describe('Provisioner key', () => {
       expect(list.status()).toBe(200);
       expect((await list.json()).map((s: { id: string }) => s.id)).toContain(sandboxId);
 
-      // The provisioner gets 403 on everything but create and delete tenant.
+      // The provisioner gets 403 on everything but create, update and delete tenant.
       const denied: Array<{ method: 'GET' | 'POST' | 'DELETE'; path: string }> = [
         { method: 'GET', path: '/admin/tenants' },
         { method: 'GET', path: `/admin/tenants/${tenantId}` },
@@ -74,6 +75,64 @@ test.describe('Provisioner key', () => {
 
       const revoked = await request.get('/sandboxes', { headers: tenant });
       expect(revoked.status()).toBe(401);
+    } finally {
+      if (sandboxId && tenantKey) {
+        await request
+          .delete(`/sandboxes/${sandboxId}`, { headers: { 'X-Api-Key': tenantKey } })
+          .catch(() => undefined);
+      }
+      if (tenantId) {
+        await request
+          .delete(`/admin/tenants/${tenantId}`, { headers: { 'X-Api-Key': ADMIN_API_KEY } })
+          .catch(() => undefined);
+      }
+    }
+  });
+
+  test('lowers a tenant limit below its count without touching its sandboxes', async ({
+    request,
+  }) => {
+    const provisioner = { 'X-Api-Key': PROVISIONER_API_KEY, 'Content-Type': 'application/json' };
+    let tenantId: string | undefined;
+    let tenantKey: string | undefined;
+    let sandboxId: string | undefined;
+
+    try {
+      const created = await request.post('/admin/tenants', {
+        headers: provisioner,
+        data: { name: `prov-limit-${Date.now()}`, max_sandboxes: 2 },
+      });
+      expect(created.status()).toBe(201);
+      const body = await created.json();
+      tenantId = body.tenant.id as string;
+      tenantKey = body.key.api_key as string;
+      const tenant = { 'X-Api-Key': tenantKey, 'Content-Type': 'application/json' };
+
+      const create = await request.post('/sandboxes', { headers: tenant, data: {} });
+      expect(create.status()).toBe(201);
+      sandboxId = (await create.json()).id as string;
+
+      // Unlimited and above-default stay out of a provisioner key's reach.
+      for (const max_sandboxes of [0, 2147483647]) {
+        const resp = await request.patch(`/admin/tenants/${tenantId}`, {
+          headers: provisioner,
+          data: { max_sandboxes },
+        });
+        expect(resp.status(), `max_sandboxes=${max_sandboxes}`).toBe(400);
+      }
+
+      const lowered = await request.patch(`/admin/tenants/${tenantId}`, {
+        headers: provisioner,
+        data: { max_sandboxes: 1 },
+      });
+      expect(lowered.status()).toBe(200);
+      expect(await lowered.json()).toMatchObject({ id: tenantId, max_sandboxes: 1 });
+
+      const refused = await request.post('/sandboxes', { headers: tenant, data: {} });
+      expect(refused.status()).toBe(403);
+
+      const stillThere = await request.get(`/sandboxes/${sandboxId}`, { headers: tenant });
+      expect(stillThere.status()).toBe(200);
     } finally {
       if (sandboxId && tenantKey) {
         await request

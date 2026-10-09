@@ -222,6 +222,56 @@ func TestTenantAndAPIKeyCRUD(t *testing.T) {
 	}
 }
 
+func TestUpdateTenantLimits(t *testing.T) {
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	defer s.Close()
+	testUpdateTenantLimits(t, s, "77777777-7777-7777-7777-777777777777")
+}
+
+// testUpdateTenantLimits runs against both backends; tenantID must not exist yet.
+func testUpdateTenantLimits(t *testing.T, s SandboxStore, tenantID string) {
+	t.Helper()
+	now := time.Now().Unix()
+	if err := s.CreateTenant(&Tenant{ID: tenantID, Name: "t", ExternalRef: "ext", MaxSandboxes: 5, CreatedAt: now}); err != nil {
+		t.Fatalf("create tenant: %v", err)
+	}
+	t.Cleanup(func() { _ = s.DeleteTenant(tenantID) })
+
+	sandboxID := "s-" + tenantID
+	if err := s.Create(&SandboxRecord{
+		ID: sandboxID, Status: "running", CreatedAt: now, LastActiveAt: now, TenantID: tenantID,
+	}); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Delete(sandboxID) })
+
+	// Unchanged values still count as a match, so they are not "not found".
+	for _, n := range []int{50, 50, 0} {
+		if err := s.UpdateTenantLimits(tenantID, n); err != nil {
+			t.Fatalf("UpdateTenantLimits(%d): %v", n, err)
+		}
+		got, err := s.GetTenant(tenantID)
+		if err != nil || got == nil {
+			t.Fatalf("GetTenant: %+v err=%v", got, err)
+		}
+		want := Tenant{ID: tenantID, Name: "t", ExternalRef: "ext", MaxSandboxes: n, CreatedAt: now}
+		if *got != want {
+			t.Fatalf("after UpdateTenantLimits(%d): got %+v, want %+v", n, *got, want)
+		}
+	}
+
+	if n, err := s.CountByTenant(tenantID); err != nil || n != 1 {
+		t.Fatalf("sandboxes after update: n=%d err=%v", n, err)
+	}
+
+	if err := s.UpdateTenantLimits("99999999-9999-9999-9999-999999999999", 1); !errors.Is(err, ErrTenantNotFound) {
+		t.Fatalf("UpdateTenantLimits(missing): got %v, want ErrTenantNotFound", err)
+	}
+}
+
 func TestDeleteTenantRejectsWhenSandboxesExist(t *testing.T) {
 	s, err := New(":memory:")
 	if err != nil {

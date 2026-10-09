@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"math"
 	"net/http"
 	"strconv"
@@ -21,6 +22,12 @@ type createTenantRequest struct {
 	ExternalRef  string `json:"external_ref"`
 	MaxSandboxes *int   `json:"max_sandboxes"`
 	CreateKey    *bool  `json:"create_key"` // default true
+}
+
+// updateTenantRequest holds the limits PATCH may change; every field is optional
+// but at least one must be set.
+type updateTenantRequest struct {
+	MaxSandboxes *int `json:"max_sandboxes"`
 }
 
 type tenantResponse struct {
@@ -69,6 +76,18 @@ func apiKeyToResponse(k *store.APIKey, plaintext string) apiKeyResponse {
 	return resp
 }
 
+// maxSandboxesError returns why the caller may not set n, or "" when it may.
+// Only admin keys may set unlimited (0) or more than the default.
+func maxSandboxesError(role authRole, n int, cfg *config.APIConfig) string {
+	if n < 0 || n > math.MaxInt32 {
+		return "max_sandboxes must be between 0 and 2147483647"
+	}
+	if role != roleAdmin && (n < 1 || n > cfg.DefaultMaxSandboxes) {
+		return "max_sandboxes must be between 1 and " + strconv.Itoa(cfg.DefaultMaxSandboxes) + " for a provisioner key"
+	}
+	return ""
+}
+
 func handleListTenants(s store.SandboxStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !requireAdmin(w, r) {
@@ -107,12 +126,8 @@ func handleCreateTenant(s store.SandboxStore, cfg *config.APIConfig) http.Handle
 		}
 		maxSandboxes := cfg.DefaultMaxSandboxes
 		if req.MaxSandboxes != nil {
-			if *req.MaxSandboxes < 0 || *req.MaxSandboxes > math.MaxInt32 {
-				writeError(w, http.StatusBadRequest, "max_sandboxes must be between 0 and 2147483647")
-				return
-			}
-			if role == roleProvisioner && (*req.MaxSandboxes < 1 || *req.MaxSandboxes > cfg.DefaultMaxSandboxes) {
-				writeError(w, http.StatusBadRequest, "max_sandboxes must be between 1 and "+strconv.Itoa(cfg.DefaultMaxSandboxes)+" for a provisioner key")
+			if msg := maxSandboxesError(role, *req.MaxSandboxes, cfg); msg != "" {
+				writeError(w, http.StatusBadRequest, msg)
 				return
 			}
 			maxSandboxes = *req.MaxSandboxes
@@ -171,6 +186,68 @@ func handleGetTenant(s store.SandboxStore) http.HandlerFunc {
 			writeError(w, http.StatusNotFound, "tenant not found")
 			return
 		}
+		writeJSON(w, http.StatusOK, tenantToResponse(t))
+	}
+}
+
+// handleUpdateTenant changes a tenant's limits and never touches its sandboxes:
+// a tenant above a lowered max_sandboxes keeps them and cannot create more until
+// it is below the limit again. Provisioner keys get the same bounds as on create.
+func handleUpdateTenant(s store.SandboxStore, cfg *config.APIConfig) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		role, ok := requireAdminOrProvisioner(w, r)
+		if !ok {
+			return
+		}
+		id := r.PathValue("id")
+		if !isValidUUID(id) {
+			writeError(w, http.StatusBadRequest, "invalid tenant id")
+			return
+		}
+		var req updateTenantRequest
+		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if _, err := dec.Token(); err != io.EOF {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if req.MaxSandboxes == nil {
+			writeError(w, http.StatusBadRequest, "max_sandboxes is required")
+			return
+		}
+		if msg := maxSandboxesError(role, *req.MaxSandboxes, cfg); msg != "" {
+			writeError(w, http.StatusBadRequest, msg)
+			return
+		}
+
+		t, err := s.GetTenant(id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if t == nil {
+			writeError(w, http.StatusNotFound, "tenant not found")
+			return
+		}
+		if err := s.UpdateTenantLimits(id, *req.MaxSandboxes); err != nil {
+			if errors.Is(err, store.ErrTenantNotFound) {
+				writeError(w, http.StatusNotFound, "tenant not found")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		slog.InfoContext(r.Context(), "tenant limits updated",
+			"tenant_id", id,
+			"role", string(role),
+			"old_max_sandboxes", t.MaxSandboxes,
+			"max_sandboxes", *req.MaxSandboxes,
+		)
+		t.MaxSandboxes = *req.MaxSandboxes
 		writeJSON(w, http.StatusOK, tenantToResponse(t))
 	}
 }
