@@ -95,7 +95,7 @@ test.describe('Provisioner key', () => {
     const provisioner = { 'X-Api-Key': PROVISIONER_API_KEY, 'Content-Type': 'application/json' };
     let tenantId: string | undefined;
     let tenantKey: string | undefined;
-    let sandboxId: string | undefined;
+    const sandboxIds: string[] = [];
 
     try {
       const created = await request.post('/admin/tenants', {
@@ -108,9 +108,22 @@ test.describe('Provisioner key', () => {
       tenantKey = body.key.api_key as string;
       const tenant = { 'X-Api-Key': tenantKey, 'Content-Type': 'application/json' };
 
-      const create = await request.post('/sandboxes', { headers: tenant, data: {} });
-      expect(create.status()).toBe(201);
-      sandboxId = (await create.json()).id as string;
+      const expectQuotaRefusal = async (label: string) => {
+        const refused = await request.post('/sandboxes', { headers: tenant, data: {} });
+        expect(refused.status(), label).toBe(403);
+        expect((await refused.json()).error, label).toContain('quota exceeded');
+      };
+      const removeSandbox = async (id: string) => {
+        const removed = await request.delete(`/sandboxes/${id}`, { headers: tenant });
+        expect(removed.status(), id).toBe(204);
+        sandboxIds.splice(sandboxIds.indexOf(id), 1);
+      };
+
+      for (let i = 0; i < 2; i++) {
+        const create = await request.post('/sandboxes', { headers: tenant, data: {} });
+        expect(create.status()).toBe(201);
+        sandboxIds.push((await create.json()).id as string);
+      }
 
       // Unlimited and above-default stay out of a provisioner key's reach.
       for (const max_sandboxes of [0, 2147483647]) {
@@ -128,16 +141,29 @@ test.describe('Provisioner key', () => {
       expect(lowered.status()).toBe(200);
       expect(await lowered.json()).toMatchObject({ id: tenantId, max_sandboxes: 1 });
 
-      const refused = await request.post('/sandboxes', { headers: tenant, data: {} });
-      expect(refused.status()).toBe(403);
+      // Two sandboxes against a limit of 1: both keep running, new ones are refused.
+      await expectQuotaRefusal('above the limit');
+      for (const id of sandboxIds) {
+        const stillThere = await request.get(`/sandboxes/${id}`, { headers: tenant });
+        expect(stillThere.status(), id).toBe(200);
+      }
 
-      const stillThere = await request.get(`/sandboxes/${sandboxId}`, { headers: tenant });
-      expect(stillThere.status()).toBe(200);
+      // Back at the limit is not below it yet; with no sandboxes left it is.
+      const [first, second] = sandboxIds;
+      await removeSandbox(first);
+      await expectQuotaRefusal('at the limit');
+
+      await removeSandbox(second);
+      const allowed = await request.post('/sandboxes', { headers: tenant, data: {} });
+      expect(allowed.status()).toBe(201);
+      sandboxIds.push((await allowed.json()).id as string);
     } finally {
-      if (sandboxId && tenantKey) {
-        await request
-          .delete(`/sandboxes/${sandboxId}`, { headers: { 'X-Api-Key': tenantKey } })
-          .catch(() => undefined);
+      if (tenantKey) {
+        for (const id of sandboxIds) {
+          await request
+            .delete(`/sandboxes/${id}`, { headers: { 'X-Api-Key': tenantKey } })
+            .catch(() => undefined);
+        }
       }
       if (tenantId) {
         await request
