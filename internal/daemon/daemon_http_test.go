@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -47,6 +49,42 @@ func TestExecEndpointStreamsResponses(t *testing.T) {
 	}
 	if !sawExit {
 		t.Fatal("expected exit response")
+	}
+}
+
+func TestExecEndpointKeepsMultibyteCharactersInLongLinesIntact(t *testing.T) {
+	// The odd prefix puts a 2-byte character across every 64 KiB chunk boundary.
+	line := "a" + strings.Repeat("é", 100_000)
+	path := filepath.Join(t.TempDir(), "output.txt")
+	if err := os.WriteFile(path, []byte(line+"\n"), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	body, _ := json.Marshal(map[string]string{"command": "cat " + shellQuote(path)})
+
+	req := httptest.NewRequest(http.MethodPost, "/executions", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	NewHandler().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	dec := json.NewDecoder(bytes.NewReader(rr.Body.Bytes()))
+	var stdout strings.Builder
+	for {
+		var resp Response
+		if err := dec.Decode(&resp); err != nil {
+			break
+		}
+		if resp.Type == ResponseTypeStdout {
+			stdout.WriteString(resp.Data)
+		}
+	}
+
+	if stdout.String() != line+"\n" {
+		t.Fatalf("stdout was altered: got %d bytes, expected %d", stdout.Len(), len(line)+1)
 	}
 }
 
