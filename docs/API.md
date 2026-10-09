@@ -888,3 +888,17 @@ Admin only. Mint an additional API key for the tenant. Returns plaintext `api_ke
 ### DELETE /admin/tenants/{id}/keys/{keyId}
 
 Admin only. Revoke an API key (`204`). Revoked keys are rejected from the next request on.
+
+---
+
+## Admin: capacity scaler
+
+### GET /admin/scaler
+
+Admin only. Forwards to `SANDBOX_API_SCALER_URL`'s `/policy` endpoint; on success, relays the response body unchanged and copies `Content-Type` when present. The scaler itself is operated privately, outside this repository.
+
+The scaler authenticates its own callers, so send its bearer token in the `Authorization` header; the API forwards that header as is. The admin key in `X-Api-Key` is not forwarded.
+
+- `SANDBOX_API_SCALER_URL` unset → `503 {"error": "scaler not configured", "code": 503}`.
+- Set but the scaler is down, times out (5s), redirects, answers anything other than `200` (including `401` for a missing or wrong token), or returns a body over 1 MiB → `503 {"error": "scaler unavailable", "code": 503}`.
+- Set and reachable → `200` with the scaler's response body, unchanged.
