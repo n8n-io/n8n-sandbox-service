@@ -115,6 +115,21 @@ func TestLoadAPIHeartbeatGraceFromEnv(t *testing.T) {
 	}
 }
 
+func TestLoadAPIScalerURLTrimsTrailingSlash(t *testing.T) {
+	t.Setenv("SANDBOX_API_KEYS", "test-key")
+	t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	t.Setenv("SANDBOX_API_SCALER_URL", " http://scaler.internal:8090// ")
+	setRequiredGRPCMTLS(t)
+
+	cfg, err := LoadAPI()
+	if err != nil {
+		t.Fatalf("LoadAPI() failed: %v", err)
+	}
+	if cfg.ScalerURL != "http://scaler.internal:8090" {
+		t.Fatalf("ScalerURL: want http://scaler.internal:8090, got %q", cfg.ScalerURL)
+	}
+}
+
 func TestLoadAPIDefaultMaxSandboxesFromEnv(t *testing.T) {
 	t.Setenv("SANDBOX_API_KEYS", "test-key")
 	t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")

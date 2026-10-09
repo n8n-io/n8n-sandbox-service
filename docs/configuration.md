@@ -42,6 +42,7 @@ All services are configured via environment variables.
 | `SANDBOX_API_IDLE_SWEEP_INTERVAL` | `1m` | How often the idle sweeper runs |
 | `SANDBOX_API_IDLE_SWEEP_CONCURRENCY` | `8` | Runner stop/delete calls one sweep keeps in flight (1–16), spread across runners. With Postgres the sandbox-lock pool is this plus 5 |
 | `SANDBOX_API_ORPHAN_REAP_BUFFER` | `5m` | How long after a runner deregisters before the idle sweeper removes its orphaned sandbox rows from the store |
+| `SANDBOX_API_SCALER_URL` | *(empty)* | Base URL of the runner scaler, such as `http://scaler.internal:8090`: scheme, host and port only, no path or query (a trailing `/` is ignored). `GET /admin/scaler` forwards to `<url>/policy`. Empty disables the endpoint, which then answers `503`. |
 | `SANDBOX_API_GRPC_TLS_CERT_FILE` | *(required)* | Server certificate (PEM) for the registration gRPC listener |
 | `SANDBOX_API_GRPC_TLS_KEY_FILE` | *(required)* | Server private key (PEM) |
 | `SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE` | *(required)* | CA bundle (PEM) that signed runner client certificates |
