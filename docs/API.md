@@ -7,7 +7,7 @@ All endpoints except `/healthz` and `/metrics` require the `X-Api-Key` header fo
 There are three key classes:
 
 - `SANDBOX_API_KEYS` are admin keys. An admin key can create/list/delete any sandbox, manage tenants and mint tenant API keys via the admin API.
-- `SANDBOX_API_PROVISIONER_KEYS` are provisioner keys: `POST /admin/tenants` and `DELETE /admin/tenants/{id}` only, `403` everywhere else. Why the class exists and what it does not protect: [security-model.md](security-model.md#provisioner-keys).
+- `SANDBOX_API_PROVISIONER_KEYS` are provisioner keys: `POST /admin/tenants`, `PATCH /admin/tenants/{id}` and `DELETE /admin/tenants/{id}` only, `403` everywhere else. Why the class exists and what it does not protect: [security-model.md](security-model.md#provisioner-keys).
 - Tenant keys are minted by an admin (or returned when a tenant is created). A tenant key may only create sandboxes for that tenant and may only list/get/delete/proxy its own sandboxes. Self-hosted operators can ignore tenant APIs entirely and keep using the admin key.
 
 Tenant keys are returned in plaintext once on create; only a hash is stored.
@@ -873,6 +873,45 @@ curl -X POST http://localhost:8080/admin/tenants \
 ### GET /admin/tenants/{id}
 
 Admin only. Get a tenant by id.
+
+### PATCH /admin/tenants/{id}
+
+Admin or provisioner. Change a tenant's limits. A provisioner key may change any tenant, not only the ones it created.
+
+**Request body:**
+
+```json
+{
+  "max_sandboxes": 20
+}
+```
+
+`max_sandboxes` is required and has the same bounds as on [create](#post-admintenants): `0`…`2147483647` with an admin key, `1`…`SANDBOX_API_DEFAULT_MAX_SANDBOXES` with a provisioner key. Unknown fields return `400`.
+
+The tenant's sandboxes are never touched. If the new limit is below the tenant's current count, creating a new sandbox returns `403` until the tenant is below it again.
+
+**Response:** `200 OK` with the updated tenant, as `GET /admin/tenants/{id}` returns it.
+
+```json
+{
+  "id": "uuid",
+  "name": "my-instance",
+  "external_ref": "n8n-instance-id",
+  "max_sandboxes": 20,
+  "created_at": 1700000000
+}
+```
+
+**Errors:** `400` invalid tenant id, invalid body, or `max_sandboxes` missing or out of bounds, `403` tenant key, `404` tenant not found
+
+**Example:**
+
+```bash
+curl -X PATCH http://localhost:8080/admin/tenants/0f0e0d0c-0000-4000-8000-000000000001 \
+  -H "X-Api-Key: PROVISIONER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"max_sandboxes":20}'
+```
 
 ### DELETE /admin/tenants/{id}
 

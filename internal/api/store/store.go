@@ -12,7 +12,8 @@ import (
 var ErrTenantHasSandboxes = errors.New("tenant has sandboxes")
 
 // ErrTenantNotFound is returned when persisting a tenant-owned sandbox whose
-// tenant row no longer exists (e.g. deleted concurrently during create).
+// tenant row no longer exists (e.g. deleted concurrently during create), and
+// when updating a tenant that does not exist.
 var ErrTenantNotFound = errors.New("tenant not found")
 
 // ErrAPIKeyTenantMismatch is returned when CreateTenantWithAPIKey is called with
@@ -100,6 +101,9 @@ type SandboxStore interface {
 	CreateTenantWithAPIKey(t *Tenant, k *APIKey) error
 	GetTenant(id string) (*Tenant, error)
 	ListTenants() ([]*Tenant, error)
+	// UpdateTenantLimits sets the tenant's limits and leaves its sandboxes
+	// alone. Returns ErrTenantNotFound when no tenant has that id.
+	UpdateTenantLimits(id string, maxSandboxes int) error
 	DeleteTenant(id string) error
 
 	CreateAPIKey(k *APIKey) error

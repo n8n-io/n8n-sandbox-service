@@ -2,6 +2,8 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -224,6 +226,123 @@ func TestRevokedTenantKeyRejected(t *testing.T) {
 	router.ServeHTTP(listRR, listReq)
 	if listRR.Code != http.StatusUnauthorized {
 		t.Fatalf("revoked key: expected %d, got %d", http.StatusUnauthorized, listRR.Code)
+	}
+}
+
+func TestAdminUpdatesTenantLimits(t *testing.T) {
+	router, s := newTestGateway(t, "admin-key")
+	created := mintTenantKey(t, router, `{"name":"acme","external_ref":"inst-1","max_sandboxes":5}`)
+
+	// Admin keys may set anything the INTEGER column holds, unlimited included.
+	for _, n := range []int{0, 51, math.MaxInt32, 1} {
+		rr := doJSON(t, router, http.MethodPatch, "/admin/tenants/"+created.Tenant.ID, "admin-key", fmt.Sprintf(`{"max_sandboxes":%d}`, n))
+		if rr.Code != http.StatusOK {
+			t.Fatalf("patch %d: expected %d, got %d body=%s", n, http.StatusOK, rr.Code, rr.Body.String())
+		}
+		// The bare tenant, as GET /admin/tenants/{id} returns it.
+		var got tenantResponse
+		if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		want := created.Tenant
+		want.MaxSandboxes = n
+		if got != want {
+			t.Fatalf("patch %d: got %+v, want %+v", n, got, want)
+		}
+		stored, err := s.GetTenant(created.Tenant.ID)
+		if err != nil || stored == nil || stored.MaxSandboxes != n {
+			t.Fatalf("patch %d: stored %+v err=%v", n, stored, err)
+		}
+	}
+}
+
+func TestUpdateTenantRejectsInvalidRequests(t *testing.T) {
+	router, s := newTestGateway(t, "admin-key")
+	created := mintTenantKey(t, router, `{"name":"acme","max_sandboxes":5}`)
+	path := "/admin/tenants/" + created.Tenant.ID
+
+	for _, tc := range []struct {
+		name, path, body string
+		want             int
+	}{
+		{"invalid id", "/admin/tenants/not-a-uuid", `{"max_sandboxes":1}`, http.StatusBadRequest},
+		{"missing tenant", "/admin/tenants/11111111-2222-3333-4444-555555555555", `{"max_sandboxes":1}`, http.StatusNotFound},
+		{"empty body", path, "", http.StatusBadRequest},
+		{"no fields", path, `{}`, http.StatusBadRequest},
+		{"null", path, `{"max_sandboxes":null}`, http.StatusBadRequest},
+		{"unknown field", path, `{"max_sandboxes":1,"name":"renamed"}`, http.StatusBadRequest},
+		{"trailing JSON", path, `{"max_sandboxes":1}{"max_sandboxes":2}`, http.StatusBadRequest},
+		{"string", path, `{"max_sandboxes":"1"}`, http.StatusBadRequest},
+		{"fraction", path, `{"max_sandboxes":1.5}`, http.StatusBadRequest},
+		{"negative", path, `{"max_sandboxes":-1}`, http.StatusBadRequest},
+		{"above INTEGER", path, `{"max_sandboxes":2147483648}`, http.StatusBadRequest},
+	} {
+		rr := doJSON(t, router, http.MethodPatch, tc.path, "admin-key", tc.body)
+		if rr.Code != tc.want {
+			t.Errorf("%s: expected %d, got %d body=%s", tc.name, tc.want, rr.Code, rr.Body.String())
+		}
+	}
+
+	stored, err := s.GetTenant(created.Tenant.ID)
+	if err != nil || stored == nil || stored.MaxSandboxes != 5 || stored.Name != "acme" {
+		t.Fatalf("tenant changed by refused requests: %+v err=%v", stored, err)
+	}
+}
+
+func TestTenantKeyCannotUpdateTenantLimits(t *testing.T) {
+	router, s := newTestGateway(t, "admin-key")
+	created := mintTenantKey(t, router, `{"name":"acme","max_sandboxes":5}`)
+
+	rr := doJSON(t, router, http.MethodPatch, "/admin/tenants/"+created.Tenant.ID, created.Key.APIKey, `{"max_sandboxes":1000}`)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected %d, got %d body=%s", http.StatusForbidden, rr.Code, rr.Body.String())
+	}
+	stored, err := s.GetTenant(created.Tenant.ID)
+	if err != nil || stored == nil || stored.MaxSandboxes != 5 {
+		t.Fatalf("tenant changed: %+v err=%v", stored, err)
+	}
+}
+
+// Lowering max_sandboxes below the tenant's count refuses new creates and leaves
+// the existing sandboxes alone; raising it again lifts the refusal.
+func TestLoweredTenantLimitBlocksCreatesAndKeepsSandboxes(t *testing.T) {
+	router, s := newTestGateway(t, "admin-key")
+	tenant := mintTenantKey(t, router, `{"name":"shrink","max_sandboxes":5}`)
+	path := "/admin/tenants/" + tenant.Tenant.ID
+
+	sandboxIDs := []string{
+		"a1111111-1111-4111-8111-111111111111",
+		"a2222222-2222-4222-8222-222222222222",
+		"a3333333-3333-4333-8333-333333333333",
+	}
+	for _, id := range sandboxIDs {
+		if err := s.Create(&store.SandboxRecord{
+			ID: id, Status: "running", CreatedAt: 1, LastActiveAt: 1, TenantID: tenant.Tenant.ID,
+		}); err != nil {
+			t.Fatalf("seed sandbox: %v", err)
+		}
+	}
+
+	if rr := doJSON(t, router, http.MethodPatch, path, "admin-key", `{"max_sandboxes":1}`); rr.Code != http.StatusOK {
+		t.Fatalf("lower limit: expected %d, got %d body=%s", http.StatusOK, rr.Code, rr.Body.String())
+	}
+	rr := postCreateSandbox(t, router, tenant.Key.APIKey, "")
+	if rr.Code != http.StatusForbidden || !strings.Contains(rr.Body.String(), "quota exceeded") {
+		t.Fatalf("create above lowered limit: expected %d quota exceeded, got %d body=%s", http.StatusForbidden, rr.Code, rr.Body.String())
+	}
+	for _, id := range sandboxIDs {
+		rec, err := s.Get(id)
+		if err != nil || rec == nil || rec.Status != "running" {
+			t.Fatalf("sandbox %s after lowering the limit: %+v err=%v", id, rec, err)
+		}
+	}
+
+	if rr := doJSON(t, router, http.MethodPatch, path, "admin-key", `{"max_sandboxes":4}`); rr.Code != http.StatusOK {
+		t.Fatalf("raise limit: expected %d, got %d body=%s", http.StatusOK, rr.Code, rr.Body.String())
+	}
+	// Past the quota check; no runner is registered, so placement fails.
+	if rr := postCreateSandbox(t, router, tenant.Key.APIKey, ""); rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("create below raised limit: expected %d, got %d body=%s", http.StatusServiceUnavailable, rr.Code, rr.Body.String())
 	}
 }
 

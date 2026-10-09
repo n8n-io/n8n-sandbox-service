@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/n8n-io/sandbox-service/internal/api/config"
 )
 
@@ -102,6 +103,10 @@ func TestPostgresStoreCRUD(t *testing.T) {
 	if len(rows) == 0 {
 		t.Fatal("expected stop candidate")
 	}
+}
+
+func TestPostgresUpdateTenantLimits(t *testing.T) {
+	testUpdateTenantLimits(t, openTestPostgresStore(t), uuid.New().String())
 }
 
 func TestPostgresSandboxLockKeepsStoreUsableAndReleasesAfterCancellation(t *testing.T) {
