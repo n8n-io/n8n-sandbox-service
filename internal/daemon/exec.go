@@ -5,18 +5,25 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
 	"syscall"
 	"time"
+	"unicode/utf8"
 )
+
+// streamChunkBytes caps the size of one stdout or stderr event. A longer line
+// is sent as several events, which clients join back together.
+const streamChunkBytes = 64 * 1024
 
 // HandleExec runs a command inside workdir with the given environment. The
 // command is always executed via /bin/sh -c so that shell features like tilde
 // expansion, pipes, and redirects work consistently.
 //
-// It streams stdout and stderr lines to callback as Response messages, and sends
+// It streams stdout and stderr lines to callback as Response messages (see
+// streamLines for lines longer than streamChunkBytes), and sends
 // a final "exit" response with metadata (success, executionTimeMs, timedOut, killed).
 //
 // If ctx is cancelled, the entire process group is killed before returning.
@@ -88,12 +95,11 @@ func HandleExec(ctx context.Context, command string, env []string, workdir strin
 	stdoutDone := make(chan struct{})
 	go func() {
 		defer close(stdoutDone)
-		scanner := bufio.NewScanner(stdoutPipe)
-		for scanner.Scan() {
-			callback(Response{Type: ResponseTypeStdout, Data: scanner.Text() + "\n"})
-		}
-		if err := scanner.Err(); err != nil {
-			slog.Warn("scan stdout", "err", err)
+		err := streamLines(stdoutPipe, func(data string) {
+			callback(Response{Type: ResponseTypeStdout, Data: data})
+		})
+		if err != nil {
+			slog.Warn("read stdout", "err", err)
 		}
 	}()
 
@@ -101,12 +107,11 @@ func HandleExec(ctx context.Context, command string, env []string, workdir strin
 	stderrDone := make(chan struct{})
 	go func() {
 		defer close(stderrDone)
-		scanner := bufio.NewScanner(stderrPipe)
-		for scanner.Scan() {
-			callback(Response{Type: ResponseTypeStderr, Data: scanner.Text() + "\n"})
-		}
-		if err := scanner.Err(); err != nil {
-			slog.Warn("scan stderr", "err", err)
+		err := streamLines(stderrPipe, func(data string) {
+			callback(Response{Type: ResponseTypeStderr, Data: data})
+		})
+		if err != nil {
+			slog.Warn("read stderr", "err", err)
 		}
 	}()
 
@@ -175,6 +180,61 @@ func HandleExec(ctx context.Context, command string, env []string, workdir strin
 		Killed:          &killed,
 	})
 	return nil
+}
+
+// streamLines sends each line from r to emit, with a trailing newline. A line
+// longer than streamChunkBytes goes out in several chunks, so no output is
+// dropped and memory stays bounded.
+func streamLines(r io.Reader, emit func(string)) error {
+	reader := bufio.NewReaderSize(r, streamChunkBytes)
+	var carry []byte
+	// midLine is true once part of the current line has been emitted.
+	midLine := false
+	for {
+		chunk, isPrefix, err := reader.ReadLine()
+		if err != nil {
+			if len(carry) > 0 || midLine {
+				emit(string(carry) + "\n")
+			}
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		}
+
+		// ReadLine reuses its buffer, so append copies chunk into carry.
+		data := append(carry, chunk...)
+		if !isPrefix {
+			carry = nil
+			midLine = false
+			emit(string(data) + "\n")
+			continue
+		}
+
+		// Hold back a split UTF-8 character: JSON encoding would replace
+		// each half of it with U+FFFD.
+		cut := incompleteRuneStart(data)
+		carry = append([]byte(nil), data[cut:]...)
+		if cut > 0 {
+			emit(string(data[:cut]))
+			midLine = true
+		}
+	}
+}
+
+// incompleteRuneStart returns the index where an incomplete UTF-8 character at
+// the end of b starts, or len(b) if b ends with a complete character.
+func incompleteRuneStart(b []byte) int {
+	for i := len(b) - 1; i >= 0 && i >= len(b)-utf8.UTFMax; i-- {
+		if !utf8.RuneStart(b[i]) {
+			continue
+		}
+		if utf8.FullRune(b[i:]) {
+			return len(b)
+		}
+		return i
+	}
+	return len(b)
 }
 
 func finalizeCmdWait(cmd *exec.Cmd) error {

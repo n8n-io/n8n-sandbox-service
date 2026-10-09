@@ -2,6 +2,9 @@ package daemon
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -71,5 +74,71 @@ func TestHandleExecPreservesStdoutForBackgroundCommand(t *testing.T) {
 	}
 	if exit.ExitCode != 0 {
 		t.Fatalf("expected exit code 0, got %d", exit.ExitCode)
+	}
+}
+
+// runCatFile writes content to a file and returns what HandleExec streams
+// while it runs cat on that file, so the test controls the exact bytes.
+func runCatFile(t *testing.T, content string, redirect string) (stdout string, stderr string, exit Response) {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "output.txt")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	err := HandleExec(ctx, "cat '"+path+"'"+redirect, nil, "", func(resp Response) {
+		switch resp.Type {
+		case ResponseTypeStdout:
+			stdout += resp.Data
+		case ResponseTypeStderr:
+			stderr += resp.Data
+		case ResponseTypeExit:
+			exit = resp
+		}
+	})
+	if err != nil {
+		t.Fatalf("HandleExec() error = %v", err)
+	}
+	return stdout, stderr, exit
+}
+
+func TestHandleExecStreamsStdoutLineLongerThan64KiB(t *testing.T) {
+	t.Parallel()
+
+	line := strings.Repeat("x", 200_000)
+	stdout, _, exit := runCatFile(t, line+"\nafter\n", "")
+
+	if stdout != line+"\nafter\n" {
+		t.Fatalf("expected %d bytes of stdout, got %d", len(line)+7, len(stdout))
+	}
+	if exit.ExitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", exit.ExitCode)
+	}
+}
+
+func TestHandleExecStreamsStderrLineLongerThan64KiB(t *testing.T) {
+	t.Parallel()
+
+	line := strings.Repeat("x", 200_000)
+	_, stderr, _ := runCatFile(t, line+"\n", " >&2")
+
+	if stderr != line+"\n" {
+		t.Fatalf("expected %d bytes of stderr, got %d", len(line)+1, len(stderr))
+	}
+}
+
+func TestHandleExecEndsUnterminatedLineOnChunkBoundaryWithNewline(t *testing.T) {
+	t.Parallel()
+
+	// No trailing newline, and the line fills the read buffer exactly.
+	line := strings.Repeat("x", 64*1024)
+	stdout, _, _ := runCatFile(t, line, "")
+
+	if stdout != line+"\n" {
+		t.Fatalf("expected %d bytes ending in a newline, got %d", len(line)+1, len(stdout))
 	}
 }

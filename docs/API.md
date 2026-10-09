@@ -398,6 +398,10 @@ Stream of JSON objects, one per line. The first event is always a `started` even
 All events include a monotonically increasing `seq` number. The `started` event provides
 the `exec_id` needed for the resume and cancel endpoints.
 
+Each `stdout` and `stderr` event usually holds one line. An output line longer than 64 KiB
+is sent as several events, and only the last one ends with `\n`. Join the `data` of
+consecutive events to get the full output.
+
 The `exit` event includes:
 - `success` — `true` when `exit_code == 0`
 - `execution_time_ms` — wall-clock execution time in milliseconds
