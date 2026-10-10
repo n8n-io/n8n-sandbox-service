@@ -24,6 +24,8 @@ Needs a Linux host with KVM; from a local machine, `e2e/run-firecracker-azure.sh
 RESOURCE_GROUP=my-resource-group bash e2e/run-firecracker-azure.sh
 ```
 
+The VMs admit SSH only from the public IPv4 of the machine that provisions them; see `infra/README.md`.
+
 On the VM:
 
 - `run-firecracker.sh` — full suite (excludes idle specs). Runner on `127.0.0.1:18082`, per-sandbox daemon proxies from `18100`; keep those ranges apart when overriding `RUNNER_ADDR` or `FIRECRACKER_PROXY_PORT_START`.
