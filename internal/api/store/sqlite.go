@@ -383,6 +383,21 @@ func (s *SQLiteStore) ListTenants() ([]*Tenant, error) {
 	return out, rows.Err()
 }
 
+func (s *SQLiteStore) UpdateTenantLimits(id string, maxSandboxes int) error {
+	res, err := s.db.Exec(`UPDATE tenants SET max_sandboxes = ? WHERE id = ?`, maxSandboxes, id)
+	if err != nil {
+		return fmt.Errorf("store: update tenant %s limits: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: update tenant %s limits: %w", id, err)
+	}
+	if n == 0 {
+		return ErrTenantNotFound
+	}
+	return nil
+}
+
 func (s *SQLiteStore) DeleteTenant(id string) error {
 	// BEGIN IMMEDIATE write-locks the DB so a concurrent Create cannot insert
 	// a sandbox after the emptiness check.

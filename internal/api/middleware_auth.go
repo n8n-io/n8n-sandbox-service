@@ -17,14 +17,14 @@ type authRole string
 
 const (
 	roleAdmin authRole = "admin"
-	// roleProvisioner: tenant create and delete only. See
+	// roleProvisioner: tenant create, limit update and delete only. See
 	// docs/security-model.md, "Provisioner keys".
 	roleProvisioner authRole = "provisioner"
 	roleTenant      authRole = "tenant"
 )
 
 // provisionerPathPrefix confines provisioner keys; the handlers under it other
-// than tenant create and delete require admin.
+// than tenant create, limit update and delete require admin.
 const provisionerPathPrefix = "/admin/tenants"
 
 // publicPaths skip auth and the access log.
@@ -136,7 +136,7 @@ func requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-// requireAdminOrProvisioner gates the two tenant routes a provisioner may call.
+// requireAdminOrProvisioner gates the three tenant routes a provisioner may call.
 // Returns the caller's role so the handler can apply provisioner-only limits.
 func requireAdminOrProvisioner(w http.ResponseWriter, r *http.Request) (authRole, bool) {
 	id, ok := authFromContext(r.Context())
