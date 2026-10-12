@@ -31,7 +31,7 @@ All services are configured via environment variables.
 | `SANDBOX_API_POSTGRES_DB` | *(required with postgres)* | Postgres database name |
 | `SANDBOX_API_POSTGRES_SSLMODE` | `require` | Postgres TLS mode (`disable`, `require`, `verify-full`, etc.) |
 | `SANDBOX_API_MAX_FILE_BYTES` | `10485760` | Maximum file upload size (10 MB) |
-| `SANDBOX_API_DEFAULT_MAX_SANDBOXES` | `50` | Default per-tenant sandbox quota when `POST /admin/tenants` omits `max_sandboxes` (`0` = unlimited). Must fit Postgres/SQLite `INTEGER` (`0`…`2147483647`). Soft check-then-act: concurrent creates can exceed the limit (see `docs/API.md`). |
+| `SANDBOX_API_DEFAULT_MAX_SANDBOXES` | `50` | Default per-tenant sandbox quota when `POST /admin/tenants` omits `max_sandboxes` (`0` = unlimited), and the highest `max_sandboxes` a provisioner key may set on create or `PATCH`. Must fit Postgres/SQLite `INTEGER` (`0`…`2147483647`). Soft check-then-act: concurrent creates can exceed the limit (see `docs/API.md`). |
 | `SANDBOX_API_MAX_INFLIGHT_PER_TENANT` | `512` | Requests a tenant may have in progress at once on this replica, all its keys together; more get `429` ([what counts](API.md#http-429--too-many-requests-in-progress)). A first estimate: 32 sandboxes at the per-sandbox limit. It also bounds what a tenant holds here while requests wait on a slow runner, which the per-sandbox limit cannot see. `0` = no limit, for execution `DELETE`s too |
 | `SANDBOX_API_ENABLE_CORS` | `false` | Enable CORS headers (allow all origins); needed for the browser playground |
 | `SANDBOX_API_METRICS_ENABLED` | `false` | When true, expose Prometheus `/metrics` (no `X-Api-Key`; firewall the port it lands on). `SANDBOX_API_METRICS_LISTEN_ADDR` chooses the listener. See [Metrics](#metrics). |

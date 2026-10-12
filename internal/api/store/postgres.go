@@ -365,6 +365,21 @@ func (s *PostgresStore) ListTenants() ([]*Tenant, error) {
 	return out, rows.Err()
 }
 
+func (s *PostgresStore) UpdateTenantLimits(id string, maxSandboxes int) error {
+	res, err := s.db.Exec(`UPDATE tenants SET max_sandboxes = $1 WHERE id = $2`, maxSandboxes, id)
+	if err != nil {
+		return fmt.Errorf("store: update tenant %s limits: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: update tenant %s limits: %w", id, err)
+	}
+	if n == 0 {
+		return ErrTenantNotFound
+	}
+	return nil
+}
+
 func (s *PostgresStore) DeleteTenant(id string) error {
 	tx, err := s.db.Begin()
 	if err != nil {

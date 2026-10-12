@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -141,6 +142,102 @@ func TestProvisionerMaxSandboxesBounds(t *testing.T) {
 		if rr.Code != http.StatusCreated {
 			t.Errorf("admin %s: expected %d, got %d body=%s", body, http.StatusCreated, rr.Code, rr.Body.String())
 		}
+	}
+}
+
+func TestProvisionerUpdateMaxSandboxesBounds(t *testing.T) {
+	router, s := newProvisionerGateway(t)
+	created := provisionerCreateTenant(t, router, `{"name":"bounds","max_sandboxes":5}`)
+	path := "/admin/tenants/" + created.Tenant.ID
+
+	for _, tc := range []struct {
+		body string
+		want int
+	}{
+		{`{"max_sandboxes":0}`, http.StatusBadRequest},
+		{`{"max_sandboxes":51}`, http.StatusBadRequest},
+		{`{"max_sandboxes":-1}`, http.StatusBadRequest},
+		{`{"max_sandboxes":1}`, http.StatusOK},
+		{`{"max_sandboxes":50}`, http.StatusOK},
+	} {
+		rr := doJSON(t, router, http.MethodPatch, path, provKey, tc.body)
+		if rr.Code != tc.want {
+			t.Errorf("%s: expected %d, got %d body=%s", tc.body, tc.want, rr.Code, rr.Body.String())
+		}
+	}
+	if stored, err := s.GetTenant(created.Tenant.ID); err != nil || stored == nil || stored.MaxSandboxes != provMaxDflt {
+		t.Fatalf("expected the last accepted value %d, got %+v err=%v", provMaxDflt, stored, err)
+	}
+
+	// Admin keeps unlimited and above-default.
+	for _, body := range []string{`{"max_sandboxes":51}`, `{"max_sandboxes":0}`} {
+		rr := doJSON(t, router, http.MethodPatch, path, provAdminKey, body)
+		if rr.Code != http.StatusOK {
+			t.Errorf("admin %s: expected %d, got %d body=%s", body, http.StatusOK, rr.Code, rr.Body.String())
+		}
+	}
+}
+
+// Only admin keys may set unlimited or above-default limits; every other role,
+// including one a future change adds, gets the provisioner bounds.
+func TestMaxSandboxesBoundsApplyToEveryNonAdminRole(t *testing.T) {
+	cfg := &config.APIConfig{DefaultMaxSandboxes: provMaxDflt}
+	for _, role := range []authRole{roleProvisioner, roleTenant, authRole("")} {
+		for _, n := range []int{0, provMaxDflt + 1} {
+			if maxSandboxesError(role, n, cfg) == "" {
+				t.Errorf("role %q, max_sandboxes %d: expected a bounds error", role, n)
+			}
+		}
+		if msg := maxSandboxesError(role, provMaxDflt, cfg); msg != "" {
+			t.Errorf("role %q, max_sandboxes %d: unexpected error %q", role, provMaxDflt, msg)
+		}
+	}
+	for _, n := range []int{0, provMaxDflt + 1, math.MaxInt32} {
+		if msg := maxSandboxesError(roleAdmin, n, cfg); msg != "" {
+			t.Errorf("admin, max_sandboxes %d: unexpected error %q", n, msg)
+		}
+	}
+}
+
+// Updating limits hands out no credentials: the response is the bare tenant and
+// the tenant's keys are untouched.
+func TestProvisionerUpdatesTenantLimitsWithoutTouchingKeys(t *testing.T) {
+	router, s := newProvisionerGateway(t)
+	created := provisionerCreateTenant(t, router, `{"name":"inst","max_sandboxes":5}`)
+
+	rr := doJSON(t, router, http.MethodPatch, "/admin/tenants/"+created.Tenant.ID, provKey, `{"max_sandboxes":20}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected %d, got %d body=%s", http.StatusOK, rr.Code, rr.Body.String())
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	want := map[string]any{
+		"id":            created.Tenant.ID,
+		"name":          "inst",
+		"external_ref":  "",
+		"max_sandboxes": float64(20),
+		"created_at":    float64(created.Tenant.CreatedAt),
+	}
+	if len(raw) != len(want) {
+		t.Fatalf("response fields: got %v, want %v", raw, want)
+	}
+	for k, v := range want {
+		if raw[k] != v {
+			t.Fatalf("response %s: got %v, want %v (body=%s)", k, raw[k], v, rr.Body.String())
+		}
+	}
+
+	keys, err := s.ListAPIKeysByTenant(created.Tenant.ID)
+	if err != nil {
+		t.Fatalf("list keys: %v", err)
+	}
+	if len(keys) != 1 || keys[0].ID != created.Key.ID || keys[0].RevokedAt != 0 {
+		t.Fatalf("expected the single original active key, got %+v", keys)
+	}
+	if rr := doJSON(t, router, http.MethodGet, "/sandboxes", created.Key.APIKey, ""); rr.Code != http.StatusOK {
+		t.Fatalf("tenant key after update: expected %d, got %d body=%s", http.StatusOK, rr.Code, rr.Body.String())
 	}
 }
 
