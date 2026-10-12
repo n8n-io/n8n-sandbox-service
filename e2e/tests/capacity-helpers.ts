@@ -30,9 +30,15 @@ export async function postCreate(): Promise<CreateAnswer> {
   return { status: res.status, retryAfter: res.headers.get('retry-after'), body: await res.json() };
 }
 
-/** Sends n creates at once. */
-export function burst(n: number): Promise<CreateAnswer[]> {
-  return Promise.all(Array.from({ length: n }, () => postCreate()));
+/**
+ * Sends n creates at once. Waits for every one, so a failed request cannot hide
+ * the sandboxes the others created from cleanup; it shows up as status 0.
+ */
+export async function burst(n: number): Promise<CreateAnswer[]> {
+  const settled = await Promise.allSettled(Array.from({ length: n }, () => postCreate()));
+  return settled.map((r) =>
+    r.status === 'fulfilled' ? r.value : { status: 0, retryAfter: null, body: { error: String(r.reason) } },
+  );
 }
 
 export function createdIds(answers: CreateAnswer[]): string[] {
@@ -43,9 +49,14 @@ export function statuses(answers: CreateAnswer[]): number[] {
   return answers.map((a) => a.status).sort((a, b) => a - b);
 }
 
+/** Deletes every sandbox in ids, attempting all of them before reporting any failure. */
 export async function deleteAll(ids: string[]): Promise<void> {
   const admin = adminClient();
-  await Promise.all(ids.map((id) => deleteSandbox(id, admin)));
+  const settled = await Promise.allSettled(ids.map((id) => deleteSandbox(id, admin)));
+  const failed = settled.flatMap((r, i) => (r.status === 'rejected' ? [`${ids[i]}: ${String(r.reason)}`] : []));
+  if (failed.length > 0) {
+    throw new Error(`failed to delete ${failed.length} sandbox(es): ${failed.join('; ')}`);
+  }
 }
 
 /** Slot-blocking sandboxes on the runner whose HTTPS listener is at addr. */

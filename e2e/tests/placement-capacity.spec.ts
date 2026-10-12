@@ -69,11 +69,12 @@ test.describe('Runner at capacity', FIRECRACKER_ONLY, () => {
     try {
       expect(ids).toHaveLength(capacity - active);
 
-      // Retries span 19s, longer than the heartbeat that tells the API a slot is free.
+      // Retries span 35s: the freed slot reaches the API only with the next 10s
+      // heartbeat after the delete finishes, and a slow teardown must not run them out.
       const client = new SandboxClient({
         baseUrl: BASE_URL,
         apiKey: ADMIN_API_KEY,
-        retry: { attempts: 6, baseDelayMs: 1000, maxDelayMs: 4000, jitter: false },
+        retry: { attempts: 10, baseDelayMs: 1000, maxDelayMs: 4000, jitter: false },
       });
       const before = await placements();
       const creating = client.createSandbox({ egress: 'public' });

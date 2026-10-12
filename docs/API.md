@@ -198,9 +198,9 @@ Create a sandbox. With no request body, the service generates a UUID. Callers ma
 
 If that ID still belongs to the caller and is within its idle-delete window, the existing sandbox is returned, or `409` if the request names an `egress` that differs from the sandbox's. If it has passed the window, the stale sandbox is deleted before the ID is reused. If the ID belongs to another tenant (or to admin when the caller is a tenant), the request fails with `409`.
 
-Disconnecting before the response does not cancel a create a runner is working on: the sandbox is still created and tracked, and can be found by listing or by repeating the request with the same `id`.
+Disconnecting before the response does not cancel a create a runner has accepted: if it succeeds, the sandbox is still created and tracked, and can be found by listing or by repeating the request with the same `id`. A disconnect after a runner refused it (below) ends the create with nothing created.
 
-The sandbox goes to the eligible runner with the lowest reported `capacity_used`. A full runner refuses before creating anything, and the API tries the next one: up to three runners, none started more than 5 seconds after the first. When no runner takes the create, or none is eligible, the answer is:
+The sandbox goes to the eligible runner with the lowest reported `capacity_used`. A full runner refuses before creating anything, and the API tries the next one: up to three runners, none started more than 5 seconds after the first. Any other runner error ends the create with `500`. When every runner tried refuses, the answer is:
 
 ```
 HTTP/1.1 503 Service Unavailable
@@ -209,7 +209,7 @@ Retry-After: 1
 {"error":"sandbox runners are at capacity","code":503,"reason":"no_capacity"}
 ```
 
-Nothing was created, so the request is safe to repeat even without an `id`. Match on `reason`: the `error` text differs when no runner is eligible.
+When no runner is eligible, it is the same except for `error`: `no sandbox runners are registered or available`. Either way nothing was created, so the request is safe to repeat even without an `id`. Match on `reason`.
 
 **Request body fields** (all optional):
 

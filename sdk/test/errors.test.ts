@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createErrorFromResponse, SandboxServiceError } from "../src/errors.js";
+import {
+  createErrorFromResponse,
+  SandboxCrashedError,
+  SandboxServiceError,
+} from "../src/errors.js";
 
 describe("createErrorFromResponse", () => {
   it("takes the message and code from a well-formed error body", () => {
@@ -35,6 +39,16 @@ describe("createErrorFromResponse", () => {
     expect(createErrorFromResponse(503, body).reason).toBe("no_capacity");
     expect(createErrorFromResponse(503, { ...body, reason: 1 }).reason).toBeUndefined();
     expect(createErrorFromResponse(503, { error: "unavailable" }).reason).toBeUndefined();
+  });
+
+  it("keeps the reason on a restarted-sandbox error", () => {
+    const error = createErrorFromResponse(409, {
+      error: "sandbox restarted after guest crash; state in memory was lost",
+      reason: "sandbox_restarted",
+    });
+
+    expect(error).toBeInstanceOf(SandboxCrashedError);
+    expect(error.reason).toBe("sandbox_restarted");
   });
 
   it("falls back to the generic message for a body with no error field", () => {

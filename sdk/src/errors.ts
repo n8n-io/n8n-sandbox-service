@@ -28,8 +28,8 @@ export class SandboxServiceError extends Error {
  * automatically; see README "Sandbox restarts".
  */
 export class SandboxCrashedError extends SandboxServiceError {
-  constructor(message: string, code?: number) {
-    super(message, 409, code);
+  constructor(message: string, code?: number, reason?: string) {
+    super(message, 409, code, reason);
     this.name = "SandboxCrashedError";
   }
 }
@@ -95,7 +95,7 @@ export function createErrorFromResponse(
   }
 
   if (isSandboxRestarted(status, data, headers)) {
-    return new SandboxCrashedError(message, code);
+    return new SandboxCrashedError(message, code, reason);
   }
 
   return new SandboxServiceError(message, status, code, reason);
