@@ -26,8 +26,8 @@ trusts it to have made the decision correctly.
 Requests carry an `X-Api-Key` header. There are three key classes:
 
 - Admin keys, listed in `SANDBOX_API_KEYS`: full access.
-- Provisioner keys, listed in `SANDBOX_API_PROVISIONER_KEYS`: tenant create
-  and delete only, see below.
+- Provisioner keys, listed in `SANDBOX_API_PROVISIONER_KEYS`: tenant create,
+  limit update and delete only, see below.
 - Tenant keys, minted by an admin or returned on tenant create, stored only as
   a SHA-256 hash alongside an 8-character lookup prefix, so a database read
   does not yield usable credentials. Revocation sets `revoked_at`, which the
@@ -45,20 +45,22 @@ of copies. The class makes those copies cheap to lose.
 
 A provisioner key may `POST /admin/tenants` with `max_sandboxes` between `1`
 and `SANDBOX_API_DEFAULT_MAX_SANDBOXES` (startup refuses the class when that
-default is unlimited), and `DELETE /admin/tenants/{id}` for a tenant that owns
-no sandboxes (`409` otherwise; the key cannot delete sandboxes). Everything
-else returns `403`: the middleware confines the key to `/admin/tenants`, and
-every other handler there requires admin. Withholding `POST
-/admin/tenants/{id}/keys` is what keeps existing tenants out of reach: it
-returns a plaintext key for that tenant's sandboxes, and tenant ids are not
-secrets. The two env sets must not overlap; startup fails if they do, because
+default is unlimited), `PATCH /admin/tenants/{id}` to set any tenant's
+`max_sandboxes` within the same bounds, and `DELETE /admin/tenants/{id}` for a
+tenant that owns no sandboxes (`409` otherwise; the key cannot delete
+sandboxes). Everything else returns `403`: the middleware confines the key to
+`/admin/tenants`, and every other handler there requires admin. Withholding
+`POST /admin/tenants/{id}/keys` is what keeps existing tenants' sandboxes out
+of reach: it returns a plaintext key for that tenant's sandboxes, and tenant
+ids are not secrets. The two env sets must not overlap; startup fails if they do, because
 admin keys are checked first and the key would silently be admin.
 
 Two limits of that guarantee. It bounds what the key grants. Automation that
 provisions tenants usually stores the tenant keys it receives, so whoever
 fully compromises it holds those keys regardless; the class still keeps the
-admin surface and tenants that automation never created out of reach. And the
-quota bounds each tenant; a leaked key can create any number of tenants.
+admin surface and the sandboxes of tenants that automation never created out
+of reach. And the quota bounds each tenant; a leaked key can create any number
+of tenants.
 
 A consequence worth keeping in mind: any key on a tenant that was not created
 together with the tenant was minted by an admin.
@@ -78,8 +80,8 @@ Authorization runs on every sandbox request through `canAccessSandbox` in
   explicitly and refuse anything but admin or tenant, so a new role can never
   fall through to the admin pseudo-tenant.
 - Sandboxes owned by the admin pseudo-tenant are not visible to tenant keys.
-- Admin routes under `/admin` require an admin key, except the two provisioner
-  routes above.
+- Admin routes under `/admin` require an admin key, except the three
+  provisioner routes above.
 
 Cross-tenant and non-existent sandboxes both return `404`, so a tenant cannot
 use the status code to learn whether an ID exists.
@@ -385,7 +387,7 @@ The boundaries above are covered by tests rather than asserted on paper.
 | Cross-tenant read, list, delete, exec, files | [internal/api/handlers_tenants_test.go](../internal/api/handlers_tenants_test.go), [internal/api/handlers_proxy_tenant_test.go](../internal/api/handlers_proxy_tenant_test.go), [e2e/tests/sandbox-api.spec.ts](../e2e/tests/sandbox-api.spec.ts) |
 | Client-supplied ID conflicts | [internal/api/handlers_create_sandbox_test.go](../internal/api/handlers_create_sandbox_test.go) |
 | Admin route gating and key revocation | [internal/api/handlers_tenants_test.go](../internal/api/handlers_tenants_test.go) |
-| Provisioner keys: the two allowed routes, `403` on every other route, quota bounds, no fall-through to the admin pseudo-tenant | [internal/api/handlers_provisioner_test.go](../internal/api/handlers_provisioner_test.go), [internal/api/config/config_test.go](../internal/api/config/config_test.go), [e2e/tests/provisioner-key.spec.ts](../e2e/tests/provisioner-key.spec.ts) |
+| Provisioner keys: the three allowed routes, `403` on every other route, quota bounds, no fall-through to the admin pseudo-tenant | [internal/api/handlers_provisioner_test.go](../internal/api/handlers_provisioner_test.go), [internal/api/config/config_test.go](../internal/api/config/config_test.go), [e2e/tests/provisioner-key.spec.ts](../e2e/tests/provisioner-key.spec.ts) |
 | Concurrency limits: per tenant (creates included) and per sandbox, the execution `DELETE` limits and timeout, the `timeout_ms` cap | [internal/api/middleware_limits_test.go](../internal/api/middleware_limits_test.go), [internal/runner/middleware_limits_test.go](../internal/runner/middleware_limits_test.go), [internal/limits/limits_test.go](../internal/limits/limits_test.go), [e2e/tests/request-limits.spec.ts](../e2e/tests/request-limits.spec.ts) |
 | Runner listeners require a CA-signed client certificate; the API verifies each runner's host name and refuses a non-https base | [internal/runner/mtls_test.go](../internal/runner/mtls_test.go), [internal/api/runnertls_test.go](../internal/api/runnertls_test.go), [internal/api/registry/validate_test.go](../internal/api/registry/validate_test.go) |
 | No caller-set header but `Content-Type` passed on to the daemon; daemon redirects refused; daemon signal headers stripped, sandbox-gone body ignored | [internal/runner/proxy_test.go](../internal/runner/proxy_test.go), [internal/api/handlers_reap_test.go](../internal/api/handlers_reap_test.go), [e2e/tests/runner-restart.spec.ts](../e2e/tests/runner-restart.spec.ts) |
