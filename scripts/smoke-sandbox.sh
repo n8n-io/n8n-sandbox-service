@@ -22,7 +22,9 @@
 #   KUBE_NAMESPACE         — Kubernetes namespace for API key secret and port-forward
 #   KUBE_AUTH_SECRET       — Secret name
 #   KUBE_AUTH_SECRET_KEY   — Secret data key (comma-separated keys; first is used)
-#   KUBE_API_SERVICE       — API Service to port-forward to (default: n8n-sandbox-service-api)
+#   KUBE_API_SERVICE       — API Service to port-forward to (default: the one labelled
+#                            app.kubernetes.io/name=n8n-sandbox-service and
+#                            app.kubernetes.io/component=api in KUBE_NAMESPACE)
 #   KUBE_API_PORT          — Service port, name or number (default: http)
 #   SMOKE_VERBOSE          — Set to 1 to print full exec NDJSON streams
 #   SMOKE_EXEC_TIMEOUT_MS  — Exec timeout in ms (default: 60000)
@@ -116,8 +118,29 @@ sid=""
 sid2=""
 tmp_files=""
 pf_pid=""
+pf_service=""
+pf_error=""
 
 cleanup() {
+	# Ctrl-C, a closed terminal or a CI cancel signals the whole process group,
+	# kubectl included. Reopen the port-forward so the deletes below still reach
+	# the API (or whenever it died mid-run, e.g. on an API pod restart).
+	if [ -n "${pf_pid}" ] && [ -n "${sid}${sid2}${KEY}${TENANT_ID}" ] &&
+		{ ! kill -0 "${pf_pid}" 2>/dev/null ||
+			! curl -fs -o /dev/null --noproxy 127.0.0.1 --max-time 5 "${BASE}/healthz"; }; then
+		kill "${pf_pid}" 2>/dev/null || true
+		if ! open_port_forward; then
+			# Send no keys to the old port: something else may listen there now.
+			printf 'cleanup: %s\n' "${pf_error}" >&2 || true
+			left_sids="${sid}${sid2:+ ${sid2}}"
+			printf 'cleanup: delete by hand: tenant %s and its sandboxes (%s)\n' \
+				"${TENANT_ID:-<none>}" "${left_sids:-none known}" >&2 || true
+			sid=""
+			sid2=""
+			KEY=""
+			TENANT_ID=""
+		fi
+	fi
 	# Known IDs from this run (may be empty if interrupted mid-create).
 	for cleanup_sid in ${sid} ${sid2}; do
 		[ -n "${cleanup_sid}" ] || continue
@@ -175,41 +198,59 @@ fail() {
 	exit 1
 }
 
-# Points BASE at a local port that kubectl forwards to the API Service. kubectl
-# picks a free port and prints it; it runs in the background until cleanup.
-start_port_forward() {
-	local service="${KUBE_API_SERVICE:-n8n-sandbox-service-api}"
-	local port="${KUBE_API_PORT:-http}"
+# Runs kubectl port-forward to pf_service in the background and points BASE at
+# the free local port kubectl picks. Returns 1 with pf_error set if kubectl
+# exits or is not ready in time; cleanup stops whatever is left.
+open_port_forward() {
 	local log local_port="" waited=0
 
-	step "port-forward svc/${service} ${port} (context ${KUBE_CONTEXT}, namespace ${KUBE_NAMESPACE})"
 	# Not mktemp_track: that runs in a subshell and cannot record the file.
 	log="$(mktemp)"
 	tmp_files="${tmp_files} ${log}"
-	# Own process group (set -m), so Ctrl-C or a closed terminal stops the script
-	# but not kubectl: cleanup still needs the port to delete what this run made.
 	# Not through kube(): $! must be kubectl itself so cleanup can stop it.
-	set -m
 	kubectl --context "${KUBE_CONTEXT}" -n "${KUBE_NAMESPACE}" \
-		port-forward "svc/${service}" ":${port}" </dev/null >"${log}" 2>&1 &
+		port-forward "svc/${pf_service}" ":${KUBE_API_PORT:-http}" </dev/null >"${log}" 2>&1 &
 	pf_pid=$!
-	set +m
 
 	while [ -z "${local_port}" ]; do
 		local_port="$(sed -n 's/^Forwarding from 127\.0\.0\.1:\([0-9][0-9]*\) .*/\1/p' "${log}" | head -n 1)"
 		[ -n "${local_port}" ] && break
 		if ! kill -0 "${pf_pid}" 2>/dev/null; then
-			fail "port-forward exited: $(cat "${log}")"
+			pf_error="port-forward exited: $(cat "${log}")"
+			return 1
 		fi
 		if [ "${waited}" -ge 30 ]; then
-			fail "port-forward not ready after 30s: $(cat "${log}")"
+			pf_error="port-forward not ready after 30s: $(cat "${log}")"
+			return 1
 		fi
 		sleep 1
 		waited=$((waited + 1))
 	done
 
 	BASE="http://127.0.0.1:${local_port}"
-	CURL_COMMON="-fsS"
+	# The forward is local: an http_proxy must not see it, nor the keys sent on it.
+	CURL_COMMON="-fsS --noproxy 127.0.0.1"
+}
+
+# The API Service is named after the Helm release, so unless KUBE_API_SERVICE
+# names it, find it by the chart's labels.
+start_port_forward() {
+	local selector="app.kubernetes.io/name=n8n-sandbox-service,app.kubernetes.io/component=api"
+	local found
+
+	pf_service="${KUBE_API_SERVICE:-}"
+	if [ -z "${pf_service}" ]; then
+		found="$(kube -n "${KUBE_NAMESPACE}" get service -l "${selector}" -o name)" ||
+			fail "could not list Services in namespace ${KUBE_NAMESPACE}"
+		case "$(printf '%s' "${found}" | grep -c .)" in
+		1) pf_service="${found#service/}" ;;
+		0) fail "no Service matching ${selector} in namespace ${KUBE_NAMESPACE}; set KUBE_API_SERVICE" ;;
+		*) fail "several Services match ${selector} in namespace ${KUBE_NAMESPACE}; set KUBE_API_SERVICE" ;;
+		esac
+	fi
+
+	step "port-forward svc/${pf_service} ${KUBE_API_PORT:-http} (context ${KUBE_CONTEXT}, namespace ${KUBE_NAMESPACE})"
+	open_port_forward || fail "${pf_error}"
 	printf '    %s\n' "${BASE}"
 }
 
