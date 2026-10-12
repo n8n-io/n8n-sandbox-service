@@ -32,6 +32,11 @@ var ErrSandboxNetworkUnavailable = errors.New("sandbox network unavailable")
 // ErrSandboxNotRunning is returned when a sandbox exists but is not running.
 var ErrSandboxNotRunning = errors.New("sandbox not running")
 
+// ErrCapacityExhausted is returned when CreateSandbox refuses a sandbox for want
+// of capacity. The refusal comes before anything is created, which is what lets
+// the API place the same sandbox on another runner.
+var ErrCapacityExhausted = errors.New("runner capacity exhausted")
+
 // Egress is a sandbox's outbound network policy.
 type Egress string
 

@@ -30,6 +30,13 @@ describe("createErrorFromResponse", () => {
     expect(error.code).toBeUndefined();
   });
 
+  it("takes the reason from the body and drops one that is not a string", () => {
+    const body = { error: "sandbox runners are at capacity", code: 503, reason: "no_capacity" };
+    expect(createErrorFromResponse(503, body).reason).toBe("no_capacity");
+    expect(createErrorFromResponse(503, { ...body, reason: 1 }).reason).toBeUndefined();
+    expect(createErrorFromResponse(503, { error: "unavailable" }).reason).toBeUndefined();
+  });
+
   it("falls back to the generic message for a body with no error field", () => {
     expect(createErrorFromResponse(503, {}).message).toBe(
       "Sandbox service request failed with status 503",

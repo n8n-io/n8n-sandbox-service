@@ -14,6 +14,7 @@ source "$SCRIPT_DIR/lib/common.sh"
 : "${SSH_KEY_PATH:?SSH_KEY_PATH is required}"
 
 VM_ADMIN="${VM_ADMIN:-azureuser}"
+RUNNER2_CAPACITY_TOTAL="${E2E_RUNNER2_CAPACITY_TOTAL:-4}"
 SSH_OPTS=(-o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=6)
 TLS_DIR="$(mktemp -d)"
 REMOTE_TLS_DIR="/tmp/n8n-sandbox-e2e-tls-$$"
@@ -50,6 +51,7 @@ cd ~/project
 E2E_TLS_DIR='$REMOTE_TLS_DIR' \
 E2E_CONTROL_PRIVATE_IP='$VM_PRIVATE_IP' \
 E2E_PEER_PRIVATE_IP='$PEER_VM_PRIVATE_IP' \
+SANDBOX_RUNNER_CAPACITY_TOTAL='$RUNNER2_CAPACITY_TOTAL' \
 bash e2e/run-firecracker-runner-peer.sh
 EOF
 
@@ -69,6 +71,7 @@ E2E_CONTROL_PRIVATE_IP='$VM_PRIVATE_IP' \
 E2E_PEER_PRIVATE_IP='$PEER_VM_PRIVATE_IP' \
 E2E_RUNNER2_HTTP_ADDR='${PEER_VM_PRIVATE_IP}:18085' \
 E2E_RUNNER2_PID='${RUNNER2_PID}' \
+E2E_RUNNER2_CAPACITY_TOTAL='${RUNNER2_CAPACITY_TOTAL}' \
 E2E_RUNNER2_ENV_FILE='/home/${VM_ADMIN}/project/e2e/.fc-runner-b.env' \
 E2E_RUNNER2_REMOTE_SSH='${VM_ADMIN}@${PEER_VM_PRIVATE_IP}' \
 E2E_RUNNER2_REMOTE_SSH_OPTS='-i /home/${VM_ADMIN}/.ssh/e2e-peer-key -o StrictHostKeyChecking=no' \

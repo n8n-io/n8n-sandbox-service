@@ -29,5 +29,7 @@ type RunnerRegistry interface {
 	Get(id string) (*Runner, bool)
 	GoneLongEnough(runnerID string, buffer time.Duration, now time.Time) bool
 	Len() int
-	PickLowestUsed() (*Runner, error)
+	// PickLowestUsed returns the eligible runner with the lowest capacity_used,
+	// skipping the runners in exclude.
+	PickLowestUsed(exclude ...string) (*Runner, error)
 }

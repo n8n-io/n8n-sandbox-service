@@ -293,8 +293,21 @@ func TestRuntimeCreateSandboxEnforcesCapacity(t *testing.T) {
 	if _, err := rt.CreateSandbox(context.Background(), "sandbox-id-123456", nil); err != nil {
 		t.Fatalf("CreateSandbox() failed: %v", err)
 	}
-	if _, err := rt.CreateSandbox(context.Background(), "sandbox-id-abcdef", nil); err == nil {
-		t.Fatal("expected capacity exhausted error")
+	if _, err := rt.CreateSandbox(context.Background(), "sandbox-id-abcdef", nil); !errors.Is(err, runnerruntime.ErrCapacityExhausted) {
+		t.Fatalf("CreateSandbox() error = %v, want ErrCapacityExhausted", err)
+	}
+
+	// The API retries a refused create on another runner, so the refusal must
+	// leave nothing here.
+	rt.mu.Lock()
+	_, tracked := rt.sandboxes["sandbox-id-abcdef"]
+	occupied := rt.occupiedSlotsLocked()
+	rt.mu.Unlock()
+	if tracked || occupied != 1 {
+		t.Fatalf("after the refusal: refused sandbox tracked = %v, occupied slots = %d; want false and 1", tracked, occupied)
+	}
+	if _, err := os.Stat(sandboxDataDir(rt.runnerConfig.DataDir, "sandbox-id-abcdef")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("refused sandbox data dir: stat error = %v, want it absent", err)
 	}
 }
 

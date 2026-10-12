@@ -4,12 +4,14 @@
  */
 export class SandboxServiceError extends Error {
   /**
-   * Creates a sandbox service error with HTTP status and optional API error code.
+   * Creates a sandbox service error with HTTP status, and the optional API error code
+   * and machine-readable `reason` from the response body.
    */
   constructor(
     message: string,
     readonly status: number,
     readonly code?: number,
+    readonly reason?: string,
   ) {
     super(message);
     this.name = "SandboxServiceError";
@@ -84,17 +86,19 @@ export function createErrorFromResponse(
       ? data
       : `Sandbox service request failed with status ${status}`;
   let code: number | undefined;
+  let reason: string | undefined;
 
   if (isRecord(data) && typeof data.error === "string") {
     message = data.error;
     code = typeof data.code === "number" ? data.code : undefined;
+    reason = typeof data.reason === "string" ? data.reason : undefined;
   }
 
   if (isSandboxRestarted(status, data, headers)) {
     return new SandboxCrashedError(message, code);
   }
 
-  return new SandboxServiceError(message, status, code);
+  return new SandboxServiceError(message, status, code, reason);
 }
 
 /**
