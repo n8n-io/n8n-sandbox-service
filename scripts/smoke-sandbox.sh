@@ -8,14 +8,22 @@
 # DNS and HTTPS must all be blocked while exec still works).
 #
 # Environment:
-#   SANDBOX_API_BASE       — API base URL (required unless set in env file)
+#   SANDBOX_API_BASE       — API base URL (required unless set in env file or
+#                            SMOKE_PORT_FORWARD=1)
 #   SANDBOX_API_KEY        — admin X-Api-Key (optional if kubectl secret vars are set)
 #   SMOKE_ENV_FILE         — Env file to source (default: none)
 #   SMOKE_DEV_ENV_FILE     — Alias for SMOKE_ENV_FILE (backward compatible)
 #   SMOKE_ENV              — Load scripts/smoke-sandbox.<env>.env (e.g. dev, stage, prod)
-#   KUBE_NAMESPACE         — Kubernetes namespace for API key secret
+#   SMOKE_PORT_FORWARD     — Set to 1 to reach the API through kubectl port-forward
+#                            instead of SANDBOX_API_BASE (which is then ignored), for
+#                            an API that only accepts traffic from inside its network
+#   KUBE_CONTEXT           — kubectl context (required with SMOKE_PORT_FORWARD=1,
+#                            otherwise defaults to the current context)
+#   KUBE_NAMESPACE         — Kubernetes namespace for API key secret and port-forward
 #   KUBE_AUTH_SECRET       — Secret name
 #   KUBE_AUTH_SECRET_KEY   — Secret data key (comma-separated keys; first is used)
+#   KUBE_API_SERVICE       — API Service to port-forward to (default: n8n-sandbox-service-api)
+#   KUBE_API_PORT          — Service port, name or number (default: http)
 #   SMOKE_VERBOSE          — Set to 1 to print full exec NDJSON streams
 #   SMOKE_EXEC_TIMEOUT_MS  — Exec timeout in ms (default: 60000)
 #   SMOKE_EXTENDED         — Set to 1 to create a second sandbox (snapshot restore path)
@@ -48,9 +56,21 @@ EXEC_TIMEOUT_MS="${SMOKE_EXEC_TIMEOUT_MS:-60000}"
 SMOKE_FILE_PATH="/tmp/n8n-sandbox-smoke.txt"
 SMOKE_FILE_CONTENT="smoke-$(date -u +%Y%m%dT%H%M%SZ)"
 
-if [ -z "${BASE}" ]; then
-	echo "SANDBOX_API_BASE is required (set it directly or via SMOKE_ENV_FILE / SMOKE_ENV)" >&2
+PORT_FORWARD="${SMOKE_PORT_FORWARD:-0}"
+if [ -z "${BASE}" ] && [ "${PORT_FORWARD}" != "1" ]; then
+	echo "SANDBOX_API_BASE is required (set it directly or via SMOKE_ENV_FILE / SMOKE_ENV, or set SMOKE_PORT_FORWARD=1)" >&2
 	exit 1
+fi
+if [ "${PORT_FORWARD}" = "1" ]; then
+	if ! command -v kubectl >/dev/null 2>&1; then
+		echo "kubectl is required with SMOKE_PORT_FORWARD=1" >&2
+		exit 1
+	fi
+	# No fallback to the current context: it names the target here.
+	if [ -z "${KUBE_CONTEXT:-}" ] || [ -z "${KUBE_NAMESPACE:-}" ]; then
+		echo "KUBE_CONTEXT and KUBE_NAMESPACE are required with SMOKE_PORT_FORWARD=1" >&2
+		exit 1
+	fi
 fi
 
 if ! command -v curl >/dev/null 2>&1; then
@@ -69,6 +89,14 @@ https://*)
 	;;
 esac
 
+kube() {
+	if [ -n "${KUBE_CONTEXT:-}" ]; then
+		kubectl --context "${KUBE_CONTEXT}" "$@"
+	else
+		kubectl "$@"
+	fi
+}
+
 if [ -z "${ADMIN_KEY}" ]; then
 	if ! command -v kubectl >/dev/null 2>&1; then
 		echo "SANDBOX_API_KEY or kubectl is required" >&2
@@ -77,7 +105,7 @@ if [ -z "${ADMIN_KEY}" ]; then
 	NAMESPACE="${KUBE_NAMESPACE:?KUBE_NAMESPACE is required when SANDBOX_API_KEY is not set}"
 	AUTH_SECRET="${KUBE_AUTH_SECRET:?KUBE_AUTH_SECRET is required when SANDBOX_API_KEY is not set}"
 	AUTH_SECRET_KEY="${KUBE_AUTH_SECRET_KEY:?KUBE_AUTH_SECRET_KEY is required when SANDBOX_API_KEY is not set}"
-	ADMIN_KEY="$(kubectl -n "${NAMESPACE}" get secret "${AUTH_SECRET}" -o "jsonpath={.data.${AUTH_SECRET_KEY}}" | base64 -d | cut -d, -f1)"
+	ADMIN_KEY="$(kube -n "${NAMESPACE}" get secret "${AUTH_SECRET}" -o "jsonpath={.data.${AUTH_SECRET_KEY}}" | base64 -d | cut -d, -f1)"
 	if [ -z "${ADMIN_KEY}" ]; then
 		echo "could not read API key from secret/${AUTH_SECRET} key ${AUTH_SECRET_KEY}" >&2
 		exit 1
@@ -87,6 +115,7 @@ fi
 sid=""
 sid2=""
 tmp_files=""
+pf_pid=""
 
 cleanup() {
 	# Known IDs from this run (may be empty if interrupted mid-create).
@@ -113,12 +142,22 @@ cleanup() {
 		# shellcheck disable=SC2086
 		curl ${CURL_COMMON} -o /dev/null -X DELETE "${BASE}/admin/tenants/${TENANT_ID}" -H "X-Api-Key: ${ADMIN_KEY}" >/dev/null 2>&1 || true
 	fi
+	# Last: the deletes above go through the forwarded port.
+	if [ -n "${pf_pid}" ]; then
+		kill "${pf_pid}" 2>/dev/null || true
+		wait "${pf_pid}" 2>/dev/null || true
+		pf_pid=""
+	fi
 	if [ -n "${tmp_files}" ]; then
 		# shellcheck disable=SC2086
 		rm -f ${tmp_files}
 	fi
 }
-trap cleanup EXIT HUP INT TERM
+trap cleanup EXIT
+# Signals end the run; cleanup then runs once, from the EXIT trap.
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 mktemp_track() {
 	local f
@@ -134,6 +173,44 @@ step() {
 fail() {
 	printf 'smoke failed: %s\n' "$*" >&2
 	exit 1
+}
+
+# Points BASE at a local port that kubectl forwards to the API Service. kubectl
+# picks a free port and prints it; it runs in the background until cleanup.
+start_port_forward() {
+	local service="${KUBE_API_SERVICE:-n8n-sandbox-service-api}"
+	local port="${KUBE_API_PORT:-http}"
+	local log local_port="" waited=0
+
+	step "port-forward svc/${service} ${port} (context ${KUBE_CONTEXT}, namespace ${KUBE_NAMESPACE})"
+	# Not mktemp_track: that runs in a subshell and cannot record the file.
+	log="$(mktemp)"
+	tmp_files="${tmp_files} ${log}"
+	# Own process group (set -m), so Ctrl-C or a closed terminal stops the script
+	# but not kubectl: cleanup still needs the port to delete what this run made.
+	# Not through kube(): $! must be kubectl itself so cleanup can stop it.
+	set -m
+	kubectl --context "${KUBE_CONTEXT}" -n "${KUBE_NAMESPACE}" \
+		port-forward "svc/${service}" ":${port}" </dev/null >"${log}" 2>&1 &
+	pf_pid=$!
+	set +m
+
+	while [ -z "${local_port}" ]; do
+		local_port="$(sed -n 's/^Forwarding from 127\.0\.0\.1:\([0-9][0-9]*\) .*/\1/p' "${log}" | head -n 1)"
+		[ -n "${local_port}" ] && break
+		if ! kill -0 "${pf_pid}" 2>/dev/null; then
+			fail "port-forward exited: $(cat "${log}")"
+		fi
+		if [ "${waited}" -ge 30 ]; then
+			fail "port-forward not ready after 30s: $(cat "${log}")"
+		fi
+		sleep 1
+		waited=$((waited + 1))
+	done
+
+	BASE="http://127.0.0.1:${local_port}"
+	CURL_COMMON="-fsS"
+	printf '    %s\n' "${BASE}"
 }
 
 api_curl() {
@@ -314,6 +391,10 @@ run_no_egress_guest_checks() {
 	assert_exec "${prefix}dns blocked" "! getent ahostsv4 example.com >/dev/null" 0 "${target_sid}"
 	assert_exec "${prefix}https blocked" "! curl -s -o /dev/null --max-time 10 https://example.com/" 0 "${target_sid}"
 }
+
+if [ "${PORT_FORWARD}" = "1" ]; then
+	start_port_forward
+fi
 
 step "healthz"
 # shellcheck disable=SC2086
