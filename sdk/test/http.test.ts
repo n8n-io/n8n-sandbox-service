@@ -274,6 +274,57 @@ describe("HttpClient", () => {
     }
   });
 
+  describe("a 429 on a non-idempotent POST", () => {
+    let hits = 0;
+    let limitedServer: TestServer;
+
+    beforeAll(async () => {
+      limitedServer = await startTestServer((_req, res) => {
+        hits += 1;
+        res.writeHead(429, { "Content-Type": "application/json", "Retry-After": "1" });
+        res.end(JSON.stringify({ error: "too many requests in progress for this sandbox" }));
+      });
+    });
+
+    afterAll(async () => {
+      await limitedServer.close();
+    });
+
+    it("is retried, since the request limits refuse it before it reaches the sandbox", async () => {
+      hits = 0;
+      const client = new HttpClient(limitedServer.baseUrl, undefined, {
+        attempts: 2,
+        baseDelayMs: 1,
+        jitter: false,
+      });
+      await expect(client.requestVoid("POST", "/mkdir")).rejects.toMatchObject({ status: 429 });
+      expect(hits).toBe(3);
+    });
+
+    it("is not retried when 429 is left out of retryOnStatuses", async () => {
+      hits = 0;
+      const client = new HttpClient(limitedServer.baseUrl, undefined, {
+        baseDelayMs: 1,
+        retryOnStatuses: [503],
+      });
+      await expect(client.requestVoid("POST", "/mkdir")).rejects.toMatchObject({ status: 429 });
+      expect(hits).toBe(1);
+    });
+
+    it("stops waiting to retry when aborted", async () => {
+      hits = 0;
+      const client = new HttpClient(limitedServer.baseUrl, undefined, { baseDelayMs: 60_000 });
+      const controller = new AbortController();
+      const started = Date.now();
+      const request = client.requestVoid("POST", "/mkdir", { signal: controller.signal });
+      setTimeout(() => controller.abort(), 20);
+
+      await expect(request).rejects.toThrow("Request aborted");
+      expect(Date.now() - started).toBeLessThan(5_000);
+      expect(hits).toBe(1);
+    });
+  });
+
   describe("retryDelayFor", () => {
     const client = new HttpClient("http://localhost", undefined, {
       attempts: 3,
