@@ -29,9 +29,9 @@ The service answers `429` when a tenant or a sandbox has too many requests in pr
 - Tune backoff: `retry: { attempts: 5, baseDelayMs: 100, maxDelayMs: 30_000, jitter: false }`.
 - Also retry other statuses (only if you accept the risk): `retry: { retryOnStatuses: [429, 502, 503] }`.
 - Idempotent methods (`GET`, `HEAD`, `OPTIONS`, `PUT`, `DELETE`) use this policy automatically.
-- Other statuses retry a `POST` only where the service makes it idempotent: `createSandbox` with an explicit `id`.
+- For other statuses, this policy retries a `POST` only where the service makes it idempotent: `createSandbox` with an explicit `id`. `exec` has its own loop (below).
 
-`exec` still has its own stream resume loop (`exec_id`, `POST` then `GET` follow). Constructor `retry` applies to each underlying HTTP call: `GET` resume lines benefit from the default policy, and an exec `POST` refused with `429` is re-posted with the same `exec_id`, which starts the command, or follows it if an earlier attempt started it. When those retries run out on a `429` while the command may be running, `exec` cancels it in the background and throws. It does not replace the exec event/state machine.
+`exec` still has its own stream resume loop (`exec_id`, `POST` then `GET` follow): after a `503`, a transport error or a stream that ends early, it posts the same `exec_id` again, or resumes with `GET` once events have arrived. Constructor `retry` applies to each underlying HTTP call: `GET` resume lines benefit from the default policy, and an exec `POST` refused with `429` is re-posted with the same `exec_id`, which starts the command, or follows it if an earlier attempt started it. When those retries run out on a `429` while the command may be running, `exec` cancels it in the background and throws. It does not replace the exec event/state machine.
 
 ### Sandbox lifecycle
 
