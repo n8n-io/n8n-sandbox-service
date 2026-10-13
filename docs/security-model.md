@@ -98,8 +98,10 @@ could open thousands of them and exhaust those machines for everyone. So by
 default the API caps the requests a tenant can have in progress at once, the
 runner caps them per sandbox, and the runner caps how long a command can run.
 Over a request limit the answer is `429`
-([API.md](API.md#http-429--too-many-requests-in-progress)), which the SDK
-retries for requests that are safe to repeat; other `429`s reach the caller.
+([API.md](API.md#http-429--too-many-requests-in-progress)). The limits refuse a
+request before it reaches the sandbox, so the SDK retries a `429` whatever the
+method. A sandbox can also answer `429` after acting on a request; the retries
+then repeat it in that sandbox only.
 The sizes are in [configuration.md](configuration.md), where setting one to `0`
 turns it off.
 

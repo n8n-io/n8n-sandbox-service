@@ -205,6 +205,9 @@ export class HttpClient {
   ): boolean {
     if (signal?.aborted) return false;
     if (attempt >= this.retry.attempts) return false;
+    // The service's request limits refuse a request before it reaches the sandbox,
+    // so a 429 is safe to repeat whatever the method.
+    if (error.status === 429) return this.retry.retryOnStatuses.has(429);
     if (!isSafeToRetry && !this.isMethodIdempotent(method)) return false;
     if (error.status === 0) return true;
     return this.retry.retryOnStatuses.has(error.status);
