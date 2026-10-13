@@ -13,6 +13,10 @@ if [[ ! -f "${TF_DIR}/terraform.tfstate" ]]; then
 fi
 
 echo "==> Destroying Azure VM resources via Terraform..."
-terraform -chdir="$TF_DIR" destroy -auto-approve -input=false
+# Destroy needs every required variable set, though not to its real value. The
+# tfvars written by a provision script from before ssh_source_address_prefix
+# existed lack it; when the tfvars has it, its value wins over TF_VAR_.
+TF_VAR_ssh_source_address_prefix=192.0.2.1/32 \
+	terraform -chdir="$TF_DIR" destroy -auto-approve -input=false
 
 echo "==> Cleanup complete"
