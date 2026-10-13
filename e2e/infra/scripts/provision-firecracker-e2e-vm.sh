@@ -40,6 +40,9 @@ case "${E2E_PEER_VM_ENABLED:-false}" in
 1 | true | yes) peer_vm_tf=true ;;
 esac
 
+SSH_SOURCE_CIDR=$(e2e_ssh_source_cidr)
+echo "==> Allowing SSH from ${SSH_SOURCE_CIDR}"
+
 cat >"${TF_DIR}/e2e-vm.auto.tfvars.json" <<EOF
 {
   "resource_group_name": "$RESOURCE_GROUP",
@@ -48,6 +51,7 @@ cat >"${TF_DIR}/e2e-vm.auto.tfvars.json" <<EOF
   "vm_size": "$VM_SIZE",
   "os_disk_size_gb": $OS_DISK_SIZE_GB,
   "ssh_public_key_path": "${SSH_KEY_PATH}.pub",
+  "ssh_source_address_prefix": "$SSH_SOURCE_CIDR",
   "peer_vm_enabled": ${peer_vm_tf}
 }
 EOF

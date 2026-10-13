@@ -1,6 +1,11 @@
 # E2E VM (Azure)
 
-Terraform config that provisions an ephemeral Ubuntu 24.04 VM in Azure for running e2e tests with sysbox. Creates: VNet, subnet, NSG (SSH-only), public IP, NIC, and VM.
+Terraform config that provisions an ephemeral Ubuntu 24.04 VM in Azure for running e2e tests with sysbox. Creates: VNet, subnet, NSG, public IP, NIC, and VM.
+
+The NSG admits SSH only from `ssh_source_address_prefix`. The provision scripts
+set it to the public IPv4 of the machine running them, as a `/32`; set
+`E2E_SSH_SOURCE_CIDR` to an IPv4 CIDR from `/24` to `/32` to override it, for
+example when a VPN routes Azure traffic out through a different address.
 
 In CI, the Sysbox workflow uses `e2e/infra/scripts/provision-e2e-vm.sh` and
 `e2e/infra/scripts/cleanup-e2e-vm.sh` to manage the Azure VM. That workflow runs
