@@ -2,7 +2,8 @@ import { Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { SandboxServiceError } from "../src/errors.js";
 import { exec, resumeExecution } from "../src/exec.js";
-import type { HttpClient } from "../src/http.js";
+import { HttpClient } from "../src/http.js";
+import { startTestServer } from "./helpers.js";
 
 function createMockHttp(ndjsonLines: string[]): HttpClient {
   return {
@@ -300,79 +301,52 @@ describe("exec", () => {
     expect(firstCall[2].data.exec_id).toBe(secondCall[2].data.exec_id);
   });
 
-  it("retries POST with same exec_id after a 429", async () => {
-    const limited = new SandboxServiceError("too many requests", 429);
-    const mockHttp = {
-      requestStream: vi
-        .fn()
-        .mockRejectedValueOnce(limited)
-        .mockRejectedValueOnce(limited)
-        .mockResolvedValueOnce({
-          stream: Readable.from([
-            Buffer.from(
-              '{"seq":0,"type":"started","exec_id":"sess-limited"}\n' +
-                '{"seq":1,"type":"exit","exit_code":0,"success":true,"execution_time_ms":5,"timed_out":false,"killed":false}\n',
-            ),
-          ]),
-          status: 200,
-        }),
-      requestVoid: vi.fn().mockResolvedValue(undefined),
-      retryDelayFor: vi.fn().mockReturnValue(0),
-    } as unknown as HttpClient;
+  it("re-posts the same exec_id after a 429", async () => {
+    const execIds: string[] = [];
+    const server = await startTestServer((req, res) => {
+      if (req.method !== "POST") {
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        execIds.push(JSON.parse(body).exec_id);
+        if (execIds.length === 1) {
+          res.writeHead(429, { "Content-Type": "application/json", "Retry-After": "1" });
+          res.end(JSON.stringify({ error: "too many requests in progress for this sandbox" }));
+          return;
+        }
+        res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+        res.end(
+          '{"seq":0,"type":"started","exec_id":"sess-limited"}\n' +
+            '{"seq":1,"type":"exit","exit_code":0,"success":true,"execution_time_ms":5,"timed_out":false,"killed":false}\n',
+        );
+      });
+    });
 
-    const result = await exec(mockHttp, "sandbox-1", { command: "test" });
-
-    expect(result.exitCode).toBe(0);
-    const calls = (mockHttp.requestStream as ReturnType<typeof vi.fn>).mock.calls;
-    expect(calls).toHaveLength(3);
-    expect(calls.every((call) => call[0] === "POST")).toBe(true);
-    expect(new Set(calls.map((call) => call[2].data.exec_id)).size).toBe(1);
-    expect(mockHttp.retryDelayFor).toHaveBeenNthCalledWith(1, limited, 0);
-    expect(mockHttp.retryDelayFor).toHaveBeenNthCalledWith(2, limited, 1);
-  });
-
-  it("waits the retry policy's delay before re-posting after a 429", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
-      const mockHttp = {
-        requestStream: vi
-          .fn()
-          .mockRejectedValueOnce(new SandboxServiceError("too many requests", 429))
-          .mockResolvedValueOnce({
-            stream: Readable.from([
-              Buffer.from(
-                '{"seq":0,"type":"started","exec_id":"sess-wait"}\n' +
-                  '{"seq":1,"type":"exit","exit_code":0,"success":true,"execution_time_ms":5,"timed_out":false,"killed":false}\n',
-              ),
-            ]),
-            status: 200,
-          }),
-        requestVoid: vi.fn().mockResolvedValue(undefined),
-        retryDelayFor: vi.fn().mockReturnValue(1000),
-      } as unknown as HttpClient;
+      const http = new HttpClient(server.baseUrl, undefined, { baseDelayMs: 1, jitter: false });
+      const result = await exec(http, "sandbox-1", { command: "test" });
 
-      const running = exec(mockHttp, "sandbox-1", { command: "test" });
-
-      await vi.advanceTimersByTimeAsync(999);
-      expect(mockHttp.requestStream).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(1);
-      expect((await running).exitCode).toBe(0);
-      expect(mockHttp.requestStream).toHaveBeenCalledTimes(2);
+      expect(result.exitCode).toBe(0);
+      expect(execIds).toHaveLength(2);
+      expect(execIds[1]).toBe(execIds[0]);
     } finally {
-      vi.useRealTimers();
+      await server.close();
     }
   });
 
-  it("throws the 429 once the retry policy gives up", async () => {
+  it("throws a 429 the client gave up on, with nothing to cancel", async () => {
     const limited = new SandboxServiceError("too many requests", 429);
     const mockHttp = {
       requestStream: vi.fn().mockRejectedValue(limited),
       requestVoid: vi.fn().mockResolvedValue(undefined),
-      retryDelayFor: vi.fn().mockReturnValueOnce(0).mockReturnValue(undefined),
     } as unknown as HttpClient;
 
     await expect(exec(mockHttp, "sandbox-1", { command: "test" })).rejects.toBe(limited);
-    expect(mockHttp.requestStream).toHaveBeenCalledTimes(2);
+    expect(mockHttp.requestStream).toHaveBeenCalledTimes(1);
     // Every POST was refused, so nothing started and there is nothing to cancel.
     expect(mockHttp.requestVoid).not.toHaveBeenCalled();
   });
@@ -387,7 +361,6 @@ describe("exec", () => {
         .mockResolvedValueOnce({ stream: Readable.from([]), status: 200 })
         .mockRejectedValue(limited),
       requestVoid: vi.fn().mockResolvedValue(undefined),
-      retryDelayFor: vi.fn().mockReturnValue(undefined),
     } as unknown as HttpClient;
 
     await expect(exec(mockHttp, "sandbox-1", { command: "test" })).rejects.toBe(limited);
@@ -409,7 +382,6 @@ describe("exec", () => {
         })
         .mockRejectedValue(limited),
       requestVoid: vi.fn().mockResolvedValue(undefined),
-      retryDelayFor: vi.fn().mockReturnValue(undefined),
     } as unknown as HttpClient;
 
     await expect(exec(mockHttp, "sandbox-1", { command: "test" })).rejects.toBe(limited);
@@ -418,32 +390,6 @@ describe("exec", () => {
     expect(mockHttp.requestVoid).toHaveBeenCalledWith(
       "DELETE",
       `/sandboxes/sandbox-1/executions/${calls[0][2].data.exec_id}`,
-    );
-  });
-
-  it("stops waiting out a 429 when aborted, without posting again", async () => {
-    const controller = new AbortController();
-    const mockHttp = {
-      requestStream: vi
-        .fn()
-        .mockRejectedValueOnce(new SandboxServiceError("too many requests", 429)),
-      requestVoid: vi.fn().mockResolvedValue(undefined),
-      retryDelayFor: vi.fn().mockReturnValue(60_000),
-    } as unknown as HttpClient;
-
-    const started = Date.now();
-    const running = exec(mockHttp, "sandbox-1", {
-      command: "test",
-      abortSignal: controller.signal,
-    });
-    setTimeout(() => controller.abort(), 20);
-
-    await expect(running).rejects.toThrow("Request aborted");
-    expect(Date.now() - started).toBeLessThan(5_000);
-    expect(mockHttp.requestStream).toHaveBeenCalledTimes(1);
-    expect(mockHttp.requestVoid).toHaveBeenCalledWith(
-      "DELETE",
-      expect.stringMatching(/^\/sandboxes\/sandbox-1\/executions\/.+$/),
     );
   });
 

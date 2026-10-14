@@ -24,7 +24,6 @@ export async function exec(
   const execId = randomUUID();
   const consumer = new ExecStreamConsumer(request.onStdout, request.onStderr);
   let retries = 0;
-  let limitedRetries = 0;
   // Whether a POST may have reached the sandbox: one returned a stream, or failed without
   // showing how far it got. A 429 only proves that the refused request started nothing.
   let mayHaveStarted = false;
@@ -69,19 +68,10 @@ export async function exec(
       if (++retries > MAX_RESUME_RETRIES) break;
       await delay(RESUME_DELAY_MS);
     } catch (error) {
-      if (isLimited(error)) {
-        // Posting the same exec_id again starts the command if nothing has yet, and
-        // follows it if an earlier POST did. The retry policy decides how often and how
-        // long to wait.
-        const wait = http.retryDelayFor(error, limitedRetries++);
-        if (wait === undefined) {
-          cancelIfStarted();
-          throw error;
-        }
-        await delay(wait, request.abortSignal);
-        if (request.abortSignal?.aborted)
-          await onError(new SandboxServiceError("Request aborted", 0));
-        continue;
+      // The client has already re-posted the same exec_id as its policy allows.
+      if (isLimited(error) && !request.abortSignal?.aborted) {
+        cancelIfStarted();
+        throw error;
       }
       await onError(error);
       mayHaveStarted = true;

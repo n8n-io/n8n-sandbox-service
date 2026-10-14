@@ -300,7 +300,7 @@ runner:
     maxFileBytes: "10485760"
     # See SANDBOX_RUNNER_MAX_INFLIGHT_PER_SANDBOX and _MAX_EXEC_TIMEOUT in
     # docs/configuration.md.
-    maxInflightPerSandbox: "16"
+    maxInflightPerSandbox: "256"
     maxExecTimeout: 15m
     defaultMemoryMb: "512"
     defaultCpuPercent: "100"

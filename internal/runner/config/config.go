@@ -26,7 +26,7 @@ const (
 	defaultControlGRPCListenAddr = ":9091"
 	defaultLogLevel              = slog.LevelInfo
 
-	defaultMaxInflightPerSandbox = 16
+	defaultMaxInflightPerSandbox = 256
 	defaultMaxExecTimeout        = 15 * time.Minute
 )
 

@@ -3,8 +3,8 @@ import { BASE_URL, createSandbox, deleteSandbox, execWithTransientRetry, getApiK
 
 test.describe.configure({ timeout: 120_000 });
 
-// The runner defaults, which the e2e stacks leave unset:
-// SANDBOX_RUNNER_MAX_INFLIGHT_PER_SANDBOX and SANDBOX_RUNNER_MAX_EXEC_TIMEOUT.
+// SANDBOX_RUNNER_MAX_INFLIGHT_PER_SANDBOX as e2e/run.sh and run-firecracker.sh
+// set it, and the default SANDBOX_RUNNER_MAX_EXEC_TIMEOUT.
 const PER_SANDBOX_LIMIT = 16;
 const MAX_EXEC_TIMEOUT_MS = 900_000;
 
