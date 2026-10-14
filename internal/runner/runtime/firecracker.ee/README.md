@@ -54,6 +54,10 @@ Invariants (rationale in the code comments of `stop_wake.go`, `crash.go`, `netwo
 
 The guest daemon is PID 1 with `panic=1 reboot=k`, and jailer execs Firecracker in place, so a guest dying ends the process the runner is waiting on. The runner tears the sandbox down and releases its slot, leaving it stopped with files intact. It is never restored from its now-stale snapshot (a memory image whose cached filesystem metadata predates later disk writes corrupts the rootfs silently); instead the next request cold boots the existing rootfs with the boot parameters recorded in `boot.json`, and is answered with `409 sandbox_restarted` ([API.md](../../../../docs/API.md#http-409-sandbox_restarted--the-sandbox-came-back-without-its-memory)). `boot.go` replays the same five Firecracker API calls `create-golden-snapshot.sh` uses. Behavior and metrics: [architecture.md](../../../../docs/architecture.md#recovering-a-crashed-guest), [observability.md](../../../../docs/observability.md#runner-guest-deaths).
 
+## Guest clock
+
+The guest runs no NTP. A restored guest would resume with the wall clock it had when its snapshot was taken, so every restore (create and wake) sends `clock_realtime: true`, which makes KVM advance the guest's kvm-clock by the time since then; the guest's monotonic clock jumps with it. Firecracker supports this on x86_64 only, and refuses the restore unless KVM recorded the wall-clock time in the snapshot, which needs host kernel 5.16 or later and a TSC-based host clocksource (`tsc`, or Hyper-V's TSC page on Azure). A host that never records it fails the admission canary. A stop snapshot taken while KVM could not record it makes that wake fail; the sandbox is then pinned to cold boot like after a failed restore.
+
 ## Resource limits
 
 CPU, memory and disk are fixed when the golden snapshot and `rootfs.ext4` are built, not by runner env vars: `VCPUS`/`MEM_MIB` in `create-golden-snapshot.sh`, `FIRECRACKER_ROOTFS_SIZE_MB` (default 2048) in `build-rootfs-template.sh`. Each sandbox gets a sparse copy of the rootfs; filling it yields ENOSPC in the guest. Rebuild on the host to change limits.
