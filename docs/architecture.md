@@ -134,7 +134,7 @@ A lightweight HTTP server embedded in every sandbox container. It is the only pr
 
 All client requests go through the API gateway over HTTP. Authentication uses an `X-Api-Key` header. Keys in `SANDBOX_API_KEYS` are admin keys (full access). Keys in `SANDBOX_API_PROVISIONER_KEYS` are provisioner keys (see [security-model.md](security-model.md#provisioner-keys)). Admin-minted tenant keys (stored hashed in the API database) are scoped to that tenant's sandboxes.
 
-Per-tenant `max_sandboxes` is enforced with a soft check-then-act before create. Concurrent creates can exceed the quota by up to the number in flight and burn shared runner capacity; the limit is not an atomic reservation.
+Per-tenant `max_sandboxes` is checked before the runner call and again when the sandbox is saved. The save counts and inserts under the tenant's row lock (Postgres) or `BEGIN IMMEDIATE` (SQLite), so concurrent creates cannot take a tenant past its quota; a create refused there is deleted from its runner again.
 
 ### API ↔ Runner Registration (gRPC Bidirectional Streaming + mTLS)
 

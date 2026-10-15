@@ -109,6 +109,16 @@ func TestPostgresUpdateTenantLimits(t *testing.T) {
 	testUpdateTenantLimits(t, openTestPostgresStore(t), uuid.New().String())
 }
 
+func TestPostgresCreateEnforcesTenantQuota(t *testing.T) {
+	testCreateEnforcesTenantQuota(t, openTestPostgresStore(t), uuid.New().String())
+}
+
+// Two stores on one database stand in for two API pods.
+func TestPostgresConcurrentCreatesStopAtTenantQuota(t *testing.T) {
+	stores := []SandboxStore{openTestPostgresStore(t), openTestPostgresStore(t)}
+	testConcurrentCreatesStopAtTenantQuota(t, stores, uuid.New().String())
+}
+
 func TestPostgresSandboxLockKeepsStoreUsableAndReleasesAfterCancellation(t *testing.T) {
 	s := openTestPostgresStore(t)
 	s.db.SetMaxOpenConns(1)

@@ -153,6 +153,73 @@ export async function deleteSandbox(id: string, c?: SandboxClient): Promise<void
   }
 }
 
+/**
+ * Mints a tenant with `max_sandboxes: quota`, sends `creates` creates for it at
+ * once, spread over baseUrls (one per API pod), and expects exactly `quota` of
+ * them to be created and the rest refused with 403. Removes the tenant and
+ * whatever it ended up with afterwards.
+ */
+export async function expectParallelCreatesStopAtQuota(
+  baseUrls: string[],
+  quota: number,
+  creates: number,
+): Promise<void> {
+  const minted = await fetch(`${baseUrls[0]}/admin/tenants`, {
+    method: 'POST',
+    headers: { 'X-Api-Key': ADMIN_API_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: `e2e-quota-${process.pid}-${Date.now()}`, max_sandboxes: quota }),
+  });
+  expect(minted.status).toBe(201);
+  const body = (await minted.json()) as { tenant: { id: string }; key: { api_key: string } };
+  const tenant = { 'X-Api-Key': body.key.api_key, 'Content-Type': 'application/json' };
+  const listIds = async (): Promise<string[]> => {
+    const resp = await fetch(`${baseUrls[0]}/sandboxes`, { headers: tenant });
+    expect(resp.status).toBe(200);
+    return ((await resp.json()) as Array<{ id: string }>).map((s) => s.id).sort();
+  };
+  // With the Postgres registry, a runner pick that overlaps another one skips
+  // the locked runner row and answers 503 before any runner call. Repeat those:
+  // they say nothing about the quota.
+  const create = async (baseUrl: string): Promise<Response> => {
+    for (let attempt = 1; ; attempt++) {
+      const resp = await fetch(`${baseUrl}/sandboxes`, {
+        method: 'POST',
+        headers: tenant,
+        body: '{}',
+      });
+      if (resp.status !== 503 || attempt === 20) return resp;
+      await resp.text();
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  };
+
+  try {
+    const responses = await Promise.all(
+      Array.from({ length: creates }, (_, i) => create(baseUrls[i % baseUrls.length])),
+    );
+    const created: string[] = [];
+    for (const resp of responses) {
+      const json = (await resp.json()) as { id?: string; error?: string };
+      if (resp.status === 201) {
+        created.push(json.id as string);
+        continue;
+      }
+      expect(resp.status, JSON.stringify(json)).toBe(403);
+      expect(json.error).toContain('quota exceeded');
+    }
+    expect(created).toHaveLength(quota);
+    expect(await listIds()).toEqual(created.sort());
+  } finally {
+    for (const id of await listIds().catch(() => [])) {
+      await fetch(`${baseUrls[0]}/sandboxes/${id}`, { method: 'DELETE', headers: tenant });
+    }
+    await fetch(`${baseUrls[0]}/admin/tenants/${body.tenant.id}`, {
+      method: 'DELETE',
+      headers: { 'X-Api-Key': ADMIN_API_KEY },
+    });
+  }
+}
+
 export async function exec(
   id: string,
   command: string,

@@ -2,7 +2,9 @@ package store
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -269,6 +271,128 @@ func testUpdateTenantLimits(t *testing.T, s SandboxStore, tenantID string) {
 
 	if err := s.UpdateTenantLimits("99999999-9999-9999-9999-999999999999", 1); !errors.Is(err, ErrTenantNotFound) {
 		t.Fatalf("UpdateTenantLimits(missing): got %v, want ErrTenantNotFound", err)
+	}
+}
+
+func TestCreateEnforcesTenantQuota(t *testing.T) {
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	defer s.Close()
+	testCreateEnforcesTenantQuota(t, s, "12121212-1212-1212-1212-121212121212")
+}
+
+// testCreateEnforcesTenantQuota runs against both backends; tenantID must not exist yet.
+func testCreateEnforcesTenantQuota(t *testing.T, s SandboxStore, tenantID string) {
+	t.Helper()
+	now := time.Now().Unix()
+	if err := s.CreateTenant(&Tenant{ID: tenantID, Name: "t", MaxSandboxes: 2, CreatedAt: now}); err != nil {
+		t.Fatalf("create tenant: %v", err)
+	}
+	t.Cleanup(func() { _ = s.DeleteTenant(tenantID) })
+
+	created := 0
+	create := func(owner string) error {
+		created++
+		id := fmt.Sprintf("quota-%d-%s", created, tenantID)
+		err := s.Create(&SandboxRecord{ID: id, Status: "running", CreatedAt: now, LastActiveAt: now, TenantID: owner})
+		if err == nil {
+			t.Cleanup(func() { _ = s.Delete(id) })
+		}
+		return err
+	}
+	wantCount := func(want int64) {
+		t.Helper()
+		if n, err := s.CountByTenant(tenantID); err != nil || n != want {
+			t.Fatalf("CountByTenant: n=%d err=%v, want %d", n, err, want)
+		}
+	}
+
+	for range 2 {
+		if err := create(tenantID); err != nil {
+			t.Fatalf("create below quota: %v", err)
+		}
+	}
+	if err := create(tenantID); !errors.Is(err, ErrTenantQuotaExceeded) {
+		t.Fatalf("create at quota: got %v, want ErrTenantQuotaExceeded", err)
+	}
+	wantCount(2)
+
+	// Admin-owned sandboxes count toward no tenant and have no quota.
+	if err := create(AdminTenantID); err != nil {
+		t.Fatalf("create admin-owned: %v", err)
+	}
+	wantCount(2)
+
+	// The limit is read when saving, so a lowered one applies at once.
+	if err := s.UpdateTenantLimits(tenantID, 1); err != nil {
+		t.Fatalf("lower limit: %v", err)
+	}
+	if err := create(tenantID); !errors.Is(err, ErrTenantQuotaExceeded) {
+		t.Fatalf("create above lowered quota: got %v, want ErrTenantQuotaExceeded", err)
+	}
+	if err := s.UpdateTenantLimits(tenantID, 0); err != nil {
+		t.Fatalf("lift limit: %v", err)
+	}
+	if err := create(tenantID); err != nil {
+		t.Fatalf("create with unlimited quota: %v", err)
+	}
+	wantCount(3)
+}
+
+func TestConcurrentCreatesStopAtTenantQuota(t *testing.T) {
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	defer s.Close()
+	testConcurrentCreatesStopAtTenantQuota(t, []SandboxStore{s}, "13131313-1313-1313-1313-131313131313")
+}
+
+// testConcurrentCreatesStopAtTenantQuota saves a burst of sandboxes for one
+// tenant in parallel, spread over stores (one per API pod sharing a database),
+// and expects exactly the quota to be saved. tenantID must not exist yet.
+func testConcurrentCreatesStopAtTenantQuota(t *testing.T, stores []SandboxStore, tenantID string) {
+	t.Helper()
+	const quota, creates = 3, 12
+	now := time.Now().Unix()
+	s := stores[0]
+	if err := s.CreateTenant(&Tenant{ID: tenantID, Name: "t", MaxSandboxes: quota, CreatedAt: now}); err != nil {
+		t.Fatalf("create tenant: %v", err)
+	}
+	t.Cleanup(func() { _ = s.DeleteTenant(tenantID) })
+
+	start := make(chan struct{})
+	errs := make([]error, creates)
+	var wg sync.WaitGroup
+	for i := range creates {
+		id := fmt.Sprintf("burst-%d-%s", i, tenantID)
+		t.Cleanup(func() { _ = s.Delete(id) })
+		wg.Go(func() {
+			<-start
+			errs[i] = stores[i%len(stores)].Create(&SandboxRecord{
+				ID: id, Status: "running", CreatedAt: now, LastActiveAt: now, TenantID: tenantID,
+			})
+		})
+	}
+	close(start)
+	wg.Wait()
+
+	saved := 0
+	for i, err := range errs {
+		switch {
+		case err == nil:
+			saved++
+		case !errors.Is(err, ErrTenantQuotaExceeded):
+			t.Fatalf("create %d: %v", i, err)
+		}
+	}
+	if saved != quota {
+		t.Fatalf("saved %d of %d parallel creates, want exactly the quota %d", saved, creates, quota)
+	}
+	if n, err := s.CountByTenant(tenantID); err != nil || n != quota {
+		t.Fatalf("CountByTenant: n=%d err=%v, want %d", n, err, quota)
 	}
 }
 
