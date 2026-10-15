@@ -76,6 +76,8 @@ playground: sdk-install sdk-build
 test:
 	go test -race ./...
 
+# -count=1: the test cache cannot see the database, so a cached pass would not
+# contact it at all.
 # -p 1: each package creates the schema on first use, and Postgres can fail two
 # concurrent CREATE TABLE IF NOT EXISTS for the same table.
 ## test-integration: Run the Postgres store and registry tests (needs SANDBOX_TEST_POSTGRES_HOST, see docs/development.md).
@@ -84,7 +86,7 @@ test-integration:
 		echo "SANDBOX_TEST_POSTGRES_HOST is not set; the tests would all skip. See docs/development.md." >&2; \
 		exit 1; \
 	fi
-	go test -race -tags integration -p 1 ./internal/api/store/ ./internal/api/registry/
+	go test -race -count=1 -tags integration -p 1 ./internal/api/store/ ./internal/api/registry/
 
 ## clean: Remove compiled binaries.
 clean:

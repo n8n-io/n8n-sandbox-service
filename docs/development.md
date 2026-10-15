@@ -88,6 +88,8 @@ The Postgres store and registry tests are behind the `integration` build tag and
 
 ```bash
 docker run -d --rm --name sandbox-test-postgres -e POSTGRES_PASSWORD=postgres -p 127.0.0.1:5432:5432 postgres:16-alpine
+# -h: on first start the image runs a temporary server on the Unix socket only.
+for i in $(seq 30); do docker exec sandbox-test-postgres pg_isready -h 127.0.0.1 -U postgres -q && break; sleep 1; done
 SANDBOX_TEST_POSTGRES_HOST=127.0.0.1 SANDBOX_TEST_POSTGRES_PASSWORD=postgres make test-integration
 ```
 
