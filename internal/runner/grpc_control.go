@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/n8n-io/sandbox-service/internal/api/grpc/pb"
+	"github.com/n8n-io/sandbox-service/internal/api/runnerctl"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/obs"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
@@ -37,6 +38,11 @@ func toGRPCError(err error) error {
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return status.Error(codes.DeadlineExceeded, context.DeadlineExceeded.Error())
+	}
+	// The API retries this on another runner, so it must only ever mean that
+	// nothing was created.
+	if errors.Is(err, runnerruntime.ErrCapacityExhausted) {
+		return runnerctl.CapacityRefusal(err.Error())
 	}
 	return status.Errorf(codes.Internal, "%v", err)
 }

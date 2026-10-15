@@ -92,8 +92,11 @@ func (r *PostgresRegistry) Len() int {
 	return n
 }
 
-func (r *PostgresRegistry) PickLowestUsed() (*Runner, error) {
+func (r *PostgresRegistry) PickLowestUsed(exclude ...string) (*Runner, error) {
 	graceSec := int64(r.heartbeatGrace.Seconds())
+	// Never nil: pgx sends a nil slice as NULL, and NOT (id = ANY(NULL)) would
+	// exclude every runner.
+	excluded := append([]string{}, exclude...)
 
 	tx, err := r.db.Begin()
 	if err != nil {
@@ -107,11 +110,12 @@ func (r *PostgresRegistry) PickLowestUsed() (*Runner, error) {
 		WHERE healthy = true
 		  AND last_seen >= now() - ($1 * interval '1 second')
 		  AND (capacity_total = 0 OR capacity_used < capacity_total)
+		  AND NOT (id = ANY($2))
 		ORDER BY capacity_used ASC, id ASC
 		FOR UPDATE SKIP LOCKED
 		LIMIT 1`
 
-	row := tx.QueryRow(q, graceSec)
+	row := tx.QueryRow(q, graceSec, excluded)
 	run, err := scanRunner(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

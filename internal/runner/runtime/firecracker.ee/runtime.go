@@ -596,7 +596,7 @@ func (r *Runtime) reserveSandbox(sandboxID string, blockEgress bool) (*sandboxSt
 	}
 	slot := r.reserveSlotLocked(sandboxID)
 	if slot < 0 {
-		return nil, fmt.Errorf("firecracker runner capacity exhausted")
+		return nil, fmt.Errorf("firecracker %w", runnerruntime.ErrCapacityExhausted)
 	}
 
 	vmID := "sandbox-" + shortID(sandboxID)

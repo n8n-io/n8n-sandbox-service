@@ -37,6 +37,19 @@ const (
 	OpRecover = "recover"
 )
 
+// Placement label values used with ObservePlacement: how a create found a runner.
+const (
+	// PlacementFirstChoice is a create the first runner picked did not refuse.
+	PlacementFirstChoice = "first_choice"
+	// PlacementRetried is a create placed on another runner after a refusal.
+	// Counted apart so a fleet that is full but still placing creates shows up.
+	PlacementRetried = "retried"
+	// PlacementExhausted is a create every runner tried refused.
+	PlacementExhausted = "exhausted"
+	// PlacementNoRunner is a create for which no runner was eligible at all.
+	PlacementNoRunner = "no_runner"
+)
+
 // Limit label values used with ObserveRequestLimited.
 const (
 	// LimitTenant is the API's per-tenant cap.
@@ -129,6 +142,7 @@ type APIRecorder struct {
 	httpInflight prometheus.Gauge
 	httpLimited  *prometheus.CounterVec
 	sandboxOps   *prometheus.CounterVec
+	placements   *prometheus.CounterVec
 }
 
 // NewAPIRecorder builds the API recorder. If enabled is false, the returned
@@ -148,7 +162,16 @@ func NewAPIRecorder(enabled bool) *APIRecorder {
 		},
 		[]string{"operation", "result"},
 	)
-	reg.MustRegister(sandboxOps)
+	placements := prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   Namespace,
+			Name:        "create_placements_total",
+			Help:        "Sandbox creates by how they found a runner: first_choice, retried after a refusal, exhausted, or no_runner.",
+			ConstLabels: prometheus.Labels{"role": RoleAPI},
+		},
+		[]string{"result"},
+	)
+	reg.MustRegister(sandboxOps, placements)
 	return &APIRecorder{
 		reg:          reg,
 		httpRequests: httpReq,
@@ -156,6 +179,7 @@ func NewAPIRecorder(enabled bool) *APIRecorder {
 		httpInflight: buildInflightGauge(reg, RoleAPI),
 		httpLimited:  buildLimitMetrics(reg, RoleAPI),
 		sandboxOps:   sandboxOps,
+		placements:   placements,
 	}
 }
 
@@ -188,6 +212,24 @@ func (r *APIRecorder) ObserveSandboxOp(operation string, success bool) {
 		return
 	}
 	r.sandboxOps.WithLabelValues(operation, resultLabel(success)).Inc()
+}
+
+// ObservePlacement records how a create found a runner (PlacementFirstChoice,
+// PlacementRetried, PlacementExhausted, PlacementNoRunner).
+func (r *APIRecorder) ObservePlacement(result string) {
+	if r.reg == nil {
+		return
+	}
+	r.placements.WithLabelValues(result).Inc()
+}
+
+// PlacementCount returns the counter value for creates with the given placement
+// result. Intended for tests in other packages.
+func (r *APIRecorder) PlacementCount(result string) float64 {
+	if r.reg == nil {
+		return 0
+	}
+	return testutil.ToFloat64(r.placements.WithLabelValues(result))
 }
 
 // ObserveRequestLimited records a request turned away by the given limit

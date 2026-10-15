@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -130,22 +131,22 @@ func (r *MemoryRegistry) eligibleLocked(now time.Time) []*Runner {
 	return eligible
 }
 
-func (r *MemoryRegistry) PickLowestUsed() (*Runner, error) {
+func (r *MemoryRegistry) PickLowestUsed(exclude ...string) (*Runner, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	now := time.Now()
-	eligible := r.eligibleLocked(now)
-	if len(eligible) == 0 {
-		return nil, ErrNoRunners
-	}
-
-	best := eligible[0]
-	for _, run := range eligible[1:] {
-		if run.CapacityUsed < best.CapacityUsed ||
+	var best *Runner
+	for _, run := range r.eligibleLocked(time.Now()) {
+		if slices.Contains(exclude, run.ID) {
+			continue
+		}
+		if best == nil || run.CapacityUsed < best.CapacityUsed ||
 			(run.CapacityUsed == best.CapacityUsed && run.ID < best.ID) {
 			best = run
 		}
+	}
+	if best == nil {
+		return nil, ErrNoRunners
 	}
 	return best, nil
 }

@@ -32,6 +32,8 @@ type fakeSandboxControl struct {
 	deleteErr error
 	// create_options_json of every create RPC, in order.
 	createOptionsJSON []string
+	// Returned by every create RPC when set, after recording it.
+	createErr error
 	// What the create response reports as applied, given create_options_json. Nil echoes
 	// the request, as a current runner does.
 	applied func(createOptionsJSON string) string
@@ -47,7 +49,11 @@ func (f *fakeSandboxControl) CreateSandbox(ctx context.Context, req *pb.CreateSa
 	}
 	f.mu.Lock()
 	f.createOptionsJSON = append(f.createOptionsJSON, req.GetCreateOptionsJson())
+	createErr := f.createErr
 	f.mu.Unlock()
+	if createErr != nil {
+		return nil, createErr
+	}
 	applied := req.GetCreateOptionsJson()
 	if f.applied != nil {
 		applied = f.applied(req.GetCreateOptionsJson())
@@ -82,6 +88,13 @@ func (f *fakeSandboxControl) failDeletes(err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.deleteErr = err
+}
+
+// creates counts the create RPCs that reached the fake, refused ones included.
+func (f *fakeSandboxControl) creates() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.createOptionsJSON)
 }
 
 func (f *fakeSandboxControl) calls() (stopped, deleted []string) {

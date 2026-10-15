@@ -2,9 +2,12 @@ package runner
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/n8n-io/sandbox-service/internal/api/grpc/pb"
+	"github.com/n8n-io/sandbox-service/internal/api/runnerctl"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
@@ -83,6 +86,46 @@ func TestSandboxControlGRPCCreateSandboxParsesOptions(t *testing.T) {
 			}
 			if got := resp.GetAppliedCreateOptionsJson(); got != tc.wantApplied {
 				t.Fatalf("applied_create_options_json = %q, want %q", got, tc.wantApplied)
+			}
+		})
+	}
+}
+
+type createErrRuntime struct {
+	fakeRuntime
+	err error
+}
+
+func (c *createErrRuntime) CreateSandbox(context.Context, string, *runnerruntime.CreateOptions) (*runnerruntime.SandboxInfo, error) {
+	return nil, c.err
+}
+
+// The API moves a create to another runner only on a capacity refusal, so that
+// must arrive marked as one and any other failure must not.
+func TestSandboxControlGRPCCreateSandboxErrorCodes(t *testing.T) {
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-api-key", "runner-key"))
+	for _, tc := range []struct {
+		name    string
+		err     error
+		want    codes.Code
+		refusal bool
+	}{
+		{name: "capacity", err: fmt.Errorf("firecracker %w", runnerruntime.ErrCapacityExhausted), want: codes.ResourceExhausted, refusal: true},
+		{name: "other", err: errors.New("clone sandbox rootfs: no space left on device"), want: codes.Internal},
+		{name: "deadline", err: context.DeadlineExceeded, want: codes.DeadlineExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := &SandboxControlGRPC{
+				Runtime: &createErrRuntime{err: tc.err},
+				Cfg:     &config.Config{APIKeys: map[string]struct{}{"runner-key": {}}},
+				Rec:     metrics.NewRunnerRecorder(true),
+			}
+			_, err := srv.CreateSandbox(ctx, &pb.CreateSandboxRequest{SandboxId: "11111111-1111-4111-8111-111111111111"})
+			if got := status.Code(err); got != tc.want {
+				t.Fatalf("CreateSandbox() code = %v (%v), want %v", got, err, tc.want)
+			}
+			if got := runnerctl.IsCapacityRefusal(err); got != tc.refusal {
+				t.Fatalf("IsCapacityRefusal(%v) = %v, want %v", err, got, tc.refusal)
 			}
 		})
 	}
