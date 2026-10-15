@@ -123,6 +123,7 @@ Metric families include:
 - `sandbox_http_requests_total{role,route,method,status}` — request counter; `route` is the matched route pattern (e.g. `/sandboxes/{id}`), not the raw path.
 - `sandbox_http_request_duration_seconds{role,route,method}` — request latency histogram.
 - `sandbox_sandbox_operations_total{role="api",operation,result}` — sandbox lifecycle ops (`create`, `delete`).
+- `sandbox_create_placements_total{role="api",result}` — how each create found a runner that did not refuse it for capacity: `first_choice`, or `retried` after a refusal; or found none: `exhausted` (every runner tried refused) or `no_runner` (none eligible). Whether the create then succeeded is in `sandbox_sandbox_operations_total`.
 - `sandbox_sandboxes_active{role="api"}` — current sandbox count from the store.
 - `sandbox_runners_registered{role="api"}` — runners registered with the API.
 - `go_*` and `process_*` — Go runtime and process collectors.
@@ -197,7 +198,18 @@ Create a sandbox. With no request body, the service generates a UUID. Callers ma
 
 If that ID still belongs to the caller and is within its idle-delete window, the existing sandbox is returned, or `409` if the request names an `egress` that differs from the sandbox's. If it has passed the window, the stale sandbox is deleted before the ID is reused. If the ID belongs to another tenant (or to admin when the caller is a tenant), the request fails with `409`.
 
-Disconnecting before the response does not cancel the create: the sandbox is still created and tracked, and can be found by listing or by repeating the request with the same `id`.
+Disconnecting before the response does not cancel a create a runner has accepted: if it succeeds, the sandbox is still created and tracked, and can be found by listing or by repeating the request with the same `id`. A disconnect after a runner refused it (below) ends the create with nothing created.
+
+The sandbox goes to the eligible runner with the lowest reported `capacity_used`. A full runner refuses before creating anything, and the API tries the next one: up to three runners, none started more than 5 seconds after the first. Any other runner error ends the create with `500`. When every runner tried refuses, the answer is:
+
+```
+HTTP/1.1 503 Service Unavailable
+Retry-After: 1
+
+{"error":"sandbox runners are at capacity","code":503,"reason":"no_capacity"}
+```
+
+When no runner is eligible, it is the same except for `error`: `no sandbox runners are registered or available`. Either way nothing was created, so the request is safe to repeat even without an `id`. Match on `reason`.
 
 **Request body fields** (all optional):
 
@@ -232,7 +244,7 @@ Resource limits (memory, CPU, process count) are configured on the runner via en
 }
 ```
 
-**Errors:** `400` invalid request body, supplied id or `egress` value, `403` tenant sandbox quota exceeded, `409` if the supplied id is owned by another tenant/admin, exists with a different `egress` than requested, or the tenant was deleted before the sandbox row could be stored (runner create is rolled back), `429` [too many requests in progress](#http-429--too-many-requests-in-progress), `502` stale sandbox cleanup failed, or the runner did not confirm the requested `egress` (runner create is rolled back; a runner from before egress modes only serves `public`), `503` no sandbox runners are registered or available
+**Errors:** `400` invalid request body, supplied id or `egress` value, `403` tenant sandbox quota exceeded, `409` if the supplied id is owned by another tenant/admin, exists with a different `egress` than requested, or the tenant was deleted before the sandbox row could be stored (runner create is rolled back), `429` [too many requests in progress](#http-429--too-many-requests-in-progress), `502` stale sandbox cleanup failed, or the runner did not confirm the requested `egress` (runner create is rolled back; a runner from before egress modes only serves `public`), `503` `no_capacity`: no runner is eligible or has room (see above)
 
 **Examples:**
 

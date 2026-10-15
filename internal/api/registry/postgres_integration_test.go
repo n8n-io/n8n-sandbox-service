@@ -4,6 +4,7 @@ package registry
 
 import (
 	"database/sql"
+	"errors"
 	"os"
 	"strconv"
 	"testing"
@@ -77,6 +78,24 @@ func TestPostgresRegistryPickLowestUsed(t *testing.T) {
 	}
 	if run.ID != "pg-test-low" {
 		t.Fatalf("got runner %q, want pg-test-low", run.ID)
+	}
+}
+
+func TestPostgresRegistryPickLowestUsedSkipsExcluded(t *testing.T) {
+	reg, _ := openTestPostgresRegistry(t)
+
+	reg.Upsert("pg-test-high", "http://127.0.0.1:8080", "127.0.0.1:9091", true, 10, 8, 0)
+	reg.Upsert("pg-test-low", "http://127.0.0.1:8081", "127.0.0.1:9092", true, 10, 2, 0)
+
+	run, err := reg.PickLowestUsed("pg-test-low")
+	if err != nil {
+		t.Fatalf("PickLowestUsed: %v", err)
+	}
+	if run.ID != "pg-test-high" {
+		t.Fatalf("got runner %q, want pg-test-high", run.ID)
+	}
+	if _, err := reg.PickLowestUsed("pg-test-low", "pg-test-high"); !errors.Is(err, ErrNoRunners) {
+		t.Fatalf("PickLowestUsed(all) error = %v, want ErrNoRunners", err)
 	}
 }
 

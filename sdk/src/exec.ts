@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { delay } from "./delay";
 import { SandboxServiceError, InvalidStreamEventError } from "./errors";
 import { ExecStreamConsumer } from "./exec-stream-consumer";
 import type { HttpClient } from "./http";
@@ -156,21 +157,4 @@ function isTransientError(error: unknown): boolean {
 
 function isLimited(error: unknown): error is SandboxServiceError {
   return error instanceof SandboxServiceError && error.status === 429;
-}
-
-/** Resolves after `ms`, or as soon as `signal` aborts. */
-function delay(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal?.aborted) {
-      resolve();
-      return;
-    }
-    const done = () => {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", done);
-      resolve();
-    };
-    const timer = setTimeout(done, ms);
-    signal?.addEventListener("abort", done);
-  });
 }
