@@ -203,7 +203,7 @@ Series exposed today:
 
 - `sandbox_http_requests_total{role,route,method,status}` and `sandbox_http_request_duration_seconds{role,route,method}` (both binaries).
 - `sandbox_http_requests_in_flight`, requests in progress, and `sandbox_http_requests_limited_total{limit}`, requests refused by the per-tenant (`tenant`, API) or per-sandbox (`sandbox`, runner) limits, execution `DELETE` ones included (both binaries). Like `sandbox_http_requests_total`, they only see requests that passed authentication. The gauge counts the whole process, not one tenant or sandbox; the counter shows how often each limit is reached.
-- API: `sandbox_sandbox_operations_total{operation,result}`, `sandbox_sandboxes_active`, `sandbox_runners_registered`.
+- API: `sandbox_sandbox_operations_total{operation,result}`, `sandbox_sandboxes_active`, `sandbox_runners_registered`, and `sandbox_create_placements_total{result}`, how each create found a runner (`first_choice`, `retried`, `exhausted`, `no_runner`). `retried` grows while the fleet is full but creates still succeed, so watch it alongside the failures.
 - Runner: `sandbox_container_operations_total{operation,result}`, `sandbox_container_operation_duration_seconds{operation}`, `sandbox_containers_active`, plus `sandbox_guest_deaths_total`, sandbox guests that died on their own, and `sandbox_recoveries_total{result}`, attempts to bring one back.
 - Firecracker runner: `sandbox_lifecycle_step_duration_seconds{operation,step}`, the per-step breakdown of a create, wake or recovery, and `sandbox_slots_unwired`, slots whose network namespace is not yet built (zero in steady state). See [observability.md](observability.md).
 - Plus the standard `go_*` and `process_*` collectors.

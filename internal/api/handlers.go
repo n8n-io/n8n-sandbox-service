@@ -377,63 +377,30 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 			}
 		}
 
-		run, err := reg.PickLowestUsed()
-		if err != nil {
-			if errors.Is(err, registry.ErrNoRunners) {
-				slog.WarnContext(r.Context(), "create sandbox failed: no eligible runners")
-				writeError(w, http.StatusServiceUnavailable, err.Error())
-			} else {
-				slog.ErrorContext(r.Context(), "create sandbox failed: pick runner", "error", err)
-				writeError(w, http.StatusInternalServerError, err.Error())
-			}
-			return
-		}
-
-		controlAddr := run.ControlGRPCAddr
-		tlsCfg := runnerControlTLS(cfg)
-
-		fields := obs.FieldsFrom(r.Context())
-		fields.Add("sandbox_id", sandboxID, "runner_id", run.ID)
-
-		now := time.Now().Unix()
-		slog.InfoContext(
-			r.Context(),
-			"create sandbox: runner selected",
-			"sandbox_id", sandboxID,
-			"runner_id", run.ID,
-			"runner_http_base_url", run.HTTPBaseURL,
-			"runner_control_grpc_addr", controlAddr,
-			"runner_healthy", run.Healthy,
-			"runner_capacity_total", run.CapacityTotal,
-			"runner_capacity_used", run.CapacityUsed,
-			"runner_capacity_stopped", run.CapacityStopped,
-			"tenant_id", tenantID,
-			"ephemeral", req.Ephemeral,
-			"egress", egress,
-		)
 		requested := runnerruntime.CreateOptions{Egress: egress}
 		createOptionsJSON, err := json.Marshal(requested)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		createCtx, cancelCreate := context.WithTimeout(context.WithoutCancel(r.Context()), runnerCreateBudget)
-		defer cancelCreate()
-		gresp, err := runnerctl.CreateSandbox(createCtx, controlAddr, cfg.RunnerAPIKey, tlsCfg, sandboxID, string(createOptionsJSON))
-		if err != nil {
-			slog.ErrorContext(
-				r.Context(),
-				"create sandbox failed: runner control create",
-				"sandbox_id", sandboxID,
-				"runner_id", run.ID,
-				"runner_control_grpc_addr", controlAddr,
-				"error", err,
-			)
-			writeError(w, http.StatusInternalServerError, "failed to create container: "+err.Error())
+
+		obs.FieldsFrom(r.Context()).Add("sandbox_id", sandboxID)
+		now := time.Now().Unix()
+		placed, err := placeSandbox(r, reg, cfg, rec, sandboxID, string(createOptionsJSON),
+			"tenant_id", tenantID, "ephemeral", req.Ephemeral, "egress", egress)
+		if errors.Is(err, registry.ErrNoRunners) || errors.Is(err, errRunnersAtCapacity) {
+			writeNoCapacity(w, err)
 			return
 		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		run, gresp := placed.run, placed.resp
+		controlAddr := run.ControlGRPCAddr
+		tlsCfg := runnerControlTLS(cfg)
 		// Undoes the runner create when the sandbox cannot be tracked as asked.
-		// Fresh deadline: the create may have used up most of createCtx.
+		// Fresh deadline: the create may have used up most of its own.
 		rollbackRunnerCreate := func() {
 			deleteCtx, cancelDelete := context.WithTimeout(context.WithoutCancel(r.Context()), runnerCreateBudget)
 			delErr := runnerctl.DeleteSandbox(deleteCtx, controlAddr, cfg.RunnerAPIKey, tlsCfg, sandboxID)

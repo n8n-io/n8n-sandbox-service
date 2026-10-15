@@ -24,11 +24,37 @@ func TestAPIRecorderDisabled(t *testing.T) {
 	r.ObserveHTTP("/x", http.MethodGet, http.StatusOK, time.Millisecond)
 	r.ObserveSandboxOp(OpCreate, true)
 	r.ObserveRequestLimited(LimitTenant)
+	r.ObservePlacement(PlacementRetried)
 	r.SetActiveSandboxes(func() float64 { return 1 })
 	r.SetRunnersRegistered(func() float64 { return 1 })
 	r.AddHTTPInFlight(1)
 	if got := r.RequestsLimitedCount(LimitTenant); got != 0 {
 		t.Errorf("RequestsLimitedCount on a disabled recorder = %v, want 0", got)
+	}
+	if got := r.PlacementCount(PlacementRetried); got != 0 {
+		t.Errorf("PlacementCount on a disabled recorder = %v, want 0", got)
+	}
+}
+
+func TestAPIRecorderCountsPlacements(t *testing.T) {
+	r := NewAPIRecorder(true)
+	r.ObservePlacement(PlacementFirstChoice)
+	r.ObservePlacement(PlacementRetried)
+	r.ObservePlacement(PlacementRetried)
+	r.ObservePlacement(PlacementExhausted)
+
+	for result, want := range map[string]float64{
+		PlacementFirstChoice: 1,
+		PlacementRetried:     2,
+		PlacementExhausted:   1,
+		PlacementNoRunner:    0,
+	} {
+		if got := r.PlacementCount(result); got != want {
+			t.Errorf("create_placements_total{result=%q} = %v, want %v", result, got, want)
+		}
+	}
+	if body := scrape(t, r.Registry()); !strings.Contains(body, `sandbox_create_placements_total{result="retried",role="api"} 2`) {
+		t.Errorf("scrape body missing the retried placement series:\n%s", body)
 	}
 }
 
