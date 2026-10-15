@@ -242,12 +242,15 @@ func TestCreateSandboxQuotaHoldsUnderConcurrentCreates(t *testing.T) {
 	for _, pods := range []int{1, 2} {
 		t.Run(fmt.Sprintf("pods=%d", pods), func(t *testing.T) {
 			// Hold every create at the runner until all have arrived, so none
-			// is saved before the last one has passed the check.
+			// is saved before the last one has passed the check. A create that
+			// returns first never reached the runner; it releases the rest, so
+			// the count check below fails at once instead of after the timeout.
 			var arrived atomic.Int32
 			allArrived := make(chan struct{})
+			release := sync.OnceFunc(func() { close(allArrived) })
 			fake := &fakeSandboxControl{createHook: func(context.Context) {
 				if arrived.Add(1) == creates {
-					close(allArrived)
+					release()
 				}
 				select {
 				case <-allArrived:
@@ -260,7 +263,10 @@ func TestCreateSandboxQuotaHoldsUnderConcurrentCreates(t *testing.T) {
 			responses := make([]*httptest.ResponseRecorder, creates)
 			var wg sync.WaitGroup
 			for i := range creates {
-				wg.Go(func() { responses[i] = postCreateSandbox(t, routers[i%pods], tenant.Key.APIKey, "") })
+				wg.Go(func() {
+					defer release()
+					responses[i] = postCreateSandbox(t, routers[i%pods], tenant.Key.APIKey, "")
+				})
 			}
 			wg.Wait()
 

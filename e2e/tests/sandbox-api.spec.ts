@@ -979,9 +979,9 @@ test.describe('Tenant isolation', () => {
 
 test.describe('Tenant quota', () => {
   test('parallel creates stop at max_sandboxes', async () => {
-    // Every create can reach the runner at once; three fit the Firecracker
-    // lane's runner capacity of four.
-    await expectParallelCreatesStopAtQuota([BASE_URL], 1, 3);
+    // Both creates can reach the runner at once, so keep the burst well within
+    // the Firecracker lane's runner capacity of four.
+    await expectParallelCreatesStopAtQuota([BASE_URL], 1, 2);
   });
 });
 

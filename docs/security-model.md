@@ -332,11 +332,11 @@ the caller already holds and does not help discover new ones.
 
 **A burst of creates briefly exceeds a tenant's quota on runners.**
 `max_sandboxes` is checked again when a sandbox is saved, where a tenant's
-creates are counted one at a time, so a tenant never holds more saved sandboxes
-than its quota. Creates that pass the first check together all reach a runner,
-though, and the ones refused when saving are deleted there again before their
-`403`. If that delete fails, the sandbox stays on the runner untracked, and the
-API logs it.
+creates are counted one at a time, so a sandbox is only saved while the tenant
+holds fewer than its quota. Creates that pass the first check together all
+reach a runner, though, and the ones refused when saving are deleted there
+again before their `403`. If that delete fails, the sandbox stays on the runner
+untracked, and the API logs it.
 
 **Tenant request limits are per API replica.** Each replica counts a tenant's
 requests in its own memory, so across replicas a tenant can hold up to

@@ -177,9 +177,10 @@ export async function expectParallelCreatesStopAtQuota(
     expect(resp.status).toBe(200);
     return ((await resp.json()) as Array<{ id: string }>).map((s) => s.id).sort();
   };
-  // With the Postgres registry, a runner pick that overlaps another one skips
-  // the locked runner row and answers 503 before any runner call. Repeat those:
-  // they say nothing about the quota.
+  // A 503 means nothing was created: no runner had room, or, with the Postgres
+  // registry, the pick skipped a runner row another pick held. Repeat those;
+  // they say nothing about the quota. Not a 500: a save-time refusal wrongly
+  // answered with 500 would pass on the retry, refused by the early check.
   const create = async (baseUrl: string): Promise<Response> => {
     for (let attempt = 1; ; attempt++) {
       const resp = await fetch(`${baseUrl}/sandboxes`, {
@@ -193,6 +194,7 @@ export async function expectParallelCreatesStopAtQuota(
     }
   };
 
+  let passed = false;
   try {
     const responses = await Promise.all(
       Array.from({ length: creates }, (_, i) => create(baseUrls[i % baseUrls.length])),
@@ -209,14 +211,32 @@ export async function expectParallelCreatesStopAtQuota(
     }
     expect(created).toHaveLength(quota);
     expect(await listIds()).toEqual(created.sort());
+    passed = true;
   } finally {
-    for (const id of await listIds().catch(() => [])) {
-      await fetch(`${baseUrls[0]}/sandboxes/${id}`, { method: 'DELETE', headers: tenant });
-    }
-    await fetch(`${baseUrls[0]}/admin/tenants/${body.tenant.id}`, {
-      method: 'DELETE',
-      headers: { 'X-Api-Key': ADMIN_API_KEY },
+    // Remove everything the tenant ended up with, then the tenant. A failed
+    // cleanup fails a passing test, but never hides why a test failed.
+    const problems: string[] = [];
+    const remove = async (url: string, headers: Record<string, string>) => {
+      try {
+        const resp = await fetch(url, { method: 'DELETE', headers });
+        if (resp.status !== 204 && resp.status !== 404) {
+          problems.push(`DELETE ${url}: ${resp.status} ${await resp.text()}`);
+        }
+      } catch (err) {
+        problems.push(`DELETE ${url}: ${err}`);
+      }
+    };
+    const ids = await listIds().catch((err) => {
+      problems.push(`list sandboxes: ${err}`);
+      return [] as string[];
     });
+    await Promise.all(ids.map((id) => remove(`${baseUrls[0]}/sandboxes/${id}`, tenant)));
+    await remove(`${baseUrls[0]}/admin/tenants/${body.tenant.id}`, { 'X-Api-Key': ADMIN_API_KEY });
+    if (problems.length > 0) {
+      const msg = `cleanup of tenant ${body.tenant.id} failed: ${problems.join('; ')}`;
+      if (passed) throw new Error(msg);
+      console.warn(msg);
+    }
   }
 }
 
