@@ -10,6 +10,7 @@ type loadSnapshotRequest struct {
 	MemBackend      memBackend `json:"mem_backend"`
 	TrackDirtyPages bool       `json:"track_dirty_pages"`
 	ResumeVM        bool       `json:"resume_vm"`
+	ClockRealtime   bool       `json:"clock_realtime"`
 }
 
 type memBackend struct {
@@ -25,6 +26,14 @@ type createSnapshotRequest struct {
 
 // loadSnapshot asks the Firecracker API socket to restore a full snapshot and
 // immediately resume the VM.
+//
+// clock_realtime advances the guest's kvm-clock by the wall-clock time since the
+// snapshot was taken. Without it the guest resumes with the clock it had then: a
+// new sandbox runs behind by the age of the golden snapshot, a woken one by how
+// long it was stopped. The guest's monotonic clock jumps by the same amount.
+// Firecracker supports it on x86_64 only, and refuses the restore unless KVM
+// recorded the wall-clock time in the snapshot (host kernel 5.16 or later with a
+// TSC-based clocksource).
 func loadSnapshot(ctx context.Context, socketPath string, _ Config) error {
 	body, err := json.Marshal(loadSnapshotRequest{
 		SnapshotPath: "/snapshot_state",
@@ -34,6 +43,7 @@ func loadSnapshot(ctx context.Context, socketPath string, _ Config) error {
 		},
 		TrackDirtyPages: false,
 		ResumeVM:        true,
+		ClockRealtime:   true,
 	})
 	if err != nil {
 		return err
