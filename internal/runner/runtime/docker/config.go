@@ -2,8 +2,12 @@ package docker
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"strconv"
+	"strings"
+
+	"github.com/n8n-io/sandbox-service/internal/runner/runtime/netpolicy"
 )
 
 const (
@@ -51,6 +55,11 @@ type Config struct {
 	// EnableCgroups controls whether cgroup setup is enforced for sandbox creation.
 	// Parsed from SANDBOX_RUNNER_ENABLE_CGROUPS (default true).
 	EnableCgroups bool
+
+	// DNSServers, when set, are the only resolvers sandbox DNS is forwarded to.
+	// Unset, Docker forwards to the runner's own resolver. Parsed from
+	// SANDBOX_RUNNER_DOCKER_DNS_SERVERS (comma-separated IPv4, default unset).
+	DNSServers []string
 }
 
 func defaultConfig() Config {
@@ -125,5 +134,34 @@ func LoadConfig() (Config, error) {
 		cfg.EnableCgroups = enabled
 	}
 
+	if v := os.Getenv("SANDBOX_RUNNER_DOCKER_DNS_SERVERS"); v != "" {
+		servers, err := parseDNSServers(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("SANDBOX_RUNNER_DOCKER_DNS_SERVERS: %w", err)
+		}
+		cfg.DNSServers = servers
+	}
+
 	return cfg, nil
+}
+
+// parseDNSServers rejects a server inside the egress denylist: queries to an
+// explicit server leave from the sandbox, so one there would leave every
+// sandbox without DNS.
+func parseDNSServers(v string) ([]string, error) {
+	var servers []string
+	for _, s := range strings.Split(v, ",") {
+		s = strings.TrimSpace(s)
+		ip := net.ParseIP(s)
+		if ip == nil || ip.To4() == nil || ip.IsUnspecified() {
+			return nil, fmt.Errorf("%q is not a usable IPv4 address", s)
+		}
+		for _, cidr := range netpolicy.PrivateRangesV4 {
+			if _, blocked, err := net.ParseCIDR(cidr); err == nil && blocked.Contains(ip) {
+				return nil, fmt.Errorf("%s is in the blocked range %s, so sandboxes could not reach it", s, cidr)
+			}
+		}
+		servers = append(servers, ip.To4().String())
+	}
+	return servers, nil
 }
