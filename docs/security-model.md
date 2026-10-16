@@ -412,8 +412,9 @@ The boundaries above are covered by tests rather than asserted on paper.
 
 The network isolation suite runs against both the Sysbox and the Firecracker
 runner, apart from the checks tagged for one of them. Its blocked-range tests
-probe one address per listed range, so they show the rules are applied, not that
-the list is complete. The
-capability suite is Docker-only: the setuid clearing it depends on is a property
+probe one address per listed range except loopback, which the guest routes to
+itself so it never reaches the rules. They show the rules are applied, not that
+the list is complete. The capability suite is Docker-only: the setuid clearing
+it depends on is a property
 of the image both runtimes share, but no Firecracker test asserts it, and
 `no-new-privileges` has no Firecracker counterpart to test.
