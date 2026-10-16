@@ -3,6 +3,7 @@
   "description": "Only the pins in the sandbox image are enrolled: sandbox-workspace/package.json and the global typescript in Dockerfile.sandbox. Lock file maintenance refreshes the transitive deps in sandbox-workspace/package-lock.json weekly; Renovate cannot raise vulnerability-driven PRs for transitive npm deps.",
   "extends": ["config:recommended", ":maintainLockFilesWeekly"],
   "enabledManagers": ["npm", "custom.regex"],
+  "includePaths": ["sandbox-workspace/**", "Dockerfile.sandbox"],
   "npm": {
     "managerFilePatterns": ["/^sandbox-workspace/package\\.json$/"]
   },
@@ -16,8 +17,8 @@
       "schedule": ["* 0-6 * * 1"]
     },
     {
-      "description": "n8n pins these itself in the package.json it writes. Change them when n8n does, not when npm has a newer release: updates wait for approval on the dependency dashboard, while security fixes still open on their own.",
-      "matchFileNames": ["sandbox-workspace/package.json"],
+      "description": "n8n pins these itself in the package.json it writes. Change them when n8n does, not when npm has a newer release: updates wait for approval on the dependency dashboard, while security fixes still open on their own. The global typescript in Dockerfile.sandbox follows the same pin, so tsc on PATH and the workspace's copy stay one version.",
+      "matchFileNames": ["sandbox-workspace/package.json", "Dockerfile.sandbox"],
       "matchPackageNames": ["tsx", "typescript", "@types/node"],
       "dependencyDashboardApproval": true
     }
