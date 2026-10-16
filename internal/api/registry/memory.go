@@ -110,6 +110,17 @@ func (r *MemoryRegistry) Len() int {
 	return len(r.runners)
 }
 
+func (r *MemoryRegistry) List() ([]Runner, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]Runner, 0, len(r.runners))
+	for _, run := range r.runners {
+		out = append(out, *run)
+	}
+	slices.SortFunc(out, func(a, b Runner) int { return strings.Compare(a.ID, b.ID) })
+	return out, nil
+}
+
 func (r *MemoryRegistry) eligibleLocked(now time.Time) []*Runner {
 	var eligible []*Runner
 	for _, id := range r.order {
