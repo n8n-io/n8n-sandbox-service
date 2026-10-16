@@ -6,6 +6,22 @@
   "npm": {
     "managerFilePatterns": ["/^sandbox-workspace/package\\.json$/"]
   },
+  "packageRules": [
+    {
+      "description": "The n8n assistant writes its own package.json into the workspace and runs npm install, which only finds nothing to do when the image has the same versions. Follow the SDK version of n8n's stable line, which is released almost daily, once a week.",
+      "matchFileNames": ["sandbox-workspace/package.json"],
+      "matchPackageNames": ["@n8n/workflow-sdk"],
+      "followTag": "stable",
+      "minimumReleaseAge": "3 days",
+      "schedule": ["* 0-6 * * 1"]
+    },
+    {
+      "description": "n8n pins these itself in the package.json it writes. Change them when n8n does, not when npm has a newer release: updates wait for approval on the dependency dashboard, while security fixes still open on their own.",
+      "matchFileNames": ["sandbox-workspace/package.json"],
+      "matchPackageNames": ["tsx", "typescript", "@types/node"],
+      "dependencyDashboardApproval": true
+    }
+  ],
   "customManagers": [
     {
       "customType": "regex",
