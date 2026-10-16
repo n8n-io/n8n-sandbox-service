@@ -92,6 +92,31 @@ func (r *PostgresRegistry) Len() int {
 	return n
 }
 
+func (r *PostgresRegistry) List() ([]Runner, error) {
+	const q = `
+		SELECT id, http_base_url, control_grpc_addr, healthy, capacity_total, capacity_used, capacity_stopped, last_seen
+		FROM runners
+		ORDER BY id`
+	rows, err := r.db.Query(q)
+	if err != nil {
+		return nil, fmt.Errorf("registry: list runners: %w", err)
+	}
+	defer rows.Close()
+
+	out := []Runner{}
+	for rows.Next() {
+		run, err := scanRunner(rows)
+		if err != nil {
+			return nil, fmt.Errorf("registry: scan runner: %w", err)
+		}
+		out = append(out, *run)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("registry: list runners: %w", err)
+	}
+	return out, nil
+}
+
 func (r *PostgresRegistry) PickLowestUsed(exclude ...string) (*Runner, error) {
 	graceSec := int64(r.heartbeatGrace.Seconds())
 	// Never nil: pgx sends a nil slice as NULL, and NOT (id = ANY(NULL)) would

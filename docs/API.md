@@ -947,6 +947,41 @@ Admin only. Revoke an API key (`204`). Revoked keys are rejected from the next r
 
 ---
 
+## Admin: runners
+
+### GET /admin/runners
+
+Admin only. Lists every registered runner, ordered by `id`, with the capacity it last reported. Runners that stopped heartbeating stay in the list (with the in-memory registry, until they disconnect); filter on `healthy` and `last_seen` to keep the live ones. Runner addresses are not returned.
+
+**Response:** `200 OK`
+
+```json
+{
+  "runners": [
+    {
+      "id": "runner-1",
+      "healthy": true,
+      "capacity_total": 20,
+      "capacity_used": 7,
+      "capacity_stopped": 2,
+      "last_seen": 1700000000
+    }
+  ]
+}
+```
+
+`last_seen` is the Unix time in seconds of the runner's last heartbeat. `runners` is `[]` when none are registered.
+
+**Errors:** `403` provisioner or tenant key, `500` registry read failed
+
+**Example:**
+
+```bash
+curl http://localhost:8080/admin/runners -H "X-Api-Key: ADMIN_KEY"
+```
+
+---
+
 ## Admin: capacity scaler
 
 ### GET /admin/scaler
