@@ -1,6 +1,9 @@
 package docker
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestLoadConfigParsesDefaults(t *testing.T) {
 	t.Setenv("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE", "test-image")
@@ -33,6 +36,37 @@ func TestLoadConfigParsesDefaults(t *testing.T) {
 	}
 	if !cfg.EnableCgroups {
 		t.Error("expected EnableCgroups true")
+	}
+	if cfg.DNSServers != nil {
+		t.Errorf("expected no DNSServers by default, got %v", cfg.DNSServers)
+	}
+}
+
+func TestLoadConfigParsesDNSServers(t *testing.T) {
+	t.Setenv("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE", "test-image")
+	t.Setenv("SANDBOX_RUNNER_DOCKER_DNS_SERVERS", "8.8.8.8, ::ffff:1.1.1.1")
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+	if want := []string{"8.8.8.8", "1.1.1.1"}; !reflect.DeepEqual(cfg.DNSServers, want) {
+		t.Errorf("expected DNSServers %v, got %v", want, cfg.DNSServers)
+	}
+}
+
+// Queries to a configured server leave from the sandbox, so one in a blocked
+// range would fail for every sandbox; refusing it at startup says why.
+func TestLoadConfigRejectsUnusableDNSServers(t *testing.T) {
+	for _, v := range []string{"10.0.0.10", "8.8.8.8,", "dns.example.com", "2001:4860:4860::8888", "168.63.129.16", "0.0.0.0"} {
+		t.Run(v, func(t *testing.T) {
+			t.Setenv("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE", "test-image")
+			t.Setenv("SANDBOX_RUNNER_DOCKER_DNS_SERVERS", v)
+
+			if _, err := LoadConfig(); err == nil {
+				t.Fatalf("expected LoadConfig to reject SANDBOX_RUNNER_DOCKER_DNS_SERVERS=%q", v)
+			}
+		})
 	}
 }
 
