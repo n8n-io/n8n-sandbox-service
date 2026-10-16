@@ -5,6 +5,7 @@ import {
   execWithTransientRetry,
   deleteSandbox,
   ensureTenantAuth,
+  expectParallelCreatesStopAtQuota,
   getApiKey,
   tenantClient,
   waitForSandboxStatus,
@@ -98,6 +99,12 @@ test.describe('multi-pod API (Postgres)', () => {
     } finally {
       await deleteSandbox(record.id, clientB);
     }
+  });
+
+  test('parallel creates split across pods stop at max_sandboxes', async () => {
+    await waitForRegisteredRunners(BASE_URL_A, 1, 30_000);
+    await waitForRegisteredRunners(BASE_URL_B, 1, 30_000);
+    await expectParallelCreatesStopAtQuota([BASE_URL_A, BASE_URL_B], 2, 8);
   });
 });
 

@@ -3,10 +3,12 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -199,6 +201,14 @@ func TestCreateSandboxQuotaExceeded(t *testing.T) {
 // newIdleTestGateway is newTestGateway with idle windows and a runner serving fake.
 func newIdleTestGateway(t *testing.T, adminKey string, fake *fakeSandboxControl) (http.Handler, store.SandboxStore, *config.APIConfig) {
 	t.Helper()
+	routers, s, cfg := newIdleTestGatewayPods(t, adminKey, fake, 1)
+	return routers[0], s, cfg
+}
+
+// newIdleTestGatewayPods is newIdleTestGateway with one router per API pod,
+// all sharing one store.
+func newIdleTestGatewayPods(t *testing.T, adminKey string, fake *fakeSandboxControl, pods int) ([]http.Handler, store.SandboxStore, *config.APIConfig) {
+	t.Helper()
 	s, err := store.New(":memory:")
 	if err != nil {
 		t.Fatalf("create store: %v", err)
@@ -213,11 +223,97 @@ func newIdleTestGateway(t *testing.T, adminKey string, fake *fakeSandboxControl)
 	reg := registry.New(45 * time.Second)
 	reg.Upsert("runner-1", "https://127.0.0.1:9", startFakeRunnerControl(t, fake), true, 10, 0, 0)
 
-	router, err := NewGatewayRouter(s, cfg, reg, metrics.NewAPIRecorder(false))
-	if err != nil {
-		t.Fatalf("create gateway router: %v", err)
+	routers := make([]http.Handler, pods)
+	for i := range routers {
+		routers[i], err = NewGatewayRouter(s, cfg, reg, metrics.NewAPIRecorder(false))
+		if err != nil {
+			t.Fatalf("create gateway router: %v", err)
+		}
 	}
-	return router, s, cfg
+	return routers, s, cfg
+}
+
+// A burst of creates for one tenant leaves exactly its quota, on one API pod or
+// spread over two. Every create here passes the check before the runner call,
+// so saving has to refuse the extra ones, and they must be deleted again on the
+// runner.
+func TestCreateSandboxQuotaHoldsUnderConcurrentCreates(t *testing.T) {
+	const quota, creates = 2, 6
+	for _, pods := range []int{1, 2} {
+		t.Run(fmt.Sprintf("pods=%d", pods), func(t *testing.T) {
+			// Hold every create at the runner until all have arrived, so none
+			// is saved before the last one has passed the check. A create that
+			// returns first never reached the runner; it releases the rest, so
+			// the count check below fails at once instead of after the timeout.
+			var arrived atomic.Int32
+			allArrived := make(chan struct{})
+			release := sync.OnceFunc(func() { close(allArrived) })
+			fake := &fakeSandboxControl{createHook: func(context.Context) {
+				if arrived.Add(1) == creates {
+					release()
+				}
+				select {
+				case <-allArrived:
+				case <-time.After(10 * time.Second):
+				}
+			}}
+			routers, s, _ := newIdleTestGatewayPods(t, "admin-key", fake, pods)
+			tenant := mintTenantKey(t, routers[0], fmt.Sprintf(`{"name":"burst","max_sandboxes":%d}`, quota))
+
+			responses := make([]*httptest.ResponseRecorder, creates)
+			var wg sync.WaitGroup
+			for i := range creates {
+				wg.Go(func() {
+					defer release()
+					responses[i] = postCreateSandbox(t, routers[i%pods], tenant.Key.APIKey, "")
+				})
+			}
+			wg.Wait()
+
+			if n := arrived.Load(); n != creates {
+				t.Fatalf("runner creates = %d, want all %d", n, creates)
+			}
+			created := map[string]bool{}
+			for _, rr := range responses {
+				switch rr.Code {
+				case http.StatusCreated:
+					var resp SandboxResponse
+					if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+						t.Fatalf("decode: %v", err)
+					}
+					created[resp.ID] = true
+				case http.StatusForbidden:
+					if !strings.Contains(rr.Body.String(), "quota exceeded") {
+						t.Fatalf("refused create: body=%s, want the quota message", rr.Body.String())
+					}
+				default:
+					t.Fatalf("create: got %d body=%s, want %d or %d", rr.Code, rr.Body.String(), http.StatusCreated, http.StatusForbidden)
+				}
+			}
+			if len(created) != quota {
+				t.Fatalf("%d of %d creates succeeded, want exactly the quota %d", len(created), creates, quota)
+			}
+
+			stored, err := s.ListByTenant(tenant.Tenant.ID)
+			if err != nil || len(stored) != quota {
+				t.Fatalf("stored %d sandboxes err=%v, want %d", len(stored), err, quota)
+			}
+			for _, rec := range stored {
+				if !created[rec.ID] {
+					t.Fatalf("stored sandbox %s was not answered with 201", rec.ID)
+				}
+			}
+			_, deleted := fake.calls()
+			if len(deleted) != creates-quota {
+				t.Fatalf("runner deletes = %v, want the %d refused creates", deleted, creates-quota)
+			}
+			for _, id := range deleted {
+				if created[id] {
+					t.Fatalf("runner deleted %s, which was answered with 201", id)
+				}
+			}
+		})
+	}
 }
 
 // A client hanging up mid-create must not cancel the runner call: the runner

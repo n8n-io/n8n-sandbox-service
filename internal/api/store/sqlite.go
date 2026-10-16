@@ -173,7 +173,7 @@ func (s *SQLiteStore) Create(record *SandboxRecord) error {
 	}
 
 	// BEGIN IMMEDIATE write-locks the DB so DeleteTenant cannot interleave
-	// after its emptiness check.
+	// after its emptiness check, and so creates count and insert one at a time.
 	conn, err := s.beginImmediate()
 	if err != nil {
 		return fmt.Errorf("store: begin create sandbox: %w", err)
@@ -185,13 +185,22 @@ func (s *SQLiteStore) Create(record *SandboxRecord) error {
 		}
 	}()
 
-	var tenantID string
-	err = conn.QueryRowContext(context.Background(), `SELECT id FROM tenants WHERE id = ?`, record.TenantID).Scan(&tenantID)
+	var maxSandboxes int
+	err = conn.QueryRowContext(context.Background(), `SELECT max_sandboxes FROM tenants WHERE id = ?`, record.TenantID).Scan(&maxSandboxes)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrTenantNotFound
 	}
 	if err != nil {
 		return fmt.Errorf("store: get tenant %s: %w", record.TenantID, err)
+	}
+	if maxSandboxes > 0 {
+		var n int64
+		if err := conn.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM sandboxes WHERE tenant_id = ?`, record.TenantID).Scan(&n); err != nil {
+			return fmt.Errorf("store: count sandboxes by tenant: %w", err)
+		}
+		if n >= int64(maxSandboxes) {
+			return ErrTenantQuotaExceeded
+		}
 	}
 	if err := s.insertSandbox(conn, record); err != nil {
 		return err

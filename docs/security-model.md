@@ -330,11 +330,13 @@ caller can learn that an ID is taken. This is deliberate, so that a client can
 reconnect to its own deterministic IDs. Since IDs are UUIDs, it confirms an ID
 the caller already holds and does not help discover new ones.
 
-**Tenant quotas are not atomic.** `max_sandboxes` is compared against the
-tenant's recorded sandboxes before a create is recorded, so concurrent creates
-that all pass the check are all admitted. The excess is bounded by how many
-creates the caller runs in parallel, not by time, and the tenant then holds more
-than its quota until it deletes sandboxes.
+**A burst of creates briefly exceeds a tenant's quota on runners.**
+`max_sandboxes` is checked again when a sandbox is saved, where a tenant's
+creates are counted one at a time, so a sandbox is only saved while the tenant
+holds fewer than its quota. Creates that pass the first check together all
+reach a runner, though, and the ones refused when saving are deleted there
+again before their `403`. If that delete fails, the sandbox stays on the runner
+untracked, and the API logs it.
 
 **Tenant request limits are per API replica.** Each replica counts a tenant's
 requests in its own memory, so across replicas a tenant can hold up to
@@ -388,6 +390,7 @@ The boundaries above are covered by tests rather than asserted on paper.
 | --- | --- |
 | Cross-tenant read, list, delete, exec, files | [internal/api/handlers_tenants_test.go](../internal/api/handlers_tenants_test.go), [internal/api/handlers_proxy_tenant_test.go](../internal/api/handlers_proxy_tenant_test.go), [e2e/tests/sandbox-api.spec.ts](../e2e/tests/sandbox-api.spec.ts) |
 | Client-supplied ID conflicts | [internal/api/handlers_create_sandbox_test.go](../internal/api/handlers_create_sandbox_test.go) |
+| Tenant quota under concurrent creates, on one API pod and on two | [internal/api/handlers_create_sandbox_test.go](../internal/api/handlers_create_sandbox_test.go), [internal/api/store/store_test.go](../internal/api/store/store_test.go), [internal/api/store/postgres_integration_test.go](../internal/api/store/postgres_integration_test.go), [e2e/tests/sandbox-api.spec.ts](../e2e/tests/sandbox-api.spec.ts), [e2e/tests/multi-pod-api.spec.ts](../e2e/tests/multi-pod-api.spec.ts) |
 | Admin route gating and key revocation | [internal/api/handlers_tenants_test.go](../internal/api/handlers_tenants_test.go) |
 | Provisioner keys: the three allowed routes, `403` on every other route, quota bounds, no fall-through to the admin pseudo-tenant | [internal/api/handlers_provisioner_test.go](../internal/api/handlers_provisioner_test.go), [internal/api/config/config_test.go](../internal/api/config/config_test.go), [e2e/tests/provisioner-key.spec.ts](../e2e/tests/provisioner-key.spec.ts) |
 | Concurrency limits: per tenant (creates included) and per sandbox, the execution `DELETE` limits and timeout, the `timeout_ms` cap | [internal/api/middleware_limits_test.go](../internal/api/middleware_limits_test.go), [internal/runner/middleware_limits_test.go](../internal/runner/middleware_limits_test.go), [internal/limits/limits_test.go](../internal/limits/limits_test.go), [e2e/tests/request-limits.spec.ts](../e2e/tests/request-limits.spec.ts) |

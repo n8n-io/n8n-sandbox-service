@@ -133,18 +133,17 @@ func (s *PostgresStore) insertSandbox(e pgExecer, record *SandboxRecord) error {
 	return nil
 }
 
-// lockTenantForUpdate takes a row lock on tenants.id until tx ends.
-// Returns false when the tenant row does not exist.
-func lockTenantForUpdate(tx *sql.Tx, id string) (bool, error) {
-	var lockedID string
-	err := tx.QueryRow(`SELECT id FROM tenants WHERE id = $1 FOR UPDATE`, id).Scan(&lockedID)
+// lockTenantForUpdate takes a row lock on tenants.id until tx ends and returns
+// the tenant's max_sandboxes. ok is false when the tenant row does not exist.
+func lockTenantForUpdate(tx *sql.Tx, id string) (maxSandboxes int, ok bool, err error) {
+	err = tx.QueryRow(`SELECT max_sandboxes FROM tenants WHERE id = $1 FOR UPDATE`, id).Scan(&maxSandboxes)
 	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
+		return 0, false, nil
 	}
 	if err != nil {
-		return false, err
+		return 0, false, err
 	}
-	return true, nil
+	return maxSandboxes, true, nil
 }
 
 func (s *PostgresStore) Create(record *SandboxRecord) error {
@@ -152,19 +151,32 @@ func (s *PostgresStore) Create(record *SandboxRecord) error {
 		return s.insertSandbox(s.db, record)
 	}
 
-	tx, err := s.db.Begin()
+	// Read committed, whatever the server default: each statement then sees
+	// what was committed before it started, so the count below, taken after
+	// the row lock, includes every sandbox the previous holder inserted.
+	tx, err := s.db.BeginTx(context.Background(), &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return fmt.Errorf("store: begin create sandbox: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Lock the tenant row so DeleteTenant cannot commit until this insert finishes.
-	ok, err := lockTenantForUpdate(tx, record.TenantID)
+	// Lock the tenant row so DeleteTenant cannot commit until this insert
+	// finishes, and so creates for this tenant count and insert one at a time.
+	maxSandboxes, ok, err := lockTenantForUpdate(tx, record.TenantID)
 	if err != nil {
 		return fmt.Errorf("store: lock tenant %s: %w", record.TenantID, err)
 	}
 	if !ok {
 		return ErrTenantNotFound
+	}
+	if maxSandboxes > 0 {
+		var n int64
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM sandboxes WHERE tenant_id = $1`, record.TenantID).Scan(&n); err != nil {
+			return fmt.Errorf("store: count sandboxes by tenant: %w", err)
+		}
+		if n >= int64(maxSandboxes) {
+			return ErrTenantQuotaExceeded
+		}
 	}
 	if err := s.insertSandbox(tx, record); err != nil {
 		return err
@@ -389,7 +401,7 @@ func (s *PostgresStore) DeleteTenant(id string) error {
 
 	// Lock the tenant row so a concurrent Create cannot insert a sandbox after
 	// the emptiness check and before this delete commits.
-	ok, err := lockTenantForUpdate(tx, id)
+	_, ok, err := lockTenantForUpdate(tx, id)
 	if err != nil {
 		return fmt.Errorf("store: lock tenant %s: %w", id, err)
 	}
