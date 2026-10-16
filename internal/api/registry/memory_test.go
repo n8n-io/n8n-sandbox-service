@@ -57,3 +57,25 @@ func TestPickLowestUsedNoEligibleRunners(t *testing.T) {
 		t.Fatalf("PickLowestUsed() error = %v, want ErrNoRunners", err)
 	}
 }
+
+func TestMemoryListReturnsCopiesOrderedByID(t *testing.T) {
+	reg := NewMemory(45 * time.Second)
+	reg.Upsert("r-b", "http://127.0.0.1:8081", "127.0.0.1:9092", false, 10, 4, 1)
+	reg.Upsert("r-a", "http://127.0.0.1:8080", "127.0.0.1:9091", true, 8, 2, 0)
+
+	runners, err := reg.List()
+	if err != nil {
+		t.Fatalf("List() failed: %v", err)
+	}
+	if len(runners) != 2 || runners[0].ID != "r-a" || runners[1].ID != "r-b" {
+		t.Fatalf("List() = %+v, want r-a then r-b", runners)
+	}
+	if b := runners[1]; b.Healthy || b.CapacityTotal != 10 || b.CapacityUsed != 4 || b.CapacityStopped != 1 {
+		t.Fatalf("List() r-b = %+v, want unhealthy 10/4/1", b)
+	}
+
+	runners[0].CapacityUsed = 99
+	if run, _ := reg.Get("r-a"); run.CapacityUsed != 2 {
+		t.Fatalf("mutating List() result changed the registry: CapacityUsed = %d", run.CapacityUsed)
+	}
+}
