@@ -23,7 +23,7 @@ All services are configured via environment variables.
 | `SANDBOX_API_GRPC_LISTEN_ADDR` | `:9090` | Private gRPC listen address for runner registration streams |
 | `SANDBOX_API_METRICS_LISTEN_ADDR` | *(empty)* | Dedicated `host:port` for Prometheus `/metrics`. Empty, or the same port as `SANDBOX_API_LISTEN_ADDR`, serves `/metrics` on the public listener; any other port starts a second server that serves only `/metrics`. Must not use the `SANDBOX_API_GRPC_LISTEN_ADDR` port. Ignored, with a warning, when `SANDBOX_API_METRICS_ENABLED=false`. See [Metrics](#metrics). |
 | `SANDBOX_API_STORE` | `sqlite` | Store backend: `sqlite` (default, single API pod) or `postgres` (multi-pod) |
-| `SANDBOX_API_DATA_DIR` | `/var/lib/n8n-sandbox-api` | SQLite store directory when `SANDBOX_API_STORE=sqlite`; must exist and be writable. Mount a persistent volume here to retain sandbox state across API pod restarts. |
+| `SANDBOX_API_DATA_DIR` | `/var/lib/n8n-sandbox-api` | SQLite store directory when `SANDBOX_API_STORE=sqlite`; must exist and be writable. Mount a persistent volume here to retain sandbox state across API pod restarts. Use a local or block volume, not a network file system: SQLite runs in WAL mode. |
 | `SANDBOX_API_POSTGRES_HOST` | *(required with postgres)* | Postgres host |
 | `SANDBOX_API_POSTGRES_PORT` | `5432` | Postgres port |
 | `SANDBOX_API_POSTGRES_USER` | *(required with postgres)* | Postgres user |

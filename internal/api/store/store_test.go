@@ -93,11 +93,36 @@ func TestSQLiteDSN(t *testing.T) {
 	if got, want := sqliteDSN(":memory:"), ":memory:?_pragma=foreign_keys(1)"; got != want {
 		t.Fatalf("memory dsn: got %q want %q", got, want)
 	}
-	if got, want := sqliteDSN("/tmp/api.db"), "/tmp/api.db?_pragma=foreign_keys(1)"; got != want {
+	const filePragmas = "_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"
+	if got, want := sqliteDSN("/tmp/api.db"), "/tmp/api.db?"+filePragmas; got != want {
 		t.Fatalf("file dsn: got %q want %q", got, want)
 	}
-	if got, want := sqliteDSN("file:x.db?mode=rwc"), "file:x.db?mode=rwc&_pragma=foreign_keys(1)"; got != want {
+	if got, want := sqliteDSN("file:x.db?mode=rwc"), "file:x.db?mode=rwc&"+filePragmas; got != want {
 		t.Fatalf("existing query dsn: got %q want %q", got, want)
+	}
+}
+
+func TestSQLiteFileUsesWALWithNormalSync(t *testing.T) {
+	s, err := New(filepath.Join(t.TempDir(), "api.db"))
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	defer s.Close()
+
+	var mode string
+	if err := s.db.QueryRow(`PRAGMA journal_mode`).Scan(&mode); err != nil {
+		t.Fatalf("pragma journal_mode: %v", err)
+	}
+	if mode != "wal" {
+		t.Errorf("journal_mode = %q, want wal", mode)
+	}
+	// 1 is NORMAL.
+	var sync int
+	if err := s.db.QueryRow(`PRAGMA synchronous`).Scan(&sync); err != nil {
+		t.Fatalf("pragma synchronous: %v", err)
+	}
+	if sync != 1 {
+		t.Errorf("synchronous = %d, want 1 (NORMAL)", sync)
 	}
 }
 
