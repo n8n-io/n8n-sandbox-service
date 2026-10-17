@@ -84,15 +84,22 @@ func NewSQLite(dbPath string) (*SQLiteStore, error) {
 
 // sqliteDSN adds modernc _pragma flags so every pooled connection gets them.
 // A one-shot Exec("PRAGMA …") only affects the connection that ran it.
+//
+// A database file uses WAL with synchronous=NORMAL. The default rollback
+// journal with synchronous=FULL syncs the file several times per commit, and
+// the API commits on every proxied request. With WAL, a commit only appends to
+// the log, and NORMAL syncs at checkpoints. A power loss can lose the last
+// commits, but it cannot corrupt the database.
 func sqliteDSN(dbPath string) string {
 	const fk = "_pragma=foreign_keys(1)"
 	if dbPath == ":memory:" {
 		return ":memory:?" + fk
 	}
+	const pragmas = fk + "&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"
 	if strings.Contains(dbPath, "?") {
-		return dbPath + "&" + fk
+		return dbPath + "&" + pragmas
 	}
-	return dbPath + "?" + fk
+	return dbPath + "?" + pragmas
 }
 
 // New opens SQLite at dbPath. It is an alias for NewSQLite.
