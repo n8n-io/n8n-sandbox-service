@@ -48,6 +48,10 @@ containers direct access to the host Docker daemon.
 - Best-effort reconciles and removes stale managed containers on startup and
   shutdown.
 - Detects guests that died on their own and reports the restart to the client.
+- Caches the daemon URL of a running sandbox in memory while the `docker events`
+  watcher is connected (`daemon_url_cache.go`), so a proxied request does not
+  run `docker ps` and `docker inspect`. A stop, a delete, a `die` event, a
+  watcher disconnect, or a proxy that cannot reach the daemon removes the entry.
 
 ## Crash recovery
 
