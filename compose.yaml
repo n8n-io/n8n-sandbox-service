@@ -51,6 +51,9 @@ services:
       SANDBOX_API_RUNNER_REGISTRATION_TOKEN: ${REG_TOKEN:-local-reg-token}
       SANDBOX_API_RUNNER_API_KEY: ${RUNNER_API_KEY:-runner-local-key}
       SANDBOX_API_ENABLE_CORS: "true"
+      # Warm pools of code sandboxes (JSON list). Empty: no pool.
+      SANDBOX_CODE_POOLS: ${SANDBOX_CODE_POOLS:-}
+      SANDBOX_CODE_POOL_REFILL_DELAY: ${SANDBOX_CODE_POOL_REFILL_DELAY:-0s}
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/healthz"]
       interval: 2s
@@ -77,6 +80,9 @@ services:
       SANDBOX_RUNNER_API_KEYS: ${RUNNER_API_KEY:-runner-local-key}
       SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE: registry:5000/n8n-sandbox:latest-${ARCH}
       SANDBOX_RUNNER_DOCKER_INSECURE_REGISTRIES: registry:5000
+      # Task API: the code sandbox image from the n8n repository
+      # (docker/images/code-sandbox). Push it to the local registry first.
+      SANDBOX_RUNNER_DOCKER_CODE_IMAGE: ${CODE_SANDBOX_IMAGE:-}
       SANDBOX_RUNNER_API_GRPC_ADDR: n8n-sandbox-service-api-local:9090
       SANDBOX_RUNNER_REGISTRATION_TOKEN: ${REG_TOKEN:-local-reg-token}
       SANDBOX_RUNNER_HTTP_BASE_URL: https://n8n-sandbox-service-runner-dind-local-1:8080
@@ -104,6 +110,9 @@ services:
       SANDBOX_RUNNER_API_KEYS: ${RUNNER_API_KEY:-runner-local-key}
       SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE: registry:5000/n8n-sandbox:latest-${ARCH}
       SANDBOX_RUNNER_DOCKER_INSECURE_REGISTRIES: registry:5000
+      # Task API: the code sandbox image from the n8n repository
+      # (docker/images/code-sandbox). Push it to the local registry first.
+      SANDBOX_RUNNER_DOCKER_CODE_IMAGE: ${CODE_SANDBOX_IMAGE:-}
       SANDBOX_RUNNER_API_GRPC_ADDR: n8n-sandbox-service-api-local:9090
       SANDBOX_RUNNER_REGISTRATION_TOKEN: ${REG_TOKEN:-local-reg-token}
       SANDBOX_RUNNER_HTTP_BASE_URL: https://n8n-sandbox-service-runner-dind-local-2:8080

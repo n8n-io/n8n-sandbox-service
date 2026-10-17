@@ -3,6 +3,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"math"
@@ -147,6 +148,27 @@ type APIConfig struct {
 	// sweeper removes its orphaned sandbox rows from the store.
 	OrphanReapBuffer time.Duration
 
+	// CodeIdleDeleteAfter is how long a code sandbox may have no Task API request
+	// and no open channel before the API deletes it (0 = disabled).
+	// Parsed from SANDBOX_CODE_IDLE_DELETE_AFTER (default 2m).
+	CodeIdleDeleteAfter time.Duration
+
+	// CodePools are the warm pools of code sandboxes (empty = no pool).
+	// Parsed from SANDBOX_CODE_POOLS (a JSON list).
+	CodePools []CodePoolConfig
+	// CodePoolRefillConcurrency is how many pool creates run at the same time,
+	// for all pools. Parsed from SANDBOX_CODE_POOL_REFILL_CONCURRENCY (default 2).
+	CodePoolRefillConcurrency int
+	// CodePoolMaxAge is how long a sandbox may stay in the pool before the pool
+	// manager replaces it. Parsed from SANDBOX_CODE_POOL_MAX_AGE (default 30m).
+	CodePoolMaxAge time.Duration
+	// CodePoolCheckInterval is the tick of the pool manager.
+	// Parsed from SANDBOX_CODE_POOL_CHECK_INTERVAL (default 10s).
+	CodePoolCheckInterval time.Duration
+	// CodePoolRefillDelay is how long the manager waits after a claim before it
+	// starts the refill create. Parsed from SANDBOX_CODE_POOL_REFILL_DELAY (default 0).
+	CodePoolRefillDelay time.Duration
+
 	// LogLevel controls the minimum log severity.
 	// Parsed from SANDBOX_API_LOG_LEVEL (default info).
 	LogLevel slog.Level
@@ -156,6 +178,36 @@ type APIConfig struct {
 	RunnerControlGRPCClientCertFile   string
 	RunnerControlGRPCClientKeyFile    string
 	RunnerControlGRPCClientServerName string // optional; defaults to runner dial host
+}
+
+// CodePoolConfig is one warm pool: the create options of its sandboxes and the
+// number of sandboxes that the pool keeps ready. Defaults are the defaults of
+// POST /v1/code/sandboxes.
+type CodePoolConfig struct {
+	Runtime      string `json:"runtime"`
+	Slots        int    `json:"slots"`
+	TaskMemoryMB int    `json:"taskMemoryMb"`
+	SpareWorkers *bool  `json:"spareWorkers"`
+	ReuseWorkers bool   `json:"reuseWorkers"`
+	Size         int    `json:"size"`
+}
+
+// maxCodePoolSize bounds one pool, to catch a wrong value in the config.
+const maxCodePoolSize = 1000
+
+func parseCodePools(v string) ([]CodePoolConfig, error) {
+	var pools []CodePoolConfig
+	dec := json.NewDecoder(strings.NewReader(v))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&pools); err != nil {
+		return nil, fmt.Errorf("SANDBOX_CODE_POOLS must be a JSON list of pools: %w", err)
+	}
+	for i, p := range pools {
+		if p.Size < 0 || p.Size > maxCodePoolSize {
+			return nil, fmt.Errorf("SANDBOX_CODE_POOLS[%d].size must be 0 to %d, got %d", i, maxCodePoolSize, p.Size)
+		}
+	}
+	return pools, nil
 }
 
 // LoadAPI reads API gateway configuration from environment variables.
@@ -173,6 +225,11 @@ func LoadAPI() (*APIConfig, error) {
 		IdleStopAfter:       defaultIdleStopAfter,
 		IdleDeleteAfter:     defaultIdleDeleteAfter,
 		LogLevel:            defaultLogLevel,
+		CodeIdleDeleteAfter: 2 * time.Minute,
+
+		CodePoolRefillConcurrency: 2,
+		CodePoolMaxAge:            30 * time.Minute,
+		CodePoolCheckInterval:     10 * time.Second,
 	}
 
 	// SANDBOX_API_LOG_LEVEL (optional)
@@ -335,6 +392,49 @@ func LoadAPI() (*APIConfig, error) {
 			return nil, fmt.Errorf("SANDBOX_API_IDLE_DELETE_AFTER must be unset, 0, or a positive duration, got %q", v)
 		}
 		cfg.IdleDeleteAfter = d
+	}
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_CODE_IDLE_DELETE_AFTER")); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d < 0 {
+			return nil, fmt.Errorf("SANDBOX_CODE_IDLE_DELETE_AFTER must be unset, 0, or a positive duration, got %q", v)
+		}
+		cfg.CodeIdleDeleteAfter = d
+	}
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_CODE_POOLS")); v != "" {
+		pools, err := parseCodePools(v)
+		if err != nil {
+			return nil, err
+		}
+		cfg.CodePools = pools
+	}
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_CODE_POOL_REFILL_CONCURRENCY")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 64 {
+			return nil, fmt.Errorf("SANDBOX_CODE_POOL_REFILL_CONCURRENCY must be 1 to 64, got %q", v)
+		}
+		cfg.CodePoolRefillConcurrency = n
+	}
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_CODE_POOL_REFILL_DELAY")); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d < 0 {
+			return nil, fmt.Errorf("SANDBOX_CODE_POOL_REFILL_DELAY must be a non-negative duration, got %q", v)
+		}
+		cfg.CodePoolRefillDelay = d
+	}
+	for _, d := range []struct {
+		name string
+		dst  *time.Duration
+	}{
+		{"SANDBOX_CODE_POOL_MAX_AGE", &cfg.CodePoolMaxAge},
+		{"SANDBOX_CODE_POOL_CHECK_INTERVAL", &cfg.CodePoolCheckInterval},
+	} {
+		if v := strings.TrimSpace(os.Getenv(d.name)); v != "" {
+			parsed, err := time.ParseDuration(v)
+			if err != nil || parsed < time.Second {
+				return nil, fmt.Errorf("%s must be a duration of at least 1s, got %q", d.name, v)
+			}
+			*d.dst = parsed
+		}
 	}
 	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_IDLE_DELETE_SAFETY_BUFFER")); v != "" {
 		d, err := time.ParseDuration(v)

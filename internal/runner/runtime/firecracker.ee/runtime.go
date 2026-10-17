@@ -401,6 +401,9 @@ func (r *Runtime) Capacity(context.Context) (runnerruntime.Capacity, error) {
 // CreateSandbox restores one microVM snapshot into a per-slot jail and netns,
 // then exposes the guest daemon through a host-local TCP proxy.
 func (r *Runtime) CreateSandbox(ctx context.Context, sandboxID string, opts *runnerruntime.CreateOptions) (*runnerruntime.SandboxInfo, error) {
+	if opts.IsCode() {
+		return nil, fmt.Errorf("code sandboxes are not supported on the firecracker runtime")
+	}
 	if len(sandboxID) < 12 {
 		return nil, fmt.Errorf("sandbox ID must be at least 12 characters, got %d", len(sandboxID))
 	}

@@ -56,6 +56,18 @@ func NewPostgres(cfg config.PostgresConfig) (*PostgresStore, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: add egress column: %w", err)
 	}
+	if _, err := db.Exec(postgresAddKindCol); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: add kind column: %w", err)
+	}
+	if _, err := db.Exec(postgresAddPoolKeyCol); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: add pool_key column: %w", err)
+	}
+	if _, err := db.Exec(postgresPoolKeyIndex); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: pool index: %w", err)
+	}
 	if _, err := db.Exec(postgresSandboxTenantIndex); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: sandboxes tenant index: %w", err)
@@ -98,7 +110,7 @@ func (s *PostgresStore) Backend() Backend { return BackendPostgres }
 
 func (s *PostgresStore) Close() error { return errors.Join(s.db.Close(), s.lockDB.Close()) }
 
-const pgSandboxCols = `id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral, egress`
+const pgSandboxCols = `id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral, egress, kind, pool_key`
 
 type pgExecer interface {
 	Exec(query string, args ...any) (sql.Result, error)
@@ -107,9 +119,9 @@ type pgExecer interface {
 func (s *PostgresStore) insertSandbox(e pgExecer, record *SandboxRecord) error {
 	const q = `
 		INSERT INTO sandboxes
-			(id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral, egress)
+			(id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral, egress, kind, pool_key)
 		VALUES
-			($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`
+			($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`
 
 	_, err := e.Exec(q,
 		record.ID,
@@ -126,6 +138,8 @@ func (s *PostgresStore) insertSandbox(e pgExecer, record *SandboxRecord) error {
 		record.TenantID,
 		record.Ephemeral,
 		record.Egress,
+		record.Kind,
+		record.PoolKey,
 	)
 	if err != nil {
 		return fmt.Errorf("store: create sandbox %s: %w", record.ID, err)
@@ -148,7 +162,7 @@ func lockTenantForUpdate(tx *sql.Tx, id string) (bool, error) {
 }
 
 func (s *PostgresStore) Create(record *SandboxRecord) error {
-	if IsAdminTenantID(record.TenantID) {
+	if IsAdminTenantID(record.TenantID) || record.TenantID == PoolTenantID {
 		return s.insertSandbox(s.db, record)
 	}
 
@@ -173,6 +187,58 @@ func (s *PostgresStore) Create(record *SandboxRecord) error {
 		return fmt.Errorf("store: commit create sandbox: %w", err)
 	}
 	return nil
+}
+
+func (s *PostgresStore) ClaimPooled(poolKey, tenantID string, now int64) (*SandboxRecord, error) {
+	if poolKey == "" {
+		return nil, nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("store: begin claim pooled: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if !IsAdminTenantID(tenantID) {
+		ok, err := lockTenantForUpdate(tx, tenantID)
+		if err != nil {
+			return nil, fmt.Errorf("store: lock tenant %s: %w", tenantID, err)
+		}
+		if !ok {
+			return nil, ErrTenantNotFound
+		}
+	}
+	// SKIP LOCKED lets claims on other API pods take other rows at once.
+	q := `UPDATE sandboxes SET tenant_id = $1, pool_key = '', last_active_at = $2
+		WHERE id = (
+			SELECT id FROM sandboxes WHERE pool_key = $3 AND tenant_id = $4
+			ORDER BY created_at, id LIMIT 1 FOR UPDATE SKIP LOCKED
+		)
+		RETURNING ` + pgSandboxCols
+	rec, err := scanRecord(tx.QueryRow(q, tenantID, now, poolKey, PoolTenantID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("store: claim pooled sandbox: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("store: commit claim pooled: %w", err)
+	}
+	return rec, nil
+}
+
+func (s *PostgresStore) UnpoolSandbox(id string) (bool, error) {
+	res, err := s.db.Exec(`UPDATE sandboxes SET tenant_id = $1, pool_key = '' WHERE id = $2 AND tenant_id = $3`, AdminTenantID, id, PoolTenantID)
+	if err != nil {
+		return false, fmt.Errorf("store: unpool sandbox %s: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+func (s *PostgresStore) ListPooled() ([]*SandboxRecord, error) {
+	q := `SELECT ` + pgSandboxCols + ` FROM sandboxes WHERE tenant_id = $1 ORDER BY created_at, id`
+	return s.querySandboxRecords(q, PoolTenantID)
 }
 
 func (s *PostgresStore) Get(id string) (*SandboxRecord, error) {
@@ -457,6 +523,14 @@ const idleSweepLockKey int64 = 8675309
 // lock is granted, then releases the lock. Returns (false, nil) when another holder
 // has the lock.
 func TryRun(ctx context.Context, db *sql.DB, fn func() error) (ran bool, err error) {
+	return TryRunKey(ctx, db, idleSweepLockKey, fn)
+}
+
+// CodePoolLockKey is the Postgres advisory lock key for the code sandbox pool manager.
+const CodePoolLockKey int64 = 8675310
+
+// TryRunKey is TryRun with an explicit advisory lock key.
+func TryRunKey(ctx context.Context, db *sql.DB, key int64, fn func() error) (ran bool, err error) {
 	conn, err := db.Conn(ctx)
 	if err != nil {
 		return false, fmt.Errorf("store: acquire conn for advisory lock: %w", err)
@@ -464,7 +538,7 @@ func TryRun(ctx context.Context, db *sql.DB, fn func() error) (ran bool, err err
 	defer conn.Close()
 
 	var locked bool
-	if err := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1)`, idleSweepLockKey).Scan(&locked); err != nil {
+	if err := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1)`, key).Scan(&locked); err != nil {
 		return false, fmt.Errorf("store: try advisory lock: %w", err)
 	}
 	if !locked {
@@ -472,7 +546,7 @@ func TryRun(ctx context.Context, db *sql.DB, fn func() error) (ran bool, err err
 	}
 
 	defer func() {
-		_, _ = conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock($1)`, idleSweepLockKey)
+		_, _ = conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock($1)`, key)
 	}()
 
 	if err := fn(); err != nil {

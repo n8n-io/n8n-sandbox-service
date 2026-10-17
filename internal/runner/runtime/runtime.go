@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -57,8 +58,66 @@ func ParseEgress(s string) (Egress, error) {
 // CreateOptions holds optional parameters for sandbox creation. It is also the
 // JSON shape of the create RPC's create_options_json and
 // applied_create_options_json fields.
+//
+// Kind KindCode selects a code sandbox (Task API). The other code fields apply
+// only to that kind. All fields are comparable, because the API compares the
+// applied options with the requested options.
 type CreateOptions struct {
-	Egress Egress `json:"egress,omitempty"`
+	Egress       Egress `json:"egress,omitempty"`
+	Kind         string `json:"kind,omitempty"`
+	Runtime      string `json:"runtime,omitempty"`
+	Slots        int    `json:"slots,omitempty"`
+	TaskMemoryMB int    `json:"taskMemoryMb,omitempty"`
+	SpareWorkers bool   `json:"spareWorkers,omitempty"`
+	ReuseWorkers bool   `json:"reuseWorkers,omitempty"`
+}
+
+// KindCode is the kind of a code sandbox, created through the Task API.
+const KindCode = "code"
+
+// Limits of a code sandbox.
+const (
+	CodeMaxSlots        = 32
+	CodeMinTaskMemoryMB = 64
+	CodeMaxTaskMemoryMB = 16 * 1024
+	// CodeMaxTotalTaskMemoryMB bounds slots x taskMemoryMb, so one create
+	// cannot ask for a container limit far beyond a runner's memory.
+	CodeMaxTotalTaskMemoryMB = 16 * 1024
+)
+
+var codeRuntimeRegex = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+
+// IsCode reports whether the options create a code sandbox.
+func (o *CreateOptions) IsCode() bool { return o != nil && o.Kind == KindCode }
+
+// validateKind checks the code sandbox fields.
+func (o *CreateOptions) validateKind() error {
+	switch o.Kind {
+	case "":
+		if o.Runtime != "" || o.Slots != 0 || o.TaskMemoryMB != 0 || o.SpareWorkers || o.ReuseWorkers {
+			return errors.New("code sandbox fields need kind \"code\"")
+		}
+		return nil
+	case KindCode:
+	default:
+		return fmt.Errorf("invalid kind %q", o.Kind)
+	}
+	if o.Egress != EgressNone {
+		return errors.New("a code sandbox must have egress \"none\"")
+	}
+	if !codeRuntimeRegex.MatchString(o.Runtime) {
+		return fmt.Errorf("invalid runtime %q", o.Runtime)
+	}
+	if o.Slots < 1 || o.Slots > CodeMaxSlots {
+		return fmt.Errorf("slots must be in [1, %d]", CodeMaxSlots)
+	}
+	if o.TaskMemoryMB < CodeMinTaskMemoryMB || o.TaskMemoryMB > CodeMaxTaskMemoryMB {
+		return fmt.Errorf("taskMemoryMb must be in [%d, %d]", CodeMinTaskMemoryMB, CodeMaxTaskMemoryMB)
+	}
+	if o.Slots*o.TaskMemoryMB > CodeMaxTotalTaskMemoryMB {
+		return fmt.Errorf("slots x taskMemoryMb must be at most %d", CodeMaxTotalTaskMemoryMB)
+	}
+	return nil
 }
 
 // ParseCreateOptions decodes the wire form of CreateOptions. Empty means the
@@ -79,6 +138,9 @@ func ParseCreateOptions(s string) (*CreateOptions, error) {
 		return nil, err
 	}
 	opts.Egress = egress
+	if err := opts.validateKind(); err != nil {
+		return nil, err
+	}
 	return opts, nil
 }
 

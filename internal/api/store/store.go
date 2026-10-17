@@ -30,6 +30,10 @@ const (
 	// owned by any tenant). Chosen to be non-UUID so it cannot collide with
 	// real tenant ids.
 	AdminTenantID = "__admin__"
+
+	// PoolTenantID is stored on code sandboxes in the warm pool. They have no
+	// tenant until a create request claims them (ClaimPooled).
+	PoolTenantID = "__pool__"
 )
 
 // IsAdminTenantID reports whether tenantID marks an admin-owned sandbox.
@@ -54,7 +58,12 @@ type SandboxRecord struct {
 	TenantID              string // AdminTenantID = admin-owned; otherwise a tenants.id UUID
 	Ephemeral             bool   // Deleted instead of stopped when idle; never enters "stopped"
 	Egress                string // Outbound network policy: "public" or "none"; fixed at creation
+	Kind                  string // "" for a general sandbox, KindCode for a Task API code sandbox
+	PoolKey               string // option set of a pooled code sandbox; "" when not in the pool
 }
+
+// KindCode marks a sandbox created through the Task API (/v1/code/sandboxes).
+const KindCode = "code"
 
 // Tenant is a provisioned consumer of the sandbox API (e.g. an n8n instance).
 type Tenant struct {
@@ -94,6 +103,16 @@ type SandboxStore interface {
 	ListByTenant(tenantID string) ([]*SandboxRecord, error)
 	Backend() Backend
 
+	// ClaimPooled moves the oldest pooled sandbox with poolKey to tenantID and
+	// returns it. It returns (nil, nil) when the pool has no such sandbox, and
+	// ErrTenantNotFound when the tenant row does not exist.
+	ClaimPooled(poolKey, tenantID string, now int64) (*SandboxRecord, error)
+	// ListPooled returns the sandboxes in the warm pool, oldest first.
+	ListPooled() ([]*SandboxRecord, error)
+	// UnpoolSandbox moves a pooled sandbox to the admin tenant, so that no claim
+	// can take it. It reports false when the sandbox is no longer in the pool.
+	UnpoolSandbox(id string) (bool, error)
+
 	CreateTenant(t *Tenant) error
 	// CreateTenantWithAPIKey inserts the tenant and its first API key in one transaction.
 	// k.TenantID must equal t.ID.
@@ -132,6 +151,8 @@ func scanRecord(row scanner) (*SandboxRecord, error) {
 		&r.TenantID,
 		&r.Ephemeral,
 		&r.Egress,
+		&r.Kind,
+		&r.PoolKey,
 	)
 	if err != nil {
 		return nil, err

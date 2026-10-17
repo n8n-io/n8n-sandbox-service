@@ -30,4 +30,6 @@ type RunnerRegistry interface {
 	GoneLongEnough(runnerID string, buffer time.Duration, now time.Time) bool
 	Len() int
 	PickLowestUsed() (*Runner, error)
+	// Eligible returns copies of the runners that can take a new sandbox now.
+	Eligible() ([]Runner, error)
 }

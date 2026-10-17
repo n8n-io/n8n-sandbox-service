@@ -47,6 +47,8 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	mux.HandleFunc("POST /admin/tenants/{id}/keys", handleCreateTenantKey(s))
 	mux.HandleFunc("DELETE /admin/tenants/{id}/keys/{keyId}", handleRevokeTenantKey(s))
 
+	newCodeAPI(s, reg, cfg, rec, runnerTransport, codeActivityTracker).register(mux)
+
 	mux.HandleFunc("POST /sandboxes/{id}/executions", sandboxProxy(false))
 	mux.HandleFunc("GET /sandboxes/{id}/executions/{exec_id}", sandboxProxy(false))
 	mux.HandleFunc("DELETE /sandboxes/{id}/executions/{exec_id}", sandboxProxy(false))

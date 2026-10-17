@@ -765,6 +765,177 @@ curl "http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/stat?
 
 ---
 
+## Task API (code sandboxes)
+
+The Task API runs one-off code tasks in code sandboxes. A code sandbox runs the
+code daemon (`cmd/code-daemon`) instead of the sandbox daemon. It has task slots.
+Each task runs in a new worker process with an empty working folder. Code
+sandboxes have egress `none`. They have no stop or wake: they are running or
+deleted. Only the Docker runner supports them (`SANDBOX_RUNNER_DOCKER_CODE_IMAGE`).
+
+`GET /sandboxes`, `GET /sandboxes/{id}` and `DELETE /sandboxes/{id}` show and
+delete code sandboxes too (`"kind": "code"`). The exec, file, `mkdir` and `stat`
+routes answer `404` for a code sandbox. The
+Task API routes answer `404` for a general sandbox.
+
+The API deletes a code sandbox that has had no Task API request and no open
+channel for `SANDBOX_CODE_IDLE_DELETE_AFTER` (default `2m`). The count of open
+channels is in the memory of the API process.
+
+### POST /v1/code/sandboxes
+
+Creates a code sandbox. The response comes when the code daemon is ready. When
+`spareWorkers` is `true`, at least one worker has loaded the runtime.
+
+```json
+{ "runtime": "n8n-js", "slots": 2, "taskMemoryMb": 512, "spareWorkers": true, "labels": { "scope": "execution" } }
+```
+
+| Field | Default | Rules |
+|---|---|---|
+| `runtime` | `n8n-js` | An entry of `/etc/code-runtime/runtimes.json` in the image |
+| `slots` | `1` | 1 to 32 |
+| `taskMemoryMb` | `512` | 64 to 16384, and `slots × taskMemoryMb` at most 16384. The container memory limit is `slots × taskMemoryMb` plus `SANDBOX_RUNNER_CODE_DAEMON_OVERHEAD_MB` |
+| `spareWorkers` | `true` | Each free slot keeps a started worker |
+| `reuseWorkers` | `false` | One shared worker process runs all tasks of the sandbox. The slots limit how many tasks run at the same time. The process, its module cache and global changes stay between tasks. Its heap limit is `slots × taskMemoryMb` |
+| `labels` | — | Logged only |
+
+Response `201`:
+
+```json
+{
+  "id": "6f1c…", "runtime": "n8n-js", "runtimeVersion": "2.x.y", "slots": 2, "state": "ready",
+  "timings": { "create": 950, "runnerCreate": 930, "daemonReady": 12, "spareReady": 180 }
+}
+```
+
+`timings` (ms): `create` is the full API time. `runnerCreate` is the runner create
+RPC. `daemonReady` and `spareReady` are measured by the code daemon from its own
+process start.
+
+**Warm pool.** When `SANDBOX_CODE_POOLS` has a pool with the same options
+(`runtime`, `slots`, `taskMemoryMb`, `spareWorkers`, `reuseWorkers`), the API
+gives a ready sandbox from the pool and does not create one. The response then
+has `"pooled": true` and `timings.claim` (the time to take the sandbox from the
+pool), and no runner or daemon timings. The API does not check the pooled
+sandbox before it gives it. If the pool is empty, the API creates a sandbox as
+usual. A pooled sandbox never ran a task. A claimed sandbox never goes back to
+the pool.
+
+Pooled sandboxes belong to the tenant `__pool__` until a claim. They do not
+count against a tenant quota. `GET /sandboxes` shows them to an admin with
+`pool_key`. While the pool manager runs, the code idle sweeper does not delete
+them. Without pools in the config, they are idle sandboxes. The pool manager in the
+API refills each pool to its size, at most
+`SANDBOX_CODE_POOL_REFILL_CONCURRENCY` creates at the same time. It replaces
+pooled sandboxes older than `SANDBOX_CODE_POOL_MAX_AGE`, and deletes those whose
+runner is gone. With several API pods (Postgres), one pod runs the manager, and
+all pods can claim.
+
+### GET /v1/code/sandboxes/{id}
+
+Returns `id`, `runtime`, `runtimeVersion`, `slots`, `state`, `busySlots`,
+`channelOpen` and `workersStarted` (worker processes started since the sandbox
+started).
+
+### DELETE /v1/code/sandboxes/{id}
+
+Deletes the sandbox and kills all its tasks. `204`.
+
+### GET /v1/code/sandboxes/{id}/channel
+
+WebSocket for the RPC channel. One connection per sandbox; a second one gets
+`409`. Frames are JSON text:
+
+| Direction | Frame | Fields |
+|---|---|---|
+| daemon → client | `channel:ready` | `runtimeVersion` |
+| daemon → client | `rpc:call` | `taskId`, `callId`, `name`, `params` |
+| client → daemon | `rpc:result` | `taskId`, `callId`, `ok`, `data` or `error` |
+
+The daemon sets `taskId` from the slot of the worker that made the call. When the
+channel closes, the open calls fail.
+
+### POST /v1/code/sandboxes/{id}/tasks
+
+Runs a task. Request: streamed `multipart/form-data`, at most 2200 MiB. Parts:
+
+1. `spec` (JSON, required, first): `{ "taskId": "t_1", "timeoutMs": 300000, "inlineResultMaxBytes": 1048576 }`.
+   `taskId` matches `^[A-Za-z0-9_-]{1,128}$` and must not be in use on the sandbox.
+2. Zero or more `input` parts. The `filename` is a relative path under `in/`, for
+   example `task.json` or `bin/0`.
+
+The daemon writes each part to disk. It answers `429` before it reads the inputs
+if no slot is free, and `409` if the task id is in use.
+
+Response `200`, `application/x-ndjson`:
+
+| Event | Fields |
+|---|---|
+| `accepted` | `taskId`, `slot` |
+| `stdout`, `stderr` | `data` |
+| `done` | `result` (the JSON of `out/result.json` if it is at most `inlineResultMaxBytes`, else `null`), `outputs` (`path`, `size`), `timings` |
+| `error` | `code` (`user_error`, `timeout`, `cancelled`, `oom`, `crashed`, `invalid`), `message`, `userError`, `timings` |
+
+There is exactly one terminal event (`done` or `error`). If the client closes the
+request first, the daemon kills the task. `timings` (ms): `slotWait`,
+`inputWrite`, `handoff`, `run`, `outputMove`, plus `spareHit`, `inputBytes`,
+`outputBytes`, `leftoverFiles` (entries in `/tmp` that changed during the task),
+`workerTasks` (tasks of this worker process, this one included)
+and `worker` (timings that the worker reported).
+
+### GET /v1/code/sandboxes/{id}/tasks/{taskId}/outputs/{path}
+
+Streams an output file of a finished task, with `Content-Length`. The daemon
+deletes outputs 5 minutes after the task if nobody deletes them.
+
+### DELETE /v1/code/sandboxes/{id}/tasks/{taskId}
+
+Cancels a running task (its stream ends with `error` `cancelled`), or deletes the
+outputs of a finished task. `204`.
+
+### Worker protocol
+
+The code daemon starts each worker with the command of the runtime entry, in its
+slot folder, in a new process group. `{taskMemoryMb}` in the command is replaced.
+fd 0 is `/dev/null`, fd 1 and 2 are the task output, fd 3 is a control socket
+with JSON lines:
+
+| Direction | Message | Fields |
+|---|---|---|
+| worker → daemon | `ready` | — (the runtime is loaded) |
+| daemon → worker | `start` | `taskId`, `dir` (the slot folder), `deadline` (unix ms), `shared` (reuse mode) |
+| worker → daemon | `rpc` | `callId`, `name`, `params`, `taskId` (a call for an ended task is refused) |
+| daemon → worker | `rpc_result` | `callId`, `ok`, `data` or `error` |
+| worker → daemon | `done` | `taskId`, `timings`. The result is in `out/result.json` |
+| worker → daemon | `error` | `taskId`, `error`, `timings` |
+| worker → daemon | `output` | `taskId`, `stream` (`stdout` or `stderr`), `text`. Reuse mode only |
+| daemon → worker | `cancel` | `taskId`. Reuse mode only |
+| worker → daemon | `cancelled` | `taskId`. Reuse mode only |
+
+Without reuse, each task gets its own worker, which runs in the slot folder.
+After the task, the daemon kills the process group and moves `out/` to the
+outputs of the task. A process that the task starts in a new session is not in
+the process group and can stay alive.
+
+In reuse mode, one shared worker runs in `/work/shared` and serves all tasks,
+at the same time up to the slot count. The daemon routes its messages by
+`taskId`. Console output of a task comes as `output` messages, because the
+pipes are shared. A timeout or a cancel sends `cancel`. If the worker does not
+answer `cancelled` within 1 s, the daemon kills it, the other running tasks fail
+with `crashed`, and the next task starts a new worker. If it answers, the code of
+the dropped task can still run, so the daemon kills the worker when no task runs
+in it any more. With spare workers on, the daemon starts the shared worker at
+start and again after it exits. The folder of the shared worker is emptied when
+a new worker starts.
+
+Tasks in one sandbox are not isolated from each other.
+
+The code daemon refuses connections from loopback and from the addresses of
+its own container, so user code cannot call it. A code sandbox container has
+restart policy `no`: when it dies, its routes answer `502` and the client
+deletes it.
+
 ## Admin: tenants and API keys
 
 All `/admin/*` routes require an admin API key (`SANDBOX_API_KEYS`) unless marked "Admin or provisioner". Any other key receives `403`.

@@ -26,7 +26,7 @@ func (f *fakeDockerBackend) ping(context.Context) error {
 	return errors.New("unexpected ping")
 }
 
-func (f *fakeDockerBackend) createContainer(_ context.Context, _, _, _, network string, _ *ResourceLimits, _ bool) (string, error) {
+func (f *fakeDockerBackend) createContainer(_ context.Context, _, _, _, network string, _ *ResourceLimits, _ bool, _ []string) (string, error) {
 	*f.events = append(*f.events, "create")
 	f.network = network
 	return f.containerID, nil

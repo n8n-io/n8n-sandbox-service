@@ -586,3 +586,38 @@ func TestLoadAPIMetricsListenAddrLoadsWhenMetricsDisabled(t *testing.T) {
 		t.Fatalf("MetricsListenAddr: want :9100, got %s", cfg.MetricsListenAddr)
 	}
 }
+
+func TestLoadAPICodePools(t *testing.T) {
+	t.Setenv("SANDBOX_API_KEYS", "test-key")
+	t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	setRequiredGRPCMTLS(t)
+
+	cfg, err := LoadAPI()
+	if err != nil {
+		t.Fatalf("LoadAPI() failed: %v", err)
+	}
+	if len(cfg.CodePools) != 0 || cfg.CodePoolRefillConcurrency != 2 || cfg.CodePoolMaxAge != 30*time.Minute || cfg.CodePoolCheckInterval != 10*time.Second {
+		t.Fatalf("pool defaults: %+v %d %s %s", cfg.CodePools, cfg.CodePoolRefillConcurrency, cfg.CodePoolMaxAge, cfg.CodePoolCheckInterval)
+	}
+
+	t.Setenv("SANDBOX_CODE_POOLS", `[{"slots":2,"reuseWorkers":true,"size":8},{"runtime":"n8n-js","slots":4,"spareWorkers":false,"size":4}]`)
+	t.Setenv("SANDBOX_CODE_POOL_REFILL_CONCURRENCY", "4")
+	t.Setenv("SANDBOX_CODE_POOL_MAX_AGE", "5m")
+	cfg, err = LoadAPI()
+	if err != nil {
+		t.Fatalf("LoadAPI() failed: %v", err)
+	}
+	if len(cfg.CodePools) != 2 || cfg.CodePools[0].Size != 8 || !cfg.CodePools[0].ReuseWorkers || cfg.CodePools[1].SpareWorkers == nil || *cfg.CodePools[1].SpareWorkers {
+		t.Fatalf("pools: %+v", cfg.CodePools)
+	}
+	if cfg.CodePoolRefillConcurrency != 4 || cfg.CodePoolMaxAge != 5*time.Minute {
+		t.Fatalf("pool settings: %d %s", cfg.CodePoolRefillConcurrency, cfg.CodePoolMaxAge)
+	}
+
+	for _, bad := range []string{`{"size":1}`, `[{"size":-1}]`, `[{"size":1,"bogus":1}]`} {
+		t.Setenv("SANDBOX_CODE_POOLS", bad)
+		if _, err := LoadAPI(); err == nil {
+			t.Errorf("SANDBOX_CODE_POOLS=%s: want an error", bad)
+		}
+	}
+}

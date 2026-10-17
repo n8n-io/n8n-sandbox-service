@@ -75,10 +75,13 @@ type Runtime struct {
 	applyPolicy     func(bridgeIface, containerID, sourceIP, gatewayIP string, daemonPort int, blockEgress bool) error
 	teardownRules   func(containerID string) error
 	waitForDaemon   func(ctx context.Context, baseURL string) error
-	imageReady      atomic.Bool
-	imageReadyCh    chan struct{}
-	metrics         *metrics.RunnerRecorder
-	watchBackoff    time.Duration
+	// waitForCodeDaemon waits for the code daemon of a code sandbox.
+	waitForCodeDaemon func(ctx context.Context, baseURL string) error
+	codeImageReady    atomic.Bool
+	imageReady        atomic.Bool
+	imageReadyCh      chan struct{}
+	metrics           *metrics.RunnerRecorder
+	watchBackoff      time.Duration
 
 	// mu guards what the event watcher and request-serving goroutines share: which
 	// containers the runner is stopping on purpose, and which sandboxes Docker
@@ -147,19 +150,20 @@ func (m *Runtime) applyNetworkPolicy(n *runnerNetwork, containerID, containerIP 
 // network policy, or daemon readiness behavior without nil defaults.
 func newRuntime(runnerConfig *config.Config, cfg Config, docker dockerBackend) *Runtime {
 	return &Runtime{
-		runnerConfig:    runnerConfig,
-		config:          cfg,
-		publicNetwork:   runnerNetwork{networkName: runnerBridgeNetwork, bridgeName: runnerBridgeNetwork},
-		noEgressNetwork: runnerNetwork{networkName: runnerNoEgressNetwork, bridgeName: runnerNoEgressBridge, blockEgress: true},
-		docker:          docker,
-		applyPolicy:     netrules.ApplyPolicy,
-		teardownRules:   netrules.Teardown,
-		waitForDaemon:   waitForDaemon,
-		imageReadyCh:    make(chan struct{}),
-		watchBackoff:    2 * time.Second,
-		expectedStops:   make(map[string]expectedStop),
-		restarted:       make(map[string]struct{}),
-		daemonURLs:      newDaemonURLCache(),
+		runnerConfig:      runnerConfig,
+		config:            cfg,
+		publicNetwork:     runnerNetwork{networkName: runnerBridgeNetwork, bridgeName: runnerBridgeNetwork},
+		noEgressNetwork:   runnerNetwork{networkName: runnerNoEgressNetwork, bridgeName: runnerNoEgressBridge, blockEgress: true},
+		docker:            docker,
+		applyPolicy:       netrules.ApplyPolicy,
+		teardownRules:     netrules.Teardown,
+		waitForDaemon:     waitForDaemon,
+		waitForCodeDaemon: waitForCodeDaemon,
+		imageReadyCh:      make(chan struct{}),
+		watchBackoff:      2 * time.Second,
+		expectedStops:     make(map[string]expectedStop),
+		restarted:         make(map[string]struct{}),
+		daemonURLs:        newDaemonURLCache(),
 	}
 }
 
@@ -215,6 +219,9 @@ func (m *Runtime) ImageReadyCh() <-chan struct{} {
 // sandbox while not watching would restart it silently.
 func (m *Runtime) Prepare(ctx context.Context) {
 	go m.watchGuestDeaths(ctx)
+	if m.config.CodeImage != "" {
+		go m.ensureCodeImage(ctx)
+	}
 	m.EnsureSandboxImage(ctx)
 }
 
@@ -296,8 +303,20 @@ func (m *Runtime) CreateContainer(ctx context.Context, sandboxID string, opts *C
 	containerName := "sandbox-" + sandboxID[:12]
 	limits := m.defaultLimits()
 	n := m.networkFor(opts.BlockEgress())
+	image := m.config.SandboxImage
+	var extraEnv []string
+	waitReady := m.waitForDaemon
+	if opts.IsCode() {
+		var err error
+		if image, err = m.codeImage(); err != nil {
+			return nil, err
+		}
+		limits.MemoryMB = codeMemoryLimitMB(opts, m.config.CodeDaemonOverheadMB)
+		extraEnv = codeDaemonEnv(opts)
+		waitReady = m.waitForCodeDaemon
+	}
 
-	containerID, err := m.docker.createContainer(ctx, sandboxID, containerName, m.config.SandboxImage, n.networkName, limits, m.config.EnableCgroups)
+	containerID, err := m.docker.createContainer(ctx, sandboxID, containerName, image, n.networkName, limits, m.config.EnableCgroups, extraEnv)
 	if err != nil {
 		return nil, fmt.Errorf("create container: %w", err)
 	}
@@ -325,7 +344,7 @@ func (m *Runtime) CreateContainer(ctx context.Context, sandboxID string, opts *C
 	}
 
 	baseURL := fmt.Sprintf("http://%s:%d", containerIP, daemonPort)
-	if err := m.waitForDaemon(ctx, baseURL); err != nil {
+	if err := waitReady(ctx, baseURL); err != nil {
 		cleanupOnError()
 		return nil, fmt.Errorf("connect to daemon: %w", err)
 	}

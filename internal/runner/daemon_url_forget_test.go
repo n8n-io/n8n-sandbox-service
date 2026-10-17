@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -51,6 +52,16 @@ func TestProxiesForgetADaemonURLThatDoesNotAnswer(t *testing.T) {
 				return ExecProxyHandler(rt, proxyTestConfig(), metrics.NewRunnerRecorder(false))
 			},
 			request: proxyTestRequest,
+		},
+		"code proxy": {
+			handler: func(rt *forgettingRuntime) http.HandlerFunc {
+				return codeProxyHandler(rt, 1<<20)
+			},
+			request: func() *http.Request {
+				req := httptest.NewRequest(http.MethodPost, "/code/sandboxes/"+proxyTestSandboxID+"/tasks", strings.NewReader("x"))
+				req.SetPathValue("id", proxyTestSandboxID)
+				return req
+			},
 		},
 	}
 

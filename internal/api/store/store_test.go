@@ -424,3 +424,76 @@ func TestCreateTenantWithAPIKeyAtomic(t *testing.T) {
 		t.Fatalf("tenant should be rolled back, got %+v", got)
 	}
 }
+
+func TestClaimPooled(t *testing.T) {
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	defer s.Close()
+
+	add := func(id, key string, created int64) {
+		t.Helper()
+		if err := s.Create(&SandboxRecord{
+			ID: id, Status: "running", CreatedAt: created, LastActiveAt: created,
+			TenantID: PoolTenantID, Kind: KindCode, PoolKey: key, Ephemeral: true, Egress: "none",
+		}); err != nil {
+			t.Fatalf("create pooled %s: %v", id, err)
+		}
+	}
+	add("p-new", "k1", 20)
+	add("p-old", "k1", 10)
+	add("p-other", "k2", 5)
+
+	pooled, err := s.ListPooled()
+	if err != nil || len(pooled) != 3 || pooled[0].ID != "p-other" || pooled[1].ID != "p-old" {
+		t.Fatalf("ListPooled: %v %+v", err, pooled)
+	}
+
+	if rec, err := s.ClaimPooled("k-none", AdminTenantID, 30); err != nil || rec != nil {
+		t.Fatalf("claim unknown key: %+v %v", rec, err)
+	}
+	if _, err := s.ClaimPooled("k1", "99999999-9999-9999-9999-999999999999", 30); !errors.Is(err, ErrTenantNotFound) {
+		t.Fatalf("claim for missing tenant: got %v, want ErrTenantNotFound", err)
+	}
+
+	tenant := &Tenant{ID: "11111111-1111-1111-1111-111111111111", Name: "t", CreatedAt: 1}
+	if err := s.CreateTenant(tenant); err != nil {
+		t.Fatalf("create tenant: %v", err)
+	}
+	rec, err := s.ClaimPooled("k1", tenant.ID, 30)
+	if err != nil || rec == nil {
+		t.Fatalf("claim: %+v %v", rec, err)
+	}
+	if rec.ID != "p-old" || rec.TenantID != tenant.ID || rec.PoolKey != "" || rec.LastActiveAt != 30 || rec.Kind != KindCode {
+		t.Fatalf("claimed record: %+v", rec)
+	}
+	if n, _ := s.CountByTenant(tenant.ID); n != 1 {
+		t.Fatalf("tenant count after claim: %d", n)
+	}
+
+	rec, err = s.ClaimPooled("k1", AdminTenantID, 31)
+	if err != nil || rec == nil || rec.ID != "p-new" || rec.TenantID != AdminTenantID {
+		t.Fatalf("second claim: %+v %v", rec, err)
+	}
+	if rec, err := s.ClaimPooled("k1", AdminTenantID, 32); err != nil || rec != nil {
+		t.Fatalf("claim of an empty pool: %+v %v", rec, err)
+	}
+	pooled, _ = s.ListPooled()
+	if len(pooled) != 1 || pooled[0].ID != "p-other" {
+		t.Fatalf("pool after claims: %+v", pooled)
+	}
+
+	if ok, err := s.UnpoolSandbox("p-old"); err != nil || ok {
+		t.Fatalf("unpool of a claimed sandbox: %v %v", ok, err)
+	}
+	if ok, err := s.UnpoolSandbox("p-other"); err != nil || !ok {
+		t.Fatalf("unpool: %v %v", ok, err)
+	}
+	if rec, err := s.ClaimPooled("k2", AdminTenantID, 33); err != nil || rec != nil {
+		t.Fatalf("claim after unpool: %+v %v", rec, err)
+	}
+	if got, _ := s.Get("p-other"); got == nil || got.TenantID != AdminTenantID || got.PoolKey != "" {
+		t.Fatalf("unpooled record: %+v", got)
+	}
+}

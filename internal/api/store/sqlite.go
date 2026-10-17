@@ -53,6 +53,8 @@ func NewSQLite(dbPath string) (*SQLiteStore, error) {
 		{sql: sqliteAddTenantIDCol, name: "tenant_id"},
 		{sql: sqliteAddEphemeralCol, name: "ephemeral"},
 		{sql: sqliteAddEgressCol, name: "egress"},
+		{sql: sqliteAddKindCol, name: "kind"},
+		{sql: sqliteAddPoolKeyCol, name: "pool_key"},
 	} {
 		if _, err := db.Exec(stmt.sql); err != nil {
 			if strings.Contains(err.Error(), "duplicate column") ||
@@ -72,6 +74,10 @@ func NewSQLite(dbPath string) (*SQLiteStore, error) {
 	if _, err := db.Exec(sqliteTenantsSchema); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: tenants schema: %w", err)
+	}
+	if _, err := db.Exec(sqlitePoolKeyIndex); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: pool index: %w", err)
 	}
 
 	slog.Debug("store: opened sqlite database", "path", dbPath)
@@ -111,7 +117,7 @@ func (s *SQLiteStore) Backend() Backend { return BackendSQLite }
 
 func (s *SQLiteStore) Close() error { return s.db.Close() }
 
-const sqliteSandboxCols = `id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral, egress`
+const sqliteSandboxCols = `id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral, egress, kind, pool_key`
 
 type sqliteExecer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
@@ -120,9 +126,9 @@ type sqliteExecer interface {
 func (s *SQLiteStore) insertSandbox(e sqliteExecer, record *SandboxRecord) error {
 	const q = `
 		INSERT INTO sandboxes
-			(id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral, egress)
+			(id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral, egress, kind, pool_key)
 		VALUES
-			(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	_, err := e.ExecContext(context.Background(), q,
 		record.ID,
@@ -139,6 +145,8 @@ func (s *SQLiteStore) insertSandbox(e sqliteExecer, record *SandboxRecord) error
 		record.TenantID,
 		record.Ephemeral,
 		record.Egress,
+		record.Kind,
+		record.PoolKey,
 	)
 	if err != nil {
 		return fmt.Errorf("store: create sandbox %s: %w", record.ID, err)
@@ -175,7 +183,7 @@ func rollbackConn(conn *sql.Conn) {
 }
 
 func (s *SQLiteStore) Create(record *SandboxRecord) error {
-	if IsAdminTenantID(record.TenantID) {
+	if IsAdminTenantID(record.TenantID) || record.TenantID == PoolTenantID {
 		return s.insertSandbox(s.db, record)
 	}
 
@@ -322,6 +330,71 @@ func (s *SQLiteStore) List() ([]*SandboxRecord, error) {
 func (s *SQLiteStore) ListByTenant(tenantID string) ([]*SandboxRecord, error) {
 	q := `SELECT ` + sqliteSandboxCols + ` FROM sandboxes WHERE tenant_id = ? ORDER BY created_at DESC`
 	return s.querySandboxRecords(q, tenantID)
+}
+
+func (s *SQLiteStore) ClaimPooled(poolKey, tenantID string, now int64) (*SandboxRecord, error) {
+	if poolKey == "" {
+		return nil, nil
+	}
+	conn, err := s.beginImmediate()
+	if err != nil {
+		return nil, fmt.Errorf("store: begin claim pooled: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			rollbackConn(conn)
+		}
+	}()
+	ctx := context.Background()
+	if !IsAdminTenantID(tenantID) {
+		var id string
+		err := conn.QueryRowContext(ctx, `SELECT id FROM tenants WHERE id = ?`, tenantID).Scan(&id)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrTenantNotFound
+		}
+		if err != nil {
+			return nil, fmt.Errorf("store: get tenant %s: %w", tenantID, err)
+		}
+	}
+	var id string
+	err = conn.QueryRowContext(ctx,
+		`SELECT id FROM sandboxes WHERE pool_key = ? AND tenant_id = ? ORDER BY created_at, id LIMIT 1`,
+		poolKey, PoolTenantID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("store: select pooled sandbox: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx,
+		`UPDATE sandboxes SET tenant_id = ?, pool_key = '', last_active_at = ? WHERE id = ?`,
+		tenantID, now, id); err != nil {
+		return nil, fmt.Errorf("store: claim pooled sandbox %s: %w", id, err)
+	}
+	rec, err := scanRecord(conn.QueryRowContext(ctx, `SELECT `+sqliteSandboxCols+` FROM sandboxes WHERE id = ?`, id))
+	if err != nil {
+		return nil, fmt.Errorf("store: read claimed sandbox %s: %w", id, err)
+	}
+	if err := commitConn(conn); err != nil {
+		return nil, fmt.Errorf("store: commit claim pooled: %w", err)
+	}
+	committed = true
+	return rec, nil
+}
+
+func (s *SQLiteStore) UnpoolSandbox(id string) (bool, error) {
+	res, err := s.db.Exec(`UPDATE sandboxes SET tenant_id = ?, pool_key = '' WHERE id = ? AND tenant_id = ?`, AdminTenantID, id, PoolTenantID)
+	if err != nil {
+		return false, fmt.Errorf("store: unpool sandbox %s: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+func (s *SQLiteStore) ListPooled() ([]*SandboxRecord, error) {
+	q := `SELECT ` + sqliteSandboxCols + ` FROM sandboxes WHERE tenant_id = ? ORDER BY created_at, id`
+	return s.querySandboxRecords(q, PoolTenantID)
 }
 
 func (s *SQLiteStore) CreateTenant(t *Tenant) error {
