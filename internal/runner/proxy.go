@@ -105,7 +105,7 @@ func proxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.Run
 				writeError(w, http.StatusBadRequest, "failed to read request body: http: request body too large")
 				return
 			}
-			logDaemonUnreachable(r, "proxy", err)
+			daemonUnreachable(rt, r, "proxy", err)
 			writeError(w, http.StatusServiceUnavailable, "daemon temporarily unavailable")
 		},
 	}
@@ -142,17 +142,31 @@ func proxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.Run
 	}
 }
 
-// logDaemonUnreachable records why a request the runtime considered proxyable
+// daemonUnreachable records why a request the runtime considered proxyable
 // still failed to reach the guest daemon, since the 503 it turns into carries no
 // detail. It logs under the request's context so the line joins the runner's
 // request event on trace id, and with the sandbox id, which the runtime's own
 // diagnostics key on. A client that has already gone is not a daemon that could
 // not be reached, so that case is left out rather than counted as an incident.
-func logDaemonUnreachable(r *http.Request, component string, err error) {
+//
+// It also drops a cached daemon URL: the container may have died or moved
+// before the runtime learned of it, and the next request must look it up again.
+func daemonUnreachable(rt runnerruntime.Runtime, r *http.Request, component string, err error) {
+	// Also when the client has gone: it may have given up on a daemon that
+	// does not answer, and a forget only costs the next request one lookup.
+	forgetDaemonURL(rt, r)
 	if r.Context().Err() != nil {
 		return
 	}
 	slog.WarnContext(r.Context(), component+": daemon request failed", "sandbox_id", r.PathValue("id"), "err", err)
+}
+
+// forgetDaemonURL drops the cached daemon URL of the request's sandbox, if the
+// runtime caches it.
+func forgetDaemonURL(rt runnerruntime.Runtime, r *http.Request) {
+	if f, ok := rt.(runnerruntime.DaemonURLForgetter); ok {
+		f.ForgetDaemonURL(r.PathValue("id"))
+	}
 }
 
 // daemonRedirected reports whether the daemon answered r with a 3xx, and logs

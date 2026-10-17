@@ -89,7 +89,7 @@ func (f *fakeDockerBackend) pullImage(context.Context, string) error {
 	return errors.New("unexpected pullImage")
 }
 
-func (f *fakeDockerBackend) watchContainerDeaths(context.Context, func(string, string)) error {
+func (f *fakeDockerBackend) watchContainerDeaths(context.Context, time.Time, func(string, string)) error {
 	return errors.New("unexpected watchContainerDeaths")
 }
 
