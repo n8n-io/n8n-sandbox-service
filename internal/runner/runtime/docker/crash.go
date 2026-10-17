@@ -20,7 +20,12 @@ import (
 // what keep the window small.
 func (m *Runtime) watchGuestDeaths(ctx context.Context) {
 	for ctx.Err() == nil {
-		err := m.docker.watchContainerDeaths(ctx, m.handleContainerDeath)
+		// The stream replays the events from since, so a death between going
+		// live and the moment Docker subscribes is not missed.
+		since := time.Now()
+		m.daemonURLs.setLive(true)
+		err := m.docker.watchContainerDeaths(ctx, since, m.handleContainerDeath)
+		m.daemonURLs.setLive(false)
 		if ctx.Err() != nil {
 			return
 		}
@@ -44,6 +49,9 @@ func (m *Runtime) watchGuestDeaths(ctx context.Context) {
 // what makes both visible: DaemonURL reports it not running until the wake path has
 // reapplied its policy, and that wake reports the restart to the client.
 func (m *Runtime) handleContainerDeath(containerID, sandboxID string) {
+	// Every death ends the URL, also one the runner asked for.
+	m.daemonURLs.forget(sandboxID)
+	m.daemonURLs.forgetContainer(containerID)
 	if m.takeExpectedStop(containerID) {
 		return
 	}

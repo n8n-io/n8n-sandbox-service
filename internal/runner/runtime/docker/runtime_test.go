@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
@@ -85,7 +86,7 @@ func (f *fakeDockerBackend) pullImage(context.Context, string) error {
 	return errors.New("unexpected pullImage")
 }
 
-func (f *fakeDockerBackend) watchContainerDeaths(context.Context, func(string, string)) error {
+func (f *fakeDockerBackend) watchContainerDeaths(context.Context, time.Time, func(string, string)) error {
 	return errors.New("unexpected watchContainerDeaths")
 }
 

@@ -144,3 +144,10 @@ type Runtime interface {
 
 	Shutdown(ctx context.Context)
 }
+
+// DaemonURLForgetter is a Runtime that caches the result of DaemonURL. A proxy
+// that cannot reach the daemon at a returned URL calls ForgetDaemonURL, so the
+// next request looks the sandbox up again.
+type DaemonURLForgetter interface {
+	ForgetDaemonURL(sandboxID string)
+}
