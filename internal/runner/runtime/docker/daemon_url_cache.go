@@ -5,22 +5,30 @@ import (
 	"time"
 )
 
-// daemonURLTombstoneTTL bounds how long a forgotten entry blocks a lookup that
-// started before it was forgotten. A lookup is a docker ps and a docker inspect,
-// which finish in milliseconds; anything that takes longer than this is a docker
-// that has hung, and its result is stored as if the forget never happened.
-const daemonURLTombstoneTTL = 2 * time.Minute
+const (
+	// daemonURLMaxAge bounds how long an entry is served. Every known way a
+	// container stops serving removes its entry, but some changes produce no
+	// event the runner watches, such as a network disconnect on the host. The
+	// age bounds the time a request can go to an address that is no longer the
+	// sandbox's. One lookup per sandbox in this time is a small cost.
+	daemonURLMaxAge = 10 * time.Second
+
+	// daemonURLTombstoneTTL bounds how long a forgotten entry blocks a lookup
+	// that started before it was forgotten. A lookup older than this does not
+	// store at all, so the sweep cannot let a stale result through.
+	daemonURLTombstoneTTL = 2 * time.Minute
+)
 
 // daemonURLCache keeps the daemon URL of running sandboxes, so that a proxied
 // request does not have to ask Docker for it. Without it, every request to a
 // sandbox runs docker ps and docker inspect, about 20 ms on a fast host.
 //
-// An entry is trusted only while the death watcher is connected. Every way a
-// container stops serving goes through it or through the runner: the runner
-// forgets an entry before it stops or removes the container, and the watcher
-// forgets it when the container dies on its own. A death while the event stream
-// is down is not replayed, so the cache is emptied and not used until the stream
-// is back.
+// An entry is trusted only while the death watcher is connected, and for at
+// most daemonURLMaxAge. The runner forgets an entry before it stops or removes
+// the container, and the watcher forgets it when the container dies on its own.
+// The watcher replays the events from the moment it went live, so the time it
+// takes to connect leaves no gap. A death while the event stream is down is not
+// replayed, so the cache is emptied and not used until the stream is back.
 //
 // A lookup that started before a forget must not store what it read, because the
 // container may have stopped since. Each sandbox therefore has a sequence number:
@@ -42,6 +50,8 @@ type daemonURLEntry struct {
 	containerID string
 	url         string
 	seq         uint64
+	// storedAt is when the URL was stored; zero for a tombstone.
+	storedAt time.Time
 	// forgotAt is when a tombstone was left; zero for an entry with a URL.
 	forgotAt time.Time
 }
@@ -50,6 +60,7 @@ type daemonURLEntry struct {
 type daemonURLToken struct {
 	epoch uint64
 	seq   uint64
+	at    time.Time
 }
 
 func newDaemonURLCache() *daemonURLCache {
@@ -64,7 +75,7 @@ func (c *daemonURLCache) get(sandboxID string) (string, bool) {
 		return "", false
 	}
 	e, ok := c.entries[sandboxID]
-	if !ok || e.url == "" {
+	if !ok || e.url == "" || time.Since(e.storedAt) > daemonURLMaxAge {
 		return "", false
 	}
 	return e.url, true
@@ -74,7 +85,7 @@ func (c *daemonURLCache) get(sandboxID string) (string, bool) {
 func (c *daemonURLCache) token(sandboxID string) daemonURLToken {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return daemonURLToken{epoch: c.epoch, seq: c.entries[sandboxID].seq}
+	return daemonURLToken{epoch: c.epoch, seq: c.entries[sandboxID].seq, at: time.Now()}
 }
 
 // store caches the URL of a container that was ready when the lookup read it,
@@ -82,10 +93,12 @@ func (c *daemonURLCache) token(sandboxID string) daemonURLToken {
 func (c *daemonURLCache) store(sandboxID, containerID, url string, tok daemonURLToken) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !c.live || c.epoch != tok.epoch || c.entries[sandboxID].seq != tok.seq {
+	now := time.Now()
+	if !c.live || c.epoch != tok.epoch || c.entries[sandboxID].seq != tok.seq ||
+		now.Sub(tok.at) > daemonURLTombstoneTTL {
 		return
 	}
-	c.entries[sandboxID] = daemonURLEntry{containerID: containerID, url: url, seq: tok.seq}
+	c.entries[sandboxID] = daemonURLEntry{containerID: containerID, url: url, seq: tok.seq, storedAt: now}
 }
 
 // forget drops the URL of a sandbox and blocks lookups that are in flight.

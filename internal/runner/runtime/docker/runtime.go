@@ -403,7 +403,6 @@ func (m *Runtime) EnsureSandboxRunning(ctx context.Context, sandboxID string) (r
 // left to do is what Docker does not: point the sandbox's network rules at the IP it
 // came back on, and wait for a daemon that has lost every process it was running.
 func (m *Runtime) ensureSandboxRunningOnce(ctx context.Context, sandboxID string) (bool, error) {
-	urlToken := m.daemonURLs.token(sandboxID)
 	containerID, err := m.FindContainerIDByLabel(ctx, sandboxID)
 	if err != nil {
 		return false, err
@@ -422,6 +421,11 @@ func (m *Runtime) ensureSandboxRunningOnce(ctx context.Context, sandboxID string
 	if !recovering && isContainerReady(inspect.State) {
 		return false, nil
 	}
+	// A lookup that runs while this wake starts the container must not store
+	// a URL that a failed wake then leaves behind. The token for this wake's
+	// own store is taken after the forget.
+	m.daemonURLs.forget(sandboxID)
+	urlToken := m.daemonURLs.token(sandboxID)
 	if recovering {
 		// The container is usually already running, and never startable while Docker
 		// is between restarts, so a wake that lands in that window waits for it. This
@@ -521,8 +525,9 @@ func (m *Runtime) cleanupWakeFailure(containerID string) {
 
 // StopSandboxContainer stops a running sandbox container without removing it.
 func (m *Runtime) StopSandboxContainer(ctx context.Context, sandboxID string) error {
-	// Before the stop, not after: a request that reads the URL while the stop
-	// runs would be proxied to a container that is going away.
+	// Before the stop, so a request during the stop does not get the URL from
+	// the cache. A lookup during the stop can still store it; the die event of
+	// the stop removes it again.
 	m.daemonURLs.forget(sandboxID)
 	containerID, err := m.FindContainerIDByLabel(ctx, sandboxID)
 	if err != nil {

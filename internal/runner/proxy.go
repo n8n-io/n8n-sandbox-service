@@ -152,14 +152,21 @@ func proxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.Run
 // It also drops a cached daemon URL: the container may have died or moved
 // before the runtime learned of it, and the next request must look it up again.
 func daemonUnreachable(rt runnerruntime.Runtime, r *http.Request, component string, err error) {
+	// Also when the client has gone: it may have given up on a daemon that
+	// does not answer, and a forget only costs the next request one lookup.
+	forgetDaemonURL(rt, r)
 	if r.Context().Err() != nil {
 		return
 	}
-	id := r.PathValue("id")
+	slog.WarnContext(r.Context(), component+": daemon request failed", "sandbox_id", r.PathValue("id"), "err", err)
+}
+
+// forgetDaemonURL drops the cached daemon URL of the request's sandbox, if the
+// runtime caches it.
+func forgetDaemonURL(rt runnerruntime.Runtime, r *http.Request) {
 	if f, ok := rt.(runnerruntime.DaemonURLForgetter); ok {
-		f.ForgetDaemonURL(id)
+		f.ForgetDaemonURL(r.PathValue("id"))
 	}
-	slog.WarnContext(r.Context(), component+": daemon request failed", "sandbox_id", id, "err", err)
 }
 
 // daemonRedirected reports whether the daemon answered r with a 3xx, and logs

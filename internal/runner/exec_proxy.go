@@ -157,6 +157,7 @@ func ExecProxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics
 
 			resumeResp, err := client.Do(resumeReq)
 			if err != nil {
+				forgetDaemonURL(rt, r)
 				slog.Warn("exec proxy: resume request failed", "exec_id", execID, "attempt", attempt+1, "err", err)
 				continue
 			}

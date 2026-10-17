@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -66,5 +67,25 @@ func TestProxiesForgetADaemonURLThatDoesNotAnswer(t *testing.T) {
 				t.Errorf("forgotten = %v, want [%s]", rt.forgotten, proxyTestSandboxID)
 			}
 		})
+	}
+}
+
+// A client that gave up on a daemon that does not answer must not leave its
+// URL in the cache for the next request.
+func TestProxyForgetsTheDaemonURLWhenTheClientHasGone(t *testing.T) {
+	dead := httptest.NewServer(http.NotFoundHandler())
+	deadURL := dead.URL
+	dead.Close()
+
+	rt := &forgettingRuntime{fakeRuntime: &fakeRuntime{daemonURL: deadURL}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest(http.MethodGet, "/sandboxes/"+proxyTestSandboxID+"/files", nil).WithContext(ctx)
+	req.SetPathValue("id", proxyTestSandboxID)
+
+	ProxyHandler(rt, proxyTestConfig(), metrics.NewRunnerRecorder(false)).ServeHTTP(httptest.NewRecorder(), req)
+
+	if len(rt.forgotten) != 1 || rt.forgotten[0] != proxyTestSandboxID {
+		t.Errorf("forgotten = %v, want [%s]", rt.forgotten, proxyTestSandboxID)
 	}
 }

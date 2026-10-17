@@ -3,6 +3,7 @@ package docker
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -297,8 +298,8 @@ func TestACreateCachesTheDaemonURL(t *testing.T) {
 	}
 }
 
-// The cache is used only while the death watcher runs, and a reconnect starts
-// it empty.
+// The cache is used only while the death watcher runs, and the watcher asks
+// Docker for the events from before the cache went live.
 func TestTheDeathWatcherControlsTheDaemonURLCache(t *testing.T) {
 	var m *Runtime
 	liveDuringWatch := make(chan bool, 1)
@@ -315,12 +316,81 @@ func TestTheDeathWatcherControlsTheDaemonURLCache(t *testing.T) {
 	}
 	m, _ = newCrashRuntime(t, backend)
 
+	before := time.Now()
 	m.watchGuestDeaths(ctx)
 
+	backend.mu.Lock()
+	since := backend.since
+	backend.mu.Unlock()
+	if since.Before(before) || since.After(time.Now()) {
+		t.Errorf("since = %v, want the time the watcher went live (after %v)", since, before)
+	}
 	if !<-liveDuringWatch {
 		t.Error("the cache was not live while the watcher ran")
 	}
 	if m.daemonURLs.live {
 		t.Error("the cache is still live after the watcher stopped")
+	}
+}
+
+func TestDockerEventsArgsReplayFromSince(t *testing.T) {
+	since := time.Unix(1700000000, 1234)
+	got := dockerEventsArgs(since)
+	want := []string{"events",
+		"--since", "1700000000.000001234",
+		"--filter", "type=container",
+		"--filter", "event=die",
+		"--filter", managedLabelFilter,
+		"--format", "{{json .}}"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("dockerEventsArgs() = %q, want %q", got, want)
+	}
+}
+
+// Some changes, such as a network disconnect on the host, produce no event the
+// runner watches. The age bounds how long such an entry is served.
+func TestDaemonURLCacheExpiresEntries(t *testing.T) {
+	c := liveCache()
+	c.store("sb", "c1", "http://10.0.0.2:8081", c.token("sb"))
+	e := c.entries["sb"]
+	e.storedAt = time.Now().Add(-daemonURLMaxAge - time.Second)
+	c.entries["sb"] = e
+
+	if _, ok := c.get("sb"); ok {
+		t.Fatal("served an entry older than daemonURLMaxAge")
+	}
+}
+
+// After the sweep, the sequence number of a sandbox can be the one an old
+// lookup started with. A lookup that old must not store.
+func TestDaemonURLCacheIgnoresALookupOlderThanTheTombstones(t *testing.T) {
+	c := liveCache()
+	tok := c.token("sb")
+	tok.at = time.Now().Add(-daemonURLTombstoneTTL - time.Second)
+	c.store("sb", "c1", "http://10.0.0.2:8081", tok)
+
+	if _, ok := c.get("sb"); ok {
+		t.Fatal("stored the result of a lookup older than daemonURLTombstoneTTL")
+	}
+}
+
+// A lookup that runs while a wake starts the container must not store: the
+// wake can still fail and leave the container without its network rules.
+func TestAWakeBlocksALookupThatStartedBeforeIt(t *testing.T) {
+	backend := &crashBackend{
+		states: []containerState{{Status: containerStatusExited}, runningState()},
+		ip:     "172.18.0.5",
+	}
+	m := newCachingRuntime(t, backend)
+	tok := m.daemonURLs.token(crashSandboxID)
+
+	if _, err := m.EnsureSandboxRunning(context.Background(), crashSandboxID); err != nil {
+		t.Fatalf("EnsureSandboxRunning() failed: %v", err)
+	}
+	m.daemonURLs.store(crashSandboxID, crashContainerID, "http://172.18.0.99:8081", tok)
+
+	url, ok := m.daemonURLs.get(crashSandboxID)
+	if want := "http://172.18.0.5:8081"; !ok || url != want {
+		t.Errorf("cached URL = %q, %v; want %q from the wake", url, ok, want)
 	}
 }

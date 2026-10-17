@@ -20,11 +20,11 @@ import (
 // what keep the window small.
 func (m *Runtime) watchGuestDeaths(ctx context.Context) {
 	for ctx.Err() == nil {
-		// Set before the stream connects, so a death in the short gap before
-		// Docker subscribes it is missed. The proxies forget a URL that does not
-		// answer, which bounds what such a miss costs.
+		// The stream replays the events from since, so a death between going
+		// live and the moment Docker subscribes is not missed.
+		since := time.Now()
 		m.daemonURLs.setLive(true)
-		err := m.docker.watchContainerDeaths(ctx, m.handleContainerDeath)
+		err := m.docker.watchContainerDeaths(ctx, since, m.handleContainerDeath)
 		m.daemonURLs.setLive(false)
 		if ctx.Err() != nil {
 			return

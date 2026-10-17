@@ -52,6 +52,8 @@ containers direct access to the host Docker daemon.
   watcher is connected (`daemon_url_cache.go`), so a proxied request does not
   run `docker ps` and `docker inspect`. A stop, a delete, a `die` event, a
   watcher disconnect, or a proxy that cannot reach the daemon removes the entry.
+  An entry is served for at most 10 s. The watcher asks for the events from the
+  moment it went live (`docker events --since`), so its connect time leaves no gap.
 
 ## Crash recovery
 

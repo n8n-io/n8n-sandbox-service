@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -102,7 +103,7 @@ type dockerBackend interface {
 	inspectNetwork(ctx context.Context, name string) (*networkInspect, error)
 	findContainerByLabels(ctx context.Context, filterArgs ...string) ([]string, error)
 	pullImage(ctx context.Context, image string) error
-	watchContainerDeaths(ctx context.Context, onDie func(containerID, sandboxID string)) error
+	watchContainerDeaths(ctx context.Context, since time.Time, onDie func(containerID, sandboxID string)) error
 	run(ctx context.Context, args ...string) (string, error)
 }
 
@@ -303,15 +304,12 @@ func (dc *dockerClient) pullImage(ctx context.Context, image string) error {
 //
 // The filters are the daemon's, not ours: asking it for die events on managed
 // containers means the runner is not woken for every image pull and exec on the
-// host. Callers get the events from the moment this connects — a death during a
-// reconnect is not replayed, which is why the wake path still repairs a container
-// it finds restarted rather than trusting the event alone.
-func (dc *dockerClient) watchContainerDeaths(ctx context.Context, onDie func(containerID, sandboxID string)) error {
-	cmd := exec.CommandContext(ctx, "docker", "events",
-		"--filter", "type=container",
-		"--filter", "event=die",
-		"--filter", managedLabelFilter,
-		"--format", "{{json .}}")
+// host. Callers get the events from since, which the daemon replays, so the time
+// the CLI takes to connect leaves no gap. A death before since is not replayed,
+// which is why the wake path still repairs a container it finds restarted rather
+// than trusting the event alone.
+func (dc *dockerClient) watchContainerDeaths(ctx context.Context, since time.Time, onDie func(containerID, sandboxID string)) error {
+	cmd := exec.CommandContext(ctx, "docker", dockerEventsArgs(since)...)
 	cmd.Env = append(os.Environ(), "DOCKER_HOST="+dc.host)
 
 	stdout, err := cmd.StdoutPipe()
@@ -343,6 +341,17 @@ func (dc *dockerClient) watchContainerDeaths(ctx context.Context, onDie func(con
 		return fmt.Errorf("read docker events: %w", scanErr)
 	}
 	return fmt.Errorf("docker events exited: %s: %w", strings.TrimSpace(stderr.String()), waitErr)
+}
+
+// dockerEventsArgs returns the docker events arguments for the death watcher.
+// since is in seconds with nanoseconds, the most precise form Docker accepts.
+func dockerEventsArgs(since time.Time) []string {
+	return []string{"events",
+		"--since", fmt.Sprintf("%d.%09d", since.Unix(), since.Nanosecond()),
+		"--filter", "type=container",
+		"--filter", "event=die",
+		"--filter", managedLabelFilter,
+		"--format", "{{json .}}"}
 }
 
 func firstGateway(inspect *networkInspect) string {
