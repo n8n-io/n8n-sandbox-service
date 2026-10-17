@@ -93,6 +93,32 @@ func (r *PostgresRegistry) Len() int {
 	return n
 }
 
+func (r *PostgresRegistry) Eligible() ([]Runner, error) {
+	graceSec := int64(r.heartbeatGrace.Seconds())
+	const q = `
+		SELECT id, http_base_url, control_grpc_addr, healthy, cordoned, capacity_total, capacity_used, capacity_stopped, last_seen
+		FROM runners
+		WHERE healthy = true
+		  AND cordoned = false
+		  AND last_seen >= now() - ($1 * interval '1 second')
+		  AND (capacity_total = 0 OR capacity_used < capacity_total)
+		ORDER BY id COLLATE "C"`
+	rows, err := r.db.Query(q, graceSec)
+	if err != nil {
+		return nil, fmt.Errorf("registry: eligible runners: %w", err)
+	}
+	defer rows.Close()
+	var out []Runner
+	for rows.Next() {
+		run, err := scanRunner(rows)
+		if err != nil {
+			return nil, fmt.Errorf("registry: eligible runners scan: %w", err)
+		}
+		out = append(out, *run)
+	}
+	return out, rows.Err()
+}
+
 func (r *PostgresRegistry) List() ([]Runner, error) {
 	const q = `
 		SELECT id, http_base_url, control_grpc_addr, healthy, cordoned, capacity_total, capacity_used, capacity_stopped, last_seen

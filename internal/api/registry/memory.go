@@ -143,6 +143,17 @@ func (r *MemoryRegistry) eligibleLocked(now time.Time) []*Runner {
 	return eligible
 }
 
+func (r *MemoryRegistry) Eligible() ([]Runner, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	eligible := r.eligibleLocked(time.Now())
+	out := make([]Runner, 0, len(eligible))
+	for _, run := range eligible {
+		out = append(out, *run)
+	}
+	return out, nil
+}
+
 func (r *MemoryRegistry) PickLowestUsed(exclude ...string) (*Runner, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

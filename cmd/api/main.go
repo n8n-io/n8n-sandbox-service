@@ -105,6 +105,11 @@ func main() {
 	sweepCtx, sweepCancel := context.WithCancel(context.Background())
 	defer sweepCancel()
 	api.StartIdleSweeper(sweepCtx, sandboxStore, runnerReg, cfg, sweepLockDB)
+	api.StartCodeIdleSweeper(sweepCtx, sandboxStore, runnerReg, cfg)
+	if err := api.StartCodePool(sweepCtx, sandboxStore, runnerReg, cfg, sweepLockDB); err != nil {
+		slog.Error("code sandbox pool", "error", err)
+		os.Exit(1)
+	}
 
 	// Stopped after the HTTP server has drained, so open streams count until
 	// then; on stop it writes the activity it has collected once more.

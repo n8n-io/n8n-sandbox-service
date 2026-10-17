@@ -67,5 +67,11 @@ const postgresAddEgressCol = `ALTER TABLE sandboxes ADD COLUMN IF NOT EXISTS egr
 
 const postgresAddRunnerCordonedCol = `ALTER TABLE runners ADD COLUMN IF NOT EXISTS cordoned BOOLEAN NOT NULL DEFAULT false`
 
+const postgresAddKindCol = `ALTER TABLE sandboxes ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT ''`
+
+const postgresAddPoolKeyCol = `ALTER TABLE sandboxes ADD COLUMN IF NOT EXISTS pool_key TEXT NOT NULL DEFAULT ''`
+
+const postgresPoolKeyIndex = `CREATE INDEX IF NOT EXISTS sandboxes_pool_idx ON sandboxes (pool_key, created_at)`
+
 // Backfill legacy empty tenant_id to the admin sentinel.
 const postgresBackfillAdminTenantID = `UPDATE sandboxes SET tenant_id = '__admin__' WHERE tenant_id = ''`

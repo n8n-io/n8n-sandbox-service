@@ -95,7 +95,7 @@ func sandboxAttachment(inspect *containerInspect) (network, ip string) {
 
 type dockerBackend interface {
 	ping(ctx context.Context) error
-	createContainer(ctx context.Context, sandboxID, containerName, image, network string, limits *ResourceLimits, enableCgroups bool) (string, error)
+	createContainer(ctx context.Context, sandboxID, containerName, image, network string, limits *ResourceLimits, enableCgroups bool, extraEnv []string) (string, error)
 	startContainer(ctx context.Context, containerID string) error
 	stopContainer(ctx context.Context, containerID string) error
 	removeContainer(ctx context.Context, containerID string) error
@@ -176,8 +176,8 @@ func (dc *dockerClient) ping(ctx context.Context) error {
 	return err
 }
 
-func (dc *dockerClient) createContainer(ctx context.Context, sandboxID, containerName, image, network string, limits *ResourceLimits, enableCgroups bool) (string, error) {
-	args := dockerContainerCreateArgs(sandboxID, containerName, image, network, limits, enableCgroups, dc.dnsServers, dc.onlyIPv4)
+func (dc *dockerClient) createContainer(ctx context.Context, sandboxID, containerName, image, network string, limits *ResourceLimits, enableCgroups bool, extraEnv []string) (string, error) {
+	args := dockerContainerCreateArgs(sandboxID, containerName, image, network, limits, enableCgroups, dc.dnsServers, dc.onlyIPv4, extraEnv...)
 
 	out, err := dc.run(ctx, args...)
 	if err != nil {
@@ -186,12 +186,18 @@ func (dc *dockerClient) createContainer(ctx context.Context, sandboxID, containe
 	return strings.TrimSpace(out), nil
 }
 
-func dockerContainerCreateArgs(sandboxID, containerName, image, network string, limits *ResourceLimits, enableCgroups bool, dnsServers []string, onlyIPv4 bool) []string {
+func dockerContainerCreateArgs(sandboxID, containerName, image, network string, limits *ResourceLimits, enableCgroups bool, dnsServers []string, onlyIPv4 bool, extraEnv ...string) []string {
+	restart := "unless-stopped"
+	if isCodeSandboxEnv(extraEnv) {
+		// A code sandbox that dies is gone: the client deletes it and creates
+		// another. A restart would bring back a daemon without its tasks.
+		restart = "no"
+	}
 	args := []string{
 		"container", "create",
 		"--name", containerName,
 		"--hostname", "sandbox",
-		"--restart", "unless-stopped",
+		"--restart", restart,
 		// Docker's init runs as PID 1 and reaps orphaned processes. The daemon
 		// does not, so as zombies they would use up the pids limit.
 		"--init",
@@ -203,6 +209,10 @@ func dockerContainerCreateArgs(sandboxID, containerName, image, network string, 
 		// user commands see.
 		"--env", "HOME=/home/user",
 		"--env", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+	}
+	// Later --env flags win, so extraEnv can override the defaults above.
+	for _, e := range extraEnv {
+		args = append(args, "--env", e)
 	}
 	args = append(args, dockerSandboxSecurityArgs()...)
 	args = append(args, dockerIPv6Args(onlyIPv4)...)
@@ -444,4 +454,15 @@ func isDockerNotFound(err error) bool {
 		strings.Contains(msg, "no such network") ||
 		strings.Contains(msg, "no such image") ||
 		strings.Contains(msg, "not found")
+}
+
+// isCodeSandboxEnv reports whether the extra environment configures a code
+// daemon (see codeDaemonEnv).
+func isCodeSandboxEnv(env []string) bool {
+	for _, e := range env {
+		if strings.HasPrefix(e, "CODE_DAEMON_") {
+			return true
+		}
+	}
+	return false
 }

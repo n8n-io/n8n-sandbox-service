@@ -92,7 +92,8 @@ func sandboxProxyHandler(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 				writeError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
-			if rec == nil || !canAccessSandbox(r, rec) {
+			// Code sandboxes serve only the Task API (/v1/code/...).
+			if rec == nil || !canAccessSandbox(r, rec) || rec.Kind == store.KindCode {
 				writeError(w, http.StatusNotFound, "sandbox not found")
 				return
 			}
@@ -160,6 +161,10 @@ type SandboxResponse struct {
 	// TenantID is the owning tenant, or store.AdminTenantID for a sandbox
 	// created with an admin key. A tenant only ever sees its own id here.
 	TenantID string `json:"tenant_id"`
+	// Kind is "code" for a Task API code sandbox, empty otherwise.
+	Kind string `json:"kind,omitempty"`
+	// PoolKey is set on a code sandbox in the warm pool (tenant_id "__pool__").
+	PoolKey string `json:"pool_key,omitempty"`
 }
 
 type createSandboxRequest struct {
@@ -183,6 +188,8 @@ func sandboxResponse(rec *store.SandboxRecord) *SandboxResponse {
 		Ephemeral:    rec.Ephemeral,
 		Egress:       rec.Egress,
 		TenantID:     tenantID,
+		Kind:         rec.Kind,
+		PoolKey:      rec.PoolKey,
 	}
 }
 

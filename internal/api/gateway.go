@@ -70,6 +70,8 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	mux.HandleFunc("PUT /admin/runners/{id}/cordon", handleSetRunnerCordon(reg, cfg, true))
 	mux.HandleFunc("DELETE /admin/runners/{id}/cordon", handleSetRunnerCordon(reg, cfg, false))
 
+	newCodeAPI(s, reg, cfg, rec, runnerTransport, codeActivityTracker, activity).register(mux)
+
 	proxy := limitTenant(sandboxProxy(proxyRoute{}))
 	uploadProxy := limitTenant(sandboxProxy(proxyRoute{limitBody: true}))
 	deleteExecutionProxy := limitTenantDeletes(sandboxProxy(proxyRoute{neverWakes: true}))

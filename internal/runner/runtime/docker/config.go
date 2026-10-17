@@ -17,6 +17,8 @@ const (
 	defaultPidsMax           = 256
 	defaultEnableCgroups     = true
 	defaultDiskQuotaInactive = false
+
+	defaultCodeDaemonOverheadMB = 256
 )
 
 // Config holds configuration for the Docker/sysbox runtime backend.
@@ -66,6 +68,15 @@ type Config struct {
 	// where the runner cannot read the sysctl. No effect on newer kernels.
 	// Parsed from SANDBOX_RUNNER_DOCKER_ACK_BR_NETFILTER_IS_LOADED (default false).
 	AckBridgeNetfilterLoaded bool
+
+	// CodeImage is the image used to start code sandboxes. Empty means code
+	// sandboxes cannot be created. Parsed from SANDBOX_RUNNER_DOCKER_CODE_IMAGE.
+	CodeImage string
+
+	// CodeDaemonOverheadMB is added to slots x taskMemoryMb for the container
+	// memory limit of a code sandbox. It covers the code daemon and the spare
+	// workers. Parsed from SANDBOX_RUNNER_CODE_DAEMON_OVERHEAD_MB (default 256).
+	CodeDaemonOverheadMB int64
 }
 
 const envAckBridgeNetfilter = "SANDBOX_RUNNER_DOCKER_ACK_BR_NETFILTER_IS_LOADED"
@@ -78,6 +89,8 @@ func defaultConfig() Config {
 		DefaultPidsMax:    defaultPidsMax,
 		DiskQuotaActive:   defaultDiskQuotaInactive,
 		EnableCgroups:     defaultEnableCgroups,
+
+		CodeDaemonOverheadMB: defaultCodeDaemonOverheadMB,
 	}
 }
 
@@ -156,6 +169,15 @@ func LoadConfig() (Config, error) {
 			return Config{}, fmt.Errorf("%s must be a boolean, got %q", envAckBridgeNetfilter, v)
 		}
 		cfg.AckBridgeNetfilterLoaded = ack
+	}
+
+	cfg.CodeImage = os.Getenv("SANDBOX_RUNNER_DOCKER_CODE_IMAGE")
+	if v := os.Getenv("SANDBOX_RUNNER_CODE_DAEMON_OVERHEAD_MB"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || n < 0 {
+			return Config{}, fmt.Errorf("SANDBOX_RUNNER_CODE_DAEMON_OVERHEAD_MB must be a non-negative integer, got %q", v)
+		}
+		cfg.CodeDaemonOverheadMB = n
 	}
 
 	return cfg, nil

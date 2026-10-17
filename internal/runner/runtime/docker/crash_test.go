@@ -85,7 +85,7 @@ func (f *crashBackend) removeContainer(context.Context, string) error {
 	defer f.mu.Unlock()
 	return f.removeErr
 }
-func (f *crashBackend) createContainer(context.Context, string, string, string, string, *ResourceLimits, bool) (string, error) {
+func (f *crashBackend) createContainer(context.Context, string, string, string, string, *ResourceLimits, bool, []string) (string, error) {
 	return "", errors.New("unexpected createContainer")
 }
 func (f *crashBackend) inspectNetwork(context.Context, string) (*networkInspect, error) {

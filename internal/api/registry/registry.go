@@ -38,4 +38,6 @@ type RunnerRegistry interface {
 	// skipping the runners in exclude. Unhealthy, cordoned, full and stale
 	// runners are not eligible.
 	PickLowestUsed(exclude ...string) (*Runner, error)
+	// Eligible returns copies of the runners that can take a new sandbox now.
+	Eligible() ([]Runner, error)
 }
