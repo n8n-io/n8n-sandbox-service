@@ -96,7 +96,7 @@ func ExecProxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics
 
 		upResp, err := client.Do(upReq)
 		if err != nil {
-			logDaemonUnreachable(r, "exec proxy", err)
+			daemonUnreachable(rt, r, "exec proxy", err)
 			writeError(w, http.StatusServiceUnavailable, "daemon temporarily unavailable")
 			return
 		}
@@ -157,6 +157,7 @@ func ExecProxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics
 
 			resumeResp, err := client.Do(resumeReq)
 			if err != nil {
+				forgetDaemonURL(rt, r)
 				slog.Warn("exec proxy: resume request failed", "exec_id", execID, "attempt", attempt+1, "err", err)
 				continue
 			}
