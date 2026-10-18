@@ -43,7 +43,7 @@ All services are configured via environment variables. [limits.md](limits.md) li
 | `SANDBOX_API_IDLE_DELETE_AFTER` | `24h` | Idle time after which the sweeper deletes a sandbox; wakes are refused past this window. `0` disables. Wakes are refused twice `SANDBOX_API_ACTIVITY_WRITE_INTERVAL` later, deletes come four times that later ([why](architecture.md#sandbox-activity)) |
 | `SANDBOX_API_ACTIVITY_WRITE_INTERVAL` | `5s` | How often each replica writes the `last_active_at` of the sandboxes it served, in one statement (`1s`–`1m`; [how](architecture.md#sandbox-activity)). Longer means fewer database writes, and idle stops that act up to twice that later, deletes four times |
 | `SANDBOX_API_MAX_RESPONSE_ACTIVITY` | `30m` | How long a response that is still open, such as an exec stream, keeps its sandbox from going idle (at least `1m`). Keep it at least `SANDBOX_RUNNER_MAX_EXEC_TIMEOUT` |
-| `SANDBOX_CODE_IDLE_DELETE_AFTER` | `2m` | Time without a Task API request and without an open channel after which the API deletes a code sandbox. `0` disables |
+| `SANDBOX_CODE_IDLE_DELETE_AFTER` | `2m` | Time without a Task API request after which the API deletes a code sandbox. A running request counts as activity. `0` disables |
 | `SANDBOX_CODE_POOLS` | — | Warm pools of code sandboxes, as a JSON list. Each item has the fields of `POST /v1/code/sandboxes` (`runtime`, `slots`, `taskMemoryMb`, `spareWorkers`, `reuseWorkers`) and `size`, the number of sandboxes to keep ready. Example: `[{"slots":2,"reuseWorkers":true,"size":8}]`. Empty disables the pool |
 | `SANDBOX_CODE_POOL_REFILL_CONCURRENCY` | `2` | Pool creates that run at the same time, for all pools |
 | `SANDBOX_CODE_POOL_MAX_AGE` | `30m` | The pool manager replaces a pooled sandbox that is older |

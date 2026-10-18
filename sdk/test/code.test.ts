@@ -82,6 +82,107 @@ describe("CodeSandboxClient", () => {
     expect((err as CodeTaskTransportError).accepted).toBe(true);
   });
 
+  it("answers rpc events with postRpcResult while the stream is open", async () => {
+    const results: { url?: string; body: string }[] = [];
+    let release!: () => void;
+    const answered = new Promise<void>((r) => (release = r));
+    server = await startTestServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        if (req.url?.includes("/rpc/")) {
+          results.push({ url: req.url, body });
+          res.writeHead(204);
+          res.end();
+          release();
+          return;
+        }
+        res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+        res.write('{"type":"accepted","taskId":"t1","slot":0}\n');
+        res.write(
+          '{"type":"rpc","callId":"c1","name":"helpers.httpRequest","params":[{"url":"u"}]}\n',
+        );
+        // The task ends only after the result arrived.
+        void answered.then(() => res.end('{"type":"done","result":null}\n'));
+      });
+    });
+    const client = new CodeSandboxClient({ baseUrl: server.baseUrl, apiKey: "k" });
+    const calls: unknown[] = [];
+    const done = await client.runTask("s1", { taskId: "t1" }, [], {
+      onRpc: async (call) => {
+        calls.push(call);
+        return { ok: true, data: { status: 200 } };
+      },
+    });
+    expect(done.type).toBe("done");
+    expect(calls).toEqual([
+      { type: "rpc", callId: "c1", name: "helpers.httpRequest", params: [{ url: "u" }] },
+    ]);
+    expect(results).toEqual([
+      { url: "/v1/code/sandboxes/s1/tasks/t1/rpc/c1", body: '{"ok":true,"data":{"status":200}}' },
+    ]);
+  });
+
+  it("postRpcResult accepts 204 and 404 and throws on other statuses", async () => {
+    let status = 204;
+    server = await startTestServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(status, { "Content-Type": "application/json" });
+        res.end(status >= 300 ? JSON.stringify({ error: "nope" }) : "");
+      });
+    });
+    const client = new CodeSandboxClient({ baseUrl: server.baseUrl });
+    await expect(
+      client.postRpcResult("s1", "t1", "c1", { ok: true, data: 1 }),
+    ).resolves.toBeUndefined();
+    status = 404;
+    await expect(
+      client.postRpcResult("s1", "t1", "c1", { ok: true, data: 1 }),
+    ).resolves.toBeUndefined();
+    status = 500;
+    await expect(
+      client.postRpcResult("s1", "t1", "c1", { ok: true, data: 1 }),
+    ).rejects.toMatchObject({
+      status: 500,
+      message: "nope",
+    });
+  });
+
+  it("parses a long NDJSON line split over many chunks", async () => {
+    const big = "x".repeat(200_000);
+    const text = JSON.stringify({ a: big }) + "\n" + JSON.stringify({ b: 1 }) + "\n";
+    const chunks: string[] = [];
+    for (let i = 0; i < text.length; i += 1000) chunks.push(text.slice(i, i + 1000));
+    const out: unknown[] = [];
+    for await (const ev of readNdjson(Readable.from(chunks))) out.push(ev);
+    expect(out).toEqual([{ a: big }, { b: 1 }]);
+  });
+
+  it("refuses an NDJSON line that is too long", async () => {
+    const read = async () => {
+      for await (const _ of readNdjson(Readable.from(["0123456789", "0123456789\n"]), 15)) {
+        // Nothing.
+      }
+    };
+    await expect(read()).rejects.toThrow("NDJSON line too long");
+  });
+
+  it("postRpcResult replaces a reply that JSON cannot encode", async () => {
+    let body = "";
+    server = await startTestServer((req, res) => {
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        res.writeHead(204);
+        res.end();
+      });
+    });
+    const client = new CodeSandboxClient({ baseUrl: server.baseUrl });
+    await client.postRpcResult("s1", "t1", "c1", { ok: true, data: { n: 1n } });
+    expect(JSON.parse(body)).toMatchObject({ ok: false });
+    expect(JSON.parse(body).error.message).toContain("cannot be serialized");
+  });
+
   it("parses NDJSON split over chunks", async () => {
     const out: unknown[] = [];
     for await (const ev of readNdjson(Readable.from(['{"a":', '1}\n{"b"', ":2}"]))) out.push(ev);

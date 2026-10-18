@@ -71,6 +71,10 @@ type taskEvent struct {
 	Code      string          `json:"code,omitempty"`
 	Message   string          `json:"message,omitempty"`
 	UserError json.RawMessage `json:"userError,omitempty"`
+	// RPC call fields (type "rpc").
+	CallID string          `json:"callId,omitempty"`
+	Name   string          `json:"name,omitempty"`
+	Params json.RawMessage `json:"params,omitempty"`
 }
 
 // eventWriter writes NDJSON events and flushes after each one.
@@ -92,11 +96,19 @@ func (e *eventWriter) start() {
 	e.w.WriteHeader(http.StatusOK)
 }
 
-func (e *eventWriter) emit(ev taskEvent) {
+// isBroken reports whether a write to the stream failed.
+func (e *eventWriter) isBroken() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.broken
+}
+
+// emit writes one event. It returns false if the stream is broken.
+func (e *eventWriter) emit(ev taskEvent) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.broken {
-		return
+		return false
 	}
 	e.start()
 	var buf bytes.Buffer
@@ -104,16 +116,18 @@ func (e *eventWriter) emit(ev taskEvent) {
 	// Output text with many "<" or "&" must not grow 6 times.
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(ev); err != nil {
-		return
+		return false
 	}
 	b := buf.Bytes()
 	if _, err := e.w.Write(b); err != nil {
 		e.broken = true
-		return
+		return false
 	}
 	if err := e.rc.Flush(); err != nil {
 		e.broken = true
+		return false
 	}
+	return true
 }
 
 // utf8Carry holds the incomplete UTF-8 sequence at the end of a chunk, so a
@@ -181,7 +195,7 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 
 	// 429 before the inputs are read: the caller owns slot accounting, so this
 	// only happens when it is wrong.
-	s, err := d.acquireSlot(spec.TaskID, cancel)
+	rt, err := d.acquireSlot(spec.TaskID, cancel)
 	if err != nil {
 		code := http.StatusServiceUnavailable
 		if errors.Is(err, errTaskExists) {
@@ -190,10 +204,13 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, code, err.Error())
 		return
 	}
-	if s == nil {
+	if rt == nil {
 		writeError(w, http.StatusTooManyRequests, "no free slot")
 		return
 	}
+	s := rt.slot
+	// No RPC result is accepted after the task ends.
+	defer rt.rpc.close()
 	tm := &taskTimings{SlotWait: 0}
 	outputsStored := false
 	defer func() {
@@ -247,9 +264,9 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 	// Run.
 	var res runResult
 	if d.cfg.ReuseWorkers {
-		res = d.runShared(ctx, ew, s, spec, tm, timeout)
+		res = d.runShared(ctx, ew, rt, spec, tm, timeout)
 	} else {
-		res = d.runOwnWorker(ctx, ew, s, spec, tm, timeout)
+		res = d.runOwnWorker(ctx, ew, rt, spec, tm, timeout)
 	}
 	if res.failedEarly {
 		return
@@ -325,7 +342,8 @@ type runResult struct {
 
 // runOwnWorker runs the task in a worker process of its own: the spare of the
 // slot, or a new one. The process is killed after the task.
-func (d *Daemon) runOwnWorker(ctx context.Context, ew *eventWriter, s *slot, spec taskSpec, tm *taskTimings, timeout time.Duration) runResult {
+func (d *Daemon) runOwnWorker(ctx context.Context, ew *eventWriter, rt *runningTask, spec taskSpec, tm *taskTimings, timeout time.Duration) runResult {
+	s := rt.slot
 	fail := func(code, msg string) runResult {
 		ew.emit(taskEvent{Type: "error", Code: code, Message: msg})
 		return runResult{failedEarly: true}
@@ -395,7 +413,7 @@ loop:
 			}
 			switch m.Type {
 			case "rpc":
-				d.relayRPC(spec.TaskID, wk, m)
+				d.relayRPC(rt, ew, spec.TaskID, wk, m)
 			case "done":
 				res.outcome = "done"
 				tm.Worker = m.Timings
@@ -428,9 +446,7 @@ loop:
 	}
 	tm.Run = time.Since(tRun).Milliseconds()
 
-	if ch := d.currentChannel(); ch != nil {
-		ch.dropTask(spec.TaskID)
-	}
+	rt.rpc.close()
 	// Kill the worker and its process group, then read what is left in the
 	// pipes.
 	wk.kill()
@@ -443,15 +459,21 @@ loop:
 	return res
 }
 
-// relayRPC sends an RPC call of the worker on the channel. The daemon sets the
-// task id; the worker cannot choose it.
-func (d *Daemon) relayRPC(taskID string, wk *worker, m workerMsg) {
+// relayRPC sends an RPC call of the worker to the client as an "rpc" event in
+// the task stream. The client answers with POST /tasks/{taskId}/rpc/{callId}.
+// The task of the stream is the scope of the call; the worker cannot select
+// another task.
+func (d *Daemon) relayRPC(rt *runningTask, ew *eventWriter, taskID string, wk *worker, m workerMsg) {
 	reply := func(res rpcResult) {
 		ok := res.OK
 		_ = wk.send(workerMsg{Type: "rpc_result", CallID: m.CallID, OK: &ok, Data: res.Data, Error: res.Error})
 	}
 	if m.CallID == "" || m.Name == "" {
 		reply(rpcResult{OK: false, Error: errorJSON("invalid rpc message")})
+		return
+	}
+	if !callIDRegex.MatchString(m.CallID) {
+		reply(rpcResult{OK: false, Error: errorJSON("invalid rpc callId")})
 		return
 	}
 	// A worker can still run code of an earlier task (a timer, for example).
@@ -461,19 +483,24 @@ func (d *Daemon) relayRPC(taskID string, wk *worker, m workerMsg) {
 		reply(rpcResult{OK: false, Error: errorJSON("the task of this call has ended")})
 		return
 	}
-	ch := d.currentChannel()
-	if ch == nil {
-		reply(rpcResult{OK: false, Error: errorJSON("RPC channel is not connected")})
+	if ew.isBroken() {
+		reply(rpcResult{OK: false, Error: errorJSON("the client of the task is gone")})
 		return
 	}
 	params := m.Params
 	if len(params) == 0 {
 		params = json.RawMessage("[]")
 	}
-	// Not the task context: a write that is cancelled half way closes the
-	// whole WebSocket, which other tasks share. The call is registered before
-	// this returns, so the end of the task (dropTask) removes it.
-	ch.call(context.Background(), taskID, m.CallID, m.Name, params, reply)
+	// Register before the event: the client can answer before emit returns.
+	if err := rt.rpc.add(m.CallID, reply); err != nil {
+		reply(rpcResult{OK: false, Error: errorJSON(err.Error())})
+		return
+	}
+	if !ew.emit(taskEvent{Type: "rpc", CallID: m.CallID, Name: m.Name, Params: params}) {
+		if cb := rt.rpc.take(m.CallID); cb != nil {
+			cb(rpcResult{OK: false, Error: errorJSON("the client of the task is gone")})
+		}
+	}
 }
 
 // rawFileName returns the filename parameter of a Content-Disposition header.

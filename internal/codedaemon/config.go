@@ -1,7 +1,7 @@
 // Package codedaemon is the daemon inside a code sandbox. It serves the Task API
 // routes that the runner proxies: task slots, a clean worker process per task
 // (or one shared worker process in reuse mode), staged inputs and outputs, the
-// task output stream and the RPC channel.
+// task output stream and the RPC calls.
 //
 // The daemon does not know the language of the runtime. It reads the worker
 // command from a runtime registry file and never reads task.json.
@@ -39,6 +39,10 @@ type Config struct {
 	// the daemon. Only for tests and local development.
 	// CODE_DAEMON_ALLOW_LOCAL_CLIENTS (default false).
 	AllowLocalClients bool
+	// CgroupDir is the cgroup v2 folder of the sandbox container. The daemon
+	// reads the CPU and memory use of the container from it.
+	// CODE_DAEMON_CGROUP_DIR (default /sys/fs/cgroup).
+	CgroupDir string
 }
 
 // RuntimeSpec is one entry of the runtime registry file.
@@ -69,6 +73,7 @@ func LoadConfig() (Config, error) {
 		TaskMemoryMB: defaultTaskMemoryMB,
 		SpareWorkers: true,
 		OutputTTL:    defaultOutputTTL,
+		CgroupDir:    envOr("CODE_DAEMON_CGROUP_DIR", "/sys/fs/cgroup"),
 	}
 	var err error
 	if cfg.Slots, err = envInt("CODE_DAEMON_SLOTS", defaultSlots, 1, maxSlots); err != nil {

@@ -123,18 +123,51 @@ func TestCodeIdleSweeper(t *testing.T) {
 		}
 	}
 	activity := newCodeActivity()
-	activity.begin(busy, true)
+	activity.begin(busy)
 	sweepIdleCodeSandboxes(context.Background(), s, reg, cfg, runnerControlTLS(cfg), activity, 2*time.Minute, time.Now())
 
 	if rec, _ := s.Get(idle); rec != nil {
 		t.Fatalf("idle code sandbox not deleted")
 	}
 	if rec, _ := s.Get(busy); rec == nil {
-		t.Fatalf("code sandbox with an open channel was deleted")
+		t.Fatalf("code sandbox with a running request was deleted")
 	}
-	activity.end(busy, true)
+	activity.end(busy)
 	sweepIdleCodeSandboxes(context.Background(), s, reg, cfg, runnerControlTLS(cfg), activity, 2*time.Minute, time.Now())
 	if rec, _ := s.Get(busy); rec != nil {
-		t.Fatalf("code sandbox not deleted after its channel closed")
+		t.Fatalf("code sandbox not deleted after its request ended")
+	}
+}
+
+// The RPC result route checks the call id and the tenant before it proxies.
+func TestCodeRPCResultRouteChecks(t *testing.T) {
+	router, s, _ := newIdleTestGateway(t, "admin-key", &fakeSandboxControl{})
+	sid := "66666666-6666-4666-8666-666666666666"
+	if err := s.Create(&store.SandboxRecord{ID: sid, Status: "running", CreatedAt: 1, LastActiveAt: time.Now().Unix(),
+		TenantID: store.AdminTenantID, RunnerID: "runner-1", RunnerHTTPBase: "https://127.0.0.1:9",
+		Kind: store.KindCode, Ephemeral: true, Egress: "none"}); err != nil {
+		t.Fatal(err)
+	}
+	post := func(key, path string) int {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"ok":true}`))
+		req.Header.Set("X-Api-Key", key)
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		return rr.Code
+	}
+	base := "/v1/code/sandboxes/" + sid + "/tasks/t1/rpc/"
+	if code := post("admin-key", base+"c.1"); code != http.StatusBadRequest {
+		t.Fatalf("invalid call id: %d", code)
+	}
+	if code := post("admin-key", base+strings.Repeat("a", 65)); code != http.StatusBadRequest {
+		t.Fatalf("long call id: %d", code)
+	}
+	if code := post("admin-key", "/v1/code/sandboxes/"+sid+"/tasks/t.1/rpc/c1"); code != http.StatusBadRequest {
+		t.Fatalf("invalid task id: %d", code)
+	}
+	other := mintTenantKey(t, router, `{"name":"other"}`)
+	if code := post(other.Key.APIKey, base+"c1"); code != http.StatusNotFound {
+		t.Fatalf("other tenant: %d", code)
 	}
 }
