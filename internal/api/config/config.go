@@ -149,7 +149,7 @@ type APIConfig struct {
 	OrphanReapBuffer time.Duration
 
 	// CodeIdleDeleteAfter is how long a code sandbox may have no Task API request
-	// and no open channel before the API deletes it (0 = disabled).
+	// before the API deletes it (0 = disabled).
 	// Parsed from SANDBOX_CODE_IDLE_DELETE_AFTER (default 2m).
 	CodeIdleDeleteAfter time.Duration
 

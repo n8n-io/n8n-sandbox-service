@@ -320,7 +320,8 @@ func (sw *sharedWorker) servedCount() int {
 }
 
 // runShared runs the task in the shared worker.
-func (d *Daemon) runShared(ctx context.Context, ew *eventWriter, s *slot, spec taskSpec, tm *taskTimings, timeout time.Duration) runResult {
+func (d *Daemon) runShared(ctx context.Context, ew *eventWriter, rt *runningTask, spec taskSpec, tm *taskTimings, timeout time.Duration) runResult {
+	s := rt.slot
 	fail := func(code, msg string) runResult {
 		ew.emit(taskEvent{Type: "error", Code: code, Message: msg})
 		return runResult{failedEarly: true}
@@ -356,7 +357,7 @@ func (d *Daemon) runShared(ctx context.Context, ew *eventWriter, s *slot, spec t
 				ew.emit(taskEvent{Type: m.Stream, Data: m.Text})
 			}
 		case "rpc":
-			d.relayRPC(spec.TaskID, sw.w, m)
+			d.relayRPC(rt, ew, spec.TaskID, sw.w, m)
 		case "done":
 			res.outcome = "done"
 			tm.Worker = m.Timings
@@ -405,9 +406,7 @@ loop:
 		}
 	}
 	tm.Run = time.Since(tRun).Milliseconds()
-	if ch := d.currentChannel(); ch != nil {
-		ch.dropTask(spec.TaskID)
-	}
+	rt.rpc.close()
 	return res
 }
 

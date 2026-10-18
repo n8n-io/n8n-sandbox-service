@@ -778,9 +778,10 @@ delete code sandboxes too (`"kind": "code"`). The exec, file, `mkdir` and `stat`
 routes answer `404` for a code sandbox. The
 Task API routes answer `404` for a general sandbox.
 
-The API deletes a code sandbox that has had no Task API request and no open
-channel for `SANDBOX_CODE_IDLE_DELETE_AFTER` (default `2m`). The count of open
-channels is in the memory of the API process.
+The API deletes a code sandbox that has had no Task API request for
+`SANDBOX_CODE_IDLE_DELETE_AFTER` (default `2m`). A running request (for example
+a task stream) counts as activity. The count of running requests is in the
+memory of the API process.
 
 ### POST /v1/code/sandboxes
 
@@ -835,26 +836,15 @@ all pods can claim.
 ### GET /v1/code/sandboxes/{id}
 
 Returns `id`, `runtime`, `runtimeVersion`, `slots`, `state`, `busySlots`,
-`channelOpen` and `workersStarted` (worker processes started since the sandbox
+`cpuUsageUsec`, `memoryPeakBytes` and `memoryCurrentBytes` (from the cgroup of
+the sandbox container, since its start; `0` if the daemon cannot read them),
+`uptimeMs` (since the code daemon started) and
+`workersStarted` (worker processes started since the sandbox
 started).
 
 ### DELETE /v1/code/sandboxes/{id}
 
 Deletes the sandbox and kills all its tasks. `204`.
-
-### GET /v1/code/sandboxes/{id}/channel
-
-WebSocket for the RPC channel. One connection per sandbox; a second one gets
-`409`. Frames are JSON text:
-
-| Direction | Frame | Fields |
-|---|---|---|
-| daemon → client | `channel:ready` | `runtimeVersion` |
-| daemon → client | `rpc:call` | `taskId`, `callId`, `name`, `params` |
-| client → daemon | `rpc:result` | `taskId`, `callId`, `ok`, `data` or `error` |
-
-The daemon sets `taskId` from the slot of the worker that made the call. When the
-channel closes, the open calls fail.
 
 ### POST /v1/code/sandboxes/{id}/tasks
 
@@ -874,6 +864,7 @@ Response `200`, `application/x-ndjson`:
 |---|---|
 | `accepted` | `taskId`, `slot` |
 | `stdout`, `stderr` | `data` |
+| `rpc` | `callId`, `name`, `params` (JSON array). An RPC call of the task. Answer it with `POST …/tasks/{taskId}/rpc/{callId}` |
 | `done` | `result` (the JSON of `out/result.json` if it is at most `inlineResultMaxBytes`, else `null`), `outputs` (`path`, `size`), `timings` |
 | `error` | `code` (`user_error`, `timeout`, `cancelled`, `oom`, `crashed`, `invalid`), `message`, `userError`, `timings` |
 
@@ -883,6 +874,22 @@ request first, the daemon kills the task. `timings` (ms): `slotWait`,
 `outputBytes`, `leftoverFiles` (entries in `/tmp` that changed during the task),
 `workerTasks` (tasks of this worker process, this one included)
 and `worker` (timings that the worker reported).
+
+### POST /v1/code/sandboxes/{id}/tasks/{taskId}/rpc/{callId}
+
+Sends the result of an `rpc` event of a running task. Body (JSON, at most 1 GiB):
+`{ "ok": true, "data": … }` or `{ "ok": false, "error": … }`. `callId` matches
+`^[A-Za-z0-9_-]{1,64}$`.
+
+| Status | Meaning |
+|---|---|
+| `204` | The worker got the result |
+| `404` | The task is not running, or the call is not open (it ended or has a result) |
+| `400` | Invalid id or body |
+
+A call can only get a result through the task that made it. When the task ends,
+its open calls close. A task can have at most 64 open calls. The worker gets an
+error reply for more.
 
 ### GET /v1/code/sandboxes/{id}/tasks/{taskId}/outputs/{path}
 
@@ -905,7 +912,7 @@ with JSON lines:
 |---|---|---|
 | worker → daemon | `ready` | — (the runtime is loaded) |
 | daemon → worker | `start` | `taskId`, `dir` (the slot folder), `deadline` (unix ms), `shared` (reuse mode) |
-| worker → daemon | `rpc` | `callId`, `name`, `params`, `taskId` (a call for an ended task is refused) |
+| worker → daemon | `rpc` | `callId` (`^[A-Za-z0-9_-]{1,64}$`), `name`, `params`, `taskId` (a call for an ended task is refused). The daemon sends it as an `rpc` event in the task stream |
 | daemon → worker | `rpc_result` | `callId`, `ok`, `data` or `error` |
 | worker → daemon | `done` | `taskId`, `timings`. The result is in `out/result.json` |
 | worker → daemon | `error` | `taskId`, `error`, `timings` |

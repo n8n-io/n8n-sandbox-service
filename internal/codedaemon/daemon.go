@@ -15,8 +15,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/coder/websocket"
 )
 
 // workerReadyTimeout bounds how long a task waits for a worker to load.
@@ -39,6 +37,8 @@ type slot struct {
 type runningTask struct {
 	slot   *slot
 	cancel context.CancelCauseFunc
+	// rpc holds the open RPC calls of the task.
+	rpc *pendingCalls
 }
 
 // Daemon is the code daemon.
@@ -63,10 +63,6 @@ type Daemon struct {
 	// sharedFailures counts shared workers in a row that exited before they
 	// were ready.
 	sharedFailures int
-
-	chMu    sync.Mutex
-	channel *channel
-	chBusy  bool
 
 	startedAt   time.Time
 	listeningAt atomic.Int64
@@ -117,7 +113,7 @@ func (d *Daemon) Handler() http.Handler {
 
 // refuseLocalClients refuses connections from inside the sandbox. Only the
 // runner may call the daemon. Without it, user code could run tasks under a
-// task id of its choice, take the RPC channel or cancel other tasks.
+// task id of its choice, answer RPC calls or cancel other tasks.
 // The runner connects from the bridge gateway, which is not a local address,
 // and user code has no CAP_NET_RAW to fake one.
 func (d *Daemon) refuseLocalClients(next http.Handler) http.Handler {
@@ -157,10 +153,10 @@ func (d *Daemon) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", d.handleHealth)
 	mux.HandleFunc("GET /state", d.handleState)
-	mux.HandleFunc("GET /channel", d.handleChannel)
 	mux.HandleFunc("POST /tasks", d.handleTask)
 	mux.HandleFunc("GET /tasks/{taskId}/outputs/{path...}", d.handleOutput)
 	mux.HandleFunc("DELETE /tasks/{taskId}", d.handleDeleteTask)
+	mux.HandleFunc("POST /tasks/{taskId}/rpc/{callId}", d.handleRPCResult)
 	return mux
 }
 
@@ -319,7 +315,7 @@ func (d *Daemon) takeWorker(s *slot) (*worker, bool, error) {
 
 // acquireSlot reserves a free slot for taskID. It returns nil if no slot is
 // free.
-func (d *Daemon) acquireSlot(taskID string, cancel context.CancelCauseFunc) (*slot, error) {
+func (d *Daemon) acquireSlot(taskID string, cancel context.CancelCauseFunc) (*runningTask, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.closed {
@@ -335,8 +331,9 @@ func (d *Daemon) acquireSlot(taskID string, cancel context.CancelCauseFunc) (*sl
 		if !s.busy {
 			s.busy = true
 			s.taskID = taskID
-			d.running[taskID] = &runningTask{slot: s, cancel: cancel}
-			return s, nil
+			rt := &runningTask{slot: s, cancel: cancel, rpc: newPendingCalls()}
+			d.running[taskID] = rt
+			return rt, nil
 		}
 	}
 	return nil, nil
@@ -377,12 +374,17 @@ type stateResponse struct {
 	Slots          int    `json:"slots"`
 	BusySlots      int    `json:"busySlots"`
 	SpareReady     int    `json:"spareReady"`
-	ChannelOpen    bool   `json:"channelOpen"`
 	SpareWorkers   bool   `json:"spareWorkers"`
 	ReuseWorkers   bool   `json:"reuseWorkers"`
 	WorkersStarted int64  `json:"workersStarted"`
 	TaskMemoryMB   int    `json:"taskMemoryMb"`
-	Timings        struct {
+	// Resource use of the sandbox container (its cgroup), since the start.
+	// Zero if the cgroup files are not readable.
+	CPUUsageUsec       int64 `json:"cpuUsageUsec"`
+	MemoryPeakBytes    int64 `json:"memoryPeakBytes"`
+	MemoryCurrentBytes int64 `json:"memoryCurrentBytes"`
+	UptimeMs           int64 `json:"uptimeMs"`
+	Timings            struct {
 		DaemonReadyMs int64 `json:"daemonReady"`
 		SpareReadyMs  int64 `json:"spareReady"`
 	} `json:"timings"`
@@ -397,6 +399,8 @@ func (d *Daemon) state() (stateResponse, bool) {
 	st.ReuseWorkers = d.cfg.ReuseWorkers
 	st.WorkersStarted = d.workersStarted.Load()
 	st.TaskMemoryMB = d.cfg.TaskMemoryMB
+	st.CPUUsageUsec, st.MemoryPeakBytes, st.MemoryCurrentBytes = readCgroupUsage(d.cfg.CgroupDir)
+	st.UptimeMs = time.Since(d.startedAt).Milliseconds()
 
 	d.mu.Lock()
 	for _, s := range d.slots {
@@ -419,10 +423,6 @@ func (d *Daemon) state() (stateResponse, bool) {
 		}
 	}
 	d.mu.Unlock()
-
-	d.chMu.Lock()
-	st.ChannelOpen = d.channel != nil
-	d.chMu.Unlock()
 
 	if v := d.listeningAt.Load(); v > 0 {
 		st.Timings.DaemonReadyMs = time.Duration(v - d.startedAt.UnixNano()).Milliseconds()
@@ -454,65 +454,6 @@ func (d *Daemon) handleHealth(w http.ResponseWriter, r *http.Request) {
 func (d *Daemon) handleState(w http.ResponseWriter, r *http.Request) {
 	st, _ := d.state()
 	writeJSON(w, http.StatusOK, st)
-}
-
-// handleChannel terminates the RPC channel WebSocket. There is at most one.
-func (d *Daemon) handleChannel(w http.ResponseWriter, r *http.Request) {
-	d.chMu.Lock()
-	if d.chBusy {
-		d.chMu.Unlock()
-		writeError(w, http.StatusConflict, errChannelBusy.Error())
-		return
-	}
-	d.chBusy = true
-	d.chMu.Unlock()
-	defer func() {
-		d.chMu.Lock()
-		d.chBusy = false
-		d.chMu.Unlock()
-	}()
-
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		// The runner and the API authenticate the caller. There is no browser.
-		InsecureSkipVerify: true,
-		CompressionMode:    websocket.CompressionDisabled,
-	})
-	if err != nil {
-		slog.Warn("channel: accept", "err", err)
-		return
-	}
-	// Results of httpRequest can be large. The memory limit of the container
-	// is the real bound.
-	conn.SetReadLimit(1 << 30)
-
-	ch := newChannel(conn)
-	d.chMu.Lock()
-	d.channel = ch
-	d.chMu.Unlock()
-
-	ctx := r.Context()
-	if err := ch.write(ctx, channelFrame{Type: "channel:ready", RuntimeVersion: d.runtime.Version}); err != nil {
-		slog.Warn("channel: write ready", "err", err)
-	} else {
-		err = ch.readLoop(ctx)
-		if websocket.CloseStatus(err) == -1 && !errors.Is(err, context.Canceled) {
-			slog.Info("channel closed", "err", err)
-		}
-	}
-
-	d.chMu.Lock()
-	if d.channel == ch {
-		d.channel = nil
-	}
-	d.chMu.Unlock()
-	ch.failAll("RPC channel closed")
-	_ = conn.Close(websocket.StatusNormalClosure, "")
-}
-
-func (d *Daemon) currentChannel() *channel {
-	d.chMu.Lock()
-	defer d.chMu.Unlock()
-	return d.channel
 }
 
 // handleOutput streams one output file of a finished task.

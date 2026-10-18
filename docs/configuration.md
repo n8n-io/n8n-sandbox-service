@@ -37,7 +37,7 @@ All services are configured via environment variables.
 | `SANDBOX_API_RUNNER_HEARTBEAT_GRACE` | `45s` | How long after the last gRPC heartbeat a runner remains eligible for placement (Go [`time.ParseDuration`](https://pkg.go.dev/time#ParseDuration) syntax, e.g. `45s`, `2m`) |
 | `SANDBOX_API_IDLE_STOP_AFTER` | `1h` | Idle time after which the sweeper stops a sandbox (deletes it if `ephemeral`). `0` disables |
 | `SANDBOX_API_IDLE_DELETE_AFTER` | `24h` | Idle time after which the sweeper deletes a sandbox; wakes are refused past this window. `0` disables |
-| `SANDBOX_CODE_IDLE_DELETE_AFTER` | `2m` | Time without a Task API request and without an open channel after which the API deletes a code sandbox. `0` disables |
+| `SANDBOX_CODE_IDLE_DELETE_AFTER` | `2m` | Time without a Task API request after which the API deletes a code sandbox. A running request counts as activity. `0` disables |
 | `SANDBOX_CODE_POOLS` | — | Warm pools of code sandboxes, as a JSON list. Each item has the fields of `POST /v1/code/sandboxes` (`runtime`, `slots`, `taskMemoryMb`, `spareWorkers`, `reuseWorkers`) and `size`, the number of sandboxes to keep ready. Example: `[{"slots":2,"reuseWorkers":true,"size":8}]`. Empty disables the pool |
 | `SANDBOX_CODE_POOL_REFILL_CONCURRENCY` | `2` | Pool creates that run at the same time, for all pools |
 | `SANDBOX_CODE_POOL_MAX_AGE` | `30m` | The pool manager replaces a pooled sandbox that is older |

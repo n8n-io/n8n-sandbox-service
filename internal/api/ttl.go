@@ -445,8 +445,8 @@ func sweepEphemeralSandboxes(ctx context.Context, s store.SandboxStore, reg regi
 		if rec.Status != "running" || rec.LastActiveAt > cutoff {
 			return false, nil
 		}
-		// Code sandboxes have their own sweeper, which knows about open
-		// channels and running tasks (StartCodeIdleSweeper).
+		// Code sandboxes have their own sweeper, which knows about running
+		// Task API requests (StartCodeIdleSweeper).
 		if rec.Kind == store.KindCode {
 			return false, nil
 		}

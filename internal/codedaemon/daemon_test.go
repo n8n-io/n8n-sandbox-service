@@ -17,8 +17,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/coder/websocket"
 )
 
 // shellWorker speaks the worker protocol. The "mode" in task.json selects the
@@ -36,6 +34,12 @@ case "$task" in
     echo "$task" > "$dir/out/result.json"
     echo '{"type":"done"}' >&3
     exit 0 ;;
+  *badcallid*)
+    echo '{"type":"rpc","callId":"c/1","name":"helpers.httpRequest","params":[]}' >&3
+    read -r res <&3
+    echo "rpc:$res"
+    echo "$task" > "$dir/out/result.json"
+    echo '{"type":"done"}' >&3; sleep 5 ;;
   *rpc*)
     echo '{"type":"rpc","callId":"c1","name":"helpers.httpRequest","params":[{"url":"http://x"}]}' >&3
     read -r res <&3
@@ -345,45 +349,72 @@ func TestNoFreeSlotAndCancel(t *testing.T) {
 	}
 }
 
-func TestRPCChannel(t *testing.T) {
-	td := startTestDaemon(t, 1, true)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	wsURL := "ws" + strings.TrimPrefix(td.base, "http") + "/channel"
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+// postRPCResult posts an RPC result and returns the status code.
+func (td *testDaemon) postRPCResult(t *testing.T, taskID, callID, body string) int {
+	t.Helper()
+	resp, err := http.Post(td.base+"/tasks/"+taskID+"/rpc/"+callID, "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.CloseNow()
-	_, data, err := conn.Read(ctx)
-	if err != nil || !bytes.Contains(data, []byte(`"channel:ready"`)) || !bytes.Contains(data, []byte(`1.2.3`)) {
-		t.Fatalf("ready frame %s %v", data, err)
+	resp.Body.Close()
+	return resp.StatusCode
+}
+
+// runTaskRPC runs a task and calls onRPC for each "rpc" event while the stream
+// is open.
+func (td *testDaemon) runTaskRPC(t *testing.T, spec map[string]any, onRPC func(ev taskEvent), inputs ...inputFile) []taskEvent {
+	t.Helper()
+	body, ct := taskBody(t, spec, inputs...)
+	resp, err := http.Post(td.base+"/tasks", ct, body)
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	// A second channel is refused.
-	_, resp, err := websocket.Dial(ctx, wsURL, nil)
-	if err == nil || resp == nil || resp.StatusCode != http.StatusConflict {
-		t.Fatalf("second channel: %v %v", err, resp)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("task status %d", resp.StatusCode)
 	}
-
-	go func() {
-		_, data, err := conn.Read(ctx)
-		if err != nil {
-			return
+	var events []taskEvent
+	dec := json.NewDecoder(resp.Body)
+	for {
+		var ev taskEvent
+		if err := dec.Decode(&ev); err != nil {
+			break
 		}
-		var f channelFrame
-		_ = json.Unmarshal(data, &f)
-		if f.Type != "rpc:call" || f.TaskID != "r1" || f.Name != "helpers.httpRequest" {
-			t.Errorf("rpc frame %s", data)
-			return
+		events = append(events, ev)
+		if ev.Type == "rpc" {
+			onRPC(ev)
 		}
-		reply := fmt.Sprintf(`{"type":"rpc:result","taskId":%q,"callId":%q,"ok":true,"data":{"status":200}}`, f.TaskID, f.CallID)
-		_ = conn.Write(ctx, websocket.MessageText, []byte(reply))
-	}()
+	}
+	return events
+}
 
-	_, events := td.runTask(t, map[string]any{"taskId": "r1"}, inputFile{"task.json", `{"mode":"rpc"}`})
+func TestRPCOverTaskStream(t *testing.T) {
+	td := startTestDaemon(t, 1, true)
+	calls := 0
+	events := td.runTaskRPC(t, map[string]any{"taskId": "r1"}, func(ev taskEvent) {
+		calls++
+		if ev.CallID != "c1" || ev.Name != "helpers.httpRequest" || ev.TaskID != "" {
+			t.Errorf("rpc event %+v", ev)
+		}
+		if string(ev.Params) != `[{"url":"http://x"}]` {
+			t.Errorf("params %s", ev.Params)
+		}
+		if code := td.postRPCResult(t, "r1", ev.CallID, `{"ok":true,"data":{"status":200}}`); code != http.StatusNoContent {
+			t.Errorf("result status %d", code)
+		}
+		// The same result again: the call is not open any more.
+		if code := td.postRPCResult(t, "r1", ev.CallID, `{"ok":true,"data":{}}`); code != http.StatusNotFound {
+			t.Errorf("second result status %d", code)
+		}
+	}, inputFile{"task.json", `{"mode":"rpc"}`})
 	if ev := terminal(t, events); ev.Type != "done" {
 		t.Fatalf("rpc task: %+v", events)
+	}
+	if calls != 1 {
+		t.Fatalf("want 1 rpc event, got %d", calls)
+	}
+	if events[0].Type != "accepted" {
+		t.Fatalf("first event %+v", events[0])
 	}
 	out := collect(events, "stdout")
 	if !strings.Contains(out, `"ok":true`) || !strings.Contains(out, `"status":200`) {
@@ -391,12 +422,91 @@ func TestRPCChannel(t *testing.T) {
 	}
 }
 
-func TestRPCWithoutChannel(t *testing.T) {
+func TestRPCResultErrors(t *testing.T) {
 	td := startTestDaemon(t, 1, true)
-	_, events := td.runTask(t, map[string]any{"taskId": "nc"}, inputFile{"task.json", `{"mode":"rpc"}`})
-	out := collect(events, "stdout")
-	if !strings.Contains(out, "not connected") {
+	if code := td.postRPCResult(t, "nope", "c1", `{"ok":true}`); code != http.StatusNotFound {
+		t.Fatalf("unknown task: %d", code)
+	}
+	if code := td.postRPCResult(t, "r1", "c.1", `{"ok":true}`); code != http.StatusBadRequest {
+		t.Fatalf("invalid call id: %d", code)
+	}
+	if code := td.postRPCResult(t, "r.1", "c1", `{"ok":true}`); code != http.StatusBadRequest {
+		t.Fatalf("invalid task id: %d", code)
+	}
+
+	events := td.runTaskRPC(t, map[string]any{"taskId": "r2"}, func(ev taskEvent) {
+		if code := td.postRPCResult(t, "r2", "other", `{"ok":true}`); code != http.StatusNotFound {
+			t.Errorf("unknown call: %d", code)
+		}
+		if code := td.postRPCResult(t, "r2", ev.CallID, `not json`); code != http.StatusBadRequest {
+			t.Errorf("bad body: %d", code)
+		}
+		if code := td.postRPCResult(t, "r2", ev.CallID, `{"data":1}`); code != http.StatusBadRequest {
+			t.Errorf("missing ok: %d", code)
+		}
+		// The call is still open after the bad requests.
+		if code := td.postRPCResult(t, "r2", ev.CallID, `{"ok":false,"error":{"message":"no"}}`); code != http.StatusNoContent {
+			t.Errorf("result: %d", code)
+		}
+	}, inputFile{"task.json", `{"mode":"rpc"}`})
+	if ev := terminal(t, events); ev.Type != "done" {
+		t.Fatalf("task: %+v", events)
+	}
+	if out := collect(events, "stdout"); !strings.Contains(out, `"ok":false`) || !strings.Contains(out, `"no"`) {
 		t.Fatalf("stdout %q", out)
+	}
+	if code := td.postRPCResult(t, "r2", "c1", `{"ok":true}`); code != http.StatusNotFound {
+		t.Fatalf("after the task: %d", code)
+	}
+}
+
+func TestRPCInvalidCallID(t *testing.T) {
+	td := startTestDaemon(t, 1, true)
+	events := td.runTaskRPC(t, map[string]any{"taskId": "b1"}, func(ev taskEvent) {
+		t.Errorf("unexpected rpc event %+v", ev)
+	}, inputFile{"task.json", `{"mode":"badcallid"}`})
+	if ev := terminal(t, events); ev.Type != "done" {
+		t.Fatalf("task: %+v", events)
+	}
+	if out := collect(events, "stdout"); !strings.Contains(out, "invalid rpc callId") {
+		t.Fatalf("stdout %q", out)
+	}
+}
+
+func TestRPCClientGone(t *testing.T) {
+	td := startTestDaemon(t, 1, true)
+	body, ct := taskBody(t, map[string]any{"taskId": "g1"}, inputFile{"task.json", `{"mode":"rpc"}`})
+	resp, err := http.Post(td.base+"/tasks", ct, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dec := json.NewDecoder(resp.Body)
+	var callID string
+	for callID == "" {
+		var ev taskEvent
+		if err := dec.Decode(&ev); err != nil {
+			t.Fatalf("stream: %v", err)
+		}
+		if ev.Type == "rpc" {
+			callID = ev.CallID
+		}
+	}
+	resp.Body.Close()
+
+	// The slot becomes free, and the call is not open any more.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		st, _ := td.d.state()
+		if st.BusySlots == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("slot not freed after the client left")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if code := td.postRPCResult(t, "g1", callID, `{"ok":true}`); code != http.StatusNotFound {
+		t.Fatalf("result after the client left: %d", code)
 	}
 }
 
@@ -462,14 +572,21 @@ func TestReadLimitedLine(t *testing.T) {
 //   - "hang": the task does not end, but the worker confirms a cancel.
 //   - "block": the worker blocks and cannot confirm a cancel.
 //   - "slow": the task takes 1 s.
+//   - "rpc": the task makes one RPC call with the task number as params, and
+//     writes "rpc ok" if the result data holds the same number.
 const sharedWorkerScript = `#!/bin/sh
 echo '{"type":"ready"}' >&3
+rdir=$(dirname "$0")
 n=0
 while read -r line <&3; do
   id=$(printf '%s' "$line" | sed -n 's/.*"taskId":"\([^"]*\)".*/\1/p')
   case "$line" in
     *'"type":"cancel"'*)
       printf '{"type":"cancelled","taskId":"%s"}\n' "$id" >&3
+      continue ;;
+    *'"type":"rpc_result"'*)
+      cid=$(printf '%s' "$line" | sed -n 's/.*"callId":"\([^"]*\)".*/\1/p')
+      printf '%s' "$line" > "$rdir/rpc-$cid"
       continue ;;
     *'"type":"start"'*) ;;
     *) continue ;;
@@ -480,6 +597,12 @@ while read -r line <&3; do
   (
     if grep -q hang "$dir/in/task.json"; then sleep 30; fi
     if grep -q slow "$dir/in/task.json"; then sleep 1; fi
+    if grep -q rpc "$dir/in/task.json"; then
+      printf '{"type":"rpc","taskId":"%s","callId":"r%s","name":"helpers.httpRequest","params":[%s]}\n' "$id" "$n" "$n" >&3
+      while [ ! -f "$rdir/rpc-r$n" ]; do sleep 0.05; done
+      if grep -q "\"tag\":$n}" "$rdir/rpc-r$n"; then res=ok; else res=bad; fi
+      printf '{"type":"output","taskId":"%s","stream":"stdout","text":"rpc %s\\n"}\n' "$id" "$res" >&3
+    fi
     printf '{"type":"output","taskId":"%s","stream":"stdout","text":"task %s\\n"}\n' "$id" "$n" >&3
     printf '{"n":%s,"pid":%s}' "$n" "$$" > "$dir/out/result.json"
     printf '{"type":"done","taskId":"%s"}\n' "$id" >&3
@@ -639,6 +762,48 @@ func TestSharedWorkerCancel(t *testing.T) {
 	}
 }
 
+func TestSharedWorkerRPC(t *testing.T) {
+	td := startSharedDaemon(t, 2)
+	type out struct {
+		id     string
+		calls  []taskEvent
+		stdout string
+	}
+	results := make(chan out, 2)
+	// Each task sees only its own call. A result posted under the other
+	// task's id does not reach the call.
+	ids := []string{"p1", "p2"}
+	for i, id := range ids {
+		other := ids[1-i]
+		go func() {
+			var calls []taskEvent
+			events := td.runTaskRPC(t, map[string]any{"taskId": id}, func(ev taskEvent) {
+				calls = append(calls, ev)
+				if code := td.postRPCResult(t, other, ev.CallID, `{"ok":true,"data":{"tag":0}}`); code != http.StatusNotFound {
+					t.Errorf("result under another task: %d", code)
+				}
+				body := fmt.Sprintf(`{"ok":true,"data":{"tag":%s}}`, strings.Trim(string(ev.Params), "[]"))
+				if code := td.postRPCResult(t, id, ev.CallID, body); code != http.StatusNoContent {
+					t.Errorf("result: %d", code)
+				}
+			}, inputFile{"task.json", `{"rpc":1,"slow":1}`})
+			if ev := terminal(t, events); ev.Type != "done" {
+				t.Errorf("task %s: %+v", id, ev)
+			}
+			results <- out{id, calls, collect(events, "stdout")}
+		}()
+	}
+	for range ids {
+		r := <-results
+		if len(r.calls) != 1 {
+			t.Fatalf("task %s: %d rpc events", r.id, len(r.calls))
+		}
+		if !strings.Contains(r.stdout, "rpc ok") {
+			t.Fatalf("task %s: stdout %q", r.id, r.stdout)
+		}
+	}
+}
+
 func TestSharedWorkerHeapLimit(t *testing.T) {
 	d, err := New(Config{WorkDir: t.TempDir(), Slots: 4, TaskMemoryMB: 128, ReuseWorkers: true},
 		RuntimeSpec{Command: []string{"node", "--max-old-space-size={taskMemoryMb}"}})
@@ -690,5 +855,45 @@ func TestWorkersStarted(t *testing.T) {
 	}
 	if got := shared.workersStarted(t); got != 1 {
 		t.Errorf("reuse: workersStarted %d, want 1", got)
+	}
+}
+
+func TestPendingCallsLimits(t *testing.T) {
+	p := newPendingCalls()
+	noop := func(rpcResult) {}
+	for i := 0; i < maxOpenCalls; i++ {
+		if err := p.add(fmt.Sprintf("c%d", i), noop); err != nil {
+			t.Fatalf("add %d: %v", i, err)
+		}
+	}
+	if err := p.add("one-more", noop); err != errTooMany {
+		t.Fatalf("over the limit: %v", err)
+	}
+	if err := p.add("c0", noop); err != errCallExists {
+		t.Fatalf("duplicate: %v", err)
+	}
+	if p.take("c0") == nil || p.take("c0") != nil {
+		t.Fatal("take must return the callback once")
+	}
+	p.close()
+	if p.has("c1") {
+		t.Fatal("open call after close")
+	}
+	if err := p.add("new", noop); err != errCallsDone {
+		t.Fatalf("add after close: %v", err)
+	}
+}
+
+func TestReadCgroupUsage(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "cpu.stat"), []byte("usage_usec 12345\nuser_usec 10000\n"), 0o600)
+	_ = os.WriteFile(filepath.Join(dir, "memory.peak"), []byte("2048\n"), 0o600)
+	_ = os.WriteFile(filepath.Join(dir, "memory.current"), []byte("1024\n"), 0o600)
+	cpu, peak, cur := readCgroupUsage(dir)
+	if cpu != 12345 || peak != 2048 || cur != 1024 {
+		t.Fatalf("got %d %d %d", cpu, peak, cur)
+	}
+	if cpu, peak, cur := readCgroupUsage(filepath.Join(dir, "missing")); cpu != 0 || peak != 0 || cur != 0 {
+		t.Fatalf("missing dir: %d %d %d", cpu, peak, cur)
 	}
 }

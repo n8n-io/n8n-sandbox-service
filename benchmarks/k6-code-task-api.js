@@ -4,13 +4,14 @@
 //   k6 run -e SCENARIO=create benchmarks/k6-code-task-api.js           # one at a time
 //   k6 run -e SCENARIO=create -e BURST=10 benchmarks/k6-code-task-api.js
 //   k6 run -e SCENARIO=task benchmarks/k6-code-task-api.js             # 1 KB in, 1 KB out
-//   k6 run -e SCENARIO=rpc benchmarks/k6-code-task-api.js              # one RPC round trip
+//
+// k6 cannot answer an "rpc" event while the task stream is open. For the RPC
+// round trip, use benchmarks/code-rpc-roundtrip.mjs.
 //
 // The code sandbox image must provide the "n8n-js" runtime (@n8n/code-runtime).
 import http from "k6/http";
 import { check, fail, sleep } from "k6";
 import { Trend, Counter } from "k6/metrics";
-import { WebSocket } from "k6/websockets";
 
 const BASE_URL = __ENV.BASE_URL || "http://127.0.0.1:8080";
 const API_KEY = __ENV.API_KEY || "test";
@@ -36,7 +37,6 @@ const taskDuration = new Trend("code_task_duration", true);
 const taskAccepted = new Trend("code_task_time_to_accepted", true);
 const taskRun = new Trend("code_task_worker_run", true);
 const taskHandoff = new Trend("code_task_handoff", true);
-const rpcRoundTrip = new Trend("code_rpc_round_trip", true);
 const taskErrors = new Counter("code_task_errors");
 
 const headers = { "X-Api-Key": API_KEY };
@@ -153,34 +153,5 @@ export default async function (data) {
     http.del(`${BASE_URL}/v1/code/sandboxes/${data.id}/tasks/${t.taskId}`, null, { headers });
     if (THINK > 0) sleep(THINK);
     return;
-  }
-
-  if (SCENARIO === "rpc") {
-    const wsUrl = BASE_URL.replace(/^http/, "ws") + `/v1/code/sandboxes/${data.id}/channel`;
-    const ws = new WebSocket(wsUrl, null, { headers });
-    await new Promise((resolve, reject) => {
-      ws.onerror = (e) => reject(e);
-      ws.onmessage = async (msg) => {
-        const frame = JSON.parse(msg.data);
-        if (frame.type === "channel:ready") {
-          const t = taskBody(
-            "const t0 = Date.now(); const r = await helpers.httpRequest({ url: 'http://bench' }); return { rpcMs: Date.now() - t0, r }",
-            {},
-          );
-          const res = await http.asyncRequest("POST", `${BASE_URL}/v1/code/sandboxes/${data.id}/tasks`, t.body, {
-            headers: { ...headers, "Content-Type": t.contentType },
-          });
-          const done = recordTask(res);
-          if (done) rpcRoundTrip.add(done.result.result.rpcMs);
-          ws.close();
-          resolve();
-          if (THINK > 0) sleep(THINK);
-        } else if (frame.type === "rpc:call") {
-          ws.send(
-            JSON.stringify({ type: "rpc:result", taskId: frame.taskId, callId: frame.callId, ok: true, data: { status: 200, body: payload } }),
-          );
-        }
-      };
-    });
   }
 }

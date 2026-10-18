@@ -5,19 +5,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/coder/websocket"
 
 	"github.com/n8n-io/sandbox-service/internal/codedaemon"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
@@ -35,9 +34,10 @@ echo '{"type":"done"}' >&3
 sleep 5
 `
 
-// The runner chain must pass the channel WebSocket and the streamed task
-// response through its middleware unchanged.
-func TestCodeProxyChannelTaskAndOutputs(t *testing.T) {
+// The runner chain must pass the streamed task response and the RPC result
+// through its middleware unchanged, and must not pass credentials to the
+// daemon.
+func TestCodeProxyTaskRPCAndOutputs(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "worker.sh")
 	if err := os.WriteFile(script, []byte(codeProxyTestWorker), 0o755); err != nil {
@@ -67,7 +67,22 @@ func TestCodeProxyChannelTaskAndOutputs(t *testing.T) {
 		<-served
 	}()
 
-	rt := &fakeRuntime{daemonURL: "http://" + lis.Addr().String()}
+	// A recorder in front of the daemon shows the headers that reach it.
+	daemonURL, _ := url.Parse("http://" + lis.Addr().String())
+	toDaemon := httputil.NewSingleHostReverseProxy(daemonURL)
+	toDaemon.FlushInterval = -1
+	leaked := make(chan string, 16)
+	recorder := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, h := range []string{"X-Api-Key", "Authorization", "Cookie"} {
+			if r.Header.Get(h) != "" {
+				leaked <- r.URL.Path + " " + h
+			}
+		}
+		toDaemon.ServeHTTP(w, r)
+	}))
+	defer recorder.Close()
+
+	rt := &fakeRuntime{daemonURL: recorder.URL}
 	mux := http.NewServeMux()
 	registerCodeRoutes(mux, rt)
 	var handler http.Handler = mux
@@ -94,27 +109,6 @@ func TestCodeProxyChannelTaskAndOutputs(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	wctx, wcancel := context.WithTimeout(ctx, 10*time.Second)
-	defer wcancel()
-	conn, _, err := websocket.Dial(wctx, "ws"+strings.TrimPrefix(base, "http")+"/channel", nil)
-	if err != nil {
-		t.Fatalf("channel through proxy: %v", err)
-	}
-	defer conn.CloseNow()
-	if _, data, err := conn.Read(wctx); err != nil || !bytes.Contains(data, []byte("channel:ready")) {
-		t.Fatalf("ready: %s %v", data, err)
-	}
-	go func() {
-		_, data, err := conn.Read(wctx)
-		if err != nil {
-			return
-		}
-		var f struct{ TaskID, CallID string }
-		_ = json.Unmarshal(data, &f)
-		_ = conn.Write(wctx, websocket.MessageText, []byte(fmt.Sprintf(
-			`{"type":"rpc:result","taskId":%q,"callId":%q,"ok":true,"data":"pong"}`, f.TaskID, f.CallID)))
-	}()
-
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
 	sw, _ := mw.CreateFormField("spec")
@@ -126,15 +120,36 @@ func TestCodeProxyChannelTaskAndOutputs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	all, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
 	if resp.StatusCode != 200 {
+		all, _ := io.ReadAll(resp.Body)
 		t.Fatalf("task status %d: %s", resp.StatusCode, all)
 	}
-	var sawPong, sawDone bool
-	sc := bufio.NewScanner(bytes.NewReader(all))
+	var sawRPC, sawPong, sawDone bool
+	var all []string
+	sc := bufio.NewScanner(resp.Body)
 	for sc.Scan() {
 		line := sc.Text()
+		all = append(all, line)
+		var ev struct{ Type, CallID string }
+		_ = json.Unmarshal([]byte(line), &ev)
+		if ev.Type == "rpc" {
+			// The stream is not buffered: the result goes back while the
+			// task waits for it.
+			sawRPC = true
+			req, _ := http.NewRequest(http.MethodPost, base+"/tasks/px1/rpc/"+ev.CallID,
+				strings.NewReader(`{"ok":true,"data":"pong"}`))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-Api-Key", "secret")
+			req.Header.Set("Authorization", "Bearer secret")
+			rres, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rres.Body.Close()
+			if rres.StatusCode != http.StatusNoContent {
+				t.Fatalf("rpc result status %d", rres.StatusCode)
+			}
+		}
 		if strings.Contains(line, `"stdout"`) && strings.Contains(line, "pong") {
 			sawPong = true
 		}
@@ -142,8 +157,14 @@ func TestCodeProxyChannelTaskAndOutputs(t *testing.T) {
 			sawDone = true
 		}
 	}
-	if !sawPong || !sawDone {
-		t.Fatalf("events: %s", all)
+	resp.Body.Close()
+	if !sawRPC || !sawPong || !sawDone {
+		t.Fatalf("events: %s", strings.Join(all, "\n"))
+	}
+	select {
+	case h := <-leaked:
+		t.Fatalf("credential header reached the daemon: %s", h)
+	default:
 	}
 
 	resp, err = http.Get(base + "/tasks/px1/outputs/result.json")

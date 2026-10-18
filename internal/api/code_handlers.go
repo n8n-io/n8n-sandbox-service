@@ -25,6 +25,9 @@ import (
 // binaries plus the other inputs.
 const codeTaskMaxBodyBytes int64 = 2200 * 1024 * 1024
 
+// codeRPCResultMaxBodyBytes bounds the result of one RPC call.
+const codeRPCResultMaxBodyBytes int64 = 1 << 30
+
 // Defaults of POST /v1/code/sandboxes.
 const (
 	defaultCodeRuntime      = "n8n-js"
@@ -57,40 +60,46 @@ type codeCreateTimings struct {
 }
 
 type codeSandboxResponse struct {
-	ID             string             `json:"id"`
-	Runtime        string             `json:"runtime"`
-	RuntimeVersion string             `json:"runtimeVersion"`
-	Slots          int                `json:"slots"`
-	State          string             `json:"state"`
-	Pooled         bool               `json:"pooled,omitempty"`
-	BusySlots      *int               `json:"busySlots,omitempty"`
-	ChannelOpen    *bool              `json:"channelOpen,omitempty"`
-	WorkersStarted *int64             `json:"workersStarted,omitempty"`
-	Timings        *codeCreateTimings `json:"timings,omitempty"`
+	ID             string `json:"id"`
+	Runtime        string `json:"runtime"`
+	RuntimeVersion string `json:"runtimeVersion"`
+	Slots          int    `json:"slots"`
+	State          string `json:"state"`
+	Pooled         bool   `json:"pooled,omitempty"`
+	BusySlots      *int   `json:"busySlots,omitempty"`
+	WorkersStarted *int64 `json:"workersStarted,omitempty"`
+	// Resource use of the sandbox container since its start (GET only).
+	CPUUsageUsec       *int64             `json:"cpuUsageUsec,omitempty"`
+	MemoryPeakBytes    *int64             `json:"memoryPeakBytes,omitempty"`
+	MemoryCurrentBytes *int64             `json:"memoryCurrentBytes,omitempty"`
+	UptimeMs           *int64             `json:"uptimeMs,omitempty"`
+	Timings            *codeCreateTimings `json:"timings,omitempty"`
 }
 
 // codeDaemonState is the subset of the code daemon /state and /healthz answer
 // that the API reads.
 type codeDaemonState struct {
-	Status         string `json:"status"`
-	Runtime        string `json:"runtime"`
-	RuntimeVersion string `json:"runtimeVersion"`
-	Slots          int    `json:"slots"`
-	BusySlots      int    `json:"busySlots"`
-	ChannelOpen    bool   `json:"channelOpen"`
-	WorkersStarted int64  `json:"workersStarted"`
-	Timings        struct {
+	Status             string `json:"status"`
+	Runtime            string `json:"runtime"`
+	RuntimeVersion     string `json:"runtimeVersion"`
+	Slots              int    `json:"slots"`
+	BusySlots          int    `json:"busySlots"`
+	WorkersStarted     int64  `json:"workersStarted"`
+	CPUUsageUsec       int64  `json:"cpuUsageUsec"`
+	MemoryPeakBytes    int64  `json:"memoryPeakBytes"`
+	MemoryCurrentBytes int64  `json:"memoryCurrentBytes"`
+	UptimeMs           int64  `json:"uptimeMs"`
+	Timings            struct {
 		DaemonReady int64 `json:"daemonReady"`
 		SpareReady  int64 `json:"spareReady"`
 	} `json:"timings"`
 }
 
-// codeActivity counts open channels and running Task API requests per code
-// sandbox. The code idle sweeper does not delete a sandbox that has either. It
-// is in memory: the spike runs one API pod.
+// codeActivity counts running Task API requests per code sandbox. The code
+// idle sweeper does not delete a sandbox that has one. It is in memory: the
+// spike runs one API pod.
 type codeActivity struct {
 	mu       sync.Mutex
-	channels map[string]int
 	requests map[string]int
 }
 
@@ -99,37 +108,29 @@ type codeActivity struct {
 var codeActivityTracker = newCodeActivity()
 
 func newCodeActivity() *codeActivity {
-	return &codeActivity{channels: make(map[string]int), requests: make(map[string]int)}
+	return &codeActivity{requests: make(map[string]int)}
 }
 
-func (a *codeActivity) begin(id string, channel bool) {
+func (a *codeActivity) begin(id string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if channel {
-		a.channels[id]++
-	} else {
-		a.requests[id]++
-	}
+	a.requests[id]++
 }
 
-func (a *codeActivity) end(id string, channel bool) {
+func (a *codeActivity) end(id string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	m := a.requests
-	if channel {
-		m = a.channels
-	}
-	if m[id] <= 1 {
-		delete(m, id)
+	if a.requests[id] <= 1 {
+		delete(a.requests, id)
 	} else {
-		m[id]--
+		a.requests[id]--
 	}
 }
 
 func (a *codeActivity) busy(id string) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.channels[id] > 0 || a.requests[id] > 0
+	return a.requests[id] > 0
 }
 
 // codeAPI holds the Task API handlers.
@@ -154,10 +155,10 @@ func (c *codeAPI) register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/code/sandboxes", c.handleCreate)
 	mux.HandleFunc("GET /v1/code/sandboxes/{id}", c.handleGet)
 	mux.HandleFunc("DELETE /v1/code/sandboxes/{id}", c.handleDelete)
-	mux.HandleFunc("GET /v1/code/sandboxes/{id}/channel", c.proxy(0, true))
-	mux.HandleFunc("POST /v1/code/sandboxes/{id}/tasks", c.proxy(codeTaskMaxBodyBytes, false))
-	mux.HandleFunc("GET /v1/code/sandboxes/{id}/tasks/{taskId}/outputs/{path...}", c.proxy(0, false))
-	mux.HandleFunc("DELETE /v1/code/sandboxes/{id}/tasks/{taskId}", c.proxy(0, false))
+	mux.HandleFunc("POST /v1/code/sandboxes/{id}/tasks", c.proxy(codeTaskMaxBodyBytes))
+	mux.HandleFunc("GET /v1/code/sandboxes/{id}/tasks/{taskId}/outputs/{path...}", c.proxy(0))
+	mux.HandleFunc("DELETE /v1/code/sandboxes/{id}/tasks/{taskId}", c.proxy(0))
+	mux.HandleFunc("POST /v1/code/sandboxes/{id}/tasks/{taskId}/rpc/{callId}", c.proxy(codeRPCResultMaxBodyBytes))
 }
 
 // handleCreate creates a code sandbox. It answers when the code daemon is ready.
@@ -363,17 +364,19 @@ func (c *codeAPI) handleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	busy := st.BusySlots
-	ch := st.ChannelOpen
 	started := st.WorkersStarted
 	writeJSON(w, http.StatusOK, codeSandboxResponse{
-		ID:             rec.ID,
-		Runtime:        st.Runtime,
-		RuntimeVersion: st.RuntimeVersion,
-		Slots:          st.Slots,
-		State:          st.Status,
-		BusySlots:      &busy,
-		ChannelOpen:    &ch,
-		WorkersStarted: &started,
+		ID:                 rec.ID,
+		Runtime:            st.Runtime,
+		RuntimeVersion:     st.RuntimeVersion,
+		Slots:              st.Slots,
+		State:              st.Status,
+		BusySlots:          &busy,
+		WorkersStarted:     &started,
+		CPUUsageUsec:       &st.CPUUsageUsec,
+		MemoryPeakBytes:    &st.MemoryPeakBytes,
+		MemoryCurrentBytes: &st.MemoryCurrentBytes,
+		UptimeMs:           &st.UptimeMs,
 	})
 }
 
@@ -402,13 +405,16 @@ func (c *codeAPI) handleDelete(w http.ResponseWriter, r *http.Request) {
 	success = true
 }
 
-var codeTaskIDRegex = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+var (
+	codeTaskIDRegex = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+	codeCallIDRegex = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+)
 
 // proxy forwards a Task API request to the runner, which forwards it to the
-// code daemon. longLived marks the routes that may run for a long time: the
-// channel and task requests.
-func (c *codeAPI) proxy(maxBody int64, channel bool) http.HandlerFunc {
-	longLived := channel || maxBody > 0
+// code daemon. A route with a body limit may run for a long time: task
+// requests and large RPC results.
+func (c *codeAPI) proxy(maxBody int64) http.HandlerFunc {
+	longLived := maxBody > 0
 	return func(w http.ResponseWriter, r *http.Request) {
 		rec := c.lookupCode(w, r)
 		if rec == nil {
@@ -416,6 +422,10 @@ func (c *codeAPI) proxy(maxBody int64, channel bool) http.HandlerFunc {
 		}
 		if taskID := r.PathValue("taskId"); taskID != "" && !codeTaskIDRegex.MatchString(taskID) {
 			writeError(w, http.StatusBadRequest, "invalid task id")
+			return
+		}
+		if callID := r.PathValue("callId"); callID != "" && !codeCallIDRegex.MatchString(callID) {
+			writeError(w, http.StatusBadRequest, "invalid call id")
 			return
 		}
 		out := r.Clone(r.Context())
@@ -435,14 +445,14 @@ func (c *codeAPI) proxy(maxBody int64, channel bool) http.HandlerFunc {
 		}
 		obs.FieldsFrom(r.Context()).Add("sandbox_id", rec.ID, "runner_id", rec.RunnerID)
 		if longLived {
-			// The server ReadTimeout would cut long uploads and the channel.
+			// The server ReadTimeout would cut long uploads and task streams.
 			_ = http.NewResponseController(w).SetReadDeadline(time.Time{})
 		}
 
-		c.activity.begin(rec.ID, channel)
+		c.activity.begin(rec.ID)
 		healthy := false
 		defer func() {
-			c.activity.end(rec.ID, channel)
+			c.activity.end(rec.ID)
 			// Mark the end of a long request as activity, but never a failed
 			// one: a client that retries a broken sandbox must not keep it.
 			if healthy {
@@ -466,7 +476,7 @@ func (c *codeAPI) proxy(maxBody int64, channel bool) http.HandlerFunc {
 }
 
 // StartCodeIdleSweeper deletes code sandboxes that have had no Task API request
-// and no open channel for cfg.CodeIdleDeleteAfter. It removes the sandboxes
+// for cfg.CodeIdleDeleteAfter. It removes the sandboxes
 // that a crashed client left behind.
 func StartCodeIdleSweeper(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig) {
 	activity := codeActivityTracker

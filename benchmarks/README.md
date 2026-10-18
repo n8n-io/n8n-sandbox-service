@@ -12,6 +12,8 @@ Load tests for the n8n Sandbox Service using [k6](https://grafana.com/docs/k6/).
 | Script | Description |
 |--------|-------------|
 | `k6-sandbox-lifecycle.js` | Full sandbox lifecycle: create, execute `echo 'hello'`, optionally wake, delete. |
+| `k6-code-task-api.js` | Task API (code sandboxes): create and task scenarios. |
+| `code-rpc-roundtrip.mjs` | Task API RPC round trip (Node, uses the SDK; run `pnpm build` in `sdk/` first). Env: `TASKS`, `CALLS`, `RESULT_BYTES`, `REUSE_WORKERS`. |
 
 ## Running
 

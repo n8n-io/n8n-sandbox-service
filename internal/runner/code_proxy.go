@@ -18,16 +18,19 @@ import (
 // other inputs.
 const CodeTaskMaxBodyBytes int64 = 2200 * 1024 * 1024
 
+// CodeRPCResultMaxBodyBytes bounds the result of one RPC call.
+const CodeRPCResultMaxBodyBytes int64 = 1 << 30
+
 // registerCodeRoutes adds the Task API routes. They proxy to the code daemon of
 // a code sandbox. They never wake a sandbox: code sandboxes have no stop.
 func registerCodeRoutes(mux *http.ServeMux, rt runnerruntime.Runtime) {
 	proxy := codeProxyHandler(rt, 0)
 	mux.HandleFunc("GET /code/sandboxes/{id}/healthz", proxy)
 	mux.HandleFunc("GET /code/sandboxes/{id}/state", proxy)
-	mux.HandleFunc("GET /code/sandboxes/{id}/channel", codeProxy(rt, 0, true))
 	mux.HandleFunc("POST /code/sandboxes/{id}/tasks", codeProxyHandler(rt, CodeTaskMaxBodyBytes))
 	mux.HandleFunc("GET /code/sandboxes/{id}/tasks/{taskId}/outputs/{path...}", proxy)
 	mux.HandleFunc("DELETE /code/sandboxes/{id}/tasks/{taskId}", proxy)
+	mux.HandleFunc("POST /code/sandboxes/{id}/tasks/{taskId}/rpc/{callId}", codeProxyHandler(rt, CodeRPCResultMaxBodyBytes))
 }
 
 func codeProxyHandler(rt runnerruntime.Runtime, maxBody int64) http.HandlerFunc {
@@ -78,7 +81,7 @@ func codeProxy(rt runnerruntime.Runtime, maxBody int64, longLived bool) http.Han
 			return
 		}
 		if longLived {
-			// The server ReadTimeout would cut long uploads and the channel.
+			// The server ReadTimeout would cut long uploads and task streams.
 			_ = http.NewResponseController(w).SetReadDeadline(time.Time{})
 		}
 
