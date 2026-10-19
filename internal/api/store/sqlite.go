@@ -21,8 +21,11 @@ type SQLiteStore struct {
 
 // NewSQLite opens (or creates) the SQLite database at dbPath, runs schema migrations,
 // and returns a ready store. Use ":memory:" for an in-process ephemeral database.
-func NewSQLite(dbPath string) (*SQLiteStore, error) {
-	db, err := sql.Open("sqlite", sqliteDSN(dbPath))
+// A database file uses WAL with synchronous=NORMAL when useWal is set, or DELETE
+// with synchronous=FULL otherwise. ":memory:" ignores the setting.
+func NewSQLite(dbPath string, useWal bool) (*SQLiteStore, error) {
+	useWal = useWal && dbPath != ":memory:"
+	db, err := sql.Open("sqlite", sqliteDSN(dbPath, useWal))
 	if err != nil {
 		return nil, fmt.Errorf("store: open db %s: %w", dbPath, err)
 	}
@@ -33,6 +36,22 @@ func NewSQLite(dbPath string) (*SQLiteStore, error) {
 	if err := db.Ping(); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: ping db: %w", err)
+	}
+
+	if dbPath != ":memory:" {
+		wantMode := "DELETE"
+		if useWal {
+			wantMode = "WAL"
+		}
+		var mode string
+		if err := db.QueryRow(`PRAGMA journal_mode`).Scan(&mode); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("store: read journal_mode: %w", err)
+		}
+		if !strings.EqualFold(mode, wantMode) {
+			_ = db.Close()
+			return nil, fmt.Errorf("store: %s mode requested but journal_mode is %q", wantMode, mode)
+		}
 	}
 
 	if _, err := db.Exec(sqliteSchema); err != nil {
@@ -83,21 +102,27 @@ func NewSQLite(dbPath string) (*SQLiteStore, error) {
 }
 
 // sqliteDSN adds modernc _pragma flags so every pooled connection gets them.
-// A one-shot Exec("PRAGMA …") only affects the connection that ran it.
-func sqliteDSN(dbPath string) string {
-	const fk = "_pragma=foreign_keys(1)"
+// Connection-local flags must be applied on every connection.
+func sqliteDSN(dbPath string, useWal bool) string {
+	pragmas := "_pragma=foreign_keys(1)"
 	if dbPath == ":memory:" {
-		return ":memory:?" + fk
+		return ":memory:?" + pragmas
+	}
+	if useWal {
+		pragmas += "&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"
+	} else {
+		// WAL persists in the database file, so disabling it needs an explicit switch.
+		pragmas += "&_pragma=journal_mode(DELETE)&_pragma=synchronous(FULL)"
 	}
 	if strings.Contains(dbPath, "?") {
-		return dbPath + "&" + fk
+		return dbPath + "&" + pragmas
 	}
-	return dbPath + "?" + fk
+	return dbPath + "?" + pragmas
 }
 
-// New opens SQLite at dbPath. It is an alias for NewSQLite.
+// New opens SQLite at dbPath without WAL. It is a shorthand for NewSQLite.
 func New(dbPath string) (*SQLiteStore, error) {
-	return NewSQLite(dbPath)
+	return NewSQLite(dbPath, false)
 }
 
 func (s *SQLiteStore) Backend() Backend { return BackendSQLite }
