@@ -7,7 +7,8 @@ containers direct access to the host Docker daemon.
 
 ## Technology
 
-- Uses the Docker CLI against `SANDBOX_RUNNER_DOCKER_HOST`.
+- Uses both the Docker REST API and the Docker CLI against
+  `SANDBOX_RUNNER_DOCKER_HOST`, which must be a `unix://` socket.
 - Starts sandbox containers from `SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE`.
 - Connects containers to a runner bridge network by egress mode:
   `runner-bridge` for `public`, `runner-no-egress` for `none` (a Docker
