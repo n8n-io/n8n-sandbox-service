@@ -48,7 +48,7 @@ func TestListRunnersAsAdmin(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
 	}
-	if strings.Contains(rr.Body.String(), "runner-a.internal") {
+	if strings.Contains(rr.Body.String(), ".internal") {
 		t.Fatalf("response leaks a runner address: %s", rr.Body.String())
 	}
 	var got listRunnersResponse
