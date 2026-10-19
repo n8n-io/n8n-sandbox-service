@@ -4,10 +4,11 @@ All endpoints except `/healthz` and `/metrics` require the `X-Api-Key` header fo
 
 ### API keys and tenants
 
-There are three key classes:
+There are four key classes:
 
 - `SANDBOX_API_KEYS` are admin keys. An admin key can create/list/delete any sandbox, manage tenants and mint tenant API keys via the admin API.
 - `SANDBOX_API_PROVISIONER_KEYS` are provisioner keys: `POST /admin/tenants`, `PATCH /admin/tenants/{id}` and `DELETE /admin/tenants/{id}` only, `403` everywhere else. Why the class exists and what it does not protect: [security-model.md](security-model.md#provisioner-keys).
+- `SANDBOX_API_SCALER_KEYS` are scaler keys: `GET /admin/runners` only, `403` on every other path ([security-model.md](security-model.md#scaler-keys)).
 - Tenant keys are minted by an admin (or returned when a tenant is created). A tenant key may only create sandboxes for that tenant and may only list/get/delete/proxy its own sandboxes. Self-hosted operators can ignore tenant APIs entirely and keep using the admin key.
 
 Tenant keys are returned in plaintext once on create; only a hash is stored.
@@ -804,7 +805,7 @@ curl "http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/stat?
 
 ## Admin: tenants and API keys
 
-All `/admin/*` routes require an admin API key (`SANDBOX_API_KEYS`) unless marked "Admin or provisioner". Any other key receives `403`.
+All `/admin/*` routes require an admin API key (`SANDBOX_API_KEYS`) unless marked "Admin or provisioner" or "Admin or scaler". Any other key receives `403`.
 
 ### GET /admin/tenants
 
@@ -951,7 +952,7 @@ Admin only. Revoke an API key (`204`). Revoked keys are rejected from the next r
 
 ### GET /admin/runners
 
-Admin only. Lists every registered runner, ordered by `id`, with the capacity it last reported. Runners that stopped heartbeating stay in the list (with the in-memory registry, until they disconnect); filter on `healthy` and `last_seen` to keep the live ones. Runner addresses are not returned.
+Admin or scaler. Lists every registered runner, ordered by `id`, with the capacity it last reported. Runners that stopped heartbeating stay in the list (with the in-memory registry, until they disconnect); filter on `healthy` and `last_seen` to keep the live ones. Runner addresses are not returned.
 
 **Response:** `200 OK`
 
@@ -977,7 +978,7 @@ Admin only. Lists every registered runner, ordered by `id`, with the capacity it
 **Example:**
 
 ```bash
-curl http://localhost:8080/admin/runners -H "X-Api-Key: ADMIN_KEY"
+curl http://localhost:8080/admin/runners -H "X-Api-Key: SCALER_KEY"
 ```
 
 ---

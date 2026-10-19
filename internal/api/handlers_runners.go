@@ -24,7 +24,7 @@ type listRunnersResponse struct {
 
 func handleListRunners(reg registry.RunnerRegistry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !requireAdmin(w, r) {
+		if !requireAdminOrScaler(w, r) {
 			return
 		}
 		runners, err := reg.List()

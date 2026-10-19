@@ -79,6 +79,10 @@ type APIConfig struct {
 	// empty. See docs/security-model.md, "Provisioner keys".
 	ProvisionerKeys map[string]struct{}
 
+	// ScalerKeys is parsed from SANDBOX_API_SCALER_KEYS; may be empty. See
+	// docs/security-model.md, "Scaler keys".
+	ScalerKeys map[string]struct{}
+
 	// ListenAddr is the TCP address the API gateway listens on.
 	ListenAddr string
 
@@ -209,12 +213,21 @@ func LoadAPI() (*APIConfig, error) {
 		return nil, fmt.Errorf("SANDBOX_API_KEYS contains no valid keys")
 	}
 
-	// A key in both sets would silently be admin, because admin keys are
-	// checked first.
+	// A key in two sets would silently get the role checked first: admin,
+	// then provisioner, then scaler.
 	cfg.ProvisionerKeys = parseKeySet(os.Getenv("SANDBOX_API_PROVISIONER_KEYS"))
 	for k := range cfg.ProvisionerKeys {
 		if _, isAdmin := cfg.APIKeys[k]; isAdmin {
 			return nil, fmt.Errorf("SANDBOX_API_PROVISIONER_KEYS must not share a key with SANDBOX_API_KEYS")
+		}
+	}
+	cfg.ScalerKeys = parseKeySet(os.Getenv("SANDBOX_API_SCALER_KEYS"))
+	for k := range cfg.ScalerKeys {
+		if _, isAdmin := cfg.APIKeys[k]; isAdmin {
+			return nil, fmt.Errorf("SANDBOX_API_SCALER_KEYS must not share a key with SANDBOX_API_KEYS")
+		}
+		if _, isProvisioner := cfg.ProvisionerKeys[k]; isProvisioner {
+			return nil, fmt.Errorf("SANDBOX_API_SCALER_KEYS must not share a key with SANDBOX_API_PROVISIONER_KEYS")
 		}
 	}
 

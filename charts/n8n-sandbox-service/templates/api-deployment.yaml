@@ -61,6 +61,12 @@ spec:
                   name: {{ include "n8n-sandbox-service.authSecretName" . }}
                   key: {{ .Values.auth.secretKeys.provisionerKeys }}
                   optional: true
+            - name: SANDBOX_API_SCALER_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "n8n-sandbox-service.authSecretName" . }}
+                  key: {{ .Values.auth.secretKeys.scalerKeys }}
+                  optional: true
             - name: SANDBOX_API_RUNNER_REGISTRATION_TOKEN
               valueFrom:
                 secretKeyRef:

@@ -265,6 +265,55 @@ func TestLoadAPIRejectsProvisionerKeysWithUnlimitedDefaultQuota(t *testing.T) {
 	}
 }
 
+func TestLoadAPIParsesScalerKeys(t *testing.T) {
+	t.Setenv("SANDBOX_API_KEYS", "admin-key")
+	t.Setenv("SANDBOX_API_SCALER_KEYS", " scaler-a,,scaler-b ")
+	t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	setRequiredGRPCMTLS(t)
+
+	cfg, err := LoadAPI()
+	if err != nil {
+		t.Fatalf("LoadAPI() failed: %v", err)
+	}
+	if len(cfg.ScalerKeys) != 2 {
+		t.Fatalf("expected 2 scaler keys, got %v", cfg.ScalerKeys)
+	}
+	for _, k := range []string{"scaler-a", "scaler-b"} {
+		if _, ok := cfg.ScalerKeys[k]; !ok {
+			t.Errorf("expected %q in ScalerKeys", k)
+		}
+	}
+}
+
+func TestLoadAPIScalerKeysOptional(t *testing.T) {
+	t.Setenv("SANDBOX_API_KEYS", "test-key")
+	t.Setenv("SANDBOX_API_SCALER_KEYS", "")
+	t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	setRequiredGRPCMTLS(t)
+
+	cfg, err := LoadAPI()
+	if err != nil {
+		t.Fatalf("LoadAPI() failed: %v", err)
+	}
+	if len(cfg.ScalerKeys) != 0 {
+		t.Fatalf("expected no scaler keys, got %v", cfg.ScalerKeys)
+	}
+}
+
+func TestLoadAPIRejectsScalerKeyInAnotherSet(t *testing.T) {
+	t.Setenv("SANDBOX_API_KEYS", "admin-key")
+	t.Setenv("SANDBOX_API_PROVISIONER_KEYS", "prov-key")
+	t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+	setRequiredGRPCMTLS(t)
+
+	for _, shared := range []string{"admin-key", "prov-key"} {
+		t.Setenv("SANDBOX_API_SCALER_KEYS", "scaler-only,"+shared)
+		if _, err := LoadAPI(); err == nil {
+			t.Errorf("expected LoadAPI() to fail when scaler key %q is also in another set", shared)
+		}
+	}
+}
+
 func TestLoadAPIRequiresAPIKeys(t *testing.T) {
 	os.Unsetenv("SANDBOX_API_KEYS")
 	os.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "x")

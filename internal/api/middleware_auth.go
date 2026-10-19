@@ -20,12 +20,18 @@ const (
 	// roleProvisioner: tenant create, limit update and delete only. See
 	// docs/security-model.md, "Provisioner keys".
 	roleProvisioner authRole = "provisioner"
-	roleTenant      authRole = "tenant"
+	// roleScaler: runner capacity listing only. See docs/security-model.md,
+	// "Scaler keys".
+	roleScaler authRole = "scaler"
+	roleTenant authRole = "tenant"
 )
 
 // provisionerPathPrefix confines provisioner keys; the handlers under it other
 // than tenant create, limit update and delete require admin.
 const provisionerPathPrefix = "/admin/tenants"
+
+// scalerPath is the only path a scaler key may reach.
+const scalerPath = "/admin/runners"
 
 // publicPaths skip auth and the access log.
 var publicPaths = probes.New("/healthz", "/metrics")
@@ -64,9 +70,9 @@ func apiKeyPrefix(plaintext string) string {
 }
 
 // AuthMiddleware checks X-Api-Key against env admin keys, then env provisioner
-// keys, then DB-backed tenant keys. GET and HEAD on /healthz and /metrics are
-// always allowed through.
-func AuthMiddleware(adminKeys, provisionerKeys map[string]struct{}, s store.SandboxStore) func(http.Handler) http.Handler {
+// keys, then env scaler keys, then DB-backed tenant keys. GET and HEAD on
+// /healthz and /metrics are always allowed through.
+func AuthMiddleware(adminKeys, provisionerKeys, scalerKeys map[string]struct{}, s store.SandboxStore) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if publicPaths.Public(r) {
@@ -91,6 +97,15 @@ func AuthMiddleware(adminKeys, provisionerKeys map[string]struct{}, s store.Sand
 					return
 				}
 				next.ServeHTTP(w, r.WithContext(withAuthIdentity(r.Context(), authIdentity{Role: roleProvisioner})))
+				return
+			}
+
+			if constantTimeContains(scalerKeys, key) {
+				if r.URL.Path != scalerPath {
+					writeError(w, http.StatusForbidden, "scaler API key may only list runners")
+					return
+				}
+				next.ServeHTTP(w, r.WithContext(withAuthIdentity(r.Context(), authIdentity{Role: roleScaler})))
 				return
 			}
 
@@ -145,6 +160,15 @@ func requireAdminOrProvisioner(w http.ResponseWriter, r *http.Request) (authRole
 		return "", false
 	}
 	return id.Role, true
+}
+
+func requireAdminOrScaler(w http.ResponseWriter, r *http.Request) bool {
+	id, ok := authFromContext(r.Context())
+	if !ok || (id.Role != roleAdmin && id.Role != roleScaler) {
+		writeError(w, http.StatusForbidden, "admin or scaler API key required")
+		return false
+	}
+	return true
 }
 
 // canAccessSandbox reports whether the caller may see/mutate the sandbox.

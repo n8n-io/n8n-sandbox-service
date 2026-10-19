@@ -12,6 +12,9 @@ auth:
     # Optional (SANDBOX_API_PROVISIONER_KEYS, see docs/security-model.md).
     # The API starts without it when the Secret has no such key.
     provisionerKeys: provisioner-api-keys
+    # Optional (SANDBOX_API_SCALER_KEYS, see docs/security-model.md).
+    # The API starts without it when the Secret has no such key.
+    scalerKeys: scaler-api-keys
     runnerRegistrationToken: runner-registration-token
     runnerApiKey: runner-api-key
     runnerApiKeys: runner-api-keys
@@ -20,6 +23,8 @@ auth:
     apiKeys: changeme
     # Empty leaves provisioner keys out of the generated Secret.
     provisionerKeys: ""
+    # Empty leaves scaler keys out of the generated Secret.
+    scalerKeys: ""
     runnerRegistrationToken: changeme
     runnerApiKey: changeme
     runnerApiKeys: changeme
