@@ -280,7 +280,7 @@ func runnerControlTLS(cfg *config.APIConfig) *runnerctl.TLS {
 // see. The runtime's own create budget plus a margin for the round trip.
 const runnerCreateBudget = runnerruntime.CreateBudget + time.Minute
 
-func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, rec *metrics.APIRecorder) http.HandlerFunc {
+func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, rec *metrics.APIRecorder, quota *tenantQuota) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		success := false
 		defer func() { rec.ObserveSandboxOp(metrics.OpCreate, success) }()
@@ -364,17 +364,18 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 				writeError(w, http.StatusUnauthorized, "invalid API key")
 				return
 			}
-			if tenant.MaxSandboxes > 0 {
-				n, err := s.CountByTenant(tenantID)
-				if err != nil {
-					writeError(w, http.StatusInternalServerError, err.Error())
-					return
-				}
-				if n >= int64(tenant.MaxSandboxes) {
-					writeError(w, http.StatusForbidden, "tenant sandbox quota exceeded")
-					return
-				}
+			release, ok, err := quota.reserve(tenantID, tenant.MaxSandboxes)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
 			}
+			if !ok {
+				writeError(w, http.StatusForbidden, "tenant sandbox quota exceeded")
+				return
+			}
+			// On return, so after the sandbox is saved, or after the runner
+			// rollback of a create that could not be saved.
+			defer release()
 		}
 
 		requested := runnerruntime.CreateOptions{Egress: egress}
@@ -463,8 +464,8 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 				return
 			}
 			if errors.Is(err, store.ErrTenantQuotaExceeded) {
-				// Passed the check above, but concurrent creates for the
-				// tenant were saved first and filled its quota.
+				// Passed the check above, but creates on other API pods
+				// were saved first and filled the quota, or it was lowered.
 				slog.WarnContext(
 					r.Context(),
 					"create sandbox refused: tenant quota filled by concurrent creates",
