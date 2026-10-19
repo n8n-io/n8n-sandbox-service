@@ -51,6 +51,10 @@ func TestLoadAPIParsesDefaults(t *testing.T) {
 		t.Errorf("expected DataDir /var/lib/n8n-sandbox-api, got %s", cfg.DataDir)
 	}
 
+	if !cfg.SQLiteWAL {
+		t.Error("expected SQLiteWAL true by default")
+	}
+
 	if _, exists := cfg.APIKeys["test-key"]; !exists {
 		t.Error("expected test-key in APIKeys")
 	}
@@ -599,6 +603,28 @@ func TestLoadAPIMetricsListenAddrLoadsWhenMetricsDisabled(t *testing.T) {
 	}
 	if cfg.MetricsListenAddr != ":9100" {
 		t.Fatalf("MetricsListenAddr: want :9100, got %s", cfg.MetricsListenAddr)
+	}
+}
+
+func TestLoadAPISQLiteWALFromEnv(t *testing.T) {
+	setRequiredAPIEnv(t)
+	t.Setenv("SANDBOX_API_SQLITE_WAL", "false")
+
+	cfg, err := LoadAPI()
+	if err != nil {
+		t.Fatalf("LoadAPI() failed: %v", err)
+	}
+	if cfg.SQLiteWAL {
+		t.Fatal("expected SQLiteWAL false")
+	}
+}
+
+func TestLoadAPIRejectsInvalidSQLiteWAL(t *testing.T) {
+	setRequiredAPIEnv(t)
+	t.Setenv("SANDBOX_API_SQLITE_WAL", "maybe")
+
+	if _, err := LoadAPI(); err == nil {
+		t.Fatal("expected error for invalid SANDBOX_API_SQLITE_WAL")
 	}
 }
 
