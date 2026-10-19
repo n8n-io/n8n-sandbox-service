@@ -67,14 +67,14 @@ func main() {
 		}
 
 		dbPath := filepath.Join(cfg.DataDir, "api.db")
-		sqliteStore, err := store.NewSQLite(dbPath)
+		sqliteStore, err := store.NewSQLite(dbPath, cfg.SQLiteWAL)
 		if err != nil {
 			slog.Error("open sqlite store", "error", err)
 			os.Exit(1)
 		}
 		sandboxStore = sqliteStore
 		runnerReg = registry.NewMemory(cfg.HeartbeatGrace)
-		slog.Info("using sqlite store", "path", dbPath)
+		slog.Info("using sqlite store", "path", dbPath, "wal", cfg.SQLiteWAL)
 	}
 	defer sandboxStore.Close()
 

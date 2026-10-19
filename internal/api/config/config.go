@@ -105,6 +105,10 @@ type APIConfig struct {
 	// DataDir is the directory for storing API state (SQLite file when Store=sqlite).
 	DataDir string
 
+	// SQLiteWAL opens the SQLite file in WAL mode with synchronous=NORMAL.
+	// Parsed from SANDBOX_API_SQLITE_WAL (default true).
+	SQLiteWAL bool
+
 	// Store selects sqlite (default) or postgres for multi-pod deployments.
 	Store StoreBackend
 
@@ -177,6 +181,7 @@ func LoadAPI() (*APIConfig, error) {
 		DefaultMaxSandboxes:  defaultMaxSandboxes,
 		MaxInflightPerTenant: defaultMaxInflightPerTenant,
 		DataDir:              "/var/lib/n8n-sandbox-api",
+		SQLiteWAL:            true,
 		Store:                StoreSQLite,
 		Postgres:             PostgresConfig{Port: defaultPostgresPort, SSLMode: defaultPostgresSSLMode},
 		HeartbeatGrace:       defaultHeartbeatGrace,
@@ -274,6 +279,14 @@ func LoadAPI() (*APIConfig, error) {
 
 	if v := os.Getenv("SANDBOX_API_DATA_DIR"); v != "" {
 		cfg.DataDir = v
+	}
+
+	if v := os.Getenv("SANDBOX_API_SQLITE_WAL"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("SANDBOX_API_SQLITE_WAL must be a boolean, got %q", v)
+		}
+		cfg.SQLiteWAL = b
 	}
 
 	if v := os.Getenv("SANDBOX_API_METRICS_ENABLED"); v != "" {

@@ -21,8 +21,11 @@ type SQLiteStore struct {
 
 // NewSQLite opens (or creates) the SQLite database at dbPath, runs schema migrations,
 // and returns a ready store. Use ":memory:" for an in-process ephemeral database.
-func NewSQLite(dbPath string) (*SQLiteStore, error) {
-	db, err := sql.Open("sqlite", sqliteDSN(dbPath))
+// With useWal set, a database file uses WAL with synchronous=NORMAL; ":memory:"
+// ignores it.
+func NewSQLite(dbPath string, useWal bool) (*SQLiteStore, error) {
+	useWal = useWal && dbPath != ":memory:"
+	db, err := sql.Open("sqlite", sqliteDSN(dbPath, useWal))
 	if err != nil {
 		return nil, fmt.Errorf("store: open db %s: %w", dbPath, err)
 	}
@@ -33,6 +36,18 @@ func NewSQLite(dbPath string) (*SQLiteStore, error) {
 	if err := db.Ping(); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: ping db: %w", err)
+	}
+
+	if useWal {
+		var mode string
+		if err := db.QueryRow(`PRAGMA journal_mode`).Scan(&mode); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("store: read journal_mode: %w", err)
+		}
+		if !strings.EqualFold(mode, "wal") {
+			_ = db.Close()
+			return nil, fmt.Errorf("store: WAL mode requested but journal_mode is %q", mode)
+		}
 	}
 
 	if _, err := db.Exec(sqliteSchema); err != nil {
@@ -84,27 +99,23 @@ func NewSQLite(dbPath string) (*SQLiteStore, error) {
 
 // sqliteDSN adds modernc _pragma flags so every pooled connection gets them.
 // A one-shot Exec("PRAGMA …") only affects the connection that ran it.
-//
-// A database file uses WAL with synchronous=NORMAL. The default rollback
-// journal with synchronous=FULL syncs the file several times per commit, and
-// the API commits on every proxied request. With WAL, a commit only appends to
-// the log, and NORMAL syncs at checkpoints. A power loss can lose the last
-// commits, but it cannot corrupt the database.
-func sqliteDSN(dbPath string) string {
-	const fk = "_pragma=foreign_keys(1)"
+func sqliteDSN(dbPath string, useWal bool) string {
+	pragmas := "_pragma=foreign_keys(1)"
 	if dbPath == ":memory:" {
-		return ":memory:?" + fk
+		return ":memory:?" + pragmas
 	}
-	const pragmas = fk + "&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"
+	if useWal {
+		pragmas += "&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"
+	}
 	if strings.Contains(dbPath, "?") {
 		return dbPath + "&" + pragmas
 	}
 	return dbPath + "?" + pragmas
 }
 
-// New opens SQLite at dbPath. It is an alias for NewSQLite.
+// New opens SQLite at dbPath without WAL. It is a shorthand for NewSQLite.
 func New(dbPath string) (*SQLiteStore, error) {
-	return NewSQLite(dbPath)
+	return NewSQLite(dbPath, false)
 }
 
 func (s *SQLiteStore) Backend() Backend { return BackendSQLite }

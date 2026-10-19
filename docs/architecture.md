@@ -201,7 +201,7 @@ Trust boundaries, the mechanism enforcing each, and the non-guarantees are in [s
 
 ### API store
 
-SQLite at `SANDBOX_API_DATA_DIR/api.db` (default) or Postgres. Tables: `sandboxes` (ID, tenant, status, timestamps, runner routing), `tenants`, `api_keys` (hashed), and on Postgres `runners` (heartbeats; SQLite keeps the runner registry in memory). Migrations run automatically on startup. The SQLite file uses WAL with `synchronous=NORMAL`.
+SQLite at `SANDBOX_API_DATA_DIR/api.db` (default) or Postgres. Tables: `sandboxes` (ID, tenant, status, timestamps, runner routing), `tenants`, `api_keys` (hashed), and on Postgres `runners` (heartbeats; SQLite keeps the runner registry in memory). Migrations run automatically on startup. The SQLite file uses WAL with `synchronous=NORMAL` unless `SANDBOX_API_SQLITE_WAL=false`.
 
 ### Runner stateless
 
