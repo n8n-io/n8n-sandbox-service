@@ -84,7 +84,7 @@ type expectedStop struct {
 // sandbox because that is what every caller has, and what the event names.
 //
 // The key has to be the full container ID, since that is what the event carries.
-// Every ID in this package is one — see containerIDArgs, which is why.
+// Every ID in this package is one — see findContainerByLabels, which is why.
 //
 // Recorded before the call it excuses, not after, because the event races the call's
 // return and usually wins.
