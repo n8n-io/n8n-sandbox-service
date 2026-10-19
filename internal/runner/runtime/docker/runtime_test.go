@@ -124,7 +124,7 @@ func TestDockerContainerCreateArgs(t *testing.T) {
 		DiskMB:     1024,
 	}
 
-	got := dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerNoEgressNetwork, limits, true)
+	got := dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerNoEgressNetwork, limits, true, []string{"1.1.1.1", "8.8.8.8"})
 	want := []string{
 		"container", "create",
 		"--name", "sandbox-name",
@@ -141,6 +141,9 @@ func TestDockerContainerCreateArgs(t *testing.T) {
 		"--sysctl", "net.ipv6.conf.all.disable_ipv6=1",
 		"--sysctl", "net.ipv6.conf.default.disable_ipv6=1",
 		"--sysctl", "net.ipv6.conf.lo.disable_ipv6=1",
+		"--dns", "1.1.1.1",
+		"--dns", "8.8.8.8",
+		"--dns-search", ".",
 		"--memory", "512m",
 		"--cpus", "1.50",
 		"--pids-limit", "128",
@@ -149,6 +152,19 @@ func TestDockerContainerCreateArgs(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("dockerContainerCreateArgs() = %#v, want %#v", got, want)
+	}
+}
+
+// Without configured servers the container keeps Docker's default DNS, which
+// is what runners did before the setting existed.
+func TestDockerDNSArgsOnlyWhenConfigured(t *testing.T) {
+	if got := dockerDNSArgs(nil); got != nil {
+		t.Fatalf("dockerDNSArgs(nil) = %#v, want nil", got)
+	}
+	got := dockerDNSArgs([]string{"8.8.8.8"})
+	want := []string{"--dns", "8.8.8.8", "--dns-search", "."}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("dockerDNSArgs() = %#v, want %#v", got, want)
 	}
 }
 
@@ -161,7 +177,7 @@ func TestDockerContainerCreateArgsAlwaysApplySecurityPolicy(t *testing.T) {
 	}
 
 	for _, enableCgroups := range []bool{false, true} {
-		gotArgs := dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerBridgeNetwork, nil, enableCgroups)
+		gotArgs := dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerBridgeNetwork, nil, enableCgroups, nil)
 		var got []string
 		for i := 0; i < len(gotArgs); i++ {
 			if gotArgs[i] != "--cap-drop" && gotArgs[i] != "--cap-add" && gotArgs[i] != "--security-opt" {

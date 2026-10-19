@@ -111,8 +111,9 @@ type dockerBackend interface {
 // served over the REST API instead. It is the only place in the Docker runtime
 // package that talks to docker.
 type dockerClient struct {
-	host string
-	api  *dockerAPI
+	host       string
+	dnsServers []string
+	api        *dockerAPI
 }
 
 func (dc *dockerClient) run(ctx context.Context, args ...string) (string, error) {
@@ -146,7 +147,7 @@ func (dc *dockerClient) ping(ctx context.Context) error {
 }
 
 func (dc *dockerClient) createContainer(ctx context.Context, sandboxID, containerName, image, network string, limits *ResourceLimits, enableCgroups bool) (string, error) {
-	args := dockerContainerCreateArgs(sandboxID, containerName, image, network, limits, enableCgroups)
+	args := dockerContainerCreateArgs(sandboxID, containerName, image, network, limits, enableCgroups, dc.dnsServers)
 
 	out, err := dc.run(ctx, args...)
 	if err != nil {
@@ -155,7 +156,7 @@ func (dc *dockerClient) createContainer(ctx context.Context, sandboxID, containe
 	return strings.TrimSpace(out), nil
 }
 
-func dockerContainerCreateArgs(sandboxID, containerName, image, network string, limits *ResourceLimits, enableCgroups bool) []string {
+func dockerContainerCreateArgs(sandboxID, containerName, image, network string, limits *ResourceLimits, enableCgroups bool, dnsServers []string) []string {
 	args := []string{
 		"container", "create",
 		"--name", containerName,
@@ -178,6 +179,7 @@ func dockerContainerCreateArgs(sandboxID, containerName, image, network string, 
 		"--sysctl", "net.ipv6.conf.default.disable_ipv6=1",
 		"--sysctl", "net.ipv6.conf.lo.disable_ipv6=1",
 	)
+	args = append(args, dockerDNSArgs(dnsServers)...)
 	if enableCgroups {
 		args = append(args, dockerLimitArgs(limits)...)
 	}
@@ -196,6 +198,23 @@ func dockerSandboxSecurityArgs() []string {
 		"--cap-drop", "ALL",
 		"--security-opt", "no-new-privileges",
 	}
+}
+
+// dockerDNSArgs points the container's embedded DNS at servers, if any.
+// Without them Docker forwards guest queries to the runner's own resolver,
+// dialled from the runner's namespace past the bridge policy, so a guest can
+// resolve names only the runner's network knows. Explicit servers are dialled
+// from the container's namespace, through the egress chain like any other
+// guest traffic. "." drops the runner's search domains.
+func dockerDNSArgs(servers []string) []string {
+	if len(servers) == 0 {
+		return nil
+	}
+	var args []string
+	for _, server := range servers {
+		args = append(args, "--dns", server)
+	}
+	return append(args, "--dns-search", ".")
 }
 
 func (dc *dockerClient) startContainer(ctx context.Context, containerID string) error {

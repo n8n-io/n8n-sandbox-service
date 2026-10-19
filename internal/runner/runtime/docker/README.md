@@ -38,8 +38,11 @@ containers direct access to the host Docker daemon.
   with `--privileged`: Docker then ignores `--cap-drop` and the policy has no
   effect.
 - Applies network isolation rules through `netrules`, keyed on the bridge
-  interface: the private-range denylist on `runner-bridge`, a plain
-  `DOCKER-USER` DROP on `br-no-egress`, and the host block on both.
+  interface: on `runner-bridge` a drop on traffic between containers and the
+  `netpolicy` denylist, a plain `DOCKER-USER` DROP on `br-no-egress`, and the
+  host block on both.
+- Points container DNS at `SANDBOX_RUNNER_DOCKER_DNS_SERVERS` when set, else
+  leaves Docker's default ([Sandbox DNS](../../../../docs/security-model.md#sandbox-dns)).
 - Waits for daemon `/healthz` and a tiny `/executions` round trip before
   returning a sandbox as ready.
 - Wakes stopped containers on proxy access, reapplies network rules, and waits

@@ -98,7 +98,7 @@ func New(runnerConfig *config.Config, cfg Config) (*Runtime, error) {
 	if err != nil {
 		return nil, fmt.Errorf("SANDBOX_RUNNER_DOCKER_HOST: %w", err)
 	}
-	m := newRuntime(runnerConfig, cfg, &dockerClient{host: cfg.Host, api: api})
+	m := newRuntime(runnerConfig, cfg, &dockerClient{host: cfg.Host, dnsServers: cfg.DNSServers, api: api})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
