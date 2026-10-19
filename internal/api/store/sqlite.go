@@ -21,8 +21,8 @@ type SQLiteStore struct {
 
 // NewSQLite opens (or creates) the SQLite database at dbPath, runs schema migrations,
 // and returns a ready store. Use ":memory:" for an in-process ephemeral database.
-// With useWal set, a database file uses WAL with synchronous=NORMAL; ":memory:"
-// ignores it.
+// A database file uses WAL with synchronous=NORMAL when useWal is set, or DELETE
+// with synchronous=FULL otherwise. ":memory:" ignores the setting.
 func NewSQLite(dbPath string, useWal bool) (*SQLiteStore, error) {
 	useWal = useWal && dbPath != ":memory:"
 	db, err := sql.Open("sqlite", sqliteDSN(dbPath, useWal))
@@ -38,15 +38,19 @@ func NewSQLite(dbPath string, useWal bool) (*SQLiteStore, error) {
 		return nil, fmt.Errorf("store: ping db: %w", err)
 	}
 
-	if useWal {
+	if dbPath != ":memory:" {
+		wantMode := "DELETE"
+		if useWal {
+			wantMode = "WAL"
+		}
 		var mode string
 		if err := db.QueryRow(`PRAGMA journal_mode`).Scan(&mode); err != nil {
 			_ = db.Close()
 			return nil, fmt.Errorf("store: read journal_mode: %w", err)
 		}
-		if !strings.EqualFold(mode, "wal") {
+		if !strings.EqualFold(mode, wantMode) {
 			_ = db.Close()
-			return nil, fmt.Errorf("store: WAL mode requested but journal_mode is %q", mode)
+			return nil, fmt.Errorf("store: %s mode requested but journal_mode is %q", wantMode, mode)
 		}
 	}
 
@@ -98,7 +102,7 @@ func NewSQLite(dbPath string, useWal bool) (*SQLiteStore, error) {
 }
 
 // sqliteDSN adds modernc _pragma flags so every pooled connection gets them.
-// A one-shot Exec("PRAGMA …") only affects the connection that ran it.
+// Connection-local flags must be applied on every connection.
 func sqliteDSN(dbPath string, useWal bool) string {
 	pragmas := "_pragma=foreign_keys(1)"
 	if dbPath == ":memory:" {
@@ -106,6 +110,9 @@ func sqliteDSN(dbPath string, useWal bool) string {
 	}
 	if useWal {
 		pragmas += "&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"
+	} else {
+		// WAL persists in the database file, so disabling it needs an explicit switch.
+		pragmas += "&_pragma=journal_mode(DELETE)&_pragma=synchronous(FULL)"
 	}
 	if strings.Contains(dbPath, "?") {
 		return dbPath + "&" + pragmas
