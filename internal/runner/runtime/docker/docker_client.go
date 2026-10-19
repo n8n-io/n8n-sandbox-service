@@ -5,8 +5,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -111,6 +113,19 @@ type dockerBackend interface {
 type dockerClient struct {
 	host       string
 	dnsServers []string
+	// onlyIPv4 is set when the host kernel has no IPv6. The net.ipv6 sysctls
+	// don't exist there and docker refuses to create the container with them.
+	onlyIPv4 bool
+}
+
+// hostIPv6Path exists only when the kernel has IPv6 (absent with ipv6.disable=1).
+const hostIPv6Path = "/proc/sys/net/ipv6"
+
+// hostOnlyIPv4 reports whether procPath is missing. Any other error counts as
+// IPv6 present, so the container keeps IPv6 disabled.
+func hostOnlyIPv4(procPath string) bool {
+	_, err := os.Stat(procPath)
+	return errors.Is(err, fs.ErrNotExist)
 }
 
 func (dc *dockerClient) run(ctx context.Context, args ...string) (string, error) {
@@ -144,7 +159,7 @@ func (dc *dockerClient) ping(ctx context.Context) error {
 }
 
 func (dc *dockerClient) createContainer(ctx context.Context, sandboxID, containerName, image, network string, limits *ResourceLimits, enableCgroups bool) (string, error) {
-	args := dockerContainerCreateArgs(sandboxID, containerName, image, network, limits, enableCgroups, dc.dnsServers)
+	args := dockerContainerCreateArgs(sandboxID, containerName, image, network, limits, enableCgroups, dc.dnsServers, dc.onlyIPv4)
 
 	out, err := dc.run(ctx, args...)
 	if err != nil {
@@ -153,7 +168,7 @@ func (dc *dockerClient) createContainer(ctx context.Context, sandboxID, containe
 	return strings.TrimSpace(out), nil
 }
 
-func dockerContainerCreateArgs(sandboxID, containerName, image, network string, limits *ResourceLimits, enableCgroups bool, dnsServers []string) []string {
+func dockerContainerCreateArgs(sandboxID, containerName, image, network string, limits *ResourceLimits, enableCgroups bool, dnsServers []string, onlyIPv4 bool) []string {
 	args := []string{
 		"container", "create",
 		"--name", containerName,
@@ -169,13 +184,7 @@ func dockerContainerCreateArgs(sandboxID, containerName, image, network string, 
 		"--env", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 	}
 	args = append(args, dockerSandboxSecurityArgs()...)
-	args = append(args,
-		// netrules only filter IPv4; disable v6 in the container so sandboxes
-		// can't bypass the policy via link-local/ULA or v6 metadata addresses.
-		"--sysctl", "net.ipv6.conf.all.disable_ipv6=1",
-		"--sysctl", "net.ipv6.conf.default.disable_ipv6=1",
-		"--sysctl", "net.ipv6.conf.lo.disable_ipv6=1",
-	)
+	args = append(args, dockerIPv6Args(onlyIPv4)...)
 	args = append(args, dockerDNSArgs(dnsServers)...)
 	if enableCgroups {
 		args = append(args, dockerLimitArgs(limits)...)
@@ -183,6 +192,21 @@ func dockerContainerCreateArgs(sandboxID, containerName, image, network string, 
 	args = append(args, dockerDiskQuotaArgs(limits)...)
 	args = append(args, image)
 	return args
+}
+
+// dockerIPv6Args disables IPv6 in the container when the host has it. netrules
+// only filter IPv4, so sandboxes could otherwise bypass the policy via
+// link-local/ULA or v6 metadata addresses. A host without IPv6 gives the
+// container none, and has no net.ipv6 sysctls to set.
+func dockerIPv6Args(onlyIPv4 bool) []string {
+	if onlyIPv4 {
+		return nil
+	}
+	return []string{
+		"--sysctl", "net.ipv6.conf.all.disable_ipv6=1",
+		"--sysctl", "net.ipv6.conf.default.disable_ipv6=1",
+		"--sysctl", "net.ipv6.conf.lo.disable_ipv6=1",
+	}
 }
 
 // dockerSandboxSecurityArgs is the single security policy for every Docker-backed

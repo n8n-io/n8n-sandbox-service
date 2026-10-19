@@ -94,7 +94,7 @@ var _ runnerruntime.Runtime = (*Runtime)(nil)
 // New creates a new Docker runtime. It reconciles any previous containers and ensures
 // the runner networks exist.
 func New(runnerConfig *config.Config, cfg Config) (*Runtime, error) {
-	m := newRuntime(runnerConfig, cfg, &dockerClient{host: cfg.Host, dnsServers: cfg.DNSServers})
+	m := newRuntime(runnerConfig, cfg, &dockerClient{host: cfg.Host, dnsServers: cfg.DNSServers, onlyIPv4: hostOnlyIPv4(hostIPv6Path)})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"reflect"
 	"sync/atomic"
 	"testing"
@@ -138,7 +139,7 @@ func TestDockerContainerCreateArgs(t *testing.T) {
 		DiskMB:     1024,
 	}
 
-	got := dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerNoEgressNetwork, limits, true, []string{"1.1.1.1", "8.8.8.8"})
+	got := dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerNoEgressNetwork, limits, true, []string{"1.1.1.1", "8.8.8.8"}, false)
 	want := []string{
 		"container", "create",
 		"--name", "sandbox-name",
@@ -169,6 +170,47 @@ func TestDockerContainerCreateArgs(t *testing.T) {
 	}
 }
 
+// IPv6 is assumed present and disabled in the container, unless the host is
+// IPv4-only: there the net.ipv6 sysctls don't exist and docker refuses to
+// create the container.
+func TestDockerContainerCreateArgsSkipIPv6SysctlsOnIPv4OnlyHost(t *testing.T) {
+	sysctls := func(args []string) []string {
+		var got []string
+		for i := 0; i+1 < len(args); i++ {
+			if args[i] == "--sysctl" {
+				got = append(got, args[i+1])
+				i++
+			}
+		}
+		return got
+	}
+
+	got := sysctls(dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerBridgeNetwork, nil, false, nil, false))
+	want := []string{
+		"net.ipv6.conf.all.disable_ipv6=1",
+		"net.ipv6.conf.default.disable_ipv6=1",
+		"net.ipv6.conf.lo.disable_ipv6=1",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("sysctls by default = %#v, want %#v", got, want)
+	}
+
+	if got := sysctls(dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerBridgeNetwork, nil, false, nil, true)); got != nil {
+		t.Fatalf("sysctls on IPv4-only host = %#v, want nil", got)
+	}
+}
+
+func TestHostOnlyIPv4(t *testing.T) {
+	dir := t.TempDir()
+	if hostOnlyIPv4(dir) {
+		t.Fatalf("hostOnlyIPv4(%q) = true for an existing path, want false", dir)
+	}
+	missing := filepath.Join(dir, "ipv6")
+	if !hostOnlyIPv4(missing) {
+		t.Fatalf("hostOnlyIPv4(%q) = false for a missing path, want true", missing)
+	}
+}
+
 // Without configured servers the container keeps Docker's default DNS, which
 // is what runners did before the setting existed.
 func TestDockerDNSArgsOnlyWhenConfigured(t *testing.T) {
@@ -191,7 +233,7 @@ func TestDockerContainerCreateArgsAlwaysApplySecurityPolicy(t *testing.T) {
 	}
 
 	for _, enableCgroups := range []bool{false, true} {
-		gotArgs := dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerBridgeNetwork, nil, enableCgroups, nil)
+		gotArgs := dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerBridgeNetwork, nil, enableCgroups, nil, false)
 		var got []string
 		for i := 0; i < len(gotArgs); i++ {
 			if gotArgs[i] != "--cap-drop" && gotArgs[i] != "--cap-add" && gotArgs[i] != "--security-opt" {
