@@ -153,6 +153,93 @@ export async function deleteSandbox(id: string, c?: SandboxClient): Promise<void
   }
 }
 
+/**
+ * Mints a tenant with `max_sandboxes: quota`, sends `creates` creates for it at
+ * once, spread over baseUrls (one per API pod), and expects exactly `quota` of
+ * them to be created and the rest refused with 403. Removes the tenant and
+ * whatever it ended up with afterwards.
+ */
+export async function expectParallelCreatesStopAtQuota(
+  baseUrls: string[],
+  quota: number,
+  creates: number,
+): Promise<void> {
+  const minted = await fetch(`${baseUrls[0]}/admin/tenants`, {
+    method: 'POST',
+    headers: { 'X-Api-Key': ADMIN_API_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: `e2e-quota-${process.pid}-${Date.now()}`, max_sandboxes: quota }),
+  });
+  expect(minted.status).toBe(201);
+  const body = (await minted.json()) as { tenant: { id: string }; key: { api_key: string } };
+  const tenant = { 'X-Api-Key': body.key.api_key, 'Content-Type': 'application/json' };
+  const listIds = async (): Promise<string[]> => {
+    const resp = await fetch(`${baseUrls[0]}/sandboxes`, { headers: tenant });
+    expect(resp.status).toBe(200);
+    return ((await resp.json()) as Array<{ id: string }>).map((s) => s.id).sort();
+  };
+  // A 503 means nothing was created: no runner had room, or, with the Postgres
+  // registry, the pick skipped a runner row another pick held. Repeat those;
+  // they say nothing about the quota. Not a 500: a save-time refusal wrongly
+  // answered with 500 would pass on the retry, refused by the early check.
+  const create = async (baseUrl: string): Promise<Response> => {
+    for (let attempt = 1; ; attempt++) {
+      const resp = await fetch(`${baseUrl}/sandboxes`, {
+        method: 'POST',
+        headers: tenant,
+        body: '{}',
+      });
+      if (resp.status !== 503 || attempt === 20) return resp;
+      await resp.text();
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  };
+
+  let passed = false;
+  try {
+    const responses = await Promise.all(
+      Array.from({ length: creates }, (_, i) => create(baseUrls[i % baseUrls.length])),
+    );
+    const created: string[] = [];
+    for (const resp of responses) {
+      const json = (await resp.json()) as { id?: string; error?: string };
+      if (resp.status === 201) {
+        created.push(json.id as string);
+        continue;
+      }
+      expect(resp.status, JSON.stringify(json)).toBe(403);
+      expect(json.error).toContain('quota exceeded');
+    }
+    expect(created).toHaveLength(quota);
+    expect(await listIds()).toEqual(created.sort());
+    passed = true;
+  } finally {
+    // Remove everything the tenant ended up with, then the tenant. A failed
+    // cleanup fails a passing test, but never hides why a test failed.
+    const problems: string[] = [];
+    const remove = async (url: string, headers: Record<string, string>) => {
+      try {
+        const resp = await fetch(url, { method: 'DELETE', headers });
+        if (resp.status !== 204 && resp.status !== 404) {
+          problems.push(`DELETE ${url}: ${resp.status} ${await resp.text()}`);
+        }
+      } catch (err) {
+        problems.push(`DELETE ${url}: ${err}`);
+      }
+    };
+    const ids = await listIds().catch((err) => {
+      problems.push(`list sandboxes: ${err}`);
+      return [] as string[];
+    });
+    await Promise.all(ids.map((id) => remove(`${baseUrls[0]}/sandboxes/${id}`, tenant)));
+    await remove(`${baseUrls[0]}/admin/tenants/${body.tenant.id}`, { 'X-Api-Key': ADMIN_API_KEY });
+    if (problems.length > 0) {
+      const msg = `cleanup of tenant ${body.tenant.id} failed: ${problems.join('; ')}`;
+      if (passed) throw new Error(msg);
+      console.warn(msg);
+    }
+  }
+}
+
 export async function exec(
   id: string,
   command: string,

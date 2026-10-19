@@ -462,6 +462,19 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 				success = writeExistingSandbox(w, existing, egress, req.Egress != nil)
 				return
 			}
+			if errors.Is(err, store.ErrTenantQuotaExceeded) {
+				// Passed the check above, but concurrent creates for the
+				// tenant were saved first and filled its quota.
+				slog.WarnContext(
+					r.Context(),
+					"create sandbox refused: tenant quota filled by concurrent creates",
+					"sandbox_id", sandboxID,
+					"runner_id", run.ID,
+					"tenant_id", tenantID,
+				)
+				writeError(w, http.StatusForbidden, "tenant sandbox quota exceeded")
+				return
+			}
 			slog.ErrorContext(
 				r.Context(),
 				"create sandbox failed: store record",

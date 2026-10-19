@@ -16,6 +16,10 @@ var ErrTenantHasSandboxes = errors.New("tenant has sandboxes")
 // when updating a tenant that does not exist.
 var ErrTenantNotFound = errors.New("tenant not found")
 
+// ErrTenantQuotaExceeded is returned when persisting a tenant-owned sandbox
+// while the tenant already holds max_sandboxes sandboxes.
+var ErrTenantQuotaExceeded = errors.New("tenant sandbox quota exceeded")
+
 // ErrAPIKeyTenantMismatch is returned when CreateTenantWithAPIKey is called with
 // k.TenantID != t.ID.
 var ErrAPIKeyTenantMismatch = errors.New("api key tenant_id does not match tenant")
@@ -79,6 +83,11 @@ type APIKey struct {
 // SandboxStore exposes CRUD operations for SandboxRecord rows and tenant keys.
 type SandboxStore interface {
 	io.Closer
+	// Create inserts the record. For a tenant-owned record it returns
+	// ErrTenantNotFound when the tenant is gone, and ErrTenantQuotaExceeded
+	// when the tenant already holds max_sandboxes sandboxes (0 = unlimited).
+	// Creates for the same tenant count and insert one at a time, so
+	// concurrent creates cannot take a tenant past its quota.
 	Create(record *SandboxRecord) error
 	Get(id string) (*SandboxRecord, error)
 	UpdateStatus(id, status string) error
