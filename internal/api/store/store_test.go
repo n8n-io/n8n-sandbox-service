@@ -4,8 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"sync"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
