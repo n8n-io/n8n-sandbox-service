@@ -138,7 +138,7 @@ func TestDockerContainerCreateArgs(t *testing.T) {
 		DiskMB:     1024,
 	}
 
-	got := dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerNoEgressNetwork, limits, true, []string{"8.8.8.8", "1.1.1.1"})
+	got := dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerNoEgressNetwork, limits, true, []string{"1.1.1.1", "8.8.8.8"})
 	want := []string{
 		"container", "create",
 		"--name", "sandbox-name",
@@ -155,8 +155,8 @@ func TestDockerContainerCreateArgs(t *testing.T) {
 		"--sysctl", "net.ipv6.conf.all.disable_ipv6=1",
 		"--sysctl", "net.ipv6.conf.default.disable_ipv6=1",
 		"--sysctl", "net.ipv6.conf.lo.disable_ipv6=1",
-		"--dns", "8.8.8.8",
 		"--dns", "1.1.1.1",
+		"--dns", "8.8.8.8",
 		"--dns-search", ".",
 		"--memory", "512m",
 		"--cpus", "1.50",

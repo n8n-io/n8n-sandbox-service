@@ -33,7 +33,7 @@ fi
 API_TLS_DNS="${E2E_API_TLS_DNS:-sandbox-api-e2e-mtls}"
 RUNNER_CONTROL_ALIAS="runner-control"
 # Set but empty runs the runner with Docker's default DNS instead.
-RUNNER_DNS_SERVERS="${E2E_RUNNER_DOCKER_DNS_SERVERS-8.8.8.8,1.1.1.1}"
+RUNNER_DNS_SERVERS="${E2E_RUNNER_DOCKER_DNS_SERVERS-1.1.1.1,8.8.8.8}"
 
 cleanup() {
 	local exit_code=$?
