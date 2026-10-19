@@ -102,6 +102,7 @@ These variables are parsed by the Docker/sysbox runner entrypoint.
 | `SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB` | `0` | Per-sandbox writable-layer quota in MB (`--storage-opt size=`). Effective only when the storage pool mounts successfully — see [Disk quotas](#disk-quotas). `0` means no quota. |
 | `SANDBOX_RUNNER_DISK_QUOTA_POOL_SIZE_GB` | *(derived)* | Size of the xfs+prjquota storage pool backing the inner dockerd. Defaults to `ceil(SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB × SANDBOX_RUNNER_CAPACITY_TOTAL × 1.2 / 1024)` (per-sandbox quota times runner capacity, plus 20% headroom for sandbox image layers). Set explicitly to override. |
 | `SANDBOX_RUNNER_DOCKER_INSECURE_REGISTRIES` | *(empty)* | Comma-separated insecure registries passed to dockerd |
+| `SANDBOX_RUNNER_DOCKER_DNS_SERVERS` | *(unset)* | Comma-separated IPv4 resolvers for sandbox DNS, e.g. `1.1.1.1,8.8.8.8`. Unset, sandboxes resolve through the runner's own resolver. See [Sandbox DNS](security-model.md#sandbox-dns). |
 | `SANDBOX_RUNNER_DOCKER_STORAGE_DRIVER` | *(dockerd default)* | Storage driver for the inner dockerd when disk quotas are off (e.g. `vfs` where nested overlayfs is unavailable). Ignored with quotas on, which always use `overlay2`. Read by `scripts/start-runner.sh`. |
 
 ### Firecracker runner backend config

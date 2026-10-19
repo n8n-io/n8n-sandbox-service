@@ -163,16 +163,10 @@ func ensureBridgePolicy(bridgeIface string, blockEgress bool) error {
 		if err := ensureJump("DOCKER-USER", "-i", bridgeIface, "-j", bridgeEgressChain); err != nil {
 			return err
 		}
-		if err := ensureRule(bridgeEgressChain, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"); err != nil {
-			return err
-		}
-		for _, cidr := range netpolicy.PrivateRangesV4 {
-			if err := ensureRule(bridgeEgressChain, "-d", cidr, "-j", "DROP"); err != nil {
+		for _, rule := range bridgeEgressRules(bridgeIface) {
+			if err := ensureRule(bridgeEgressChain, rule...); err != nil {
 				return err
 			}
-		}
-		if err := ensureRule(bridgeEgressChain, "-j", "ACCEPT"); err != nil {
-			return err
 		}
 	}
 
@@ -183,6 +177,25 @@ func ensureBridgePolicy(bridgeIface string, blockEgress bool) error {
 		return err
 	}
 	return ensureRule(bridgeHostChain, "-j", "DROP")
+}
+
+// bridgeEgressRules returns the shared egress chain of the public bridge, in
+// order. The first rule drops whatever would leave the bridge the way it came
+// in, which is traffic for another sandbox. Docker's own block on that traffic
+// (enable_icc=false) sits behind DOCKER-USER, where this chain's terminal
+// ACCEPT pre-empts it, so without the rule sandboxes would be kept apart only
+// by the denylist happening to cover every destination one can use to reach
+// another. Nothing legitimate crosses the bridge, so the rule goes ahead of
+// the accept for established traffic too.
+func bridgeEgressRules(bridgeIface string) [][]string {
+	rules := [][]string{
+		{"-o", bridgeIface, "-j", "DROP"},
+		{"-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"},
+	}
+	for _, cidr := range netpolicy.PrivateRangesV4 {
+		rules = append(rules, []string{"-d", cidr, "-j", "DROP"})
+	}
+	return append(rules, []string{"-j", "ACCEPT"})
 }
 
 // Teardown removes per-sandbox iptables rules and chains.

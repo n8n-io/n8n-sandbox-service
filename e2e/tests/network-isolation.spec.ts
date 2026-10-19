@@ -11,6 +11,7 @@ import {
   docker,
   exec,
   execWithTransientRetry,
+  innerContainerName,
   scrapeRunnerMetrics,
   siblingOf,
   stopSandboxViaRunner,
@@ -33,8 +34,35 @@ const httpGetWithRetry = (ip: string, port: number) =>
 const tcpConnectV6 = (ip: string, port: number = 443, timeout: number = 3) =>
   `curl --connect-timeout ${timeout} -sk -o /dev/null -6 "https://[${ip}]:${port}/"`;
 
+// Succeeds only once the TCP handshake completes. curl's exit code cannot tell
+// a blocked port from one that accepted the connection and then answered
+// something other than HTTP, which is what a DNS port does.
+const tcpOpen = (ip: string, port: number, timeout: number = 3) =>
+  `timeout ${timeout} bash -c 'exec 3<>/dev/tcp/${ip}/${port}'`;
+
 const resolve = (host: string) =>
   `getent ahostsv4 ${host} | head -1 | awk '{print $1}'`;
+
+// Azure WireServer and platform DNS. Blocked by netpolicy.PrivateRangesV4
+// although it is a public address.
+const AZURE_PLATFORM_IP = '168.63.129.16';
+
+const MULTICAST_GROUP = '239.255.42.42';
+const MULTICAST_PORT = 41234;
+const MULTICAST_LOG = '/tmp/multicast.log';
+
+// Joins the group and appends every datagram it receives to MULTICAST_LOG.
+const multicastListen = () =>
+  `node -e "const d=require('dgram').createSocket({type:'udp4',reuseAddr:true});` +
+  `d.on('message',m=>require('fs').appendFileSync('${MULTICAST_LOG}',m+';'));` +
+  `d.bind(${MULTICAST_PORT},()=>d.addMembership('${MULTICAST_GROUP}'));` +
+  `setTimeout(()=>process.exit(0),60000)" >/dev/null 2>&1 &`;
+
+// Sends token to the group a few times, since UDP may drop any one datagram.
+const multicastSend = (token: string) =>
+  `node -e "const s=require('dgram').createSocket('udp4');let n=0;` +
+  `const t=setInterval(()=>{s.send('${token}',${MULTICAST_PORT},'${MULTICAST_GROUP}');` +
+  `if(++n===5){clearInterval(t);setTimeout(()=>s.close(),200);}},100)"`;
 
 // Both runtimes put the gateway at .1 of the sandbox's own /24: the TAP address
 // on Firecracker, the bridge gateway on Sysbox. Deriving it beats reading it,
@@ -80,6 +108,7 @@ test.describe('Network isolation', () => {
       // One address per blocked range in netpolicy.PrivateRangesV4, except
       // 127.0.0.0/8: the guest routes loopback to its own lo, so it never
       // reaches the FORWARD chain and the assertion would prove nothing.
+      // Multicast and the Azure platform address have tests of their own.
       const privateIPs = [
         '10.0.0.1',
         '172.16.0.1',
@@ -99,6 +128,66 @@ test.describe('Network isolation', () => {
     }
   });
 
+  // WireServer listens on 80 and 32526, platform DNS on 53. Off Azure nothing
+  // answers there and this passes trivially, as the metadata check above does;
+  // the Azure VM lanes are where it answers the host and the test has teeth.
+  test('sandbox cannot reach the Azure platform address', async () => {
+    const id = await createSandbox();
+    try {
+      for (const port of [80, 32526, 53]) {
+        const result = await execWithTransientRetry(id, tcpOpen(AZURE_PLATFORM_IP, port, 3), {
+          timeoutMs: 10_000,
+        });
+        expect(result.exitCode, `expected ${AZURE_PLATFORM_IP}:${port} to be unreachable`).not.toBe(0);
+      }
+    } finally {
+      await deleteSandbox(id);
+    }
+  });
+
+  // Multicast is the one destination the private ranges left open between two
+  // sandboxes on a Sysbox bridge. Firecracker slots share no layer 2 at all,
+  // so there it only asserts that this stays true. B hearing its own datagrams,
+  // through multicast loopback, before and after A sends is the control: it
+  // shows B was in the group and listening the whole time.
+  test('sandboxes cannot reach each other over multicast', async () => {
+    const sender = await createSandbox();
+    let listener: string | undefined;
+    try {
+      listener = await createSandbox();
+      const lid = listener;
+
+      const started = await execWithTransientRetry(lid, multicastListen(), { timeoutMs: 5_000 });
+      expect(started).toHaveSucceeded();
+
+      const expectHeard = async (token: string) => {
+        let log = '';
+        for (let attempt = 0; attempt < 10 && !log.includes(token); attempt++) {
+          await execWithTransientRetry(lid, multicastSend(token), { timeoutMs: 10_000 });
+          log = (await execWithTransientRetry(lid, `cat ${MULTICAST_LOG} 2>/dev/null`, { timeoutMs: 5_000 }))
+            .stdout;
+        }
+        expect(log, `expected the listener to hear its own ${token}`).toContain(token);
+      };
+
+      const run = Date.now();
+      await expectHeard(`before${run}`);
+
+      const fromSender = `sender${run}`;
+      const sent = await execWithTransientRetry(sender, multicastSend(fromSender), { timeoutMs: 10_000 });
+      expect(sent, 'expected the sender to send without error').toHaveSucceeded();
+
+      await expectHeard(`after${run}`);
+      const log = (await execWithTransientRetry(lid, `cat ${MULTICAST_LOG}`, { timeoutMs: 5_000 })).stdout;
+      expect(log, "expected the listener not to receive the other sandbox's datagrams").not.toContain(
+        fromSender,
+      );
+    } finally {
+      if (listener) await cleanUpSandbox(listener);
+      await cleanUpSandbox(sender);
+    }
+  });
+
   test('sandboxes cannot reach each other across tenants', async ({ request }) => {
     const id1 = await createSandbox();
     let otherTenantId: string | undefined;
@@ -110,8 +199,8 @@ test.describe('Network isolation', () => {
       // with otherClient, and sandbox 1's key cannot name it. The runner has no
       // tenant concept, so the network side proves only that one sandbox cannot
       // reach another's listener, by whichever mechanism gets there first. On
-      // Sysbox that is the private-range drop, which covers the whole bridge
-      // subnet before the per-container chains see the packet. On Firecracker
+      // Sysbox that is the shared egress chain's drop on anything leaving the
+      // bridge the way it came in, ahead of the private ranges. On Firecracker
       // every guest holds the same address, so sandbox 1 ends up dialling
       // itself. Neither can be narrowed from inside a sandbox, which is why the
       // positive control below carries the weight: without it the assertion
@@ -290,6 +379,45 @@ test.describe('Network isolation', () => {
       expect(result).toHaveSucceeded();
       // Should resolve to an IP address
       expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
+    } finally {
+      await deleteSandbox(id);
+    }
+  });
+
+  // Docker's embedded DNS forwards to the runner's own resolver unless the
+  // runner configures others (SANDBOX_RUNNER_DOCKER_DNS_SERVERS). On this lane
+  // that resolver is the outer Docker's, which knows the API container by name,
+  // reached from the runner's namespace where the bridge policy never sees it.
+  // With public resolvers configured the name must not resolve. It is qualified
+  // with its network because the embedded DNS keeps single-label names to
+  // itself whenever the runner's resolv.conf sets ndots, which the outer
+  // Docker's does.
+  test('sandbox DNS does not go through the runner resolver', DOCKER_ONLY, async () => {
+    const apiContainer = process.env.E2E_API_CONTAINER_NAME;
+    test.skip(!apiContainer, 'needs E2E_API_CONTAINER_NAME (from e2e/run.sh)');
+    test.skip(!process.env.E2E_RUNNER_DOCKER_DNS_SERVERS, 'runner uses its own resolver');
+    const apiNetwork = docker([
+      'inspect',
+      '--format',
+      '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}} {{end}}',
+      apiContainer!,
+    ])
+      .trim()
+      .split(/\s+/)[0];
+    const apiName = `${apiContainer}.${apiNetwork}`;
+
+    const id = await createSandbox();
+    try {
+      const control = await execWithTransientRetry(id, resolve('example.com'), { timeoutMs: 10_000 });
+      expect(control.stdout.trim(), 'expected a public name to resolve').toMatch(/^\d+\.\d+\.\d+\.\d+$/);
+
+      const leaked = await execWithTransientRetry(id, resolve(apiName), { timeoutMs: 20_000 });
+      expect(leaked.stdout.trim(), `expected ${apiName} not to resolve from a sandbox`).toBe('');
+
+      // The runner's search domains stay out too, so a short name is never
+      // completed with a domain only the runner's network knows.
+      const resolvConf = await execWithTransientRetry(id, 'cat /etc/resolv.conf', { timeoutMs: 5_000 });
+      expect(resolvConf.stdout, 'expected no search domains in the guest').not.toMatch(/^search\s/m);
     } finally {
       await deleteSandbox(id);
     }
@@ -543,16 +671,46 @@ test.describe('Runner bridge policy', DOCKER_ONLY, () => {
         );
       }
 
-      // The shared egress chain ends in its terminal accept, so nothing the
+      // The shared egress chain starts by dropping traffic for another sandbox
+      // on the bridge, which Docker's own inter-container block would never see
+      // behind the terminal accept, and ends in that accept, so nothing the
       // policy blocks can have been appended behind it.
       const egressRules = rules.filter((line) => line.startsWith('-A N8N-SB-BR-EGRESS '));
-      expect(egressRules, 'expected the blocked ranges to sit before the terminal accept').toContain(
-        '-A N8N-SB-BR-EGRESS -d 169.254.0.0/16 -j DROP',
+      expect(egressRules[0], 'expected the bridge-to-bridge drop to be the first rule').toBe(
+        `-A N8N-SB-BR-EGRESS -o ${bridgeIface} -j DROP`,
       );
+      for (const cidr of ['169.254.0.0/16', '224.0.0.0/4', '168.63.129.16/32']) {
+        expect(egressRules, 'expected the blocked ranges to sit before the terminal accept').toContain(
+          `-A N8N-SB-BR-EGRESS -d ${cidr} -j DROP`,
+        );
+      }
       expect(
         egressRules[egressRules.length - 1],
         'expected the terminal accept to be the last rule',
       ).toBe('-A N8N-SB-BR-EGRESS -j ACCEPT');
+    } finally {
+      await deleteSandbox(id);
+    }
+  });
+
+  // Explicit servers are what keeps Docker's embedded DNS from forwarding to the
+  // runner's own resolver; the behaviour is covered by the DNS test above.
+  test('sandbox containers name the configured resolvers and no search domain', async () => {
+    test.skip(
+      !process.env.E2E_RUNNER_CONTAINER_NAME,
+      'needs E2E_RUNNER_CONTAINER_NAME (from e2e/run.sh)',
+    );
+    const servers = process.env.E2E_RUNNER_DOCKER_DNS_SERVERS;
+    test.skip(!servers, 'runner uses its own resolver');
+    const runnerContainer = process.env.E2E_RUNNER_CONTAINER_NAME!;
+
+    const id = await createSandbox();
+    try {
+      const container = JSON.parse(
+        docker(['exec', runnerContainer, 'docker', 'inspect', innerContainerName(id)]),
+      )[0] as { HostConfig: { Dns: string[]; DnsSearch: string[] } };
+      expect(container.HostConfig.Dns).toEqual(servers!.split(',').map((s) => s.trim()));
+      expect(container.HostConfig.DnsSearch).toEqual(['.']);
     } finally {
       await deleteSandbox(id);
     }
