@@ -79,6 +79,33 @@ test.describe('sandbox package installation', () => {
     }
   });
 
+  // The n8n assistant writes its own package.json into /home/user/workspace and
+  // runs npm install there. That install is only free when the image already
+  // holds everything, including TypeScript as a local package: the assistant
+  // imports it from the workspace, which the global install cannot satisfy.
+  test('workspace dependencies install offline and resolve from the workspace', async () => {
+    test.setTimeout(180_000);
+    const id = await createSandbox();
+    try {
+      const installed = await execWithTransientRetry(
+        id,
+        'npm install --ignore-scripts --no-audit --no-fund --offline',
+        { workdir: '/home/user/workspace', timeoutMs: 120_000 },
+      );
+      expect(installed).toHaveSucceeded();
+
+      const resolved = await exec(
+        id,
+        `node --input-type=module -e "await import('@n8n/workflow-sdk'); await import('typescript/unstable/async'); console.log('ok')"`,
+        { workdir: '/home/user/workspace' },
+      );
+      expect(resolved).toHaveSucceeded();
+      expect(resolved.stdout.trim()).toBe('ok');
+    } finally {
+      await deleteSandbox(id);
+    }
+  });
+
   // Every pip sdist and npm native addon needs a compiler, and a sandbox cannot
   // apt-get one.
   test('ships a toolchain for packages that build from source', async () => {
