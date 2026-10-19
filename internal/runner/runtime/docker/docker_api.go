@@ -18,15 +18,20 @@ import (
 var errDockerNotFound = errors.New("not found")
 
 const (
-	// dockerAPIBaseURL is a placeholder: the transport dials the socket and
-	// ignores the host.
+	// dockerAPIBaseURL is only what net/http puts on the request line, which
+	// accepts nothing but http(s) URLs. The connection itself always goes to
+	// the unix:// socket in SANDBOX_RUNNER_DOCKER_HOST: the transport dials it
+	// and ignores this host.
 	dockerAPIBaseURL = "http://docker"
-	// maxDockerAPIResponse bounds how much of a response body is read. A
-	// container inspect is a few KiB; a list of every managed container stays
-	// far below this.
+	// maxDockerAPIResponse bounds how much of a response body is read. The
+	// largest response is the container list: ~2.5 KiB per container, so the
+	// default runner capacity of 1000 sandboxes is ~2.5 MiB. 16 MiB leaves
+	// about 6x headroom.
 	maxDockerAPIResponse = 16 << 20
 	// maxDockerAPIErrorBody bounds how much of an error body is read for its
-	// message.
+	// message, and how much of any body is drained to reuse the connection.
+	// dockerd's errors are a one-line {"message": …}; 64 KiB is far above
+	// that while keeping a misbehaving peer from making us read much.
 	maxDockerAPIErrorBody = 64 << 10
 )
 
