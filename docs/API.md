@@ -952,7 +952,7 @@ Admin only. Revoke an API key (`204`). Revoked keys are rejected from the next r
 
 ### GET /admin/runners
 
-Admin or scaler. Lists every registered runner, ordered by `id`, with the capacity it last reported. Runners that stopped heartbeating stay in the list (with the in-memory registry, until they disconnect); filter on `healthy` and `last_seen` to keep the live ones. Runner addresses are not returned.
+Admin or scaler. Lists every registered runner, ordered by `id`, with the capacity it last reported. Runners that stopped heartbeating stay in the list: the in-memory registry drops a runner when it disconnects, the Postgres registry never does. Filter on `healthy` and `last_seen` to keep the live ones. Runner addresses are not returned.
 
 **Response:** `200 OK`
 

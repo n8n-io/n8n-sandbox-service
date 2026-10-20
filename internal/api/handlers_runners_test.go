@@ -142,8 +142,6 @@ func TestScalerDeniedRoutes(t *testing.T) {
 	}
 }
 
-// A scaler identity that reaches an admin-only handler, e.g. after a change to
-// the middleware's path check, must still get 403.
 func TestRequireAdminRejectsScaler(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/admin/scaler", nil)
 	req = req.WithContext(withAuthIdentity(req.Context(), authIdentity{Role: roleScaler}))

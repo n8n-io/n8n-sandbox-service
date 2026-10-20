@@ -20,17 +20,14 @@ const (
 	// roleProvisioner: tenant create, limit update and delete only. See
 	// docs/security-model.md, "Provisioner keys".
 	roleProvisioner authRole = "provisioner"
-	// roleScaler: runner capacity listing only. See docs/security-model.md,
-	// "Scaler keys".
-	roleScaler authRole = "scaler"
-	roleTenant authRole = "tenant"
+	roleScaler      authRole = "scaler"
+	roleTenant      authRole = "tenant"
 )
 
 // provisionerPathPrefix confines provisioner keys; the handlers under it other
 // than tenant create, limit update and delete require admin.
 const provisionerPathPrefix = "/admin/tenants"
 
-// scalerPath is the only path a scaler key may reach.
 const scalerPath = "/admin/runners"
 
 // publicPaths skip auth and the access log.

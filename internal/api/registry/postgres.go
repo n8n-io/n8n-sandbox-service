@@ -96,7 +96,7 @@ func (r *PostgresRegistry) List() ([]Runner, error) {
 	const q = `
 		SELECT id, http_base_url, control_grpc_addr, healthy, capacity_total, capacity_used, capacity_stopped, last_seen
 		FROM runners
-		ORDER BY id`
+		ORDER BY id COLLATE "C"`
 	rows, err := r.db.Query(q)
 	if err != nil {
 		return nil, fmt.Errorf("registry: list runners: %w", err)

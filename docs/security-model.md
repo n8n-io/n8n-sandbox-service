@@ -35,30 +35,6 @@ Requests carry an `X-Api-Key` header. There are four key classes:
   does not yield usable credentials. Revocation sets `revoked_at`, which the
   lookup query filters on.
 
-Authorization runs on every sandbox request through `canAccessSandbox` in
-[internal/api/middleware_auth.go](../internal/api/middleware_auth.go):
-
-- Read, delete and all proxied routes (exec and files) load the sandbox record
-  and compare its `tenant_id` against the caller's. An admin key passes this
-  check for every sandbox, whoever owns it.
-- List is scoped at the query level with `ListByTenant`. The `tenant_id` query
-  parameter that narrows an admin's listing is refused with `403` for tenant
-  keys, so it cannot be used to probe other tenants' ids. Every sandbox
-  response names its owner in `tenant_id`; for a tenant that is always its own.
-- Create sets `tenant_id` from the authenticated identity. A caller cannot
-  assign a sandbox to another tenant. Create and list switch on the role
-  explicitly and refuse anything but admin or tenant, so a new role can never
-  fall through to the admin pseudo-tenant.
-- Sandboxes owned by the admin pseudo-tenant are not visible to tenant keys.
-- Admin routes under `/admin` require an admin key, except the three
-  provisioner routes and the scaler route below.
-
-Cross-tenant and non-existent sandboxes both return `404`, so a tenant cannot
-use the status code to learn whether an ID exists.
-
-Error bodies the API generates itself have runner-side sandbox paths stripped
-before they are returned.
-
 ### Provisioner keys
 
 The class exists for automation that creates and tears down tenants without a
@@ -91,14 +67,36 @@ of tenants.
 A consequence worth keeping in mind: any key on a tenant that was not created
 together with the tenant was minted by an admin.
 
+Authorization runs on every sandbox request through `canAccessSandbox` in
+[internal/api/middleware_auth.go](../internal/api/middleware_auth.go):
+
+- Read, delete and all proxied routes (exec and files) load the sandbox record
+  and compare its `tenant_id` against the caller's. An admin key passes this
+  check for every sandbox, whoever owns it.
+- List is scoped at the query level with `ListByTenant`. The `tenant_id` query
+  parameter that narrows an admin's listing is refused with `403` for tenant
+  keys, so it cannot be used to probe other tenants' ids. Every sandbox
+  response names its owner in `tenant_id`; for a tenant that is always its own.
+- Create sets `tenant_id` from the authenticated identity. A caller cannot
+  assign a sandbox to another tenant. Create and list switch on the role
+  explicitly and refuse anything but admin or tenant, so a new role can never
+  fall through to the admin pseudo-tenant.
+- Sandboxes owned by the admin pseudo-tenant are not visible to tenant keys.
+- Admin routes under `/admin` require an admin key, except the three
+  provisioner routes above and the scaler route below.
+
+Cross-tenant and non-existent sandboxes both return `404`, so a tenant cannot
+use the status code to learn whether an ID exists.
+
+Error bodies the API generates itself have runner-side sandbox paths stripped
+before they are returned.
+
 ### Scaler keys
 
-The class exists for the capacity autoscaler, which polls runner capacity and
-would otherwise need an admin key. A scaler key may only call
-`GET /admin/runners`: the middleware refuses any other path with `403`, and
-the handler accepts only admin or scaler. The response carries runner ids,
-health and capacity, never runner addresses. Startup fails if a scaler key is
-also an admin or provisioner key, because those are checked first.
+The class exists for the capacity autoscaler, which would otherwise need an
+admin key. A scaler key may only call `GET /admin/runners`, which returns
+runner ids, health and capacity but no addresses. Startup fails if a scaler key
+is also an admin or provisioner key.
 
 ### Concurrency limits
 

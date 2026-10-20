@@ -7,8 +7,6 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
 )
 
-// runnerResponse leaves out the runner addresses: they only matter to API to
-// runner traffic.
 type runnerResponse struct {
 	ID              string `json:"id"`
 	Healthy         bool   `json:"healthy"`

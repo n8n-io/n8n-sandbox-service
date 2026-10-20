@@ -112,11 +112,11 @@ func (r *MemoryRegistry) Len() int {
 
 func (r *MemoryRegistry) List() ([]Runner, error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	out := make([]Runner, 0, len(r.runners))
 	for _, run := range r.runners {
 		out = append(out, *run)
 	}
+	r.mu.Unlock()
 	slices.SortFunc(out, func(a, b Runner) int { return strings.Compare(a.ID, b.ID) })
 	return out, nil
 }

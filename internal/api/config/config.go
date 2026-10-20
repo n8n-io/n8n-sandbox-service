@@ -79,8 +79,7 @@ type APIConfig struct {
 	// empty. See docs/security-model.md, "Provisioner keys".
 	ProvisionerKeys map[string]struct{}
 
-	// ScalerKeys is parsed from SANDBOX_API_SCALER_KEYS; may be empty. See
-	// docs/security-model.md, "Scaler keys".
+	// ScalerKeys is parsed from SANDBOX_API_SCALER_KEYS; may be empty.
 	ScalerKeys map[string]struct{}
 
 	// ListenAddr is the TCP address the API gateway listens on.
