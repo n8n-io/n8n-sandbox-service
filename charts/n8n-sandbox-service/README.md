@@ -189,12 +189,13 @@ auth:
   secretKeys:
     apiKeys: api-keys
     provisionerKeys: provisioner-api-keys
+    scalerKeys: scaler-api-keys
     runnerRegistrationToken: runner-registration-token
     runnerApiKey: runner-api-key
     runnerApiKeys: runner-api-keys
 ```
 
-`provisionerKeys` is optional: the API reads it as `SANDBOX_API_PROVISIONER_KEYS` with `secretKeyRef.optional: true`, so a Secret without that key runs with no provisioner keys. When it is set, `api.config.defaultMaxSandboxes` must be above `0` or the API refuses to start.
+`provisionerKeys` is optional: the API reads it as `SANDBOX_API_PROVISIONER_KEYS` with `secretKeyRef.optional: true`, so a Secret without that key runs with no provisioner keys. When it is set, `api.config.defaultMaxSandboxes` must be above `0` or the API refuses to start. `scalerKeys` (`SANDBOX_API_SCALER_KEYS`) is optional the same way.
 
 If `auth.existingSecret` is empty, the chart creates an opaque Secret from `auth.generated`:
 
@@ -204,6 +205,7 @@ auth:
   generated:
     apiKeys: replace-with-random-api-key
     provisionerKeys: "" # optional; empty leaves the key out
+    scalerKeys: "" # optional; empty leaves the key out
     runnerRegistrationToken: replace-with-random-registration-token
     runnerApiKey: replace-with-random-runner-api-key
     runnerApiKeys: replace-with-random-runner-api-key
@@ -211,7 +213,7 @@ auth:
 
 The chart fails rendering when any required generated auth value is empty or `changeme`. Do not expose the API with placeholder credentials.
 
-The API uses `apiKeys`, `provisionerKeys`, `runnerRegistrationToken`, and `runnerApiKey`. The runner uses `runnerApiKeys` and `runnerRegistrationToken`.
+The API uses `apiKeys`, `provisionerKeys`, `scalerKeys`, `runnerRegistrationToken`, and `runnerApiKey`. The runner uses `runnerApiKeys` and `runnerRegistrationToken`.
 
 ## TLS Secrets
 

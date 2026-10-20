@@ -14,6 +14,8 @@ import { execFileSync } from 'node:child_process';
 export const ADMIN_API_KEY = process.env.SANDBOX_API_KEY || 'test';
 /** Provisioner key (SANDBOX_API_PROVISIONER_KEYS): tenant create, limit update and delete only. */
 export const PROVISIONER_API_KEY = process.env.SANDBOX_API_PROVISIONER_KEY || 'provisioner-test';
+/** Scaler key (SANDBOX_API_SCALER_KEYS): GET /admin/runners only. */
+export const SCALER_API_KEY = process.env.SANDBOX_API_SCALER_KEY || 'scaler-test';
 export const BASE_URL = process.env.BASE_URL || process.env.BASE_URL_A || 'http://localhost:8080';
 
 let tenantApiKey: string | null = null;

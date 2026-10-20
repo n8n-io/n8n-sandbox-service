@@ -132,7 +132,7 @@ A lightweight HTTP server embedded in every sandbox container. It is the only pr
 
 ### Client → API (REST + API Key)
 
-All client requests go through the API gateway over HTTP. Authentication uses an `X-Api-Key` header. Keys in `SANDBOX_API_KEYS` are admin keys (full access). Keys in `SANDBOX_API_PROVISIONER_KEYS` are provisioner keys (see [security-model.md](security-model.md#provisioner-keys)). Admin-minted tenant keys (stored hashed in the API database) are scoped to that tenant's sandboxes.
+All client requests go through the API gateway over HTTP. Authentication uses an `X-Api-Key` header. Keys in `SANDBOX_API_KEYS` are admin keys (full access). Keys in `SANDBOX_API_PROVISIONER_KEYS` are provisioner keys (see [security-model.md](security-model.md#provisioner-keys)). Keys in `SANDBOX_API_SCALER_KEYS` are scaler keys (see [security-model.md](security-model.md#scaler-keys)). Admin-minted tenant keys (stored hashed in the API database) are scoped to that tenant's sandboxes.
 
 Per-tenant `max_sandboxes` is checked before the runner call and again when the sandbox is saved. The first check counts the tenant's saved sandboxes plus the creates in progress on this API pod (`internal/api/tenant_quota.go`), so on one pod no create past the quota reaches a runner while the quota stays the same. No lock is held over the store read or the runner call. The save counts and inserts under the tenant's row lock (Postgres) or `BEGIN IMMEDIATE` (SQLite), so concurrent creates on several pods, or a quota lowered during a create, cannot take a tenant past its quota. A create refused there is deleted from its runner again; if that delete fails, the sandbox stays on the runner untracked and the API logs it.
 

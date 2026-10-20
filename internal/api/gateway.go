@@ -60,6 +60,7 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	mux.HandleFunc("POST /admin/tenants/{id}/keys", handleCreateTenantKey(s))
 	mux.HandleFunc("DELETE /admin/tenants/{id}/keys/{keyId}", handleRevokeTenantKey(s))
 	mux.HandleFunc("GET /admin/scaler", handleGetScaler(cfg))
+	mux.HandleFunc("GET /admin/runners", handleListRunners(reg))
 
 	mux.HandleFunc("POST /sandboxes/{id}/executions", limitTenant(sandboxProxy(false)))
 	mux.HandleFunc("GET /sandboxes/{id}/executions/{exec_id}", limitTenant(sandboxProxy(false)))
@@ -78,7 +79,7 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	if rec.Enabled() {
 		handler = metrics.HTTPMiddleware(rec)(handler)
 	}
-	handler = AuthMiddleware(cfg.APIKeys, cfg.ProvisionerKeys, s)(handler)
+	handler = AuthMiddleware(cfg.APIKeys, cfg.ProvisionerKeys, cfg.ScalerKeys, s)(handler)
 	handler = publicPaths.RejectOtherMethods(handler)
 	handler = LoggingMiddleware(handler)
 	if cfg.EnableCORS {
