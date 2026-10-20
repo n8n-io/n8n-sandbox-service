@@ -462,9 +462,9 @@ func (b *blockingWriter) Write(p []byte) (int, error) {
 	return b.ResponseRecorder.Write(p)
 }
 
-// A saved create frees its slot right away, not once its response is written:
-// until then it counts as saved and in progress, and refuses a create below
-// the quota.
+// A saved create frees its slot right away, not once its response is written.
+// If it held the slot until then, the sandbox would count both as saved and in
+// progress, and the second create here would be refused below the quota.
 func TestCreateSandboxFreesQuotaSlotOnceSaved(t *testing.T) {
 	router, _, _ := newIdleTestGateway(t, "admin-key", &fakeSandboxControl{})
 	tenant := mintTenantKey(t, router, `{"name":"capped","max_sandboxes":2}`)
