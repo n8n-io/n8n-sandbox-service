@@ -4,6 +4,8 @@ This guide covers running the n8n Sandbox Service with an in-cluster Sysbox runn
 
 Sysbox must install a runtime binary on the node and change the node's containerd configuration. Immutable-rootfs distributions such as Talos, Bottlerocket, Flatcar, and Fedora CoreOS do not permit that. On those clusters, skip to [Immutable-rootfs distributions](#immutable-rootfs-distributions-privileged-isolation).
 
+Either way, runner nodes need the `br_netfilter` kernel module loaded: the runner refuses to start without it ([security model](security-model.md#guest-to-host-and-network)).
+
 ## 1. Create a Sysbox node pool
 
 Use a dedicated Linux node pool for Sysbox workloads. Sysbox changes the node runtime setup, so keep these nodes separate from regular application nodes.
