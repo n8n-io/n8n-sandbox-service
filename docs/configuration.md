@@ -16,6 +16,7 @@ All services are configured via environment variables.
 | --- | --- | --- |
 | `SANDBOX_API_KEYS` | *(required)* | Comma-separated admin API keys. Full access to all sandboxes and `/admin/tenants` key management. Self-hosted can use these alone without minting tenant keys. |
 | `SANDBOX_API_PROVISIONER_KEYS` | *(empty)* | Comma-separated provisioner API keys ([security-model.md](security-model.md#provisioner-keys)). When set, startup fails if a key is also in `SANDBOX_API_KEYS` or if `SANDBOX_API_DEFAULT_MAX_SANDBOXES` is `0`. |
+| `SANDBOX_API_SCALER_KEYS` | *(empty)* | Comma-separated scaler API keys: `GET /admin/runners` only ([security-model.md](security-model.md#scaler-keys)). Startup fails if a key is also in `SANDBOX_API_KEYS` or `SANDBOX_API_PROVISIONER_KEYS`. |
 | `SANDBOX_API_RUNNER_REGISTRATION_TOKEN` | *(required)* | Shared secret; runners authenticate to the private gRPC registration service with `Authorization: Bearer …` |
 | `SANDBOX_API_RUNNER_API_KEY` | *(empty)* | Optional API key injected by the API when calling runner HTTP; the runner also requires the client certificate above |
 | `SANDBOX_API_LOG_LEVEL` | `info` | Minimum log severity (`debug`, `info`, `warn`, `error`; case-insensitive) |
@@ -32,7 +33,7 @@ All services are configured via environment variables.
 | `SANDBOX_API_POSTGRES_DB` | *(required with postgres)* | Postgres database name |
 | `SANDBOX_API_POSTGRES_SSLMODE` | `require` | Postgres TLS mode (`disable`, `require`, `verify-full`, etc.) |
 | `SANDBOX_API_MAX_FILE_BYTES` | `10485760` | Maximum file upload size (10 MB) |
-| `SANDBOX_API_DEFAULT_MAX_SANDBOXES` | `50` | Default per-tenant sandbox quota when `POST /admin/tenants` omits `max_sandboxes` (`0` = unlimited), and the highest `max_sandboxes` a provisioner key may set on create or `PATCH`. Must fit Postgres/SQLite `INTEGER` (`0`…`2147483647`). Soft check-then-act: concurrent creates can exceed the limit (see `docs/API.md`). |
+| `SANDBOX_API_DEFAULT_MAX_SANDBOXES` | `50` | Default per-tenant sandbox quota when `POST /admin/tenants` omits `max_sandboxes` (`0` = unlimited), and the highest `max_sandboxes` a provisioner key may set on create or `PATCH`. Must fit Postgres/SQLite `INTEGER` (`0`…`2147483647`). |
 | `SANDBOX_API_MAX_INFLIGHT_PER_TENANT` | `512` | Requests a tenant may have in progress at once on this replica, all its keys together; more get `429` ([what counts](API.md#http-429--too-many-requests-in-progress)). A first estimate: 32 sandboxes with 16 requests in progress each. It also bounds what a tenant holds here while requests wait on a slow runner, which the per-sandbox limit cannot see. `0` = no limit, for execution `DELETE`s too |
 | `SANDBOX_API_ENABLE_CORS` | `false` | Enable CORS headers (allow all origins); needed for the browser playground |
 | `SANDBOX_API_METRICS_ENABLED` | `false` | When true, expose Prometheus `/metrics` (no `X-Api-Key`; firewall the port it lands on). `SANDBOX_API_METRICS_LISTEN_ADDR` chooses the listener. See [Metrics](#metrics). |
@@ -94,7 +95,7 @@ These variables are parsed by the Docker/sysbox runner entrypoint.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE` | *(required)* | Docker image used for sandbox containers |
-| `SANDBOX_RUNNER_DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker daemon endpoint used by the runner |
+| `SANDBOX_RUNNER_DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker daemon endpoint used by the runner; must be `unix://` |
 | `SANDBOX_RUNNER_ENABLE_CGROUPS` | `true` | Whether Docker resource limits are applied |
 | `SANDBOX_RUNNER_DEFAULT_MEMORY_MB` | `512` | Default Docker memory limit per sandbox in megabytes |
 | `SANDBOX_RUNNER_DEFAULT_CPU_PERCENT` | `100` | Default Docker CPU limit as a percentage of one core |

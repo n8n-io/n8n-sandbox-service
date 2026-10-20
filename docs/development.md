@@ -84,10 +84,13 @@ Run Go unit tests:
 make test
 ```
 
-Postgres store tests are behind a build tag and skip unless `SANDBOX_TEST_POSTGRES_HOST` is set (`SANDBOX_TEST_POSTGRES_{PORT,USER,PASSWORD,DB,SSLMODE}` are optional):
+The Postgres store and registry tests are behind the `integration` build tag and need a database. `make test-integration` runs them and fails when `SANDBOX_TEST_POSTGRES_HOST` is unset (`SANDBOX_TEST_POSTGRES_{PORT,USER,PASSWORD,DB,SSLMODE}` are optional). Use a throwaway database: the tests run the migrations and write runners and sandboxes that a running API would act on. CI runs them against `postgres:16-alpine`:
 
 ```bash
-SANDBOX_TEST_POSTGRES_HOST=localhost go test -tags=integration ./internal/api/...
+docker run -d --rm --name sandbox-test-postgres -e POSTGRES_PASSWORD=postgres -p 127.0.0.1:5432:5432 postgres:16-alpine
+# -h: on first start the image runs a temporary server on the Unix socket only.
+for i in $(seq 30); do docker exec sandbox-test-postgres pg_isready -h 127.0.0.1 -U postgres -q && break; sleep 1; done
+SANDBOX_TEST_POSTGRES_HOST=127.0.0.1 SANDBOX_TEST_POSTGRES_PASSWORD=postgres make test-integration
 ```
 
 Run the full end-to-end suite (all topologies sequentially):

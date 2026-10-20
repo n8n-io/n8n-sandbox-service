@@ -14,6 +14,8 @@ import {
   ADMIN_API_KEY,
   ensureTenantAuth,
   adminClient,
+  BASE_URL,
+  expectParallelCreatesStopAtQuota,
 } from './helpers';
 import { SandboxServiceError } from '@n8n/sandbox-client';
 
@@ -972,6 +974,14 @@ test.describe('Tenant isolation', () => {
         });
       }
     }
+  });
+});
+
+test.describe('Tenant quota', () => {
+  test('parallel creates stop at max_sandboxes', async () => {
+    // Both creates can reach the runner at once, so keep the burst well within
+    // the Firecracker lane's runner capacity of four.
+    await expectParallelCreatesStopAtQuota([BASE_URL], 1, 2);
   });
 });
 

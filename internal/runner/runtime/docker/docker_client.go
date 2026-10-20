@@ -108,11 +108,13 @@ type dockerBackend interface {
 	run(ctx context.Context, args ...string) (string, error)
 }
 
-// dockerClient is a thin wrapper around the docker CLI. It is the only place
-// in the Docker runtime package that shells out to docker.
+// dockerClient is a thin wrapper around the docker CLI, with container lookups
+// served over the REST API instead. It is the only place in the Docker runtime
+// package that talks to docker.
 type dockerClient struct {
 	host       string
 	dnsServers []string
+  api        *dockerAPI
 	// onlyIPv4 is set when the host kernel has no IPv6. The net.ipv6 sysctls
 	// don't exist there and docker refuses to create the container with them.
 	onlyIPv4 bool
@@ -126,6 +128,7 @@ const hostIPv6Path = "/proc/sys/net/ipv6"
 func hostOnlyIPv4(procPath string) bool {
 	_, err := os.Stat(procPath)
 	return errors.Is(err, fs.ErrNotExist)
+
 }
 
 func (dc *dockerClient) run(ctx context.Context, args ...string) (string, error) {
@@ -271,18 +274,7 @@ func (dc *dockerClient) containerIP(ctx context.Context, containerID string) (st
 }
 
 func (dc *dockerClient) inspectContainer(ctx context.Context, containerID string) (*containerInspect, error) {
-	out, err := dc.run(ctx, "container", "inspect", containerID)
-	if err != nil {
-		return nil, err
-	}
-	var items []containerInspect
-	if err := json.Unmarshal([]byte(out), &items); err != nil {
-		return nil, fmt.Errorf("decode container inspect: %w", err)
-	}
-	if len(items) == 0 {
-		return nil, fmt.Errorf("container inspect returned no results for %s", containerID)
-	}
-	return &items[0], nil
+	return dc.api.inspectContainer(ctx, containerID)
 }
 
 func (dc *dockerClient) inspectNetwork(ctx context.Context, name string) (*networkInspect, error) {
@@ -300,35 +292,12 @@ func (dc *dockerClient) inspectNetwork(ctx context.Context, name string) (*netwo
 	return &items[0], nil
 }
 
+// findContainerByLabels is the lookup every container ID in this package comes
+// from. The REST API reports full 64-character IDs, the same width docker create
+// and die events use; the runner matches one against the other, and an
+// abbreviated ID would make its own deliberate stop read as a crash.
 func (dc *dockerClient) findContainerByLabels(ctx context.Context, filterArgs ...string) ([]string, error) {
-	out, err := dc.run(ctx, containerIDArgs(filterArgs...)...)
-	if err != nil {
-		return nil, err
-	}
-	lines := strings.Fields(strings.TrimSpace(out))
-	if len(lines) == 1 && lines[0] == "" {
-		return nil, nil
-	}
-	return lines, nil
-}
-
-// containerIDArgs builds the lookup every container ID in this package comes from,
-// so there is one place that decides how wide those IDs are.
-//
-// --no-trunc is the whole reason it exists. docker ps abbreviates IDs to 12
-// characters, while docker create and the die events from docker events both report
-// the full 64, and the runner matches one against the other: a stop it recorded
-// under an abbreviated ID never matches the death that stop caused, so the runner
-// reads its own deliberate stop as a crash and the next request is refused with
-// 409 sandbox_restarted. Nothing downstream notices the difference otherwise —
-// docker resolves ID prefixes, and netrules truncates to 12 for its chain names.
-func containerIDArgs(filters ...string) []string {
-	args := make([]string, 0, 3+2*len(filters))
-	args = append(args, "ps", "-aq", "--no-trunc")
-	for _, f := range filters {
-		args = append(args, "--filter", f)
-	}
-	return args
+	return dc.api.listContainerIDs(ctx, filterArgs...)
 }
 
 func (dc *dockerClient) pullImage(ctx context.Context, image string) error {
@@ -440,6 +409,9 @@ func dockerLimitArgs(limits *ResourceLimits) []string {
 func isDockerNotFound(err error) bool {
 	if err == nil {
 		return false
+	}
+	if errors.Is(err, errDockerNotFound) {
+		return true
 	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "no such container") ||

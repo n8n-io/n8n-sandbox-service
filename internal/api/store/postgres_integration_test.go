@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"strconv"
 	"sync"
 	"testing"
@@ -89,24 +90,68 @@ func TestPostgresStoreCRUD(t *testing.T) {
 		t.Fatalf("unexpected record: %+v", got)
 	}
 
+	// Running and idle: a stop candidate. Other tests share the database, so
+	// look for this row rather than counting.
+	rows, err := s.ListForIdleReapStop(9999999999, false)
+	if err != nil {
+		t.Fatalf("list stop: %v", err)
+	}
+	if !containsSandbox(rows, rec.ID) {
+		t.Fatalf("stop candidates %v, want %s", sandboxIDs(rows), rec.ID)
+	}
+
 	if err := s.UpdateStatus(rec.ID, "stopped"); err != nil {
 		t.Fatalf("update status: %v", err)
 	}
 	if err := s.UpdateLastActive(rec.ID); err != nil {
 		t.Fatalf("update last active: %v", err)
 	}
+	got, err = s.Get(rec.ID)
+	if err != nil || got == nil || got.Status != "stopped" || got.LastActiveAt <= rec.LastActiveAt {
+		t.Fatalf("after stop: %+v err=%v, want stopped with a newer last_active_at", got, err)
+	}
 
-	rows, err := s.ListForIdleReapStop(9999999999, false)
+	// Stopped: no longer a stop candidate, now a delete candidate.
+	rows, err = s.ListForIdleReapStop(9999999999, false)
 	if err != nil {
 		t.Fatalf("list stop: %v", err)
 	}
-	if len(rows) == 0 {
-		t.Fatal("expected stop candidate")
+	if containsSandbox(rows, rec.ID) {
+		t.Fatalf("stopped sandbox %s is still a stop candidate", rec.ID)
 	}
+	rows, err = s.ListForIdleReapDelete(9999999999)
+	if err != nil {
+		t.Fatalf("list delete: %v", err)
+	}
+	if !containsSandbox(rows, rec.ID) {
+		t.Fatalf("delete candidates %v, want %s", sandboxIDs(rows), rec.ID)
+	}
+}
+
+func sandboxIDs(rows []*SandboxRecord) []string {
+	ids := make([]string, len(rows))
+	for i, r := range rows {
+		ids[i] = r.ID
+	}
+	return ids
+}
+
+func containsSandbox(rows []*SandboxRecord, id string) bool {
+	return slices.Contains(sandboxIDs(rows), id)
 }
 
 func TestPostgresUpdateTenantLimits(t *testing.T) {
 	testUpdateTenantLimits(t, openTestPostgresStore(t), uuid.New().String())
+}
+
+func TestPostgresCreateEnforcesTenantQuota(t *testing.T) {
+	testCreateEnforcesTenantQuota(t, openTestPostgresStore(t), uuid.New().String())
+}
+
+// Two stores on one database stand in for two API pods.
+func TestPostgresConcurrentCreatesStopAtTenantQuota(t *testing.T) {
+	stores := []SandboxStore{openTestPostgresStore(t), openTestPostgresStore(t)}
+	testConcurrentCreatesStopAtTenantQuota(t, stores, uuid.New().String())
 }
 
 func TestPostgresSandboxLockKeepsStoreUsableAndReleasesAfterCancellation(t *testing.T) {

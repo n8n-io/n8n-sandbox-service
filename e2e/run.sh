@@ -226,6 +226,7 @@ if [[ ${#MAIN_SPECS[@]} -eq 0 ]]; then
 fi
 BASE_URL="http://localhost:$PORT" SANDBOX_API_KEY="$API_KEY" \
 	SANDBOX_API_PROVISIONER_KEY="$E2E_PROVISIONER_API_KEY" \
+	SANDBOX_API_SCALER_KEY="$E2E_SCALER_API_KEY" \
 	npx playwright test "${MAIN_SPECS[@]}" --grep-invert "$FIRECRACKER_ONLY_TAG" "$@"
 
 if [[ "${E2E_IDLE_TTL_SUITE:-}" != "1" ]]; then

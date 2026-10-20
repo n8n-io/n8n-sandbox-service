@@ -7,16 +7,17 @@ containers direct access to the host Docker daemon.
 
 ## Technology
 
-- Uses the Docker CLI against `SANDBOX_RUNNER_DOCKER_HOST`.
+- Uses both the Docker REST API and the Docker CLI against
+  `SANDBOX_RUNNER_DOCKER_HOST`, which must be a `unix://` socket.
 - Starts sandbox containers from `SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE`.
 - Connects containers to a runner bridge network by egress mode:
   `runner-bridge` for `public`, `runner-no-egress` for `none` (a Docker
   `--internal` network; its bridge device is `br-no-egress`, the name being
   over the 15-character interface limit). The host must have `br_netfilter`
   loaded with `bridge-nf-call-iptables=1`, or bridged sandbox traffic bypasses
-  the iptables rules. `scripts/setup-sysbox.sh` loads the module; the sysctl
-  defaults to `1` once it is loaded, so only a host that overrides it needs
-  attention.
+  the iptables rules. The runner refuses to start unless the sysctl reads `1`
+  in its network namespace. `scripts/setup-sysbox.sh` loads the module; the
+  sysctl defaults to `1` once it is loaded. The check runs only at startup.
 - Proxies API traffic to the sandbox daemon on port `8081`.
 
 ## Supported Features

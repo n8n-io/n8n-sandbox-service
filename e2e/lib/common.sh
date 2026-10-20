@@ -6,6 +6,9 @@
 # Playwright (SANDBOX_API_PROVISIONER_KEY, read by tests/helpers.ts).
 # shellcheck disable=SC2034  # read by the run-*.sh callers
 E2E_PROVISIONER_API_KEY="provisioner-test"
+# Same for the scaler key (SANDBOX_API_SCALER_KEYS / SANDBOX_API_SCALER_KEY).
+# shellcheck disable=SC2034  # read by the run-*.sh callers
+E2E_SCALER_API_KEY="scaler-test"
 
 # Maps host uname -m to Docker image arch tag (amd64/arm64).
 e2e_docker_arch() {
@@ -427,6 +430,7 @@ e2e_api_container_env_args() {
 		-v "$tls_dir/api:/grpc-tls:ro"
 		-e "SANDBOX_API_KEYS=$api_key"
 		-e "SANDBOX_API_PROVISIONER_KEYS=$E2E_PROVISIONER_API_KEY"
+		-e "SANDBOX_API_SCALER_KEYS=$E2E_SCALER_API_KEY"
 		-e "SANDBOX_API_METRICS_ENABLED=true"
 		-e "SANDBOX_API_RUNNER_REGISTRATION_TOKEN=$reg_token"
 		-e "SANDBOX_API_RUNNER_API_KEY=$runner_api_key"

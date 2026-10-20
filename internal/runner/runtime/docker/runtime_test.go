@@ -117,20 +117,6 @@ func TestDockerLimitArgs(t *testing.T) {
 	}
 }
 
-// Every container ID the runner holds is matched against the ID a die event
-// carries, and events carry the full 64-character one. docker ps abbreviates to 12
-// unless told not to, and an abbreviated ID in the expected-stop map means a stop
-// the runner asked for never matches the death it caused: the stop is read as a
-// crash, and the next request for an idle-stopped sandbox is refused with a 409 it
-// should never see.
-func TestContainerIDArgsAskDockerForUntruncatedIDs(t *testing.T) {
-	got := containerIDArgs("label=managed=true", "label=sandbox=abc")
-	want := []string{"ps", "-aq", "--no-trunc", "--filter", "label=managed=true", "--filter", "label=sandbox=abc"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("containerIDArgs() = %#v, want %#v", got, want)
-	}
-}
-
 func TestDockerContainerCreateArgs(t *testing.T) {
 	limits := &ResourceLimits{
 		MemoryMB:   512,

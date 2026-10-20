@@ -94,7 +94,11 @@ var _ runnerruntime.Runtime = (*Runtime)(nil)
 // New creates a new Docker runtime. It reconciles any previous containers and ensures
 // the runner networks exist.
 func New(runnerConfig *config.Config, cfg Config) (*Runtime, error) {
-	m := newRuntime(runnerConfig, cfg, &dockerClient{host: cfg.Host, dnsServers: cfg.DNSServers, onlyIPv4: hostOnlyIPv4(hostIPv6Path)})
+  api, err := newDockerAPI(cfg.Host)
+	if err != nil {
+		return nil, fmt.Errorf("SANDBOX_RUNNER_DOCKER_HOST: %w", err)
+	}
+	m := newRuntime(runnerConfig, cfg, &dockerClient{host: cfg.Host, dnsServers: cfg.DNSServers, api: api, onlyIPv4: hostOnlyIPv4(hostIPv6Path)})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -114,6 +118,13 @@ func New(runnerConfig *config.Config, cfg Config) (*Runtime, error) {
 		if err := netrules.EnsureBridgePolicy(n.iface, n.blockEgress); err != nil {
 			return nil, fmt.Errorf("ensure network %s policy: %w", n.networkName, err)
 		}
+	}
+
+	// Checked once the networks exist, since Docker may load the module and set
+	// the sysctl when it sets up a bridge. No sandbox can be created before New
+	// returns.
+	if err := checkBridgeNetfilter(bridgeNFCallIPTablesPath); err != nil {
+		return nil, fmt.Errorf("bridge netfilter: %w", err)
 	}
 
 	return m, nil

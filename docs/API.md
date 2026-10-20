@@ -4,10 +4,11 @@ All endpoints except `/healthz` and `/metrics` require the `X-Api-Key` header fo
 
 ### API keys and tenants
 
-There are three key classes:
+There are four key classes:
 
 - `SANDBOX_API_KEYS` are admin keys. An admin key can create/list/delete any sandbox, manage tenants and mint tenant API keys via the admin API.
 - `SANDBOX_API_PROVISIONER_KEYS` are provisioner keys: `POST /admin/tenants`, `PATCH /admin/tenants/{id}` and `DELETE /admin/tenants/{id}` only, `403` everywhere else. Why the class exists and what it does not protect: [security-model.md](security-model.md#provisioner-keys).
+- `SANDBOX_API_SCALER_KEYS` are scaler keys: `GET /admin/runners` only, `403` on every other path ([security-model.md](security-model.md#scaler-keys)).
 - Tenant keys are minted by an admin (or returned when a tenant is created). A tenant key may only create sandboxes for that tenant and may only list/get/delete/proxy its own sandboxes. Self-hosted operators can ignore tenant APIs entirely and keep using the admin key.
 
 Tenant keys are returned in plaintext once on create; only a hash is stored.
@@ -226,7 +227,7 @@ When no runner is eligible, it is the same except for `error`: `no sandbox runne
 
 With a tenant key, the sandbox is owned by that tenant and counts toward the tenant's `max_sandboxes` quota (`403` when exceeded). With an admin key, the sandbox is stored with `tenant_id` `__admin__` (admin-owned; not visible to tenant keys; admins see all sandboxes in list).
 
-Quota enforcement is a soft check-then-act (`CountByTenant` before create). Concurrent `POST /sandboxes` from the same tenant can exceed `max_sandboxes` by up to the number of creates in flight and consume shared runner capacity. Treat the limit as a soft ceiling, not a hard atomic reservation.
+The quota holds under concurrent creates: it is checked before the runner call and again when the sandbox is saved, where a tenant's creates are counted one at a time. A create refused when saving was already made on a runner and is deleted there again before the `403`, so during a burst a tenant can briefly hold more sandboxes on runners than its quota.
 
 Resource limits (memory, CPU, process count) are configured on the runner via environment variables.
 
@@ -244,7 +245,7 @@ Resource limits (memory, CPU, process count) are configured on the runner via en
 }
 ```
 
-**Errors:** `400` invalid request body, supplied id or `egress` value, `403` tenant sandbox quota exceeded, `409` if the supplied id is owned by another tenant/admin, exists with a different `egress` than requested, or the tenant was deleted before the sandbox row could be stored (runner create is rolled back), `429` [too many requests in progress](#http-429--too-many-requests-in-progress), `502` stale sandbox cleanup failed, or the runner did not confirm the requested `egress` (runner create is rolled back; a runner from before egress modes only serves `public`), `503` `no_capacity`: no runner is eligible or has room (see above)
+**Errors:** `400` invalid request body, supplied id or `egress` value, `403` tenant sandbox quota exceeded (when concurrent creates filled it first, the runner create is rolled back), `409` if the supplied id is owned by another tenant/admin, exists with a different `egress` than requested, or the tenant was deleted before the sandbox row could be stored (runner create is rolled back), `429` [too many requests in progress](#http-429--too-many-requests-in-progress), `502` stale sandbox cleanup failed, or the runner did not confirm the requested `egress` (runner create is rolled back; a runner from before egress modes only serves `public`), `503` `no_capacity`: no runner is eligible or has room (see above)
 
 **Examples:**
 
@@ -804,7 +805,7 @@ curl "http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/stat?
 
 ## Admin: tenants and API keys
 
-All `/admin/*` routes require an admin API key (`SANDBOX_API_KEYS`) unless marked "Admin or provisioner". Any other key receives `403`.
+All `/admin/*` routes require an admin API key (`SANDBOX_API_KEYS`) unless marked "Admin or provisioner" or "Admin or scaler". Any other key receives `403`.
 
 ### GET /admin/tenants
 
@@ -944,6 +945,41 @@ Admin only. Mint an additional API key for the tenant. Returns plaintext `api_ke
 ### DELETE /admin/tenants/{id}/keys/{keyId}
 
 Admin only. Revoke an API key (`204`). Revoked keys are rejected from the next request on.
+
+---
+
+## Admin: runners
+
+### GET /admin/runners
+
+Admin or scaler. Lists every registered runner, ordered by `id`, with the capacity it last reported. Runners that stopped heartbeating stay in the list: the in-memory registry drops a runner when it disconnects, the Postgres registry never does. Filter on `healthy` and `last_seen` to keep the live ones. Runner addresses are not returned.
+
+**Response:** `200 OK`
+
+```json
+{
+  "runners": [
+    {
+      "id": "runner-1",
+      "healthy": true,
+      "capacity_total": 20,
+      "capacity_used": 7,
+      "capacity_stopped": 2,
+      "last_seen": 1700000000
+    }
+  ]
+}
+```
+
+`last_seen` is the Unix time in seconds of the runner's last heartbeat. `runners` is `[]` when none are registered.
+
+**Errors:** `403` provisioner or tenant key, `500` registry read failed
+
+**Example:**
+
+```bash
+curl http://localhost:8080/admin/runners -H "X-Api-Key: SCALER_KEY"
+```
 
 ---
 
