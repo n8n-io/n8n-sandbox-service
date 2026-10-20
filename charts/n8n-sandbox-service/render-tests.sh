@@ -367,6 +367,22 @@ render "${generated[@]}" --set auth.generated.provisionerKeys=prov-secret \
 must_fail "auth.generated.provisionerKeys must not be a placeholder" \
 	"${generated[@]}" --set auth.generated.provisionerKeys=changeme
 
+echo "==> scaler keys are an optional Secret key"
+scaler_env=$(awk '/name: SANDBOX_API_SCALER_KEYS/{f=1; next} f && /- name:/{exit} f' <<<"$api")
+grep -q 'key: scaler-api-keys' <<<"$scaler_env"
+grep -q 'optional: true' <<<"$scaler_env"
+for blank in "" "  "; do
+	secret=$(render "${generated[@]}" --set auth.generated.scalerKeys="$blank" --show-only templates/secrets.yaml)
+	if grep -q 'scaler-api-keys' <<<"$secret"; then
+		echo "a blank auth.generated.scalerKeys must not render a Secret key" >&2
+		exit 1
+	fi
+done
+render "${generated[@]}" --set auth.generated.scalerKeys=scaler-secret \
+	--show-only templates/secrets.yaml | grep -q 'scaler-api-keys: "scaler-secret"'
+must_fail "auth.generated.scalerKeys must not be a placeholder" \
+	"${generated[@]}" --set auth.generated.scalerKeys=changeme
+
 echo "==> API autoscaling is off by default"
 default_api=$(render --show-only templates/api-deployment.yaml)
 grep -q 'replicas: 1' <<<"$default_api"

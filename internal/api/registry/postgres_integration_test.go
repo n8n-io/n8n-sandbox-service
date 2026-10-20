@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -110,5 +111,36 @@ func TestPostgresRegistryGoneLongEnough(t *testing.T) {
 
 	if !reg.GoneLongEnough("pg-test-stale", 5*time.Minute, time.Now()) {
 		t.Fatal("expected stale runner to be gone long enough")
+	}
+}
+
+func TestPostgresRegistryListIncludesStaleRunners(t *testing.T) {
+	reg, db := openTestPostgresRegistry(t)
+
+	reg.Upsert("pg-test-list-b", "http://127.0.0.1:8081", "127.0.0.1:9092", false, 10, 4, 1)
+	reg.Upsert("pg-test-list-a", "http://127.0.0.1:8080", "127.0.0.1:9091", true, 8, 2, 0)
+	_, err := db.Exec(`UPDATE runners SET last_seen = now() - interval '10 minutes' WHERE id = $1`, "pg-test-list-b")
+	if err != nil {
+		t.Fatalf("update last_seen: %v", err)
+	}
+
+	all, err := reg.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var got []Runner
+	for _, run := range all {
+		if strings.HasPrefix(run.ID, "pg-test-list-") {
+			got = append(got, run)
+		}
+	}
+	if len(got) != 2 || got[0].ID != "pg-test-list-a" || got[1].ID != "pg-test-list-b" {
+		t.Fatalf("List() = %+v, want pg-test-list-a then pg-test-list-b", got)
+	}
+	if b := got[1]; b.Healthy || b.CapacityTotal != 10 || b.CapacityUsed != 4 || b.CapacityStopped != 1 {
+		t.Fatalf("List() pg-test-list-b = %+v, want unhealthy 10/4/1", b)
+	}
+	if age := time.Since(got[1].LastSeen); age < 9*time.Minute {
+		t.Fatalf("List() pg-test-list-b last_seen age = %v, want about 10m", age)
 	}
 }

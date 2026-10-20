@@ -29,6 +29,8 @@ type RunnerRegistry interface {
 	Get(id string) (*Runner, bool)
 	GoneLongEnough(runnerID string, buffer time.Duration, now time.Time) bool
 	Len() int
+	// List returns every registered runner, stale ones included, ordered by ID.
+	List() ([]Runner, error)
 	// PickLowestUsed returns the eligible runner with the lowest capacity_used,
 	// skipping the runners in exclude.
 	PickLowestUsed(exclude ...string) (*Runner, error)
