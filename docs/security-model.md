@@ -227,7 +227,8 @@ container.
 Containers are created with IPv6 disabled. The bridge rules apply to bridged
 traffic only on a host running `br_netfilter` with `bridge-nf-call-iptables`
 enabled. The runner refuses to start unless the sysctl reads `1` in its own
-network namespace, where the bridges are.
+network namespace, where the bridges are; it does not notice the sysctl being
+turned off afterwards.
 [scripts/setup-sysbox.sh](../scripts/setup-sysbox.sh) loads the module, and the
 kernel enables the sysctl by default once it is loaded.
 

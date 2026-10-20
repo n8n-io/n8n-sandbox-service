@@ -96,6 +96,7 @@ check_sysbox_installed() {
 			echo "==> Sysbox is already installed and running."
 			# The runner refuses to start without bridge netfilter, so a host
 			# prepared before this step existed still needs it.
+			check_sudo
 			ensure_br_netfilter
 			exit 0
 		fi

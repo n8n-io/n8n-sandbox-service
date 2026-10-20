@@ -17,7 +17,7 @@ containers direct access to the host Docker daemon.
   loaded with `bridge-nf-call-iptables=1`, or bridged sandbox traffic bypasses
   the iptables rules. The runner refuses to start unless the sysctl reads `1`
   in its network namespace. `scripts/setup-sysbox.sh` loads the module; the
-  sysctl defaults to `1` once it is loaded.
+  sysctl defaults to `1` once it is loaded. The check runs only at startup.
 - Proxies API traffic to the sandbox daemon on port `8081`.
 
 ## Supported Features
