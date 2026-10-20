@@ -93,7 +93,10 @@ check_sysbox_installed() {
 		if [[ "$DRY_RUN" == "1" ]]; then
 			echo "==> Sysbox is already installed and running."
 		else
-			echo "==> Sysbox is already installed and running. Nothing to do."
+			echo "==> Sysbox is already installed and running."
+			# The runner refuses to start without bridge netfilter, so a host
+			# prepared before this step existed still needs it.
+			ensure_br_netfilter
 			exit 0
 		fi
 	fi

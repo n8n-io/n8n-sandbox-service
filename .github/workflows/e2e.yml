@@ -21,6 +21,10 @@ jobs:
         with:
           version: 10
 
+      - name: Load br_netfilter
+        # The Docker runner refuses to start without bridge netfilter.
+        run: sudo modprobe br_netfilter
+
       - name: Run e2e tests
         # E2E_VERIFY_DISK_QUOTA is unset, so disk-quota.spec.ts is skipped here (needs CONFIG_XFS_QUOTA on the host).
         run: PRIVILEGED=1 e2e/run.sh

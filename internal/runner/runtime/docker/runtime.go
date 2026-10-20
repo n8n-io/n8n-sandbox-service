@@ -120,6 +120,13 @@ func New(runnerConfig *config.Config, cfg Config) (*Runtime, error) {
 		}
 	}
 
+	// Checked once the networks exist, since Docker may load the module and set
+	// the sysctl when it sets up a bridge. No sandbox can be created before New
+	// returns.
+	if err := checkBridgeNetfilter(bridgeNFCallIPTablesPath); err != nil {
+		return nil, fmt.Errorf("bridge netfilter: %w", err)
+	}
+
 	return m, nil
 }
 

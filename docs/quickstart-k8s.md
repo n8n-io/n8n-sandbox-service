@@ -14,6 +14,7 @@ Follow the upstream [Sysbox Kubernetes requirements](https://github.com/nestybox
 - Ubuntu Noble, Jammy, Focal, or Bionic workers.
 - At least 4 CPUs and 4 GB RAM per node.
 - containerd `2.0.5` or newer for native Kubernetes user namespaces. If containerd is not suitable, the Sysbox installer may configure CRI-O and restart kubelet on the node.
+- The `br_netfilter` kernel module loaded. The runner refuses to start without it ([security model](security-model.md#guest-to-host-and-network)).
 
 Provider notes:
 
