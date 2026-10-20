@@ -18,7 +18,7 @@ func TestTenantQuotaCountsCreatesInProgress(t *testing.T) {
 	saved.Store(1)
 	q := newTenantQuota(fixedCount(&saved))
 
-	var releases []func()
+	var releases []func(bool)
 	for i := range 2 {
 		release, ok, err := q.reserve("a", 3)
 		if err != nil || !ok {
@@ -32,16 +32,16 @@ func TestTenantQuotaCountsCreatesInProgress(t *testing.T) {
 	if release, ok, err := q.reserve("b", 3); err != nil || !ok {
 		t.Fatalf("reserve for another tenant: ok=%v err=%v, want a slot", ok, err)
 	} else {
-		release()
+		release(false)
 	}
 
-	releases[0]()
+	releases[0](false)
 	release, ok, err := q.reserve("a", 3)
 	if err != nil || !ok {
 		t.Fatalf("reserve after a release: ok=%v err=%v, want the freed slot", ok, err)
 	}
-	release()
-	releases[1]()
+	release(false)
+	releases[1](false)
 }
 
 // A create saved and released while another reserve reads the saved count must
@@ -50,12 +50,12 @@ func TestTenantQuotaCountsCreatesInProgress(t *testing.T) {
 // which finishes, release included, before the read returns.
 func TestTenantQuotaCountsCreateSavedDuringCountRead(t *testing.T) {
 	var saved atomic.Int64
-	var releaseFirst func()
+	var releaseFirst func(bool)
 	q := newTenantQuota(func(string) (int64, error) {
 		before := saved.Load()
 		if releaseFirst != nil {
 			saved.Add(1)
-			releaseFirst()
+			releaseFirst(true)
 		}
 		return before, nil
 	})
@@ -79,11 +79,11 @@ func TestTenantQuotaCountsCreateSavedDuringCountRead(t *testing.T) {
 // limit: the reserve reads again.
 func TestTenantQuotaRereadsWhenCreateReleasedDuringRead(t *testing.T) {
 	var saved, calls atomic.Int64
-	var releaseFirst func()
+	var releaseFirst func(bool)
 	q := newTenantQuota(func(string) (int64, error) {
 		if calls.Add(1) == 2 {
 			saved.Add(1)
-			releaseFirst()
+			releaseFirst(true)
 		}
 		return saved.Load(), nil
 	})
@@ -98,9 +98,38 @@ func TestTenantQuotaRereadsWhenCreateReleasedDuringRead(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("second reserve with 1 saved at limit 2: ok=%v err=%v, want a slot", ok, err)
 	}
-	release()
+	release(false)
 	if n := calls.Load(); n != 3 {
 		t.Fatalf("count reads = %d, want 3: one for the first reserve, two for the second", n)
+	}
+}
+
+// A create that fails during the read was never saved, so it is in neither the
+// read nor the creates in progress, and needs no second read.
+func TestTenantQuotaIgnoresCreateFailedDuringRead(t *testing.T) {
+	var saved, calls atomic.Int64
+	saved.Store(1)
+	var releaseFirst func(bool)
+	q := newTenantQuota(func(string) (int64, error) {
+		if calls.Add(1) == 2 {
+			releaseFirst(false)
+		}
+		return saved.Load(), nil
+	})
+
+	var ok bool
+	var err error
+	releaseFirst, ok, err = q.reserve("a", 2)
+	if err != nil || !ok {
+		t.Fatalf("first reserve: ok=%v err=%v", ok, err)
+	}
+	release, ok, err := q.reserve("a", 2)
+	if err != nil || !ok {
+		t.Fatalf("reserve with 1 saved at limit 2: ok=%v err=%v, want a slot", ok, err)
+	}
+	release(false)
+	if n := calls.Load(); n != 2 {
+		t.Fatalf("count reads = %d, want 2: the failed create must not count as saved", n)
 	}
 }
 
@@ -110,13 +139,13 @@ func TestTenantQuotaRereadsWhenCreateReleasedDuringRead(t *testing.T) {
 // see that create in progress.
 func TestTenantQuotaKeepsEntryWhileReserveReads(t *testing.T) {
 	var saved, calls atomic.Int64
-	var releaseFirst func()
+	var releaseFirst func(bool)
 	var q *tenantQuota
 	q = newTenantQuota(func(string) (int64, error) {
 		before := saved.Load()
 		if calls.Add(1) == 2 {
 			saved.Add(1)
-			releaseFirst()
+			releaseFirst(true)
 			if _, ok, err := q.reserve("a", 2); err != nil || !ok {
 				t.Errorf("reserve during the read: ok=%v err=%v, want a slot", ok, err)
 			}
@@ -156,7 +185,7 @@ func TestTenantQuotaSlowCountReadBlocksNoOtherCreate(t *testing.T) {
 	go func() {
 		release, ok, _ := q.reserve("a", 5)
 		if ok {
-			release()
+			release(false)
 		}
 		slow <- ok
 	}()
@@ -170,7 +199,7 @@ func TestTenantQuotaSlowCountReadBlocksNoOtherCreate(t *testing.T) {
 			t.Errorf("reserve during a slow read: ok=%v err=%v", ok, err)
 			return
 		}
-		release()
+		release(false)
 	}()
 	select {
 	case <-done:
@@ -202,7 +231,7 @@ func TestTenantQuotaNeverAdmitsPastLimitConcurrently(t *testing.T) {
 			}
 			time.Sleep(time.Millisecond)
 			saved.Add(1)
-			release()
+			release(true)
 		})
 	}
 	wg.Wait()
@@ -224,7 +253,7 @@ func TestTenantQuotaUnlimitedCountsNothing(t *testing.T) {
 		if err != nil || !ok {
 			t.Fatalf("reserve unlimited: ok=%v err=%v", ok, err)
 		}
-		release()
+		release(false)
 	}
 	if len(q.tenants) != 0 {
 		t.Fatalf("tenants = %v, want none tracked when unlimited", q.tenants)
@@ -251,14 +280,14 @@ func TestTenantQuotaForgetsTenantsWithNothingInProgress(t *testing.T) {
 	if _, ok, _ := q.reserve("b", 1); ok {
 		t.Fatal("reserve for b at limit 1: admitted, want refused")
 	}
-	releaseB()
+	releaseB(false)
 	if _, ok := q.tenants["b"]; ok {
 		t.Error("tenant b is still tracked with nothing in progress")
 	}
 	if e := q.tenants["a"]; e == nil || e.inProgress != 1 {
 		t.Fatalf("tenant a = %+v, want 1 in progress", e)
 	}
-	releaseA()
+	releaseA(false)
 	if len(q.tenants) != 0 {
 		t.Fatalf("tenants = %v, want empty", q.tenants)
 	}
@@ -269,10 +298,11 @@ func TestTenantQuotaReleaseTwiceFreesOneSlot(t *testing.T) {
 	q := newTenantQuota(fixedCount(&saved))
 	release, _, _ := q.reserve("a", 3)
 	other, _, _ := q.reserve("a", 3)
-	release()
-	release()
-	if e := q.tenants["a"]; e == nil || e.inProgress != 1 {
-		t.Fatalf("tenant a = %+v, want 1 in progress", e)
+	release(true)
+	release(true)
+	release(false)
+	if e := q.tenants["a"]; e == nil || e.inProgress != 1 || e.saved != 1 {
+		t.Fatalf("tenant a = %+v, want 1 in progress and 1 saved", e)
 	}
-	other()
+	other(false)
 }

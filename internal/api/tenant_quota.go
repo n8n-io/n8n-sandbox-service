@@ -17,7 +17,7 @@ type tenantQuota struct {
 // tenantCreates is one tenant's creates on this pod, guarded by tenantQuota.mu.
 type tenantCreates struct {
 	inProgress int
-	finished   int64 // creates finished so far; only differences are used
+	saved      int64 // creates saved so far; only differences are used
 	reading    int   // reserves reading the saved count
 }
 
@@ -31,11 +31,13 @@ func newTenantQuota(count func(tenantID string) (int64, error)) *tenantQuota {
 // its creates in progress on this pod are below limit. A limit of 0 or less is
 // unlimited and counts nothing. ok is false when the quota is full.
 //
-// Call release once the sandbox is saved, or once a failed create is gone from
-// its runner: until then the sandbox is in neither count.
-func (q *tenantQuota) reserve(tenantID string, limit int) (release func(), ok bool, err error) {
+// Call release(true) right after the sandbox is saved, so it is not counted
+// both as saved and in progress for long, or when it may have been saved.
+// Call release(false) once a failed create is gone from its runner. Calls
+// after the first do nothing.
+func (q *tenantQuota) reserve(tenantID string, limit int) (release func(saved bool), ok bool, err error) {
 	if limit <= 0 {
-		return func() {}, true, nil
+		return func(bool) {}, true, nil
 	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -52,28 +54,33 @@ func (q *tenantQuota) reserve(tenantID string, limit int) (release func(), ok bo
 
 	const maxReads = 3
 	for read := 1; ; read++ {
-		finishedBefore := e.finished
+		savedBefore := e.saved
 		n, err := q.countUnlocked(tenantID)
 		if err != nil {
 			return nil, false, err
 		}
-		// A create that finished during the read may have been saved after the
-		// read started, so it is in neither n nor inProgress: count it too.
-		finishedDuring := e.finished - finishedBefore
-		if n+int64(e.inProgress)+finishedDuring < int64(limit) {
+		// A create saved during the read is no longer in inProgress, and may
+		// not be in n if it was saved after the read started: count it too.
+		savedDuring := e.saved - savedBefore
+		if n+int64(e.inProgress)+savedDuring < int64(limit) {
 			e.inProgress++
-			return sync.OnceFunc(func() {
-				q.mu.Lock()
-				defer q.mu.Unlock()
-				e.inProgress--
-				e.finished++
-				q.forgetIfIdle(tenantID, e)
-			}), true, nil
+			var once sync.Once
+			return func(saved bool) {
+				once.Do(func() {
+					q.mu.Lock()
+					defer q.mu.Unlock()
+					e.inProgress--
+					if saved {
+						e.saved++
+					}
+					q.forgetIfIdle(tenantID, e)
+				})
+			}, true, nil
 		}
 		// Those creates may be in n as well, and refuse a create below the
-		// limit. A new read sees them saved, unless creates keep finishing
-		// during every read.
-		if finishedDuring == 0 || read == maxReads {
+		// limit. A new read sees them, unless creates keep being saved during
+		// every read.
+		if savedDuring == 0 || read == maxReads {
 			return nil, false, nil
 		}
 	}
@@ -88,7 +95,7 @@ func (q *tenantQuota) countUnlocked(tenantID string) (int64, error) {
 }
 
 // forgetIfIdle drops e once no create is in progress and no reserve is reading,
-// so finished never restarts under a reading reserve. Call with q.mu held.
+// so saved never restarts under a reading reserve. Call with q.mu held.
 func (q *tenantQuota) forgetIfIdle(tenantID string, e *tenantCreates) {
 	if e.inProgress == 0 && e.reading == 0 {
 		delete(q.tenants, tenantID)

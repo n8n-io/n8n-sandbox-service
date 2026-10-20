@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -385,6 +386,119 @@ func TestCreateSandboxFreesQuotaSlotWhenCreateEnds(t *testing.T) {
 				t.Fatalf("create after the first ended: got %d body=%s, want %d: its slot was not freed", rr.Code, rr.Body.String(), http.StatusCreated)
 			}
 		})
+	}
+}
+
+// createErrStore returns err from every sandbox Create, after saving the row
+// when save is set.
+type createErrStore struct {
+	store.SandboxStore
+	save bool
+	err  error
+}
+
+func (s createErrStore) Create(r *store.SandboxRecord) error {
+	if s.save {
+		if err := s.SandboxStore.Create(r); err != nil {
+			return err
+		}
+	}
+	return s.err
+}
+
+// A save that errored may still have saved the row, say when the reply to its
+// commit was lost. Unless the store refused the row, its slot is freed as
+// saved, so a reserve reading meanwhile still counts it.
+func TestCreateSandboxCountsUnclearSaveAsSaved(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		save      bool
+		err       error
+		wantCode  int
+		wantSaved int64
+	}{
+		{name: "saved, reply lost", save: true, err: errors.New("connection reset"), wantCode: http.StatusOK, wantSaved: 1},
+		{name: "refused at quota", err: store.ErrTenantQuotaExceeded, wantCode: http.StatusForbidden},
+		{name: "tenant gone", err: store.ErrTenantNotFound, wantCode: http.StatusConflict},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newSweepStore(t)
+			const tenantID = "13131313-1313-4313-8313-131313131313"
+			if err := s.CreateTenant(&store.Tenant{ID: tenantID, Name: "t", MaxSandboxes: 2}); err != nil {
+				t.Fatalf("create tenant: %v", err)
+			}
+			reg := registry.New(45 * time.Second)
+			reg.Upsert("runner-1", "https://127.0.0.1:9", startFakeRunnerControl(t, &fakeSandboxControl{}), true, 10, 0, 0)
+			q := newTenantQuota(s.CountByTenant)
+			// Keeps the tenant's entry, and so its counts, after the create.
+			hold, _, _ := q.reserve(tenantID, 2)
+			defer hold(false)
+
+			h := handleCreateSandbox(createErrStore{SandboxStore: s, save: tc.save, err: tc.err}, reg, idleSweepConfig(), metrics.NewAPIRecorder(false), q)
+			req := httptest.NewRequest(http.MethodPost, "/sandboxes", nil)
+			req = req.WithContext(withAuthIdentity(req.Context(), authIdentity{Role: roleTenant, TenantID: tenantID}))
+			rr := httptest.NewRecorder()
+			h(rr, req)
+			if rr.Code != tc.wantCode {
+				t.Fatalf("create: got %d body=%s, want %d", rr.Code, rr.Body.String(), tc.wantCode)
+			}
+			if e := q.tenants[tenantID]; e == nil || e.inProgress != 1 || e.saved != tc.wantSaved {
+				t.Fatalf("tenant entry = %+v, want only the held create in progress and %d saved", e, tc.wantSaved)
+			}
+		})
+	}
+}
+
+// blockingWriter holds the response body until unblock is closed.
+type blockingWriter struct {
+	*httptest.ResponseRecorder
+	writing func()
+	unblock chan struct{}
+}
+
+func (b *blockingWriter) Write(p []byte) (int, error) {
+	b.writing()
+	<-b.unblock
+	return b.ResponseRecorder.Write(p)
+}
+
+// A saved create frees its slot right away, not once its response is written:
+// until then it counts as saved and in progress, and refuses a create below
+// the quota.
+func TestCreateSandboxFreesQuotaSlotOnceSaved(t *testing.T) {
+	router, _, _ := newIdleTestGateway(t, "admin-key", &fakeSandboxControl{})
+	tenant := mintTenantKey(t, router, `{"name":"capped","max_sandboxes":2}`)
+
+	writing := make(chan struct{})
+	w := &blockingWriter{
+		ResponseRecorder: httptest.NewRecorder(),
+		writing:          sync.OnceFunc(func() { close(writing) }),
+		unblock:          make(chan struct{}),
+	}
+	unblock := sync.OnceFunc(func() { close(w.unblock) })
+	defer unblock()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		req := httptest.NewRequest(http.MethodPost, "/sandboxes", nil)
+		req.Header.Set("X-Api-Key", tenant.Key.APIKey)
+		router.ServeHTTP(w, req)
+	}()
+	select {
+	case <-writing:
+	case <-done:
+		t.Fatalf("first create returned without writing a body: %d", w.Code)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the first create's response")
+	}
+
+	if rr := postCreateSandbox(t, router, tenant.Key.APIKey, ""); rr.Code != http.StatusCreated {
+		t.Fatalf("create while the first one's response is written: got %d body=%s, want %d", rr.Code, rr.Body.String(), http.StatusCreated)
+	}
+	unblock()
+	<-done
+	if w.Code != http.StatusCreated {
+		t.Fatalf("first create: got %d, want %d", w.Code, http.StatusCreated)
 	}
 }
 

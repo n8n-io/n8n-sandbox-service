@@ -353,6 +353,7 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 		}
 
 		tenantID := store.AdminTenantID
+		releaseQuota := func(bool) {}
 		if authID.Role == roleTenant {
 			tenantID = authID.TenantID
 			tenant, err := s.GetTenant(tenantID)
@@ -364,7 +365,8 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 				writeError(w, http.StatusUnauthorized, "invalid API key")
 				return
 			}
-			release, ok, err := quota.reserve(tenantID, tenant.MaxSandboxes)
+			var ok bool
+			releaseQuota, ok, err = quota.reserve(tenantID, tenant.MaxSandboxes)
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, err.Error())
 				return
@@ -373,10 +375,10 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 				writeError(w, http.StatusForbidden, "tenant sandbox quota exceeded")
 				return
 			}
-			// On return, so after the sandbox is saved, or after the runner
-			// rollback of a create that could not be saved.
-			defer release()
 		}
+		// A create that is not saved frees its slot on return, after any
+		// runner rollback; a saved one right after the save, below.
+		defer releaseQuota(false)
 
 		requested := runnerruntime.CreateOptions{Egress: egress}
 		createOptionsJSON, err := json.Marshal(requested)
@@ -455,6 +457,9 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 		}
 		if err := s.Create(record); err != nil {
 			rollbackRunnerCreate()
+			// Unless the store refused the row, it may have been saved anyway,
+			// say when a commit's reply was lost: count it as saved, the safe side.
+			releaseQuota(!errors.Is(err, store.ErrTenantQuotaExceeded) && !errors.Is(err, store.ErrTenantNotFound))
 			if existing, getErr := s.Get(sandboxID); getErr == nil && existing != nil {
 				if !canAccessSandbox(r, existing) {
 					writeError(w, http.StatusConflict, "sandbox id unavailable")
@@ -491,6 +496,7 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 			writeError(w, http.StatusInternalServerError, "failed to store sandbox: "+err.Error())
 			return
 		}
+		releaseQuota(true)
 		slog.InfoContext(
 			r.Context(),
 			"create sandbox succeeded",
