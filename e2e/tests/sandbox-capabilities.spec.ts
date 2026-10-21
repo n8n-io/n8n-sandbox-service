@@ -96,3 +96,25 @@ test.describe('Docker sandbox capability policy', DOCKER_ONLY, () => {
     }
   });
 });
+
+// Both runtimes. A user namespace would hand uid 1000 every capability inside
+// it, and with them the kernel interfaces gated on those capabilities.
+test.describe('sandbox namespace policy', () => {
+  test('cannot create a user namespace', async () => {
+    const id = await createSandbox();
+    try {
+      // Positive control. Without it the assertion below also passes when
+      // unshare is missing from the image.
+      const tool = await execWithTransientRetry(id, 'command -v unshare');
+      expect(tool, 'expected unshare to be available').toHaveSucceeded();
+
+      const created = await exec(id, 'unshare --user true');
+      expect(created.exitCode, 'expected user namespace creation to be refused').not.toBe(0);
+      // EPERM from Docker's default seccomp profile, ENOSPC from the
+      // Firecracker guest's user.max_user_namespaces=0.
+      expect(created.stderr).toMatch(/Operation not permitted|No space left on device/);
+    } finally {
+      await deleteSandbox(id);
+    }
+  });
+});

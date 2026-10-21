@@ -10,6 +10,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # resolves FIRECRACKER_VERSION / FIRECRACKER_TARBALL_SHA256 (env or the pin).
 # shellcheck source=scripts/firecracker.ee/firecracker-release.sh
 source "${SCRIPT_DIR}/firecracker-release.sh"
+# Same guard. Gives the pinned guest kernel version for the manifest;
+# build-rootfs-template.sh downloads that kernel.
+# shellcheck source=scripts/firecracker.ee/firecracker-ci-assets.sh
+source "${SCRIPT_DIR}/firecracker-ci-assets.sh"
 
 # Defaults to the go line of ~/project/go.mod, the tree this script builds and
 # the version CI builds with.
@@ -17,7 +21,6 @@ GO_VERSION="${GO_VERSION:-$(awk '$1 == "go" { print $2; exit }' ~/project/go.mod
 NODE_MAJOR="${NODE_MAJOR:-24}"
 PNPM_VERSION="${PNPM_VERSION:-10}"
 JAILER_TMPFS_SIZE="${JAILER_TMPFS_SIZE:-8G}"
-FIRECRACKER_CI_VERSION="${FIRECRACKER_CI_VERSION:-${FIRECRACKER_VERSION%.*}}"
 FIRECRACKER_E2E_ROOTFS_SIZE_MB="${FIRECRACKER_E2E_ROOTFS_SIZE_MB:-2048}"
 FIRECRACKER_E2E_SNAPSHOT_MEM_MIB="${FIRECRACKER_E2E_SNAPSHOT_MEM_MIB:-512}"
 FIRECRACKER_E2E_SNAPSHOT_VCPUS="${FIRECRACKER_E2E_SNAPSHOT_VCPUS:-1}"
@@ -155,8 +158,7 @@ build_template_assets() {
 	sudo mkdir -p /srv/firecracker/snapshots
 
 	if [[ -n "$SANDBOX_ROOTFS_TAR" ]]; then
-		FIRECRACKER_CI_VERSION="$FIRECRACKER_CI_VERSION" \
-			FIRECRACKER_ROOTFS_SIZE_MB="$FIRECRACKER_E2E_ROOTFS_SIZE_MB" \
+		FIRECRACKER_ROOTFS_SIZE_MB="$FIRECRACKER_E2E_ROOTFS_SIZE_MB" \
 			SANDBOX_ROOTFS_TAR="$SANDBOX_ROOTFS_TAR" \
 			TEMPLATE_DIR="/srv/firecracker/template" \
 			bash "${SCRIPT_DIR}/build-rootfs-template.sh"
@@ -179,8 +181,7 @@ build_template_assets() {
 	cid=""
 	sudo chmod 0644 "$rootfs_tar"
 
-	FIRECRACKER_CI_VERSION="$FIRECRACKER_CI_VERSION" \
-		FIRECRACKER_ROOTFS_SIZE_MB="$FIRECRACKER_E2E_ROOTFS_SIZE_MB" \
+	FIRECRACKER_ROOTFS_SIZE_MB="$FIRECRACKER_E2E_ROOTFS_SIZE_MB" \
 		SANDBOX_IMAGE='' \
 		SANDBOX_ROOTFS_TAR="$rootfs_tar" \
 		TEMPLATE_DIR="/srv/firecracker/template" \
@@ -196,7 +197,7 @@ write_manifest() {
 	sudo tee "$manifest" >/dev/null <<EOF
 {
   "firecracker_version": $(json_escape "${FIRECRACKER_VERSION#v}"),
-  "firecracker_ci_version": $(json_escape "${FIRECRACKER_CI_VERSION}"),
+  "firecracker_ci_kernel_version": $(json_escape "${FIRECRACKER_CI_DEFAULT_KERNEL_VERSION}"),
   "azure_vm_size": $(json_escape "$(current_azure_vm_size)"),
   "cpu_model": $(json_escape "$(current_cpu_model)"),
   "cpu_flags": $(json_escape "$(current_cpu_flags)"),
@@ -214,7 +215,6 @@ sudo env \
 	FIRECRACKER_VERSION="$FIRECRACKER_VERSION" \
 	FIRECRACKER_TARBALL_SHA256="$FIRECRACKER_TARBALL_SHA256" \
 	JAILER_TMPFS_SIZE="$JAILER_TMPFS_SIZE" \
-	FIRECRACKER_CI_VERSION="$FIRECRACKER_CI_VERSION" \
 	CONFIGURE_HOST_NAT_SCRIPT="${SCRIPT_DIR}/configure-host-nat.sh" \
 	FIRECRACKER_CI_ASSETS_BIN="${SCRIPT_DIR}/firecracker-ci-assets.sh" \
 	FIRECRACKER_RELEASE_BIN="${SCRIPT_DIR}/firecracker-release.sh" \

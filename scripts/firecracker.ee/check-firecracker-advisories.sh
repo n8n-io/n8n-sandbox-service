@@ -16,9 +16,13 @@ REPORT=""
 
 # Advisories reviewed and cleared for the pinned line, one "GHSA-id  verdict"
 # per entry. Acknowledging an advisory is a PR that adds it here; the check then
-# reports it as assessed instead of flagging it. Empty today: both published
-# advisories are decided by the patched-version rule below.
-FIRECRACKER_ASSESSED_ADVISORIES=()
+# reports it as assessed instead of flagging it. The patched-version rule below
+# only sees fixes listed for the pinned line, so an advisory whose range never
+# reached that line needs an entry here.
+FIRECRACKER_ASSESSED_ADVISORIES=(
+	"GHSA-776c-mpj7-jm3r  not affected from 1.16.0: vulnerable range is 1.13.0 to 1.14.3 and 1.15.0"
+	"GHSA-36j2-f825-qvgc  not affected from 1.14.1: vulnerable range is up to 1.13.1 and 1.14.0"
+)
 
 usage() {
 	cat >&2 <<EOF
@@ -109,17 +113,19 @@ while IFS=$'\t' read -r ghsa cve severity url patched; do
 			sed -E 's/^[[:space:]]*v?//; s/[[:space:]]*$//' |
 			grep -E "$line_re" | sort -V | tail -n 1 || true
 	)"
+	# A fix listed for the pinned line decides before the ledger does, so an
+	# advisory amended later with a newer fix in this line is flagged again.
 	verdict="$(ledger_verdict "$ghsa")"
-	if [[ -n "$verdict" ]]; then
-		status="assessed: ${verdict}"
-	elif [[ -z "$newest" ]]; then
-		status="**flagged**: no ${line} fix listed; check whether the pin is in the vulnerable range"
-		advisory_flagged=$((advisory_flagged + 1))
-	elif [[ "$(printf '%s\n' "$pin" "$newest" | sort -V | tail -n 1)" != "$pin" ]]; then
+	if [[ -n "$newest" && "$(printf '%s\n' "$pin" "$newest" | sort -V | tail -n 1)" != "$pin" ]]; then
 		status="**flagged**: fixed in ${newest}, pin is ${pin}"
 		advisory_flagged=$((advisory_flagged + 1))
-	else
+	elif [[ -n "$newest" ]]; then
 		status="cleared: fixed in ${newest} <= pin"
+	elif [[ -n "$verdict" ]]; then
+		status="assessed: ${verdict}"
+	else
+		status="**flagged**: no ${line} fix listed; check whether the pin is in the vulnerable range"
+		advisory_flagged=$((advisory_flagged + 1))
 	fi
 	advisory_rows+="| [${ghsa}](${url}) | ${cve} | ${severity} | ${newest:--} | ${status} |"$'\n'
 done <<<"$advisories"
@@ -204,11 +210,11 @@ while IFS=$'\t' read -r l epoch date; do
 	fi
 done <<<"$lines_table"
 
-# A minor or major move is never proposed automatically: the guest kernel comes
-# from the per-line firecracker-ci/<line>/ bucket prefix, the snapshot format
-# may change (bitcode bumps its major on any state change) and boot/API
-# behaviour can change. This check surfaces it; the move is a manual PR.
-manual_move="Moving lines is a manual change: it changes the guest kernel source, may change the snapshot format, and can change boot/API behaviour."
+# A minor or major move is never proposed automatically: the snapshot format
+# may change (bitcode bumps its major on any state change), boot/API behaviour
+# can change, and advisories whose range ends below the new line need a ledger
+# entry. This check surfaces it; the move is a manual PR.
+manual_move="Moving lines is a manual change: it may change the snapshot format and can change boot/API behaviour."
 if [[ -z "$pin_zero_date" ]]; then
 	flagged=true
 	window_verdict="**flagged**: pinned line ${line} has no ${line}.0 release in the ${GITHUB_REPO} listing, so it cannot be placed in the window. ${manual_move}"

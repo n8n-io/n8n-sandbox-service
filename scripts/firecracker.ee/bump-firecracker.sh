@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Moves the Firecracker release pin in firecracker-release.sh to the newest patch
-# of the same MAJOR.MINOR line (e.g. v1.14.x) on GitHub Releases; never a minor
+# of the same MAJOR.MINOR line (e.g. v1.17.x) on GitHub Releases; never a minor
 # or major move. Run by the firecracker-upstream workflow; not shipped in the
 # golden-build bundle.
 set -euo pipefail
