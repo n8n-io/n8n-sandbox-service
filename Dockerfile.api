@@ -9,7 +9,9 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /out/api ./cmd/api
 
 FROM alpine:3.23
 
-RUN apk add --no-cache tini ca-certificates bash openssl
+# The base image already ships ca-certificates-bundle, and a plain add keeps
+# its version.
+RUN apk add --no-cache --upgrade tini ca-certificates ca-certificates-bundle bash openssl
 
 COPY --from=builder /out/api /usr/local/bin/sandbox-api
 COPY scripts/bootstrap-mtls.sh /usr/local/bin/bootstrap-mtls.sh
