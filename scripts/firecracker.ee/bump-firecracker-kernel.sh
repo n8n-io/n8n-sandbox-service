@@ -8,9 +8,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FIRECRACKER_CI_ASSETS_BIN="${FIRECRACKER_CI_ASSETS_BIN:-${SCRIPT_DIR}/firecracker-ci-assets.sh}"
 ARCH=x86_64
 GITHUB_REPO=firecracker-microvm/firecracker
-# Newest builds searched for the pinned line, about a month of weekly builds.
-# None of them carrying it means upstream stopped building that line.
-SEARCH_BUILDS=6
+# Build dates searched for the pinned line, newest first: about a month of
+# weekly builds. None of them carrying it means upstream stopped building that
+# line.
+SEARCH_DATES=6
 # Build directory names: <date>-<12-hex Firecracker commit>-<n>.
 BUILD_RE='^[0-9]{8}-[0-9a-f]{12}-[0-9]+$'
 # Config lines the guest's protections rely on: the user namespace block in the
@@ -28,8 +29,8 @@ usage() {
 Usage: $0 [--pr-body PATH]
 
 Rewrites the kernel pin (version, SHA-256, path) in ${FIRECRACKER_CI_ASSETS_BIN}
-when one of the ${SEARCH_BUILDS} newest CI builds has a newer kernel of the
-pinned line.
+when a CI build from the ${SEARCH_DATES} newest build dates has a newer kernel
+of the pinned line.
 With --pr-body, writes a Markdown summary with links to the evidence. Writes
 changed/old/new to \$GITHUB_OUTPUT when set.
 EOF
@@ -77,13 +78,15 @@ s3_list() {
 }
 
 listing="$(s3_list "prefix=firecracker-ci/&delimiter=/")"
-# Dated build directories, newest first. The name starts with the build date;
-# two builds on one day are both kept and told apart by upload time below.
+# Dated build directories from the newest dates. The name starts with the build
+# date, and the cut is by date so that every build of a day is kept: the rest
+# of the name says nothing about order, which upload time settles below.
 # `|| true`: with pipefail a no-match grep would abort before the error below.
 builds="$(
 	tr '<' '\n' <<<"$listing" |
 		sed -n 's#^Prefix>firecracker-ci/\([^/]*\)/$#\1#p' |
-		grep -E "$BUILD_RE" | sort -r | head -n "$SEARCH_BUILDS" || true
+		grep -E "$BUILD_RE" | sort -r |
+		awk -F '-' -v n="$SEARCH_DATES" '!seen[$1]++ { dates++ } dates <= n' || true
 )"
 if [[ -z "$builds" ]]; then
 	echo "ERROR: no dated CI builds under ${FIRECRACKER_CI_S3_BASE}/firecracker-ci/" >&2
@@ -114,7 +117,7 @@ pick="$(
 		sort -t $'\t' -k2,2V -k3,3 | tail -n 1
 )"
 if [[ -z "$pick" ]]; then
-	echo "ERROR: no vmlinux-${line}.* in the ${SEARCH_BUILDS} newest CI builds ($(paste -sd ' ' - <<<"$builds")); upstream may have stopped building the ${line} line" >&2
+	echo "ERROR: no vmlinux-${line}.* in the CI builds of the ${SEARCH_DATES} newest dates ($(paste -sd ' ' - <<<"$builds")); upstream may have stopped building the ${line} line" >&2
 	exit 1
 fi
 IFS=$'\t' read -r newest_build newest _ <<<"$pick"

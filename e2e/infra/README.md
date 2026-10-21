@@ -89,7 +89,7 @@ The setup writes `/srv/firecracker/manifest.json` for diagnostics:
 ```json
 {
   "firecracker_version": "<configured release without the v>",
-  "firecracker_ci_kernel_version": "<pinned guest kernel, e.g. 6.1.188>",
+  "kernel_version": "<guest kernel version from the vmlinux banner, e.g. 6.1.188>",
   "azure_vm_size": "Standard_D4as_v5",
   "cpu_model": "Intel(R) Xeon(R) Platinum ...",
   "cpu_flags": "...",

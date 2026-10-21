@@ -10,10 +10,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # resolves FIRECRACKER_VERSION / FIRECRACKER_TARBALL_SHA256 (env or the pin).
 # shellcheck source=scripts/firecracker.ee/firecracker-release.sh
 source "${SCRIPT_DIR}/firecracker-release.sh"
-# Same guard. Gives the pinned guest kernel version for the manifest;
-# build-rootfs-template.sh downloads that kernel.
-# shellcheck source=scripts/firecracker.ee/firecracker-ci-assets.sh
-source "${SCRIPT_DIR}/firecracker-ci-assets.sh"
 
 # Defaults to the go line of ~/project/go.mod, the tree this script builds and
 # the version CI builds with.
@@ -132,6 +128,12 @@ file_type() {
 	fi
 }
 
+# Reads the version from the banner a kernel prints at boot, so the manifest
+# names the kernel the template holds, whether pinned or passed in.
+kernel_version() {
+	grep -aoE 'Linux version [0-9]+\.[0-9]+\.[0-9]+' "$1" 2>/dev/null | head -n 1 | sed 's/^Linux version //' || true
+}
+
 # JSON-encodes a shell value before embedding it in the generated manifest.
 json_escape() {
 	node -e 'process.stdout.write(JSON.stringify(process.argv[1] ?? ""))' "$1"
@@ -197,7 +199,7 @@ write_manifest() {
 	sudo tee "$manifest" >/dev/null <<EOF
 {
   "firecracker_version": $(json_escape "${FIRECRACKER_VERSION#v}"),
-  "firecracker_ci_kernel_version": $(json_escape "${FIRECRACKER_CI_DEFAULT_KERNEL_VERSION}"),
+  "kernel_version": $(json_escape "$(kernel_version /srv/firecracker/template/vmlinux)"),
   "azure_vm_size": $(json_escape "$(current_azure_vm_size)"),
   "cpu_model": $(json_escape "$(current_cpu_model)"),
   "cpu_flags": $(json_escape "$(current_cpu_flags)"),

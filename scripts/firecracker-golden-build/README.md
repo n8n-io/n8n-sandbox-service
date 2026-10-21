@@ -49,4 +49,6 @@ sudo ln -sf snapshot_state /srv/firecracker/snapshots/state
 
 `snapshot_mem`, `snapshot_state` and `boot.json` describe one build; keep them together and rebuild the set rather than editing `boot.json`. Alternatively point the runner at this bundle via `SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT` and `SANDBOX_RUNNER_FIRECRACKER_DAEMON_BIN` and it creates the snapshot itself on first start.
 
+Either way the snapshot is only created when it is missing, and Firecracker cannot restore a snapshot taken by another release. When `firecracker_version` in `MANIFEST.json` changes on a host that keeps its disk, remove the old set from `/srv/firecracker/snapshots` before step 3 or before starting the runner.
+
 Runner installation and configuration: <https://github.com/n8n-io/n8n-sandbox-service/blob/main/docs/quickstart-firecracker-linux.md>.
