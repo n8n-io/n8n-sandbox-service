@@ -89,6 +89,7 @@ func main() {
 			return float64(n)
 		})
 		mrec.SetRunnersRegistered(func() float64 { return float64(runnerReg.Len()) })
+		mrec.SetTLSCertificateExpiry(grpctls.CertificateExpiry)
 		slog.Info("metrics endpoint enabled",
 			"path", "/metrics",
 			"addr", cfg.ResolvedMetricsListenAddr(),

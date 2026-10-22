@@ -411,6 +411,30 @@ func TestHTTPMiddlewareLabelsUnmatchedRoutes(t *testing.T) {
 	}
 }
 
+func TestTLSCertificateExpiryReadsAtScrapeTime(t *testing.T) {
+	expiry := map[string]time.Time{"/tls/a/tls.crt": time.Unix(1800000000, 0)}
+	read := func() map[string]time.Time { return expiry }
+
+	api := NewAPIRecorder(true)
+	api.SetTLSCertificateExpiry(read)
+	runner := NewRunnerRecorder(true)
+	runner.SetTLSCertificateExpiry(read)
+	NewAPIRecorder(false).SetTLSCertificateExpiry(read)
+	NewRunnerRecorder(false).SetTLSCertificateExpiry(read)
+
+	for role, reg := range map[string]*prometheus.Registry{"api": api.Registry(), "runner": runner.Registry()} {
+		want := `sandbox_tls_certificate_expiry_timestamp_seconds{path="/tls/a/tls.crt",role="` + role + `"} 1.8e+09`
+		if body := scrape(t, reg); !strings.Contains(body, want) {
+			t.Errorf("%s scrape missing %q:\n%s", role, want, body)
+		}
+	}
+
+	expiry = map[string]time.Time{"/tls/a/tls.crt": time.Unix(1900000000, 0)}
+	if body := scrape(t, runner.Registry()); !strings.Contains(body, `path="/tls/a/tls.crt",role="runner"} 1.9e+09`) {
+		t.Errorf("scrape did not read the renewed expiry:\n%s", body)
+	}
+}
+
 func scrape(t *testing.T, reg *prometheus.Registry) string {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)

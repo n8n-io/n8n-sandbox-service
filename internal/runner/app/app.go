@@ -78,6 +78,7 @@ func Run(cfg *config.Config, rt runnerruntime.Runtime) {
 			}
 			return float64(capacity.Stopped)
 		})
+		mrec.SetTLSCertificateExpiry(grpctls.CertificateExpiry)
 		slog.Info("metrics endpoint enabled", "path", "/metrics")
 	}
 

@@ -13,6 +13,7 @@ import (
 
 	"github.com/n8n-io/sandbox-service/internal/api/grpc/pb"
 	"github.com/n8n-io/sandbox-service/internal/api/runnerctl"
+	"github.com/n8n-io/sandbox-service/internal/grpctls"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/obs"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
@@ -76,6 +77,7 @@ func (s *SandboxControlGRPC) checkAPIKey(ctx context.Context) error {
 	if _, ok := s.Cfg.APIKeys[key]; !ok {
 		return status.Error(codes.Unauthenticated, "invalid api key")
 	}
+	grpctls.NotePeer(grpctls.PeerCertificate(ctx))
 	return nil
 }
 

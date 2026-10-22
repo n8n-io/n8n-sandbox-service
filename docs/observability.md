@@ -157,6 +157,36 @@ also stops it recording its own scrapes as `route="/metrics"`.
 
 Full list in [configuration.md](configuration.md#metrics).
 
+## TLS certificates
+
+The API and the runner reload a renewed leaf from disk on the next handshake.
+To follow a renewal through both processes:
+
+- `tls certificate loaded` (`path`, `subject`, `serial`, `not_after`, `reload`):
+  a certificate this process presents, logged once per process for each
+  certificate it loads from a file.
+- `tls certificate reload failed, keeping the previous certificate` (warning):
+  the files changed but don't load. Repeated at most once a minute while they
+  stay broken.
+- `tls peer certificate first seen` (`subject`, `serial`, `not_after`): the first
+  authenticated request or call in which the other side presented this
+  certificate. The runner logs the API's client certificate (HTTP and control
+  gRPC); the API logs the runner's server certificate (proxy and control gRPC).
+- On the registration stream, `runner registered` on the API carries
+  `client_cert_serial` and `client_cert_not_after`, and `runner registration
+  stream established` on the runner carries `server_cert_serial` and
+  `server_cert_not_after`.
+
+`serial` is formatted like `openssl x509 -serial`, so it compares directly with
+the files. `sandbox_tls_certificate_expiry_timestamp_seconds{path}` (both
+binaries) is the expiry of the certificate the process presents on its next
+handshake. It picks up renewed files before every scrape, even while a
+long-lived connection still uses the older certificate; if they don't load, it
+stays at the previous certificate. Alert on it, for example when
+`sandbox_tls_certificate_expiry_timestamp_seconds - time() < 7 * 86400`, to
+catch a renewal that never reached the process as well as one that failed to
+load.
+
 ## Working with the events
 
 Both binaries log JSON to stdout, so the examples below work on any log stream —

@@ -106,6 +106,9 @@ func sandboxProxyHandler(s store.SandboxStore, cfg *config.APIConfig, transport 
 				// Response headers are in, so for a streamed exec this is the
 				// time to first byte rather than the full round trip.
 				fields.Add("ttfb_ms", time.Since(upstreamStart).Milliseconds())
+				if resp.TLS != nil && len(resp.TLS.PeerCertificates) > 0 {
+					grpctls.NotePeer(resp.TLS.PeerCertificates[0])
+				}
 				if reapSandboxIfRunnerGone(s, id, resp) {
 					return
 				}
