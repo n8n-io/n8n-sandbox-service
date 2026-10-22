@@ -146,6 +146,11 @@ certificate when the same CA issues both, as it does in the chart's
 cert-manager mode. Runner credentials are fleet-wide rather than per-runner, so
 what one runner holds drives every runner.
 
+The same credentials cordon a runner over `SandboxControl.SetCordon`
+([API.md](API.md#runner-cordon)), so an operator or tool given them to cordon
+runners can also create, stop and delete sandboxes on every runner and reach
+every sandbox there.
+
 The proxy replaces the caller's `X-Api-Key` with the runner API key before
 forwarding, so tenant and admin keys never reach a runner, and it forwards the
 trace context it established rather than the caller's header. Responses are

@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
@@ -15,7 +16,18 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+
+	"github.com/n8n-io/sandbox-service/internal/api/grpc/pb"
+	"github.com/n8n-io/sandbox-service/internal/api/runnerctl"
 	"github.com/n8n-io/sandbox-service/internal/grpctls"
+	"github.com/n8n-io/sandbox-service/internal/metrics"
+	"github.com/n8n-io/sandbox-service/internal/runner/config"
+	"github.com/n8n-io/sandbox-service/internal/runner/cordon"
 )
 
 // testPKI is a throwaway CA plus the leaf certificates the runner and the API
@@ -242,5 +254,69 @@ func TestRunnerHTTPListenerRejectsUntrustedClientCertificate(t *testing.T) {
 	if err == nil {
 		resp.Body.Close()
 		t.Fatalf("expected handshake failure, got status %d", resp.StatusCode)
+	}
+}
+
+// serveControlGRPC starts SandboxControl with the listener credentials app.Run
+// uses, and returns its address.
+func serveControlGRPC(t *testing.T, pki testPKI, cd *cordon.State) string {
+	t.Helper()
+	creds, err := grpctls.NewServerTransportCredentials(pki.serverCertFile, pki.serverKeyFile, pki.caFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := grpc.NewServer(grpc.Creds(creds))
+	pb.RegisterSandboxControlServer(srv, &SandboxControlGRPC{
+		Runtime: &fakeRuntime{},
+		Cfg:     &config.Config{APIKeys: map[string]struct{}{"secret": {}}},
+		Rec:     metrics.NewRunnerRecorder(false),
+		Cordon:  cd,
+	})
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(srv.Stop)
+	return ln.Addr().String()
+}
+
+func TestCordonOverControlGRPC(t *testing.T) {
+	pki := newTestPKI(t)
+	cd := cordon.New()
+	addr := serveControlGRPC(t, pki, cd)
+	ctx := context.Background()
+	tlsCfg := &runnerctl.TLS{CAFile: pki.caFile, CertFile: pki.clientCertFile, KeyFile: pki.clientKeyFile, ServerName: "localhost"}
+
+	if got, err := runnerctl.SetCordon(ctx, addr, "secret", tlsCfg, true); err != nil || !got {
+		t.Fatalf("SetCordon(true) = %v, %v; want true", got, err)
+	}
+	if got, err := runnerctl.GetCordon(ctx, addr, "secret", tlsCfg); err != nil || !got {
+		t.Fatalf("GetCordon() = %v, %v; want true", got, err)
+	}
+	if got, err := runnerctl.SetCordon(ctx, addr, "secret", tlsCfg, false); err != nil || got {
+		t.Fatalf("SetCordon(false) = %v, %v; want false", got, err)
+	}
+
+	if _, err := runnerctl.SetCordon(ctx, addr, "wrong", tlsCfg, true); status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("SetCordon with a wrong key: error = %v, want Unauthenticated", err)
+	}
+
+	// No client certificate: the handshake fails before the key is looked at.
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
+		RootCAs:    caPool(t, pki.caFile),
+		ServerName: "localhost",
+	})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	callCtx := metadata.AppendToOutgoingContext(ctx, "x-api-key", "secret")
+	if _, err := pb.NewSandboxControlClient(conn).SetCordon(callCtx, &pb.SetCordonRequest{Cordoned: true}); err == nil {
+		t.Fatal("SetCordon without a client certificate succeeded")
+	}
+
+	if cd.Cordoned() {
+		t.Fatal("a rejected call cordoned the runner")
 	}
 }

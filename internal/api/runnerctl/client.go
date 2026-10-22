@@ -1,4 +1,4 @@
-// Package runnerctl dials a runner's SandboxControl gRPC (create/stop/delete sandbox).
+// Package runnerctl dials a runner's SandboxControl gRPC (create/stop/delete sandbox, cordon).
 package runnerctl
 
 import (
@@ -104,4 +104,37 @@ func DeleteSandbox(ctx context.Context, target, apiKey string, tlsCfg *TLS, sand
 	cli := pb.NewSandboxControlClient(conn)
 	_, err = cli.DeleteSandbox(withCallMetadata(ctx, apiKey), &pb.DeleteSandboxRequest{SandboxId: sandboxID})
 	return err
+}
+
+// GetCordon calls SandboxControl.GetCordon and closes the connection.
+func GetCordon(ctx context.Context, target, apiKey string, tlsCfg *TLS) (bool, error) {
+	opts, err := dialOpts(target, tlsCfg)
+	if err != nil {
+		return false, err
+	}
+	conn, err := grpc.NewClient(target, opts...)
+	if err != nil {
+		return false, fmt.Errorf("runnerctl dial: %w", err)
+	}
+	defer conn.Close()
+
+	resp, err := pb.NewSandboxControlClient(conn).GetCordon(withCallMetadata(ctx, apiKey), &pb.GetCordonRequest{})
+	return resp.GetCordoned(), err
+}
+
+// SetCordon calls SandboxControl.SetCordon, closes the connection and returns
+// the state after the call.
+func SetCordon(ctx context.Context, target, apiKey string, tlsCfg *TLS, cordoned bool) (bool, error) {
+	opts, err := dialOpts(target, tlsCfg)
+	if err != nil {
+		return false, err
+	}
+	conn, err := grpc.NewClient(target, opts...)
+	if err != nil {
+		return false, fmt.Errorf("runnerctl dial: %w", err)
+	}
+	defer conn.Close()
+
+	resp, err := pb.NewSandboxControlClient(conn).SetCordon(withCallMetadata(ctx, apiKey), &pb.SetCordonRequest{Cordoned: cordoned})
+	return resp.GetCordoned(), err
 }
