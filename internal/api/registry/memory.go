@@ -34,7 +34,7 @@ func New(heartbeatGrace time.Duration) *MemoryRegistry {
 	return NewMemory(heartbeatGrace)
 }
 
-func (r *MemoryRegistry) Upsert(id, httpBaseURL, controlGRPCAddr string, healthy bool, capTotal, capUsed, capStopped int32) {
+func (r *MemoryRegistry) Upsert(id, httpBaseURL, controlGRPCAddr string, healthy, cordoned bool, capTotal, capUsed, capStopped int32) {
 	if id == "" || httpBaseURL == "" {
 		return
 	}
@@ -53,6 +53,7 @@ func (r *MemoryRegistry) Upsert(id, httpBaseURL, controlGRPCAddr string, healthy
 		HTTPBaseURL:     httpBaseURL,
 		ControlGRPCAddr: controlGRPCAddr,
 		Healthy:         healthy,
+		Cordoned:        cordoned,
 		CapacityTotal:   capTotal,
 		CapacityUsed:    capUsed,
 		CapacityStopped: capStopped,
@@ -131,7 +132,7 @@ func (r *MemoryRegistry) eligibleLocked(now time.Time) []*Runner {
 		if now.Sub(run.LastSeen) > r.heartbeatGrace {
 			continue
 		}
-		if !run.Healthy {
+		if !run.Healthy || run.Cordoned {
 			continue
 		}
 		if run.CapacityTotal > 0 && run.CapacityUsed >= run.CapacityTotal {

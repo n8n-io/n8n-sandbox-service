@@ -41,8 +41,8 @@ func newRunnersGateway(t *testing.T) (http.Handler, *registry.MemoryRegistry) {
 
 func TestListRunnersAsAdmin(t *testing.T) {
 	router, reg := newRunnersGateway(t)
-	reg.Upsert("r-b", "https://runner-b.internal:8443", "runner-b.internal:9091", false, 10, 4, 1)
-	reg.Upsert("r-a", "https://runner-a.internal:8443", "runner-a.internal:9091", true, 8, 2, 0)
+	reg.Upsert("r-b", "https://runner-b.internal:8443", "runner-b.internal:9091", false, true, 10, 4, 1)
+	reg.Upsert("r-a", "https://runner-a.internal:8443", "runner-a.internal:9091", true, false, 8, 2, 0)
 
 	rr := doJSON(t, router, http.MethodGet, "/admin/runners", provAdminKey, "")
 	if rr.Code != http.StatusOK {
@@ -59,10 +59,10 @@ func TestListRunnersAsAdmin(t *testing.T) {
 		t.Fatalf("expected 2 runners, got %+v", got.Runners)
 	}
 	a, b := got.Runners[0], got.Runners[1]
-	if a.ID != "r-a" || !a.Healthy || a.CapacityTotal != 8 || a.CapacityUsed != 2 || a.CapacityStopped != 0 {
+	if a.ID != "r-a" || !a.Healthy || a.Cordoned || a.CapacityTotal != 8 || a.CapacityUsed != 2 || a.CapacityStopped != 0 {
 		t.Fatalf("r-a = %+v", a)
 	}
-	if b.ID != "r-b" || b.Healthy || b.CapacityTotal != 10 || b.CapacityUsed != 4 || b.CapacityStopped != 1 {
+	if b.ID != "r-b" || b.Healthy || !b.Cordoned || b.CapacityTotal != 10 || b.CapacityUsed != 4 || b.CapacityStopped != 1 {
 		t.Fatalf("r-b = %+v", b)
 	}
 	if age := time.Now().Unix() - a.LastSeen; age < 0 || age > 5 {
@@ -95,7 +95,7 @@ func TestListRunnersRejectsProvisionerAndTenantKeys(t *testing.T) {
 
 func TestListRunnersAsScaler(t *testing.T) {
 	router, reg := newRunnersGateway(t)
-	reg.Upsert("r-a", "https://runner-a.internal:8443", "runner-a.internal:9091", true, 8, 2, 0)
+	reg.Upsert("r-a", "https://runner-a.internal:8443", "runner-a.internal:9091", true, false, 8, 2, 0)
 
 	rr := doJSON(t, router, http.MethodGet, "/admin/runners", scalerKey, "")
 	if rr.Code != http.StatusOK {
