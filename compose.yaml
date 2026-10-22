@@ -66,6 +66,10 @@ services:
       dockerfile: Dockerfile.runner-dind
     image: n8n-sandbox-service-runner-dind:latest-${ARCH}
     container_name: n8n-sandbox-service-runner-dind-local-1
+    # The runner drains requests (up to 40s) and removes its sandboxes (up to
+    # 20s) before dockerd stops (up to 15s). The compose default of 10s cuts
+    # that short.
+    stop_grace_period: 90s
     depends_on:
       api:
         condition: service_healthy
@@ -95,6 +99,10 @@ services:
   runner-2:
     image: n8n-sandbox-service-runner-dind:latest-${ARCH}
     container_name: n8n-sandbox-service-runner-dind-local-2
+    # The runner drains requests (up to 40s) and removes its sandboxes (up to
+    # 20s) before dockerd stops (up to 15s). The compose default of 10s cuts
+    # that short.
+    stop_grace_period: 90s
     depends_on:
       runner-1:
         condition: service_healthy
