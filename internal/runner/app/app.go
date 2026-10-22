@@ -176,7 +176,11 @@ func Run(cfg *config.Config, rt runnerruntime.Runtime) {
 		controlGRPC.Stop()
 	}
 
-	rt.Shutdown(shutdownCtx)
+	// Fresh budget: a long HTTP drain can use up shutdownCtx, and the
+	// container cleanup must still get to run.
+	cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancelCleanup()
+	rt.Shutdown(cleanupCtx)
 
 	slog.Info("server stopped")
 }
