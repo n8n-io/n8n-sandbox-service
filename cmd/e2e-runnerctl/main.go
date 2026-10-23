@@ -75,7 +75,7 @@ func main() {
 	if cmd == "cordon-status" {
 		cordoned, err = runnerctl.GetCordon(ctx, target, apiKey, tlsCfg)
 	} else {
-		cordoned, err = runnerctl.SetCordon(ctx, target, apiKey, tlsCfg, cmd == "cordon")
+		cordoned, err = runnerctl.SetCordon(ctx, target, apiKey, tlsCfg, "", cmd == "cordon")
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%s: %v\n", cmd, err)

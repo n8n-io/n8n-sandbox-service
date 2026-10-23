@@ -523,8 +523,10 @@ func (x *GetCordonResponse) GetCordoned() bool {
 }
 
 type SetCordonRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Cordoned      bool                   `protobuf:"varint,1,opt,name=cordoned,proto3" json:"cordoned,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Cordoned bool                   `protobuf:"varint,1,opt,name=cordoned,proto3" json:"cordoned,omitempty"`
+	// Optional. When set, a runner with another id refuses the request.
+	RunnerId      string `protobuf:"bytes,2,opt,name=runner_id,json=runnerId,proto3" json:"runner_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -564,6 +566,13 @@ func (x *SetCordonRequest) GetCordoned() bool {
 		return x.Cordoned
 	}
 	return false
+}
+
+func (x *SetCordonRequest) GetRunnerId() string {
+	if x != nil {
+		return x.RunnerId
+	}
+	return ""
 }
 
 // The state after the call.
@@ -646,9 +655,10 @@ const file_proto_runner_v1_runner_proto_rawDesc = "" +
 	"\x15DeleteSandboxResponse\"\x12\n" +
 	"\x10GetCordonRequest\"/\n" +
 	"\x11GetCordonResponse\x12\x1a\n" +
-	"\bcordoned\x18\x01 \x01(\bR\bcordoned\".\n" +
+	"\bcordoned\x18\x01 \x01(\bR\bcordoned\"K\n" +
 	"\x10SetCordonRequest\x12\x1a\n" +
-	"\bcordoned\x18\x01 \x01(\bR\bcordoned\"/\n" +
+	"\bcordoned\x18\x01 \x01(\bR\bcordoned\x12\x1b\n" +
+	"\trunner_id\x18\x02 \x01(\tR\brunnerId\"/\n" +
 	"\x11SetCordonResponse\x12\x1a\n" +
 	"\bcordoned\x18\x01 \x01(\bR\bcordoned2V\n" +
 	"\x0eRunnerRegistry\x12D\n" +
