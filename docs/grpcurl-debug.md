@@ -33,6 +33,20 @@ grpcurl \
 
 `create_options_json` is a JSON `CreateOptions` (`internal/runner/runtime`): `{}` for the defaults, `{"egress":"none"}` for no egress. Unknown values are `InvalidArgument`. The response echoes what was applied in `applied_create_options_json`; the API refuses a sandbox whose echo does not match.
 
+Cordon a runner: it keeps its sandboxes but takes no new creates until it is uncordoned (`{"cordoned": false}`) or restarts. `GetCordon` with `-d '{}'` reads the state.
+
+```bash
+grpcurl \
+  -import-path "$PROTO_IMPORT" -proto "$PROTO_FILE" \
+  -cacert "$TLS_API_DIR/ca.crt" \
+  -cert "$TLS_API_DIR/control-grpc-api-client.crt" \
+  -key "$TLS_API_DIR/control-grpc-api-client.key" \
+  -H "x-api-key: ${RUNNER_API_KEY:-runner-local-key}" \
+  -d '{"cordoned": true}' \
+  n8n-sandbox-service-runner-dind-local-1:9091 \
+  runner.v1.SandboxControl/SetCordon
+```
+
 The bootstrap script puts **both** compose runner hostnames in the **same** control server certificate SAN list, so one `control-grpc-server` cert works on every local runner.
 
 ## API: `RunnerRegistry` (bidirectional stream)

@@ -21,6 +21,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/obs"
 	"github.com/n8n-io/sandbox-service/internal/runner"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
+	"github.com/n8n-io/sandbox-service/internal/runner/cordon"
 	"github.com/n8n-io/sandbox-service/internal/runner/register"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 )
@@ -53,6 +54,7 @@ func Main(runtimeName string, factory RuntimeFactory) {
 }
 
 func Run(cfg *config.Config, rt runnerruntime.Runtime) {
+	cd := cordon.New()
 	mrec := metrics.NewRunnerRecorder(cfg.MetricsEnabled)
 	if fc, ok := rt.(interface{ SetMetricsRecorder(*metrics.RunnerRecorder) }); ok {
 		fc.SetMetricsRecorder(mrec)
@@ -77,6 +79,12 @@ func Run(cfg *config.Config, rt runnerruntime.Runtime) {
 				return 0
 			}
 			return float64(capacity.Stopped)
+		})
+		mrec.SetCordoned(func() float64 {
+			if cd.Cordoned() {
+				return 1
+			}
+			return 0
 		})
 		slog.Info("metrics endpoint enabled", "path", "/metrics")
 	}
@@ -110,7 +118,7 @@ func Run(cfg *config.Config, rt runnerruntime.Runtime) {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	go register.Run(ctx, cfg, rt)
+	go register.Run(ctx, cfg, rt, cd)
 
 	lis, err := net.Listen("tcp", cfg.ControlGRPCListenAddr)
 	if err != nil {
@@ -128,7 +136,7 @@ func Run(cfg *config.Config, rt runnerruntime.Runtime) {
 	}
 	slog.Info("sandbox control grpc mTLS enabled", "addr", cfg.ControlGRPCListenAddr)
 	controlGRPC := grpc.NewServer(grpc.Creds(creds))
-	pb.RegisterSandboxControlServer(controlGRPC, &runner.SandboxControlGRPC{Runtime: rt, Cfg: cfg, Rec: mrec})
+	pb.RegisterSandboxControlServer(controlGRPC, &runner.SandboxControlGRPC{Runtime: rt, Cfg: cfg, Rec: mrec, Cordon: cd})
 	go func() {
 		if err := controlGRPC.Serve(lis); err != nil {
 			slog.Error("control grpc serve", "error", err)
@@ -176,7 +184,11 @@ func Run(cfg *config.Config, rt runnerruntime.Runtime) {
 		controlGRPC.Stop()
 	}
 
-	rt.Shutdown(shutdownCtx)
+	// Fresh budget: a long HTTP drain can use up shutdownCtx, and the
+	// sandbox cleanup must still get to run.
+	cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancelCleanup()
+	rt.Shutdown(cleanupCtx)
 
 	slog.Info("server stopped")
 }
