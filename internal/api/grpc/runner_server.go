@@ -52,7 +52,7 @@ func (s *RunnerRegistryServer) Connect(stream grpc.BidiStreamingServer[pb.Runner
 	// Bind to the first non-empty runner_id for this stream and reject changes so we
 	// never leave an earlier ID registered when the client disconnects.
 	var committedRunnerID, committedHTTPBase, committedControlGRPC string
-	var registered bool
+	var registered, cordoned bool
 	defer func() {
 		if committedRunnerID != "" {
 			s.Reg.Remove(committedRunnerID)
@@ -113,6 +113,7 @@ func (s *RunnerRegistryServer) Connect(stream grpc.BidiStreamingServer[pb.Runner
 			httpBase,
 			controlGRPC,
 			hb.GetHealthy(),
+			hb.GetCordoned(),
 			hb.GetCapacityTotal(),
 			hb.GetCapacityUsed(),
 			hb.GetCapacityStopped(),
@@ -125,11 +126,15 @@ func (s *RunnerRegistryServer) Connect(stream grpc.BidiStreamingServer[pb.Runner
 				"http_base_url", httpBase,
 				"control_grpc_addr", controlGRPC,
 				"healthy", hb.GetHealthy(),
+				"cordoned", hb.GetCordoned(),
 				"capacity_total", hb.GetCapacityTotal(),
 				"capacity_used", hb.GetCapacityUsed(),
 				"capacity_stopped", hb.GetCapacityStopped(),
 			)
+		} else if hb.GetCordoned() != cordoned {
+			slog.Info("runner cordon changed", "runner_id", committedRunnerID, "cordoned", hb.GetCordoned())
 		}
+		cordoned = hb.GetCordoned()
 		if err := stream.Send(&pb.ControlMessage{Ack: true}); err != nil {
 			slog.Warn("runner registration ack failed", "runner_id", committedRunnerID, "error", err)
 			return err
