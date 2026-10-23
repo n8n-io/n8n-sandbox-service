@@ -67,6 +67,10 @@ services:
     image: n8nio/n8n-sandbox-service-runner-dind:latest
     privileged: true
     restart: unless-stopped
+    # The runner drains requests (up to 40s) and removes its sandboxes (up to
+    # 30s) before dockerd stops (up to 15s). The compose default of 10s cuts
+    # that short.
+    stop_grace_period: 90s
     depends_on:
       tls-init:
         condition: service_completed_successfully

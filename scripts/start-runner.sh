@@ -97,12 +97,15 @@ dockerd-entrypoint.sh $INSECURE_ARGS $STORAGE_ARGS $DOCKERD_ARGS >"$DOCKERD_LOG"
 DOCKERD_PID=$!
 RUNNER_PID=""
 
+# Stop the runner before dockerd: the runner removes its sandbox containers
+# during shutdown and needs the Docker socket until it exits.
 cleanup() {
 	if [ -n "$RUNNER_PID" ]; then
 		kill "$RUNNER_PID" >/dev/null 2>&1 || true
+		wait "$RUNNER_PID" >/dev/null 2>&1 || true
 	fi
 	kill "$DOCKERD_PID" >/dev/null 2>&1 || true
-	wait >/dev/null 2>&1 || true
+	wait "$DOCKERD_PID" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 trap 'exit 143' INT TERM
