@@ -114,6 +114,35 @@ type dockerClient struct {
 	host       string
 	dnsServers []string
 	api        *dockerAPI
+	// onlyIPv4 is set when the host kernel was booted with ipv6.disable=1. The
+	// net.ipv6 sysctls don't exist there and the container fails to start with
+	// them.
+	onlyIPv4 bool
+}
+
+// hostIPv6DisablePath reads 1 when the kernel was booted with ipv6.disable=1.
+const hostIPv6DisablePath = "/sys/module/ipv6/parameters/disable"
+
+// hostOnlyIPv4 reports whether the file at path reads 1. Anything else,
+// including a missing file (IPv6 built as a module that is not loaded), counts
+// as IPv6 present, so the container keeps IPv6 disabled.
+func hostOnlyIPv4(path string) bool {
+	b, err := os.ReadFile(path)
+	return err == nil && strings.TrimSpace(string(b)) == "1"
+}
+
+// explainIPv6SysctlError adds the cause to a container start that failed
+// because the kernel has no net.ipv6 sysctls: IPv6 is a loadable module that
+// is not loaded yet.
+func explainIPv6SysctlError(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "sysctl net.ipv6.") || !strings.Contains(msg, "no such file or directory") {
+		return err
+	}
+	return fmt.Errorf("host kernel has no net.ipv6 sysctls: IPv6 as a loadable kernel module is not supported unless the ipv6 module is loaded on the host before the sandbox starts (or the host boots with ipv6.disable=1): %w", err)
 }
 
 func (dc *dockerClient) run(ctx context.Context, args ...string) (string, error) {
@@ -147,7 +176,7 @@ func (dc *dockerClient) ping(ctx context.Context) error {
 }
 
 func (dc *dockerClient) createContainer(ctx context.Context, sandboxID, containerName, image, network string, limits *ResourceLimits, enableCgroups bool) (string, error) {
-	args := dockerContainerCreateArgs(sandboxID, containerName, image, network, limits, enableCgroups, dc.dnsServers)
+	args := dockerContainerCreateArgs(sandboxID, containerName, image, network, limits, enableCgroups, dc.dnsServers, dc.onlyIPv4)
 
 	out, err := dc.run(ctx, args...)
 	if err != nil {
@@ -156,7 +185,7 @@ func (dc *dockerClient) createContainer(ctx context.Context, sandboxID, containe
 	return strings.TrimSpace(out), nil
 }
 
-func dockerContainerCreateArgs(sandboxID, containerName, image, network string, limits *ResourceLimits, enableCgroups bool, dnsServers []string) []string {
+func dockerContainerCreateArgs(sandboxID, containerName, image, network string, limits *ResourceLimits, enableCgroups bool, dnsServers []string, onlyIPv4 bool) []string {
 	args := []string{
 		"container", "create",
 		"--name", containerName,
@@ -172,13 +201,7 @@ func dockerContainerCreateArgs(sandboxID, containerName, image, network string, 
 		"--env", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 	}
 	args = append(args, dockerSandboxSecurityArgs()...)
-	args = append(args,
-		// netrules only filter IPv4; disable v6 in the container so sandboxes
-		// can't bypass the policy via link-local/ULA or v6 metadata addresses.
-		"--sysctl", "net.ipv6.conf.all.disable_ipv6=1",
-		"--sysctl", "net.ipv6.conf.default.disable_ipv6=1",
-		"--sysctl", "net.ipv6.conf.lo.disable_ipv6=1",
-	)
+	args = append(args, dockerIPv6Args(onlyIPv4)...)
 	args = append(args, dockerDNSArgs(dnsServers)...)
 	if enableCgroups {
 		args = append(args, dockerLimitArgs(limits)...)
@@ -186,6 +209,21 @@ func dockerContainerCreateArgs(sandboxID, containerName, image, network string, 
 	args = append(args, dockerDiskQuotaArgs(limits)...)
 	args = append(args, image)
 	return args
+}
+
+// dockerIPv6Args disables IPv6 in the container when the host has it. netrules
+// only filter IPv4, so sandboxes could otherwise bypass the policy via
+// link-local/ULA or v6 metadata addresses. A host without IPv6 gives the
+// container none, and has no net.ipv6 sysctls to set.
+func dockerIPv6Args(onlyIPv4 bool) []string {
+	if onlyIPv4 {
+		return nil
+	}
+	return []string{
+		"--sysctl", "net.ipv6.conf.all.disable_ipv6=1",
+		"--sysctl", "net.ipv6.conf.default.disable_ipv6=1",
+		"--sysctl", "net.ipv6.conf.lo.disable_ipv6=1",
+	}
 }
 
 // dockerSandboxSecurityArgs is the single security policy for every Docker-backed
@@ -219,7 +257,7 @@ func dockerDNSArgs(servers []string) []string {
 
 func (dc *dockerClient) startContainer(ctx context.Context, containerID string) error {
 	_, err := dc.run(ctx, "container", "start", containerID)
-	return err
+	return explainIPv6SysctlError(err)
 }
 
 func (dc *dockerClient) stopContainer(ctx context.Context, containerID string) error {
