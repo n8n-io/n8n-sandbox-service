@@ -36,6 +36,7 @@ func newRunnersGateway(t *testing.T) (http.Handler, *registry.MemoryRegistry) {
 		RunnerAPIKey:        "runner-key",
 		MaxFileBytes:        1024,
 		DefaultMaxSandboxes: provMaxDflt,
+		HeartbeatGrace:      45 * time.Second,
 	}), reg, metrics.NewAPIRecorder(false))
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
@@ -198,6 +199,12 @@ func TestSetRunnerCordonErrors(t *testing.T) {
 	refusing := &fakeSandboxControl{cordonErr: status.Error(codes.Unauthenticated, "invalid api key")}
 	reg.Upsert("r-refusing", "https://127.0.0.1:9", startFakeRunnerControl(t, refusing), true, false, 8, 0, 0)
 	reg.Upsert("r-gone", "https://127.0.0.1:9", "127.0.0.1:1", true, false, 8, 0, 0)
+	// No heartbeat for longer than the grace: the API does not call it.
+	stale := &fakeSandboxControl{}
+	reg.Upsert("r-stale", "https://127.0.0.1:9", startFakeRunnerControl(t, stale), true, false, 8, 0, 0)
+	if run, ok := reg.Get("r-stale"); ok {
+		run.LastSeen = time.Now().Add(-time.Hour)
+	}
 
 	for _, tc := range []struct {
 		runner string
@@ -206,11 +213,17 @@ func TestSetRunnerCordonErrors(t *testing.T) {
 		{"r-unknown", http.StatusNotFound},
 		{"r-refusing", http.StatusBadGateway},
 		{"r-gone", http.StatusServiceUnavailable},
+		{"r-stale", http.StatusServiceUnavailable},
 	} {
 		rr := doJSON(t, router, http.MethodPut, "/admin/runners/"+tc.runner+"/cordon", provAdminKey, "")
 		if rr.Code != tc.want {
 			t.Errorf("%s: expected %d, got %d body=%s", tc.runner, tc.want, rr.Code, rr.Body.String())
 		}
+	}
+	stale.mu.Lock()
+	defer stale.mu.Unlock()
+	if len(stale.cordonCalls) != 0 {
+		t.Fatalf("the API called a stale runner: %v", stale.cordonCalls)
 	}
 }
 
