@@ -123,8 +123,8 @@ func GetCordon(ctx context.Context, target, apiKey string, tlsCfg *TLS) (bool, e
 }
 
 // SetCordon calls SandboxControl.SetCordon, closes the connection and returns
-// the state after the call.
-func SetCordon(ctx context.Context, target, apiKey string, tlsCfg *TLS, cordoned bool) (bool, error) {
+// the state after the call. A non-empty runnerID makes any other runner refuse.
+func SetCordon(ctx context.Context, target, apiKey string, tlsCfg *TLS, runnerID string, cordoned bool) (bool, error) {
 	opts, err := dialOpts(target, tlsCfg)
 	if err != nil {
 		return false, err
@@ -135,6 +135,6 @@ func SetCordon(ctx context.Context, target, apiKey string, tlsCfg *TLS, cordoned
 	}
 	defer conn.Close()
 
-	resp, err := pb.NewSandboxControlClient(conn).SetCordon(withCallMetadata(ctx, apiKey), &pb.SetCordonRequest{Cordoned: cordoned})
+	resp, err := pb.NewSandboxControlClient(conn).SetCordon(withCallMetadata(ctx, apiKey), &pb.SetCordonRequest{Cordoned: cordoned, RunnerId: runnerID})
 	return resp.GetCordoned(), err
 }
