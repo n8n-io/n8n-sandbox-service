@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -124,7 +127,7 @@ func TestDockerContainerCreateArgs(t *testing.T) {
 		DiskMB:     1024,
 	}
 
-	got := dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerNoEgressNetwork, limits, true, []string{"1.1.1.1", "8.8.8.8"})
+	got := dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerNoEgressNetwork, limits, true, []string{"1.1.1.1", "8.8.8.8"}, false)
 	want := []string{
 		"container", "create",
 		"--name", "sandbox-name",
@@ -155,6 +158,81 @@ func TestDockerContainerCreateArgs(t *testing.T) {
 	}
 }
 
+// IPv6 is assumed present and disabled in the container, unless the host is
+// IPv4-only: there the net.ipv6 sysctls don't exist and docker refuses to
+// create the container.
+func TestDockerContainerCreateArgsSkipIPv6SysctlsOnIPv4OnlyHost(t *testing.T) {
+	sysctls := func(args []string) []string {
+		var got []string
+		for i := 0; i+1 < len(args); i++ {
+			if args[i] == "--sysctl" {
+				got = append(got, args[i+1])
+				i++
+			}
+		}
+		return got
+	}
+
+	got := sysctls(dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerBridgeNetwork, nil, false, nil, false))
+	want := []string{
+		"net.ipv6.conf.all.disable_ipv6=1",
+		"net.ipv6.conf.default.disable_ipv6=1",
+		"net.ipv6.conf.lo.disable_ipv6=1",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("sysctls by default = %#v, want %#v", got, want)
+	}
+
+	if got := sysctls(dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerBridgeNetwork, nil, false, nil, true)); got != nil {
+		t.Fatalf("sysctls on IPv4-only host = %#v, want nil", got)
+	}
+}
+
+// Only an explicit ipv6.disable=1 skips the sysctls. A missing parameter file
+// (IPv6 module not loaded) keeps IPv6 disabled in the container.
+func TestHostOnlyIPv4(t *testing.T) {
+	dir := t.TempDir()
+	for _, tc := range []struct {
+		content string
+		want    bool
+	}{
+		{"1\n", true},
+		{"0\n", false},
+		{"", false},
+	} {
+		path := filepath.Join(dir, "disable")
+		if err := os.WriteFile(path, []byte(tc.content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got := hostOnlyIPv4(path); got != tc.want {
+			t.Fatalf("hostOnlyIPv4 with %q = %v, want %v", tc.content, got, tc.want)
+		}
+	}
+	if hostOnlyIPv4(filepath.Join(dir, "missing")) {
+		t.Fatal("hostOnlyIPv4 for a missing file = true, want false")
+	}
+}
+
+func TestExplainIPv6SysctlError(t *testing.T) {
+	if explainIPv6SysctlError(nil) != nil {
+		t.Fatal("explainIPv6SysctlError(nil) != nil")
+	}
+
+	other := errors.New("docker container start abc: Error response from daemon: no such container")
+	if got := explainIPv6SysctlError(other); got != other {
+		t.Fatalf("unrelated error rewritten: %v", got)
+	}
+
+	sysctlErr := errors.New("docker container start abc: Error response from daemon: failed to create task for container: failed to create shim task: OCI runtime create failed: runc create failed: unable to start container process: error during container init: open sysctl net.ipv6.conf.default.disable_ipv6 file: unsafe procfs detected: openat2 fsmount:fscontext:proc/./sys/net/ipv6/conf/default/disable_ipv6: no such file or directory: exit status 1")
+	got := explainIPv6SysctlError(sysctlErr)
+	if !errors.Is(got, sysctlErr) {
+		t.Fatalf("explained error does not wrap the original: %v", got)
+	}
+	if !strings.Contains(got.Error(), "ipv6 module is loaded") {
+		t.Fatalf("explained error lacks the cause: %v", got)
+	}
+}
+
 // Without configured servers the container keeps Docker's default DNS, which
 // is what runners did before the setting existed.
 func TestDockerDNSArgsOnlyWhenConfigured(t *testing.T) {
@@ -177,7 +255,7 @@ func TestDockerContainerCreateArgsAlwaysApplySecurityPolicy(t *testing.T) {
 	}
 
 	for _, enableCgroups := range []bool{false, true} {
-		gotArgs := dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerBridgeNetwork, nil, enableCgroups, nil)
+		gotArgs := dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerBridgeNetwork, nil, enableCgroups, nil, false)
 		var got []string
 		for i := 0; i < len(gotArgs); i++ {
 			if gotArgs[i] != "--cap-drop" && gotArgs[i] != "--cap-add" && gotArgs[i] != "--security-opt" {
