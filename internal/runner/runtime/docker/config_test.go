@@ -124,3 +124,29 @@ func TestLoadConfigRejectsInvalidDefaultDiskQuotaMB(t *testing.T) {
 		t.Fatal("expected LoadConfig to reject non-numeric SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB")
 	}
 }
+
+func TestLoadConfigParsesTemplates(t *testing.T) {
+	t.Setenv("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE", "img/default")
+	t.Setenv("SANDBOX_RUNNER_DOCKER_TEMPLATES", `{"python":{"image":"img/python","memory_mb":2048}}`)
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Templates["python"].Image != "img/python" || cfg.Templates["python"].MemoryMB != 2048 {
+		t.Fatalf("templates = %+v", cfg.Templates)
+	}
+	for _, bad := range []string{
+		`{"default":{"image":"x"}}`,
+		`{"Python":{"image":"x"}}`,
+		`{"python":{}}`,
+		`{"python":{"image":"x","memory":1}}`,
+		`{"python":{"image":"x","memory_mb":-1}}`,
+		`[]`,
+		`{"python":{"image":"x"}} {}`,
+	} {
+		t.Setenv("SANDBOX_RUNNER_DOCKER_TEMPLATES", bad)
+		if _, err := LoadConfig(); err == nil {
+			t.Errorf("accepted %s", bad)
+		}
+	}
+}

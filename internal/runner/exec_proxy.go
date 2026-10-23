@@ -14,7 +14,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/n8n-io/sandbox-service/internal/daemon"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
+	"github.com/n8n-io/sandbox-service/internal/runner/activity"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 )
@@ -53,7 +55,13 @@ func isTerminalEvent(typ string) bool {
 // drops before a terminal event, the handler resumes via the daemon's
 // GET /executions/{exec_id}?follow=true&after=<seq> endpoint. We have seen
 // connection drops in load tests, and this retrying here mitigates it.
-func ExecProxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder) http.HandlerFunc {
+//
+// tr learns of the execution and of the open stream, so the sandbox counts as
+// active until the execution ends; nil tracks nothing.
+//
+// env, when given, is environment every execution of a sandbox gets unless the
+// request sets the variable itself (the egress proxy's).
+func ExecProxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder, tr *activity.Tracker, env ...func(sandboxID string) map[string]string) http.HandlerFunc {
 	client := &http.Client{CheckRedirect: runnerruntime.RefuseRedirect}
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -77,6 +85,16 @@ func ExecProxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics
 
 		if body.ExecID == "" {
 			body.ExecID = uuid.New().String()
+		}
+		for _, fn := range env {
+			for k, v := range fn(r.PathValue("id")) {
+				if _, set := body.Env[k]; !set {
+					if body.Env == nil {
+						body.Env = map[string]string{}
+					}
+					body.Env[k] = v
+				}
+			}
 		}
 		execID := body.ExecID
 
@@ -113,6 +131,23 @@ func ExecProxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics
 			return
 		}
 
+		sandboxID := r.PathValue("id")
+		timeout := daemon.DefaultExecTimeout
+		if body.TimeoutMs > 0 {
+			timeout = time.Duration(body.TimeoutMs) * time.Millisecond
+		}
+		// Recorded before the stream is, so the sandbox is never seen idle
+		// between the two; a repeated exec_id only renews the deadline.
+		tr.ExecStarted(sandboxID, execID, timeout)
+		defer tr.StreamOpened(sandboxID)()
+		var lastSeq *uint64
+		// When the stream ends early, the poller picks up from what was seen.
+		defer func() {
+			if lastSeq != nil {
+				tr.ExecProgress(sandboxID, execID, *lastSeq)
+			}
+		}()
+
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -127,9 +162,9 @@ func ExecProxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics
 		}
 		flush()
 
-		var lastSeq *uint64
 		completed, streamErr := streamNDJSON(upResp.Body, w, flush, &lastSeq)
 		if completed {
+			tr.ExecEnded(sandboxID, execID)
 			return
 		}
 		upResp.Body.Close()
@@ -170,6 +205,7 @@ func ExecProxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics
 			completed, streamErr = streamNDJSON(resumeResp.Body, w, flush, &lastSeq)
 			resumeResp.Body.Close()
 			if completed {
+				tr.ExecEnded(sandboxID, execID)
 				return
 			}
 			if !shouldRetryStreamError(r, execID, attempt+1, streamErr, lastSeq) {

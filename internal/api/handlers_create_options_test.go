@@ -204,27 +204,66 @@ func TestCreateSandboxBodyLimit(t *testing.T) {
 	}
 }
 
-func TestRunnerDrainNotImplemented(t *testing.T) {
+// Drain is the runner's cordon plus what it still runs: drained only once
+// nothing is left, and only an admin may see or change it.
+func TestRunnerDrain(t *testing.T) {
+	ctl := &fakeSandboxControl{executions: 1, streams: 1}
+	router, _, _ := newIdleTestGateway(t, "admin-key", ctl)
+
+	call := func(method, key, runner string) (int, drainState) {
+		t.Helper()
+		req := httptest.NewRequest(method, "/admin/runners/"+runner+"/drain", nil)
+		req.Header.Set("X-Api-Key", key)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		var st drainState
+		_ = json.Unmarshal(rr.Body.Bytes(), &st)
+		return rr.Code, st
+	}
+
+	if code, st := call(http.MethodGet, "admin-key", "runner-1"); code != http.StatusOK || st.Draining || st.Drained {
+		t.Fatalf("initial: %d %+v", code, st)
+	}
+	if code, st := call(http.MethodPost, "admin-key", "runner-1"); code != http.StatusOK || !st.Draining || st.Drained ||
+		st.ActiveExecutions != 1 || st.OpenStreams != 1 || st.CapacityUsed != 3 || st.CapacityStopped != 1 || st.RunnerID != "runner-1" {
+		t.Fatalf("start with a run in progress: %d %+v", code, st)
+	}
+	ctl.mu.Lock()
+	ctl.executions, ctl.streams = 0, 0
+	ctl.mu.Unlock()
+	if code, st := call(http.MethodGet, "admin-key", "runner-1"); code != http.StatusOK || !st.Drained {
+		t.Fatalf("after the run: %d %+v", code, st)
+	}
+	if code, st := call(http.MethodDelete, "admin-key", "runner-1"); code != http.StatusOK || st.Draining || st.Drained {
+		t.Fatalf("stop: %d %+v", code, st)
+	}
+	if code, _ := call(http.MethodGet, "admin-key", "runner-9"); code != http.StatusNotFound {
+		t.Fatalf("unknown runner: %d", code)
+	}
+	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodDelete} {
+		if code, _ := call(method, "not-a-key", "runner-1"); code != http.StatusUnauthorized && code != http.StatusForbidden {
+			t.Fatalf("%s without a valid key: %d", method, code)
+		}
+	}
+	ctl.mu.Lock()
+	cordoned := ctl.cordoned
+	ctl.mu.Unlock()
+	if cordoned {
+		t.Fatal("runner left cordoned")
+	}
+}
+
+// A tenant key never reaches the runner.
+func TestRunnerDrainRefusesTenants(t *testing.T) {
 	router, _ := newTestGateway(t, "admin-key")
 	tenant := mintTenantKey(t, router, `{"name":"t"}`)
 	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodDelete} {
-		for _, tc := range []struct {
-			key  string
-			want int
-		}{
-			{key: "admin-key", want: http.StatusNotImplemented},
-			{key: tenant.Key.APIKey, want: http.StatusForbidden},
-		} {
-			req := httptest.NewRequest(method, "/admin/runners/runner-1/drain", nil)
-			req.Header.Set("X-Api-Key", tc.key)
-			rr := httptest.NewRecorder()
-			router.ServeHTTP(rr, req)
-			if rr.Code != tc.want {
-				t.Fatalf("%s drain: got %d body=%s, want %d", method, rr.Code, rr.Body.String(), tc.want)
-			}
-			if tc.want == http.StatusNotImplemented && !strings.Contains(rr.Body.String(), `"reason":"not_implemented"`) {
-				t.Fatalf("%s drain body = %s", method, rr.Body.String())
-			}
+		req := httptest.NewRequest(method, "/admin/runners/runner-1/drain", nil)
+		req.Header.Set("X-Api-Key", tenant.Key.APIKey)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusForbidden {
+			t.Fatalf("%s drain: got %d, want 403", method, rr.Code)
 		}
 	}
 }

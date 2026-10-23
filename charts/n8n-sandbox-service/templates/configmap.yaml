@@ -21,6 +21,7 @@ data:
   SANDBOX_API_IDLE_DELETE_AFTER: {{ .Values.api.config.idleDeleteAfter | quote }}
   SANDBOX_API_IDLE_DELETE_SAFETY_BUFFER: {{ .Values.api.config.idleDeleteSafetyBuffer | quote }}
   SANDBOX_API_IDLE_SWEEP_INTERVAL: {{ .Values.api.config.idleSweepInterval | quote }}
+  SANDBOX_API_MAX_IDLE_WINDOW: {{ .Values.api.config.maxIdleWindow | quote }}
 {{- $runner := .Values.runner }}
 {{- if eq .Values.dataPlane.mode "in-cluster" }}
 ---

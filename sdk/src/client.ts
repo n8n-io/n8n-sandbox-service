@@ -11,20 +11,32 @@ import {
   stat,
 } from "./files";
 import { HttpClient } from "./http";
-import { createSandbox, getSandbox, deleteSandbox } from "./sandboxes";
+import {
+  createSandbox,
+  getSandbox,
+  deleteSandbox,
+  getModelEgress,
+  listTemplates,
+  setModelEgress,
+  updateEgressProxy,
+  updateIdleWindows,
+} from "./sandboxes";
 import type {
   CopyFileRequest,
   CreateSandboxOptions,
   DeleteFileOptions,
+  EgressProxySpec,
   ExecRequest,
   ExecResult,
   FileContent,
   FileEntry,
   FileStat,
+  IdleWindowsUpdate,
   ListFilesOptions,
   MoveFileRequest,
   SandboxClientOptions,
   SandboxRecord,
+  TemplateInfo,
 } from "./types";
 
 /**
@@ -54,6 +66,40 @@ export class SandboxClient {
    */
   async getSandbox(id: string): Promise<SandboxRecord> {
     return getSandbox(this.http, id);
+  }
+
+  /**
+   * Changes a sandbox's idle windows. A field left out keeps its value; `null`
+   * returns it to the service's global window.
+   */
+  async updateIdleWindows(id: string, update: IdleWindowsUpdate): Promise<SandboxRecord> {
+    return updateIdleWindows(this.http, id, update);
+  }
+
+  /**
+   * Replaces a proxy sandbox's egress spec. A stage that inherits a sandbox
+   * uses it to give the sandbox its own refs and labels.
+   */
+  async updateEgressProxy(id: string, spec: EgressProxySpec): Promise<void> {
+    return updateEgressProxy(this.http, id, spec);
+  }
+
+  /** Reports whether a proxy sandbox's model requests are blocked. */
+  async getModelEgress(id: string): Promise<boolean> {
+    return getModelEgress(this.http, id);
+  }
+
+  /** Blocks or unblocks a proxy sandbox's model requests; returns the state after. */
+  async setModelEgress(id: string, blocked: boolean): Promise<boolean> {
+    return setModelEgress(this.http, id, blocked);
+  }
+
+  /**
+   * Lists the templates a create may name, with their sizes and how many
+   * runners serve each now.
+   */
+  async listTemplates(): Promise<TemplateInfo[]> {
+    return listTemplates(this.http);
   }
 
   /**

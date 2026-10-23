@@ -98,7 +98,7 @@ func TestPostgresStoreCRUD(t *testing.T) {
 
 	// Running and idle: a stop candidate. Other tests share the database, so
 	// look for this row rather than counting.
-	rows, err := s.ListForIdleReapStop(9999999999, false)
+	rows, err := s.ListIdle(IdleStop, 9999999999, 1)
 	if err != nil {
 		t.Fatalf("list stop: %v", err)
 	}
@@ -118,14 +118,14 @@ func TestPostgresStoreCRUD(t *testing.T) {
 	}
 
 	// Stopped: no longer a stop candidate, now a delete candidate.
-	rows, err = s.ListForIdleReapStop(9999999999, false)
+	rows, err = s.ListIdle(IdleStop, 9999999999, 1)
 	if err != nil {
 		t.Fatalf("list stop: %v", err)
 	}
 	if containsSandbox(rows, rec.ID) {
 		t.Fatalf("stopped sandbox %s is still a stop candidate", rec.ID)
 	}
-	rows, err = s.ListForIdleReapDelete(9999999999)
+	rows, err = s.ListIdle(IdleDelete, 9999999999, 1)
 	if err != nil {
 		t.Fatalf("list delete: %v", err)
 	}
@@ -260,4 +260,26 @@ func TestTryRunReleasesAfterFnReturns(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatal("lock not released after first TryRun completed")
+}
+
+func TestPostgresTouchRunnerActive(t *testing.T) {
+	s := openTestPostgresStore(t)
+	prefix := uuid.New().String()[:8] + "-"
+	t.Cleanup(func() {
+		for _, id := range []string{"a", "b", "c"} {
+			_ = s.Delete(prefix + id)
+		}
+	})
+	testTouchRunnerActive(t, s, prefix)
+}
+
+func TestPostgresListIdlePerSandboxWindows(t *testing.T) {
+	s := openTestPostgresStore(t)
+	prefix := uuid.New().String()[:8] + "-"
+	t.Cleanup(func() {
+		for _, id := range []string{"global", "longer", "shorter", "stopped", "del"} {
+			_ = s.Delete(prefix + id)
+		}
+	})
+	testListIdlePerSandboxWindows(t, s, prefix)
 }

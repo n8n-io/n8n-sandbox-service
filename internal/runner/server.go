@@ -10,13 +10,16 @@ import (
 
 	"github.com/n8n-io/sandbox-service/internal/limits"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
+	"github.com/n8n-io/sandbox-service/internal/runner/activity"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 )
 
 // NewRouter creates the HTTP handler for sandbox operations. If rec is
 // enabled, its /metrics handler is mounted and HTTPMiddleware wraps the chain.
-func NewRouter(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder) http.Handler {
+// tr counts the execution streams it serves; nil tracks nothing.
+// env is passed to ExecProxyHandler.
+func NewRouter(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder, tr *activity.Tracker, env ...func(sandboxID string) map[string]string) http.Handler {
 	mux := http.NewServeMux()
 
 	livenessHandler := func(w http.ResponseWriter, r *http.Request) {
@@ -60,8 +63,8 @@ func NewRouter(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.Runner
 	proxy := limitSandbox(ProxyHandler(rt, cfg, rec))
 	uploadProxy := limitSandbox(UploadProxyHandler(rt, cfg, rec))
 
-	mux.HandleFunc("POST /sandboxes/{id}/executions", limitSandbox(ExecProxyHandler(rt, cfg, rec)))
-	mux.HandleFunc("GET /sandboxes/{id}/executions/{exec_id}", proxy)
+	mux.HandleFunc("POST /sandboxes/{id}/executions", limitSandbox(ExecProxyHandler(rt, cfg, rec, tr, env...)))
+	mux.HandleFunc("GET /sandboxes/{id}/executions/{exec_id}", countFollowStream(tr, proxy))
 	mux.HandleFunc("DELETE /sandboxes/{id}/executions/{exec_id}", limitSandboxDeletes(DeleteExecutionHandler(rt, cfg, rec)))
 	mux.HandleFunc("POST /sandboxes/{id}/files/copy", proxy)
 	mux.HandleFunc("POST /sandboxes/{id}/files/move", proxy)
@@ -84,6 +87,18 @@ func NewRouter(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.Runner
 	handler = RecoveryMiddleware(handler)
 
 	return handler
+}
+
+// countFollowStream counts a follow=true stream as activity while it is open:
+// someone is waiting on the execution, which may have been started on another
+// runner incarnation the tracker never saw.
+func countFollowStream(tr *activity.Tracker, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("follow") == "true" {
+			defer tr.StreamOpened(r.PathValue("id"))()
+		}
+		next(w, r)
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {

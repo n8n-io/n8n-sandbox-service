@@ -19,7 +19,8 @@ CREATE TABLE IF NOT EXISTS sandboxes (
 	template                  TEXT NOT NULL DEFAULT 'default',
 	idle_stop_after           BIGINT NOT NULL DEFAULT 0,
 	idle_delete_after         BIGINT NOT NULL DEFAULT 0,
-	egress_proxy              TEXT NOT NULL DEFAULT ''
+	egress_proxy              TEXT NOT NULL DEFAULT '',
+	model_blocked             BOOLEAN NOT NULL DEFAULT false
 );
 CREATE INDEX IF NOT EXISTS sandboxes_idle_reap_idx
 	ON sandboxes (status, last_active_at);
@@ -42,6 +43,18 @@ CREATE TABLE IF NOT EXISTS runners (
 CREATE INDEX IF NOT EXISTS runners_eligible_idx
 	ON runners (healthy, last_seen, capacity_used);
 `
+
+// postgresAddRunnerStateCols adds the cordon and the served templates (a JSON
+// array of registry.Template, ” for a runner that lists none) to runner
+// heartbeats.
+const postgresAddRunnerStateCols = `
+ALTER TABLE runners
+	ADD COLUMN IF NOT EXISTS cordoned BOOLEAN NOT NULL DEFAULT false,
+	ADD COLUMN IF NOT EXISTS templates TEXT NOT NULL DEFAULT ''`
+
+// postgresAddTenantMaxIdleWindowCol caps a tenant's idle windows, in seconds;
+// 0 is the server's cap.
+const postgresAddTenantMaxIdleWindowCol = `ALTER TABLE tenants ADD COLUMN IF NOT EXISTS max_idle_window BIGINT NOT NULL DEFAULT 0`
 
 const postgresTenantsSchema = `
 CREATE TABLE IF NOT EXISTS tenants (
@@ -74,7 +87,8 @@ const postgresAddCreateOptionCols = `ALTER TABLE sandboxes
 	ADD COLUMN IF NOT EXISTS template TEXT NOT NULL DEFAULT 'default',
 	ADD COLUMN IF NOT EXISTS idle_stop_after BIGINT NOT NULL DEFAULT 0,
 	ADD COLUMN IF NOT EXISTS idle_delete_after BIGINT NOT NULL DEFAULT 0,
-	ADD COLUMN IF NOT EXISTS egress_proxy TEXT NOT NULL DEFAULT ''`
+	ADD COLUMN IF NOT EXISTS egress_proxy TEXT NOT NULL DEFAULT '',
+	ADD COLUMN IF NOT EXISTS model_blocked BOOLEAN NOT NULL DEFAULT false`
 
 // Backfill legacy empty tenant_id to the admin sentinel.
 const postgresBackfillAdminTenantID = `UPDATE sandboxes SET tenant_id = '__admin__' WHERE tenant_id = ''`

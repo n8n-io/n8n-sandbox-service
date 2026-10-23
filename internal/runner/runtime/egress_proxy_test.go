@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-const validProxyOptions = `{"egress":"proxy","egress_proxy":{
+const validProxyOptions = `{"egress":"proxy","tenant":"t1","egress_proxy":{
 	"allow":[{"name":"git","hosts":["git.example.com","forgejo:3000"]},{"name":"anthropic","hosts":["api.anthropic.com"]}],
 	"repos":[{"host":"git.example.com","path":"org/repo","access":"write"},{"host":"forgejo:3000","path":"org/other","access":"read"}],
 	"push_refs":["refs/heads/factory/abc/","refs/heads/factory-wip/s1"],
@@ -91,6 +91,8 @@ func TestParseCreateOptionsRefusesBadEgressProxy(t *testing.T) {
 		{"label value newline", `"i-1"`, `"i-1\nforged"`},
 		{"label value empty", `"i-1"`, `""`},
 		{"trailing data", `}}`, `}}{}`},
+		{"no tenant", `"tenant":"t1",`, ``},
+		{"tenant with a slash", `"tenant":"t1"`, `"tenant":"t1/../t2"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if !strings.Contains(validProxyOptions, tc.old) {

@@ -312,10 +312,11 @@ func TestListForIdleReapDeleteAndStop(t *testing.T) {
 		RunnerControlGRPCAddr: ctl, RunnerHTTPBase: "http://x", Ephemeral: true,
 	})
 
-	cutoff := int64(200)
-	delRows, err := s.ListForIdleReapDelete(cutoff)
+	// Idle for more than the global window at now: last_active_at <= 200.
+	const now, global = int64(300), int64(100)
+	delRows, err := s.ListIdle(IdleDelete, now, global)
 	if err != nil {
-		t.Fatalf("ListForIdleReapDelete: %v", err)
+		t.Fatalf("ListIdle(delete): %v", err)
 	}
 	ids := make([]string, 0, len(delRows))
 	for _, r := range delRows {
@@ -332,20 +333,76 @@ func TestListForIdleReapDeleteAndStop(t *testing.T) {
 	// Old running rows split by the ephemeral flag: regular ones are stop
 	// candidates, ephemeral ones delete candidates.
 	for _, tc := range []struct {
-		ephemeral bool
-		want      string
-	}{{false, "a-run-old"}, {true, "d-eph-old"}} {
-		stopRows, err := s.ListForIdleReapStop(cutoff, tc.ephemeral)
+		phase IdlePhase
+		want  string
+	}{{IdleStop, "a-run-old"}, {IdleEphemeral, "d-eph-old"}} {
+		stopRows, err := s.ListIdle(tc.phase, now, global)
 		if err != nil {
-			t.Fatalf("ListForIdleReapStop(ephemeral=%v): %v", tc.ephemeral, err)
+			t.Fatalf("ListIdle(%v): %v", tc.phase, err)
 		}
 		var stopIDs []string
 		for _, r := range stopRows {
 			stopIDs = append(stopIDs, r.ID)
 		}
 		if len(stopIDs) != 1 || stopIDs[0] != tc.want {
-			t.Fatalf("stop candidates (ephemeral=%v): got %v want [%s]", tc.ephemeral, stopIDs, tc.want)
+			t.Fatalf("candidates (%v): got %v want [%s]", tc.phase, stopIDs, tc.want)
 		}
+	}
+}
+
+// A row's own window replaces the global one in both directions, and with the
+// global window off only rows with their own window are candidates.
+func TestListIdlePerSandboxWindows(t *testing.T) {
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	testListIdlePerSandboxWindows(t, s, "")
+}
+
+func testListIdlePerSandboxWindows(t *testing.T, s SandboxStore, prefix string) {
+	t.Helper()
+	const now = int64(10_000)
+	for _, rec := range []*SandboxRecord{
+		{ID: prefix + "global", LastActiveAt: now - 150},                      // global 100: due
+		{ID: prefix + "longer", LastActiveAt: now - 150, IdleStopAfter: 3600}, // own 1h: not due
+		{ID: prefix + "shorter", LastActiveAt: now - 70, IdleStopAfter: 60},   // own 60s: due
+		{ID: prefix + "stopped", LastActiveAt: now - 150, Status: "stopped"},  // other phase
+		{ID: prefix + "del", LastActiveAt: now - 150, IdleDeleteAfter: 120, Status: "stopped"},
+	} {
+		if rec.Status == "" {
+			rec.Status = "running"
+		}
+		rec.TenantID, rec.CreatedAt = AdminTenantID, 1
+		if err := s.Create(rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ids := func(phase IdlePhase, global int64) map[string]bool {
+		rows, err := s.ListIdle(phase, now, global)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]bool{}
+		for _, r := range rows {
+			if strings.HasPrefix(r.ID, prefix) {
+				out[strings.TrimPrefix(r.ID, prefix)] = true
+			}
+		}
+		return out
+	}
+	if got := ids(IdleStop, 100); len(got) != 2 || !got["global"] || !got["shorter"] {
+		t.Fatalf("stop, global 100: %v", got)
+	}
+	if got := ids(IdleStop, 0); len(got) != 1 || !got["shorter"] {
+		t.Fatalf("stop, global off: %v", got)
+	}
+	if got := ids(IdleDelete, 0); len(got) != 1 || !got["del"] {
+		t.Fatalf("delete, global off: %v", got)
+	}
+	if got := ids(IdleDelete, 100); len(got) != 2 || !got["del"] || !got["stopped"] {
+		t.Fatalf("delete, global 100: %v", got)
 	}
 }
 
@@ -746,5 +803,42 @@ func TestCreateTenantWithAPIKeyAtomic(t *testing.T) {
 	}
 	if got != nil {
 		t.Fatalf("tenant should be rolled back, got %+v", got)
+	}
+}
+
+// A runner vouches only for running sandboxes stored as placed on it.
+func TestTouchRunnerActive(t *testing.T) {
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	testTouchRunnerActive(t, s, "")
+}
+
+func testTouchRunnerActive(t *testing.T, s SandboxStore, prefix string) {
+	t.Helper()
+	old := time.Now().Add(-time.Hour).Unix()
+	for _, rec := range []*SandboxRecord{
+		{ID: prefix + "a", RunnerID: prefix + "r1", Status: "running"},
+		{ID: prefix + "b", RunnerID: prefix + "r2", Status: "running"},
+		{ID: prefix + "c", RunnerID: prefix + "r1", Status: "stopped"},
+	} {
+		rec.TenantID, rec.CreatedAt, rec.LastActiveAt = AdminTenantID, old, old
+		if err := s.Create(rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.TouchRunnerActive(prefix+"r1", []string{prefix + "a", prefix + "b", prefix + "c"}); err != nil {
+		t.Fatal(err)
+	}
+	for id, wantTouched := range map[string]bool{"a": true, "b": false, "c": false} {
+		rec, _ := s.Get(prefix + id)
+		if touched := rec.LastActiveAt > old; touched != wantTouched {
+			t.Errorf("%s touched = %v, want %v", id, touched, wantTouched)
+		}
+	}
+	if err := s.TouchRunnerActive(prefix+"r1", nil); err != nil {
+		t.Fatal(err)
 	}
 }

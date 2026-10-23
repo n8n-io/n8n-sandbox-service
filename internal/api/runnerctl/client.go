@@ -138,3 +138,48 @@ func SetCordon(ctx context.Context, target, apiKey string, tlsCfg *TLS, cordoned
 	resp, err := pb.NewSandboxControlClient(conn).SetCordon(withCallMetadata(ctx, apiKey), &pb.SetCordonRequest{Cordoned: cordoned})
 	return resp.GetCordoned(), err
 }
+
+// GetActivity calls SandboxControl.GetActivity and closes the connection.
+func GetActivity(ctx context.Context, target, apiKey string, tlsCfg *TLS) (*pb.GetActivityResponse, error) {
+	opts, err := dialOpts(target, tlsCfg)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := grpc.NewClient(target, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("runnerctl dial: %w", err)
+	}
+	defer conn.Close()
+
+	return pb.NewSandboxControlClient(conn).GetActivity(withCallMetadata(ctx, apiKey), &pb.GetActivityRequest{})
+}
+
+// UpdateEgressProxy calls SandboxControl.UpdateEgressProxy and closes the connection.
+func UpdateEgressProxy(ctx context.Context, target, apiKey string, tlsCfg *TLS, sandboxID, specJSON string) error {
+	opts, err := dialOpts(target, tlsCfg)
+	if err != nil {
+		return err
+	}
+	conn, err := grpc.NewClient(target, opts...)
+	if err != nil {
+		return fmt.Errorf("runnerctl dial: %w", err)
+	}
+	defer conn.Close()
+	_, err = pb.NewSandboxControlClient(conn).UpdateEgressProxy(withCallMetadata(ctx, apiKey), &pb.UpdateEgressProxyRequest{SandboxId: sandboxID, EgressProxyJson: specJSON})
+	return err
+}
+
+// SetModelBlocked calls SandboxControl.SetModelBlocked and closes the connection.
+func SetModelBlocked(ctx context.Context, target, apiKey string, tlsCfg *TLS, sandboxID string, blocked bool) error {
+	opts, err := dialOpts(target, tlsCfg)
+	if err != nil {
+		return err
+	}
+	conn, err := grpc.NewClient(target, opts...)
+	if err != nil {
+		return fmt.Errorf("runnerctl dial: %w", err)
+	}
+	defer conn.Close()
+	_, err = pb.NewSandboxControlClient(conn).SetModelBlocked(withCallMetadata(ctx, apiKey), &pb.SetModelBlockedRequest{SandboxId: sandboxID, Blocked: blocked})
+	return err
+}

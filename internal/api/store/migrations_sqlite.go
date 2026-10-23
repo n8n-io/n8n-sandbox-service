@@ -37,7 +37,13 @@ const sqliteAddIdleStopAfterCol = `ALTER TABLE sandboxes ADD COLUMN idle_stop_af
 
 const sqliteAddIdleDeleteAfterCol = `ALTER TABLE sandboxes ADD COLUMN idle_delete_after INTEGER NOT NULL DEFAULT 0`
 
+// sqliteAddTenantMaxIdleWindowCol caps a tenant's idle windows, in seconds;
+// 0 is the server's cap.
+const sqliteAddTenantMaxIdleWindowCol = `ALTER TABLE tenants ADD COLUMN max_idle_window INTEGER NOT NULL DEFAULT 0`
+
 const sqliteAddEgressProxyCol = `ALTER TABLE sandboxes ADD COLUMN egress_proxy TEXT NOT NULL DEFAULT ''`
+
+const sqliteAddModelBlockedCol = `ALTER TABLE sandboxes ADD COLUMN model_blocked INTEGER NOT NULL DEFAULT 0`
 
 // Backfill legacy empty tenant_id to the admin sentinel.
 const sqliteBackfillAdminTenantID = `UPDATE sandboxes SET tenant_id = '__admin__' WHERE tenant_id = ''`

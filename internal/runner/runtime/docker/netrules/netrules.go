@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -177,6 +178,23 @@ func ensureBridgePolicy(bridgeIface string, blockEgress bool) error {
 		return err
 	}
 	return ensureRule(bridgeHostChain, "-j", "DROP")
+}
+
+// AllowProxy admits new connections from bridgeIface to the egress proxy at
+// gatewayIP:port, ahead of the bridge's block on reaching the runner. Nothing
+// else on the runner is reachable from that bridge, and nothing is forwarded
+// from it (EnsureBridgePolicy with blockEgress).
+func AllowProxy(bridgeIface, gatewayIP string, port int) error {
+	if bridgeIface == "" || gatewayIP == "" || port < 1 || port > 65535 {
+		return fmt.Errorf("egress proxy opening needs a bridge, a gateway and a port")
+	}
+	if net.ParseIP(gatewayIP) == nil {
+		return fmt.Errorf("gateway %q is not an IP address", gatewayIP)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	return ensureJump("INPUT", "-i", bridgeIface, "-d", gatewayIP+"/32", "-p", "tcp", "--dport", strconv.Itoa(port),
+		"-m", "conntrack", "--ctstate", "NEW,ESTABLISHED", "-j", "ACCEPT")
 }
 
 // bridgeEgressRules returns the shared egress chain of the public bridge, in

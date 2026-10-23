@@ -31,9 +31,9 @@ grpcurl \
   runner.v1.SandboxControl/CreateSandbox
 ```
 
-`create_options_json` is a JSON `CreateOptions` (`internal/runner/runtime`): `{}` for the defaults, `{"egress":"none"}` for no egress. Unknown values, and any `template` but `default`, are `InvalidArgument`; `{"egress":"proxy","egress_proxy":{…}}` is `Unimplemented`. The response echoes what was applied in `applied_create_options_json`; the API refuses a sandbox whose echo does not match.
+`create_options_json` is a JSON `CreateOptions` (`internal/runner/runtime`): `{}` for the defaults, `{"egress":"none"}` for no egress. Unknown values, and any `template` the runner does not serve, are `InvalidArgument`; `{"egress":"proxy","tenant":"<tenant_id>","egress_proxy":{…}}` puts the sandbox behind the egress proxy (`Unimplemented` when the runner cannot, `FailedPrecondition` for a secret the tenant lacks). `UpdateEgressProxy` and `SetModelBlocked` change a proxy sandbox's spec and model block. The response echoes what was applied in `applied_create_options_json`; the API refuses a sandbox whose echo does not match.
 
-Cordon a runner: it keeps its sandboxes but takes no new creates until it is uncordoned (`{"cordoned": false}`) or restarts. `GetCordon` with `-d '{}'` reads the state.
+Cordon a runner: it keeps its sandboxes but takes no new creates until it is uncordoned (`{"cordoned": false}`) or restarts. `GetCordon` with `-d '{}'` reads the state, and `GetActivity` with `-d '{}'` adds what drain waits for: unfinished executions, open execution streams and capacity. `POST /admin/runners/{id}/drain` does the same through the API.
 
 ```bash
 grpcurl \

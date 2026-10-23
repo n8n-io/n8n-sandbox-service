@@ -41,6 +41,49 @@ type fakeSandboxControl struct {
 	createHook func(ctx context.Context)
 	stopHook   func(ctx context.Context)
 	deleteHook func(ctx context.Context)
+	// cordoned is the drain state; executions and streams are what GetActivity
+	// reports.
+	cordoned            bool
+	executions, streams int32
+	// stopErr is returned by every stop RPC when set, after recording it.
+	stopErr error
+	// Egress changes received, and the error to answer them with.
+	egressSpecs  []string
+	modelBlocked []bool
+	egressErr    error
+}
+
+func (f *fakeSandboxControl) UpdateEgressProxy(_ context.Context, req *pb.UpdateEgressProxyRequest) (*pb.UpdateEgressProxyResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.egressErr != nil {
+		return nil, f.egressErr
+	}
+	f.egressSpecs = append(f.egressSpecs, req.GetEgressProxyJson())
+	return &pb.UpdateEgressProxyResponse{}, nil
+}
+
+func (f *fakeSandboxControl) SetModelBlocked(_ context.Context, req *pb.SetModelBlockedRequest) (*pb.SetModelBlockedResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.egressErr != nil {
+		return nil, f.egressErr
+	}
+	f.modelBlocked = append(f.modelBlocked, req.GetBlocked())
+	return &pb.SetModelBlockedResponse{}, nil
+}
+
+func (f *fakeSandboxControl) SetCordon(_ context.Context, req *pb.SetCordonRequest) (*pb.SetCordonResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cordoned = req.GetCordoned()
+	return &pb.SetCordonResponse{Cordoned: f.cordoned}, nil
+}
+
+func (f *fakeSandboxControl) GetActivity(context.Context, *pb.GetActivityRequest) (*pb.GetActivityResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return &pb.GetActivityResponse{Cordoned: f.cordoned, ActiveExecutions: f.executions, OpenStreams: f.streams, CapacityTotal: 10, CapacityUsed: 3, CapacityStopped: 1}, nil
 }
 
 func (f *fakeSandboxControl) CreateSandbox(ctx context.Context, req *pb.CreateSandboxRequest) (*pb.CreateSandboxResponse, error) {
@@ -68,6 +111,9 @@ func (f *fakeSandboxControl) StopSandbox(ctx context.Context, req *pb.StopSandbo
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.stopped = append(f.stopped, req.GetSandboxId())
+	if f.stopErr != nil {
+		return nil, f.stopErr
+	}
 	return &pb.StopSandboxResponse{}, nil
 }
 
@@ -590,5 +636,84 @@ func TestIdleStopSweepSkipsUnreachableRunnerAfterFirstFailure(t *testing.T) {
 	}
 	if stopped, _ := healthy.calls(); len(stopped) != 1 || stopped[0] != healthyID {
 		t.Fatalf("healthy runner stops = %v, want [%s]", stopped, healthyID)
+	}
+}
+
+// A sandbox's own windows replace the global ones: a longer stop window keeps
+// it running past the global one, a shorter one stops it first, and a delete
+// window removes it while the global one would still hold it.
+func TestIdleSweepAppliesPerSandboxWindows(t *testing.T) {
+	fake := &fakeSandboxControl{}
+	addr := startFakeRunnerControl(t, fake)
+	s := newSweepStore(t)
+	cfg := idleSweepConfig() // stop 1h, delete 24h, buffer 1m
+	now := time.Now()
+
+	const longer = "a1111111-1111-4111-8111-111111111111"
+	const shorter = "a2222222-2222-4222-8222-222222222222"
+	const deleteSoon = "a3333333-3333-4333-8333-333333333333"
+	for _, rec := range []*store.SandboxRecord{
+		{ID: longer, Status: "running", LastActiveAt: now.Add(-2 * time.Hour).Unix(), IdleStopAfter: 3 * 3600},
+		{ID: shorter, Status: "running", LastActiveAt: now.Add(-10 * time.Minute).Unix(), IdleStopAfter: 300},
+		{ID: deleteSoon, Status: "stopped", LastActiveAt: now.Add(-3 * time.Hour).Unix(), IdleDeleteAfter: 2 * 3600},
+	} {
+		rec.CreatedAt, rec.RunnerHTTPBase, rec.RunnerControlGRPCAddr, rec.TenantID = rec.LastActiveAt, "https://127.0.0.1:9", addr, store.AdminTenantID
+		if err := s.Create(rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	runSweep(t, s, cfg, now)
+
+	stopped, deleted := fake.calls()
+	if len(stopped) != 1 || stopped[0] != shorter {
+		t.Fatalf("stops = %v, want [%s]", stopped, shorter)
+	}
+	if len(deleted) != 1 || deleted[0] != deleteSoon {
+		t.Fatalf("deletes = %v, want [%s]", deleted, deleteSoon)
+	}
+	if rec := mustGet(t, s, longer); rec.Status != "running" {
+		t.Fatalf("sandbox with a longer window = %+v, want running", rec)
+	}
+}
+
+// With every global window off, the sweeper still acts on sandboxes that set
+// their own.
+func TestIdleSweepRunsOwnWindowsWithGlobalOff(t *testing.T) {
+	fake := &fakeSandboxControl{}
+	addr := startFakeRunnerControl(t, fake)
+	s := newSweepStore(t)
+	cfg := idleSweepConfig()
+	cfg.IdleStopAfter, cfg.IdleDeleteAfter = 0, 0
+	now := time.Now()
+	const own = "b1111111-1111-4111-8111-111111111111"
+	const plain = "b2222222-2222-4222-8222-222222222222"
+	if err := s.Create(&store.SandboxRecord{ID: own, Status: "running", LastActiveAt: now.Add(-time.Hour).Unix(), IdleStopAfter: 60,
+		RunnerHTTPBase: "https://127.0.0.1:9", RunnerControlGRPCAddr: addr, TenantID: store.AdminTenantID}); err != nil {
+		t.Fatal(err)
+	}
+	seedRunningSandbox(t, s, plain, addr, now.Add(-1000*time.Hour).Unix(), false)
+	runSweep(t, s, cfg, now)
+	if stopped, _ := fake.calls(); len(stopped) != 1 || stopped[0] != own {
+		t.Fatalf("stops = %v, want [%s]", stopped, own)
+	}
+}
+
+// The runner refusing a stop because a run is in progress is a skip, not a
+// failure: the sandbox stays running in the store.
+func TestIdleStopSweepSkipsActiveSandbox(t *testing.T) {
+	fake := &fakeSandboxControl{stopErr: status.Error(codes.FailedPrecondition, "sandbox is active")}
+	addr := startFakeRunnerControl(t, fake)
+	s := newSweepStore(t)
+	cfg := idleSweepConfig()
+	now := time.Now()
+	const id = "c1111111-1111-4111-8111-111111111111"
+	seedRunningSandbox(t, s, id, addr, now.Add(-2*time.Hour).Unix(), false)
+	stats := sweepIdleStopSandboxes(context.Background(), s, registry.New(45*time.Second), cfg, runnerControlTLS(cfg), now)
+	if stats.failed != 0 || stats.acted != 0 {
+		t.Fatalf("stats = %+v, want neither failed nor acted", stats)
+	}
+	if rec := mustGet(t, s, id); rec.Status != "running" {
+		t.Fatalf("row = %+v, want running", rec)
 	}
 }

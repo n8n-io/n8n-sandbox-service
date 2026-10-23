@@ -186,6 +186,8 @@ api:
     idleDeleteAfter: 24h
     idleDeleteSafetyBuffer: 1m
     idleSweepInterval: 1m
+    # Largest idle_stop_after / idle_delete_after a create may set; 0 refuses both.
+    maxIdleWindow: 24h
 
   persistence:
     enabled: true

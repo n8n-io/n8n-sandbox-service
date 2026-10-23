@@ -65,15 +65,35 @@ export interface CreateSandboxOptions {
   egress: EgressMode;
   /** Required when `egress` is `proxy`, refused otherwise. Fixed at creation. */
   egressProxy?: EgressProxySpec;
-  /** Image the sandbox boots. Defaults to `default`, the only template served today. */
+  /** Image the sandbox boots, one of `listTemplates()`. Defaults to `default`. */
   template?: string;
   /**
-   * Per-sandbox idle windows in seconds, from 60 up to the API's
-   * `SANDBOX_API_MAX_IDLE_WINDOW`. Stored and returned; the idle sweeper does
-   * not apply them yet.
+   * Per-sandbox idle windows in seconds, replacing the service's global ones,
+   * from 60 up to the tenant's or the service's cap. Change them later with
+   * `updateIdleWindows`.
    */
   idleStopAfter?: number;
   idleDeleteAfter?: number;
+}
+
+/** A template a create may name, from `GET /templates`. */
+export interface TemplateInfo {
+  name: string;
+  vcpus: number;
+  memoryMb: number;
+  /** The sandbox's disk; 0 on a Docker runner that enforces no quota. */
+  diskMb: number;
+  /** Healthy, undrained runners serving it now; creates with none answer 503. */
+  runners: number;
+}
+
+/**
+ * Idle windows to change on an existing sandbox, in seconds. A field left out
+ * keeps its value; `null` returns it to the service's global window.
+ */
+export interface IdleWindowsUpdate {
+  idleStopAfter?: number | null;
+  idleDeleteAfter?: number | null;
 }
 
 /** Retry policy for transient HTTP failures. */

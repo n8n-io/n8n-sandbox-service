@@ -142,8 +142,9 @@ func main() {
 	slog.Info("runner registry grpc mTLS enabled")
 	grpcSrv := grpc.NewServer(grpc.Creds(creds))
 	pb.RegisterRunnerRegistryServer(grpcSrv, &grpcapi.RunnerRegistryServer{
-		Token: cfg.RegistrationToken,
-		Reg:   runnerReg,
+		Token:    cfg.RegistrationToken,
+		Reg:      runnerReg,
+		Activity: sandboxStore,
 	})
 
 	// One slot per listener, so a second failure never blocks its goroutine.

@@ -6,6 +6,8 @@ import (
 	"crypto/subtle"
 	"io"
 	"log/slog"
+	"regexp"
+	"slices"
 	"strings"
 
 	"google.golang.org/grpc"
@@ -15,6 +17,7 @@ import (
 
 	"github.com/n8n-io/sandbox-service/internal/api/grpc/pb"
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
+	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 )
 
 // RunnerRegistryServer implements runner registration over gRPC.
@@ -22,6 +25,56 @@ type RunnerRegistryServer struct {
 	pb.UnimplementedRunnerRegistryServer
 	Token string
 	Reg   registry.RunnerRegistry
+	// Activity receives the sandboxes a heartbeat reports active; nil ignores them.
+	Activity ActivityRecorder
+}
+
+// ActivityRecorder is the part of the sandbox store heartbeats write to.
+type ActivityRecorder interface {
+	TouchRunnerActive(runnerID string, ids []string) error
+}
+
+// Bounds on what one heartbeat may carry; a runner never needs more.
+const (
+	maxHeartbeatActive    = 4096
+	maxHeartbeatTemplates = 64
+)
+
+var sandboxIDRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// heartbeatTemplates keeps the well-formed templates, deduplicated by name.
+func heartbeatTemplates(runnerID string, in []*pb.TemplateInfo) []registry.Template {
+	if len(in) > maxHeartbeatTemplates {
+		slog.Warn("runner heartbeat templates truncated", "runner_id", runnerID, "count", len(in))
+		in = in[:maxHeartbeatTemplates]
+	}
+	out := make([]registry.Template, 0, len(in))
+	for _, t := range in {
+		name := t.GetName()
+		if runnerruntime.ValidateTemplateName(name) != nil || t.GetVcpus() < 0 || t.GetMemoryMb() < 0 || t.GetDiskMb() < 0 {
+			slog.Warn("runner heartbeat template ignored", "runner_id", runnerID, "template", name)
+			continue
+		}
+		if slices.ContainsFunc(out, func(o registry.Template) bool { return o.Name == name }) {
+			continue
+		}
+		out = append(out, registry.Template{Name: name, VCPUs: t.GetVcpus(), MemoryMB: t.GetMemoryMb(), DiskMB: t.GetDiskMb()})
+	}
+	return out
+}
+
+// heartbeatActive keeps the well-formed sandbox ids.
+func heartbeatActive(ids []string) []string {
+	if len(ids) > maxHeartbeatActive {
+		ids = ids[:maxHeartbeatActive]
+	}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if sandboxIDRe.MatchString(id) {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 var _ pb.RunnerRegistryServer = (*RunnerRegistryServer)(nil)
@@ -108,15 +161,22 @@ func (s *RunnerRegistryServer) Connect(stream grpc.BidiStreamingServer[pb.Runner
 		}
 		committedHTTPBase = httpBase
 		committedControlGRPC = controlGRPC
-		s.Reg.Upsert(
-			committedRunnerID,
-			httpBase,
-			controlGRPC,
-			hb.GetHealthy(),
-			hb.GetCapacityTotal(),
-			hb.GetCapacityUsed(),
-			hb.GetCapacityStopped(),
-		)
+		s.Reg.UpsertRunner(registry.Runner{
+			ID:              committedRunnerID,
+			HTTPBaseURL:     httpBase,
+			ControlGRPCAddr: controlGRPC,
+			Healthy:         hb.GetHealthy(),
+			CapacityTotal:   hb.GetCapacityTotal(),
+			CapacityUsed:    hb.GetCapacityUsed(),
+			CapacityStopped: hb.GetCapacityStopped(),
+			Cordoned:        hb.GetCordoned(),
+			Templates:       heartbeatTemplates(committedRunnerID, hb.GetTemplates()),
+		})
+		if active := heartbeatActive(hb.GetActiveSandboxIds()); s.Activity != nil && len(active) > 0 {
+			if err := s.Activity.TouchRunnerActive(committedRunnerID, active); err != nil {
+				slog.Warn("runner heartbeat activity not recorded", "runner_id", committedRunnerID, "error", err)
+			}
+		}
 		if !registered {
 			registered = true
 			slog.Info(

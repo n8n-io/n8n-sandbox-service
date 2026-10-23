@@ -263,3 +263,64 @@ func TestConnectRequiresControlGRPCAddr(t *testing.T) {
 		}
 	}
 }
+
+type recordedActivity struct {
+	runnerID string
+	ids      []string
+}
+
+type fakeActivity struct{ calls chan recordedActivity }
+
+func (f *fakeActivity) TouchRunnerActive(runnerID string, ids []string) error {
+	f.calls <- recordedActivity{runnerID, ids}
+	return nil
+}
+
+// A heartbeat carries the cordon, the templates and the active sandboxes; the
+// API keeps only well-formed templates and ids, and touches them as this
+// runner's.
+func TestConnectRecordsCordonTemplatesAndActivity(t *testing.T) {
+	reg := registry.New(time.Hour)
+	act := &fakeActivity{calls: make(chan recordedActivity, 1)}
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := grpc.NewServer()
+	pb.RegisterRunnerRegistryServer(srv, &RunnerRegistryServer{Token: "tok", Reg: reg, Activity: act})
+	go func() { _ = srv.Serve(lis) }()
+	defer srv.Stop()
+	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	ctx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer tok")
+	stream, err := pb.NewRunnerRegistryClient(conn).Connect(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hb := testHeartbeat("runner-a")
+	hb.Cordoned = true
+	hb.Templates = []*pb.TemplateInfo{{Name: "default"}, {Name: "python", Vcpus: 2, MemoryMb: 4096, DiskMb: 10240}, {Name: "Bad Name"}, {Name: "python"}, {Name: "neg", Vcpus: -1}}
+	hb.ActiveSandboxIds = []string{"11111111-1111-4111-8111-111111111111", "../etc", "ABCDEF00-1111-4111-8111-111111111111"}
+	if err := stream.Send(hb); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stream.Recv(); err != nil {
+		t.Fatal(err)
+	}
+	run, ok := reg.Get("runner-a")
+	if !ok || !run.Cordoned || len(run.Templates) != 2 || run.Templates[0].Name != "default" ||
+		run.Templates[1] != (registry.Template{Name: "python", VCPUs: 2, MemoryMB: 4096, DiskMB: 10240}) {
+		t.Fatalf("registered runner = %+v", run)
+	}
+	select {
+	case got := <-act.calls:
+		if got.runnerID != "runner-a" || len(got.ids) != 1 || got.ids[0] != "11111111-1111-4111-8111-111111111111" {
+			t.Fatalf("activity = %+v", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("activity not recorded")
+	}
+}

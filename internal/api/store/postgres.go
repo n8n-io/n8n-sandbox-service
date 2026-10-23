@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // register the "pgx" driver
@@ -68,9 +70,17 @@ func NewPostgres(cfg config.PostgresConfig) (*PostgresStore, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: run runners schema: %w", err)
 	}
+	if _, err := db.Exec(postgresAddRunnerStateCols); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: add runner state columns: %w", err)
+	}
 	if _, err := db.Exec(postgresTenantsSchema); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: run tenants schema: %w", err)
+	}
+	if _, err := db.Exec(postgresAddTenantMaxIdleWindowCol); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: add tenant max_idle_window: %w", err)
 	}
 
 	lockDB, err := sql.Open("pgx", cfg.DSN())
@@ -102,7 +112,7 @@ func (s *PostgresStore) Backend() Backend { return BackendPostgres }
 
 func (s *PostgresStore) Close() error { return errors.Join(s.db.Close(), s.lockDB.Close()) }
 
-const pgSandboxCols = `id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral, egress, template, idle_stop_after, idle_delete_after, egress_proxy`
+const pgSandboxCols = `id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral, egress, template, idle_stop_after, idle_delete_after, egress_proxy, model_blocked`
 
 type pgExecer interface {
 	Exec(query string, args ...any) (sql.Result, error)
@@ -225,6 +235,38 @@ func (s *PostgresStore) UpdateLastActive(id string) error {
 	return nil
 }
 
+func (s *PostgresStore) UpdateIdleWindows(id string, stopAfter, deleteAfter int64) error {
+	if _, err := s.db.Exec(`UPDATE sandboxes SET idle_stop_after = $1, idle_delete_after = $2 WHERE id = $3`, stopAfter, deleteAfter, id); err != nil {
+		return fmt.Errorf("store: update idle windows for %s: %w", id, err)
+	}
+	return nil
+}
+
+func (s *PostgresStore) UpdateEgressProxy(id, spec string) error {
+	if _, err := s.db.Exec(`UPDATE sandboxes SET egress_proxy = $1 WHERE id = $2`, spec, id); err != nil {
+		return fmt.Errorf("store: update egress_proxy for %s: %w", id, err)
+	}
+	return nil
+}
+
+func (s *PostgresStore) SetModelBlocked(id string, blocked bool) error {
+	if _, err := s.db.Exec(`UPDATE sandboxes SET model_blocked = $1 WHERE id = $2`, blocked, id); err != nil {
+		return fmt.Errorf("store: update model_blocked for %s: %w", id, err)
+	}
+	return nil
+}
+
+func (s *PostgresStore) TouchRunnerActive(runnerID string, ids []string) error {
+	if runnerID == "" || len(ids) == 0 {
+		return nil
+	}
+	const q = `UPDATE sandboxes SET last_active_at = $1 WHERE runner_id = $2 AND status = 'running' AND id = ANY($3)`
+	if _, err := s.db.Exec(q, time.Now().Unix(), runnerID, ids); err != nil {
+		return fmt.Errorf("store: touch active sandboxes of runner %s: %w", runnerID, err)
+	}
+	return nil
+}
+
 func (s *PostgresStore) Delete(id string) error {
 	const q = `DELETE FROM sandboxes WHERE id = $1`
 	if _, err := s.db.Exec(q, id); err != nil {
@@ -255,21 +297,13 @@ func (s *PostgresStore) LockSandbox(ctx context.Context, id string) (func(), err
 	return unlock, nil
 }
 
-func (s *PostgresStore) ListForIdleReapDelete(cutoff int64) ([]*SandboxRecord, error) {
-	q := `SELECT ` + pgSandboxCols + `
-		FROM sandboxes
-		WHERE status = 'stopped'
-		  AND last_active_at <= $1`
-	return s.querySandboxRecords(q, cutoff)
-}
-
-func (s *PostgresStore) ListForIdleReapStop(cutoff int64, ephemeral bool) ([]*SandboxRecord, error) {
-	q := `SELECT ` + pgSandboxCols + `
-		FROM sandboxes
-		WHERE status = 'running'
-		  AND last_active_at <= $1
-		  AND ephemeral = $2`
-	return s.querySandboxRecords(q, cutoff, ephemeral)
+func (s *PostgresStore) ListIdle(phase IdlePhase, now, global int64) ([]*SandboxRecord, error) {
+	filter := idleFilter(phase)
+	for i := 1; strings.Contains(filter, "?"); i++ {
+		filter = strings.Replace(filter, "?", "$"+strconv.Itoa(i), 1)
+	}
+	q := `SELECT ` + pgSandboxCols + ` FROM sandboxes WHERE ` + filter
+	return s.querySandboxRecords(q, now, global, now, global)
 }
 
 func (s *PostgresStore) querySandboxRecords(q string, args ...any) ([]*SandboxRecord, error) {
@@ -320,8 +354,8 @@ func (s *PostgresStore) ListByTenant(tenantID string) ([]*SandboxRecord, error) 
 }
 
 func (s *PostgresStore) CreateTenant(t *Tenant) error {
-	const q = `INSERT INTO tenants (id, name, external_ref, max_sandboxes, created_at) VALUES ($1, $2, $3, $4, $5)`
-	_, err := s.db.Exec(q, t.ID, t.Name, t.ExternalRef, t.MaxSandboxes, t.CreatedAt)
+	const q = `INSERT INTO tenants (id, name, external_ref, max_sandboxes, created_at, max_idle_window) VALUES ($1, $2, $3, $4, $5, $6)`
+	_, err := s.db.Exec(q, t.ID, t.Name, t.ExternalRef, t.MaxSandboxes, t.CreatedAt, t.MaxIdleWindow)
 	if err != nil {
 		return fmt.Errorf("store: create tenant %s: %w", t.ID, err)
 	}
@@ -338,8 +372,8 @@ func (s *PostgresStore) CreateTenantWithAPIKey(t *Tenant, k *APIKey) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	const tenantQ = `INSERT INTO tenants (id, name, external_ref, max_sandboxes, created_at) VALUES ($1, $2, $3, $4, $5)`
-	if _, err := tx.Exec(tenantQ, t.ID, t.Name, t.ExternalRef, t.MaxSandboxes, t.CreatedAt); err != nil {
+	const tenantQ = `INSERT INTO tenants (id, name, external_ref, max_sandboxes, created_at, max_idle_window) VALUES ($1, $2, $3, $4, $5, $6)`
+	if _, err := tx.Exec(tenantQ, t.ID, t.Name, t.ExternalRef, t.MaxSandboxes, t.CreatedAt, t.MaxIdleWindow); err != nil {
 		return fmt.Errorf("store: create tenant %s: %w", t.ID, err)
 	}
 	var revoked any
@@ -357,7 +391,7 @@ func (s *PostgresStore) CreateTenantWithAPIKey(t *Tenant, k *APIKey) error {
 }
 
 func (s *PostgresStore) GetTenant(id string) (*Tenant, error) {
-	row := s.db.QueryRow(`SELECT id, name, external_ref, max_sandboxes, created_at FROM tenants WHERE id = $1`, id)
+	row := s.db.QueryRow(`SELECT id, name, external_ref, max_sandboxes, created_at, max_idle_window FROM tenants WHERE id = $1`, id)
 	t, err := scanTenant(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -369,7 +403,7 @@ func (s *PostgresStore) GetTenant(id string) (*Tenant, error) {
 }
 
 func (s *PostgresStore) ListTenants() ([]*Tenant, error) {
-	rows, err := s.db.Query(`SELECT id, name, external_ref, max_sandboxes, created_at FROM tenants ORDER BY created_at DESC`)
+	rows, err := s.db.Query(`SELECT id, name, external_ref, max_sandboxes, created_at, max_idle_window FROM tenants ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list tenants: %w", err)
 	}
@@ -383,6 +417,17 @@ func (s *PostgresStore) ListTenants() ([]*Tenant, error) {
 		out = append(out, t)
 	}
 	return out, rows.Err()
+}
+
+func (s *PostgresStore) SetTenantMaxIdleWindow(id string, seconds int64) error {
+	res, err := s.db.Exec(`UPDATE tenants SET max_idle_window = $1 WHERE id = $2`, seconds, id)
+	if err != nil {
+		return fmt.Errorf("store: set tenant max_idle_window: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrTenantNotFound
+	}
+	return nil
 }
 
 func (s *PostgresStore) UpdateTenantLimits(id string, maxSandboxes int) error {

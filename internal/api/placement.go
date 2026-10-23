@@ -57,7 +57,9 @@ type placement struct {
 // Returns registry.ErrNoRunners when no runner was eligible and
 // errRunnersAtCapacity when every runner tried refused; in both cases nothing
 // was created. logAttrs are added to each runner-selected event.
-func placeSandbox(r *http.Request, reg registry.RunnerRegistry, cfg *config.APIConfig, rec *metrics.APIRecorder, sandboxID, createOptionsJSON string, logAttrs ...any) (*placement, error) {
+//
+// Only runners that serve template are eligible.
+func placeSandbox(r *http.Request, reg registry.RunnerRegistry, cfg *config.APIConfig, rec *metrics.APIRecorder, sandboxID, template, createOptionsJSON string, logAttrs ...any) (*placement, error) {
 	ctx := r.Context()
 	tlsCfg := runnerControlTLS(cfg)
 	start := time.Now()
@@ -66,7 +68,7 @@ func placeSandbox(r *http.Request, reg registry.RunnerRegistry, cfg *config.APIC
 	defer func() { obs.FieldsFrom(ctx).Add("placement_attempts", attempts) }()
 
 	for {
-		run, err := reg.PickLowestUsed(refusedBy...)
+		run, err := reg.PickForTemplate(template, refusedBy...)
 		if errors.Is(err, registry.ErrNoRunners) && len(refusedBy) > 0 {
 			break
 		}

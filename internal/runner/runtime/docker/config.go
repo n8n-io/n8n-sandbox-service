@@ -1,12 +1,14 @@
 package docker
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
 	"strconv"
 	"strings"
 
+	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 	"github.com/n8n-io/sandbox-service/internal/runner/runtime/netpolicy"
 )
 
@@ -17,6 +19,7 @@ const (
 	defaultPidsMax           = 256
 	defaultEnableCgroups     = true
 	defaultDiskQuotaInactive = false
+	defaultEgressProxyPort   = 3128
 )
 
 // Config holds configuration for the Docker/sysbox runtime backend.
@@ -60,6 +63,53 @@ type Config struct {
 	// Unset, Docker forwards to the runner's own resolver. Parsed from
 	// SANDBOX_RUNNER_DOCKER_DNS_SERVERS (comma-separated IPv4, default unset).
 	DNSServers []string
+
+	// Templates are the named images served besides the default (the image
+	// and limits above). Parsed from SANDBOX_RUNNER_DOCKER_TEMPLATES, a JSON
+	// object of name to Template.
+	Templates map[string]Template
+
+	// EgressProxyPort is the port of the egress proxy on the proxy network's
+	// gateway. Parsed from SANDBOX_EGRESS_PROXY_PORT (default 3128).
+	EgressProxyPort int
+}
+
+// Template is a named sandbox image with its own limits; a limit left 0 is
+// the default one.
+type Template struct {
+	Image       string `json:"image"`
+	MemoryMB    int64  `json:"memory_mb,omitempty"`
+	CPUPercent  int    `json:"cpu_percent,omitempty"`
+	PidsMax     int    `json:"pids_max,omitempty"`
+	DiskQuotaMB int64  `json:"disk_quota_mb,omitempty"`
+}
+
+// parseTemplates decodes SANDBOX_RUNNER_DOCKER_TEMPLATES strictly.
+func parseTemplates(v string) (map[string]Template, error) {
+	dec := json.NewDecoder(strings.NewReader(v))
+	dec.DisallowUnknownFields()
+	var out map[string]Template
+	if err := dec.Decode(&out); err != nil {
+		return nil, err
+	}
+	if dec.More() {
+		return nil, fmt.Errorf("trailing data")
+	}
+	for name, t := range out {
+		if err := runnerruntime.ValidateTemplateName(name); err != nil {
+			return nil, err
+		}
+		if name == runnerruntime.DefaultTemplate {
+			return nil, fmt.Errorf("%q is set by SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE and the SANDBOX_RUNNER_DEFAULT_* limits", name)
+		}
+		if strings.TrimSpace(t.Image) == "" {
+			return nil, fmt.Errorf("template %q: image must be set", name)
+		}
+		if t.MemoryMB < 0 || t.CPUPercent < 0 || t.PidsMax < 0 || t.DiskQuotaMB < 0 {
+			return nil, fmt.Errorf("template %q: limits must not be negative", name)
+		}
+	}
+	return out, nil
 }
 
 func defaultConfig() Config {
@@ -70,6 +120,7 @@ func defaultConfig() Config {
 		DefaultPidsMax:    defaultPidsMax,
 		DiskQuotaActive:   defaultDiskQuotaInactive,
 		EnableCgroups:     defaultEnableCgroups,
+		EgressProxyPort:   defaultEgressProxyPort,
 	}
 }
 
@@ -140,6 +191,21 @@ func LoadConfig() (Config, error) {
 			return Config{}, fmt.Errorf("SANDBOX_RUNNER_DOCKER_DNS_SERVERS: %w", err)
 		}
 		cfg.DNSServers = servers
+	}
+
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_EGRESS_PROXY_PORT")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 65535 {
+			return Config{}, fmt.Errorf("SANDBOX_EGRESS_PROXY_PORT must be a port number, got %q", v)
+		}
+		cfg.EgressProxyPort = n
+	}
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_DOCKER_TEMPLATES")); v != "" {
+		templates, err := parseTemplates(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("SANDBOX_RUNNER_DOCKER_TEMPLATES: %w", err)
+		}
+		cfg.Templates = templates
 	}
 
 	return cfg, nil

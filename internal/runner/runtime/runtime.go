@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -78,6 +80,10 @@ type CreateOptions struct {
 	Template string `json:"template,omitempty"`
 	// EgressProxy is set exactly when Egress is EgressProxy.
 	EgressProxy *EgressProxySpec `json:"egress_proxy,omitempty"`
+	// Tenant owns the sandbox; set by the API with EgressProxy only. Runners
+	// otherwise know nothing of tenants: this scopes the secrets the proxy
+	// reads and attributes the usage it meters.
+	Tenant string `json:"tenant,omitempty"`
 }
 
 // Equal reports whether o and p ask for the same sandbox. Both must have come
@@ -115,7 +121,12 @@ func ParseCreateOptions(s string) (*CreateOptions, error) {
 			return nil, err
 		}
 	}
+	if opts.Tenant != "" && (egress != EgressProxy || !tenantRe.MatchString(opts.Tenant)) {
+		return nil, errors.New("create options: tenant is only set, well formed, with egress proxy")
+	}
 	switch {
+	case egress == EgressProxy && opts.Tenant == "":
+		return nil, errors.New("egress proxy needs the owning tenant")
 	case egress == EgressProxy && opts.EgressProxy == nil:
 		return nil, errors.New("egress proxy needs egress_proxy")
 	case egress != EgressProxy && opts.EgressProxy != nil:
@@ -127,6 +138,8 @@ func ParseCreateOptions(s string) (*CreateOptions, error) {
 	}
 	return opts, nil
 }
+
+var tenantRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 // BlockEgress reports whether the sandbox gets no direct egress at all. Options
 // reach a runtime through ParseCreateOptions, so any other value is a bug, not
@@ -143,6 +156,18 @@ func (o *CreateOptions) BlockEgress() bool {
 		return true
 	}
 	panic(fmt.Sprintf("unvalidated egress %q", o.Egress))
+}
+
+// EgressProxyHost is a Runtime that can put sandboxes behind the runner's
+// egress proxy: an egress-proxy sandbox's only route out is to a proxy
+// endpoint the runtime serves.
+type EgressProxyHost interface {
+	// ServeEgressProxy serves the proxy to egress-proxy sandboxes until ctx
+	// ends. handler is called once per listener with the function naming the
+	// sandbox a connection comes from.
+	ServeEgressProxy(ctx context.Context, handler func(identify func(remoteAddr string) (string, bool)) http.Handler) error
+	// EgressProxyURL is the URL sandboxID's guest reaches the proxy at.
+	EgressProxyURL(sandboxID string) (string, bool)
 }
 
 // SandboxInfo represents information about a created sandbox.
@@ -176,12 +201,39 @@ type Capacity struct {
 	Stopped int32 // managed but not slot-blocking (Firecracker stopped snapshots)
 }
 
+// TemplateInfo is a template a runtime boots sandboxes from, with what one
+// sandbox of it gets.
+type TemplateInfo struct {
+	Name     string
+	VCPUs    int32
+	MemoryMB int64
+	// DiskMB is the sandbox's disk: the rootfs on Firecracker, the
+	// writable-layer quota on Docker (0 when none is enforced).
+	DiskMB int64
+}
+
+// ServesTemplate reports whether templates includes name ("" is the default).
+func ServesTemplate(templates []TemplateInfo, name string) bool {
+	if name == "" {
+		name = DefaultTemplate
+	}
+	for _, t := range templates {
+		if t.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 // Runtime is the sandbox backend contract used by the shared runner process.
 type Runtime interface {
 	Prepare(ctx context.Context)
 	Ready(ctx context.Context) error
 	ReadyCh() <-chan struct{}
 	Capacity(ctx context.Context) (Capacity, error)
+	// Templates lists the templates the runtime serves, the default first.
+	// Each has passed admission once Ready returns nil.
+	Templates() []TemplateInfo
 
 	CreateSandbox(ctx context.Context, sandboxID string, opts *CreateOptions) (*SandboxInfo, error)
 	GetSandboxInfo(ctx context.Context, sandboxID string) (*SandboxInfo, error)

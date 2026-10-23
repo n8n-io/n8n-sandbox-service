@@ -1,7 +1,14 @@
 import { delay } from "./delay";
 import type { HttpClient } from "./http";
 import { CreateOptionMismatchError, EgressMismatchError, SandboxServiceError } from "./errors";
-import type { CreateSandboxOptions, SandboxRecord, SandboxWireResponse } from "./types";
+import type {
+  CreateSandboxOptions,
+  EgressProxySpec,
+  IdleWindowsUpdate,
+  SandboxRecord,
+  SandboxWireResponse,
+  TemplateInfo,
+} from "./types";
 
 /** Reason of a 503 for a create no runner had capacity for. Nothing was created. */
 const NO_CAPACITY_REASON = "no_capacity";
@@ -55,6 +62,77 @@ function checkOption(
 export async function getSandbox(http: HttpClient, id: string): Promise<SandboxRecord> {
   const response = await http.requestJson<SandboxWireResponse>("GET", `/sandboxes/${id}`);
   return mapSandboxRecord(response);
+}
+
+/** Changes a sandbox's idle windows; the same body twice leaves the same result, so it is retried. */
+export async function updateIdleWindows(
+  http: HttpClient,
+  id: string,
+  update: IdleWindowsUpdate,
+): Promise<SandboxRecord> {
+  const response = await http.requestJson<SandboxWireResponse>("PATCH", `/sandboxes/${id}`, {
+    data: { idle_stop_after: update.idleStopAfter, idle_delete_after: update.idleDeleteAfter },
+    isSafeToRetry: true,
+  });
+  return mapSandboxRecord(response);
+}
+
+/** Replaces a proxy sandbox's egress spec, for requests made afterwards. */
+export async function updateEgressProxy(
+  http: HttpClient,
+  id: string,
+  spec: EgressProxySpec,
+): Promise<void> {
+  await http.requestVoid("PUT", `/sandboxes/${id}/egress-proxy`, {
+    data: spec,
+    isSafeToRetry: true,
+  });
+}
+
+/** Reports whether a proxy sandbox's model requests are blocked. */
+export async function getModelEgress(http: HttpClient, id: string): Promise<boolean> {
+  const response = await http.requestJson<{ blocked: boolean }>(
+    "GET",
+    `/sandboxes/${id}/model-egress`,
+  );
+  return response.blocked;
+}
+
+/** Blocks or unblocks a proxy sandbox's model requests (budget cut-off). */
+export async function setModelEgress(
+  http: HttpClient,
+  id: string,
+  blocked: boolean,
+): Promise<boolean> {
+  const response = await http.requestJson<{ blocked: boolean }>(
+    "PUT",
+    `/sandboxes/${id}/model-egress`,
+    {
+      data: { blocked },
+      isSafeToRetry: true,
+    },
+  );
+  return response.blocked;
+}
+
+/** Lists the template catalog. */
+export async function listTemplates(http: HttpClient): Promise<TemplateInfo[]> {
+  const response = await http.requestJson<{
+    templates: {
+      name: string;
+      vcpus: number;
+      memory_mb: number;
+      disk_mb: number;
+      runners: number;
+    }[];
+  }>("GET", "/templates", { isSafeToRetry: true });
+  return response.templates.map((t) => ({
+    name: t.name,
+    vcpus: t.vcpus,
+    memoryMb: t.memory_mb,
+    diskMb: t.disk_mb,
+    runners: t.runners,
+  }));
 }
 
 /** Deletes a sandbox. Treats 404 as success so retries after a dropped 204 stay idempotent. */

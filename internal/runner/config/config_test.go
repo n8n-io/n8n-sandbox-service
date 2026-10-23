@@ -242,7 +242,7 @@ func TestLoadRejectsInvalidMaxExecTimeout(t *testing.T) {
 		})
 	}
 
-	for value, want := range map[string]time.Duration{"5m": 5 * time.Minute, "0": 0, "0s": 0} {
+	for value, want := range map[string]time.Duration{"5m": 5 * time.Minute, "0": 0, "0s": 0, "8h": 8 * time.Hour} {
 		t.Run("accepts "+value, func(t *testing.T) {
 			setRequiredEnv(t)
 			t.Setenv("SANDBOX_RUNNER_MAX_EXEC_TIMEOUT", value)

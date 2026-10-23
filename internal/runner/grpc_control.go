@@ -15,8 +15,10 @@ import (
 
 	"github.com/n8n-io/sandbox-service/internal/api/grpc/pb"
 	"github.com/n8n-io/sandbox-service/internal/api/runnerctl"
+	"github.com/n8n-io/sandbox-service/internal/egressproxy"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/obs"
+	"github.com/n8n-io/sandbox-service/internal/runner/activity"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 	"github.com/n8n-io/sandbox-service/internal/runner/cordon"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
@@ -29,6 +31,11 @@ type SandboxControlGRPC struct {
 	Cfg     *config.Config
 	Rec     *metrics.RunnerRecorder
 	Cordon  *cordon.State
+	// Activity is what the runner is still running; nil tracks nothing.
+	Activity *activity.Tracker
+	// Egress is the egress proxy; nil, or a runtime that is no
+	// EgressProxyHost, refuses egress-proxy creates as Unimplemented.
+	Egress *egressproxy.Server
 }
 
 var _ pb.SandboxControlServer = (*SandboxControlGRPC)(nil)
@@ -105,15 +112,25 @@ func (s *SandboxControlGRPC) CreateSandbox(ctx context.Context, req *pb.CreateSa
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid create options: "+err.Error())
 	}
-	// This runner has one image, the default. Any other is refused, not booted
-	// as the default, so a sandbox never runs an image it did not ask for.
-	if opts.Template != "" {
+	// A template this runner does not serve is refused, never booted as
+	// another, so a sandbox never runs an image it did not ask for. The API
+	// only places a sandbox on a runner that lists its template.
+	if !runnerruntime.ServesTemplate(s.Runtime.Templates(), opts.Template) {
 		return nil, status.Errorf(codes.InvalidArgument, "runner has no template %q", opts.Template)
 	}
-	// No runtime serves the egress proxy yet. Unimplemented, so the API can
-	// tell this from a bad request; nothing is created either way.
+	var host runnerruntime.EgressProxyHost
+	// A create for a sandbox the proxy already knows is refused before touching
+	// it, so a failure below cannot roll back another create's sandbox.
+	if s.Egress != nil && s.Egress.Has(sandboxID) {
+		return nil, status.Error(codes.AlreadyExists, "sandbox already exists")
+	}
 	if opts.Egress == runnerruntime.EgressProxy {
-		return nil, status.Error(codes.Unimplemented, "egress proxy is not supported by this runner")
+		var err error
+		if host, err = s.admitEgressProxy(opts); err != nil {
+			return nil, err
+		}
+		// Installed before the sandbox exists, so its first request finds it.
+		s.Egress.Set(sandboxID, opts.Tenant, opts.EgressProxy)
 	}
 	// Echoed so the API can tell a runner that applied the options from one that
 	// ignored them. Marshalled here, before anything is created.
@@ -125,11 +142,22 @@ func (s *SandboxControlGRPC) CreateSandbox(ctx context.Context, req *pb.CreateSa
 	start := time.Now()
 	info, err := s.Runtime.CreateSandbox(ctx, sandboxID, opts)
 	s.Rec.ObserveContainerOp(metrics.OpCreate, err == nil && info != nil, time.Since(start))
-	if err != nil {
-		return nil, toGRPCError(err)
+	if err == nil && info == nil {
+		err = errors.New("create sandbox returned nil info")
 	}
-	if info == nil {
-		return nil, status.Error(codes.Internal, "create sandbox returned nil info")
+	if err == nil && host != nil {
+		err = s.installEgressCA(ctx, sandboxID)
+	}
+	if err != nil {
+		if host != nil {
+			s.Egress.Remove(sandboxID)
+		}
+		if info != nil {
+			// The sandbox exists but cannot reach its proxy: remove it rather
+			// than hand out one whose egress does not work.
+			_ = s.Runtime.DeleteSandbox(context.WithoutCancel(ctx), sandboxID)
+		}
+		return nil, toGRPCError(err)
 	}
 	return &pb.CreateSandboxResponse{SandboxId: sandboxID, ContainerIp: info.IP, AppliedCreateOptionsJson: string(applied)}, nil
 }
@@ -143,8 +171,15 @@ func (s *SandboxControlGRPC) StopSandbox(ctx context.Context, req *pb.StopSandbo
 	if !isValidID(sandboxID) {
 		return nil, status.Error(codes.InvalidArgument, "invalid sandbox id")
 	}
+	// Only the idle sweeper stops sandboxes. Its view of activity can lag by a
+	// heartbeat, or miss one an API pod lost, so the runner has the last word:
+	// a stop never kills a run in progress.
+	if s.Activity.Active(sandboxID) {
+		return nil, status.Error(codes.FailedPrecondition, "sandbox is active")
+	}
 	ctx = withTrace(ctx)
 	start := time.Now()
+	defer s.Activity.Forget(sandboxID)
 	if err := s.Runtime.StopSandbox(ctx, sandboxID); err != nil {
 		if errors.Is(err, runnerruntime.ErrSandboxNotFound) {
 			s.Rec.ObserveContainerOp(metrics.OpStop, true, time.Since(start))
@@ -168,7 +203,13 @@ func (s *SandboxControlGRPC) DeleteSandbox(ctx context.Context, req *pb.DeleteSa
 	}
 	ctx = withTrace(ctx)
 	start := time.Now()
+	defer s.Activity.Forget(sandboxID)
 	err := s.Runtime.DeleteSandbox(ctx, sandboxID)
+	if err == nil || errors.Is(err, runnerruntime.ErrSandboxNotFound) {
+		if s.Egress != nil {
+			s.Egress.Remove(sandboxID)
+		}
+	}
 	s.Rec.ObserveContainerOp(metrics.OpDelete, err == nil, time.Since(start))
 	if err != nil {
 		if errors.Is(err, runnerruntime.ErrSandboxNotFound) {
@@ -200,4 +241,104 @@ func (s *SandboxControlGRPC) SetCordon(ctx context.Context, req *pb.SetCordonReq
 		slog.InfoContext(ctx, "runner cordon changed", "cordoned", req.GetCordoned(), "remote_addr", remote)
 	}
 	return &pb.SetCordonResponse{Cordoned: req.GetCordoned()}, nil
+}
+
+// GetActivity reports what drain waits for: the cordon, and the executions and
+// streams the runner is still serving.
+func (s *SandboxControlGRPC) GetActivity(ctx context.Context, _ *pb.GetActivityRequest) (*pb.GetActivityResponse, error) {
+	if err := s.checkAPIKey(ctx); err != nil {
+		return nil, err
+	}
+	capacity, err := s.Runtime.Capacity(ctx)
+	if err != nil {
+		return nil, status.Error(codes.Unavailable, "runtime capacity: "+err.Error())
+	}
+	snap := s.Activity.Snapshot()
+	return &pb.GetActivityResponse{
+		Cordoned:         s.Cordon.Cordoned(),
+		ActiveExecutions: int32(snap.Executions),
+		OpenStreams:      int32(snap.Streams),
+		CapacityTotal:    capacity.Total,
+		CapacityUsed:     capacity.Used,
+		CapacityStopped:  capacity.Stopped,
+	}, nil
+}
+
+// admitEgressProxy checks that this runner can serve opts' proxy spec before
+// anything is created. Unimplemented for what the runner lacks, so the API
+// tells it from a bad request; FailedPrecondition for a secret the tenant
+// does not have.
+func (s *SandboxControlGRPC) admitEgressProxy(opts *runnerruntime.CreateOptions) (runnerruntime.EgressProxyHost, error) {
+	host, ok := s.Runtime.(runnerruntime.EgressProxyHost)
+	if !ok || s.Egress == nil {
+		return nil, status.Error(codes.Unimplemented, "egress proxy is not supported by this runner")
+	}
+	if len(opts.EgressProxy.ModelHosts) > 0 && !s.Egress.HasSink() {
+		return nil, status.Error(codes.Unimplemented, "egress proxy model hosts need a usage sink, and this runner has none")
+	}
+	for _, c := range opts.EgressProxy.Credentials {
+		if !s.Egress.HasSecret(opts.Tenant, c.SecretRef) {
+			return nil, status.Errorf(codes.FailedPrecondition, "unknown secret_ref %q", c.SecretRef)
+		}
+	}
+	return host, nil
+}
+
+func (s *SandboxControlGRPC) installEgressCA(ctx context.Context, sandboxID string) error {
+	daemonURL, err := s.Runtime.DaemonURL(ctx, sandboxID)
+	if err != nil {
+		return err
+	}
+	return installGuestCA(ctx, daemonURL, s.Egress.CACertPEM())
+}
+
+// UpdateEgressProxy replaces a proxy sandbox's spec. The sandbox keeps its
+// tenant; the spec is validated as at create.
+func (s *SandboxControlGRPC) UpdateEgressProxy(ctx context.Context, req *pb.UpdateEgressProxyRequest) (*pb.UpdateEgressProxyResponse, error) {
+	if err := s.checkAPIKey(ctx); err != nil {
+		return nil, err
+	}
+	sandboxID := strings.TrimSpace(req.GetSandboxId())
+	if !isValidID(sandboxID) {
+		return nil, status.Error(codes.InvalidArgument, "invalid sandbox id")
+	}
+	var spec runnerruntime.EgressProxySpec
+	if err := json.Unmarshal([]byte(req.GetEgressProxyJson()), &spec); err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid egress_proxy: "+err.Error())
+	}
+	if err := spec.Validate(); err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid egress_proxy: "+err.Error())
+	}
+	if s.Egress == nil {
+		return nil, status.Error(codes.Unimplemented, "egress proxy is not supported by this runner")
+	}
+	tenant, ok := s.Egress.Tenant(sandboxID)
+	if !ok {
+		return nil, status.Error(codes.NotFound, "no egress proxy sandbox "+sandboxID)
+	}
+	if len(spec.ModelHosts) > 0 && !s.Egress.HasSink() {
+		return nil, status.Error(codes.Unimplemented, "egress proxy model hosts need a usage sink, and this runner has none")
+	}
+	for _, c := range spec.Credentials {
+		if !s.Egress.HasSecret(tenant, c.SecretRef) {
+			return nil, status.Errorf(codes.FailedPrecondition, "unknown secret_ref %q", c.SecretRef)
+		}
+	}
+	s.Egress.Set(sandboxID, tenant, &spec)
+	return &pb.UpdateEgressProxyResponse{}, nil
+}
+
+// SetModelBlocked blocks or unblocks a proxy sandbox's model requests.
+func (s *SandboxControlGRPC) SetModelBlocked(ctx context.Context, req *pb.SetModelBlockedRequest) (*pb.SetModelBlockedResponse, error) {
+	if err := s.checkAPIKey(ctx); err != nil {
+		return nil, err
+	}
+	sandboxID := strings.TrimSpace(req.GetSandboxId())
+	if !isValidID(sandboxID) {
+		return nil, status.Error(codes.InvalidArgument, "invalid sandbox id")
+	}
+	if s.Egress == nil || !s.Egress.SetModelBlocked(sandboxID, req.GetBlocked()) {
+		return nil, status.Error(codes.NotFound, "no egress proxy sandbox "+sandboxID)
+	}
+	return &pb.SetModelBlockedResponse{}, nil
 }

@@ -2,6 +2,7 @@ package registry
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -23,16 +24,19 @@ func NewPostgres(db *sql.DB, heartbeatGrace time.Duration) *PostgresRegistry {
 }
 
 func (r *PostgresRegistry) Upsert(id, httpBaseURL, controlGRPCAddr string, healthy bool, capTotal, capUsed, capStopped int32) {
-	if id == "" || httpBaseURL == "" {
+	r.UpsertRunner(Runner{ID: id, HTTPBaseURL: httpBaseURL, ControlGRPCAddr: controlGRPCAddr, Healthy: healthy,
+		CapacityTotal: capTotal, CapacityUsed: capUsed, CapacityStopped: capStopped})
+}
+
+func (r *PostgresRegistry) UpsertRunner(run Runner) {
+	if run.ID == "" || run.HTTPBaseURL == "" {
 		return
 	}
-	httpBaseURL = strings.TrimRight(httpBaseURL, "/")
-	controlGRPCAddr = strings.TrimSpace(controlGRPCAddr)
 	const q = `
 		INSERT INTO runners
-			(id, http_base_url, control_grpc_addr, healthy, capacity_total, capacity_used, capacity_stopped, last_seen)
+			(id, http_base_url, control_grpc_addr, healthy, capacity_total, capacity_used, capacity_stopped, cordoned, templates, last_seen)
 		VALUES
-			($1, $2, $3, $4, $5, $6, $7, now())
+			($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
 		ON CONFLICT (id) DO UPDATE SET
 			http_base_url = EXCLUDED.http_base_url,
 			control_grpc_addr = EXCLUDED.control_grpc_addr,
@@ -40,8 +44,19 @@ func (r *PostgresRegistry) Upsert(id, httpBaseURL, controlGRPCAddr string, healt
 			capacity_total = EXCLUDED.capacity_total,
 			capacity_used = EXCLUDED.capacity_used,
 			capacity_stopped = EXCLUDED.capacity_stopped,
+			cordoned = EXCLUDED.cordoned,
+			templates = EXCLUDED.templates,
 			last_seen = now()`
-	_, _ = r.db.Exec(q, id, httpBaseURL, controlGRPCAddr, healthy, capTotal, capUsed, capStopped)
+	templates := ""
+	if len(run.Templates) > 0 {
+		raw, err := json.Marshal(run.Templates)
+		if err != nil {
+			return
+		}
+		templates = string(raw)
+	}
+	_, _ = r.db.Exec(q, run.ID, strings.TrimRight(run.HTTPBaseURL, "/"), strings.TrimSpace(run.ControlGRPCAddr), run.Healthy,
+		run.CapacityTotal, run.CapacityUsed, run.CapacityStopped, run.Cordoned, templates)
 }
 
 // Remove is a no-op for Postgres; stale runners are detected via last_seen.
@@ -49,7 +64,7 @@ func (r *PostgresRegistry) Remove(id string) {}
 
 func (r *PostgresRegistry) Get(id string) (*Runner, bool) {
 	const q = `
-		SELECT id, http_base_url, control_grpc_addr, healthy, capacity_total, capacity_used, capacity_stopped, last_seen
+		SELECT ` + runnerCols + `
 		FROM runners
 		WHERE id = $1`
 	row := r.db.QueryRow(q, id)
@@ -94,7 +109,7 @@ func (r *PostgresRegistry) Len() int {
 
 func (r *PostgresRegistry) List() ([]Runner, error) {
 	const q = `
-		SELECT id, http_base_url, control_grpc_addr, healthy, capacity_total, capacity_used, capacity_stopped, last_seen
+		SELECT ` + runnerCols + `
 		FROM runners
 		ORDER BY id COLLATE "C"`
 	rows, err := r.db.Query(q)
@@ -118,6 +133,13 @@ func (r *PostgresRegistry) List() ([]Runner, error) {
 }
 
 func (r *PostgresRegistry) PickLowestUsed(exclude ...string) (*Runner, error) {
+	return r.PickForTemplate(DefaultTemplate, exclude...)
+}
+
+func (r *PostgresRegistry) PickForTemplate(template string, exclude ...string) (*Runner, error) {
+	if template == "" {
+		template = DefaultTemplate
+	}
 	graceSec := int64(r.heartbeatGrace.Seconds())
 	// Never nil: pgx sends a nil slice as NULL, and NOT (id = ANY(NULL)) would
 	// exclude every runner.
@@ -130,17 +152,19 @@ func (r *PostgresRegistry) PickLowestUsed(exclude ...string) (*Runner, error) {
 	defer func() { _ = tx.Rollback() }()
 
 	const q = `
-		SELECT id, http_base_url, control_grpc_addr, healthy, capacity_total, capacity_used, capacity_stopped, last_seen
+		SELECT ` + runnerCols + `
 		FROM runners
 		WHERE healthy = true
+		  AND cordoned = false
 		  AND last_seen >= now() - ($1 * interval '1 second')
 		  AND (capacity_total = 0 OR capacity_used < capacity_total)
 		  AND NOT (id = ANY($2))
+		  AND ((templates = '' AND $3 = 'default') OR (templates <> '' AND templates::jsonb @> jsonb_build_array(jsonb_build_object('name', $3::text))))
 		ORDER BY capacity_used ASC, id ASC
 		FOR UPDATE SKIP LOCKED
 		LIMIT 1`
 
-	row := tx.QueryRow(q, graceSec, excluded)
+	row := tx.QueryRow(q, graceSec, excluded, template)
 	run, err := scanRunner(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -155,12 +179,15 @@ func (r *PostgresRegistry) PickLowestUsed(exclude ...string) (*Runner, error) {
 	return run, nil
 }
 
+const runnerCols = `id, http_base_url, control_grpc_addr, healthy, capacity_total, capacity_used, capacity_stopped, cordoned, templates, last_seen`
+
 type runnerScanner interface {
 	Scan(dest ...any) error
 }
 
 func scanRunner(row runnerScanner) (*Runner, error) {
 	var run Runner
+	var templates string
 	err := row.Scan(
 		&run.ID,
 		&run.HTTPBaseURL,
@@ -169,10 +196,17 @@ func scanRunner(row runnerScanner) (*Runner, error) {
 		&run.CapacityTotal,
 		&run.CapacityUsed,
 		&run.CapacityStopped,
+		&run.Cordoned,
+		&templates,
 		&run.LastSeen,
 	)
 	if err != nil {
 		return nil, err
+	}
+	if templates != "" {
+		if err := json.Unmarshal([]byte(templates), &run.Templates); err != nil {
+			return nil, fmt.Errorf("runner %s templates: %w", run.ID, err)
+		}
 	}
 	return &run, nil
 }

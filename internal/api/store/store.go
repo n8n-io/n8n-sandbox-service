@@ -43,6 +43,36 @@ func IsAdminTenantID(tenantID string) bool {
 	return tenantID == "" || tenantID == AdminTenantID
 }
 
+// IdlePhase is one pass of the idle sweeper.
+type IdlePhase int
+
+const (
+	// IdleStop: running regular rows, by idle_stop_after.
+	IdleStop IdlePhase = iota
+	// IdleEphemeral: running ephemeral rows, deleted by idle_stop_after.
+	IdleEphemeral
+	// IdleDelete: stopped rows, by idle_delete_after.
+	IdleDelete
+)
+
+// idleFilter is the WHERE clause of phase with ? placeholders for now,
+// global, now and global, in that order. The column names are fixed here,
+// never caller input.
+func idleFilter(phase IdlePhase) string {
+	var where, col string
+	switch phase {
+	case IdleStop:
+		where, col = `status = 'running' AND ephemeral = false`, "idle_stop_after"
+	case IdleEphemeral:
+		where, col = `status = 'running' AND ephemeral = true`, "idle_stop_after"
+	default:
+		where, col = `status = 'stopped'`, "idle_delete_after"
+	}
+	// Casts let Postgres type the bare parameters.
+	return where + ` AND ((` + col + ` > 0 AND last_active_at <= CAST(? AS BIGINT) - ` + col + `) OR (` +
+		col + ` = 0 AND CAST(? AS BIGINT) > 0 AND last_active_at <= CAST(? AS BIGINT) - CAST(? AS BIGINT)))`
+}
+
 // SandboxRecord is the in-memory representation of a row in the sandboxes table.
 type SandboxRecord struct {
 	ID                    string
@@ -63,6 +93,7 @@ type SandboxRecord struct {
 	IdleStopAfter         int64  // Seconds; 0 = the API's global window
 	IdleDeleteAfter       int64  // Seconds; 0 = the API's global window
 	EgressProxy           string // Validated EgressProxySpec as JSON when Egress is "proxy", else empty
+	ModelBlocked          bool   // New requests to the proxy sandbox's model hosts are refused
 }
 
 // Tenant is a provisioned consumer of the sandbox API (e.g. an n8n instance).
@@ -72,6 +103,9 @@ type Tenant struct {
 	ExternalRef  string
 	MaxSandboxes int // 0 = unlimited
 	CreatedAt    int64
+	// MaxIdleWindow caps the idle windows of the tenant's sandboxes, in
+	// seconds; 0 is the server's cap.
+	MaxIdleWindow int64
 }
 
 // APIKey is a hashed tenant credential. Plaintext is never stored.
@@ -96,12 +130,22 @@ type SandboxStore interface {
 	Get(id string) (*SandboxRecord, error)
 	UpdateStatus(id, status string) error
 	UpdateLastActive(id string) error
+	// UpdateIdleWindows sets a sandbox's own idle windows (seconds, 0 = the
+	// API's global window).
+	UpdateIdleWindows(id string, stopAfter, deleteAfter int64) error
+	// UpdateEgressProxy stores a proxy sandbox's replaced spec (canonical JSON).
+	UpdateEgressProxy(id, spec string) error
+	// SetModelBlocked records whether a proxy sandbox's model egress is blocked.
+	SetModelBlocked(id string, blocked bool) error
+	// TouchRunnerActive marks running sandboxes active now, but only those
+	// stored as placed on runnerID: a runner vouches for its own sandboxes alone.
+	TouchRunnerActive(runnerID string, ids []string) error
 	Delete(id string) error
 	LockSandbox(ctx context.Context, id string) (unlock func(), err error)
-	ListForIdleReapDelete(cutoff int64) ([]*SandboxRecord, error)
-	// ListForIdleReapStop returns running rows idle since cutoff with the given
-	// ephemeral flag: regular rows are stop candidates, ephemeral rows delete candidates.
-	ListForIdleReapStop(cutoff int64, ephemeral bool) ([]*SandboxRecord, error)
+	// ListIdle returns phase's sweep candidates at now (Unix seconds): rows
+	// idle for longer than their own window, or than global (seconds) when they
+	// have none. global 0 leaves rows without their own window out.
+	ListIdle(phase IdlePhase, now, global int64) ([]*SandboxRecord, error)
 	Count() (int64, error)
 	CountByTenant(tenantID string) (int64, error)
 	List() ([]*SandboxRecord, error)
@@ -117,6 +161,9 @@ type SandboxStore interface {
 	// UpdateTenantLimits sets the tenant's limits and leaves its sandboxes
 	// alone. Returns ErrTenantNotFound when no tenant has that id.
 	UpdateTenantLimits(id string, maxSandboxes int) error
+	// SetTenantMaxIdleWindow sets the tenant's idle window cap (seconds, 0 =
+	// the server's); existing sandboxes keep their windows.
+	SetTenantMaxIdleWindow(id string, seconds int64) error
 	DeleteTenant(id string) error
 
 	CreateAPIKey(k *APIKey) error
@@ -153,6 +200,7 @@ func scanRecord(row scanner) (*SandboxRecord, error) {
 		&r.IdleStopAfter,
 		&r.IdleDeleteAfter,
 		&r.EgressProxy,
+		&r.ModelBlocked,
 	)
 	if err != nil {
 		return nil, err
@@ -162,7 +210,7 @@ func scanRecord(row scanner) (*SandboxRecord, error) {
 
 func scanTenant(row scanner) (*Tenant, error) {
 	var t Tenant
-	err := row.Scan(&t.ID, &t.Name, &t.ExternalRef, &t.MaxSandboxes, &t.CreatedAt)
+	err := row.Scan(&t.ID, &t.Name, &t.ExternalRef, &t.MaxSandboxes, &t.CreatedAt, &t.MaxIdleWindow)
 	if err != nil {
 		return nil, err
 	}

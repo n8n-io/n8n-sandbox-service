@@ -49,6 +49,10 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	// has gone, so a burst of creates is bounded like any other request.
 	mux.HandleFunc("POST /sandboxes", limitTenant(handleCreateSandbox(s, reg, cfg, rec, newTenantQuota(s.CountByTenant))))
 	mux.HandleFunc("GET /sandboxes/{id}", handleGetSandbox(s, cfg))
+	mux.HandleFunc("PATCH /sandboxes/{id}", handlePatchSandbox(s, cfg))
+	mux.HandleFunc("PUT /sandboxes/{id}/egress-proxy", handlePutEgressProxy(s, reg, cfg))
+	mux.HandleFunc("GET /sandboxes/{id}/model-egress", handleGetModelEgress(s, cfg))
+	mux.HandleFunc("PUT /sandboxes/{id}/model-egress", handlePutModelEgress(s, reg, cfg))
 	mux.HandleFunc("DELETE /sandboxes/{id}", handleDeleteSandbox(s, cfg, rec))
 
 	mux.HandleFunc("GET /admin/tenants", handleListTenants(s))
@@ -60,10 +64,11 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	mux.HandleFunc("POST /admin/tenants/{id}/keys", handleCreateTenantKey(s))
 	mux.HandleFunc("DELETE /admin/tenants/{id}/keys/{keyId}", handleRevokeTenantKey(s))
 	mux.HandleFunc("GET /admin/scaler", handleGetScaler(cfg))
+	mux.HandleFunc("GET /templates", handleListTemplates(reg, cfg))
 	mux.HandleFunc("GET /admin/runners", handleListRunners(reg))
-	mux.HandleFunc("GET /admin/runners/{id}/drain", handleRunnerDrain())
-	mux.HandleFunc("POST /admin/runners/{id}/drain", handleRunnerDrain())
-	mux.HandleFunc("DELETE /admin/runners/{id}/drain", handleRunnerDrain())
+	mux.HandleFunc("GET /admin/runners/{id}/drain", handleRunnerDrain(reg, cfg))
+	mux.HandleFunc("POST /admin/runners/{id}/drain", handleRunnerDrain(reg, cfg))
+	mux.HandleFunc("DELETE /admin/runners/{id}/drain", handleRunnerDrain(reg, cfg))
 
 	mux.HandleFunc("POST /sandboxes/{id}/executions", limitTenant(sandboxProxy(false)))
 	mux.HandleFunc("GET /sandboxes/{id}/executions/{exec_id}", limitTenant(sandboxProxy(false)))
@@ -84,6 +89,7 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	}
 	handler = AuthMiddleware(cfg.APIKeys, cfg.ProvisionerKeys, cfg.ScalerKeys, s)(handler)
 	handler = publicPaths.RejectOtherMethods(handler)
+	handler = RetryAfterMiddleware(handler)
 	handler = LoggingMiddleware(handler)
 	if cfg.EnableCORS {
 		handler = CORSMiddleware(handler)

@@ -40,7 +40,8 @@ All services are configured via environment variables.
 | `SANDBOX_API_RUNNER_HEARTBEAT_GRACE` | `45s` | How long after the last gRPC heartbeat a runner remains eligible for placement (Go [`time.ParseDuration`](https://pkg.go.dev/time#ParseDuration) syntax, e.g. `45s`, `2m`) |
 | `SANDBOX_API_IDLE_STOP_AFTER` | `1h` | Idle time after which the sweeper stops a sandbox (deletes it if `ephemeral`). `0` disables |
 | `SANDBOX_API_IDLE_DELETE_AFTER` | `24h` | Idle time after which the sweeper deletes a sandbox; wakes are refused past this window. `0` disables |
-| `SANDBOX_API_MAX_IDLE_WINDOW` | `24h` | Largest `idle_stop_after` / `idle_delete_after` a create may set (at least `1m`). `0` refuses both |
+| `SANDBOX_API_TEMPLATES` | `default` | Comma-separated template catalog creates may name; `default` is always in it. Runners list what they serve in their heartbeats, and a sandbox is placed only on one serving its template |
+| `SANDBOX_API_MAX_IDLE_WINDOW` | `24h` | Largest `idle_stop_after` / `idle_delete_after` a create or `PATCH /sandboxes/{id}` may set (at least `1m`); a tenant's `max_idle_window` can narrow it. `0` refuses both |
 | `SANDBOX_API_IDLE_DELETE_SAFETY_BUFFER` | `1m` | Added to a sandbox's idle window before deletion as a race guard (applied when either window above is > 0) |
 | `SANDBOX_API_IDLE_SWEEP_INTERVAL` | `1m` | How often the idle sweeper runs |
 | `SANDBOX_API_IDLE_SWEEP_CONCURRENCY` | `8` | Runner stop/delete calls one sweep keeps in flight (1–16), spread across runners. With Postgres the sandbox-lock pool is this plus 5 |
@@ -77,7 +78,7 @@ The idle sweeper waits `SANDBOX_API_ORPHAN_REAP_BUFFER` (default `5m`) after a r
 | `SANDBOX_RUNNER_DATA_DIR` | `/var/sandboxes` | Per-sandbox data directory (the Firecracker runner keeps each sandbox's rootfs here) |
 | `SANDBOX_RUNNER_MAX_FILE_BYTES` | `10485760` | Maximum body the runner accepts on file write/append (10 MB); the API applies `SANDBOX_API_MAX_FILE_BYTES` first |
 | `SANDBOX_RUNNER_MAX_INFLIGHT_PER_SANDBOX` | `256` | Requests one sandbox may have in progress at once; more get `429` ([what counts](API.md#http-429--too-many-requests-in-progress)). Room for clients that write many files in parallel, while still bounding what one sandbox holds on its runner. `0` = no limit, for execution `DELETE`s too |
-| `SANDBOX_RUNNER_MAX_EXEC_TIMEOUT` | `15m` | Largest `timeout_ms` an exec may ask for; a larger one gets `400`. A first estimate: long enough for builds and test suites, and what ends a forgotten command, which keeps running after its stream closes. `0` (no limit) or at least `5m`, the timeout a command gets when it sets none |
+| `SANDBOX_RUNNER_MAX_EXEC_TIMEOUT` | `15m` | Largest `timeout_ms` an exec may ask for; a larger one gets `400`. A first estimate: long enough for builds and test suites, and what ends a forgotten command, which keeps running after its stream closes. `0` (no limit) or at least `5m`, the timeout a command gets when it sets none; there is no upper bound, so a pool for multi-hour runs sets e.g. `8h` |
 | `SANDBOX_RUNNER_METRICS_ENABLED` | `false` | When true, expose Prometheus `/metrics` on the runner's HTTP listener (no `X-Api-Key` and no client certificate; firewall the port). See [Metrics](#metrics). |
 | `SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE` | *(required)* | CA (PEM) that signed the API registration gRPC server cert |
 | `SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE` | *(required)* | Runner client cert (PEM) for registration mTLS |
@@ -89,13 +90,28 @@ The idle sweeper waits `SANDBOX_API_ORPHAN_REAP_BUFFER` (default `5m`) after a r
 | `SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE` | *(required)* | Server private key (PEM) |
 | `SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE` | *(required)* | CA (PEM) that signed API client certificates, for SandboxControl and the HTTP listener |
 
+### Egress proxy
+
+Both runtimes serve the [egress proxy](API.md#the-egress-proxy) to `egress: "proxy"` sandboxes.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `SANDBOX_EGRESS_PROXY_PORT` | `3128` | Proxy port on each proxy sandbox's gateway |
+| `SANDBOX_EGRESS_PROXY_CA_CERT_FILE`, `SANDBOX_EGRESS_PROXY_CA_KEY_FILE` | *(unset)* | ECDSA CA the proxy signs inspected hosts' certificates with. Unset, the runner generates one in memory at startup, so its key never touches disk and a restart, which deletes every sandbox, rotates it |
+| `SANDBOX_EGRESS_PROXY_INTERNAL_HOSTS` | *(unset)* | Comma-separated host names (no ports) that may resolve into the blocked ranges, such as the in-cluster Git service. Nothing else on the runner's network is reachable |
+| `SANDBOX_EGRESS_PROXY_UPSTREAM_CA_FILE` | *(unset)* | PEM roots added to the system pool for verifying upstream TLS |
+| `SANDBOX_EGRESS_PROXY_SECRETS_DIR` | *(unset)* | Secret store: one file per `<tenant_id>/<secret_ref>`, each tenant's directory a root of its own; re-read at most 30 s after a change. Unset, every create naming a credential is refused (`400` `unknown_secret_ref`) |
+| `SANDBOX_EGRESS_USAGE_SINK_URL` | *(unset)* | Where usage records are posted. Unset, creates naming `model_hosts` are refused (`501`) |
+| `SANDBOX_EGRESS_USAGE_SINK_TOKEN_FILE` | *(unset)* | File holding the bearer token sent to the sink |
+
 ### Docker runner backend config
 
 These variables are parsed by the Docker/sysbox runner entrypoint.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE` | *(required)* | Docker image used for sandbox containers |
+| `SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE` | *(required)* | Docker image used for sandbox containers of the `default` template |
+| `SANDBOX_RUNNER_DOCKER_TEMPLATES` | *(unset)* | Further templates, as a JSON object of name to `{"image": …, "memory_mb", "cpu_percent", "pids_max", "disk_quota_mb"}`; a limit left out is the default one. Every image is pulled before the runner reports ready |
 | `SANDBOX_RUNNER_DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker daemon endpoint used by the runner; must be `unix://` |
 | `SANDBOX_RUNNER_ENABLE_CGROUPS` | `true` | Whether Docker resource limits are applied |
 | `SANDBOX_RUNNER_DEFAULT_MEMORY_MB` | `512` | Default Docker memory limit per sandbox in megabytes |
@@ -130,6 +146,7 @@ Slots give the host-side Firecracker resources stable names without exposing tho
 | `SANDBOX_RUNNER_FIRECRACKER_TEMPLATE_DIR` | `/srv/firecracker/template` | Directory containing the snapshot rootfs (`rootfs.ext4`) |
 | `SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_MEM_PATH` | `/srv/firecracker/snapshots/mem` | Host path bind-mounted into the jail as `/snapshot_mem` |
 | `SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_STATE_PATH` | `/srv/firecracker/snapshots/state` | Host path bind-mounted into the jail as `/snapshot_state`. When auto-create is enabled, must share a directory with `SNAPSHOT_MEM_PATH` |
+| `SANDBOX_RUNNER_FIRECRACKER_TEMPLATES` | *(unset)* | Further templates, as a JSON object of name to `{"template_dir", "snapshot_mem_path", "snapshot_state_path"}`, each laid out like the three settings above (the default template's). Every template is admitted on its own (assets, golden snapshot, `boot.json`, canary) before the runner reports ready; no two may share a snapshot directory |
 | `SANDBOX_RUNNER_FIRECRACKER_GUEST_IP` | `172.16.0.10` | Guest IP expected by the restored snapshot |
 | `SANDBOX_RUNNER_FIRECRACKER_HOST_TAP_DEVICE_NAME` | `fc-tap-0` | TAP device name inside each sandbox netns |
 | `SANDBOX_RUNNER_FIRECRACKER_HOST_TAP_IP_CIDR` | `172.16.0.1/24` | Host-side TAP address inside each sandbox netns |
@@ -160,8 +177,9 @@ The runner reports healthy only after `Prepare` has verified these assets, creat
 
 The Firecracker runner does **not** read `SANDBOX_RUNNER_DEFAULT_MEMORY_MB`,
 `SANDBOX_RUNNER_DEFAULT_CPU_PERCENT`, or `SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB`.
-CPU and memory are fixed in the golden memory snapshot; disk capacity is fixed
-by the template `rootfs.ext4` size. Change those by rebuilding the host snapshot
+CPU and memory are fixed in each template's golden memory snapshot; disk
+capacity is fixed by the template's `rootfs.ext4` size. Admission reads them
+from `boot.json` and the rootfs, and the heartbeat reports them per template. Change those by rebuilding the host snapshot
 assets (see [`internal/runner/runtime/firecracker.ee/README.md`](../internal/runner/runtime/firecracker.ee/README.md)).
 
 #### File descriptors

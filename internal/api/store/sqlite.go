@@ -76,6 +76,7 @@ func NewSQLite(dbPath string, useWal bool) (*SQLiteStore, error) {
 		{sql: sqliteAddIdleStopAfterCol, name: "idle_stop_after"},
 		{sql: sqliteAddIdleDeleteAfterCol, name: "idle_delete_after"},
 		{sql: sqliteAddEgressProxyCol, name: "egress_proxy"},
+		{sql: sqliteAddModelBlockedCol, name: "model_blocked"},
 	} {
 		if _, err := db.Exec(stmt.sql); err != nil {
 			if strings.Contains(err.Error(), "duplicate column") ||
@@ -95,6 +96,10 @@ func NewSQLite(dbPath string, useWal bool) (*SQLiteStore, error) {
 	if _, err := db.Exec(sqliteTenantsSchema); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: tenants schema: %w", err)
+	}
+	if _, err := db.Exec(sqliteAddTenantMaxIdleWindowCol); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: migration tenants max_idle_window: %w", err)
 	}
 
 	slog.Debug("store: opened sqlite database", "path", dbPath)
@@ -133,7 +138,7 @@ func (s *SQLiteStore) Backend() Backend { return BackendSQLite }
 
 func (s *SQLiteStore) Close() error { return s.db.Close() }
 
-const sqliteSandboxCols = `id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral, egress, template, idle_stop_after, idle_delete_after, egress_proxy`
+const sqliteSandboxCols = `id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral, egress, template, idle_stop_after, idle_delete_after, egress_proxy, model_blocked`
 
 type sqliteExecer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
@@ -275,6 +280,44 @@ func (s *SQLiteStore) UpdateLastActive(id string) error {
 	return nil
 }
 
+func (s *SQLiteStore) UpdateIdleWindows(id string, stopAfter, deleteAfter int64) error {
+	if _, err := s.db.Exec(`UPDATE sandboxes SET idle_stop_after = ?, idle_delete_after = ? WHERE id = ?`, stopAfter, deleteAfter, id); err != nil {
+		return fmt.Errorf("store: update idle windows for %s: %w", id, err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) UpdateEgressProxy(id, spec string) error {
+	if _, err := s.db.Exec(`UPDATE sandboxes SET egress_proxy = ? WHERE id = ?`, spec, id); err != nil {
+		return fmt.Errorf("store: update egress_proxy for %s: %w", id, err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) SetModelBlocked(id string, blocked bool) error {
+	if _, err := s.db.Exec(`UPDATE sandboxes SET model_blocked = ? WHERE id = ?`, blocked, id); err != nil {
+		return fmt.Errorf("store: update model_blocked for %s: %w", id, err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) TouchRunnerActive(runnerID string, ids []string) error {
+	if runnerID == "" || len(ids) == 0 {
+		return nil
+	}
+	q := `UPDATE sandboxes SET last_active_at = ? WHERE runner_id = ? AND status = 'running' AND id IN (?` +
+		strings.Repeat(",?", len(ids)-1) + `)`
+	args := make([]any, 0, len(ids)+2)
+	args = append(args, time.Now().Unix(), runnerID)
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	if _, err := s.db.Exec(q, args...); err != nil {
+		return fmt.Errorf("store: touch active sandboxes of runner %s: %w", runnerID, err)
+	}
+	return nil
+}
+
 func (s *SQLiteStore) Delete(id string) error {
 	const q = `DELETE FROM sandboxes WHERE id = ?`
 	if _, err := s.db.Exec(q, id); err != nil {
@@ -295,21 +338,9 @@ func (s *SQLiteStore) LockSandbox(ctx context.Context, id string) (func(), error
 	}
 }
 
-func (s *SQLiteStore) ListForIdleReapDelete(cutoff int64) ([]*SandboxRecord, error) {
-	q := `SELECT ` + sqliteSandboxCols + `
-		FROM sandboxes
-		WHERE status = 'stopped'
-		  AND last_active_at <= ?`
-	return s.querySandboxRecords(q, cutoff)
-}
-
-func (s *SQLiteStore) ListForIdleReapStop(cutoff int64, ephemeral bool) ([]*SandboxRecord, error) {
-	q := `SELECT ` + sqliteSandboxCols + `
-		FROM sandboxes
-		WHERE status = 'running'
-		  AND last_active_at <= ?
-		  AND ephemeral = ?`
-	return s.querySandboxRecords(q, cutoff, ephemeral)
+func (s *SQLiteStore) ListIdle(phase IdlePhase, now, global int64) ([]*SandboxRecord, error) {
+	q := `SELECT ` + sqliteSandboxCols + ` FROM sandboxes WHERE ` + idleFilter(phase)
+	return s.querySandboxRecords(q, now, global, now, global)
 }
 
 func (s *SQLiteStore) querySandboxRecords(q string, args ...any) ([]*SandboxRecord, error) {
@@ -360,8 +391,8 @@ func (s *SQLiteStore) ListByTenant(tenantID string) ([]*SandboxRecord, error) {
 }
 
 func (s *SQLiteStore) CreateTenant(t *Tenant) error {
-	const q = `INSERT INTO tenants (id, name, external_ref, max_sandboxes, created_at) VALUES (?, ?, ?, ?, ?)`
-	_, err := s.db.Exec(q, t.ID, t.Name, t.ExternalRef, t.MaxSandboxes, t.CreatedAt)
+	const q = `INSERT INTO tenants (id, name, external_ref, max_sandboxes, created_at, max_idle_window) VALUES (?, ?, ?, ?, ?, ?)`
+	_, err := s.db.Exec(q, t.ID, t.Name, t.ExternalRef, t.MaxSandboxes, t.CreatedAt, t.MaxIdleWindow)
 	if err != nil {
 		return fmt.Errorf("store: create tenant %s: %w", t.ID, err)
 	}
@@ -378,8 +409,8 @@ func (s *SQLiteStore) CreateTenantWithAPIKey(t *Tenant, k *APIKey) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	const tenantQ = `INSERT INTO tenants (id, name, external_ref, max_sandboxes, created_at) VALUES (?, ?, ?, ?, ?)`
-	if _, err := tx.Exec(tenantQ, t.ID, t.Name, t.ExternalRef, t.MaxSandboxes, t.CreatedAt); err != nil {
+	const tenantQ = `INSERT INTO tenants (id, name, external_ref, max_sandboxes, created_at, max_idle_window) VALUES (?, ?, ?, ?, ?, ?)`
+	if _, err := tx.Exec(tenantQ, t.ID, t.Name, t.ExternalRef, t.MaxSandboxes, t.CreatedAt, t.MaxIdleWindow); err != nil {
 		return fmt.Errorf("store: create tenant %s: %w", t.ID, err)
 	}
 	var revoked any
@@ -397,7 +428,7 @@ func (s *SQLiteStore) CreateTenantWithAPIKey(t *Tenant, k *APIKey) error {
 }
 
 func (s *SQLiteStore) GetTenant(id string) (*Tenant, error) {
-	row := s.db.QueryRow(`SELECT id, name, external_ref, max_sandboxes, created_at FROM tenants WHERE id = ?`, id)
+	row := s.db.QueryRow(`SELECT id, name, external_ref, max_sandboxes, created_at, max_idle_window FROM tenants WHERE id = ?`, id)
 	t, err := scanTenant(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -409,7 +440,7 @@ func (s *SQLiteStore) GetTenant(id string) (*Tenant, error) {
 }
 
 func (s *SQLiteStore) ListTenants() ([]*Tenant, error) {
-	rows, err := s.db.Query(`SELECT id, name, external_ref, max_sandboxes, created_at FROM tenants ORDER BY created_at DESC`)
+	rows, err := s.db.Query(`SELECT id, name, external_ref, max_sandboxes, created_at, max_idle_window FROM tenants ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list tenants: %w", err)
 	}
@@ -423,6 +454,17 @@ func (s *SQLiteStore) ListTenants() ([]*Tenant, error) {
 		out = append(out, t)
 	}
 	return out, rows.Err()
+}
+
+func (s *SQLiteStore) SetTenantMaxIdleWindow(id string, seconds int64) error {
+	res, err := s.db.Exec(`UPDATE tenants SET max_idle_window = ? WHERE id = ?`, seconds, id)
+	if err != nil {
+		return fmt.Errorf("store: set tenant max_idle_window: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrTenantNotFound
+	}
+	return nil
 }
 
 func (s *SQLiteStore) UpdateTenantLimits(id string, maxSandboxes int) error {

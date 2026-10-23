@@ -233,7 +233,7 @@ func TestSandboxProxyKeepsStoreOnDaemonForgedSandboxGone(t *testing.T) {
 	rt := daemonAt{url: daemon.URL}
 	runnerCfg := &runnerconfig.Config{MaxFileBytes: 1024}
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /sandboxes/{id}/executions", runnerhttp.ExecProxyHandler(rt, runnerCfg, nil))
+	mux.HandleFunc("POST /sandboxes/{id}/executions", runnerhttp.ExecProxyHandler(rt, runnerCfg, nil, nil))
 	mux.HandleFunc("GET /sandboxes/{id}/files", runnerhttp.ProxyHandler(rt, runnerCfg, nil))
 	runner := newTestRunnerServer(t, mux)
 

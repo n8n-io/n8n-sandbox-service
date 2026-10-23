@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/n8n-io/sandbox-service/internal/api/config"
@@ -15,9 +16,6 @@ import (
 // maxCreateBodyBytes bounds a create body. An egress_proxy spec is the only
 // large part; its lists have limits of their own (runnerruntime.EgressProxySpec).
 const maxCreateBodyBytes = 64 << 10
-
-// The API serves only the default template: every runner has one image.
-var knownTemplates = map[string]bool{runnerruntime.DefaultTemplate: true}
 
 // Reasons on create errors a caller acts on: an unknown template is a
 // configuration error, and each mismatch tells a reconnecting caller whether
@@ -65,8 +63,10 @@ type createParams struct {
 	egressProxyJSON string // canonical JSON of egressProxy, stored and compared on reconnect
 }
 
-// parseCreateRequest validates a create body. Every error is a 400.
-func parseCreateRequest(req *createSandboxRequest, cfg *config.APIConfig) (*createParams, error) {
+// parseCreateRequest validates a create body. Every error is a 400. idleLimit
+// returns the largest idle window the caller may set; it is only called when
+// the body sets one.
+func parseCreateRequest(req *createSandboxRequest, cfg *config.APIConfig, idleLimit func() (int64, error)) (*createParams, error) {
 	p := &createParams{template: runnerruntime.DefaultTemplate}
 
 	egressField := ""
@@ -88,22 +88,28 @@ func parseCreateRequest(req *createSandboxRequest, cfg *config.APIConfig) (*crea
 		if err := runnerruntime.ValidateTemplateName(p.template); err != nil {
 			return nil, err
 		}
-		if !knownTemplates[p.template] {
+		if p.template != runnerruntime.DefaultTemplate && !slices.Contains(cfg.Templates, p.template) {
 			return nil, &createError{msg: fmt.Sprintf("unknown template %q", p.template), reason: reasonUnknownTemplate}
 		}
 	}
 
-	if req.IdleStopAfter != nil {
-		if err := checkIdleWindow("idle_stop_after", *req.IdleStopAfter, cfg); err != nil {
+	if req.IdleStopAfter != nil || req.IdleDeleteAfter != nil {
+		limit, err := idleLimit()
+		if err != nil {
 			return nil, err
 		}
-		p.idleStopAfter, p.idleStopGiven = *req.IdleStopAfter, true
-	}
-	if req.IdleDeleteAfter != nil {
-		if err := checkIdleWindow("idle_delete_after", *req.IdleDeleteAfter, cfg); err != nil {
-			return nil, err
+		if req.IdleStopAfter != nil {
+			if err := checkIdleWindow("idle_stop_after", *req.IdleStopAfter, limit); err != nil {
+				return nil, err
+			}
+			p.idleStopAfter, p.idleStopGiven = *req.IdleStopAfter, true
 		}
-		p.idleDeleteAfter, p.idleDeleteGiven = *req.IdleDeleteAfter, true
+		if req.IdleDeleteAfter != nil {
+			if err := checkIdleWindow("idle_delete_after", *req.IdleDeleteAfter, limit); err != nil {
+				return nil, err
+			}
+			p.idleDeleteAfter, p.idleDeleteGiven = *req.IdleDeleteAfter, true
+		}
 	}
 	if p.idleStopGiven && p.idleDeleteGiven && p.idleStopAfter > p.idleDeleteAfter {
 		return nil, errors.New("idle_stop_after must not exceed idle_delete_after")
@@ -132,11 +138,28 @@ func parseCreateRequest(req *createSandboxRequest, cfg *config.APIConfig) (*crea
 	return p, nil
 }
 
-// checkIdleWindow bounds a per-sandbox idle window. 0 is refused: it would
-// mean "never" to a reader of the global settings, and no create may opt its
-// sandbox out of the sweeper.
-func checkIdleWindow(field string, seconds int64, cfg *config.APIConfig) error {
+// idleWindowLimit is the largest idle window, in seconds, a sandbox of tenantID
+// may have: the server's cap, narrowed by the tenant's own. Admin-owned
+// sandboxes get the server's.
+func idleWindowLimit(s store.SandboxStore, cfg *config.APIConfig, tenantID string) (int64, error) {
 	limit := int64(cfg.MaxIdleWindow / time.Second)
+	if limit == 0 || tenantID == "" || store.IsAdminTenantID(tenantID) {
+		return limit, nil
+	}
+	t, err := s.GetTenant(tenantID)
+	if err != nil {
+		return 0, err
+	}
+	if t != nil && t.MaxIdleWindow > 0 && t.MaxIdleWindow < limit {
+		limit = t.MaxIdleWindow
+	}
+	return limit, nil
+}
+
+// checkIdleWindow bounds a per-sandbox idle window by limit seconds. 0 is
+// refused: it would mean "never" to a reader of the global settings, and no
+// create may opt its sandbox out of the sweeper.
+func checkIdleWindow(field string, seconds, limit int64) error {
 	if limit == 0 {
 		return fmt.Errorf("%s is not allowed: SANDBOX_API_MAX_IDLE_WINDOW is 0", field)
 	}
@@ -149,9 +172,13 @@ func checkIdleWindow(field string, seconds int64, cfg *config.APIConfig) error {
 
 // runnerOptions is what the create RPC carries. Idle windows stay in the API,
 // whose sweeper applies them; the default template goes as empty so a runner
-// from before templates confirms it.
-func (p *createParams) runnerOptions() runnerruntime.CreateOptions {
+// from before templates confirms it. A proxy sandbox carries its owner, under
+// whose name alone the runner reads secrets.
+func (p *createParams) runnerOptions(tenantID string) runnerruntime.CreateOptions {
 	opts := runnerruntime.CreateOptions{Egress: p.egress, EgressProxy: p.egressProxy}
+	if p.egress == runnerruntime.EgressProxy {
+		opts.Tenant = tenantID
+	}
 	if p.template != runnerruntime.DefaultTemplate {
 		opts.Template = p.template
 	}

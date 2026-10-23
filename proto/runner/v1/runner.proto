@@ -16,6 +16,14 @@ service SandboxControl {
   rpc DeleteSandbox(DeleteSandboxRequest) returns (DeleteSandboxResponse);
   rpc GetCordon(GetCordonRequest) returns (GetCordonResponse);
   rpc SetCordon(SetCordonRequest) returns (SetCordonResponse);
+  // GetActivity reports the runner's cordon and what it is still running, for
+  // drain.
+  rpc GetActivity(GetActivityRequest) returns (GetActivityResponse);
+  // UpdateEgressProxy replaces a proxy sandbox's egress spec, for requests
+  // the proxy receives afterwards.
+  rpc UpdateEgressProxy(UpdateEgressProxyRequest) returns (UpdateEgressProxyResponse);
+  // SetModelBlocked blocks or unblocks new requests to a proxy sandbox's model hosts.
+  rpc SetModelBlocked(SetModelBlockedRequest) returns (SetModelBlockedResponse);
 }
 
 message RunnerHeartbeat {
@@ -30,6 +38,20 @@ message RunnerHeartbeat {
   // An operator cordoned the runner: it serves its sandboxes but takes no new
   // creates. Separate from healthy, which is the runtime's own readiness.
   bool cordoned = 8;
+  // Sandboxes with a running execution or an open execution stream. The API
+  // counts them as active, so the idle sweeper never stops one under a run.
+  repeated string active_sandbox_ids = 9;
+  // Templates the runner serves; empty from a runner that predates templates,
+  // which serves "default" alone.
+  repeated TemplateInfo templates = 10;
+}
+
+// A template a runner boots sandboxes from, with what one sandbox of it gets.
+message TemplateInfo {
+  string name = 1;
+  int32 vcpus = 2;
+  int64 memory_mb = 3;
+  int64 disk_mb = 4;
 }
 
 message ControlMessage {
@@ -75,3 +97,31 @@ message SetCordonRequest {
 message SetCordonResponse {
   bool cordoned = 1;
 }
+
+message GetActivityRequest {}
+
+message GetActivityResponse {
+  bool cordoned = 1;
+  // Executions the runner started and has not seen end.
+  int32 active_executions = 2;
+  // Execution streams open through the runner.
+  int32 open_streams = 3;
+  int32 capacity_total = 4;
+  int32 capacity_used = 5;
+  int32 capacity_stopped = 6;
+}
+
+message UpdateEgressProxyRequest {
+  string sandbox_id = 1;
+  // An EgressProxySpec, encoded as in create_options_json.
+  string egress_proxy_json = 2;
+}
+
+message UpdateEgressProxyResponse {}
+
+message SetModelBlockedRequest {
+  string sandbox_id = 1;
+  bool blocked = 2;
+}
+
+message SetModelBlockedResponse {}

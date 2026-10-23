@@ -16,10 +16,12 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/n8n-io/sandbox-service/internal/api/grpc/pb"
+	"github.com/n8n-io/sandbox-service/internal/egressproxy"
 	"github.com/n8n-io/sandbox-service/internal/grpctls"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/obs"
 	"github.com/n8n-io/sandbox-service/internal/runner"
+	"github.com/n8n-io/sandbox-service/internal/runner/activity"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 	"github.com/n8n-io/sandbox-service/internal/runner/cordon"
 	"github.com/n8n-io/sandbox-service/internal/runner/register"
@@ -89,7 +91,21 @@ func Run(cfg *config.Config, rt runnerruntime.Runtime) {
 		slog.Info("metrics endpoint enabled", "path", "/metrics")
 	}
 
-	handler := runner.NewRouter(rt, cfg, mrec)
+	tracker := activity.New()
+	// The egress proxy runs only on a runtime that can put sandboxes behind it;
+	// elsewhere egress-proxy creates are refused as Unimplemented.
+	var egress *egressproxy.Server
+	var execEnv []func(string) map[string]string
+	if host, ok := rt.(runnerruntime.EgressProxyHost); ok {
+		var err error
+		egress, err = runner.LoadEgressProxy(cfg.RunnerID)
+		if err != nil {
+			slog.Error("egress proxy", "error", err)
+			os.Exit(1)
+		}
+		execEnv = append(execEnv, runner.EgressExecEnv(egress, host))
+	}
+	handler := runner.NewRouter(rt, cfg, mrec, tracker, execEnv...)
 
 	// VerifyClientCertIfGiven rather than RequireAndVerifyClientCert: health and
 	// metrics must stay reachable by probes, which cannot present a client
@@ -118,7 +134,16 @@ func Run(cfg *config.Config, rt runnerruntime.Runtime) {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	go register.Run(ctx, cfg, rt, cd)
+	go register.Run(ctx, cfg, rt, cd, tracker)
+	if egress != nil {
+		egress.StartSink(ctx)
+		go func() {
+			if err := rt.(runnerruntime.EgressProxyHost).ServeEgressProxy(ctx, egress.Handler); err != nil {
+				slog.Error("egress proxy stopped", "error", err)
+			}
+		}()
+	}
+	go runner.PollUnwatchedExecutions(ctx, rt, tracker)
 
 	lis, err := net.Listen("tcp", cfg.ControlGRPCListenAddr)
 	if err != nil {
@@ -136,7 +161,7 @@ func Run(cfg *config.Config, rt runnerruntime.Runtime) {
 	}
 	slog.Info("sandbox control grpc mTLS enabled", "addr", cfg.ControlGRPCListenAddr)
 	controlGRPC := grpc.NewServer(grpc.Creds(creds))
-	pb.RegisterSandboxControlServer(controlGRPC, &runner.SandboxControlGRPC{Runtime: rt, Cfg: cfg, Rec: mrec, Cordon: cd})
+	pb.RegisterSandboxControlServer(controlGRPC, &runner.SandboxControlGRPC{Runtime: rt, Cfg: cfg, Rec: mrec, Cordon: cd, Activity: tracker, Egress: egress})
 	go func() {
 		if err := controlGRPC.Serve(lis); err != nil {
 			slog.Error("control grpc serve", "error", err)

@@ -161,6 +161,60 @@ describe("SandboxClient", () => {
     );
   });
 
+  it("updateEgressProxy and model egress use their routes", async () => {
+    const mock = getMockHttp(client);
+    const spec = { allow: [{ name: "git", hosts: ["git.example.com"] }] };
+    await client.updateEgressProxy("abc", spec);
+    expect(mock.requestVoid).toHaveBeenCalledWith("PUT", "/sandboxes/abc/egress-proxy", {
+      data: spec,
+      isSafeToRetry: true,
+    });
+    mock.requestJson.mockResolvedValue({ blocked: true });
+    await expect(client.setModelEgress("abc", true)).resolves.toBe(true);
+    expect(mock.requestJson).toHaveBeenCalledWith("PUT", "/sandboxes/abc/model-egress", {
+      data: { blocked: true },
+      isSafeToRetry: true,
+    });
+    await expect(client.getModelEgress("abc")).resolves.toBe(true);
+  });
+
+  it("listTemplates maps the catalog", async () => {
+    const mock = getMockHttp(client);
+    mock.requestJson.mockResolvedValue({
+      templates: [{ name: "python", vcpus: 4, memory_mb: 8192, disk_mb: 20480, runners: 1 }],
+    });
+    await expect(client.listTemplates()).resolves.toEqual([
+      { name: "python", vcpus: 4, memoryMb: 8192, diskMb: 20480, runners: 1 },
+    ]);
+    expect(mock.requestJson).toHaveBeenCalledWith("GET", "/templates", { isSafeToRetry: true });
+  });
+
+  it("updateIdleWindows sends PATCH in wire form, null clearing a window", async () => {
+    const mock = getMockHttp(client);
+    mock.requestJson.mockResolvedValue({
+      id: "abc",
+      status: "stopped",
+      created_at: 1000,
+      last_active_at: 1000,
+      ephemeral: false,
+      egress: "public",
+      template: "default",
+      idle_delete_after: 604800,
+    });
+
+    const result = await client.updateIdleWindows("abc", {
+      idleStopAfter: null,
+      idleDeleteAfter: 604800,
+    });
+
+    expect(mock.requestJson).toHaveBeenCalledWith("PATCH", "/sandboxes/abc", {
+      data: { idle_stop_after: null, idle_delete_after: 604800 },
+      isSafeToRetry: true,
+    });
+    expect(result).toMatchObject({ id: "abc", idleDeleteAfter: 604800 });
+    expect(result.idleStopAfter).toBeUndefined();
+  });
+
   it("createSandbox sends template, idle windows and the proxy spec in wire form", async () => {
     const mock = getMockHttp(client);
     mock.requestJson.mockResolvedValue({

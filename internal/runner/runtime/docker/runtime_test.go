@@ -26,15 +26,19 @@ type fakeDockerBackend struct {
 	stopErr        error
 	// network the container was created on, and the one inspect reports.
 	network string
+	// image and limits of the last create.
+	image  string
+	limits *ResourceLimits
 }
 
 func (f *fakeDockerBackend) ping(context.Context) error {
 	return errors.New("unexpected ping")
 }
 
-func (f *fakeDockerBackend) createContainer(_ context.Context, _, _, _, network string, _ *ResourceLimits, _ bool) (string, error) {
+func (f *fakeDockerBackend) createContainer(_ context.Context, _, _, image, network string, limits *ResourceLimits, _ bool) (string, error) {
 	*f.events = append(*f.events, "create")
 	f.network = network
+	f.image, f.limits = image, limits
 	return f.containerID, nil
 }
 
@@ -704,5 +708,89 @@ func TestWaitForDaemonRefusesRedirects(t *testing.T) {
 	}
 	if got := targetHits.Load(); got != 0 {
 		t.Fatalf("redirect target hits = %d, want 0", got)
+	}
+}
+
+// A create boots its template's image with its limits, an unset limit taking
+// the default; Templates lists the default first.
+func TestCreateUsesTemplateImageAndLimits(t *testing.T) {
+	events := []string{}
+	backend := &fakeDockerBackend{events: &events, containerID: "container-1", ip: "172.18.0.2"}
+	m := newRuntime(&config.Config{}, Config{
+		SandboxImage: "img/default", DefaultMemoryMB: 512, DefaultCPUPercent: 100, DefaultPidsMax: 256,
+		DiskQuotaActive: true, DefaultDiskQuotaMB: 2048,
+		Templates: map[string]Template{"python": {Image: "img/python", MemoryMB: 4096, CPUPercent: 250, DiskQuotaMB: 20480}},
+	}, backend)
+	m.imageReady.Store(true)
+	m.applyPolicy = func(string, string, string, string, int, bool) error { return nil }
+	m.teardownRules = func(string) error { return nil }
+	m.waitForDaemon = func(context.Context, string) error { return nil }
+
+	if _, err := m.CreateContainer(context.Background(), "11111111-1111-4111-8111-111111111111", &CreateOptions{Template: "python"}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if backend.image != "img/python" || backend.limits.MemoryMB != 4096 || backend.limits.CPUPercent != 250 ||
+		backend.limits.PidsMax != 256 || backend.limits.DiskMB != 20480 {
+		t.Fatalf("image %q limits %+v", backend.image, backend.limits)
+	}
+	if _, err := m.CreateContainer(context.Background(), "22222222-2222-4222-8222-222222222222", &CreateOptions{}); err != nil {
+		t.Fatalf("default create: %v", err)
+	}
+	if backend.image != "img/default" || backend.limits.MemoryMB != 512 || backend.limits.DiskMB != 2048 {
+		t.Fatalf("default: image %q limits %+v", backend.image, backend.limits)
+	}
+	if _, err := m.CreateContainer(context.Background(), "33333333-3333-4333-8333-333333333333", &CreateOptions{Template: "go"}); err == nil {
+		t.Fatal("unknown template created")
+	}
+	got := m.Templates()
+	if len(got) != 2 || got[0].Name != "default" || got[1] != (runnerruntime.TemplateInfo{Name: "python", VCPUs: 3, MemoryMB: 4096, DiskMB: 20480}) {
+		t.Fatalf("templates = %+v", got)
+	}
+}
+
+// An egress-proxy sandbox goes on the proxy network, and its address names it
+// to the proxy until it stops or is deleted.
+func TestProxySandboxIsIdentifiedByItsAddress(t *testing.T) {
+	events := []string{}
+	backend := &fakeDockerBackend{events: &events, containerID: "container-1", ip: "172.20.0.5"}
+	m := newRuntime(&config.Config{}, Config{SandboxImage: "img", EgressProxyPort: 3128}, backend)
+	m.proxyNetwork.iface, m.proxyNetwork.gatewayIP = runnerEgressProxyBridge, "172.20.0.1"
+	m.imageReady.Store(true)
+	m.applyPolicy = func(string, string, string, string, int, bool) error { return nil }
+	m.teardownRules = func(string) error { return nil }
+	m.waitForDaemon = func(context.Context, string) error { return nil }
+
+	const id = "11111111-1111-4111-8111-111111111111"
+	if _, err := m.CreateContainer(context.Background(), id, &CreateOptions{Egress: runnerruntime.EgressProxy}); err != nil {
+		t.Fatal(err)
+	}
+	if backend.network != runnerEgressProxyNetwork {
+		t.Fatalf("network = %q", backend.network)
+	}
+	if got, ok := m.identifyProxyClient("172.20.0.5:40000"); !ok || got != id {
+		t.Fatalf("identify = %q %v", got, ok)
+	}
+	if u, ok := m.EgressProxyURL(id); !ok || u != "http://172.20.0.1:3128" {
+		t.Fatalf("proxy url = %q %v", u, ok)
+	}
+	if _, ok := m.identifyProxyClient("172.20.0.6:40000"); ok {
+		t.Fatal("unknown address identified")
+	}
+	// A later sandbox taking the address takes its identity.
+	m.trackProxyAddr(&m.proxyNetwork, "22222222-2222-4222-8222-222222222222", "172.20.0.5")
+	if got, _ := m.identifyProxyClient("172.20.0.5:1"); got != "22222222-2222-4222-8222-222222222222" {
+		t.Fatalf("after reuse = %q", got)
+	}
+	if _, ok := m.EgressProxyURL(id); ok {
+		t.Fatal("first sandbox kept a proxy url after losing its address")
+	}
+	m.untrackProxy("22222222-2222-4222-8222-222222222222")
+	if _, ok := m.identifyProxyClient("172.20.0.5:1"); ok {
+		t.Fatal("untracked address still identified")
+	}
+	// A public sandbox has no proxy identity.
+	m.trackProxyAddr(&m.publicNetwork, id, "172.18.0.9")
+	if _, ok := m.identifyProxyClient("172.18.0.9:1"); ok {
+		t.Fatal("public sandbox identified")
 	}
 }

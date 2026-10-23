@@ -35,30 +35,27 @@ func New(heartbeatGrace time.Duration) *MemoryRegistry {
 }
 
 func (r *MemoryRegistry) Upsert(id, httpBaseURL, controlGRPCAddr string, healthy bool, capTotal, capUsed, capStopped int32) {
-	if id == "" || httpBaseURL == "" {
+	r.UpsertRunner(Runner{ID: id, HTTPBaseURL: httpBaseURL, ControlGRPCAddr: controlGRPCAddr, Healthy: healthy,
+		CapacityTotal: capTotal, CapacityUsed: capUsed, CapacityStopped: capStopped})
+}
+
+func (r *MemoryRegistry) UpsertRunner(run Runner) {
+	if run.ID == "" || run.HTTPBaseURL == "" {
 		return
 	}
-	httpBaseURL = strings.TrimRight(httpBaseURL, "/")
-	controlGRPCAddr = strings.TrimSpace(controlGRPCAddr)
+	run.HTTPBaseURL = strings.TrimRight(run.HTTPBaseURL, "/")
+	run.ControlGRPCAddr = strings.TrimSpace(run.ControlGRPCAddr)
+	run.Templates = slices.Clone(run.Templates)
+	run.LastSeen = time.Now()
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if _, exists := r.runners[id]; !exists {
-		r.order = append(r.order, id)
+	if _, exists := r.runners[run.ID]; !exists {
+		r.order = append(r.order, run.ID)
 	}
-
-	r.runners[id] = &Runner{
-		ID:              id,
-		HTTPBaseURL:     httpBaseURL,
-		ControlGRPCAddr: controlGRPCAddr,
-		Healthy:         healthy,
-		CapacityTotal:   capTotal,
-		CapacityUsed:    capUsed,
-		CapacityStopped: capStopped,
-		LastSeen:        time.Now(),
-	}
-	delete(r.removedAt, id)
+	r.runners[run.ID] = &run
+	delete(r.removedAt, run.ID)
 }
 
 func (r *MemoryRegistry) Remove(id string) {
@@ -131,7 +128,7 @@ func (r *MemoryRegistry) eligibleLocked(now time.Time) []*Runner {
 		if now.Sub(run.LastSeen) > r.heartbeatGrace {
 			continue
 		}
-		if !run.Healthy {
+		if !run.Healthy || run.Cordoned {
 			continue
 		}
 		if run.CapacityTotal > 0 && run.CapacityUsed >= run.CapacityTotal {
@@ -143,12 +140,16 @@ func (r *MemoryRegistry) eligibleLocked(now time.Time) []*Runner {
 }
 
 func (r *MemoryRegistry) PickLowestUsed(exclude ...string) (*Runner, error) {
+	return r.PickForTemplate(DefaultTemplate, exclude...)
+}
+
+func (r *MemoryRegistry) PickForTemplate(template string, exclude ...string) (*Runner, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	var best *Runner
 	for _, run := range r.eligibleLocked(time.Now()) {
-		if slices.Contains(exclude, run.ID) {
+		if slices.Contains(exclude, run.ID) || !run.Serves(template) {
 			continue
 		}
 		if best == nil || run.CapacityUsed < best.CapacityUsed ||

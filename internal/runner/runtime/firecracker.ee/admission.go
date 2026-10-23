@@ -109,48 +109,76 @@ func (r *Runtime) markAdmissionOK() {
 	})
 }
 
-// pinBaseAssets verifies Firecracker binaries and the template rootfs/kernel.
+// pinBaseAssets verifies Firecracker binaries and every template's rootfs/kernel.
 func (r *Runtime) pinBaseAssets() error {
 	required := map[string]string{
-		"jailer":           r.config.JailerBin,
-		"firecracker":      r.config.FirecrackerBin,
-		"template rootfs":  filepath.Join(r.config.TemplateDir, "rootfs.ext4"),
-		"template vmlinux": filepath.Join(r.config.TemplateDir, "vmlinux"),
+		"jailer":      r.config.JailerBin,
+		"firecracker": r.config.FirecrackerBin,
 	}
 	for label, path := range required {
 		if !r.deps.pathExists(path) {
 			return fmt.Errorf("firecracker %s path does not exist: %s", label, path)
+		}
+	}
+	for _, a := range r.config.templateAssetsList() {
+		if err := r.templateAssetsExist(a, false); err != nil {
+			return err
 		}
 	}
 	return r.verifyManifestPin()
 }
 
+// pinSnapshotAssets checks every template's golden snapshot and boot
+// parameters, and records what each template's sandboxes get.
 func (r *Runtime) pinSnapshotAssets() error {
+	infos := make([]runnerruntime.TemplateInfo, 0, len(r.config.Templates)+1)
+	for _, a := range r.config.templateAssetsList() {
+		info, err := r.pinTemplateSnapshot(a)
+		if err != nil {
+			return err
+		}
+		infos = append(infos, info)
+	}
+	r.templateInfo.Store(&infos)
+	return nil
+}
+
+func (r *Runtime) pinTemplateSnapshot(a templateAssets) (runnerruntime.TemplateInfo, error) {
 	required := map[string]string{
-		"snapshot memory": r.config.SnapshotMemPath,
-		"snapshot state":  r.config.SnapshotStatePath,
+		"snapshot memory": a.SnapshotMemPath,
+		"snapshot state":  a.SnapshotStatePath,
 	}
 	for label, path := range required {
 		if !r.deps.pathExists(path) {
-			return fmt.Errorf("firecracker %s path does not exist: %s", label, path)
+			return runnerruntime.TemplateInfo{}, fmt.Errorf("firecracker template %q %s path does not exist: %s", a.Name, label, path)
 		}
 	}
 
-	params, err := loadBootParams(bootParamsPath(r.config))
+	params, err := loadBootParams(a.bootParamsPath())
 	if err != nil {
-		return err
+		return runnerruntime.TemplateInfo{}, fmt.Errorf("template %q: %w", a.Name, err)
 	}
 	if err := params.matchesConfig(r.config); err != nil {
-		return err
+		return runnerruntime.TemplateInfo{}, fmt.Errorf("template %q: %w", a.Name, err)
 	}
 	slog.Info("firecracker golden snapshot boot parameters",
+		"template", a.Name,
 		"vcpu_count", params.VCPUCount,
 		"mem_size_mib", params.MemSizeMiB,
 		"kernel_image_path", params.KernelImagePath,
 		"boot_args", params.BootArgs,
 		"guest_ip", params.GuestIP,
 	)
-	return nil
+	// The rootfs is cloned whole per sandbox, so its apparent size is the
+	// sandbox's disk. Reported, not required: a size it cannot read only
+	// leaves the template's disk unknown to the API.
+	info := runnerruntime.TemplateInfo{Name: a.Name, VCPUs: int32(params.VCPUCount), MemoryMB: int64(params.MemSizeMiB)}
+	if size, err := r.deps.fileSize(a.rootfsPath()); err == nil {
+		info.DiskMB = size >> 20
+	} else {
+		slog.Warn("firecracker template rootfs size unknown", "template", a.Name, "err", err)
+	}
+	return info, nil
 }
 
 func (r *Runtime) verifyManifestPin() error {
@@ -210,13 +238,25 @@ func fileSHA256(path string) (string, error) {
 // than the sidecar reconstructed from current config. A set that is already complete
 // is verified rather than trusted, see verifyGoldenSnapshotSet.
 func (r *Runtime) ensureGoldenSnapshot(ctx context.Context) error {
-	bootPath := bootParamsPath(r.config)
-	if r.deps.pathExists(r.config.SnapshotMemPath) && r.deps.pathExists(r.config.SnapshotStatePath) && r.deps.pathExists(bootPath) {
-		return r.verifyGoldenSnapshotSet()
+	for _, a := range r.config.templateAssetsList() {
+		if err := r.ensureTemplateSnapshot(ctx, a); err != nil {
+			if a.Name != runnerruntime.DefaultTemplate {
+				return fmt.Errorf("template %q: %w", a.Name, err)
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Runtime) ensureTemplateSnapshot(ctx context.Context, a templateAssets) error {
+	bootPath := a.bootParamsPath()
+	if r.deps.pathExists(a.SnapshotMemPath) && r.deps.pathExists(a.SnapshotStatePath) && r.deps.pathExists(bootPath) {
+		return r.verifyGoldenSnapshotSet(a)
 	}
 	if strings.TrimSpace(r.config.CreateSnapshotScript) == "" {
 		return fmt.Errorf("golden snapshot incomplete (need %s, %s and %s) and create script is not configured; re-run create-golden-snapshot.sh with --out %s",
-			r.config.SnapshotMemPath, r.config.SnapshotStatePath, bootPath, filepath.Dir(r.config.SnapshotMemPath))
+			a.SnapshotMemPath, a.SnapshotStatePath, bootPath, filepath.Dir(a.SnapshotMemPath))
 	}
 	if !r.deps.pathExists(r.config.CreateSnapshotScript) {
 		return fmt.Errorf("create snapshot script does not exist: %s", r.config.CreateSnapshotScript)
@@ -224,14 +264,14 @@ func (r *Runtime) ensureGoldenSnapshot(ctx context.Context) error {
 	if !r.deps.pathExists(r.config.DaemonBin) {
 		return fmt.Errorf("daemon binary for snapshot create does not exist: %s", r.config.DaemonBin)
 	}
-	if !snapshotDirsMatch(r.config.SnapshotMemPath, r.config.SnapshotStatePath) {
+	if !snapshotDirsMatch(a.SnapshotMemPath, a.SnapshotStatePath) {
 		return fmt.Errorf("golden snapshot create requires SnapshotMemPath and SnapshotStatePath in the same directory (got %q and %q); create-golden-snapshot.sh writes snapshot_mem and snapshot_state into a single --out directory",
-			r.config.SnapshotMemPath, r.config.SnapshotStatePath)
+			a.SnapshotMemPath, a.SnapshotStatePath)
 	}
 
-	outDir := filepath.Dir(r.config.SnapshotMemPath)
-	kernel := filepath.Join(r.config.TemplateDir, "vmlinux")
-	ext4 := filepath.Join(r.config.TemplateDir, "rootfs.ext4")
+	outDir := filepath.Dir(a.SnapshotMemPath)
+	kernel := a.kernelPath()
+	ext4 := a.rootfsPath()
 	slog.Info("firecracker creating host-local golden snapshot",
 		"script", r.config.CreateSnapshotScript,
 		"out", outDir,
@@ -242,14 +282,14 @@ func (r *Runtime) ensureGoldenSnapshot(ctx context.Context) error {
 	if err := r.deps.run(ctx, "sudo", "/bin/sh", "-c", createSnapshotCommand(r.config, outDir, kernel, ext4)); err != nil {
 		return fmt.Errorf("create golden snapshot: %w", err)
 	}
-	if err := ensureSnapshotSymlinks(outDir, r.config.SnapshotMemPath, r.config.SnapshotStatePath, r.deps.pathExists); err != nil {
+	if err := ensureSnapshotSymlinks(outDir, a.SnapshotMemPath, a.SnapshotStatePath, r.deps.pathExists); err != nil {
 		return err
 	}
-	if !r.deps.pathExists(r.config.SnapshotMemPath) || !r.deps.pathExists(r.config.SnapshotStatePath) || !r.deps.pathExists(bootPath) {
+	if !r.deps.pathExists(a.SnapshotMemPath) || !r.deps.pathExists(a.SnapshotStatePath) || !r.deps.pathExists(bootPath) {
 		return fmt.Errorf("golden snapshot still missing after create at %s / %s / %s",
-			r.config.SnapshotMemPath, r.config.SnapshotStatePath, bootPath)
+			a.SnapshotMemPath, a.SnapshotStatePath, bootPath)
 	}
-	return verifySnapshotPathsResolveToOutputs(outDir, r.config.SnapshotMemPath, r.config.SnapshotStatePath)
+	return verifySnapshotPathsResolveToOutputs(outDir, a.SnapshotMemPath, a.SnapshotStatePath)
 }
 
 // createSnapshotCommand builds the privileged command that runs
@@ -298,15 +338,15 @@ DAEMON_PORT=%s \
 // comparison target would refuse admission for no reason. Where the script is
 // configured, config validation has already required both configured paths to share
 // a directory, so one outDir covers them.
-func (r *Runtime) verifyGoldenSnapshotSet() error {
+func (r *Runtime) verifyGoldenSnapshotSet(a templateAssets) error {
 	if strings.TrimSpace(r.config.CreateSnapshotScript) == "" {
 		return nil
 	}
-	outDir := filepath.Dir(r.config.SnapshotMemPath)
+	outDir := filepath.Dir(a.SnapshotMemPath)
 	if !r.deps.pathExists(filepath.Join(outDir, "snapshot_mem")) || !r.deps.pathExists(filepath.Join(outDir, "snapshot_state")) {
 		return nil
 	}
-	return verifySnapshotPathsResolveToOutputs(outDir, r.config.SnapshotMemPath, r.config.SnapshotStatePath)
+	return verifySnapshotPathsResolveToOutputs(outDir, a.SnapshotMemPath, a.SnapshotStatePath)
 }
 
 // verifySnapshotPathsResolveToOutputs rejects configured mem/state paths that do
@@ -356,7 +396,25 @@ func ensureSnapshotSymlinks(outDir, memPath, statePath string, exists func(strin
 	return nil
 }
 
-func (r *Runtime) runAdmissionCanary(ctx context.Context) (err error) {
+// runAdmissionCanary boots one canary per template, in turn, so a capacity-1
+// runner still admits.
+func (r *Runtime) runAdmissionCanary(ctx context.Context) error {
+	for _, a := range r.config.templateAssetsList() {
+		template := ""
+		if a.Name != runnerruntime.DefaultTemplate {
+			template = a.Name
+		}
+		if err := r.runTemplateCanary(ctx, template); err != nil {
+			if template != "" {
+				return fmt.Errorf("template %q: %w", template, err)
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Runtime) runTemplateCanary(ctx context.Context, template string) (err error) {
 	// A prior canary whose delete failed still holds a slot; free it before creating
 	// another, or capacity-1 runners can never admit (and never create user sandboxes).
 	if cleanErr := r.cleanupLeftoverAdmissionCanaries(ctx); cleanErr != nil {
@@ -368,8 +426,8 @@ func (r *Runtime) runAdmissionCanary(ctx context.Context) (err error) {
 	if len(sandboxID) < 12 {
 		return fmt.Errorf("internal error: admission canary sandbox id too short: %q", sandboxID)
 	}
-	slog.Info("firecracker admission canary starting", "sandbox_id", sandboxID)
-	if _, createErr := r.CreateSandbox(ctx, sandboxID, nil); createErr != nil {
+	slog.Info("firecracker admission canary starting", "sandbox_id", sandboxID, "template", template)
+	if _, createErr := r.CreateSandbox(ctx, sandboxID, &runnerruntime.CreateOptions{Template: template}); createErr != nil {
 		return fmt.Errorf("admission canary create: %w", createErr)
 	}
 	defer func() {

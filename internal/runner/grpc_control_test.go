@@ -65,7 +65,7 @@ func TestSandboxControlGRPCCreateSandboxParsesOptions(t *testing.T) {
 		{name: "not an object", createOptionsJSON: "[]", wantErr: codes.InvalidArgument},
 		{name: "other template", createOptionsJSON: `{"template":"python"}`, wantErr: codes.InvalidArgument},
 		{name: "invalid template", createOptionsJSON: `{"template":"../x"}`, wantErr: codes.InvalidArgument},
-		{name: "proxy", createOptionsJSON: `{"egress":"proxy","egress_proxy":{"allow":[{"name":"a","hosts":["example.com"]}]}}`, wantErr: codes.Unimplemented},
+		{name: "proxy", createOptionsJSON: `{"egress":"proxy","tenant":"t1","egress_proxy":{"allow":[{"name":"a","hosts":["example.com"]}]}}`, wantErr: codes.Unimplemented},
 		{name: "proxy without spec", createOptionsJSON: `{"egress":"proxy"}`, wantErr: codes.InvalidArgument},
 		{name: "spec without proxy", createOptionsJSON: `{"egress":"none","egress_proxy":{"allow":[]}}`, wantErr: codes.InvalidArgument},
 	} {
@@ -262,5 +262,21 @@ func TestSandboxControlGRPCStopSandboxRecordsMetric(t *testing.T) {
 	}
 	if got := rec.ContainerOpCount(metrics.OpStop, true); got != 1 {
 		t.Fatalf("stop metric = %v, want 1", got)
+	}
+}
+
+// A runtime that serves a template gets creates for it; one it does not serve
+// is still refused.
+func TestSandboxControlGRPCCreateSandboxServedTemplate(t *testing.T) {
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-api-key", "runner-key"))
+	rt := &createOptsRuntime{fakeRuntime: fakeRuntime{templates: []runnerruntime.TemplateInfo{{Name: "default"}, {Name: "python"}}}}
+	srv := &SandboxControlGRPC{Runtime: rt, Cfg: &config.Config{APIKeys: map[string]struct{}{"runner-key": {}}}, Rec: metrics.NewRunnerRecorder(false), Cordon: cordon.New()}
+	resp, err := srv.CreateSandbox(ctx, &pb.CreateSandboxRequest{SandboxId: "11111111-1111-4111-8111-111111111111", CreateOptionsJson: `{"template":"python"}`})
+	if err != nil || rt.opts.Template != "python" || resp.GetAppliedCreateOptionsJson() != `{"egress":"public","template":"python"}` {
+		t.Fatalf("python: resp=%v err=%v opts=%+v", resp, err, rt.opts)
+	}
+	_, err = srv.CreateSandbox(ctx, &pb.CreateSandboxRequest{SandboxId: "11111111-1111-4111-8111-111111111111", CreateOptionsJson: `{"template":"go"}`})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("go: %v", err)
 	}
 }

@@ -8,11 +8,13 @@ import (
 	"math"
 	"net"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/n8n-io/sandbox-service/internal/logging"
+	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 )
 
 const (
@@ -153,6 +155,10 @@ type APIConfig struct {
 	// MaxIdleWindow caps the idle_stop_after and idle_delete_after a create may
 	// set for its sandbox. 0 refuses both.
 	MaxIdleWindow time.Duration
+
+	// Templates is the catalog creates may name, "default" always among them.
+	// Parsed from SANDBOX_API_TEMPLATES (comma-separated).
+	Templates []string
 	// IdleDeleteSafetyBuffer is added to a sandbox's idle window before the sweeper
 	// deletes it (race guard). Ephemeral sandboxes use IdleStopAfter as their window
 	// (IdleDeleteAfter when idle stop is disabled), so when either window is > 0 and
@@ -198,6 +204,7 @@ func LoadAPI() (*APIConfig, error) {
 		IdleStopAfter:        defaultIdleStopAfter,
 		IdleDeleteAfter:      defaultIdleDeleteAfter,
 		MaxIdleWindow:        defaultMaxIdleWindow,
+		Templates:            []string{runnerruntime.DefaultTemplate},
 		LogLevel:             defaultLogLevel,
 	}
 
@@ -390,6 +397,13 @@ func LoadAPI() (*APIConfig, error) {
 		}
 		cfg.MaxIdleWindow = d
 	}
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_TEMPLATES")); v != "" {
+		templates, err := parseTemplateCatalog(v)
+		if err != nil {
+			return nil, fmt.Errorf("SANDBOX_API_TEMPLATES: %w", err)
+		}
+		cfg.Templates = templates
+	}
 	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_IDLE_DELETE_SAFETY_BUFFER")); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil || d < 0 {
@@ -565,4 +579,20 @@ func parseKeySet(raw string) map[string]struct{} {
 		}
 	}
 	return keys
+}
+
+// parseTemplateCatalog reads a comma-separated list of template names. The
+// default is added when missing, since a create that names none gets it.
+func parseTemplateCatalog(v string) ([]string, error) {
+	out := []string{runnerruntime.DefaultTemplate}
+	for _, name := range strings.Split(v, ",") {
+		name = strings.TrimSpace(name)
+		if err := runnerruntime.ValidateTemplateName(name); err != nil {
+			return nil, err
+		}
+		if !slices.Contains(out, name) {
+			out = append(out, name)
+		}
+	}
+	return out, nil
 }

@@ -57,8 +57,7 @@ func (p kernelPin) String() string {
 // in-place template rebuild under a live one rather than recovering from it. What
 // failing costs is the recovery and nothing beyond it: the sandbox stays as the
 // crash left it, stopped with its rootfs on disk.
-func (r *Runtime) verifyKernelPin(pinned kernelPin) error {
-	path := templateKernelPath(r.config)
+func (r *Runtime) verifyKernelPin(path string, pinned kernelPin) error {
 	current, err := r.deps.statTemplateKernel(path)
 	if err != nil {
 		return err

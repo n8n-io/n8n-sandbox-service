@@ -15,13 +15,23 @@ import (
 
 	"github.com/n8n-io/sandbox-service/internal/api/grpc/pb"
 	"github.com/n8n-io/sandbox-service/internal/grpctls"
+	"github.com/n8n-io/sandbox-service/internal/runner/activity"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 	"github.com/n8n-io/sandbox-service/internal/runner/cordon"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 )
 
+func templateInfos(ts []runnerruntime.TemplateInfo) []*pb.TemplateInfo {
+	out := make([]*pb.TemplateInfo, 0, len(ts))
+	for _, t := range ts {
+		out = append(out, &pb.TemplateInfo{Name: t.Name, Vcpus: t.VCPUs, MemoryMb: t.MemoryMB, DiskMb: t.DiskMB})
+	}
+	return out
+}
+
 // Run maintains a registration stream to the API until ctx is cancelled.
-func Run(ctx context.Context, cfg *config.Config, rt runnerruntime.Runtime, cd *cordon.State) {
+// tr supplies the sandboxes the API must treat as active; nil reports none.
+func Run(ctx context.Context, cfg *config.Config, rt runnerruntime.Runtime, cd *cordon.State, tr *activity.Tracker) {
 	backoff := time.Second
 	for {
 		select {
@@ -29,7 +39,7 @@ func Run(ctx context.Context, cfg *config.Config, rt runnerruntime.Runtime, cd *
 			return
 		default:
 		}
-		err := connectOnce(ctx, cfg, rt, cd)
+		err := connectOnce(ctx, cfg, rt, cd, tr)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -52,7 +62,7 @@ func Run(ctx context.Context, cfg *config.Config, rt runnerruntime.Runtime, cd *
 	}
 }
 
-func connectOnce(ctx context.Context, cfg *config.Config, rt runnerruntime.Runtime, cd *cordon.State) error {
+func connectOnce(ctx context.Context, cfg *config.Config, rt runnerruntime.Runtime, cd *cordon.State, tr *activity.Tracker) error {
 	serverName := cfg.GRPCServerName
 	if serverName == "" {
 		host, _, err := net.SplitHostPort(cfg.APIGRPCAddr)
@@ -120,14 +130,16 @@ func connectOnce(ctx context.Context, cfg *config.Config, rt runnerruntime.Runti
 			healthy = false
 		}
 		hb := &pb.RunnerHeartbeat{
-			RunnerId:        cfg.RunnerID,
-			HttpBaseUrl:     cfg.RunnerHTTPBaseURL,
-			Healthy:         healthy,
-			CapacityTotal:   capacity.Total,
-			CapacityUsed:    capacity.Used,
-			CapacityStopped: capacity.Stopped,
-			ControlGrpcAddr: cfg.ResolvedControlGRPCAdvertiseAddr(),
-			Cordoned:        cd.Cordoned(),
+			RunnerId:         cfg.RunnerID,
+			HttpBaseUrl:      cfg.RunnerHTTPBaseURL,
+			Healthy:          healthy,
+			CapacityTotal:    capacity.Total,
+			CapacityUsed:     capacity.Used,
+			CapacityStopped:  capacity.Stopped,
+			ControlGrpcAddr:  cfg.ResolvedControlGRPCAdvertiseAddr(),
+			Cordoned:         cd.Cordoned(),
+			ActiveSandboxIds: tr.Snapshot().Active,
+			Templates:        templateInfos(rt.Templates()),
 		}
 		return stream.Send(hb)
 	}

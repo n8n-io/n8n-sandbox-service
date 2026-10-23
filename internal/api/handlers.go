@@ -259,10 +259,11 @@ func isPastIdleDeleteWindow(rec *store.SandboxRecord, cfg *config.APIConfig, now
 	if rec == nil {
 		return false
 	}
-	window := cfg.IdleDeleteAfter
+	phase := store.IdleDelete
 	if rec.Ephemeral {
-		window = ephemeralIdleWindow(cfg)
+		phase = store.IdleEphemeral
 	}
+	window := idleWindow(rec, phase, cfg)
 	return window > 0 && now > rec.LastActiveAt+idleSeconds(window)
 }
 
@@ -312,7 +313,16 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
-		params, err := parseCreateRequest(&req, cfg)
+		var limitErr error
+		params, err := parseCreateRequest(&req, cfg, func() (int64, error) {
+			limit, err := idleWindowLimit(s, cfg, authID.TenantID)
+			limitErr = err
+			return limit, err
+		})
+		if limitErr != nil {
+			writeError(w, http.StatusInternalServerError, limitErr.Error())
+			return
+		}
 		if err != nil {
 			var ce *createError
 			if errors.As(err, &ce) {
@@ -387,7 +397,7 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 		// runner rollback; a saved one right after the save, below.
 		defer releaseQuota(false)
 
-		requested := params.runnerOptions()
+		requested := params.runnerOptions(tenantID)
 		createOptionsJSON, err := json.Marshal(requested)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
@@ -396,7 +406,7 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 
 		obs.FieldsFrom(r.Context()).Add("sandbox_id", sandboxID)
 		now := time.Now().Unix()
-		placed, err := placeSandbox(r, reg, cfg, rec, sandboxID, string(createOptionsJSON),
+		placed, err := placeSandbox(r, reg, cfg, rec, sandboxID, params.template, string(createOptionsJSON),
 			"tenant_id", tenantID, "ephemeral", req.Ephemeral, "egress", egress, "template", params.template)
 		if errors.Is(err, registry.ErrNoRunners) || errors.Is(err, errRunnersAtCapacity) {
 			writeNoCapacity(w, err)
@@ -405,6 +415,12 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 		// The runner refused before creating anything: it cannot serve a
 		// valid option yet (egress proxy). A fixed message: the runner's own
 		// (or an intermediary's) is logged by placeSandbox, not relayed.
+		// The runner refused a secret the tenant does not have, before creating
+		// anything.
+		if status.Code(err) == codes.FailedPrecondition {
+			writeErrorReason(w, http.StatusBadRequest, "egress_proxy names a secret_ref the tenant does not have", reasonUnknownSecretRef)
+			return
+		}
 		if status.Code(err) == codes.Unimplemented {
 			writeErrorReason(w, http.StatusNotImplemented, "the requested egress is not supported by the sandbox runners", reasonNotImplemented)
 			return

@@ -22,12 +22,16 @@ type createTenantRequest struct {
 	ExternalRef  string `json:"external_ref"`
 	MaxSandboxes *int   `json:"max_sandboxes"`
 	CreateKey    *bool  `json:"create_key"` // default true
+	// MaxIdleWindow caps the tenant's per-sandbox idle windows, in seconds.
+	MaxIdleWindow *int64 `json:"max_idle_window"`
 }
 
 // updateTenantRequest holds the limits PATCH may change; every field is optional
-// but at least one must be set.
+// but at least one must be set. max_idle_window is raw so that null, which
+// clears it, differs from leaving it out.
 type updateTenantRequest struct {
-	MaxSandboxes *int `json:"max_sandboxes"`
+	MaxSandboxes  *int            `json:"max_sandboxes"`
+	MaxIdleWindow json.RawMessage `json:"max_idle_window"`
 }
 
 type tenantResponse struct {
@@ -36,6 +40,8 @@ type tenantResponse struct {
 	ExternalRef  string `json:"external_ref"`
 	MaxSandboxes int    `json:"max_sandboxes"`
 	CreatedAt    int64  `json:"created_at"`
+	// MaxIdleWindow is present when set; otherwise the server's cap applies.
+	MaxIdleWindow int64 `json:"max_idle_window,omitempty"`
 }
 
 type apiKeyResponse struct {
@@ -54,12 +60,26 @@ type createTenantResponse struct {
 
 func tenantToResponse(t *store.Tenant) tenantResponse {
 	return tenantResponse{
-		ID:           t.ID,
-		Name:         t.Name,
-		ExternalRef:  t.ExternalRef,
-		MaxSandboxes: t.MaxSandboxes,
-		CreatedAt:    t.CreatedAt,
+		ID:            t.ID,
+		Name:          t.Name,
+		ExternalRef:   t.ExternalRef,
+		MaxSandboxes:  t.MaxSandboxes,
+		CreatedAt:     t.CreatedAt,
+		MaxIdleWindow: t.MaxIdleWindow,
 	}
+}
+
+// maxIdleWindowError returns why a tenant's idle window cap cannot be n
+// seconds, or "" when it can: it narrows the server's cap, never widens it.
+func maxIdleWindowError(n int64, cfg *config.APIConfig) string {
+	limit := int64(cfg.MaxIdleWindow / time.Second)
+	if limit == 0 {
+		return "max_idle_window is not allowed: SANDBOX_API_MAX_IDLE_WINDOW is 0"
+	}
+	if minimum := int64(config.MinIdleWindow / time.Second); n < minimum || n > limit {
+		return "max_idle_window must be between " + strconv.FormatInt(minimum, 10) + " and " + strconv.FormatInt(limit, 10) + " seconds"
+	}
+	return ""
 }
 
 func apiKeyToResponse(k *store.APIKey, plaintext string) apiKeyResponse {
@@ -132,6 +152,14 @@ func handleCreateTenant(s store.SandboxStore, cfg *config.APIConfig) http.Handle
 			}
 			maxSandboxes = *req.MaxSandboxes
 		}
+		var maxIdleWindow int64
+		if req.MaxIdleWindow != nil {
+			if msg := maxIdleWindowError(*req.MaxIdleWindow, cfg); msg != "" {
+				writeError(w, http.StatusBadRequest, msg)
+				return
+			}
+			maxIdleWindow = *req.MaxIdleWindow
+		}
 		createKey := true
 		if req.CreateKey != nil {
 			createKey = *req.CreateKey
@@ -139,11 +167,12 @@ func handleCreateTenant(s store.SandboxStore, cfg *config.APIConfig) http.Handle
 
 		now := time.Now().Unix()
 		t := &store.Tenant{
-			ID:           uuid.New().String(),
-			Name:         req.Name,
-			ExternalRef:  req.ExternalRef,
-			MaxSandboxes: maxSandboxes,
-			CreatedAt:    now,
+			ID:            uuid.New().String(),
+			Name:          req.Name,
+			ExternalRef:   req.ExternalRef,
+			MaxSandboxes:  maxSandboxes,
+			CreatedAt:     now,
+			MaxIdleWindow: maxIdleWindow,
 		}
 
 		resp := createTenantResponse{Tenant: tenantToResponse(t)}
@@ -215,13 +244,30 @@ func handleUpdateTenant(s store.SandboxStore, cfg *config.APIConfig) http.Handle
 			writeError(w, http.StatusBadRequest, "invalid JSON body")
 			return
 		}
-		if req.MaxSandboxes == nil {
-			writeError(w, http.StatusBadRequest, "max_sandboxes is required")
+		if req.MaxSandboxes == nil && req.MaxIdleWindow == nil {
+			writeError(w, http.StatusBadRequest, "max_sandboxes or max_idle_window is required")
 			return
 		}
-		if msg := maxSandboxesError(role, *req.MaxSandboxes, cfg); msg != "" {
-			writeError(w, http.StatusBadRequest, msg)
-			return
+		if req.MaxSandboxes != nil {
+			if msg := maxSandboxesError(role, *req.MaxSandboxes, cfg); msg != "" {
+				writeError(w, http.StatusBadRequest, msg)
+				return
+			}
+		}
+		var maxIdleWindow *int64
+		if req.MaxIdleWindow != nil {
+			var n *int64
+			if err := json.Unmarshal(req.MaxIdleWindow, &n); err != nil {
+				writeError(w, http.StatusBadRequest, "max_idle_window must be an integer or null")
+				return
+			}
+			if n == nil {
+				n = new(int64) // null: back to the server's cap
+			} else if msg := maxIdleWindowError(*n, cfg); msg != "" {
+				writeError(w, http.StatusBadRequest, msg)
+				return
+			}
+			maxIdleWindow = n
 		}
 
 		t, err := s.GetTenant(id)
@@ -233,23 +279,34 @@ func handleUpdateTenant(s store.SandboxStore, cfg *config.APIConfig) http.Handle
 			writeError(w, http.StatusNotFound, "tenant not found")
 			return
 		}
-		if err := s.UpdateTenantLimits(id, *req.MaxSandboxes); err != nil {
-			if errors.Is(err, store.ErrTenantNotFound) {
-				writeError(w, http.StatusNotFound, "tenant not found")
+		logArgs := []any{"tenant_id", id, "role", string(role)}
+		if req.MaxSandboxes != nil {
+			if err := s.UpdateTenantLimits(id, *req.MaxSandboxes); err != nil {
+				writeTenantUpdateError(w, err)
 				return
 			}
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
+			logArgs = append(logArgs, "old_max_sandboxes", t.MaxSandboxes, "max_sandboxes", *req.MaxSandboxes)
+			t.MaxSandboxes = *req.MaxSandboxes
 		}
-		slog.InfoContext(r.Context(), "tenant limits updated",
-			"tenant_id", id,
-			"role", string(role),
-			"old_max_sandboxes", t.MaxSandboxes,
-			"max_sandboxes", *req.MaxSandboxes,
-		)
-		t.MaxSandboxes = *req.MaxSandboxes
+		if maxIdleWindow != nil {
+			if err := s.SetTenantMaxIdleWindow(id, *maxIdleWindow); err != nil {
+				writeTenantUpdateError(w, err)
+				return
+			}
+			logArgs = append(logArgs, "old_max_idle_window", t.MaxIdleWindow, "max_idle_window", *maxIdleWindow)
+			t.MaxIdleWindow = *maxIdleWindow
+		}
+		slog.InfoContext(r.Context(), "tenant limits updated", logArgs...)
 		writeJSON(w, http.StatusOK, tenantToResponse(t))
 	}
+}
+
+func writeTenantUpdateError(w http.ResponseWriter, err error) {
+	if errors.Is(err, store.ErrTenantNotFound) {
+		writeError(w, http.StatusNotFound, "tenant not found")
+		return
+	}
+	writeError(w, http.StatusInternalServerError, err.Error())
 }
 
 // handleDeleteTenant is safe for provisioners because of the 409 below.

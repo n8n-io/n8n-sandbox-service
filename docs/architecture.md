@@ -89,7 +89,7 @@ The API gateway is the single public-facing service. It exposes a REST API for s
 | gRPC server | `internal/api/grpc/` | `RunnerRegistry` service — accepts runner heartbeat streams |
 | Store | `internal/api/store/` | Sandbox metadata (`sqlite` default, `postgres` for multi-pod) |
 | Sweeper lock | `internal/api/store/postgres.go` | Postgres advisory lock for idle sweeper leadership |
-| Idle sweeper | `internal/api/ttl.go` | Periodic scan to stop/delete idle sandboxes (ephemeral ones are deleted, never stopped), bounded concurrency with per-call runner deadlines |
+| Idle sweeper | `internal/api/ttl.go` | Periodic scan to stop/delete idle sandboxes by their own windows or the global ones (ephemeral ones are deleted, never stopped), bounded concurrency with per-call runner deadlines |
 | Config | `internal/api/config/` | Environment variable parsing and validation |
 
 **Middleware chain:** Recovery → CORS (optional) → Logging → Auth (API key) → Metrics (optional)
@@ -106,8 +106,10 @@ Each runner hosts sandboxes through the shared `runtime.Runtime` contract. The D
 | Docker runtime | `internal/runner/runtime/docker/` | Create, stop, delete containers; reconcile on startup; manage Docker network |
 | Firecracker runtime | `internal/runner/runtime/firecracker.ee/` | Create, stop, delete microVM sandboxes; manage jailer, snapshot restore, and host networking |
 | Docker client | `internal/runner/runtime/docker/docker_client.go` | Thin wrapper around the `docker` CLI |
-| Registration client | `internal/runner/register/` | gRPC heartbeat stream to API; sends capacity, health and cordon state every 10s, and at once when cordon changes |
-| gRPC control server | `internal/runner/grpc_control.go` | `SandboxControl` service — accepts create/stop/delete RPCs from API, and cordon RPCs |
+| Registration client | `internal/runner/register/` | gRPC heartbeat stream to API; sends capacity, health, cordon state, templates and active sandboxes every 10s, and at once when cordon changes |
+| Egress proxy | `internal/egressproxy/` (`gitfilter/`, `credentials/`, `metering/`), `internal/runner/egress.go` | Serves `egress: "proxy"` sandboxes: allow list, TLS inspection with the runner CA, Git repo and ref filter, credential injection, model metering and block, usage sink |
+| Activity tracker | `internal/runner/activity/`, `internal/runner/activity_poll.go` | Sandboxes with a running execution or an open execution stream; the heartbeat reports them, stop refuses them, drain waits for them |
+| gRPC control server | `internal/runner/grpc_control.go` | `SandboxControl` service — accepts create/stop/delete RPCs from API, and cordon and activity RPCs |
 | HTTP proxy | `internal/runner/proxy.go` | Reverse proxy from runner HTTP to sandbox daemon |
 | Network rules | `internal/runner/runtime/docker/netrules/` | iptables rules for Docker sandbox network isolation |
 | Resource limits | `internal/runner/runtime/docker/resource_limits.go` | Memory, CPU, PID, and disk quota enforcement |
@@ -138,7 +140,7 @@ Per-tenant `max_sandboxes` is checked before the runner call and again when the 
 
 ### API ↔ Runner Registration (gRPC Bidirectional Streaming + mTLS)
 
-Runners register with the API by opening a long-lived gRPC stream (`RunnerRegistry.Connect`). The runner sends periodic heartbeats containing its ID, HTTP base URL, health status, cordon state, and capacity metrics. The API uses these to maintain a live registry and route requests. The gRPC channel is secured with mutual TLS and an additional bearer token.
+Runners register with the API by opening a long-lived gRPC stream (`RunnerRegistry.Connect`). The runner sends periodic heartbeats containing its ID, HTTP base URL, health status, cordon state, served templates, capacity metrics and the sandboxes it is running work in. The API uses these to maintain a live registry and route requests, skipping cordoned runners, and marks those sandboxes active, only where the store has them on that runner. The gRPC channel is secured with mutual TLS and an additional bearer token.
 
 **Proto definition:** `proto/runner/v1/runner.proto`
 

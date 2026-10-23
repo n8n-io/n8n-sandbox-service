@@ -24,7 +24,13 @@ const (
 	runnerNoEgressNetwork = "runner-no-egress"
 	// runnerNoEgressBridge is that network's bridge device: the network name is
 	// one over the 15-character interface limit.
-	runnerNoEgressBridge     = "br-no-egress"
+	runnerNoEgressBridge = "br-no-egress"
+	// runnerEgressProxyNetwork carries egress "proxy" sandboxes: like the
+	// no-egress network, plus one opening, to the runner's egress proxy on
+	// its gateway. A bridge of its own, so egress "none" sandboxes have no
+	// route to the proxy.
+	runnerEgressProxyNetwork = "runner-egress-proxy"
+	runnerEgressProxyBridge  = "br-egress-proxy"
 	bridgeNameOption         = "com.docker.network.bridge.name"
 	containerLabelManaged    = "sandbox-service.managed"
 	containerLabelManagedVal = "true"
@@ -84,7 +90,7 @@ type networkInspect struct {
 // stopped; the network is known from creation on. Both are empty for a
 // container on neither runner network.
 func sandboxAttachment(inspect *containerInspect) (network, ip string) {
-	for _, name := range []string{runnerBridgeNetwork, runnerNoEgressNetwork} {
+	for _, name := range []string{runnerBridgeNetwork, runnerNoEgressNetwork, runnerEgressProxyNetwork} {
 		if n, ok := inspect.NetworkSettings.Networks[name]; ok {
 			return name, n.IPAddress
 		}

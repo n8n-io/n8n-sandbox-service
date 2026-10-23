@@ -79,3 +79,25 @@ func TestMemoryListReturnsCopiesOrderedByID(t *testing.T) {
 		t.Fatalf("mutating List() result changed the registry: CapacityUsed = %d", run.CapacityUsed)
 	}
 }
+
+// Placement skips a cordoned runner and one without the template; a runner
+// that lists no templates serves the default alone.
+func TestPickForTemplateSkipsCordonedAndMissingTemplate(t *testing.T) {
+	r := New(time.Minute)
+	r.UpsertRunner(Runner{ID: "a", HTTPBaseURL: "https://a", Healthy: true, CapacityTotal: 10, CapacityUsed: 0, Cordoned: true})
+	r.UpsertRunner(Runner{ID: "b", HTTPBaseURL: "https://b", Healthy: true, CapacityTotal: 10, CapacityUsed: 5})
+	r.UpsertRunner(Runner{ID: "c", HTTPBaseURL: "https://c", Healthy: true, CapacityTotal: 10, CapacityUsed: 6, Templates: []Template{{Name: "python"}, {Name: "default"}}})
+
+	if run, err := r.PickLowestUsed(); err != nil || run.ID != "b" {
+		t.Fatalf("default: %+v %v, want b (a is cordoned)", run, err)
+	}
+	if run, err := r.PickForTemplate("python"); err != nil || run.ID != "c" {
+		t.Fatalf("python: %+v %v, want c", run, err)
+	}
+	if _, err := r.PickForTemplate("go"); err != ErrNoRunners {
+		t.Fatalf("go: %v, want ErrNoRunners", err)
+	}
+	if run, err := r.PickForTemplate("", "b"); err != nil || run.ID != "c" {
+		t.Fatalf("empty template, b excluded: %+v %v, want c", run, err)
+	}
+}

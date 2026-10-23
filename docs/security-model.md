@@ -177,6 +177,14 @@ An ID hosted by a different runner returns `404`. Routing is keyed entirely on
 the `{id}` path segment; no request body, header or query parameter can
 redirect a call to a different sandbox.
 
+Heartbeats also name the sandboxes a runner is running work in, and the API
+marks them active. It only touches running sandboxes the store has on that
+runner, and takes at most 4096 well-formed ids per heartbeat, so a runner can
+hold its own sandboxes past their idle windows but no one else's. Since the
+advertised ID is taken as given, a client holding the registration credentials
+can do the same for any runner's sandboxes; that is no wider than what those
+credentials already allow, which is to take over the runner's placements.
+
 ## Guest to host and network
 
 Sandbox contents are untrusted. Both runtimes block egress to the same list of
@@ -194,11 +202,48 @@ fails the create and asks the runner, best effort, to remove the sandbox, so a
 runner from before egress modes cannot hand out a public sandbox recorded as
 `none`.
 
-Egress `proxy` is accepted by the API and refused by every runner
-(`Unimplemented`, before anything is created), so it never yields a sandbox.
-The runner refuses a template other than the default the same way, rather than
-booting the default image in its place. A runtime handed `proxy` options would
-treat them as `none`.
+Egress `proxy` blocks the sandbox like `none` and opens one port: the runner's
+egress proxy, on a Docker bridge of its own (no route from `none` sandboxes) or
+inside the Firecracker slot's network namespace. On Docker the proxy names the
+sandbox by the connection's source address; sandboxes run with every
+capability dropped, so none can complete a TCP handshake from another's
+address. On Firecracker each sandbox has its own listener. Nothing a guest
+sends selects the policy. What the proxy then allows is in
+[API.md](API.md#the-egress-proxy); the parts that hold the boundary:
+
+- The CONNECT target alone picks the upstream, the filters and the credential;
+  SNI is ignored, every request on an inspected connection must name the same
+  host, and only HTTP/1.1 is offered, so one connection cannot carry requests
+  for another host or streams the proxy does not see. Requests are parsed by
+  Go's server and re-serialised, never forwarded as received bytes.
+- Names are resolved by the proxy, every record is checked, and the checked
+  address is dialled, so rebinding cannot reach a blocked range. The runner's
+  own interface addresses count as blocked, since the proxy dials from the
+  runner's namespace, where they reach the host's services. Only hosts the
+  operator lists in `SANDBOX_EGRESS_PROXY_INTERNAL_HOSTS` may resolve into a
+  blocked range, and that list serves every tenant: on a shared internal
+  service, per-tenant credentials are the only separation.
+- What one guest holds on the runner is bounded: 256 proxy connections, a
+  10-minute idle limit on tunnels, 1 MiB of push command list, 16 MiB of a
+  Responses request body (read to refuse `background: true`, which would spend
+  before any usage exists), and 10 000 unsent usage records per sandbox, so
+  one sandbox cannot push the others' out.
+- On a Git host only smart HTTP for listed repositories passes, so the
+  org-wide token the proxy injects cannot reach the REST API or other
+  repositories; path forms a server could read differently are refused. A push
+  is refused whole, before any of it is forwarded, if its command list names a
+  ref outside `push_refs` or is not the plain form (no push certificate, whose
+  capability is stripped from the advertisement).
+- Credentials are read per tenant from the secret store (each tenant's
+  directory its own `os.Root`, so neither `..` nor a symlink leaves it; the API
+  sets the tenant), replace whatever the guest sent, and are sent only to the
+  CONNECT target over verified TLS, or plain HTTP where the spec allows it.
+  Redirects are returned, not followed.
+- On a model host only the metered and token-free paths pass, so spending
+  cannot go around the meter, and the model block refuses new requests at once.
+
+The runner refuses a template it does not serve, rather than booting another
+image in its place.
 
 The Firecracker runtime gives every slot its own network namespace with a
 dedicated TAP device and veth uplink. The guest subnet is identical in every
@@ -352,13 +397,17 @@ every sandbox built from it. What is verified today:
 These are known and accepted. Do not read the section above as implying any of
 them.
 
-**Egress is `public` or `none`.** A `public` sandbox can reach any address
+**`public` egress is broad.** A `public` sandbox can reach any address
 outside the blocked ranges, which are not a definition of what is internal.
-Per-sandbox allowlists (`egress: "proxy"`) are validated and stored but not
-enforced, and no sandbox can be created with one. Validation refuses IP
-literals but not names that resolve to internal addresses (`localhost`,
-`*.internal`, cluster names), and a `secret_ref` is any string of the allowed
-form, not scoped to the caller's tenant.
+
+**What `proxy` egress does not cover.** A tunnelled (uninspected) host carries
+anything inside its TLS, so allow only hosts whose whole surface is acceptable.
+A credential on a host that is neither a Git nor a model host goes with every
+request to it. A request that resolves to an internal host's address is
+allowed only by name; the proxy does not check that name's records further.
+Usage records wait in runner memory and are lost if the runner restarts before
+the sink acknowledges them. The runner's egress CA key is in its memory (or the
+configured file); a runner compromise exposes it and every secret it reads.
 
 **The runner does not enforce tenancy.** It has no tenant concept at all. Anyone
 holding a runner API key and a client certificate the CA has signed can operate
@@ -452,6 +501,8 @@ The boundaries above are covered by tests rather than asserted on paper.
 | Docker capability policy, absence of a root path, and denied network administration; no user namespaces on either runtime | [e2e/tests/sandbox-capabilities.spec.ts](../e2e/tests/sandbox-capabilities.spec.ts) |
 | Unprivileged npm and PyPI installation, and the build toolchain | [e2e/tests/sandbox-packages.spec.ts](../e2e/tests/sandbox-packages.spec.ts) |
 | Blocked list and egress rule generation | [internal/runner/runtime/netpolicy/private_ranges_test.go](../internal/runner/runtime/netpolicy/private_ranges_test.go), [internal/runner/runtime/docker/netrules/netrules_test.go](../internal/runner/runtime/docker/netrules/netrules_test.go), [internal/runner/runtime/firecracker.ee/network/egress_test.go](../internal/runner/runtime/firecracker.ee/network/egress_test.go) |
+| Egress proxy: allow list, address checks and rebinding, inspection and Host binding, credential injection and tenant scoping, redirects and upgrades, model paths, block and metering | [internal/egressproxy/proxy_test.go](../internal/egressproxy/proxy_test.go), [internal/egressproxy/credentials/credentials_test.go](../internal/egressproxy/credentials/credentials_test.go), [internal/egressproxy/metering/usage_test.go](../internal/egressproxy/metering/usage_test.go), [internal/runner/egress_test.go](../internal/runner/egress_test.go) |
+| Git repository and ref filter, fuzzed, and against a real `git` client and `git http-backend` | [internal/egressproxy/gitfilter/gitfilter_test.go](../internal/egressproxy/gitfilter/gitfilter_test.go), [internal/egressproxy/git_differential_test.go](../internal/egressproxy/git_differential_test.go) |
 | Egress mode: API to runner to network and rules, refused when the runner does not confirm it | [internal/api/handlers_create_sandbox_test.go](../internal/api/handlers_create_sandbox_test.go), [internal/runner/grpc_control_test.go](../internal/runner/grpc_control_test.go), [internal/runner/runtime/docker/runtime_test.go](../internal/runner/runtime/docker/runtime_test.go), [internal/runner/runtime/firecracker.ee/network_wirer_test.go](../internal/runner/runtime/firecracker.ee/network_wirer_test.go) |
 
 The network isolation suite runs against both the Sysbox and the Firecracker

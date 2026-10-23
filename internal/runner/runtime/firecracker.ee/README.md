@@ -12,6 +12,8 @@ The runner reports `Healthy=false`, fails `/readyz` and `Ready()` until all of t
 4. Snapshot pin — mem/state exist and `boot.json` agrees with the runner (see [boot.json](../../../../docs/configuration.md#golden-snapshot-boot-parameters-bootjson)).
 5. Canary — create `admission-canary-*`, probe `/healthz`, run a tiny exec and a files round-trip, delete it. A canary whose cleanup fails keeps its slot and fails admission, so a capacity-1 runner is never healthy with a leaked slot.
 
+Steps 2 to 5 run for every template: the default one (the `TEMPLATE_DIR` and `SNAPSHOT_*_PATH` settings) and each in `SANDBOX_RUNNER_FIRECRACKER_TEMPLATES`, canaries one at a time. A sandbox keeps the template it was created from (`templates.go`): its rootfs and snapshot are cloned from it, its boot parameters and kernel pin are read from it, and its jail binds that template's kernel. Admission records each template's vCPUs and memory from its `boot.json` and its disk from the rootfs size, for the heartbeat.
+
 ## Networking
 
 Each sandbox slot gets its own network namespace:
@@ -60,7 +62,7 @@ The guest runs no NTP. A restored guest would resume with the wall clock it had 
 
 ## Resource limits
 
-CPU, memory and disk are fixed when the golden snapshot and `rootfs.ext4` are built, not by runner env vars: `VCPUS`/`MEM_MIB` in `create-golden-snapshot.sh`, `FIRECRACKER_ROOTFS_SIZE_MB` (default 2048) in `build-rootfs-template.sh`. Each sandbox gets a sparse copy of the rootfs; filling it yields ENOSPC in the guest. Rebuild on the host to change limits.
+CPU, memory and disk are fixed per template when its golden snapshot and `rootfs.ext4` are built, not by runner env vars: `VCPUS`/`MEM_MIB` in `create-golden-snapshot.sh`, `FIRECRACKER_ROOTFS_SIZE_MB` (default 2048) in `build-rootfs-template.sh`. Each sandbox gets a sparse copy of the rootfs; filling it yields ENOSPC in the guest. Rebuild on the host to change limits.
 
 ## Limitations
 

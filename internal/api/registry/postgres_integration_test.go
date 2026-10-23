@@ -144,3 +144,33 @@ func TestPostgresRegistryListIncludesStaleRunners(t *testing.T) {
 		t.Fatalf("List() pg-test-list-b last_seen age = %v, want about 10m", age)
 	}
 }
+
+func TestPostgresRegistryCordonAndTemplates(t *testing.T) {
+	reg, _ := openTestPostgresRegistry(t)
+	reg.UpsertRunner(Runner{ID: "pg-test-cordon", HTTPBaseURL: "https://a", ControlGRPCAddr: "a:1", Healthy: true, CapacityTotal: 10, Cordoned: true})
+	reg.UpsertRunner(Runner{ID: "pg-test-plain", HTTPBaseURL: "https://b", ControlGRPCAddr: "b:1", Healthy: true, CapacityTotal: 10, CapacityUsed: 5})
+	reg.UpsertRunner(Runner{ID: "pg-test-tpl", HTTPBaseURL: "https://c", ControlGRPCAddr: "c:1", Healthy: true, CapacityTotal: 10, CapacityUsed: 6, Templates: []Template{{Name: "py_3", VCPUs: 2, MemoryMB: 4096, DiskMB: 10240}, {Name: "default"}}})
+	others := []string{}
+	all, _ := reg.List()
+	for _, run := range all {
+		if !strings.HasPrefix(run.ID, "pg-test-") {
+			others = append(others, run.ID)
+		}
+	}
+	if run, ok := reg.Get("pg-test-tpl"); !ok || len(run.Templates) != 2 || run.Templates[0] != (Template{Name: "py_3", VCPUs: 2, MemoryMB: 4096, DiskMB: 10240}) {
+		t.Fatalf("templates round trip: %+v", run)
+	}
+	if run, ok := reg.Get("pg-test-cordon"); !ok || !run.Cordoned {
+		t.Fatalf("cordon round trip: %+v", run)
+	}
+	if run, err := reg.PickLowestUsed(others...); err != nil || run.ID != "pg-test-plain" {
+		t.Fatalf("default: %+v %v", run, err)
+	}
+	if run, err := reg.PickForTemplate("py_3", others...); err != nil || run.ID != "pg-test-tpl" {
+		t.Fatalf("py_3: %+v %v", run, err)
+	}
+	// "_" is a LIKE wildcard; the match is exact.
+	if _, err := reg.PickForTemplate("pya3", others...); !errors.Is(err, ErrNoRunners) {
+		t.Fatalf("pya3: %v, want ErrNoRunners", err)
+	}
+}

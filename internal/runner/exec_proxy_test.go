@@ -196,6 +196,7 @@ func TestExecProxyHappyPath(t *testing.T) {
 		&fakeRuntime{daemonURL: daemon.URL},
 		&config.Config{},
 		metrics.NewRunnerRecorder(false),
+		nil,
 	)
 
 	body := fmt.Sprintf(`{"command":"echo hello","exec_id":"%s"}`, execID)
@@ -242,6 +243,7 @@ func TestExecProxyRejectsOversizedBody(t *testing.T) {
 		&fakeRuntime{daemonURL: daemon.URL},
 		&config.Config{},
 		metrics.NewRunnerRecorder(false),
+		nil,
 	)
 
 	body := `{"command":"` + strings.Repeat("x", execMaxJSONBodyBytes) + `"}`
@@ -283,6 +285,7 @@ func TestExecProxyStreamsLargeEvent(t *testing.T) {
 		&fakeRuntime{daemonURL: daemon.URL},
 		&config.Config{},
 		metrics.NewRunnerRecorder(false),
+		nil,
 	)
 
 	body := fmt.Sprintf(`{"command":"echo hello","exec_id":"%s"}`, execID)
@@ -348,6 +351,7 @@ func TestExecProxyOneRetry(t *testing.T) {
 		&fakeRuntime{daemonURL: daemon.URL},
 		&config.Config{},
 		metrics.NewRunnerRecorder(false),
+		nil,
 	)
 
 	body := fmt.Sprintf(`{"command":"echo hello","exec_id":"%s"}`, execID)
@@ -426,6 +430,7 @@ func TestExecProxyResumeWithoutAfterBeforeFirstEvent(t *testing.T) {
 		&fakeRuntime{daemonURL: daemon.URL},
 		&config.Config{},
 		metrics.NewRunnerRecorder(false),
+		nil,
 	)
 
 	body := fmt.Sprintf(`{"command":"echo hello","exec_id":"%s"}`, execID)
@@ -497,6 +502,7 @@ func TestExecProxyRetriesExhausted(t *testing.T) {
 		&fakeRuntime{daemonURL: daemon.URL},
 		&config.Config{},
 		metrics.NewRunnerRecorder(false),
+		nil,
 	)
 
 	body := fmt.Sprintf(`{"command":"echo hello","exec_id":"%s"}`, execID)
@@ -546,6 +552,7 @@ func TestExecProxyExecIDPropagation(t *testing.T) {
 			&fakeRuntime{daemonURL: daemon.URL},
 			&config.Config{},
 			metrics.NewRunnerRecorder(false),
+			nil,
 		)
 
 		req := httptest.NewRequest(http.MethodPost, "/sandboxes/550e8400-e29b-41d4-a716-446655440000/executions", strings.NewReader(`{"command":"echo hi"}`))
@@ -586,6 +593,7 @@ func TestExecProxyExecIDPropagation(t *testing.T) {
 			&fakeRuntime{daemonURL: daemon.URL},
 			&config.Config{},
 			metrics.NewRunnerRecorder(false),
+			nil,
 		)
 
 		body := fmt.Sprintf(`{"command":"echo hi","exec_id":"%s"}`, explicitID)
@@ -639,6 +647,7 @@ func TestExecProxyAlreadyCompletedOnResume(t *testing.T) {
 		&fakeRuntime{daemonURL: daemon.URL},
 		&config.Config{},
 		metrics.NewRunnerRecorder(false),
+		nil,
 	)
 
 	body := fmt.Sprintf(`{"command":"echo hello","exec_id":"%s"}`, execID)

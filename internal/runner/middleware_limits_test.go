@@ -72,7 +72,7 @@ func newLimitTestRunner(t *testing.T, tune func(*config.Config)) *limitTestRunne
 	cfg := &config.Config{APIKeys: map[string]struct{}{"k": {}}, MaxFileBytes: 1 << 20}
 	tune(cfg)
 	rec := metrics.NewRunnerRecorder(true)
-	return &limitTestRunner{router: NewRouter(&fakeRuntime{daemonURL: d.URL}, cfg, rec), daemon: d, rec: rec}
+	return &limitTestRunner{router: NewRouter(&fakeRuntime{daemonURL: d.URL}, cfg, rec, nil), daemon: d, rec: rec}
 }
 
 // authedRequest passes AuthMiddleware the way the API does: with a client
@@ -254,7 +254,7 @@ func TestSandboxLimitRefusesBeforeTheHandlerRuns(t *testing.T) {
 // refused for it never wakes a stopped sandbox.
 func TestExecProxyRejectsTimeoutAboveMaxWithoutWaking(t *testing.T) {
 	rt := &fakeRuntime{daemonErr: runnerruntime.ErrSandboxNotRunning}
-	handler := ExecProxyHandler(rt, &config.Config{MaxExecTimeout: time.Hour}, metrics.NewRunnerRecorder(false))
+	handler := ExecProxyHandler(rt, &config.Config{MaxExecTimeout: time.Hour}, metrics.NewRunnerRecorder(false), nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/sandboxes/"+proxyTestSandboxID+"/executions",
 		strings.NewReader(`{"command":"sleep 1","timeout_ms":3600001}`))
@@ -280,7 +280,7 @@ func TestExecProxyAcceptsTimeoutAtMax(t *testing.T) {
 		_, _ = w.Write([]byte(startedEvent("exec-1") + "\n" + exitEvent(1) + "\n"))
 	}))
 	defer daemon.Close()
-	handler := ExecProxyHandler(&fakeRuntime{daemonURL: daemon.URL}, &config.Config{MaxExecTimeout: time.Hour}, metrics.NewRunnerRecorder(false))
+	handler := ExecProxyHandler(&fakeRuntime{daemonURL: daemon.URL}, &config.Config{MaxExecTimeout: time.Hour}, metrics.NewRunnerRecorder(false), nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/sandboxes/"+proxyTestSandboxID+"/executions",
 		strings.NewReader(`{"command":"true","timeout_ms":3600000}`))
