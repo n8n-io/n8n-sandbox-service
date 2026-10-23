@@ -280,7 +280,7 @@ func runnerControlTLS(cfg *config.APIConfig) *runnerctl.TLS {
 // see. The runtime's own create budget plus a margin for the round trip.
 const runnerCreateBudget = runnerruntime.CreateBudget + time.Minute
 
-func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, rec *metrics.APIRecorder) http.HandlerFunc {
+func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, rec *metrics.APIRecorder, quota *tenantQuota) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		success := false
 		defer func() { rec.ObserveSandboxOp(metrics.OpCreate, success) }()
@@ -353,6 +353,7 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 		}
 
 		tenantID := store.AdminTenantID
+		releaseQuota := func(bool) {}
 		if authID.Role == roleTenant {
 			tenantID = authID.TenantID
 			tenant, err := s.GetTenant(tenantID)
@@ -364,18 +365,20 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 				writeError(w, http.StatusUnauthorized, "invalid API key")
 				return
 			}
-			if tenant.MaxSandboxes > 0 {
-				n, err := s.CountByTenant(tenantID)
-				if err != nil {
-					writeError(w, http.StatusInternalServerError, err.Error())
-					return
-				}
-				if n >= int64(tenant.MaxSandboxes) {
-					writeError(w, http.StatusForbidden, "tenant sandbox quota exceeded")
-					return
-				}
+			var ok bool
+			releaseQuota, ok, err = quota.reserve(tenantID, tenant.MaxSandboxes)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			if !ok {
+				writeError(w, http.StatusForbidden, "tenant sandbox quota exceeded")
+				return
 			}
 		}
+		// A create that is not saved frees its slot on return, after any
+		// runner rollback; a saved one right after the save, below.
+		defer releaseQuota(false)
 
 		requested := runnerruntime.CreateOptions{Egress: egress}
 		createOptionsJSON, err := json.Marshal(requested)
@@ -454,6 +457,9 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 		}
 		if err := s.Create(record); err != nil {
 			rollbackRunnerCreate()
+			// Unless the store refused the row, it may have been saved anyway,
+			// say when a commit's reply was lost: count it as saved, the safe side.
+			releaseQuota(!errors.Is(err, store.ErrTenantQuotaExceeded) && !errors.Is(err, store.ErrTenantNotFound))
 			if existing, getErr := s.Get(sandboxID); getErr == nil && existing != nil {
 				if !canAccessSandbox(r, existing) {
 					writeError(w, http.StatusConflict, "sandbox id unavailable")
@@ -463,8 +469,8 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 				return
 			}
 			if errors.Is(err, store.ErrTenantQuotaExceeded) {
-				// Passed the check above, but concurrent creates for the
-				// tenant were saved first and filled its quota.
+				// Passed the check above, but creates on other API pods
+				// were saved first and filled the quota, or it was lowered.
 				slog.WarnContext(
 					r.Context(),
 					"create sandbox refused: tenant quota filled by concurrent creates",
@@ -490,6 +496,7 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 			writeError(w, http.StatusInternalServerError, "failed to store sandbox: "+err.Error())
 			return
 		}
+		releaseQuota(true)
 		slog.InfoContext(
 			r.Context(),
 			"create sandbox succeeded",
