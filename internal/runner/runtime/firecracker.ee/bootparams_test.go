@@ -18,7 +18,7 @@ func testBootParams(cfg Config) bootParams {
 		VCPUCount:         1,
 		MemSizeMiB:        512,
 		KernelImagePath:   "/vmlinux",
-		BootArgs:          "console=ttyS0 reboot=k panic=1 pci=off ipv6.disable=1 init=/sandbox-daemon ip=172.16.0.10::172.16.0.1:255.255.255.0::eth0:off",
+		BootArgs:          "console=ttyS0 reboot=k panic=1 pci=off ipv6.disable=1 clocksource=kvm-clock init=/sandbox-daemon ip=172.16.0.10::172.16.0.1:255.255.255.0::eth0:off",
 		RootfsDrivePath:   "/rootfs.ext4",
 		GuestMAC:          "AA:FC:00:00:00:01",
 		GuestIP:           cfg.GuestIP,

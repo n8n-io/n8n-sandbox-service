@@ -10,8 +10,8 @@ code (see `AGENTS.md`).
 | `firecracker-release.sh` | The Firecracker release pin (version + tarball SHA-256) and installer; also used by `Dockerfile.ee.runner-firecracker` |
 | `bump-firecracker.sh` | Move that pin to the newest patch of the same line (weekly workflow, not in the bundle) |
 | `check-firecracker-advisories.sh` | Report published advisories unfixed at the pin and a pinned line outside upstream's patch window (weekly workflow, not in the bundle) |
-| `firecracker-ci-assets.sh` | Download the pinned CI `vmlinux`, verify its SHA-256 |
-| `bump-firecracker-kernel.sh` | Move that pin to the newest same-line kernel (weekly workflow, not in the bundle) |
+| `firecracker-ci-assets.sh` | Download the pinned `vmlinux` from Firecracker's weekly CI builds, verify its SHA-256 |
+| `bump-firecracker-kernel.sh` | Move that pin to the newest same-line kernel in those builds (weekly workflow, not in the bundle) |
 | `build-rootfs-template.sh` | `rootfs.ext4` from sandbox OCI image + `vmlinux` |
 | `configure-host-nat.sh` | Host MASQUERADE / FORWARD for `fc-veth+` |
 | `create-golden-snapshot.sh` | Host-local golden snapshot (injects daemon as PID 1) |

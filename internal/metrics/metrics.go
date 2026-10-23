@@ -533,6 +533,23 @@ func (r *RunnerRecorder) SetStoppedContainers(f func() float64) {
 	))
 }
 
+// SetCordoned registers a scrape-time gauge that calls f to read whether the
+// runner is cordoned (1) or not (0).
+func (r *RunnerRecorder) SetCordoned(f func() float64) {
+	if r == nil || r.reg == nil {
+		return
+	}
+	r.reg.MustRegister(prometheus.NewGaugeFunc(
+		prometheus.GaugeOpts{
+			Namespace:   Namespace,
+			Name:        "runner_cordoned",
+			Help:        "1 while an operator has cordoned the runner from new creates, 0 otherwise.",
+			ConstLabels: prometheus.Labels{"role": RoleRunner},
+		},
+		f,
+	))
+}
+
 // SetUnwiredSlots registers a scrape-time gauge for Firecracker slots whose
 // network namespace is not built. Zero in steady state.
 func (r *RunnerRecorder) SetUnwiredSlots(f func() float64) {

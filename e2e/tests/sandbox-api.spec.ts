@@ -979,8 +979,9 @@ test.describe('Tenant isolation', () => {
 
 test.describe('Tenant quota', () => {
   test('parallel creates stop at max_sandboxes', async () => {
-    // Both creates can reach the runner at once, so keep the burst well within
-    // the Firecracker lane's runner capacity of four.
+    // On one API pod only the first create should reach the runner. Keep the
+    // burst within the Firecracker lane's runner capacity of four anyway, so a
+    // broken early check fails on the quota and not on capacity.
     await expectParallelCreatesStopAtQuota([BASE_URL], 1, 2);
   });
 });

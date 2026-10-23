@@ -34,7 +34,7 @@ Host fc-veth-{slot} ── FORWARD ── MASQUERADE ── internet
 API/exec: 127.0.0.1 proxy ── setns ── guest:8081
 ```
 
-`network/network.go` owns topology (netns, TAP, veth, routes, NAT); `network/egress.go` owns the `FORWARD` rules for the `netpolicy` denylist shared with Docker and the egress `none` rule, a `FORWARD -i <tap> -j DROP` inserted ahead of them. Guest IPv6 is disabled via `ipv6.disable=1` in the snapshot boot args, and `pci=off` keeps virtio on MMIO (why: [docs/security-model.md](../../../../docs/security-model.md), "Guest to host and network"); changing boot args requires a snapshot rebuild.
+`network/network.go` owns topology (netns, TAP, veth, routes, NAT); `network/egress.go` owns the `FORWARD` rules for the `netpolicy` denylist shared with Docker and the egress `none` rule, a `FORWARD -i <tap> -j DROP` inserted ahead of them. Guest IPv6 is disabled via `ipv6.disable=1` in the snapshot boot args, `sysctl.user.max_user_namespaces=0` refuses user namespaces as Docker's default seccomp profile does, and `pci=off` keeps virtio on MMIO (why: [docs/security-model.md](../../../../docs/security-model.md), "Guest to host and network"); changing boot args requires a snapshot rebuild.
 
 ## Slots and lifecycle
 
@@ -56,7 +56,7 @@ The guest daemon is PID 1 with `panic=1 reboot=k`, and jailer execs Firecracker 
 
 ## Guest clock
 
-The guest runs no NTP. A restored guest would resume with the wall clock it had when its snapshot was taken, so every restore (create and wake) sends `clock_realtime: true`, which makes KVM advance the guest's kvm-clock by the time since then; the guest's monotonic clock jumps with it. Firecracker supports this on x86_64 only, and refuses the restore unless KVM recorded the wall-clock time in the snapshot, which needs host kernel 5.16 or later and a TSC-based host clocksource (`tsc`, or Hyper-V's TSC page on Azure). A host that never records it fails the admission canary. A stop snapshot taken while KVM could not record it makes that wake fail; the sandbox is then pinned to cold boot like after a failed restore.
+The guest runs no NTP. A restored guest would resume with the wall clock it had when its snapshot was taken, so every restore (create and wake) sends `clock_realtime: true`, which makes KVM advance the guest's kvm-clock by the time since then; the guest's monotonic clock jumps with it. That only works while the guest keeps time with kvm-clock, so the golden snapshot boots with `clocksource=kvm-clock`: where the guest sees an invariant TSC (Azure v6 sizes, for example), the kernel would otherwise switch to `tsc`, which resumes at snapshot time. Firecracker supports this on x86_64 only, and refuses the restore unless KVM recorded the wall-clock time in the snapshot, which needs host kernel 5.16 or later and a TSC-based host clocksource (`tsc`, or Hyper-V's TSC page on Azure). A host that never records it fails the admission canary. A stop snapshot taken while KVM could not record it makes that wake fail; the sandbox is then pinned to cold boot like after a failed restore.
 
 ## Resource limits
 

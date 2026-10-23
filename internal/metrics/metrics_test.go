@@ -227,6 +227,7 @@ func TestRunnerRecorderDisabled(t *testing.T) {
 	r.ObserveRequestLimited(LimitSandbox)
 	r.SetActiveContainers(func() float64 { return 1 })
 	r.SetUnwiredSlots(func() float64 { return 1 })
+	r.SetCordoned(func() float64 { return 1 })
 	r.AddHTTPInFlight(1)
 }
 
@@ -235,12 +236,14 @@ func TestRunnerRecorderStoppedGaugeScrape(t *testing.T) {
 	r.SetActiveContainers(func() float64 { return 2 })
 	r.SetStoppedContainers(func() float64 { return 3 })
 	r.SetUnwiredSlots(func() float64 { return 4 })
+	r.SetCordoned(func() float64 { return 1 })
 
 	body := scrape(t, r.Registry())
 	for _, want := range []string{
 		"sandbox_containers_active",
 		"sandbox_containers_stopped",
 		"sandbox_slots_unwired",
+		`sandbox_runner_cordoned{role="runner"} 1`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("scrape body missing %q", want)

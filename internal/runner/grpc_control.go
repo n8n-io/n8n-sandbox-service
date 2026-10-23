@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
 	"github.com/n8n-io/sandbox-service/internal/api/grpc/pb"
@@ -17,6 +19,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/obs"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
+	"github.com/n8n-io/sandbox-service/internal/runner/cordon"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 )
 
@@ -26,6 +29,7 @@ type SandboxControlGRPC struct {
 	Runtime runnerruntime.Runtime
 	Cfg     *config.Config
 	Rec     *metrics.RunnerRecorder
+	Cordon  *cordon.State
 }
 
 var _ pb.SandboxControlServer = (*SandboxControlGRPC)(nil)
@@ -85,6 +89,10 @@ func (s *SandboxControlGRPC) checkAPIKey(ctx context.Context) error {
 func (s *SandboxControlGRPC) CreateSandbox(ctx context.Context, req *pb.CreateSandboxRequest) (*pb.CreateSandboxResponse, error) {
 	if err := s.checkAPIKey(ctx); err != nil {
 		return nil, err
+	}
+	// A capacity refusal makes the API retry the create on another runner.
+	if s.Cordon.Cordoned() {
+		return nil, runnerctl.CapacityRefusal("runner is cordoned")
 	}
 	if err := s.Runtime.Ready(ctx); err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
@@ -161,4 +169,27 @@ func (s *SandboxControlGRPC) DeleteSandbox(ctx context.Context, req *pb.DeleteSa
 		return nil, toGRPCError(err)
 	}
 	return &pb.DeleteSandboxResponse{}, nil
+}
+
+// GetCordon reports whether the runner is cordoned.
+func (s *SandboxControlGRPC) GetCordon(ctx context.Context, _ *pb.GetCordonRequest) (*pb.GetCordonResponse, error) {
+	if err := s.checkAPIKey(ctx); err != nil {
+		return nil, err
+	}
+	return &pb.GetCordonResponse{Cordoned: s.Cordon.Cordoned()}, nil
+}
+
+// SetCordon cordons or uncordons the runner. Idempotent.
+func (s *SandboxControlGRPC) SetCordon(ctx context.Context, req *pb.SetCordonRequest) (*pb.SetCordonResponse, error) {
+	if err := s.checkAPIKey(ctx); err != nil {
+		return nil, err
+	}
+	if s.Cordon.Set(req.GetCordoned()) {
+		remote := ""
+		if p, ok := peer.FromContext(ctx); ok {
+			remote = p.Addr.String()
+		}
+		slog.InfoContext(ctx, "runner cordon changed", "cordoned", req.GetCordoned(), "remote_addr", remote)
+	}
+	return &pb.SetCordonResponse{Cordoned: req.GetCordoned()}, nil
 }

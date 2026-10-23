@@ -10,6 +10,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/runnerctl"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
+	"github.com/n8n-io/sandbox-service/internal/runner/cordon"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -67,6 +68,7 @@ func TestSandboxControlGRPCCreateSandboxParsesOptions(t *testing.T) {
 				Runtime: rt,
 				Cfg:     &config.Config{APIKeys: map[string]struct{}{"runner-key": {}}},
 				Rec:     metrics.NewRunnerRecorder(true),
+				Cordon:  cordon.New(),
 			}
 			resp, err := srv.CreateSandbox(ctx, &pb.CreateSandboxRequest{SandboxId: id, CreateOptionsJson: tc.createOptionsJSON})
 			if tc.wantErr {
@@ -119,6 +121,7 @@ func TestSandboxControlGRPCCreateSandboxErrorCodes(t *testing.T) {
 				Runtime: &createErrRuntime{err: tc.err},
 				Cfg:     &config.Config{APIKeys: map[string]struct{}{"runner-key": {}}},
 				Rec:     metrics.NewRunnerRecorder(true),
+				Cordon:  cordon.New(),
 			}
 			_, err := srv.CreateSandbox(ctx, &pb.CreateSandboxRequest{SandboxId: "11111111-1111-4111-8111-111111111111"})
 			if got := status.Code(err); got != tc.want {
@@ -130,6 +133,106 @@ func TestSandboxControlGRPCCreateSandboxErrorCodes(t *testing.T) {
 		})
 	}
 }
+
+// A cordoned runner refuses creates as a capacity refusal, before the runtime is
+// asked, so the API retries on another runner; uncordoning lets them through.
+func TestSandboxControlGRPCCreateSandboxRefusedWhileCordoned(t *testing.T) {
+	const id = "11111111-1111-4111-8111-111111111111"
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-api-key", "runner-key"))
+	rt := &createOptsRuntime{}
+	cd := cordon.New()
+	srv := &SandboxControlGRPC{
+		Runtime: rt,
+		Cfg:     &config.Config{APIKeys: map[string]struct{}{"runner-key": {}}},
+		Rec:     metrics.NewRunnerRecorder(true),
+		Cordon:  cd,
+	}
+
+	cd.Set(true)
+	_, err := srv.CreateSandbox(ctx, &pb.CreateSandboxRequest{SandboxId: id})
+	if !runnerctl.IsCapacityRefusal(err) {
+		t.Fatalf("CreateSandbox() while cordoned = %v, want a capacity refusal", err)
+	}
+	if rt.opts != nil {
+		t.Fatal("runtime was asked to create while cordoned")
+	}
+
+	cd.Set(false)
+	if _, err := srv.CreateSandbox(ctx, &pb.CreateSandboxRequest{SandboxId: id}); err != nil {
+		t.Fatalf("CreateSandbox() after uncordon failed: %v", err)
+	}
+}
+
+func TestSandboxControlGRPCCordon(t *testing.T) {
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-api-key", "runner-key"))
+	cd := cordon.New()
+	srv := &SandboxControlGRPC{
+		Runtime: &fakeRuntime{},
+		Cfg:     &config.Config{APIKeys: map[string]struct{}{"runner-key": {}}},
+		Rec:     metrics.NewRunnerRecorder(false),
+		Cordon:  cd,
+	}
+
+	for _, step := range []struct {
+		set  *bool
+		want bool
+	}{
+		{nil, false},
+		{ptr(true), true},
+		{ptr(true), true},
+		{nil, true},
+		{ptr(false), false},
+		{ptr(false), false},
+		{nil, false},
+	} {
+		var got bool
+		if step.set == nil {
+			resp, err := srv.GetCordon(ctx, &pb.GetCordonRequest{})
+			if err != nil {
+				t.Fatalf("GetCordon() failed: %v", err)
+			}
+			got = resp.GetCordoned()
+		} else {
+			resp, err := srv.SetCordon(ctx, &pb.SetCordonRequest{Cordoned: *step.set})
+			if err != nil {
+				t.Fatalf("SetCordon(%v) failed: %v", *step.set, err)
+			}
+			got = resp.GetCordoned()
+		}
+		if got != step.want || cd.Cordoned() != step.want {
+			t.Fatalf("cordoned: response %v, state %v, want %v", got, cd.Cordoned(), step.want)
+		}
+	}
+}
+
+// Cordoning stops placement on the runner, so it takes the same API key as the
+// lifecycle calls; the listener has already required a client certificate.
+func TestSandboxControlGRPCCordonRequiresAPIKey(t *testing.T) {
+	cd := cordon.New()
+	srv := &SandboxControlGRPC{
+		Runtime: &fakeRuntime{},
+		Cfg:     &config.Config{APIKeys: map[string]struct{}{"runner-key": {}}},
+		Rec:     metrics.NewRunnerRecorder(false),
+		Cordon:  cd,
+	}
+	for name, ctx := range map[string]context.Context{
+		"no metadata": context.Background(),
+		"no key":      metadata.NewIncomingContext(context.Background(), metadata.Pairs()),
+		"wrong key":   metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-api-key", "wrong")),
+	} {
+		if _, err := srv.SetCordon(ctx, &pb.SetCordonRequest{Cordoned: true}); status.Code(err) != codes.Unauthenticated {
+			t.Fatalf("SetCordon with %s: error = %v, want Unauthenticated", name, err)
+		}
+		if _, err := srv.GetCordon(ctx, &pb.GetCordonRequest{}); status.Code(err) != codes.Unauthenticated {
+			t.Fatalf("GetCordon with %s: error = %v, want Unauthenticated", name, err)
+		}
+	}
+	if cd.Cordoned() {
+		t.Fatal("an unauthenticated call cordoned the runner")
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
 
 func TestSandboxControlGRPCStopSandboxRecordsMetric(t *testing.T) {
 	rec := metrics.NewRunnerRecorder(true)

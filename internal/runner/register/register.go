@@ -16,11 +16,12 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/grpc/pb"
 	"github.com/n8n-io/sandbox-service/internal/grpctls"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
+	"github.com/n8n-io/sandbox-service/internal/runner/cordon"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 )
 
 // Run maintains a registration stream to the API until ctx is cancelled.
-func Run(ctx context.Context, cfg *config.Config, rt runnerruntime.Runtime) {
+func Run(ctx context.Context, cfg *config.Config, rt runnerruntime.Runtime, cd *cordon.State) {
 	backoff := time.Second
 	for {
 		select {
@@ -28,7 +29,7 @@ func Run(ctx context.Context, cfg *config.Config, rt runnerruntime.Runtime) {
 			return
 		default:
 		}
-		err := connectOnce(ctx, cfg, rt)
+		err := connectOnce(ctx, cfg, rt, cd)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -51,7 +52,7 @@ func Run(ctx context.Context, cfg *config.Config, rt runnerruntime.Runtime) {
 	}
 }
 
-func connectOnce(ctx context.Context, cfg *config.Config, rt runnerruntime.Runtime) error {
+func connectOnce(ctx context.Context, cfg *config.Config, rt runnerruntime.Runtime, cd *cordon.State) error {
 	serverName := cfg.GRPCServerName
 	if serverName == "" {
 		host, _, err := net.SplitHostPort(cfg.APIGRPCAddr)
@@ -138,6 +139,7 @@ func connectOnce(ctx context.Context, cfg *config.Config, rt runnerruntime.Runti
 			CapacityUsed:    capacity.Used,
 			CapacityStopped: capacity.Stopped,
 			ControlGrpcAddr: cfg.ResolvedControlGRPCAdvertiseAddr(),
+			Cordoned:        cd.Cordoned(),
 		}
 		return stream.Send(hb)
 	}
@@ -166,6 +168,10 @@ func connectOnce(ctx context.Context, cfg *config.Config, rt runnerruntime.Runti
 			return err
 		case <-readyCh:
 			readyCh = nil
+			if err := send(); err != nil {
+				return err
+			}
+		case <-cd.Changed():
 			if err := send(); err != nil {
 				return err
 			}

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -234,26 +235,32 @@ func newIdleTestGatewayPods(t *testing.T, adminKey string, fake *fakeSandboxCont
 }
 
 // A burst of creates for one tenant leaves exactly its quota, on one API pod or
-// spread over two. Every create here passes the check before the runner call,
-// so saving has to refuse the extra ones, and they must be deleted again on the
-// runner.
+// spread over two. Each pod counts its own creates in progress, so on one pod
+// no create past the quota reaches the runner. Across pods each one lets the
+// quota through, so saving has to refuse the extra ones, and they must be
+// deleted again on the runner.
 func TestCreateSandboxQuotaHoldsUnderConcurrentCreates(t *testing.T) {
 	const quota, creates = 2, 6
 	for _, pods := range []int{1, 2} {
 		t.Run(fmt.Sprintf("pods=%d", pods), func(t *testing.T) {
-			// Hold every create at the runner until all have arrived, so none
-			// is saved before the last one has passed the check. A create that
-			// returns first never reached the runner; it releases the rest, so
-			// the count check below fails at once instead of after the timeout.
-			var arrived atomic.Int32
-			allArrived := make(chan struct{})
-			release := sync.OnceFunc(func() { close(allArrived) })
-			fake := &fakeSandboxControl{createHook: func(context.Context) {
-				if arrived.Add(1) == creates {
+			reachRunner := pods * quota
+			// Hold every create at the runner until each create has either
+			// arrived there or returned without reaching it, so none is saved
+			// before the last one has been checked. Until then a create that
+			// returns never reached the runner, as those are held.
+			var settled, arrived atomic.Int32
+			allSettled := make(chan struct{})
+			release := sync.OnceFunc(func() { close(allSettled) })
+			settle := func() {
+				if settled.Add(1) == creates {
 					release()
 				}
+			}
+			fake := &fakeSandboxControl{createHook: func(context.Context) {
+				arrived.Add(1)
+				settle()
 				select {
-				case <-allArrived:
+				case <-allSettled:
 				case <-time.After(10 * time.Second):
 				}
 			}}
@@ -264,14 +271,14 @@ func TestCreateSandboxQuotaHoldsUnderConcurrentCreates(t *testing.T) {
 			var wg sync.WaitGroup
 			for i := range creates {
 				wg.Go(func() {
-					defer release()
 					responses[i] = postCreateSandbox(t, routers[i%pods], tenant.Key.APIKey, "")
+					settle()
 				})
 			}
 			wg.Wait()
 
-			if n := arrived.Load(); n != creates {
-				t.Fatalf("runner creates = %d, want all %d", n, creates)
+			if n := arrived.Load(); int(n) != reachRunner {
+				t.Fatalf("runner creates = %d, want %d: the quota on each of %d pods", n, reachRunner, pods)
 			}
 			created := map[string]bool{}
 			for _, rr := range responses {
@@ -304,8 +311,8 @@ func TestCreateSandboxQuotaHoldsUnderConcurrentCreates(t *testing.T) {
 				}
 			}
 			_, deleted := fake.calls()
-			if len(deleted) != creates-quota {
-				t.Fatalf("runner deletes = %v, want the %d refused creates", deleted, creates-quota)
+			if len(deleted) != reachRunner-quota {
+				t.Fatalf("runner deletes = %v, want the %d creates refused when saving", deleted, reachRunner-quota)
 			}
 			for _, id := range deleted {
 				if created[id] {
@@ -313,6 +320,185 @@ func TestCreateSandboxQuotaHoldsUnderConcurrentCreates(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// However a create ends, its slot among the tenant's creates in progress is
+// freed, or the tenant loses that slot on the pod for good. With a quota of
+// one, a lost slot shows as a 403 on the next create.
+func TestCreateSandboxFreesQuotaSlotWhenCreateEnds(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		want int
+		// Makes the first create end with want; returns what undoes it.
+		fail func(f *fakeSandboxControl, s store.SandboxStore, tenantID string) (undo func())
+	}{
+		{name: "created", want: http.StatusCreated},
+		{name: "runner error", want: http.StatusInternalServerError, fail: func(f *fakeSandboxControl, _ store.SandboxStore, _ string) func() {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			f.createErr = status.Error(codes.Internal, "runner broke")
+			return func() {
+				f.mu.Lock()
+				defer f.mu.Unlock()
+				f.createErr = nil
+			}
+		}},
+		{name: "egress not applied", want: http.StatusBadGateway, fail: func(f *fakeSandboxControl, _ store.SandboxStore, _ string) func() {
+			f.applied = func(string) string { return `{"egress":"none"}` }
+			return func() { f.applied = nil }
+		}},
+		{name: "refused when saving", want: http.StatusForbidden, fail: func(f *fakeSandboxControl, s store.SandboxStore, tenantID string) func() {
+			// Saved meanwhile, as by another API pod.
+			const other = "12121212-1212-4212-8212-121212121212"
+			f.createHook = func(context.Context) {
+				if err := s.Create(&store.SandboxRecord{ID: other, Status: "running", TenantID: tenantID}); err != nil {
+					t.Errorf("plant other pod's sandbox: %v", err)
+				}
+			}
+			return func() { f.createHook = nil }
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeSandboxControl{}
+			router, s, _ := newIdleTestGateway(t, "admin-key", fake)
+			tenant := mintTenantKey(t, router, `{"name":"capped","max_sandboxes":1}`)
+
+			undo := func() {}
+			if tc.fail != nil {
+				undo = tc.fail(fake, s, tenant.Tenant.ID)
+			}
+			if rr := postCreateSandbox(t, router, tenant.Key.APIKey, ""); rr.Code != tc.want {
+				t.Fatalf("first create: got %d body=%s, want %d", rr.Code, rr.Body.String(), tc.want)
+			}
+			undo()
+			stored, err := s.ListByTenant(tenant.Tenant.ID)
+			if err != nil {
+				t.Fatalf("list: %v", err)
+			}
+			for _, rec := range stored {
+				if err := s.Delete(rec.ID); err != nil {
+					t.Fatalf("delete %s: %v", rec.ID, err)
+				}
+			}
+
+			if rr := postCreateSandbox(t, router, tenant.Key.APIKey, ""); rr.Code != http.StatusCreated {
+				t.Fatalf("create after the first ended: got %d body=%s, want %d: its slot was not freed", rr.Code, rr.Body.String(), http.StatusCreated)
+			}
+		})
+	}
+}
+
+// createErrStore returns err from every sandbox Create, after saving the row
+// when save is set.
+type createErrStore struct {
+	store.SandboxStore
+	save bool
+	err  error
+}
+
+func (s createErrStore) Create(r *store.SandboxRecord) error {
+	if s.save {
+		if err := s.SandboxStore.Create(r); err != nil {
+			return err
+		}
+	}
+	return s.err
+}
+
+// A save that errored may still have saved the row, say when the reply to its
+// commit was lost. Unless the store refused the row, its slot is freed as
+// saved, so a reserve reading meanwhile still counts it.
+func TestCreateSandboxCountsUnclearSaveAsSaved(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		save      bool
+		err       error
+		wantCode  int
+		wantSaved int64
+	}{
+		{name: "saved, reply lost", save: true, err: errors.New("connection reset"), wantCode: http.StatusOK, wantSaved: 1},
+		{name: "refused at quota", err: store.ErrTenantQuotaExceeded, wantCode: http.StatusForbidden},
+		{name: "tenant gone", err: store.ErrTenantNotFound, wantCode: http.StatusConflict},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newSweepStore(t)
+			const tenantID = "13131313-1313-4313-8313-131313131313"
+			if err := s.CreateTenant(&store.Tenant{ID: tenantID, Name: "t", MaxSandboxes: 2}); err != nil {
+				t.Fatalf("create tenant: %v", err)
+			}
+			reg := registry.New(45 * time.Second)
+			reg.Upsert("runner-1", "https://127.0.0.1:9", startFakeRunnerControl(t, &fakeSandboxControl{}), true, 10, 0, 0)
+			q := newTenantQuota(s.CountByTenant)
+			// Keeps the tenant's entry, and so its counts, after the create.
+			hold, _, _ := q.reserve(tenantID, 2)
+			defer hold(false)
+
+			h := handleCreateSandbox(createErrStore{SandboxStore: s, save: tc.save, err: tc.err}, reg, idleSweepConfig(), metrics.NewAPIRecorder(false), q)
+			req := httptest.NewRequest(http.MethodPost, "/sandboxes", nil)
+			req = req.WithContext(withAuthIdentity(req.Context(), authIdentity{Role: roleTenant, TenantID: tenantID}))
+			rr := httptest.NewRecorder()
+			h(rr, req)
+			if rr.Code != tc.wantCode {
+				t.Fatalf("create: got %d body=%s, want %d", rr.Code, rr.Body.String(), tc.wantCode)
+			}
+			if e := q.tenants[tenantID]; e == nil || e.inProgress != 1 || e.saved != tc.wantSaved {
+				t.Fatalf("tenant entry = %+v, want only the held create in progress and %d saved", e, tc.wantSaved)
+			}
+		})
+	}
+}
+
+// blockingWriter holds the response body until unblock is closed.
+type blockingWriter struct {
+	*httptest.ResponseRecorder
+	writing func()
+	unblock chan struct{}
+}
+
+func (b *blockingWriter) Write(p []byte) (int, error) {
+	b.writing()
+	<-b.unblock
+	return b.ResponseRecorder.Write(p)
+}
+
+// A saved create frees its slot right away, not once its response is written.
+// If it held the slot until then, the sandbox would count both as saved and in
+// progress, and the second create here would be refused below the quota.
+func TestCreateSandboxFreesQuotaSlotOnceSaved(t *testing.T) {
+	router, _, _ := newIdleTestGateway(t, "admin-key", &fakeSandboxControl{})
+	tenant := mintTenantKey(t, router, `{"name":"capped","max_sandboxes":2}`)
+
+	writing := make(chan struct{})
+	w := &blockingWriter{
+		ResponseRecorder: httptest.NewRecorder(),
+		writing:          sync.OnceFunc(func() { close(writing) }),
+		unblock:          make(chan struct{}),
+	}
+	unblock := sync.OnceFunc(func() { close(w.unblock) })
+	defer unblock()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		req := httptest.NewRequest(http.MethodPost, "/sandboxes", nil)
+		req.Header.Set("X-Api-Key", tenant.Key.APIKey)
+		router.ServeHTTP(w, req)
+	}()
+	select {
+	case <-writing:
+	case <-done:
+		t.Fatalf("first create returned without writing a body: %d", w.Code)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the first create's response")
+	}
+
+	if rr := postCreateSandbox(t, router, tenant.Key.APIKey, ""); rr.Code != http.StatusCreated {
+		t.Fatalf("create while the first one's response is written: got %d body=%s, want %d", rr.Code, rr.Body.String(), http.StatusCreated)
+	}
+	unblock()
+	<-done
+	if w.Code != http.StatusCreated {
+		t.Fatalf("first create: got %d, want %d", w.Code, http.StatusCreated)
 	}
 }
 

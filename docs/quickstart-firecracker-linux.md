@@ -55,6 +55,11 @@ Alternatively, set `SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT` and
 `SANDBOX_RUNNER_FIRECRACKER_DAEMON_BIN` and let the runner create the snapshot on
 first start (this is what production VM images do).
 
+The runner creates the snapshot only when it is missing, and Firecracker cannot
+restore a snapshot taken by another release. When upgrading a host in place to a
+bundle with a different `firecracker_version`, remove the old set from
+`/srv/firecracker/snapshots` first.
+
 ## 2. Runner
 
 ### Option A: Docker Hub image (recommended)

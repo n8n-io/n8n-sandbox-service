@@ -14,11 +14,16 @@ GITHUB_REPO=firecracker-microvm/firecracker
 MIN_PUBLISHED_ADVISORIES=2
 REPORT=""
 
-# Advisories reviewed and cleared for the pinned line, one "GHSA-id  verdict"
-# per entry. Acknowledging an advisory is a PR that adds it here; the check then
-# reports it as assessed instead of flagging it. Empty today: both published
-# advisories are decided by the patched-version rule below.
-FIRECRACKER_ASSESSED_ADVISORIES=()
+# Advisories reviewed and cleared, one "GHSA-id  updated_at  verdict" per entry,
+# with the advisory's updated_at as it was when assessed. Acknowledging an
+# advisory is a PR that adds it here; the check then reports it as assessed
+# instead of flagging it, until upstream edits the advisory, which flags it for
+# review again. The patched-version rule below only sees fixes listed for the
+# pinned line, so an advisory whose range never reached that line needs an entry.
+FIRECRACKER_ASSESSED_ADVISORIES=(
+	"GHSA-776c-mpj7-jm3r  2026-04-07T23:18:46Z  not affected from 1.16.0: vulnerable range is 1.13.0 to 1.14.3 and 1.15.0"
+	"GHSA-36j2-f825-qvgc  2026-01-23T21:30:16Z  not affected from 1.14.1: vulnerable range is up to 1.13.1 and 1.14.0"
+)
 
 usage() {
 	cat >&2 <<EOF
@@ -62,8 +67,9 @@ today="$(date -u +%Y-%m-%d)"
 now="$(date -u +%s)"
 flagged=false
 
-# Prints the ledger verdict for a GHSA id; nothing when it is not assessed.
-ledger_verdict() {
+# Prints "updated_at verdict" of the ledger entry for a GHSA id; nothing when it
+# is not assessed.
+ledger_entry() {
 	local entry
 	# ${arr[@]+...}: an empty array is unbound under set -u in bash < 4.4.
 	for entry in ${FIRECRACKER_ASSESSED_ADVISORIES[@]+"${FIRECRACKER_ASSESSED_ADVISORIES[@]}"}; do
@@ -74,13 +80,13 @@ ledger_verdict() {
 	done
 }
 
-# One advisory per line: ghsa_id, cve_id, severity, html_url and every
-# vulnerabilities[].patched_versions joined by ",". patched_versions is free
-# text ("1.14.4, 1.15.1", "v1.14.1"); vulnerable_version_range is free-form and
-# not parsed. --paginate: the listing may span pages.
+# One advisory per line: ghsa_id, cve_id, severity, html_url, updated_at and
+# every vulnerabilities[].patched_versions joined by ",". patched_versions is
+# free text ("1.14.4, 1.15.1", "v1.14.1"); vulnerable_version_range is free-form
+# and not parsed. --paginate: the listing may span pages.
 advisories="$(
 	gh api --paginate "repos/${GITHUB_REPO}/security-advisories?state=published" \
-		--jq '.[] | [.ghsa_id, (.cve_id // "-"), (.severity // "-"), (.html_url // "-"), ([.vulnerabilities[]?.patched_versions | select(. != null)] | join(","))] | @tsv'
+		--jq '.[] | [.ghsa_id, (.cve_id // "-"), (.severity // "-"), (.html_url // "-"), (.updated_at // "-"), ([.vulnerabilities[]?.patched_versions | select(. != null)] | join(","))] | @tsv'
 )"
 
 # The fields land in Markdown that becomes an issue body, so only the shapes
@@ -95,12 +101,13 @@ require_field() {
 advisory_rows=""
 advisory_total=0
 advisory_flagged=0
-while IFS=$'\t' read -r ghsa cve severity url patched; do
+while IFS=$'\t' read -r ghsa cve severity url updated patched; do
 	[[ -n "$ghsa" ]] || continue
 	require_field ghsa_id "$ghsa" '^GHSA-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}$'
 	require_field cve_id "$cve" '^(CVE-[0-9]{4}-[0-9]+|-)$'
 	require_field severity "$severity" '^[a-z_-]+$'
 	require_field html_url "$url" '^https://github\.com/[A-Za-z0-9._/-]+$'
+	require_field updated_at "$updated" '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
 	advisory_total=$((advisory_total + 1))
 	# Newest fix in the pinned line named by patched_versions, if any.
 	# `|| true`: with pipefail a no-match grep would abort the script.
@@ -109,19 +116,25 @@ while IFS=$'\t' read -r ghsa cve severity url patched; do
 			sed -E 's/^[[:space:]]*v?//; s/[[:space:]]*$//' |
 			grep -E "$line_re" | sort -V | tail -n 1 || true
 	)"
-	verdict="$(ledger_verdict "$ghsa")"
-	if [[ -n "$verdict" ]]; then
-		status="assessed: ${verdict}"
-	elif [[ -z "$newest" ]]; then
-		status="**flagged**: no ${line} fix listed; check whether the pin is in the vulnerable range"
-		advisory_flagged=$((advisory_flagged + 1))
-	elif [[ "$(printf '%s\n' "$pin" "$newest" | sort -V | tail -n 1)" != "$pin" ]]; then
+	# A fix listed for the pinned line decides before the ledger does, so an
+	# advisory amended later with a newer fix in this line is flagged again.
+	assessed_at="" verdict=""
+	read -r assessed_at verdict <<<"$(ledger_entry "$ghsa")" || true
+	if [[ -n "$newest" && "$(printf '%s\n' "$pin" "$newest" | sort -V | tail -n 1)" != "$pin" ]]; then
 		status="**flagged**: fixed in ${newest}, pin is ${pin}"
 		advisory_flagged=$((advisory_flagged + 1))
-	else
+	elif [[ -n "$newest" ]]; then
 		status="cleared: fixed in ${newest} <= pin"
+	elif [[ -n "$verdict" && "$assessed_at" == "$updated" ]]; then
+		status="assessed: ${verdict}"
+	elif [[ -n "$verdict" ]]; then
+		status="**flagged**: edited since it was assessed at ${assessed_at}; re-check it and update its entry"
+		advisory_flagged=$((advisory_flagged + 1))
+	else
+		status="**flagged**: no ${line} fix listed; check whether the pin is in the vulnerable range"
+		advisory_flagged=$((advisory_flagged + 1))
 	fi
-	advisory_rows+="| [${ghsa}](${url}) | ${cve} | ${severity} | ${newest:--} | ${status} |"$'\n'
+	advisory_rows+="| [${ghsa}](${url}) | ${cve} | ${severity} | ${updated} | ${newest:--} | ${status} |"$'\n'
 done <<<"$advisories"
 
 if ((advisory_total < MIN_PUBLISHED_ADVISORIES)); then
@@ -130,13 +143,13 @@ if ((advisory_total < MIN_PUBLISHED_ADVISORIES)); then
 	if ((advisory_total > 0)); then
 		advisory_section+="
 
-| Advisory | CVE | Severity | Fix in ${line} | Status |
-| --- | --- | --- | --- | --- |
+| Advisory | CVE | Severity | Updated | Fix in ${line} | Status |
+| --- | --- | --- | --- | --- | --- |
 ${advisory_rows}"
 	fi
 else
-	advisory_section="| Advisory | CVE | Severity | Fix in ${line} | Status |
-| --- | --- | --- | --- | --- |
+	advisory_section="| Advisory | CVE | Severity | Updated | Fix in ${line} | Status |
+| --- | --- | --- | --- | --- | --- |
 ${advisory_rows}"
 	if ((advisory_flagged > 0)); then
 		flagged=true
@@ -204,11 +217,11 @@ while IFS=$'\t' read -r l epoch date; do
 	fi
 done <<<"$lines_table"
 
-# A minor or major move is never proposed automatically: the guest kernel comes
-# from the per-line firecracker-ci/<line>/ bucket prefix, the snapshot format
-# may change (bitcode bumps its major on any state change) and boot/API
-# behaviour can change. This check surfaces it; the move is a manual PR.
-manual_move="Moving lines is a manual change: it changes the guest kernel source, may change the snapshot format, and can change boot/API behaviour."
+# A minor or major move is never proposed automatically: the snapshot format
+# may change (bitcode bumps its major on any state change), boot/API behaviour
+# can change, and advisories whose range ends below the new line need a ledger
+# entry. This check surfaces it; the move is a manual PR.
+manual_move="Moving lines is a manual change: it may change the snapshot format and can change boot/API behaviour."
 if [[ -z "$pin_zero_date" ]]; then
 	flagged=true
 	window_verdict="**flagged**: pinned line ${line} has no ${line}.0 release in the ${GITHUB_REPO} listing, so it cannot be placed in the window. ${manual_move}"
@@ -239,7 +252,7 @@ ${window_verdict}
 
 ## Acknowledging
 
-To clear an advisory, add its GHSA id and a one-line verdict to \`FIRECRACKER_ASSESSED_ADVISORIES\` in \`scripts/firecracker.ee/check-firecracker-advisories.sh\`. A line move is a manual PR.
+To clear an advisory, add its GHSA id, its Updated value and a one-line verdict to \`FIRECRACKER_ASSESSED_ADVISORIES\` in \`scripts/firecracker.ee/check-firecracker-advisories.sh\`. A line move is a manual PR.
 EOF
 )"
 

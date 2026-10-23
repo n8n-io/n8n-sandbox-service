@@ -142,9 +142,6 @@ e2e_firecracker_setup_remote_env() {
 	if [[ -n "${FIRECRACKER_TARBALL_SHA256:-}" ]]; then
 		remote_env+=" FIRECRACKER_TARBALL_SHA256=$(e2e_shell_quote "$FIRECRACKER_TARBALL_SHA256")"
 	fi
-	if [[ -n "${FIRECRACKER_CI_VERSION:-}" ]]; then
-		remote_env+=" FIRECRACKER_CI_VERSION=$(e2e_shell_quote "$FIRECRACKER_CI_VERSION")"
-	fi
 	if [[ -n "${FIRECRACKER_E2E_ROOTFS_SIZE_MB:-}" ]]; then
 		remote_env+=" FIRECRACKER_E2E_ROOTFS_SIZE_MB=$(e2e_shell_quote "$FIRECRACKER_E2E_ROOTFS_SIZE_MB")"
 	fi

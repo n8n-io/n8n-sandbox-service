@@ -11,7 +11,9 @@ test.describe.configure({ timeout: 120_000 });
 // The suite runs on the sandbox host (or an NTP-synced peer), so a guest's wall
 // clock has to fall inside the window around the exec that reads it. A
 // Firecracker guest restored from a snapshot keeps the clock it had when the
-// snapshot was taken unless the runner asks Firecracker to advance it.
+// snapshot was taken unless the runner asks Firecracker to advance it and the
+// guest keeps time with kvm-clock. Whether the guest kernel would pick tsc
+// instead depends on the host's VM family, so run this on the runners' family.
 const TOLERANCE_MS = 5_000;
 const STOPPED_FOR_MS = 15_000;
 

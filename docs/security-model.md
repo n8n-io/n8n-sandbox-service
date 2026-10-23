@@ -252,6 +252,12 @@ setuid binary inert, and the image ships no `sudo` and no setuid binary at all,
 because the Firecracker runtime has no equivalent flag. Setgid bits are left in
 place; a setgid binary can change its group, never its user.
 
+Neither runtime lets a sandbox create a user namespace, which would give uid
+1000 every capability inside it and with them kernel interfaces such as
+netfilter. Docker's default seccomp profile refuses `unshare` and namespace
+flags on `clone` without `CAP_SYS_ADMIN` (the runner sets no profile of its
+own); Firecracker guests boot with `sysctl.user.max_user_namespaces=0`.
+
 A sandbox therefore has no root and no `apt-get`. Packages install unprivileged,
 under `/home/user`: `pip` runs from a virtual environment at `/home/user/venv`,
 and `npm install -g` writes to `/home/user/.npm-global`.
@@ -312,6 +318,13 @@ every sandbox built from it. What is verified today:
   after a restart); the golden snapshot is rebuilt in the order
   [BUNDLE.md](../BUNDLE.md) gives and admission canaries it before the runner
   reports healthy.
+- The Firecracker guest kernel is pinned in
+  [scripts/firecracker.ee/firecracker-ci-assets.sh](../scripts/firecracker.ee/firecracker-ci-assets.sh)
+  to one `vmlinux` from Firecracker's weekly CI builds, by kernel version, path
+  and SHA-256. Firecracker publishes no checksum for it, so the SHA-256
+  freezes the artifact as first downloaded rather than proving its origin. The
+  weekly [bump-firecracker-kernel](../.github/workflows/bump-firecracker-kernel.yml)
+  workflow opens a PR when a newer kernel of the pinned line appears.
 - The Node.js tarball in the sandbox image is checked against the SHA-256
   values recorded in [Dockerfile.sandbox](../Dockerfile.sandbox).
 - Service images are published by version. The release workflow mirrors each
@@ -351,13 +364,16 @@ caller can learn that an ID is taken. This is deliberate, so that a client can
 reconnect to its own deterministic IDs. Since IDs are UUIDs, it confirms an ID
 the caller already holds and does not help discover new ones.
 
-**A burst of creates briefly exceeds a tenant's quota on runners.**
-`max_sandboxes` is checked again when a sandbox is saved, where a tenant's
-creates are counted one at a time, so a sandbox is only saved while the tenant
-holds fewer than its quota. Creates that pass the first check together all
-reach a runner, though, and the ones refused when saving are deleted there
-again before their `403`. If that delete fails, the sandbox stays on the runner
-untracked, and the API logs it.
+**A burst of creates spread over API pods briefly exceeds a tenant's quota on
+runners.** Before the runner call, each API pod counts a tenant's creates in
+progress in its own memory, so on one pod no create past `max_sandboxes`
+reaches a runner while the quota stays the same. Across pods each one can let
+creates up to the quota through at once, and a quota lowered during a create
+does not stop it. `max_sandboxes` is checked again when a sandbox is saved,
+where a tenant's creates are counted one at a time, so a sandbox is only saved
+while the tenant holds fewer than its quota; the ones refused there are deleted
+on their runner again before their `403`. If that delete fails, the sandbox
+stays on the runner untracked, and the API logs it.
 
 **Tenant request limits are per API replica.** Each replica counts a tenant's
 requests in its own memory, so across replicas a tenant can hold up to
@@ -412,7 +428,7 @@ The boundaries above are covered by tests rather than asserted on paper.
 | --- | --- |
 | Cross-tenant read, list, delete, exec, files | [internal/api/handlers_tenants_test.go](../internal/api/handlers_tenants_test.go), [internal/api/handlers_proxy_tenant_test.go](../internal/api/handlers_proxy_tenant_test.go), [e2e/tests/sandbox-api.spec.ts](../e2e/tests/sandbox-api.spec.ts) |
 | Client-supplied ID conflicts | [internal/api/handlers_create_sandbox_test.go](../internal/api/handlers_create_sandbox_test.go) |
-| Tenant quota under concurrent creates, on one API pod and on two | [internal/api/handlers_create_sandbox_test.go](../internal/api/handlers_create_sandbox_test.go), [internal/api/store/store_test.go](../internal/api/store/store_test.go), [internal/api/store/postgres_integration_test.go](../internal/api/store/postgres_integration_test.go), [e2e/tests/sandbox-api.spec.ts](../e2e/tests/sandbox-api.spec.ts), [e2e/tests/multi-pod-api.spec.ts](../e2e/tests/multi-pod-api.spec.ts) |
+| Tenant quota under concurrent creates, on one API pod and on two | [internal/api/handlers_create_sandbox_test.go](../internal/api/handlers_create_sandbox_test.go), [internal/api/tenant_quota_test.go](../internal/api/tenant_quota_test.go), [internal/api/store/store_test.go](../internal/api/store/store_test.go), [internal/api/store/postgres_integration_test.go](../internal/api/store/postgres_integration_test.go), [e2e/tests/sandbox-api.spec.ts](../e2e/tests/sandbox-api.spec.ts), [e2e/tests/multi-pod-api.spec.ts](../e2e/tests/multi-pod-api.spec.ts) |
 | Admin route gating and key revocation | [internal/api/handlers_tenants_test.go](../internal/api/handlers_tenants_test.go) |
 | Provisioner keys: the three allowed routes, `403` on every other route, quota bounds, no fall-through to the admin pseudo-tenant | [internal/api/handlers_provisioner_test.go](../internal/api/handlers_provisioner_test.go), [internal/api/config/config_test.go](../internal/api/config/config_test.go), [e2e/tests/provisioner-key.spec.ts](../e2e/tests/provisioner-key.spec.ts) |
 | Scaler keys: `GET /admin/runners` only, `403` on every other path, no overlap with the other key sets | [internal/api/handlers_runners_test.go](../internal/api/handlers_runners_test.go), [internal/api/config/config_test.go](../internal/api/config/config_test.go), [e2e/tests/admin-runners.spec.ts](../e2e/tests/admin-runners.spec.ts) |
@@ -420,7 +436,7 @@ The boundaries above are covered by tests rather than asserted on paper.
 | Runner listeners require a CA-signed client certificate; the API verifies each runner's host name and refuses a non-https base | [internal/runner/mtls_test.go](../internal/runner/mtls_test.go), [internal/api/runnertls_test.go](../internal/api/runnertls_test.go), [internal/api/registry/validate_test.go](../internal/api/registry/validate_test.go) |
 | No caller-set header but `Content-Type` passed on to the daemon; daemon redirects refused; daemon signal headers stripped, sandbox-gone body ignored | [internal/runner/proxy_test.go](../internal/runner/proxy_test.go), [internal/api/handlers_reap_test.go](../internal/api/handlers_reap_test.go), [e2e/tests/runner-restart.spec.ts](../e2e/tests/runner-restart.spec.ts) |
 | Sandbox-to-sandbox (unicast and multicast), blocked-range egress and guest DNS; egress `none` across stop/wake and slot reuse | [e2e/tests/network-isolation.spec.ts](../e2e/tests/network-isolation.spec.ts) |
-| Docker capability policy, absence of a root path, and denied network administration | [e2e/tests/sandbox-capabilities.spec.ts](../e2e/tests/sandbox-capabilities.spec.ts) |
+| Docker capability policy, absence of a root path, and denied network administration; no user namespaces on either runtime | [e2e/tests/sandbox-capabilities.spec.ts](../e2e/tests/sandbox-capabilities.spec.ts) |
 | Unprivileged npm and PyPI installation, and the build toolchain | [e2e/tests/sandbox-packages.spec.ts](../e2e/tests/sandbox-packages.spec.ts) |
 | Blocked list and egress rule generation | [internal/runner/runtime/netpolicy/private_ranges_test.go](../internal/runner/runtime/netpolicy/private_ranges_test.go), [internal/runner/runtime/docker/netrules/netrules_test.go](../internal/runner/runtime/docker/netrules/netrules_test.go), [internal/runner/runtime/firecracker.ee/network/egress_test.go](../internal/runner/runtime/firecracker.ee/network/egress_test.go) |
 | Egress mode: API to runner to network and rules, refused when the runner does not confirm it | [internal/api/handlers_create_sandbox_test.go](../internal/api/handlers_create_sandbox_test.go), [internal/runner/grpc_control_test.go](../internal/runner/grpc_control_test.go), [internal/runner/runtime/docker/runtime_test.go](../internal/runner/runtime/docker/runtime_test.go), [internal/runner/runtime/firecracker.ee/network_wirer_test.go](../internal/runner/runtime/firecracker.ee/network_wirer_test.go) |
@@ -429,7 +445,7 @@ The network isolation suite runs against both the Sysbox and the Firecracker
 runner, apart from the checks tagged for one of them. Its blocked-range tests
 probe one address per listed range except loopback, which the guest routes to
 itself so it never reaches the rules. They show the rules are applied, not that
-the list is complete. The capability suite is Docker-only: the setuid clearing
-it depends on is a property
+the list is complete. The capability suite is Docker-only apart from the user
+namespace check: the setuid clearing it depends on is a property
 of the image both runtimes share, but no Firecracker test asserts it, and
 `no-new-privileges` has no Firecracker counterpart to test.
