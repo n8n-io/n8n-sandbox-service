@@ -51,7 +51,9 @@ Firecracker e2e provisioning allows overriding:
 
 - `FIRECRACKER_E2E_LOCATION`: optional Azure region override.
 - `FIRECRACKER_E2E_VM_SIZE`: optional VM size override; Firecracker runs default
-  to `Standard_D4s_v3`.
+  to `Standard_E4ds_v6`, the stage runners' size. Keep it in the runners' VM
+  family, because the guest sees that family's CPU features. v6 sizes need a
+  Gen2 image with NVMe support (the Ubuntu 24.04 image has both).
 - `FIRECRACKER_VERSION`: optional Firecracker release override; defaults to
   the pin in `scripts/firecracker.ee/firecracker-release.sh`.
 - `FIRECRACKER_TARBALL_SHA256`: required when overriding to a Firecracker
@@ -90,7 +92,7 @@ The setup writes `/srv/firecracker/manifest.json` for diagnostics:
 {
   "firecracker_version": "<configured release without the v>",
   "kernel_version": "<guest kernel version from the vmlinux banner, e.g. 6.1.188>",
-  "azure_vm_size": "Standard_D4as_v5",
+  "azure_vm_size": "Standard_E4ds_v6",
   "cpu_model": "Intel(R) Xeon(R) Platinum ...",
   "cpu_flags": "...",
   "kvm_tsc_scaling": "1",

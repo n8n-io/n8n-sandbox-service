@@ -12,7 +12,9 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /out/runner ./cmd/runner-docker
 
 FROM docker:29.3.1-dind-alpine3.23 AS runner
 
-RUN apk add --no-cache tini
+# The base image already ships both CA packages, and a plain add keeps their
+# versions. dockerd verifies registry TLS against them.
+RUN apk add --no-cache --upgrade tini ca-certificates ca-certificates-bundle
 
 COPY --from=builder /out/runner /usr/local/bin/sandbox-runner
 COPY scripts/start-runner.sh /usr/local/bin/start-runner.sh

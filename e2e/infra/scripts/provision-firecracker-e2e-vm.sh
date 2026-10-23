@@ -15,7 +15,9 @@ source e2e/lib/common.sh
 TF_DIR="e2e/infra"
 VM_NAME="e2e-firecracker-${GITHUB_RUN_ID:-$(date +%s)}"
 LOCATION="${FIRECRACKER_E2E_LOCATION:-germanywestcentral}"
-VM_SIZE="${FIRECRACKER_E2E_VM_SIZE:-Standard_D4s_v3}"
+# The stage runners' size. Stay in the runners' VM family: the guest sees that
+# family's CPU features (on v6, for example, an invariant TSC).
+VM_SIZE="${FIRECRACKER_E2E_VM_SIZE:-Standard_E4ds_v6}"
 OS_DISK_SIZE_GB="${FIRECRACKER_E2E_OS_DISK_SIZE_GB:-80}"
 SSH_KEY_PATH="$HOME/.ssh/e2e-firecracker-vm-key"
 VM_ADMIN="azureuser"
