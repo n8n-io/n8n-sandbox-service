@@ -177,8 +177,8 @@ func Run(cfg *config.Config, rt runnerruntime.Runtime) {
 	}
 
 	// Fresh budget: a long HTTP drain can use up shutdownCtx, and the
-	// container cleanup must still get to run.
-	cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), 20*time.Second)
+	// sandbox cleanup must still get to run.
+	cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancelCleanup()
 	rt.Shutdown(cleanupCtx)
 

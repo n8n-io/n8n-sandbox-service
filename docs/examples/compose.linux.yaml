@@ -65,7 +65,7 @@ services:
     runtime: sysbox-runc
     restart: unless-stopped
     # The runner drains requests (up to 40s) and removes its sandboxes (up to
-    # 20s) before dockerd stops (up to 15s). The compose default of 10s cuts
+    # 30s) before dockerd stops (up to 15s). The compose default of 10s cuts
     # that short.
     stop_grace_period: 90s
     depends_on:
