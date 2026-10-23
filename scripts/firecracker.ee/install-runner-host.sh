@@ -12,7 +12,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 JAILER_TMPFS_SIZE="${JAILER_TMPFS_SIZE:-8G}"
 FIRECRACKER_CI_ASSETS_DIR="${FIRECRACKER_CI_ASSETS_DIR:-/srv/firecracker/ci-assets}"
-FIRECRACKER_CI_VERSION="${FIRECRACKER_CI_VERSION:-v1.14}"
 DOWNLOAD_FIRECRACKER_CI_ASSETS="${DOWNLOAD_FIRECRACKER_CI_ASSETS:-0}"
 CONFIGURE_HOST_NAT_SCRIPT="${CONFIGURE_HOST_NAT_SCRIPT:-${SCRIPT_DIR}/configure-host-nat.sh}"
 FIRECRACKER_CI_ASSETS_BIN="${FIRECRACKER_CI_ASSETS_BIN:-${SCRIPT_DIR}/firecracker-ci-assets.sh}"
@@ -31,7 +30,7 @@ forwarding, and NAT/FORWARD rules for sandbox netns egress.
 Options:
   --skip-packages           Skip apt package install
   --skip-firecracker        Skip Firecracker/jailer install
-  --download-ci-assets      Download Firecracker CI vmlinux into FIRECRACKER_CI_ASSETS_DIR
+  --download-ci-assets      Download the Firecracker CI vmlinux pinned in firecracker-ci-assets.sh into FIRECRACKER_CI_ASSETS_DIR
   -h, --help                Show this help
 
 Environment:
@@ -39,7 +38,6 @@ Environment:
   FIRECRACKER_TARBALL_SHA256    Required when FIRECRACKER_VERSION is not the pinned default
   JAILER_TMPFS_SIZE             tmpfs size for /srv/jailer (default: 8G)
   FIRECRACKER_CI_ASSETS_DIR     CI asset directory (default: /srv/firecracker/ci-assets)
-  FIRECRACKER_CI_VERSION        CI bucket version for --download-ci-assets
   DOWNLOAD_FIRECRACKER_CI_ASSETS  Set to 1 to download CI assets (same as flag)
   CONFIGURE_HOST_NAT_SCRIPT     Path to configure-host-nat.sh
   FIRECRACKER_CI_ASSETS_BIN     Path to firecracker-ci-assets.sh
@@ -119,8 +117,7 @@ download_ci_assets() {
 		exit 1
 	fi
 	echo "==> Downloading Firecracker CI assets for image bake..."
-	FIRECRACKER_CI_VERSION="$FIRECRACKER_CI_VERSION" \
-		"$FIRECRACKER_CI_ASSETS_BIN" download "$FIRECRACKER_CI_ASSETS_DIR"
+	"$FIRECRACKER_CI_ASSETS_BIN" download "$FIRECRACKER_CI_ASSETS_DIR"
 	"$FIRECRACKER_CI_ASSETS_BIN" verify "$FIRECRACKER_CI_ASSETS_DIR"
 }
 

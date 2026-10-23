@@ -58,8 +58,6 @@ Firecracker e2e provisioning allows overriding:
   the pin in `scripts/firecracker.ee/firecracker-release.sh`.
 - `FIRECRACKER_TARBALL_SHA256`: required when overriding to a Firecracker
   release other than the pinned one.
-- `FIRECRACKER_CI_VERSION`: optional Firecracker CI asset line override;
-  defaults to the configured Firecracker release line, for example `v1.14`.
 - `FIRECRACKER_E2E_ROOTFS_SIZE_MB`: optional ext4 rootfs size; defaults to
   `2048`.
 - `FIRECRACKER_E2E_SNAPSHOT_MEM_MIB`: optional guest memory for local snapshot
@@ -76,13 +74,14 @@ Firecracker e2e provisioning allows overriding:
 The Firecracker e2e setup builds the bootable template locally on the VM:
 
 1. Install the configured Firecracker release and jailer.
-2. Download the matching Firecracker CI `vmlinux`.
+2. Download the Firecracker CI `vmlinux` pinned in
+   `scripts/firecracker.ee/firecracker-ci-assets.sh`.
 3. Build `Dockerfile.sandbox` (or use `SANDBOX_ROOTFS_TAR`) and pack
    `/srv/firecracker/template/rootfs.ext4`.
 4. Build the n8n sandbox daemon locally and inject it into the rootfs.
 5. Boot the VM locally and write `snapshots/mem` and `snapshots/state`.
 
-The e2e asset contract is the configured Firecracker release, the matching
+The e2e asset contract is the configured Firecracker release, the pinned
 Firecracker CI kernel, the sandbox image userspace, and the locally built
 sandbox daemon. The e2e VM generates the bootable template and snapshot from
 those pinned inputs locally.
@@ -92,7 +91,7 @@ The setup writes `/srv/firecracker/manifest.json` for diagnostics:
 ```json
 {
   "firecracker_version": "<configured release without the v>",
-  "firecracker_ci_version": "v1.14",
+  "kernel_version": "<guest kernel version from the vmlinux banner, e.g. 6.1.188>",
   "azure_vm_size": "Standard_E4ds_v6",
   "cpu_model": "Intel(R) Xeon(R) Platinum ...",
   "cpu_flags": "...",

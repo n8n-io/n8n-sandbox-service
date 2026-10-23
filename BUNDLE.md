@@ -182,6 +182,9 @@ Rollout order per environment:
 3. Set `SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT` (and
    `SANDBOX_RUNNER_FIRECRACKER_DAEMON_BIN`) so the runner creates the host-local
    golden snapshot on first `Prepare`, or run `create-golden-snapshot.sh` by hand.
+   The runner creates it only when it is missing, and Firecracker cannot restore
+   a snapshot taken by another release: when `firecracker_version` changes on a
+   host that keeps its disk, remove the old snapshot first.
 4. Roll `runner-firecracker` to the matching version — after step 3, never before.
    The runner stays unhealthy (`/readyz`, registration `Healthy=false`) until pin,
    snapshot and canary pass.

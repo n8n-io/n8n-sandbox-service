@@ -4,7 +4,6 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_SCRIPT="${ROOT}/scripts/firecracker.ee/build-rootfs-template.sh"
-FIRECRACKER_CI_VERSION="${FIRECRACKER_CI_VERSION:-v1.14}"
 SANDBOX_IMAGE="${SANDBOX_IMAGE:-n8n-sandbox:golden-build-self-test}"
 FIRECRACKER_ROOTFS_SIZE_MB="${FIRECRACKER_ROOTFS_SIZE_MB:-2048}"
 
@@ -37,9 +36,8 @@ trap 'maybe_sudo rm -rf "$work"' EXIT
 echo "==> Building sandbox image ${SANDBOX_IMAGE} from Dockerfile.sandbox..."
 docker build -f "${ROOT}/Dockerfile.sandbox" -t "$SANDBOX_IMAGE" "$ROOT"
 
-echo "==> Running build-rootfs-template.sh (FIRECRACKER_CI_VERSION=${FIRECRACKER_CI_VERSION})..."
-FIRECRACKER_CI_VERSION="$FIRECRACKER_CI_VERSION" \
-	SANDBOX_IMAGE="$SANDBOX_IMAGE" \
+echo "==> Running build-rootfs-template.sh with the pinned CI kernel..."
+SANDBOX_IMAGE="$SANDBOX_IMAGE" \
 	FIRECRACKER_ROOTFS_SIZE_MB="$FIRECRACKER_ROOTFS_SIZE_MB" \
 	TEMPLATE_DIR="$template_dir" \
 	bash "$BUILD_SCRIPT"

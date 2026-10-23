@@ -7,7 +7,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FIRECRACKER_CI_ASSETS_BIN="${FIRECRACKER_CI_ASSETS_BIN:-${SCRIPT_DIR}/firecracker-ci-assets.sh}"
 
-FIRECRACKER_CI_VERSION="${FIRECRACKER_CI_VERSION:-v1.14}"
 FIRECRACKER_CI_VMLINUX="${FIRECRACKER_CI_VMLINUX:-}"
 TEMPLATE_DIR="${TEMPLATE_DIR:-/srv/firecracker/template}"
 FIRECRACKER_ROOTFS_SIZE_MB="${FIRECRACKER_ROOTFS_SIZE_MB:-${FIRECRACKER_E2E_ROOTFS_SIZE_MB:-2048}}"
@@ -33,8 +32,8 @@ Options:
   -h, --help              Show this help
 
 Provide exactly one of --sandbox-image or --sandbox-rootfs-tar (or the matching
-env vars). When --kernel is omitted, downloads the Firecracker CI vmlinux using
-FIRECRACKER_CI_VERSION.
+env vars). When --kernel is omitted, downloads the Firecracker CI vmlinux pinned
+in firecracker-ci-assets.sh.
 
 Unpack requires crane or docker on PATH when using --sandbox-image.
 EOF
@@ -201,8 +200,7 @@ if [[ -z "$FIRECRACKER_CI_VMLINUX" ]]; then
 		echo "ERROR: missing firecracker-ci-assets script: ${FIRECRACKER_CI_ASSETS_BIN}" >&2
 		exit 1
 	fi
-	FIRECRACKER_CI_VERSION="$FIRECRACKER_CI_VERSION" \
-		"$FIRECRACKER_CI_ASSETS_BIN" download "$ci_assets_dir"
+	"$FIRECRACKER_CI_ASSETS_BIN" download "$ci_assets_dir"
 	# shellcheck source=/dev/null  # written by firecracker-ci-assets.sh at runtime
 	source "${ci_assets_dir}/manifest.env"
 fi

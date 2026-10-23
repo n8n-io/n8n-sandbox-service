@@ -17,7 +17,6 @@ GO_VERSION="${GO_VERSION:-$(awk '$1 == "go" { print $2; exit }' ~/project/go.mod
 NODE_MAJOR="${NODE_MAJOR:-24}"
 PNPM_VERSION="${PNPM_VERSION:-10}"
 JAILER_TMPFS_SIZE="${JAILER_TMPFS_SIZE:-8G}"
-FIRECRACKER_CI_VERSION="${FIRECRACKER_CI_VERSION:-${FIRECRACKER_VERSION%.*}}"
 FIRECRACKER_E2E_ROOTFS_SIZE_MB="${FIRECRACKER_E2E_ROOTFS_SIZE_MB:-2048}"
 FIRECRACKER_E2E_SNAPSHOT_MEM_MIB="${FIRECRACKER_E2E_SNAPSHOT_MEM_MIB:-512}"
 FIRECRACKER_E2E_SNAPSHOT_VCPUS="${FIRECRACKER_E2E_SNAPSHOT_VCPUS:-1}"
@@ -129,6 +128,12 @@ file_type() {
 	fi
 }
 
+# Reads the version from the banner a kernel prints at boot, so the manifest
+# names the kernel the template holds, whether pinned or passed in.
+kernel_version() {
+	grep -aoE 'Linux version [0-9]+\.[0-9]+\.[0-9]+' "$1" 2>/dev/null | head -n 1 | sed 's/^Linux version //' || true
+}
+
 # JSON-encodes a shell value before embedding it in the generated manifest.
 json_escape() {
 	node -e 'process.stdout.write(JSON.stringify(process.argv[1] ?? ""))' "$1"
@@ -155,8 +160,7 @@ build_template_assets() {
 	sudo mkdir -p /srv/firecracker/snapshots
 
 	if [[ -n "$SANDBOX_ROOTFS_TAR" ]]; then
-		FIRECRACKER_CI_VERSION="$FIRECRACKER_CI_VERSION" \
-			FIRECRACKER_ROOTFS_SIZE_MB="$FIRECRACKER_E2E_ROOTFS_SIZE_MB" \
+		FIRECRACKER_ROOTFS_SIZE_MB="$FIRECRACKER_E2E_ROOTFS_SIZE_MB" \
 			SANDBOX_ROOTFS_TAR="$SANDBOX_ROOTFS_TAR" \
 			TEMPLATE_DIR="/srv/firecracker/template" \
 			bash "${SCRIPT_DIR}/build-rootfs-template.sh"
@@ -179,8 +183,7 @@ build_template_assets() {
 	cid=""
 	sudo chmod 0644 "$rootfs_tar"
 
-	FIRECRACKER_CI_VERSION="$FIRECRACKER_CI_VERSION" \
-		FIRECRACKER_ROOTFS_SIZE_MB="$FIRECRACKER_E2E_ROOTFS_SIZE_MB" \
+	FIRECRACKER_ROOTFS_SIZE_MB="$FIRECRACKER_E2E_ROOTFS_SIZE_MB" \
 		SANDBOX_IMAGE='' \
 		SANDBOX_ROOTFS_TAR="$rootfs_tar" \
 		TEMPLATE_DIR="/srv/firecracker/template" \
@@ -196,7 +199,7 @@ write_manifest() {
 	sudo tee "$manifest" >/dev/null <<EOF
 {
   "firecracker_version": $(json_escape "${FIRECRACKER_VERSION#v}"),
-  "firecracker_ci_version": $(json_escape "${FIRECRACKER_CI_VERSION}"),
+  "kernel_version": $(json_escape "$(kernel_version /srv/firecracker/template/vmlinux)"),
   "azure_vm_size": $(json_escape "$(current_azure_vm_size)"),
   "cpu_model": $(json_escape "$(current_cpu_model)"),
   "cpu_flags": $(json_escape "$(current_cpu_flags)"),
@@ -214,7 +217,6 @@ sudo env \
 	FIRECRACKER_VERSION="$FIRECRACKER_VERSION" \
 	FIRECRACKER_TARBALL_SHA256="$FIRECRACKER_TARBALL_SHA256" \
 	JAILER_TMPFS_SIZE="$JAILER_TMPFS_SIZE" \
-	FIRECRACKER_CI_VERSION="$FIRECRACKER_CI_VERSION" \
 	CONFIGURE_HOST_NAT_SCRIPT="${SCRIPT_DIR}/configure-host-nat.sh" \
 	FIRECRACKER_CI_ASSETS_BIN="${SCRIPT_DIR}/firecracker-ci-assets.sh" \
 	FIRECRACKER_RELEASE_BIN="${SCRIPT_DIR}/firecracker-release.sh" \

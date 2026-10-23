@@ -180,10 +180,12 @@ mount --bind "$SNAPSHOT_MEM" "${JAIL_ROOT}/snapshot_mem"
 mount --bind "$SNAPSHOT_STATE" "${JAIL_ROOT}/snapshot_state"
 
 # pci=off is deliberate (virtio on MMIO); see docs/security-model.md before enabling PCI.
+# sysctl.user.max_user_namespaces=0 refuses user namespaces, as Docker's default
+# seccomp profile does for Docker sandboxes; the kernel applies it before init.
 # clocksource=kvm-clock: the runner's clock_realtime restore only advances
 # kvm-clock. Where the guest sees an invariant TSC, the kernel would otherwise
 # switch to tsc, which resumes at snapshot time.
-boot_args="console=ttyS0 reboot=k panic=1 pci=off ipv6.disable=1 clocksource=kvm-clock init=/sandbox-daemon ip=${GUEST_IP}::${HOST_TAP_IP}:255.255.255.0::eth0:off"
+boot_args="console=ttyS0 reboot=k panic=1 pci=off ipv6.disable=1 sysctl.user.max_user_namespaces=0 clocksource=kvm-clock init=/sandbox-daemon ip=${GUEST_IP}::${HOST_TAP_IP}:255.255.255.0::eth0:off"
 
 echo "==> Configuring and booting Firecracker snapshot VM..."
 api_put "/machine-config" "{\"vcpu_count\":${VCPUS},\"mem_size_mib\":${MEM_MIB},\"smt\":false}"
