@@ -33,7 +33,7 @@ grpcurl \
 
 `create_options_json` is a JSON `CreateOptions` (`internal/runner/runtime`): `{}` for the defaults, `{"egress":"none"}` for no egress. Unknown values are `InvalidArgument`. The response echoes what was applied in `applied_create_options_json`; the API refuses a sandbox whose echo does not match.
 
-Cordon the runner (no new creates; `{"cordoned": false}` lifts it), or read the state with `GetCordon` and `-d '{}'`. See [API.md](API.md#runner-cordon):
+Cordon a runner: it keeps its sandboxes but takes no new creates until it is uncordoned (`{"cordoned": false}`) or restarts. `GetCordon` with `-d '{}'` reads the state.
 
 ```bash
 grpcurl \

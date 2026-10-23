@@ -2,10 +2,11 @@ import { test, expect } from '@playwright/test';
 import {
   createSandbox,
   deleteSandbox,
-  exec,
+  execWithTransientRetry,
   runnerCordon,
   runnerCordonConfigured,
   scrapeRunnerMetrics,
+  stopSandboxViaRunner,
 } from './helpers';
 import { postCreate } from './capacity-helpers';
 import { parseGauge } from './metrics-helpers';
@@ -32,7 +33,9 @@ test.describe('Runner cordon', () => {
       expect(refused.status).toBe(503);
       expect(refused.body.reason).toBe('no_capacity');
 
-      const r = await exec(id, "printf '%s' still-served");
+      // A stopped sandbox still wakes on a cordoned runner.
+      stopSandboxViaRunner(id);
+      const r = await execWithTransientRetry(id, "printf '%s' still-served");
       expect(r.stdout.trim()).toBe('still-served');
 
       expect(runnerCordon('uncordon')).toBe(false);
