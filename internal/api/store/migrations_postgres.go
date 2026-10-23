@@ -15,7 +15,11 @@ CREATE TABLE IF NOT EXISTS sandboxes (
 	runner_control_grpc_addr  TEXT NOT NULL DEFAULT '',
 	tenant_id                 TEXT NOT NULL DEFAULT '__admin__',
 	ephemeral                 BOOLEAN NOT NULL DEFAULT false,
-	egress                    TEXT NOT NULL DEFAULT 'public'
+	egress                    TEXT NOT NULL DEFAULT 'public',
+	template                  TEXT NOT NULL DEFAULT 'default',
+	idle_stop_after           BIGINT NOT NULL DEFAULT 0,
+	idle_delete_after         BIGINT NOT NULL DEFAULT 0,
+	egress_proxy              TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS sandboxes_idle_reap_idx
 	ON sandboxes (status, last_active_at);
@@ -64,6 +68,13 @@ const postgresAddTenantIDCol = `ALTER TABLE sandboxes ADD COLUMN IF NOT EXISTS t
 const postgresAddEphemeralCol = `ALTER TABLE sandboxes ADD COLUMN IF NOT EXISTS ephemeral BOOLEAN NOT NULL DEFAULT false`
 
 const postgresAddEgressCol = `ALTER TABLE sandboxes ADD COLUMN IF NOT EXISTS egress TEXT NOT NULL DEFAULT 'public'`
+
+// One statement so a pod on the previous schema gets all four columns or none.
+const postgresAddCreateOptionCols = `ALTER TABLE sandboxes
+	ADD COLUMN IF NOT EXISTS template TEXT NOT NULL DEFAULT 'default',
+	ADD COLUMN IF NOT EXISTS idle_stop_after BIGINT NOT NULL DEFAULT 0,
+	ADD COLUMN IF NOT EXISTS idle_delete_after BIGINT NOT NULL DEFAULT 0,
+	ADD COLUMN IF NOT EXISTS egress_proxy TEXT NOT NULL DEFAULT ''`
 
 // Backfill legacy empty tenant_id to the admin sentinel.
 const postgresBackfillAdminTenantID = `UPDATE sandboxes SET tenant_id = '__admin__' WHERE tenant_id = ''`

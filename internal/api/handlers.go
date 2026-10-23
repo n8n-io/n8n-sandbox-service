@@ -14,6 +14,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/n8n-io/sandbox-service/internal/api/config"
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
 	"github.com/n8n-io/sandbox-service/internal/api/runnerctl"
@@ -128,15 +131,13 @@ type SandboxResponse struct {
 	LastActiveAt int64  `json:"last_active_at"`
 	Ephemeral    bool   `json:"ephemeral"`
 	Egress       string `json:"egress"`
+	Template     string `json:"template"`
+	// Seconds; left out when the sandbox uses the API's global window.
+	IdleStopAfter   int64 `json:"idle_stop_after,omitempty"`
+	IdleDeleteAfter int64 `json:"idle_delete_after,omitempty"`
 	// TenantID is the owning tenant, or store.AdminTenantID for a sandbox
 	// created with an admin key. A tenant only ever sees its own id here.
 	TenantID string `json:"tenant_id"`
-}
-
-type createSandboxRequest struct {
-	ID        *string `json:"id"`
-	Ephemeral bool    `json:"ephemeral"`
-	Egress    *string `json:"egress"` // nil when left out; "" is the default, as on create
 }
 
 func sandboxResponse(rec *store.SandboxRecord) *SandboxResponse {
@@ -153,7 +154,11 @@ func sandboxResponse(rec *store.SandboxRecord) *SandboxResponse {
 		LastActiveAt: rec.LastActiveAt,
 		Ephemeral:    rec.Ephemeral,
 		Egress:       rec.Egress,
-		TenantID:     tenantID,
+		Template:     recordTemplate(rec),
+		// Not acted on yet: the sweeper uses the global windows.
+		IdleStopAfter:   rec.IdleStopAfter,
+		IdleDeleteAfter: rec.IdleDeleteAfter,
+		TenantID:        tenantID,
 	}
 }
 
@@ -298,7 +303,7 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 		}
 
 		var req createSandboxRequest
-		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxCreateBodyBytes))
 		if err := decoder.Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
@@ -307,15 +312,17 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
-		egressField := ""
-		if req.Egress != nil {
-			egressField = *req.Egress
-		}
-		egress, err := runnerruntime.ParseEgress(egressField)
+		params, err := parseCreateRequest(&req, cfg)
 		if err != nil {
+			var ce *createError
+			if errors.As(err, &ce) {
+				writeErrorReason(w, http.StatusBadRequest, ce.msg, ce.reason)
+				return
+			}
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		egress := params.egress
 
 		sandboxID := generateUUID()
 		if req.ID != nil {
@@ -343,7 +350,7 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 					return
 				}
 				if !isPastIdleDeleteWindow(existing, cfg, time.Now().Unix()) {
-					success = writeExistingSandbox(w, existing, egress, req.Egress != nil)
+					success = writeExistingSandbox(w, existing, params)
 					return
 				}
 				if !deleteSandboxRecord(w, r, s, cfg, existing) {
@@ -380,7 +387,7 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 		// runner rollback; a saved one right after the save, below.
 		defer releaseQuota(false)
 
-		requested := runnerruntime.CreateOptions{Egress: egress}
+		requested := params.runnerOptions()
 		createOptionsJSON, err := json.Marshal(requested)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
@@ -390,9 +397,16 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 		obs.FieldsFrom(r.Context()).Add("sandbox_id", sandboxID)
 		now := time.Now().Unix()
 		placed, err := placeSandbox(r, reg, cfg, rec, sandboxID, string(createOptionsJSON),
-			"tenant_id", tenantID, "ephemeral", req.Ephemeral, "egress", egress)
+			"tenant_id", tenantID, "ephemeral", req.Ephemeral, "egress", egress, "template", params.template)
 		if errors.Is(err, registry.ErrNoRunners) || errors.Is(err, errRunnersAtCapacity) {
 			writeNoCapacity(w, err)
+			return
+		}
+		// The runner refused before creating anything: it cannot serve a
+		// valid option yet (egress proxy). A fixed message: the runner's own
+		// (or an intermediary's) is logged by placeSandbox, not relayed.
+		if status.Code(err) == codes.Unimplemented {
+			writeErrorReason(w, http.StatusNotImplemented, "the requested egress is not supported by the sandbox runners", reasonNotImplemented)
 			return
 		}
 		if err != nil {
@@ -425,15 +439,22 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 		// asked for would leave the record saying one thing and the network
 		// another, so the sandbox is removed rather than tracked.
 		applied, err := runnerruntime.ParseCreateOptions(gresp.GetAppliedCreateOptionsJson())
-		if err != nil || *applied != requested {
+		if err != nil || !applied.Equal(&requested) {
 			rollbackRunnerCreate()
+			// Not the echoed JSON itself: an egress_proxy spec names secrets.
+			appliedEgress, appliedTemplate, appliedProxy := "", "", false
+			if applied != nil {
+				appliedEgress, appliedTemplate, appliedProxy = string(applied.Egress), applied.Template, applied.EgressProxy != nil
+			}
 			slog.ErrorContext(
 				r.Context(),
 				"create sandbox failed: runner did not apply the requested egress",
 				"sandbox_id", sandboxID,
 				"runner_id", run.ID,
 				"requested_egress", egress,
-				"applied_create_options_json", gresp.GetAppliedCreateOptionsJson(),
+				"applied_egress", appliedEgress,
+				"applied_template", appliedTemplate,
+				"applied_egress_proxy", appliedProxy,
 				"error", err,
 			)
 			writeError(w, http.StatusBadGateway, "runner did not apply the requested egress")
@@ -454,6 +475,10 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 			TenantID:              tenantID,
 			Ephemeral:             req.Ephemeral,
 			Egress:                string(egress),
+			Template:              params.template,
+			IdleStopAfter:         params.idleStopAfter,
+			IdleDeleteAfter:       params.idleDeleteAfter,
+			EgressProxy:           params.egressProxyJSON,
 		}
 		if err := s.Create(record); err != nil {
 			rollbackRunnerCreate()
@@ -465,7 +490,7 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 					writeError(w, http.StatusConflict, "sandbox id unavailable")
 					return
 				}
-				success = writeExistingSandbox(w, existing, egress, req.Egress != nil)
+				success = writeExistingSandbox(w, existing, params)
 				return
 			}
 			if errors.Is(err, store.ErrTenantQuotaExceeded) {
@@ -511,14 +536,11 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 }
 
 // writeExistingSandbox answers a create whose id the caller already owns with
-// that sandbox. Egress is fixed at creation, so a mode the request names has to
-// be the sandbox's: a caller asking for none must not get an open sandbox back
-// and take it for sealed. egress is the request's parsed mode; egressGiven is
-// false when the request left it out, in which case whatever the sandbox has
-// is fine.
-func writeExistingSandbox(w http.ResponseWriter, existing *store.SandboxRecord, egress runnerruntime.Egress, egressGiven bool) bool {
-	if egressGiven && string(egress) != existing.Egress {
-		writeError(w, http.StatusConflict, "sandbox exists with egress "+existing.Egress)
+// that sandbox, or 409 when the request names options the sandbox was not
+// created with (createParams.conflict).
+func writeExistingSandbox(w http.ResponseWriter, existing *store.SandboxRecord, params *createParams) bool {
+	if msg, reason := params.conflict(existing); msg != "" {
+		writeErrorReason(w, http.StatusConflict, msg, reason)
 		return false
 	}
 	writeJSON(w, http.StatusOK, sandboxResponse(existing))

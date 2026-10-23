@@ -42,7 +42,8 @@ func (c *createOptsRuntime) CreateSandbox(_ context.Context, sandboxID string, o
 
 // create_options_json reaches the runtime as CreateOptions and the response echoes what
 // was applied; an empty field is the default policy and an unknown egress is
-// refused, not defaulted.
+// refused, not defaulted. Templates other than the default and egress proxy,
+// which no runtime serves yet, are refused before the runtime is called.
 func TestSandboxControlGRPCCreateSandboxParsesOptions(t *testing.T) {
 	const id = "11111111-1111-4111-8111-111111111111"
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-api-key", "runner-key"))
@@ -52,15 +53,21 @@ func TestSandboxControlGRPCCreateSandboxParsesOptions(t *testing.T) {
 		createOptionsJSON string
 		want              runnerruntime.Egress
 		wantApplied       string
-		wantErr           bool
+		wantErr           codes.Code
 	}{
 		{name: "empty", createOptionsJSON: "", want: runnerruntime.EgressPublic, wantApplied: `{"egress":"public"}`},
 		{name: "empty object", createOptionsJSON: "{}", want: runnerruntime.EgressPublic, wantApplied: `{"egress":"public"}`},
 		{name: "none", createOptionsJSON: `{"egress":"none"}`, want: runnerruntime.EgressNone, wantApplied: `{"egress":"none"}`},
-		{name: "unknown egress", createOptionsJSON: `{"egress":"allow-all"}`, wantErr: true},
-		{name: "malformed", createOptionsJSON: `{"egress":`, wantErr: true},
-		{name: "null", createOptionsJSON: "null", wantErr: true},
-		{name: "not an object", createOptionsJSON: "[]", wantErr: true},
+		{name: "default template", createOptionsJSON: `{"egress":"none","template":"default"}`, want: runnerruntime.EgressNone, wantApplied: `{"egress":"none"}`},
+		{name: "unknown egress", createOptionsJSON: `{"egress":"allow-all"}`, wantErr: codes.InvalidArgument},
+		{name: "malformed", createOptionsJSON: `{"egress":`, wantErr: codes.InvalidArgument},
+		{name: "null", createOptionsJSON: "null", wantErr: codes.InvalidArgument},
+		{name: "not an object", createOptionsJSON: "[]", wantErr: codes.InvalidArgument},
+		{name: "other template", createOptionsJSON: `{"template":"python"}`, wantErr: codes.InvalidArgument},
+		{name: "invalid template", createOptionsJSON: `{"template":"../x"}`, wantErr: codes.InvalidArgument},
+		{name: "proxy", createOptionsJSON: `{"egress":"proxy","egress_proxy":{"allow":[{"name":"a","hosts":["example.com"]}]}}`, wantErr: codes.Unimplemented},
+		{name: "proxy without spec", createOptionsJSON: `{"egress":"proxy"}`, wantErr: codes.InvalidArgument},
+		{name: "spec without proxy", createOptionsJSON: `{"egress":"none","egress_proxy":{"allow":[]}}`, wantErr: codes.InvalidArgument},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rt := &createOptsRuntime{}
@@ -71,9 +78,9 @@ func TestSandboxControlGRPCCreateSandboxParsesOptions(t *testing.T) {
 				Cordon:  cordon.New(),
 			}
 			resp, err := srv.CreateSandbox(ctx, &pb.CreateSandboxRequest{SandboxId: id, CreateOptionsJson: tc.createOptionsJSON})
-			if tc.wantErr {
-				if status.Code(err) != codes.InvalidArgument {
-					t.Fatalf("CreateSandbox() error = %v, want InvalidArgument", err)
+			if tc.wantErr != codes.OK {
+				if status.Code(err) != tc.wantErr {
+					t.Fatalf("CreateSandbox() error = %v, want %v", err, tc.wantErr)
 				}
 				if rt.opts != nil {
 					t.Fatal("runtime was called despite invalid options")

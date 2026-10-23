@@ -56,6 +56,10 @@ func NewPostgres(cfg config.PostgresConfig) (*PostgresStore, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: add egress column: %w", err)
 	}
+	if _, err := db.Exec(postgresAddCreateOptionCols); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: add create option columns: %w", err)
+	}
 	if _, err := db.Exec(postgresSandboxTenantIndex); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: sandboxes tenant index: %w", err)
@@ -98,7 +102,7 @@ func (s *PostgresStore) Backend() Backend { return BackendPostgres }
 
 func (s *PostgresStore) Close() error { return errors.Join(s.db.Close(), s.lockDB.Close()) }
 
-const pgSandboxCols = `id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral, egress`
+const pgSandboxCols = `id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral, egress, template, idle_stop_after, idle_delete_after, egress_proxy`
 
 type pgExecer interface {
 	Exec(query string, args ...any) (sql.Result, error)
@@ -107,9 +111,9 @@ type pgExecer interface {
 func (s *PostgresStore) insertSandbox(e pgExecer, record *SandboxRecord) error {
 	const q = `
 		INSERT INTO sandboxes
-			(id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral, egress)
+			(id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral, egress, template, idle_stop_after, idle_delete_after, egress_proxy)
 		VALUES
-			($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`
+			($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`
 
 	_, err := e.Exec(q,
 		record.ID,
@@ -126,6 +130,10 @@ func (s *PostgresStore) insertSandbox(e pgExecer, record *SandboxRecord) error {
 		record.TenantID,
 		record.Ephemeral,
 		record.Egress,
+		record.Template,
+		record.IdleStopAfter,
+		record.IdleDeleteAfter,
+		record.EgressProxy,
 	)
 	if err != nil {
 		return fmt.Errorf("store: create sandbox %s: %w", record.ID, err)

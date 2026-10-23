@@ -421,6 +421,38 @@ func TestLoadAPIRejectsNegativeIdleDeleteAfter(t *testing.T) {
 	}
 }
 
+func TestLoadAPIMaxIdleWindow(t *testing.T) {
+	for _, tc := range []struct {
+		value   string
+		want    time.Duration
+		wantErr bool
+	}{
+		{value: "", want: 24 * time.Hour},
+		{value: "0", want: 0},
+		{value: "6h", want: 6 * time.Hour},
+		{value: "30s", wantErr: true},
+		{value: "-1h", wantErr: true},
+		{value: "soon", wantErr: true},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			t.Setenv("SANDBOX_API_KEYS", "test-key")
+			t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+			t.Setenv("SANDBOX_API_MAX_IDLE_WINDOW", tc.value)
+			setRequiredGRPCMTLS(t)
+			cfg, err := LoadAPI()
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("accepted SANDBOX_API_MAX_IDLE_WINDOW=%q", tc.value)
+				}
+				return
+			}
+			if err != nil || cfg.MaxIdleWindow != tc.want {
+				t.Fatalf("MaxIdleWindow = %v err=%v, want %s", cfg, err, tc.want)
+			}
+		})
+	}
+}
+
 // The lock pool follows the configured concurrency plus five connections the
 // sweeper's workers can never take from the request path.
 func TestLoadAPIIdleSweepConcurrencyKeepsLockPoolAboveIt(t *testing.T) {

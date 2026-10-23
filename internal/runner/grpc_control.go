@@ -105,6 +105,16 @@ func (s *SandboxControlGRPC) CreateSandbox(ctx context.Context, req *pb.CreateSa
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid create options: "+err.Error())
 	}
+	// This runner has one image, the default. Any other is refused, not booted
+	// as the default, so a sandbox never runs an image it did not ask for.
+	if opts.Template != "" {
+		return nil, status.Errorf(codes.InvalidArgument, "runner has no template %q", opts.Template)
+	}
+	// No runtime serves the egress proxy yet. Unimplemented, so the API can
+	// tell this from a bad request; nothing is created either way.
+	if opts.Egress == runnerruntime.EgressProxy {
+		return nil, status.Error(codes.Unimplemented, "egress proxy is not supported by this runner")
+	}
 	// Echoed so the API can tell a runner that applied the options from one that
 	// ignored them. Marshalled here, before anything is created.
 	applied, err := json.Marshal(opts)

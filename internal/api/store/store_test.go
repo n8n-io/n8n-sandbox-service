@@ -76,6 +76,60 @@ func TestEgressMigrationBackfillsPublic(t *testing.T) {
 	}
 }
 
+// The create options added for templates, idle windows and the egress proxy
+// round-trip, and rows from before them read back as the defaults.
+func TestCreateOptionColumns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "api.db")
+	s, err := New(path)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	rec := &SandboxRecord{
+		ID:              "with-options",
+		Status:          "running",
+		Egress:          "proxy",
+		Template:        "python",
+		IdleStopAfter:   600,
+		IdleDeleteAfter: 7200,
+		EgressProxy:     `{"allow":[]}`,
+	}
+	if err := s.Create(rec); err != nil {
+		t.Fatalf("create record: %v", err)
+	}
+	got, err := s.Get(rec.ID)
+	if err != nil || got == nil {
+		t.Fatalf("get: got=%v err=%v", got, err)
+	}
+	if got.Template != "python" || got.IdleStopAfter != 600 || got.IdleDeleteAfter != 7200 || got.EgressProxy != rec.EgressProxy {
+		t.Fatalf("round trip = %+v", got)
+	}
+
+	for _, col := range []string{"template", "idle_stop_after", "idle_delete_after", "egress_proxy"} {
+		if _, err := s.db.Exec(`ALTER TABLE sandboxes DROP COLUMN ` + col); err != nil {
+			t.Fatalf("drop %s column: %v", col, err)
+		}
+	}
+	if _, err := s.db.Exec(`INSERT INTO sandboxes (id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip)
+		VALUES ('legacy', 'running', 1, 2, '', '', '')`); err != nil {
+		t.Fatalf("insert legacy row: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	s, err = New(path)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer s.Close()
+	got, err = s.Get("legacy")
+	if err != nil || got == nil {
+		t.Fatalf("get legacy row: got=%v err=%v", got, err)
+	}
+	if got.Template != "default" || got.IdleStopAfter != 0 || got.IdleDeleteAfter != 0 || got.EgressProxy != "" {
+		t.Fatalf("legacy row = %+v, want the defaults", got)
+	}
+}
+
 func TestSQLiteDSNEnablesForeignKeys(t *testing.T) {
 	s, err := New(":memory:")
 	if err != nil {

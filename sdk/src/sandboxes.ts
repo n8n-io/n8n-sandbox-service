@@ -1,6 +1,6 @@
 import { delay } from "./delay";
 import type { HttpClient } from "./http";
-import { EgressMismatchError, SandboxServiceError } from "./errors";
+import { CreateOptionMismatchError, EgressMismatchError, SandboxServiceError } from "./errors";
 import type { CreateSandboxOptions, SandboxRecord, SandboxWireResponse } from "./types";
 
 /** Reason of a 503 for a create no runner had capacity for. Nothing was created. */
@@ -12,7 +12,15 @@ export async function createSandbox(
 ): Promise<SandboxRecord> {
   const post = () =>
     http.requestJson<SandboxWireResponse>("POST", "/sandboxes", {
-      data: { id: options.id, ephemeral: options.ephemeral, egress: options.egress },
+      data: {
+        id: options.id,
+        ephemeral: options.ephemeral,
+        egress: options.egress,
+        egress_proxy: options.egressProxy,
+        template: options.template,
+        idle_stop_after: options.idleStopAfter,
+        idle_delete_after: options.idleDeleteAfter,
+      },
       // Only a caller-supplied id makes a repeated POST idempotent; retrying an
       // anonymous create would provision a second sandbox.
       isSafeToRetry: options.id !== undefined,
@@ -25,7 +33,23 @@ export async function createSandbox(
   if (record.egress !== options.egress) {
     throw new EgressMismatchError(record.id, options.egress, record.egress);
   }
+  // A current API refuses a mismatch itself (409); an older one ignores the
+  // option and reports nothing for it.
+  checkOption(record.id, "template", options.template || undefined, record.template ?? "default");
+  checkOption(record.id, "idle_stop_after", options.idleStopAfter, record.idleStopAfter);
+  checkOption(record.id, "idle_delete_after", options.idleDeleteAfter, record.idleDeleteAfter);
   return record;
+}
+
+function checkOption(
+  sandboxId: string,
+  option: string,
+  requested: string | number | undefined,
+  actual: string | number | undefined,
+): void {
+  if (requested !== undefined && requested !== actual) {
+    throw new CreateOptionMismatchError(sandboxId, option, String(requested), String(actual));
+  }
 }
 
 export async function getSandbox(http: HttpClient, id: string): Promise<SandboxRecord> {
@@ -80,6 +104,9 @@ function mapSandboxRecord(wire: SandboxWireResponse): SandboxRecord {
   };
   // Left out rather than set to undefined so `toEqual` comparisons and JSON
   // output of records from older services stay unchanged.
+  if (wire.template !== undefined) record.template = wire.template;
+  if (wire.idle_stop_after !== undefined) record.idleStopAfter = wire.idle_stop_after;
+  if (wire.idle_delete_after !== undefined) record.idleDeleteAfter = wire.idle_delete_after;
   if (wire.tenant_id !== undefined) record.tenantId = wire.tenant_id;
   return record;
 }

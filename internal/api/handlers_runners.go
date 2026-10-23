@@ -45,3 +45,14 @@ func handleListRunners(reg registry.RunnerRegistry) http.HandlerFunc {
 		writeJSON(w, http.StatusOK, out)
 	}
 }
+
+// handleRunnerDrain serves the runner drain routes, which are reserved but not
+// implemented: placement cannot be stopped on one runner yet.
+func handleRunnerDrain() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !requireAdmin(w, r) {
+			return
+		}
+		writeErrorReason(w, http.StatusNotImplemented, "runner drain is not implemented", reasonNotImplemented)
+	}
+}

@@ -76,6 +76,11 @@ func TestPostgresStoreCRUD(t *testing.T) {
 		RunnerID:              "r1",
 		RunnerHTTPBase:        "http://runner:8080",
 		RunnerControlGRPCAddr: "runner:9091",
+		Egress:                "proxy",
+		Template:              "python",
+		IdleStopAfter:         600,
+		IdleDeleteAfter:       7200,
+		EgressProxy:           `{"allow":[]}`,
 	}
 	if err := s.Create(rec); err != nil {
 		t.Fatalf("create: %v", err)
@@ -86,7 +91,8 @@ func TestPostgresStoreCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if got == nil || got.ContainerIP != rec.ContainerIP {
+	if got == nil || got.ContainerIP != rec.ContainerIP || got.Template != rec.Template ||
+		got.IdleStopAfter != rec.IdleStopAfter || got.IdleDeleteAfter != rec.IdleDeleteAfter || got.EgressProxy != rec.EgressProxy {
 		t.Fatalf("unexpected record: %+v", got)
 	}
 

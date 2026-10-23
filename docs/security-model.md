@@ -194,6 +194,12 @@ fails the create and asks the runner, best effort, to remove the sandbox, so a
 runner from before egress modes cannot hand out a public sandbox recorded as
 `none`.
 
+Egress `proxy` is accepted by the API and refused by every runner
+(`Unimplemented`, before anything is created), so it never yields a sandbox.
+The runner refuses a template other than the default the same way, rather than
+booting the default image in its place. A runtime handed `proxy` options would
+treat them as `none`.
+
 The Firecracker runtime gives every slot its own network namespace with a
 dedicated TAP device and veth uplink. The guest subnet is identical in every
 namespace, and there is no bridge between them, so guests have no layer-2 path
@@ -348,7 +354,11 @@ them.
 
 **Egress is `public` or `none`.** A `public` sandbox can reach any address
 outside the blocked ranges, which are not a definition of what is internal.
-Per-sandbox allowlists are not implemented.
+Per-sandbox allowlists (`egress: "proxy"`) are validated and stored but not
+enforced, and no sandbox can be created with one. Validation refuses IP
+literals but not names that resolve to internal addresses (`localhost`,
+`*.internal`, cluster names), and a `secret_ref` is any string of the allowed
+form, not scoped to the caller's tenant.
 
 **The runner does not enforce tenancy.** It has no tenant concept at all. Anyone
 holding a runner API key and a client certificate the CA has signed can operate

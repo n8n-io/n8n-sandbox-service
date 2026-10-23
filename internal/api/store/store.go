@@ -58,7 +58,11 @@ type SandboxRecord struct {
 	RunnerControlGRPCAddr string // host:port for SandboxControl gRPC
 	TenantID              string // AdminTenantID = admin-owned; otherwise a tenants.id UUID
 	Ephemeral             bool   // Deleted instead of stopped when idle; never enters "stopped"
-	Egress                string // Outbound network policy: "public" or "none"; fixed at creation
+	Egress                string // Outbound network policy: "public", "none" or "proxy"; fixed at creation
+	Template              string // Image the sandbox boots; fixed at creation
+	IdleStopAfter         int64  // Seconds; 0 = the API's global window
+	IdleDeleteAfter       int64  // Seconds; 0 = the API's global window
+	EgressProxy           string // Validated EgressProxySpec as JSON when Egress is "proxy", else empty
 }
 
 // Tenant is a provisioned consumer of the sandbox API (e.g. an n8n instance).
@@ -145,6 +149,10 @@ func scanRecord(row scanner) (*SandboxRecord, error) {
 		&r.TenantID,
 		&r.Ephemeral,
 		&r.Egress,
+		&r.Template,
+		&r.IdleStopAfter,
+		&r.IdleDeleteAfter,
+		&r.EgressProxy,
 	)
 	if err != nil {
 		return nil, err

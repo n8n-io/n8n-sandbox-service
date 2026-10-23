@@ -46,6 +46,9 @@ const (
 	EgressPublic Egress = "public"
 	// EgressNone lets no guest-initiated connection leave the sandbox, DNS included.
 	EgressNone Egress = "none"
+	// EgressProxy lets the guest reach only the runner's egress proxy, which
+	// enforces the sandbox's EgressProxySpec. No runner serves it yet.
+	EgressProxy Egress = "proxy"
 )
 
 // ParseEgress maps the wire value to an Egress, treating empty as EgressPublic.
@@ -55,19 +58,39 @@ func ParseEgress(s string) (Egress, error) {
 		return EgressPublic, nil
 	case EgressNone:
 		return EgressNone, nil
+	case EgressProxy:
+		return EgressProxy, nil
 	}
-	return "", fmt.Errorf("invalid egress %q: must be %q or %q", s, EgressPublic, EgressNone)
+	return "", fmt.Errorf("invalid egress %q: must be %q, %q or %q", s, EgressPublic, EgressNone, EgressProxy)
 }
+
+// DefaultTemplate is the template a create that names none gets: the runner's
+// one rootfs or snapshot. On the wire it is sent as an empty Template, so a
+// runner from before templates confirms it.
+const DefaultTemplate = "default"
 
 // CreateOptions holds optional parameters for sandbox creation. It is also the
 // JSON shape of the create RPC's create_options_json and
 // applied_create_options_json fields.
 type CreateOptions struct {
 	Egress Egress `json:"egress,omitempty"`
+	// Template is the image the sandbox boots; empty is DefaultTemplate.
+	Template string `json:"template,omitempty"`
+	// EgressProxy is set exactly when Egress is EgressProxy.
+	EgressProxy *EgressProxySpec `json:"egress_proxy,omitempty"`
+}
+
+// Equal reports whether o and p ask for the same sandbox. Both must have come
+// through ParseCreateOptions or been built from validated values.
+func (o *CreateOptions) Equal(p *CreateOptions) bool {
+	a, errA := json.Marshal(o)
+	b, errB := json.Marshal(p)
+	return errA == nil && errB == nil && string(a) == string(b)
 }
 
 // ParseCreateOptions decodes the wire form of CreateOptions. Empty means the
-// defaults; otherwise it must be an object with a valid Egress.
+// defaults; otherwise it must be an object with a valid Egress, and an
+// EgressProxy spec exactly when Egress is EgressProxy.
 func ParseCreateOptions(s string) (*CreateOptions, error) {
 	opts := &CreateOptions{}
 	if strings.TrimSpace(s) != "" {
@@ -84,11 +107,31 @@ func ParseCreateOptions(s string) (*CreateOptions, error) {
 		return nil, err
 	}
 	opts.Egress = egress
+	if opts.Template == DefaultTemplate {
+		opts.Template = ""
+	}
+	if opts.Template != "" {
+		if err := ValidateTemplateName(opts.Template); err != nil {
+			return nil, err
+		}
+	}
+	switch {
+	case egress == EgressProxy && opts.EgressProxy == nil:
+		return nil, errors.New("egress proxy needs egress_proxy")
+	case egress != EgressProxy && opts.EgressProxy != nil:
+		return nil, fmt.Errorf("egress_proxy is only allowed with egress %q", EgressProxy)
+	case opts.EgressProxy != nil:
+		if err := opts.EgressProxy.Validate(); err != nil {
+			return nil, err
+		}
+	}
 	return opts, nil
 }
 
-// BlockEgress reports whether the sandbox gets no egress at all. Options reach a
-// runtime through ParseCreateOptions, so any other value is a bug, not input.
+// BlockEgress reports whether the sandbox gets no direct egress at all. Options
+// reach a runtime through ParseCreateOptions, so any other value is a bug, not
+// input. A proxy sandbox is blocked too: whatever it may reach goes through
+// the proxy, never straight out.
 func (o *CreateOptions) BlockEgress() bool {
 	if o == nil {
 		return false
@@ -96,7 +139,7 @@ func (o *CreateOptions) BlockEgress() bool {
 	switch o.Egress {
 	case "", EgressPublic:
 		return false
-	case EgressNone:
+	case EgressNone, EgressProxy:
 		return true
 	}
 	panic(fmt.Sprintf("unvalidated egress %q", o.Egress))

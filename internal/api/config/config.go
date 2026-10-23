@@ -23,10 +23,13 @@ const (
 	defaultOrphanReapBuffer = 5 * time.Minute
 	defaultIdleStopAfter    = time.Hour
 	defaultIdleDeleteAfter  = 24 * time.Hour
-	defaultLogLevel         = slog.LevelInfo
-	defaultPostgresPort     = 5432
-	defaultPostgresSSLMode  = "require"
-	defaultMaxSandboxes     = 50
+	defaultMaxIdleWindow    = 24 * time.Hour
+	// MinIdleWindow is the shortest per-sandbox idle window a create may ask for.
+	MinIdleWindow          = time.Minute
+	defaultLogLevel        = slog.LevelInfo
+	defaultPostgresPort    = 5432
+	defaultPostgresSSLMode = "require"
+	defaultMaxSandboxes    = 50
 
 	defaultMaxInflightPerTenant = 512
 )
@@ -147,6 +150,9 @@ type APIConfig struct {
 	// IdleDeleteAfter is how long after last activity the API deletes the sandbox
 	// (0 = disabled). Wakes are refused after this window until the row is removed.
 	IdleDeleteAfter time.Duration
+	// MaxIdleWindow caps the idle_stop_after and idle_delete_after a create may
+	// set for its sandbox. 0 refuses both.
+	MaxIdleWindow time.Duration
 	// IdleDeleteSafetyBuffer is added to a sandbox's idle window before the sweeper
 	// deletes it (race guard). Ephemeral sandboxes use IdleStopAfter as their window
 	// (IdleDeleteAfter when idle stop is disabled), so when either window is > 0 and
@@ -191,6 +197,7 @@ func LoadAPI() (*APIConfig, error) {
 		OrphanReapBuffer:     defaultOrphanReapBuffer,
 		IdleStopAfter:        defaultIdleStopAfter,
 		IdleDeleteAfter:      defaultIdleDeleteAfter,
+		MaxIdleWindow:        defaultMaxIdleWindow,
 		LogLevel:             defaultLogLevel,
 	}
 
@@ -375,6 +382,13 @@ func LoadAPI() (*APIConfig, error) {
 			return nil, fmt.Errorf("SANDBOX_API_IDLE_DELETE_AFTER must be unset, 0, or a positive duration, got %q", v)
 		}
 		cfg.IdleDeleteAfter = d
+	}
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_MAX_IDLE_WINDOW")); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || (d != 0 && d < MinIdleWindow) {
+			return nil, fmt.Errorf("SANDBOX_API_MAX_IDLE_WINDOW must be 0 or a duration of at least %s, got %q", MinIdleWindow, v)
+		}
+		cfg.MaxIdleWindow = d
 	}
 	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_IDLE_DELETE_SAFETY_BUFFER")); v != "" {
 		d, err := time.ParseDuration(v)

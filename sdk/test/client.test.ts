@@ -1,6 +1,10 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { SandboxClient } from "../src/client.js";
-import { EgressMismatchError, SandboxServiceError } from "../src/errors.js";
+import {
+  CreateOptionMismatchError,
+  EgressMismatchError,
+  SandboxServiceError,
+} from "../src/errors.js";
 import { HttpClient } from "../src/http.js";
 
 vi.mock("../src/http.js", () => {
@@ -155,6 +159,79 @@ describe("SandboxClient", () => {
     await expect(client.createSandbox({ id: "abc", egress: "public" })).rejects.toBeInstanceOf(
       EgressMismatchError,
     );
+  });
+
+  it("createSandbox sends template, idle windows and the proxy spec in wire form", async () => {
+    const mock = getMockHttp(client);
+    mock.requestJson.mockResolvedValue({
+      id: "abc",
+      status: "running",
+      created_at: 1000,
+      last_active_at: 1000,
+      ephemeral: false,
+      egress: "proxy",
+      template: "default",
+      idle_stop_after: 1800,
+      idle_delete_after: 604800,
+    });
+    const egressProxy = {
+      allow: [{ name: "git", hosts: ["git.example.com"] }],
+      repos: [{ host: "git.example.com", path: "org/repo", access: "write" as const }],
+      push_refs: ["refs/heads/factory/i1/"],
+    };
+
+    const result = await client.createSandbox({
+      egress: "proxy",
+      egressProxy,
+      template: "default",
+      idleStopAfter: 1800,
+      idleDeleteAfter: 604800,
+    });
+
+    expect(mock.requestJson).toHaveBeenCalledWith("POST", "/sandboxes", {
+      data: {
+        egress: "proxy",
+        egress_proxy: egressProxy,
+        template: "default",
+        idle_stop_after: 1800,
+        idle_delete_after: 604800,
+      },
+      isSafeToRetry: false,
+    });
+    expect(result).toMatchObject({
+      template: "default",
+      idleStopAfter: 1800,
+      idleDeleteAfter: 604800,
+    });
+  });
+
+  it("createSandbox rejects a sandbox an older API created without the requested options", async () => {
+    const mock = getMockHttp(client);
+    // An API from before templates and idle windows reports neither.
+    mock.requestJson.mockResolvedValue({
+      id: "abc",
+      status: "running",
+      created_at: 1000,
+      last_active_at: 1000,
+      egress: "public",
+    });
+
+    await expect(
+      client.createSandbox({ egress: "public", template: "default" }),
+    ).resolves.toMatchObject({ id: "abc" });
+    const err = await client
+      .createSandbox({ egress: "public", template: "python" })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CreateOptionMismatchError);
+    expect(err).toMatchObject({
+      sandboxId: "abc",
+      option: "template",
+      requested: "python",
+      actual: "default",
+    });
+    await expect(
+      client.createSandbox({ egress: "public", idleDeleteAfter: 604800 }),
+    ).rejects.toBeInstanceOf(CreateOptionMismatchError);
   });
 
   it("maps missing ephemeral and egress fields to their pre-flag values", async () => {

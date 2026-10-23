@@ -15,8 +15,37 @@ export interface SandboxClientOptions {
  * Outbound network policy of a sandbox.
  * - `public`: the public internet; private and link-local ranges are blocked.
  * - `none`: no guest-initiated connection leaves the sandbox, DNS included.
+ * - `proxy`: only what `egressProxy` allows, through the runner's proxy. Validated
+ *   by the API, but no runner serves it yet: the create fails with 501.
  */
-export type EgressMode = "public" | "none";
+export type EgressMode = "public" | "none" | "proxy";
+
+/** What an egress `proxy` sandbox may reach. Wire format documented in API.md. */
+export interface EgressProxySpec {
+  /** Named groups of allowed hosts (lowercase DNS names, optional `:port`, no IPs). */
+  allow: { name: string; hosts: string[] }[];
+  /** Git repositories on allowed hosts the sandbox may fetch (`read`) or also push (`write`). */
+  repos?: { host: string; path: string; access: "read" | "write" }[];
+  /** Refs a push may update; an entry ending in `/` is a prefix under `refs/heads/`. */
+  push_refs?: string[];
+  /**
+   * Per allowed host, a reference to the secret the proxy injects: as
+   * `Authorization: Bearer` (default), `basic` with `username`, or as the value
+   * of `header`.
+   */
+  credentials?: {
+    host: string;
+    secret_ref: string;
+    scheme?: "bearer" | "basic" | "header";
+    username?: string;
+    header?: string;
+    allow_plain_http?: boolean;
+  }[];
+  /** Allowed hosts that are model provider APIs, metered by the proxy. */
+  model_hosts?: { host: string; provider: "anthropic" | "openai" }[];
+  /** Opaque attribution for usage records and refusal logs. */
+  labels?: Record<string, string>;
+}
 
 /** Options for creating a sandbox. */
 export interface CreateSandboxOptions {
@@ -34,6 +63,17 @@ export interface CreateSandboxOptions {
    * Reconnecting to an existing `id` keeps the mode it was created with.
    */
   egress: EgressMode;
+  /** Required when `egress` is `proxy`, refused otherwise. Fixed at creation. */
+  egressProxy?: EgressProxySpec;
+  /** Image the sandbox boots. Defaults to `default`, the only template served today. */
+  template?: string;
+  /**
+   * Per-sandbox idle windows in seconds, from 60 up to the API's
+   * `SANDBOX_API_MAX_IDLE_WINDOW`. Stored and returned; the idle sweeper does
+   * not apply them yet.
+   */
+  idleStopAfter?: number;
+  idleDeleteAfter?: number;
 }
 
 /** Retry policy for transient HTTP failures. */
@@ -69,6 +109,11 @@ export interface SandboxRecord {
   ephemeral: boolean;
   /** Outbound network policy the sandbox was created with. */
   egress: EgressMode;
+  /** Template the sandbox was created with. Undefined against services that predate templates. */
+  template?: string;
+  /** Per-sandbox idle windows in seconds; undefined when the sandbox uses the global ones. */
+  idleStopAfter?: number;
+  idleDeleteAfter?: number;
   /**
    * Owning tenant id, or `__admin__` for a sandbox created with an admin key.
    * A tenant key only ever sees its own id. Undefined against services that
@@ -179,6 +224,11 @@ export type SandboxWireResponse = {
   ephemeral?: boolean;
   /** Absent from services that predate egress modes; mapped to `public`, the only policy they had. */
   egress?: EgressMode;
+  /** Absent from services that predate templates. */
+  template?: string;
+  /** Absent when the sandbox uses the global windows, and from services that predate them. */
+  idle_stop_after?: number;
+  idle_delete_after?: number;
   /** Absent from services that predate sandbox ownership in responses. */
   tenant_id?: string;
 };

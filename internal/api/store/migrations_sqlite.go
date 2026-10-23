@@ -31,6 +31,14 @@ const sqliteAddEphemeralCol = `ALTER TABLE sandboxes ADD COLUMN ephemeral INTEGE
 
 const sqliteAddEgressCol = `ALTER TABLE sandboxes ADD COLUMN egress TEXT NOT NULL DEFAULT 'public'`
 
+const sqliteAddTemplateCol = `ALTER TABLE sandboxes ADD COLUMN template TEXT NOT NULL DEFAULT 'default'`
+
+const sqliteAddIdleStopAfterCol = `ALTER TABLE sandboxes ADD COLUMN idle_stop_after INTEGER NOT NULL DEFAULT 0`
+
+const sqliteAddIdleDeleteAfterCol = `ALTER TABLE sandboxes ADD COLUMN idle_delete_after INTEGER NOT NULL DEFAULT 0`
+
+const sqliteAddEgressProxyCol = `ALTER TABLE sandboxes ADD COLUMN egress_proxy TEXT NOT NULL DEFAULT ''`
+
 // Backfill legacy empty tenant_id to the admin sentinel.
 const sqliteBackfillAdminTenantID = `UPDATE sandboxes SET tenant_id = '__admin__' WHERE tenant_id = ''`
 

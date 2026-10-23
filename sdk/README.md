@@ -38,6 +38,8 @@ The service answers `429` when a tenant or a sandbox has too many requests in pr
 
 `createSandbox` requires an `egress` mode: `'public'` (the internet, minus private ranges) or `'none'` (no outbound connection, DNS included). It is fixed at creation and echoed on every sandbox record. Reconnecting by `id` with a different mode is refused by the API (`409`). If the API returns a sandbox that is not in the requested mode (it predates egress modes and ignored the field), `createSandbox` throws `EgressMismatchError` with its `sandboxId`.
 
+`egress: 'proxy'` with an `egressProxy` spec is validated by the API, but no runner serves it yet: the create fails with `501` (`reason: 'not_implemented'`). `template` (only `'default'` today) and `idleStopAfter` / `idleDeleteAfter` (seconds) are optional and fixed at creation; the idle windows are stored and returned but not applied yet. If an older API ignored one of them, `createSandbox` throws `CreateOptionMismatchError`.
+
 ```ts
 // Create a sandbox
 const sandbox = await client.createSandbox({ egress: 'public' });

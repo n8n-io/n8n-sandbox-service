@@ -165,6 +165,7 @@ Sandboxes past their idle-delete window stay listed until the sweeper removes th
     "last_active_at": 1700000000,
     "ephemeral": false,
     "egress": "public",
+    "template": "default",
     "tenant_id": "uuid"
   }
 ]
@@ -197,7 +198,7 @@ Create a sandbox. With no request body, the service generates a UUID. Callers ma
 }
 ```
 
-If that ID still belongs to the caller and is within its idle-delete window, the existing sandbox is returned, or `409` if the request names an `egress` that differs from the sandbox's. If it has passed the window, the stale sandbox is deleted before the ID is reused. If the ID belongs to another tenant (or to admin when the caller is a tenant), the request fails with `409`.
+If that ID still belongs to the caller and is within its idle-delete window, the existing sandbox is returned, or `409` if the request names an `egress`, `egress_proxy`, `template`, `idle_stop_after` or `idle_delete_after` that differs from the sandbox's, with `reason` `egress_mismatch`, `egress_proxy_mismatch`, `template_mismatch` or `idle_window_mismatch`. A field left out matches whatever the sandbox has. If it has passed the window, the stale sandbox is deleted before the ID is reused. If the ID belongs to another tenant (or to admin when the caller is a tenant), the request fails with `409`.
 
 Disconnecting before the response does not cancel a create a runner has accepted: if it succeeds, the sandbox is still created and tracked, and can be found by listing or by repeating the request with the same `id`. A disconnect after a runner refused it (below) ends the create with nothing created.
 
@@ -223,7 +224,37 @@ When no runner is eligible, it is the same except for `error`: `no sandbox runne
 }
 ```
 
-- `egress` (string, default `"public"`) — outbound network policy. `"public"`: the internet, minus the [blocked destinations](security-model.md#guest-to-host-and-network). `"none"`: nothing leaves the sandbox, DNS included; the API still reaches it. Fixed at creation: a reconnect to an existing `id` that names a different mode is refused with `409`, so a caller asking for `"none"` never gets an open sandbox back.
+- `egress` (string, default `"public"`) — outbound network policy. `"public"`: the internet, minus the [blocked destinations](security-model.md#guest-to-host-and-network). `"none"`: nothing leaves the sandbox, DNS included; the API still reaches it. `"proxy"`: only what `egress_proxy` allows; validated, but no runner serves it yet, so the create fails with `501` `not_implemented` and nothing is created. Fixed at creation: a reconnect to an existing `id` that names a different mode is refused with `409`, so a caller asking for `"none"` never gets an open sandbox back.
+- `egress_proxy` (object) — required with `egress: "proxy"`, refused otherwise. Unknown fields are refused.
+
+```json
+{
+  "egress": "proxy",
+  "egress_proxy": {
+    "allow": [
+      { "name": "git", "hosts": ["git.example.com", "forgejo:3000"] },
+      { "name": "anthropic", "hosts": ["api.anthropic.com"] }
+    ],
+    "repos": [{ "host": "git.example.com", "path": "org/repo", "access": "write" }],
+    "push_refs": ["refs/heads/factory/i1/", "refs/heads/factory-wip/s1"],
+    "credentials": [
+      { "host": "git.example.com", "secret_ref": "factory/git-token", "scheme": "basic", "username": "factory-agent" },
+      { "host": "api.anthropic.com", "secret_ref": "factory/anthropic-key", "scheme": "header", "header": "x-api-key" }
+    ],
+    "model_hosts": [{ "host": "api.anthropic.com", "provider": "anthropic" }],
+    "labels": { "instance_id": "i1", "session_id": "s1" }
+  }
+}
+```
+
+  - `allow` (up to 64): named groups of 1–16 hosts each. A host is a lowercase DNS name with an optional `:port` other than `80` or `443` (the defaults, left out); IP addresses (hex forms included) and wildcards are refused.
+  - `repos` (up to 64): Git repositories on an `allow` host. `path` is lowercase, without `.git`. `access` is `read` (fetch) or `write` (fetch and push to `push_refs`).
+  - `push_refs` (up to 16): refs under `refs/heads/`; one ending in `/` is a prefix, any other is one ref.
+  - `credentials` (up to 32): per `allow` host, a reference to the secret to inject. Only the reference is stored. `scheme` is `bearer` (default), `basic` (needs `username`) or `header` (needs `header`, a lowercase name that is not hop-by-hop, `host`, `cookie`, `content-*` or `proxy-*`); `allow_plain_http` (boolean).
+  - `model_hosts` (up to 8): `allow` hosts that are model APIs, with `provider` `anthropic` or `openai`. A host with `repos` cannot be one.
+  - `labels` (up to 16): string map; keys lowercase (`a-z0-9_.-`, at most 63), values 1–128 of `A-Za-z0-9._:@/-`.
+- `template` (string, default `"default"`) — image the sandbox boots. Only `"default"` is served; any other name is `400` with `reason` `unknown_template`. Fixed at creation.
+- `idle_stop_after`, `idle_delete_after` (integer seconds) — per-sandbox idle windows, from 60 up to `SANDBOX_API_MAX_IDLE_WINDOW` (default `24h`), with `idle_stop_after` no larger than `idle_delete_after`. Stored and returned, but the sweeper does not apply them yet: it uses the global windows. Fixed at creation.
 
 With a tenant key, the sandbox is owned by that tenant and counts toward the tenant's `max_sandboxes` quota (`403` when exceeded). With an admin key, the sandbox is stored with `tenant_id` `__admin__` (admin-owned; not visible to tenant keys; admins see all sandboxes in list).
 
@@ -241,11 +272,14 @@ Resource limits (memory, CPU, process count) are configured on the runner via en
   "last_active_at": 1700000000,
   "ephemeral": false,
   "egress": "public",
+  "template": "default",
   "tenant_id": "uuid"
 }
 ```
 
-**Errors:** `400` invalid request body, supplied id or `egress` value, `403` tenant sandbox quota exceeded (when creates on other API pods filled it first, the runner create is rolled back), `409` if the supplied id is owned by another tenant/admin, exists with a different `egress` than requested, or the tenant was deleted before the sandbox row could be stored (runner create is rolled back), `429` [too many requests in progress](#http-429--too-many-requests-in-progress), `502` stale sandbox cleanup failed, or the runner did not confirm the requested `egress` (runner create is rolled back; a runner from before egress modes only serves `public`), `503` `no_capacity`: no runner is eligible or has room (see above)
+`idle_stop_after` and `idle_delete_after` are included when the create set them. `egress_proxy` is not returned.
+
+**Errors:** `400` invalid request body (over 64 KiB, or any field above out of range), supplied id, `403` tenant sandbox quota exceeded (when creates on other API pods filled it first, the runner create is rolled back), `409` if the supplied id is owned by another tenant/admin, exists with a different option than requested (see above), or the tenant was deleted before the sandbox row could be stored (runner create is rolled back), `429` [too many requests in progress](#http-429--too-many-requests-in-progress), `502` stale sandbox cleanup failed, or the runner did not confirm the requested `egress` (runner create is rolled back; a runner from before egress modes only serves `public`), `501` `not_implemented`: `egress: "proxy"`, which no runner serves yet, `503` `no_capacity`: no runner is eligible or has room (see above)
 
 **Examples:**
 
@@ -294,11 +328,12 @@ This is a read-only status check: it does not update `last_active_at` or extend 
   "last_active_at": 1700000000,
   "ephemeral": false,
   "egress": "public",
+  "template": "default",
   "tenant_id": "uuid"
 }
 ```
 
-`status` is `running` or `stopped`; an ephemeral sandbox is only ever `running`. `egress` is the mode the sandbox was created with. `tenant_id` is the owner, `__admin__` for an admin-owned sandbox.
+`status` is `running` or `stopped`; an ephemeral sandbox is only ever `running`. `egress`, `template` and, when set, `idle_stop_after` and `idle_delete_after` are what the sandbox was created with. `tenant_id` is the owner, `__admin__` for an admin-owned sandbox.
 
 **Errors:** `400` invalid id, `404` not found
 
@@ -980,6 +1015,18 @@ Admin or scaler. Lists every registered runner, ordered by `id`, with the capaci
 ```bash
 curl http://localhost:8080/admin/runners -H "X-Api-Key: SCALER_KEY"
 ```
+
+---
+
+### GET, POST, DELETE /admin/runners/{id}/drain
+
+Admin only. Reserved for runner drain (stop placement on a runner and report when its sandboxes have gone idle). Not implemented: every call returns `501`, and nothing changes.
+
+```json
+{"error":"runner drain is not implemented","code":501,"reason":"not_implemented"}
+```
+
+**Errors:** `403` any key but admin, `501` always for admin
 
 ---
 
