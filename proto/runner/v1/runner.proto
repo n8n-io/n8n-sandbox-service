@@ -9,10 +9,13 @@ service RunnerRegistry {
 }
 
 // SandboxControl: API → runner for sandbox create/stop/delete (HTTP remains for exec/files proxy).
+// GetCordon and SetCordon are for operators; they take the same credentials.
 service SandboxControl {
   rpc CreateSandbox(CreateSandboxRequest) returns (CreateSandboxResponse);
   rpc StopSandbox(StopSandboxRequest) returns (StopSandboxResponse);
   rpc DeleteSandbox(DeleteSandboxRequest) returns (DeleteSandboxResponse);
+  rpc GetCordon(GetCordonRequest) returns (GetCordonResponse);
+  rpc SetCordon(SetCordonRequest) returns (SetCordonResponse);
 }
 
 message RunnerHeartbeat {
@@ -24,6 +27,9 @@ message RunnerHeartbeat {
   string control_grpc_addr = 6;
   // Managed sandboxes that are stopped and not occupying a concurrent-VM slot.
   int32 capacity_stopped = 7;
+  // An operator cordoned the runner: it serves its sandboxes but takes no new
+  // creates. Separate from healthy, which is the runtime's own readiness.
+  bool cordoned = 8;
 }
 
 message ControlMessage {
@@ -54,3 +60,18 @@ message DeleteSandboxRequest {
 }
 
 message DeleteSandboxResponse {}
+
+message GetCordonRequest {}
+
+message GetCordonResponse {
+  bool cordoned = 1;
+}
+
+message SetCordonRequest {
+  bool cordoned = 1;
+}
+
+// The state after the call.
+message SetCordonResponse {
+  bool cordoned = 1;
+}

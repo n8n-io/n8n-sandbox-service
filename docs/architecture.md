@@ -106,8 +106,8 @@ Each runner hosts sandboxes through the shared `runtime.Runtime` contract. The D
 | Docker runtime | `internal/runner/runtime/docker/` | Create, stop, delete containers; reconcile on startup; manage Docker network |
 | Firecracker runtime | `internal/runner/runtime/firecracker.ee/` | Create, stop, delete microVM sandboxes; manage jailer, snapshot restore, and host networking |
 | Docker client | `internal/runner/runtime/docker/docker_client.go` | Thin wrapper around the `docker` CLI |
-| Registration client | `internal/runner/register/` | gRPC heartbeat stream to API; sends capacity and health info every 10s |
-| gRPC control server | `internal/runner/grpc_control.go` | `SandboxControl` service — accepts create/stop/delete RPCs from API |
+| Registration client | `internal/runner/register/` | gRPC heartbeat stream to API; sends capacity, health and cordon state every 10s, and at once when cordon changes |
+| gRPC control server | `internal/runner/grpc_control.go` | `SandboxControl` service — accepts create/stop/delete RPCs from API, and cordon RPCs |
 | HTTP proxy | `internal/runner/proxy.go` | Reverse proxy from runner HTTP to sandbox daemon |
 | Network rules | `internal/runner/runtime/docker/netrules/` | iptables rules for Docker sandbox network isolation |
 | Resource limits | `internal/runner/runtime/docker/resource_limits.go` | Memory, CPU, PID, and disk quota enforcement |
@@ -138,7 +138,7 @@ Per-tenant `max_sandboxes` is checked before the runner call and again when the 
 
 ### API ↔ Runner Registration (gRPC Bidirectional Streaming + mTLS)
 
-Runners register with the API by opening a long-lived gRPC stream (`RunnerRegistry.Connect`). The runner sends periodic heartbeats containing its ID, HTTP base URL, health status, and capacity metrics. The API uses these to maintain a live registry and route requests. The gRPC channel is secured with mutual TLS and an additional bearer token.
+Runners register with the API by opening a long-lived gRPC stream (`RunnerRegistry.Connect`). The runner sends periodic heartbeats containing its ID, HTTP base URL, health status, cordon state, and capacity metrics. The API uses these to maintain a live registry and route requests. The gRPC channel is secured with mutual TLS and an additional bearer token.
 
 **Proto definition:** `proto/runner/v1/runner.proto`
 
