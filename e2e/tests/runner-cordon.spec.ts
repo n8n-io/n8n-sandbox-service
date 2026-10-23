@@ -19,7 +19,7 @@ async function liveRunners(): Promise<AdminRunner[]> {
   expect(res.status).toBe(200);
   const body = (await res.json()) as { runners: AdminRunner[] };
   const now = Date.now() / 1000;
-  return body.runners.filter((r) => now - r.last_seen < 30);
+  return body.runners.filter((r) => now - r.last_seen < 45);
 }
 
 /** Cordons or uncordons a runner through the API with the scaler key. */

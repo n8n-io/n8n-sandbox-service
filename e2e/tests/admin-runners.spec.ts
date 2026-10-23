@@ -14,7 +14,7 @@ test.describe('GET /admin/runners', () => {
     }
   });
 
-  test('a scaler key may list runners and reach no other admin or sandbox route', async ({ request }) => {
+  test('a scaler key may list and cordon runners and reach no other admin or sandbox route', async ({ request }) => {
     const scaler = { 'X-Api-Key': SCALER_API_KEY };
     const resp = await request.get('/admin/runners', { headers: scaler });
     expect(resp.status()).toBe(200);
