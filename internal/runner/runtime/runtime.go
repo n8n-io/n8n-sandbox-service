@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"regexp"
 	"strings"
@@ -170,6 +171,17 @@ type EgressProxyHost interface {
 	EgressProxyURL(sandboxID string) (string, bool)
 }
 
+// Archiver is a Runtime that can move a sandbox's disk out and back: an
+// archive holds its files, not its memory.
+type Archiver interface {
+	// ExportSandbox writes stopped sandboxID's disk to w, in a format of the
+	// runtime's own; it fails for a running sandbox.
+	ExportSandbox(ctx context.Context, sandboxID string, w io.Writer) error
+	// ImportSandbox creates sandboxID from an export and starts it with a cold
+	// boot, as CreateSandbox would with opts.
+	ImportSandbox(ctx context.Context, sandboxID string, opts *CreateOptions, r io.Reader) (*SandboxInfo, error)
+}
+
 // SandboxInfo represents information about a created sandbox.
 type SandboxInfo struct {
 	ID   string `json:"id"`
@@ -210,6 +222,9 @@ type TemplateInfo struct {
 	// DiskMB is the sandbox's disk: the rootfs on Firecracker, the
 	// writable-layer quota on Docker (0 when none is enforced).
 	DiskMB int64
+	// Version identifies the build of the template's image. An archive
+	// restores only onto the version it was made from.
+	Version string
 }
 
 // ServesTemplate reports whether templates includes name ("" is the default).

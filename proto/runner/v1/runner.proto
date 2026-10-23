@@ -24,6 +24,11 @@ service SandboxControl {
   rpc UpdateEgressProxy(UpdateEgressProxyRequest) returns (UpdateEgressProxyResponse);
   // SetModelBlocked blocks or unblocks new requests to a proxy sandbox's model hosts.
   rpc SetModelBlocked(SetModelBlockedRequest) returns (SetModelBlockedResponse);
+  // ArchiveSandbox seals a stopped sandbox's disk and uploads it. The sandbox
+  // stays on the runner until the API deletes it.
+  rpc ArchiveSandbox(ArchiveSandboxRequest) returns (ArchiveSandboxResponse);
+  // RestoreSandbox creates a sandbox from an archive, as CreateSandbox would.
+  rpc RestoreSandbox(RestoreSandboxRequest) returns (CreateSandboxResponse);
 }
 
 message RunnerHeartbeat {
@@ -52,6 +57,8 @@ message TemplateInfo {
   int32 vcpus = 2;
   int64 memory_mb = 3;
   int64 disk_mb = 4;
+  // The template's build; an archive restores onto the same one.
+  string version = 5;
 }
 
 message ControlMessage {
@@ -125,3 +132,26 @@ message SetModelBlockedRequest {
 }
 
 message SetModelBlockedResponse {}
+
+
+message ArchiveSandboxRequest {
+  string sandbox_id = 1;
+  // Where to PUT the sealed archive; signed by the API, valid for one object.
+  string upload_url = 2;
+  // The archive's own key (32 bytes).
+  bytes key = 3;
+}
+
+message ArchiveSandboxResponse {
+  // Size and SHA-256 (hex) of the sealed object uploaded.
+  int64 size = 1;
+  string sha256 = 2;
+}
+
+message RestoreSandboxRequest {
+  string sandbox_id = 1;
+  string create_options_json = 2;
+  // Where to GET the sealed archive.
+  string download_url = 3;
+  bytes key = 4;
+}

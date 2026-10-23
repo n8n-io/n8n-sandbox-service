@@ -91,6 +91,12 @@ func TestPinSnapshotAssetsRecordsEveryTemplate(t *testing.T) {
 		t.Fatalf("pinSnapshotAssets: %v", err)
 	}
 	got := rt.Templates()
+	for i := range got {
+		if got[i].Version == "" {
+			t.Fatalf("template %q has no version", got[i].Name)
+		}
+		got[i].Version = ""
+	}
 	want := []runnerruntime.TemplateInfo{
 		{Name: "default", VCPUs: 1, MemoryMB: 512, DiskMB: 2048},
 		{Name: "python", VCPUs: 4, MemoryMB: 8192, DiskMB: 20480},

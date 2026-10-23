@@ -146,11 +146,13 @@ func (x *RunnerHeartbeat) GetTemplates() []*TemplateInfo {
 
 // A template a runner boots sandboxes from, with what one sandbox of it gets.
 type TemplateInfo struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Vcpus         int32                  `protobuf:"varint,2,opt,name=vcpus,proto3" json:"vcpus,omitempty"`
-	MemoryMb      int64                  `protobuf:"varint,3,opt,name=memory_mb,json=memoryMb,proto3" json:"memory_mb,omitempty"`
-	DiskMb        int64                  `protobuf:"varint,4,opt,name=disk_mb,json=diskMb,proto3" json:"disk_mb,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Name     string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Vcpus    int32                  `protobuf:"varint,2,opt,name=vcpus,proto3" json:"vcpus,omitempty"`
+	MemoryMb int64                  `protobuf:"varint,3,opt,name=memory_mb,json=memoryMb,proto3" json:"memory_mb,omitempty"`
+	DiskMb   int64                  `protobuf:"varint,4,opt,name=disk_mb,json=diskMb,proto3" json:"disk_mb,omitempty"`
+	// The template's build; an archive restores onto the same one.
+	Version       string `protobuf:"bytes,5,opt,name=version,proto3" json:"version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -211,6 +213,13 @@ func (x *TemplateInfo) GetDiskMb() int64 {
 		return x.DiskMb
 	}
 	return 0
+}
+
+func (x *TemplateInfo) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
 }
 
 type ControlMessage struct {
@@ -999,6 +1008,190 @@ func (*SetModelBlockedResponse) Descriptor() ([]byte, []int) {
 	return file_proto_runner_v1_runner_proto_rawDescGZIP(), []int{18}
 }
 
+type ArchiveSandboxRequest struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	SandboxId string                 `protobuf:"bytes,1,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
+	// Where to PUT the sealed archive; signed by the API, valid for one object.
+	UploadUrl string `protobuf:"bytes,2,opt,name=upload_url,json=uploadUrl,proto3" json:"upload_url,omitempty"`
+	// The archive's own key (32 bytes).
+	Key           []byte `protobuf:"bytes,3,opt,name=key,proto3" json:"key,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ArchiveSandboxRequest) Reset() {
+	*x = ArchiveSandboxRequest{}
+	mi := &file_proto_runner_v1_runner_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ArchiveSandboxRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ArchiveSandboxRequest) ProtoMessage() {}
+
+func (x *ArchiveSandboxRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_runner_v1_runner_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ArchiveSandboxRequest.ProtoReflect.Descriptor instead.
+func (*ArchiveSandboxRequest) Descriptor() ([]byte, []int) {
+	return file_proto_runner_v1_runner_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *ArchiveSandboxRequest) GetSandboxId() string {
+	if x != nil {
+		return x.SandboxId
+	}
+	return ""
+}
+
+func (x *ArchiveSandboxRequest) GetUploadUrl() string {
+	if x != nil {
+		return x.UploadUrl
+	}
+	return ""
+}
+
+func (x *ArchiveSandboxRequest) GetKey() []byte {
+	if x != nil {
+		return x.Key
+	}
+	return nil
+}
+
+type ArchiveSandboxResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Size and SHA-256 (hex) of the sealed object uploaded.
+	Size          int64  `protobuf:"varint,1,opt,name=size,proto3" json:"size,omitempty"`
+	Sha256        string `protobuf:"bytes,2,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ArchiveSandboxResponse) Reset() {
+	*x = ArchiveSandboxResponse{}
+	mi := &file_proto_runner_v1_runner_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ArchiveSandboxResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ArchiveSandboxResponse) ProtoMessage() {}
+
+func (x *ArchiveSandboxResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_runner_v1_runner_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ArchiveSandboxResponse.ProtoReflect.Descriptor instead.
+func (*ArchiveSandboxResponse) Descriptor() ([]byte, []int) {
+	return file_proto_runner_v1_runner_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *ArchiveSandboxResponse) GetSize() int64 {
+	if x != nil {
+		return x.Size
+	}
+	return 0
+}
+
+func (x *ArchiveSandboxResponse) GetSha256() string {
+	if x != nil {
+		return x.Sha256
+	}
+	return ""
+}
+
+type RestoreSandboxRequest struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	SandboxId         string                 `protobuf:"bytes,1,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
+	CreateOptionsJson string                 `protobuf:"bytes,2,opt,name=create_options_json,json=createOptionsJson,proto3" json:"create_options_json,omitempty"`
+	// Where to GET the sealed archive.
+	DownloadUrl   string `protobuf:"bytes,3,opt,name=download_url,json=downloadUrl,proto3" json:"download_url,omitempty"`
+	Key           []byte `protobuf:"bytes,4,opt,name=key,proto3" json:"key,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RestoreSandboxRequest) Reset() {
+	*x = RestoreSandboxRequest{}
+	mi := &file_proto_runner_v1_runner_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RestoreSandboxRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RestoreSandboxRequest) ProtoMessage() {}
+
+func (x *RestoreSandboxRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_runner_v1_runner_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RestoreSandboxRequest.ProtoReflect.Descriptor instead.
+func (*RestoreSandboxRequest) Descriptor() ([]byte, []int) {
+	return file_proto_runner_v1_runner_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *RestoreSandboxRequest) GetSandboxId() string {
+	if x != nil {
+		return x.SandboxId
+	}
+	return ""
+}
+
+func (x *RestoreSandboxRequest) GetCreateOptionsJson() string {
+	if x != nil {
+		return x.CreateOptionsJson
+	}
+	return ""
+}
+
+func (x *RestoreSandboxRequest) GetDownloadUrl() string {
+	if x != nil {
+		return x.DownloadUrl
+	}
+	return ""
+}
+
+func (x *RestoreSandboxRequest) GetKey() []byte {
+	if x != nil {
+		return x.Key
+	}
+	return nil
+}
+
 var File_proto_runner_v1_runner_proto protoreflect.FileDescriptor
 
 const file_proto_runner_v1_runner_proto_rawDesc = "" +
@@ -1015,12 +1208,13 @@ const file_proto_runner_v1_runner_proto_rawDesc = "" +
 	"\bcordoned\x18\b \x01(\bR\bcordoned\x12,\n" +
 	"\x12active_sandbox_ids\x18\t \x03(\tR\x10activeSandboxIds\x125\n" +
 	"\ttemplates\x18\n" +
-	" \x03(\v2\x17.runner.v1.TemplateInfoR\ttemplates\"n\n" +
+	" \x03(\v2\x17.runner.v1.TemplateInfoR\ttemplates\"\x88\x01\n" +
 	"\fTemplateInfo\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05vcpus\x18\x02 \x01(\x05R\x05vcpus\x12\x1b\n" +
 	"\tmemory_mb\x18\x03 \x01(\x03R\bmemoryMb\x12\x17\n" +
-	"\adisk_mb\x18\x04 \x01(\x03R\x06diskMb\"\"\n" +
+	"\adisk_mb\x18\x04 \x01(\x03R\x06diskMb\x12\x18\n" +
+	"\aversion\x18\x05 \x01(\tR\aversion\"\"\n" +
 	"\x0eControlMessage\x12\x10\n" +
 	"\x03ack\x18\x01 \x01(\bR\x03ack\"e\n" +
 	"\x14CreateSandboxRequest\x12\x1d\n" +
@@ -1064,9 +1258,24 @@ const file_proto_runner_v1_runner_proto_rawDesc = "" +
 	"\n" +
 	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\x12\x18\n" +
 	"\ablocked\x18\x02 \x01(\bR\ablocked\"\x19\n" +
-	"\x17SetModelBlockedResponse2V\n" +
+	"\x17SetModelBlockedResponse\"g\n" +
+	"\x15ArchiveSandboxRequest\x12\x1d\n" +
+	"\n" +
+	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\x12\x1d\n" +
+	"\n" +
+	"upload_url\x18\x02 \x01(\tR\tuploadUrl\x12\x10\n" +
+	"\x03key\x18\x03 \x01(\fR\x03key\"D\n" +
+	"\x16ArchiveSandboxResponse\x12\x12\n" +
+	"\x04size\x18\x01 \x01(\x03R\x04size\x12\x16\n" +
+	"\x06sha256\x18\x02 \x01(\tR\x06sha256\"\x9b\x01\n" +
+	"\x15RestoreSandboxRequest\x12\x1d\n" +
+	"\n" +
+	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\x12.\n" +
+	"\x13create_options_json\x18\x02 \x01(\tR\x11createOptionsJson\x12!\n" +
+	"\fdownload_url\x18\x03 \x01(\tR\vdownloadUrl\x12\x10\n" +
+	"\x03key\x18\x04 \x01(\fR\x03key2V\n" +
 	"\x0eRunnerRegistry\x12D\n" +
-	"\aConnect\x12\x1a.runner.v1.RunnerHeartbeat\x1a\x19.runner.v1.ControlMessage(\x010\x012\x9e\x05\n" +
+	"\aConnect\x12\x1a.runner.v1.RunnerHeartbeat\x1a\x19.runner.v1.ControlMessage(\x010\x012\xcb\x06\n" +
 	"\x0eSandboxControl\x12R\n" +
 	"\rCreateSandbox\x12\x1f.runner.v1.CreateSandboxRequest\x1a .runner.v1.CreateSandboxResponse\x12L\n" +
 	"\vStopSandbox\x12\x1d.runner.v1.StopSandboxRequest\x1a\x1e.runner.v1.StopSandboxResponse\x12R\n" +
@@ -1075,7 +1284,9 @@ const file_proto_runner_v1_runner_proto_rawDesc = "" +
 	"\tSetCordon\x12\x1b.runner.v1.SetCordonRequest\x1a\x1c.runner.v1.SetCordonResponse\x12L\n" +
 	"\vGetActivity\x12\x1d.runner.v1.GetActivityRequest\x1a\x1e.runner.v1.GetActivityResponse\x12^\n" +
 	"\x11UpdateEgressProxy\x12#.runner.v1.UpdateEgressProxyRequest\x1a$.runner.v1.UpdateEgressProxyResponse\x12X\n" +
-	"\x0fSetModelBlocked\x12!.runner.v1.SetModelBlockedRequest\x1a\".runner.v1.SetModelBlockedResponseB;Z9github.com/n8n-io/sandbox-service/internal/api/grpc/pb;pbb\x06proto3"
+	"\x0fSetModelBlocked\x12!.runner.v1.SetModelBlockedRequest\x1a\".runner.v1.SetModelBlockedResponse\x12U\n" +
+	"\x0eArchiveSandbox\x12 .runner.v1.ArchiveSandboxRequest\x1a!.runner.v1.ArchiveSandboxResponse\x12T\n" +
+	"\x0eRestoreSandbox\x12 .runner.v1.RestoreSandboxRequest\x1a .runner.v1.CreateSandboxResponseB;Z9github.com/n8n-io/sandbox-service/internal/api/grpc/pb;pbb\x06proto3"
 
 var (
 	file_proto_runner_v1_runner_proto_rawDescOnce sync.Once
@@ -1089,7 +1300,7 @@ func file_proto_runner_v1_runner_proto_rawDescGZIP() []byte {
 	return file_proto_runner_v1_runner_proto_rawDescData
 }
 
-var file_proto_runner_v1_runner_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_proto_runner_v1_runner_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
 var file_proto_runner_v1_runner_proto_goTypes = []any{
 	(*RunnerHeartbeat)(nil),           // 0: runner.v1.RunnerHeartbeat
 	(*TemplateInfo)(nil),              // 1: runner.v1.TemplateInfo
@@ -1110,6 +1321,9 @@ var file_proto_runner_v1_runner_proto_goTypes = []any{
 	(*UpdateEgressProxyResponse)(nil), // 16: runner.v1.UpdateEgressProxyResponse
 	(*SetModelBlockedRequest)(nil),    // 17: runner.v1.SetModelBlockedRequest
 	(*SetModelBlockedResponse)(nil),   // 18: runner.v1.SetModelBlockedResponse
+	(*ArchiveSandboxRequest)(nil),     // 19: runner.v1.ArchiveSandboxRequest
+	(*ArchiveSandboxResponse)(nil),    // 20: runner.v1.ArchiveSandboxResponse
+	(*RestoreSandboxRequest)(nil),     // 21: runner.v1.RestoreSandboxRequest
 }
 var file_proto_runner_v1_runner_proto_depIdxs = []int32{
 	1,  // 0: runner.v1.RunnerHeartbeat.templates:type_name -> runner.v1.TemplateInfo
@@ -1122,17 +1336,21 @@ var file_proto_runner_v1_runner_proto_depIdxs = []int32{
 	13, // 7: runner.v1.SandboxControl.GetActivity:input_type -> runner.v1.GetActivityRequest
 	15, // 8: runner.v1.SandboxControl.UpdateEgressProxy:input_type -> runner.v1.UpdateEgressProxyRequest
 	17, // 9: runner.v1.SandboxControl.SetModelBlocked:input_type -> runner.v1.SetModelBlockedRequest
-	2,  // 10: runner.v1.RunnerRegistry.Connect:output_type -> runner.v1.ControlMessage
-	4,  // 11: runner.v1.SandboxControl.CreateSandbox:output_type -> runner.v1.CreateSandboxResponse
-	6,  // 12: runner.v1.SandboxControl.StopSandbox:output_type -> runner.v1.StopSandboxResponse
-	8,  // 13: runner.v1.SandboxControl.DeleteSandbox:output_type -> runner.v1.DeleteSandboxResponse
-	10, // 14: runner.v1.SandboxControl.GetCordon:output_type -> runner.v1.GetCordonResponse
-	12, // 15: runner.v1.SandboxControl.SetCordon:output_type -> runner.v1.SetCordonResponse
-	14, // 16: runner.v1.SandboxControl.GetActivity:output_type -> runner.v1.GetActivityResponse
-	16, // 17: runner.v1.SandboxControl.UpdateEgressProxy:output_type -> runner.v1.UpdateEgressProxyResponse
-	18, // 18: runner.v1.SandboxControl.SetModelBlocked:output_type -> runner.v1.SetModelBlockedResponse
-	10, // [10:19] is the sub-list for method output_type
-	1,  // [1:10] is the sub-list for method input_type
+	19, // 10: runner.v1.SandboxControl.ArchiveSandbox:input_type -> runner.v1.ArchiveSandboxRequest
+	21, // 11: runner.v1.SandboxControl.RestoreSandbox:input_type -> runner.v1.RestoreSandboxRequest
+	2,  // 12: runner.v1.RunnerRegistry.Connect:output_type -> runner.v1.ControlMessage
+	4,  // 13: runner.v1.SandboxControl.CreateSandbox:output_type -> runner.v1.CreateSandboxResponse
+	6,  // 14: runner.v1.SandboxControl.StopSandbox:output_type -> runner.v1.StopSandboxResponse
+	8,  // 15: runner.v1.SandboxControl.DeleteSandbox:output_type -> runner.v1.DeleteSandboxResponse
+	10, // 16: runner.v1.SandboxControl.GetCordon:output_type -> runner.v1.GetCordonResponse
+	12, // 17: runner.v1.SandboxControl.SetCordon:output_type -> runner.v1.SetCordonResponse
+	14, // 18: runner.v1.SandboxControl.GetActivity:output_type -> runner.v1.GetActivityResponse
+	16, // 19: runner.v1.SandboxControl.UpdateEgressProxy:output_type -> runner.v1.UpdateEgressProxyResponse
+	18, // 20: runner.v1.SandboxControl.SetModelBlocked:output_type -> runner.v1.SetModelBlockedResponse
+	20, // 21: runner.v1.SandboxControl.ArchiveSandbox:output_type -> runner.v1.ArchiveSandboxResponse
+	4,  // 22: runner.v1.SandboxControl.RestoreSandbox:output_type -> runner.v1.CreateSandboxResponse
+	12, // [12:23] is the sub-list for method output_type
+	1,  // [1:12] is the sub-list for method input_type
 	1,  // [1:1] is the sub-list for extension type_name
 	1,  // [1:1] is the sub-list for extension extendee
 	0,  // [0:1] is the sub-list for field type_name
@@ -1149,7 +1367,7 @@ func file_proto_runner_v1_runner_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_runner_v1_runner_proto_rawDesc), len(file_proto_runner_v1_runner_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   19,
+			NumMessages:   22,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

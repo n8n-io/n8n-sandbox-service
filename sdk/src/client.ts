@@ -12,11 +12,13 @@ import {
 } from "./files";
 import { HttpClient } from "./http";
 import {
+  archiveSandbox,
   createSandbox,
   getSandbox,
   deleteSandbox,
   getModelEgress,
   listTemplates,
+  restoreSandbox,
   setModelEgress,
   updateEgressProxy,
   updateIdleWindows,
@@ -82,6 +84,22 @@ export class SandboxClient {
    */
   async updateEgressProxy(id: string, spec: EgressProxySpec): Promise<void> {
     return updateEgressProxy(this.http, id, spec);
+  }
+
+  /**
+   * Archives a sandbox: its disk moves to the archive store and the runner is
+   * freed. Its memory is not kept; the next request restores it.
+   */
+  async archiveSandbox(id: string): Promise<SandboxRecord> {
+    return archiveSandbox(this.http, id);
+  }
+
+  /**
+   * Restores an archived sandbox ahead of use. The service answers 503
+   * `restoring` until it runs; the client's retry policy waits for it.
+   */
+  async restoreSandbox(id: string): Promise<SandboxRecord> {
+    return restoreSandbox(this.http, id);
   }
 
   /** Reports whether a proxy sandbox's model requests are blocked. */

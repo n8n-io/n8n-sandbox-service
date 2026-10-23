@@ -107,6 +107,7 @@ Each runner hosts sandboxes through the shared `runtime.Runtime` contract. The D
 | Firecracker runtime | `internal/runner/runtime/firecracker.ee/` | Create, stop, delete microVM sandboxes; manage jailer, snapshot restore, and host networking |
 | Docker client | `internal/runner/runtime/docker/docker_client.go` | Thin wrapper around the `docker` CLI |
 | Registration client | `internal/runner/register/` | gRPC heartbeat stream to API; sends capacity, health, cordon state, templates and active sandboxes every 10s, and at once when cordon changes |
+| Archive and restore | `internal/api/archive.go`, `internal/api/archivestore/`, `internal/archive/`, `internal/runner/archive_rpc.go` | Moves stopped sandboxes' disks to a directory or S3 store sealed per archive, and restores them on any runner |
 | Egress proxy | `internal/egressproxy/` (`gitfilter/`, `credentials/`, `metering/`), `internal/runner/egress.go` | Serves `egress: "proxy"` sandboxes: allow list, TLS inspection with the runner CA, Git repo and ref filter, credential injection, model metering and block, usage sink |
 | Activity tracker | `internal/runner/activity/`, `internal/runner/activity_poll.go` | Sandboxes with a running execution or an open execution stream; the heartbeat reports them, stop refuses them, drain waits for them |
 | gRPC control server | `internal/runner/grpc_control.go` | `SandboxControl` service — accepts create/stop/delete RPCs from API, and cordon and activity RPCs |

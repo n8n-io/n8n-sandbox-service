@@ -1,10 +1,13 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"io"
 	"math"
 	"net"
+	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -51,6 +54,54 @@ type fakeSandboxControl struct {
 	egressSpecs  []string
 	modelBlocked []bool
 	egressErr    error
+	// Archives: what ArchiveSandbox uploads, the create options of each
+	// restore, and the error restores answer with.
+	archiveBody []byte
+	restored    []string
+	restoreRuns int
+	restoreErr  error
+}
+
+// ArchiveSandbox uploads a fixed body to the signed URL, as a runner uploads
+// a sealed disk.
+func (f *fakeSandboxControl) ArchiveSandbox(ctx context.Context, req *pb.ArchiveSandboxRequest) (*pb.ArchiveSandboxResponse, error) {
+	f.mu.Lock()
+	body := append([]byte(nil), f.archiveBody...)
+	f.mu.Unlock()
+	httpReq, _ := http.NewRequestWithContext(ctx, http.MethodPut, req.GetUploadUrl(), bytes.NewReader(body))
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		return nil, status.Error(codes.Unavailable, err.Error())
+	}
+	resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return nil, status.Errorf(codes.Unavailable, "store answered %d", resp.StatusCode)
+	}
+	return &pb.ArchiveSandboxResponse{Size: int64(len(body))}, nil
+}
+
+// RestoreSandbox downloads the archive and checks it is what was uploaded.
+func (f *fakeSandboxControl) RestoreSandbox(ctx context.Context, req *pb.RestoreSandboxRequest) (*pb.CreateSandboxResponse, error) {
+	f.mu.Lock()
+	restoreErr, want := f.restoreErr, f.archiveBody
+	f.restoreRuns++
+	f.mu.Unlock()
+	if restoreErr != nil {
+		return nil, restoreErr
+	}
+	resp, err := http.Get(req.GetDownloadUrl())
+	if err != nil {
+		return nil, status.Error(codes.Unavailable, err.Error())
+	}
+	got, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !bytes.Equal(got, want) || len(req.GetKey()) != 32 {
+		return nil, status.Error(codes.DataLoss, "archive does not open")
+	}
+	f.mu.Lock()
+	f.restored = append(f.restored, req.GetCreateOptionsJson())
+	f.mu.Unlock()
+	return &pb.CreateSandboxResponse{ContainerIp: "10.0.0.7", AppliedCreateOptionsJson: req.GetCreateOptionsJson()}, nil
 }
 
 func (f *fakeSandboxControl) UpdateEgressProxy(_ context.Context, req *pb.UpdateEgressProxyRequest) (*pb.UpdateEgressProxyResponse, error) {

@@ -81,10 +81,14 @@ func logSandboxDeleted(sandboxID, runnerID, reason string) {
 // When sweepLockDB is non-nil (Postgres multi-pod), only the advisory-lock holder runs each sweep.
 // It runs when a global window is set, or when creates may set their own.
 func StartIdleSweeper(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, sweepLockDB *sql.DB) {
-	if cfg.IdleStopAfter <= 0 && cfg.IdleDeleteAfter <= 0 && cfg.MaxIdleWindow <= 0 {
+	if cfg.IdleStopAfter <= 0 && cfg.IdleDeleteAfter <= 0 && cfg.MaxIdleWindow <= 0 && cfg.IdleArchiveAfter <= 0 {
 		return
 	}
 	tlsCfg := runnerControlTLS(cfg)
+	arch, _, err := newArchiver(s, reg, cfg)
+	if err != nil {
+		slog.Error("idle sweeper: archive store unusable, archiving is off", "err", err)
+	}
 	interval := cfg.IdleSweepInterval
 	if interval <= 0 {
 		interval = time.Minute
@@ -98,7 +102,7 @@ func StartIdleSweeper(ctx context.Context, s store.SandboxStore, reg registry.Ru
 				return
 			case <-t.C:
 				runSweep := func() error {
-					return sweepIdleSandboxes(ctx, s, reg, cfg, tlsCfg, time.Now())
+					return sweepIdleSandboxes(ctx, s, reg, cfg, tlsCfg, time.Now(), arch)
 				}
 
 				if sweepLockDB != nil {
@@ -118,12 +122,23 @@ func StartIdleSweeper(ctx context.Context, s store.SandboxStore, reg registry.Ru
 
 // sweepIdleSandboxes runs one pass of every sweep. A phase whose global window
 // is off still acts on sandboxes that set their own.
-func sweepIdleSandboxes(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) error {
+func sweepIdleSandboxes(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time, arch ...*archiver) error {
+	var a *archiver
+	if len(arch) > 0 {
+		a = arch[0]
+	}
 	sweepIdleStopSandboxes(ctx, s, reg, cfg, tlsCfg, now)
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	sweepIdleDeleteSandboxes(ctx, s, reg, cfg, tlsCfg, now)
+	if a != nil {
+		sweepIdleArchiveSandboxes(ctx, s, cfg, now, a)
+		a.sweepRunnerCopies(ctx)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+	}
+	sweepIdleDeleteSandboxes(ctx, s, reg, cfg, tlsCfg, now, a)
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -138,6 +153,8 @@ func globalIdleWindow(phase store.IdlePhase, cfg *config.APIConfig) time.Duratio
 		return cfg.IdleStopAfter
 	case store.IdleEphemeral:
 		return ephemeralIdleWindow(cfg)
+	case store.IdleArchive:
+		return cfg.IdleArchiveAfter
 	default:
 		return cfg.IdleDeleteAfter
 	}
@@ -148,8 +165,11 @@ func globalIdleWindow(phase store.IdlePhase, cfg *config.APIConfig) time.Duratio
 // where a regular one would stop.
 func idleWindow(rec *store.SandboxRecord, phase store.IdlePhase, cfg *config.APIConfig) time.Duration {
 	own := rec.IdleStopAfter
-	if phase == store.IdleDelete {
+	switch phase {
+	case store.IdleDelete:
 		own = rec.IdleDeleteAfter
+	case store.IdleArchive:
+		own = rec.IdleArchiveAfter
 	}
 	if own > 0 {
 		return time.Duration(own) * time.Second
@@ -445,7 +465,7 @@ func idleSeconds(d time.Duration) int64 {
 	return secs
 }
 
-func sweepIdleDeleteSandboxes(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) sweepStats {
+func sweepIdleDeleteSandboxes(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time, arch *archiver) sweepStats {
 	records, err := listIdle(s, store.IdleDelete, cfg, now, cfg.IdleDeleteSafetyBuffer)
 	if err != nil {
 		slog.Error("idle sweep list delete candidates failed", "err", err)
@@ -453,8 +473,18 @@ func sweepIdleDeleteSandboxes(ctx context.Context, s store.SandboxStore, reg reg
 	}
 
 	return sweepConcurrently(ctx, s, cfg, "delete", records, func(ctx context.Context, rec *store.SandboxRecord) (bool, error) {
-		if rec.Status != "stopped" || !idleDue(rec, store.IdleDelete, cfg, now, cfg.IdleDeleteSafetyBuffer) {
+		if (rec.Status != "stopped" && rec.Status != statusArchived) || !idleDue(rec, store.IdleDelete, cfg, now, cfg.IdleDeleteSafetyBuffer) {
 			return false, nil
+		}
+		if rec.Status == statusArchived {
+			if arch == nil {
+				return false, nil
+			}
+			if err := arch.deleteArchived(ctx, rec); err != nil {
+				return false, err
+			}
+			logSandboxDeleted(rec.ID, rec.RunnerID, "idle archived")
+			return true, nil
 		}
 		return deleteIdleSandbox(ctx, s, reg, cfg, tlsCfg, rec, now, "idle")
 	})
@@ -516,4 +546,39 @@ func sweepIdleStopSandboxes(ctx context.Context, s store.SandboxStore, reg regis
 		logSandboxStopped(rec.ID, rec.RunnerID, "idle")
 		return true, nil
 	})
+}
+
+// sweepIdleArchiveSandboxes archives stopped sandboxes idle past their
+// archive window.
+func sweepIdleArchiveSandboxes(ctx context.Context, s store.SandboxStore, cfg *config.APIConfig, now time.Time, a *archiver) sweepStats {
+	records, err := listIdle(s, store.IdleArchive, cfg, now, 0)
+	if err != nil {
+		slog.Error("idle sweep list archive candidates failed", "err", err)
+		return sweepStats{}
+	}
+	return sweepConcurrently(ctx, s, cfg, "archive", records, func(ctx context.Context, rec *store.SandboxRecord) (bool, error) {
+		if rec.Status != "stopped" || rec.Ephemeral || !idleDue(rec, store.IdleArchive, cfg, now, 0) {
+			return false, nil
+		}
+		if err := a.archive(ctx, rec); err != nil {
+			return false, err
+		}
+		return true, nil
+	})
+}
+
+// sweepRunnerCopies removes archived sandboxes from runners whose earlier
+// delete failed.
+func (a *archiver) sweepRunnerCopies(ctx context.Context) {
+	recs, err := a.s.ListArchivedOnRunner()
+	if err != nil {
+		return
+	}
+	for _, rec := range recs {
+		_ = withLockedSandbox(ctx, a.s, rec.ID, func(fresh *store.SandboxRecord) {
+			if fresh.Status == statusArchived && fresh.RunnerID != "" {
+				a.dropRunnerCopy(ctx, fresh)
+			}
+		})
+	}
 }

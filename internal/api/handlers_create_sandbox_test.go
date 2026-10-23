@@ -434,7 +434,7 @@ func TestCreateSandboxCountsUnclearSaveAsSaved(t *testing.T) {
 			hold, _, _ := q.reserve(tenantID, 2)
 			defer hold(false)
 
-			h := handleCreateSandbox(createErrStore{SandboxStore: s, save: tc.save, err: tc.err}, reg, idleSweepConfig(), metrics.NewAPIRecorder(false), q)
+			h := handleCreateSandbox(createErrStore{SandboxStore: s, save: tc.save, err: tc.err}, reg, idleSweepConfig(), metrics.NewAPIRecorder(false), q, nil)
 			req := httptest.NewRequest(http.MethodPost, "/sandboxes", nil)
 			req = req.WithContext(withAuthIdentity(req.Context(), authIdentity{Role: roleTenant, TenantID: tenantID}))
 			rr := httptest.NewRecorder()

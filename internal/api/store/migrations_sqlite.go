@@ -45,6 +45,17 @@ const sqliteAddEgressProxyCol = `ALTER TABLE sandboxes ADD COLUMN egress_proxy T
 
 const sqliteAddModelBlockedCol = `ALTER TABLE sandboxes ADD COLUMN model_blocked INTEGER NOT NULL DEFAULT 0`
 
+// The archive columns, one ALTER each: SQLite adds one column at a time.
+var sqliteAddArchiveCols = []struct{ sql, name string }{
+	{`ALTER TABLE sandboxes ADD COLUMN idle_archive_after INTEGER NOT NULL DEFAULT 0`, "idle_archive_after"},
+	{`ALTER TABLE sandboxes ADD COLUMN archive_object TEXT NOT NULL DEFAULT ''`, "archive_object"},
+	{`ALTER TABLE sandboxes ADD COLUMN archive_key TEXT NOT NULL DEFAULT ''`, "archive_key"},
+	{`ALTER TABLE sandboxes ADD COLUMN archive_size INTEGER NOT NULL DEFAULT 0`, "archive_size"},
+	{`ALTER TABLE sandboxes ADD COLUMN archive_version TEXT NOT NULL DEFAULT ''`, "archive_version"},
+	{`ALTER TABLE sandboxes ADD COLUMN archived_at INTEGER NOT NULL DEFAULT 0`, "archived_at"},
+	{`ALTER TABLE sandboxes ADD COLUMN restore_started_at INTEGER NOT NULL DEFAULT 0`, "restore_started_at"},
+}
+
 // Backfill legacy empty tenant_id to the admin sentinel.
 const sqliteBackfillAdminTenantID = `UPDATE sandboxes SET tenant_id = '__admin__' WHERE tenant_id = ''`
 

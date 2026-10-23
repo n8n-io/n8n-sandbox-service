@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/n8n-io/sandbox-service/internal/api/archivestore"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
 	"github.com/n8n-io/sandbox-service/internal/obs"
 	"github.com/n8n-io/sandbox-service/internal/probes"
@@ -73,6 +74,12 @@ func AuthMiddleware(adminKeys, provisionerKeys, scalerKeys map[string]struct{}, 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if publicPaths.Public(r) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			// Archive objects carry a signature for one object and method
+			// instead of a key; their handler checks it.
+			if strings.HasPrefix(r.URL.Path, archivestore.HandlerPrefix) && (r.Method == http.MethodGet || r.Method == http.MethodPut) {
 				next.ServeHTTP(w, r)
 				return
 			}

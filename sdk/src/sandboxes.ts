@@ -27,6 +27,7 @@ export async function createSandbox(
         template: options.template,
         idle_stop_after: options.idleStopAfter,
         idle_delete_after: options.idleDeleteAfter,
+        idle_archive_after: options.idleArchiveAfter,
       },
       // Only a caller-supplied id makes a repeated POST idempotent; retrying an
       // anonymous create would provision a second sandbox.
@@ -45,6 +46,7 @@ export async function createSandbox(
   checkOption(record.id, "template", options.template || undefined, record.template ?? "default");
   checkOption(record.id, "idle_stop_after", options.idleStopAfter, record.idleStopAfter);
   checkOption(record.id, "idle_delete_after", options.idleDeleteAfter, record.idleDeleteAfter);
+  checkOption(record.id, "idle_archive_after", options.idleArchiveAfter, record.idleArchiveAfter);
   return record;
 }
 
@@ -71,7 +73,11 @@ export async function updateIdleWindows(
   update: IdleWindowsUpdate,
 ): Promise<SandboxRecord> {
   const response = await http.requestJson<SandboxWireResponse>("PATCH", `/sandboxes/${id}`, {
-    data: { idle_stop_after: update.idleStopAfter, idle_delete_after: update.idleDeleteAfter },
+    data: {
+      idle_stop_after: update.idleStopAfter,
+      idle_delete_after: update.idleDeleteAfter,
+      idle_archive_after: update.idleArchiveAfter,
+    },
     isSafeToRetry: true,
   });
   return mapSandboxRecord(response);
@@ -113,6 +119,25 @@ export async function setModelEgress(
     },
   );
   return response.blocked;
+}
+
+/** Archives a sandbox now: stopped first if it runs; resolves once archived. */
+export async function archiveSandbox(http: HttpClient, id: string): Promise<SandboxRecord> {
+  const response = await http.requestJson<SandboxWireResponse>("POST", `/sandboxes/${id}/archive`, {
+    isSafeToRetry: true,
+  });
+  return mapSandboxRecord(response);
+}
+
+/**
+ * Starts restoring an archived sandbox. Resolves with the sandbox once it is
+ * not archived; while it restores the service answers 503 `restoring`.
+ */
+export async function restoreSandbox(http: HttpClient, id: string): Promise<SandboxRecord> {
+  const response = await http.requestJson<SandboxWireResponse>("POST", `/sandboxes/${id}/restore`, {
+    isSafeToRetry: true,
+  });
+  return mapSandboxRecord(response);
 }
 
 /** Lists the template catalog. */
@@ -185,6 +210,8 @@ function mapSandboxRecord(wire: SandboxWireResponse): SandboxRecord {
   if (wire.template !== undefined) record.template = wire.template;
   if (wire.idle_stop_after !== undefined) record.idleStopAfter = wire.idle_stop_after;
   if (wire.idle_delete_after !== undefined) record.idleDeleteAfter = wire.idle_delete_after;
+  if (wire.idle_archive_after !== undefined) record.idleArchiveAfter = wire.idle_archive_after;
+  if (wire.archived_at !== undefined) record.archivedAt = wire.archived_at;
   if (wire.tenant_id !== undefined) record.tenantId = wire.tenant_id;
   return record;
 }

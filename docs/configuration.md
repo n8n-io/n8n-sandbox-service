@@ -61,6 +61,17 @@ All services are configured via environment variables.
 
 The idle sweeper waits `SANDBOX_API_ORPHAN_REAP_BUFFER` (default `5m`) after a runner's last heartbeat before removing its orphaned sandbox rows from the API store (sandboxes that are already idle stop/delete candidates). With SQLite, this is based on observing the runner stream close; with Postgres, it is based on `last_seen` in the shared registry.
 
+### Archive store
+
+Set one store to enable [archive and restore](API.md#archive-and-restore), with the master key.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `SANDBOX_API_ARCHIVE_KEY_FILE` | *(unset)* | 64 hex characters (32 bytes): wraps each archive's own key in the store; derives the key that signs directory URLs |
+| `SANDBOX_API_ARCHIVE_DIR`, `SANDBOX_API_ARCHIVE_URL` | *(unset)* | A directory the API keeps archives in, and the API's URL as runners reach it; runners `PUT` and `GET` objects at `<URL>/internal/archives/…` with URLs signed for one object and method, valid an hour; an object is written once. Shared storage is needed with several API pods |
+| `SANDBOX_API_ARCHIVE_S3_ENDPOINT`, `_BUCKET`, `_REGION`, `_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY_FILE` | *(unset)* | Or an S3-compatible bucket (path-style); runners get presigned URLs, only the API holds the credentials |
+| `SANDBOX_API_IDLE_ARCHIVE_AFTER` | `0` (off) | Idle time after which a stopped sandbox is archived, when it sets no `idle_archive_after` |
+
 ## Runner
 
 ### Shared runner config

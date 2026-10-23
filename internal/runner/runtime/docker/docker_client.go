@@ -35,6 +35,7 @@ const (
 	containerLabelManaged    = "sandbox-service.managed"
 	containerLabelManagedVal = "true"
 	containerLabelSandboxID  = "sandbox-service.id"
+	containerLabelTemplate   = "sandbox-service.template"
 
 	// managedLabelFilter selects the containers this runner owns, and is what keeps
 	// every lookup and the death watcher agreeing on that set.
@@ -100,7 +101,7 @@ func sandboxAttachment(inspect *containerInspect) (network, ip string) {
 
 type dockerBackend interface {
 	ping(ctx context.Context) error
-	createContainer(ctx context.Context, sandboxID, containerName, image, network string, limits *ResourceLimits, enableCgroups bool) (string, error)
+	createContainer(ctx context.Context, sandboxID, template, containerName, image, network string, limits *ResourceLimits, enableCgroups bool) (string, error)
 	startContainer(ctx context.Context, containerID string) error
 	stopContainer(ctx context.Context, containerID string) error
 	removeContainer(ctx context.Context, containerID string) error
@@ -109,6 +110,13 @@ type dockerBackend interface {
 	inspectNetwork(ctx context.Context, name string) (*networkInspect, error)
 	findContainerByLabels(ctx context.Context, filterArgs ...string) ([]string, error)
 	pullImage(ctx context.Context, image string) error
+	// exportContainer streams a container's filesystem as a tar to w.
+	exportContainer(ctx context.Context, containerID string, w io.Writer) error
+	// importImage makes image from a filesystem tar, with the config changes.
+	importImage(ctx context.Context, r io.Reader, image string, changes []string) error
+	// imageConfig reads the run config an imported image takes from its template.
+	imageConfig(ctx context.Context, image string) (*imageRunConfig, error)
+	removeImage(ctx context.Context, image string) error
 	watchContainerDeaths(ctx context.Context, onDie func(containerID, sandboxID string)) error
 	run(ctx context.Context, args ...string) (string, error)
 }
@@ -181,8 +189,8 @@ func (dc *dockerClient) ping(ctx context.Context) error {
 	return err
 }
 
-func (dc *dockerClient) createContainer(ctx context.Context, sandboxID, containerName, image, network string, limits *ResourceLimits, enableCgroups bool) (string, error) {
-	args := dockerContainerCreateArgs(sandboxID, containerName, image, network, limits, enableCgroups, dc.dnsServers, dc.onlyIPv4)
+func (dc *dockerClient) createContainer(ctx context.Context, sandboxID, template, containerName, image, network string, limits *ResourceLimits, enableCgroups bool) (string, error) {
+	args := dockerContainerCreateArgs(sandboxID, template, containerName, image, network, limits, enableCgroups, dc.dnsServers, dc.onlyIPv4)
 
 	out, err := dc.run(ctx, args...)
 	if err != nil {
@@ -191,7 +199,7 @@ func (dc *dockerClient) createContainer(ctx context.Context, sandboxID, containe
 	return strings.TrimSpace(out), nil
 }
 
-func dockerContainerCreateArgs(sandboxID, containerName, image, network string, limits *ResourceLimits, enableCgroups bool, dnsServers []string, onlyIPv4 bool) []string {
+func dockerContainerCreateArgs(sandboxID, template, containerName, image, network string, limits *ResourceLimits, enableCgroups bool, dnsServers []string, onlyIPv4 bool) []string {
 	args := []string{
 		"container", "create",
 		"--name", containerName,
@@ -200,6 +208,7 @@ func dockerContainerCreateArgs(sandboxID, containerName, image, network string, 
 		"--network", network,
 		"--label", containerLabelManaged + "=" + containerLabelManagedVal,
 		"--label", containerLabelSandboxID + "=" + sandboxID,
+		"--label", containerLabelTemplate + "=" + template,
 		"--user", "1000:1000",
 		// The daemon process only. internal/daemon/exec.go sets the environment
 		// user commands see.
@@ -318,6 +327,63 @@ func (dc *dockerClient) inspectNetwork(ctx context.Context, name string) (*netwo
 // abbreviated ID would make its own deliberate stop read as a crash.
 func (dc *dockerClient) findContainerByLabels(ctx context.Context, filterArgs ...string) ([]string, error) {
 	return dc.api.listContainerIDs(ctx, filterArgs...)
+}
+
+// stream runs docker with stdin and stdout attached to r and w.
+func (dc *dockerClient) stream(ctx context.Context, r io.Reader, w io.Writer, args ...string) error {
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd.Env = append(os.Environ(), "DOCKER_HOST="+dc.host)
+	cmd.Stdin, cmd.Stdout = r, w
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("docker %s: %s: %w", args[0], strings.TrimSpace(stderr.String()), err)
+	}
+	return nil
+}
+
+func (dc *dockerClient) exportContainer(ctx context.Context, containerID string, w io.Writer) error {
+	return dc.stream(ctx, nil, w, "export", containerID)
+}
+
+func (dc *dockerClient) importImage(ctx context.Context, r io.Reader, image string, changes []string) error {
+	args := []string{"import"}
+	for _, c := range changes {
+		args = append(args, "--change", c)
+	}
+	return dc.stream(ctx, r, io.Discard, append(args, "-", image)...)
+}
+
+// imageRunConfig is what a container takes from its image, and the image's
+// size.
+type imageRunConfig struct {
+	Size       int64    `json:"-"`
+	Cmd        []string `json:"Cmd"`
+	Entrypoint []string `json:"Entrypoint"`
+	Env        []string `json:"Env"`
+	User       string   `json:"User"`
+	WorkingDir string   `json:"WorkingDir"`
+}
+
+func (dc *dockerClient) imageConfig(ctx context.Context, image string) (*imageRunConfig, error) {
+	out, err := dc.run(ctx, "image", "inspect", image)
+	if err != nil {
+		return nil, err
+	}
+	var items []struct {
+		Size   int64          `json:"Size"`
+		Config imageRunConfig `json:"Config"`
+	}
+	if err := json.Unmarshal([]byte(out), &items); err != nil || len(items) != 1 {
+		return nil, fmt.Errorf("decode image inspect of %s: %v", image, err)
+	}
+	items[0].Config.Size = items[0].Size
+	return &items[0].Config, nil
+}
+
+func (dc *dockerClient) removeImage(ctx context.Context, image string) error {
+	_, err := dc.run(ctx, "image", "rm", "-f", image)
+	return err
 }
 
 func (dc *dockerClient) pullImage(ctx context.Context, image string) error {

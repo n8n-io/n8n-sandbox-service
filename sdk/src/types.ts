@@ -74,6 +74,8 @@ export interface CreateSandboxOptions {
    */
   idleStopAfter?: number;
   idleDeleteAfter?: number;
+  /** Seconds a stopped sandbox idles before its disk is archived (needs an archive store). */
+  idleArchiveAfter?: number;
 }
 
 /** A template a create may name, from `GET /templates`. */
@@ -94,6 +96,7 @@ export interface TemplateInfo {
 export interface IdleWindowsUpdate {
   idleStopAfter?: number | null;
   idleDeleteAfter?: number | null;
+  idleArchiveAfter?: number | null;
 }
 
 /** Retry policy for transient HTTP failures. */
@@ -119,7 +122,11 @@ export interface RetryOptions {
 /** Metadata for a sandbox instance. */
 export interface SandboxRecord {
   id: string;
-  /** `running` or `stopped` (idle-stopped; the next request wakes it). */
+  /**
+   * `running`, `stopped` (idle-stopped; the next request wakes it), `archived`
+   * (its disk is in the archive store; the next request restores it, memory
+   * not included) or `restoring`.
+   */
   status: string;
   /** Unix timestamp (seconds) when the sandbox was created. */
   createdAt: number;
@@ -134,6 +141,9 @@ export interface SandboxRecord {
   /** Per-sandbox idle windows in seconds; undefined when the sandbox uses the global ones. */
   idleStopAfter?: number;
   idleDeleteAfter?: number;
+  idleArchiveAfter?: number;
+  /** Unix seconds of the last archive; set while archived or restoring. */
+  archivedAt?: number;
   /**
    * Owning tenant id, or `__admin__` for a sandbox created with an admin key.
    * A tenant key only ever sees its own id. Undefined against services that
@@ -249,6 +259,8 @@ export type SandboxWireResponse = {
   /** Absent when the sandbox uses the global windows, and from services that predate them. */
   idle_stop_after?: number;
   idle_delete_after?: number;
+  idle_archive_after?: number;
+  archived_at?: number;
   /** Absent from services that predate sandbox ownership in responses. */
   tenant_id?: string;
 };

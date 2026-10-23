@@ -259,6 +259,7 @@ When no runner is eligible, it is the same except for `error`: `no sandbox runne
   Change the spec later with [`PUT /sandboxes/{id}/egress-proxy`](#put-sandboxesidegress-proxy).
 - `template` (string, default `"default"`) — image the sandbox boots, one of [`GET /templates`](#get-templates) (`SANDBOX_API_TEMPLATES`); any other name is `400` with `reason` `unknown_template`. The sandbox goes only to a runner that serves it; when none that does is eligible or has room, the answer is `503` `no_capacity` as above. Fixed at creation.
 - `idle_stop_after`, `idle_delete_after` (integer seconds) — per-sandbox idle windows that replace `SANDBOX_API_IDLE_STOP_AFTER` and `SANDBOX_API_IDLE_DELETE_AFTER` for this sandbox, even when those are `0`. From 60 up to the tenant's `max_idle_window` or, without one (and for admin keys), `SANDBOX_API_MAX_IDLE_WINDOW` (default `24h`), with `idle_stop_after` no larger than `idle_delete_after`. An ephemeral sandbox is deleted at its `idle_stop_after`. A sandbox is only deleted once stopped, so an `idle_delete_after` shorter than the stop window in force waits for the stop. Change them with [`PATCH /sandboxes/{id}`](#patch-sandboxesid).
+- `idle_archive_after` (integer seconds) — idle time after which a stopped sandbox is [archived](#archive-and-restore), replacing `SANDBOX_API_IDLE_ARCHIVE_AFTER`; bounded like the other windows, between `idle_stop_after` and `idle_delete_after` when those are set. Needs an archive store; refused with `ephemeral`.
 
 With a tenant key, the sandbox is owned by that tenant and counts toward the tenant's `max_sandboxes` quota (`403` when exceeded). With an admin key, the sandbox is stored with `tenant_id` `__admin__` (admin-owned; not visible to tenant keys; admins see all sandboxes in list).
 
@@ -382,7 +383,7 @@ This is a read-only status check: it does not update `last_active_at` or extend 
 }
 ```
 
-`status` is `running` or `stopped`; an ephemeral sandbox is only ever `running`. `egress`, `template` and, when set, `idle_stop_after` and `idle_delete_after` are what the sandbox was created with. `tenant_id` is the owner, `__admin__` for an admin-owned sandbox.
+`status` is `running`, `stopped`, `archived` or `restoring` ([archive and restore](#archive-and-restore)); an ephemeral sandbox is only ever `running`. `egress`, `template` and, when set, `idle_stop_after`, `idle_archive_after` and `idle_delete_after` are the sandbox's; `archived_at` is set while it is archived or restoring. `tenant_id` is the owner, `__admin__` for an admin-owned sandbox.
 
 **Errors:** `400` invalid id, `404` not found
 
@@ -395,9 +396,28 @@ curl http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000 \
 
 ---
 
+### Archive and restore
+
+With an archive store configured ([configuration.md](configuration.md#archive-store)), a stopped sandbox's disk can leave its runner: `archived` sandboxes hold no runner capacity and survive runner restarts and host loss. What is kept is every file on the guest's disk; memory, processes and execution history are not, and a restored sandbox cold boots.
+
+- A sandbox is archived after `idle_archive_after` (or `SANDBOX_API_IDLE_ARCHIVE_AFTER`) of inactivity once stopped, on [`POST /sandboxes/{id}/archive`](#post-sandboxesidarchive), or during a [drain](#get-post-delete-adminrunnersiddrain) with `{"archive": true}`. Ephemeral sandboxes, and sandboxes with a running execution or open stream, are not archived.
+- The runner compresses the disk (Firecracker: its rootfs; Docker: the container's whole filesystem, at most the template's image size plus its disk quota where one applies) and seals it with AES-256-GCM under a key made for that archive alone, so an altered, truncated or reordered object does not open. It uploads to a URL the API signs for that object only; runners hold no store credentials. The API checks the stored size, records the archive (the key wrapped by `SANDBOX_API_ARCHIVE_KEY_FILE`), and only then deletes the runner's copy; any failure before that leaves the sandbox stopped on its runner.
+- Any exec or file request for an archived sandbox starts a restore and gets `503` `restoring` with `Retry-After: 5`, as does every request until it is `running` again. The restore goes to a healthy runner serving the sandbox's template at the version it was archived from (one that still has it), and keeps the sandbox's options, egress proxy spec included. A restore is not a crash: no `409 sandbox_restarted`. An archive the store no longer has, or that does not open, deletes the sandbox, and later requests get `404`; a failed download or no runner with room leaves it archived, and a request at least 30 s later retries.
+- Deleting an archived sandbox deletes its archive; `idle_delete_after` applies to archived sandboxes as to stopped ones. A restored sandbox's archive is deleted.
+
+### POST /sandboxes/{id}/archive
+
+Archive now: a running sandbox is stopped first. Answers once the archive is recorded, with the sandbox. Archiving an archived sandbox is a no-op `200`.
+
+**Errors:** `404`, `409` `ephemeral` or `sandbox_busy` (a run in progress), `501` no archive store, `503` the runner or store failed (the sandbox is left stopped on its runner) or `restoring`
+
+### POST /sandboxes/{id}/restore
+
+Start restoring an archived sandbox ahead of use: `503` `restoring` with `Retry-After` while it restores, `200` with the sandbox once it is not archived.
+
 ### PATCH /sandboxes/{id}
 
-Change a sandbox's idle windows. The body sets `idle_stop_after`, `idle_delete_after` or both, with the bounds of [create](#post-sandboxes) checked against the result, including the owning tenant's `max_idle_window` whatever key is used; `null` clears a window back to the global one. Unknown fields return `400`. The new windows apply from the next sweep; a stopped sandbox stays stopped.
+Change a sandbox's idle windows. The body sets any of `idle_stop_after`, `idle_archive_after` and `idle_delete_after`, with the bounds of [create](#post-sandboxes) checked against the result, including the owning tenant's `max_idle_window` whatever key is used; `null` clears a window back to the global one. Unknown fields return `400`. The new windows apply from the next sweep; a stopped sandbox stays stopped.
 
 ```json
 { "idle_stop_after": 1800, "idle_delete_after": 604800 }
@@ -1101,6 +1121,8 @@ Admin only. `POST` starts draining the runner: it is cordoned, so it refuses cre
   "capacity_stopped": 2
 }
 ```
+
+`POST` may send `{"archive": true}`: this API pod then archives every non-ephemeral sandbox on the runner as it goes idle (stopping running ones), and `drained` also waits until only ephemeral sandboxes are left there, so an upgrade keeps every sandbox's files. The response says `"archive": true` while it runs; `DELETE` ends it.
 
 `drained` is true once the runner is draining and has no running execution and no open execution stream (see [activity](#get-sandboxesid)), so it can be restarted without cutting a run short. A restart still deletes every sandbox the runner hosts. The drain lives in the runner's memory: a restarted runner comes back undrained. `capacity_used` and `capacity_stopped` are as in [`GET /admin/runners`](#get-adminrunners).
 

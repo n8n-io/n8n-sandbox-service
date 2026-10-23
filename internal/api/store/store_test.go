@@ -842,3 +842,85 @@ func testTouchRunnerActive(t *testing.T, s SandboxStore, prefix string) {
 		t.Fatal(err)
 	}
 }
+
+func TestArchiveLifecycle(t *testing.T) {
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	testArchiveLifecycle(t, s, "")
+}
+
+// archived -> restoring (once) -> running, with the runner fields and the
+// archive fields moving as the archive's life says.
+func testArchiveLifecycle(t *testing.T, s SandboxStore, prefix string) {
+	t.Helper()
+	id := prefix + "arch"
+	if err := s.Create(&SandboxRecord{ID: id, Status: "stopped", TenantID: AdminTenantID, RunnerID: prefix + "r1", RunnerControlGRPCAddr: "r1:1", IdleArchiveAfter: 600}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetArchived(id, "t/s/a", "wrapped", "v1", 123, 1000); err != nil {
+		t.Fatal(err)
+	}
+	if recs, _ := s.ListByRunner(prefix + "r1"); len(recs) != 1 {
+		t.Fatalf("by runner: %d", len(recs))
+	}
+	if recs, _ := s.ListArchivedOnRunner(); !containsID(recs, id) {
+		t.Fatal("archived copy on runner not listed")
+	}
+	if err := s.ClearRunner(id); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := s.Get(id)
+	if rec.Status != "archived" || rec.ArchiveObject != "t/s/a" || rec.ArchiveSize != 123 || rec.ArchiveVersion != "v1" || rec.RunnerID != "" || rec.IdleArchiveAfter != 600 {
+		t.Fatalf("archived = %+v", rec)
+	}
+	if won, err := s.BeginRestore(id, "archived", 0, 2000); err != nil || !won {
+		t.Fatalf("first restore: %v %v", won, err)
+	}
+	if won, _ := s.BeginRestore(id, "archived", 0, 2000); won {
+		t.Fatal("second restore also won")
+	}
+	// Two pods taking over the same stale restore: only one wins.
+	if won, err := s.BeginRestore(id, "restoring", 2000, 2500); err != nil || !won {
+		t.Fatalf("takeover: %v %v", won, err)
+	}
+	if won, _ := s.BeginRestore(id, "restoring", 2000, 2600); won {
+		t.Fatal("second takeover also won")
+	}
+	// The restore that was taken over neither finishes nor aborts.
+	if ok, err := s.SetRestored(id, 2000, prefix+"r3", "https://r3", "r3:1", "10.0.0.3", 2700); err != nil || ok {
+		t.Fatalf("stale set restored: %v %v", ok, err)
+	}
+	if err := s.AbortRestore(id, 2000); err != nil {
+		t.Fatal(err)
+	}
+	if rec, _ := s.Get(id); rec.Status != "restoring" {
+		t.Fatalf("stale abort applied: %s", rec.Status)
+	}
+	// ClearRunner leaves a sandbox that is not archived alone.
+	if err := s.ClearRunner(id); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.SetRestored(id, 2500, prefix+"r2", "https://r2", "r2:1", "10.0.0.2", 3000); err != nil || !ok {
+		t.Fatalf("set restored: %v %v", ok, err)
+	}
+	if err := s.ClearRunner(id); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ = s.Get(id)
+	if rec.Status != "running" || rec.RunnerID != prefix+"r2" || rec.ArchiveObject != "" || rec.ArchiveKey != "" || rec.LastActiveAt != 3000 {
+		t.Fatalf("restored = %+v", rec)
+	}
+	_ = s.Delete(id)
+}
+
+func containsID(recs []*SandboxRecord, id string) bool {
+	for _, r := range recs {
+		if r.ID == id {
+			return true
+		}
+	}
+	return false
+}

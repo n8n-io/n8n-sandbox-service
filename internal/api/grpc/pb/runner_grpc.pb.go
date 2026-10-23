@@ -123,6 +123,8 @@ const (
 	SandboxControl_GetActivity_FullMethodName       = "/runner.v1.SandboxControl/GetActivity"
 	SandboxControl_UpdateEgressProxy_FullMethodName = "/runner.v1.SandboxControl/UpdateEgressProxy"
 	SandboxControl_SetModelBlocked_FullMethodName   = "/runner.v1.SandboxControl/SetModelBlocked"
+	SandboxControl_ArchiveSandbox_FullMethodName    = "/runner.v1.SandboxControl/ArchiveSandbox"
+	SandboxControl_RestoreSandbox_FullMethodName    = "/runner.v1.SandboxControl/RestoreSandbox"
 )
 
 // SandboxControlClient is the client API for SandboxControl service.
@@ -145,6 +147,11 @@ type SandboxControlClient interface {
 	UpdateEgressProxy(ctx context.Context, in *UpdateEgressProxyRequest, opts ...grpc.CallOption) (*UpdateEgressProxyResponse, error)
 	// SetModelBlocked blocks or unblocks new requests to a proxy sandbox's model hosts.
 	SetModelBlocked(ctx context.Context, in *SetModelBlockedRequest, opts ...grpc.CallOption) (*SetModelBlockedResponse, error)
+	// ArchiveSandbox seals a stopped sandbox's disk and uploads it. The sandbox
+	// stays on the runner until the API deletes it.
+	ArchiveSandbox(ctx context.Context, in *ArchiveSandboxRequest, opts ...grpc.CallOption) (*ArchiveSandboxResponse, error)
+	// RestoreSandbox creates a sandbox from an archive, as CreateSandbox would.
+	RestoreSandbox(ctx context.Context, in *RestoreSandboxRequest, opts ...grpc.CallOption) (*CreateSandboxResponse, error)
 }
 
 type sandboxControlClient struct {
@@ -235,6 +242,26 @@ func (c *sandboxControlClient) SetModelBlocked(ctx context.Context, in *SetModel
 	return out, nil
 }
 
+func (c *sandboxControlClient) ArchiveSandbox(ctx context.Context, in *ArchiveSandboxRequest, opts ...grpc.CallOption) (*ArchiveSandboxResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ArchiveSandboxResponse)
+	err := c.cc.Invoke(ctx, SandboxControl_ArchiveSandbox_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *sandboxControlClient) RestoreSandbox(ctx context.Context, in *RestoreSandboxRequest, opts ...grpc.CallOption) (*CreateSandboxResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateSandboxResponse)
+	err := c.cc.Invoke(ctx, SandboxControl_RestoreSandbox_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // SandboxControlServer is the server API for SandboxControl service.
 // All implementations must embed UnimplementedSandboxControlServer
 // for forward compatibility.
@@ -255,6 +282,11 @@ type SandboxControlServer interface {
 	UpdateEgressProxy(context.Context, *UpdateEgressProxyRequest) (*UpdateEgressProxyResponse, error)
 	// SetModelBlocked blocks or unblocks new requests to a proxy sandbox's model hosts.
 	SetModelBlocked(context.Context, *SetModelBlockedRequest) (*SetModelBlockedResponse, error)
+	// ArchiveSandbox seals a stopped sandbox's disk and uploads it. The sandbox
+	// stays on the runner until the API deletes it.
+	ArchiveSandbox(context.Context, *ArchiveSandboxRequest) (*ArchiveSandboxResponse, error)
+	// RestoreSandbox creates a sandbox from an archive, as CreateSandbox would.
+	RestoreSandbox(context.Context, *RestoreSandboxRequest) (*CreateSandboxResponse, error)
 	mustEmbedUnimplementedSandboxControlServer()
 }
 
@@ -288,6 +320,12 @@ func (UnimplementedSandboxControlServer) UpdateEgressProxy(context.Context, *Upd
 }
 func (UnimplementedSandboxControlServer) SetModelBlocked(context.Context, *SetModelBlockedRequest) (*SetModelBlockedResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetModelBlocked not implemented")
+}
+func (UnimplementedSandboxControlServer) ArchiveSandbox(context.Context, *ArchiveSandboxRequest) (*ArchiveSandboxResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ArchiveSandbox not implemented")
+}
+func (UnimplementedSandboxControlServer) RestoreSandbox(context.Context, *RestoreSandboxRequest) (*CreateSandboxResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RestoreSandbox not implemented")
 }
 func (UnimplementedSandboxControlServer) mustEmbedUnimplementedSandboxControlServer() {}
 func (UnimplementedSandboxControlServer) testEmbeddedByValue()                        {}
@@ -454,6 +492,42 @@ func _SandboxControl_SetModelBlocked_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SandboxControl_ArchiveSandbox_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ArchiveSandboxRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SandboxControlServer).ArchiveSandbox(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SandboxControl_ArchiveSandbox_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SandboxControlServer).ArchiveSandbox(ctx, req.(*ArchiveSandboxRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SandboxControl_RestoreSandbox_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RestoreSandboxRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SandboxControlServer).RestoreSandbox(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SandboxControl_RestoreSandbox_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SandboxControlServer).RestoreSandbox(ctx, req.(*RestoreSandboxRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // SandboxControl_ServiceDesc is the grpc.ServiceDesc for SandboxControl service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -492,6 +566,14 @@ var SandboxControl_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetModelBlocked",
 			Handler:    _SandboxControl_SetModelBlocked_Handler,
+		},
+		{
+			MethodName: "ArchiveSandbox",
+			Handler:    _SandboxControl_ArchiveSandbox_Handler,
+		},
+		{
+			MethodName: "RestoreSandbox",
+			Handler:    _SandboxControl_RestoreSandbox_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

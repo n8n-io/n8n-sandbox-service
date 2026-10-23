@@ -77,6 +77,8 @@ func NewSQLite(dbPath string, useWal bool) (*SQLiteStore, error) {
 		{sql: sqliteAddIdleDeleteAfterCol, name: "idle_delete_after"},
 		{sql: sqliteAddEgressProxyCol, name: "egress_proxy"},
 		{sql: sqliteAddModelBlockedCol, name: "model_blocked"},
+		sqliteAddArchiveCols[0], sqliteAddArchiveCols[1], sqliteAddArchiveCols[2], sqliteAddArchiveCols[3],
+		sqliteAddArchiveCols[4], sqliteAddArchiveCols[5], sqliteAddArchiveCols[6],
 	} {
 		if _, err := db.Exec(stmt.sql); err != nil {
 			if strings.Contains(err.Error(), "duplicate column") ||
@@ -138,7 +140,7 @@ func (s *SQLiteStore) Backend() Backend { return BackendSQLite }
 
 func (s *SQLiteStore) Close() error { return s.db.Close() }
 
-const sqliteSandboxCols = `id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral, egress, template, idle_stop_after, idle_delete_after, egress_proxy, model_blocked`
+const sqliteSandboxCols = `id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral, egress, template, idle_stop_after, idle_delete_after, egress_proxy, model_blocked, idle_archive_after, archive_object, archive_key, archive_size, archive_version, archived_at, restore_started_at`
 
 type sqliteExecer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
@@ -147,9 +149,9 @@ type sqliteExecer interface {
 func (s *SQLiteStore) insertSandbox(e sqliteExecer, record *SandboxRecord) error {
 	const q = `
 		INSERT INTO sandboxes
-			(id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral, egress, template, idle_stop_after, idle_delete_after, egress_proxy)
+			(id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral, egress, template, idle_stop_after, idle_delete_after, egress_proxy, idle_archive_after)
 		VALUES
-			(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	_, err := e.ExecContext(context.Background(), q,
 		record.ID,
@@ -170,6 +172,7 @@ func (s *SQLiteStore) insertSandbox(e sqliteExecer, record *SandboxRecord) error
 		record.IdleStopAfter,
 		record.IdleDeleteAfter,
 		record.EgressProxy,
+		record.IdleArchiveAfter,
 	)
 	if err != nil {
 		return fmt.Errorf("store: create sandbox %s: %w", record.ID, err)
@@ -276,13 +279,6 @@ func (s *SQLiteStore) UpdateLastActive(id string) error {
 	now := time.Now().Unix()
 	if _, err := s.db.Exec(q, now, id); err != nil {
 		return fmt.Errorf("store: update last_active_at for %s: %w", id, err)
-	}
-	return nil
-}
-
-func (s *SQLiteStore) UpdateIdleWindows(id string, stopAfter, deleteAfter int64) error {
-	if _, err := s.db.Exec(`UPDATE sandboxes SET idle_stop_after = ?, idle_delete_after = ? WHERE id = ?`, stopAfter, deleteAfter, id); err != nil {
-		return fmt.Errorf("store: update idle windows for %s: %w", id, err)
 	}
 	return nil
 }
@@ -587,4 +583,63 @@ func scanAPIKeyRows(rows *sql.Rows) ([]*APIKey, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+func (s *SQLiteStore) UpdateIdleWindows(id string, stopAfter, archiveAfter, deleteAfter int64) error {
+	if _, err := s.db.Exec(`UPDATE sandboxes SET idle_stop_after = ?, idle_archive_after = ?, idle_delete_after = ? WHERE id = ?`, stopAfter, archiveAfter, deleteAfter, id); err != nil {
+		return fmt.Errorf("store: update idle windows for %s: %w", id, err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) SetArchived(id, object, key, version string, size, at int64) error {
+	const q = `UPDATE sandboxes SET status = 'archived', archive_object = ?, archive_key = ?, archive_version = ?, archive_size = ?, archived_at = ?, restore_started_at = 0 WHERE id = ?`
+	if _, err := s.db.Exec(q, object, key, version, size, at, id); err != nil {
+		return fmt.Errorf("store: set archived %s: %w", id, err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) ClearRunner(id string) error {
+	const q = `UPDATE sandboxes SET runner_id = '', runner_http_base_url = '', runner_control_grpc_addr = '', container_ip = '' WHERE id = ? AND status = 'archived'`
+	if _, err := s.db.Exec(q, id); err != nil {
+		return fmt.Errorf("store: clear runner of %s: %w", id, err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) BeginRestore(id, from string, fromStarted, at int64) (bool, error) {
+	res, err := s.db.Exec(`UPDATE sandboxes SET status = 'restoring', restore_started_at = ? WHERE id = ? AND status = ? AND restore_started_at = ?`, at, id, from, fromStarted)
+	if err != nil {
+		return false, fmt.Errorf("store: begin restore of %s: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+func (s *SQLiteStore) SetRestored(id string, started int64, runnerID, httpBase, controlAddr, containerIP string, at int64) (bool, error) {
+	const q = `UPDATE sandboxes SET status = 'running', runner_id = ?, runner_http_base_url = ?, runner_control_grpc_addr = ?, container_ip = ?,
+		last_active_at = ?, archive_object = '', archive_key = '', archive_size = 0, archive_version = '', archived_at = 0, restore_started_at = 0
+		WHERE id = ? AND status = 'restoring' AND restore_started_at = ?`
+	res, err := s.db.Exec(q, runnerID, httpBase, controlAddr, containerIP, at, id, started)
+	if err != nil {
+		return false, fmt.Errorf("store: set restored %s: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+func (s *SQLiteStore) AbortRestore(id string, started int64) error {
+	if _, err := s.db.Exec(`UPDATE sandboxes SET status = 'archived' WHERE id = ? AND status = 'restoring' AND restore_started_at = ?`, id, started); err != nil {
+		return fmt.Errorf("store: abort restore of %s: %w", id, err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) ListByRunner(runnerID string) ([]*SandboxRecord, error) {
+	return s.querySandboxRecords(`SELECT `+sqliteSandboxCols+` FROM sandboxes WHERE runner_id = ?`, runnerID)
+}
+
+func (s *SQLiteStore) ListArchivedOnRunner() ([]*SandboxRecord, error) {
+	return s.querySandboxRecords(`SELECT ` + sqliteSandboxCols + ` FROM sandboxes WHERE status = 'archived' AND runner_id <> ''`)
 }

@@ -58,7 +58,11 @@ func heartbeatTemplates(runnerID string, in []*pb.TemplateInfo) []registry.Templ
 		if slices.ContainsFunc(out, func(o registry.Template) bool { return o.Name == name }) {
 			continue
 		}
-		out = append(out, registry.Template{Name: name, VCPUs: t.GetVcpus(), MemoryMB: t.GetMemoryMb(), DiskMB: t.GetDiskMb()})
+		version := t.GetVersion()
+		if len(version) > 128 {
+			version = version[:128]
+		}
+		out = append(out, registry.Template{Name: name, VCPUs: t.GetVcpus(), MemoryMB: t.GetMemoryMb(), DiskMB: t.GetDiskMb(), Version: version})
 	}
 	return out
 }

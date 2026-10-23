@@ -178,6 +178,33 @@ describe("SandboxClient", () => {
     await expect(client.getModelEgress("abc")).resolves.toBe(true);
   });
 
+  it("archiveSandbox and restoreSandbox use their routes and map archive fields", async () => {
+    const mock = getMockHttp(client);
+    mock.requestJson.mockResolvedValue({
+      id: "abc",
+      status: "archived",
+      created_at: 1,
+      last_active_at: 1,
+      ephemeral: false,
+      egress: "public",
+      template: "default",
+      idle_archive_after: 7200,
+      archived_at: 99,
+    });
+    await expect(client.archiveSandbox("abc")).resolves.toMatchObject({
+      status: "archived",
+      archivedAt: 99,
+      idleArchiveAfter: 7200,
+    });
+    expect(mock.requestJson).toHaveBeenCalledWith("POST", "/sandboxes/abc/archive", {
+      isSafeToRetry: true,
+    });
+    await client.restoreSandbox("abc");
+    expect(mock.requestJson).toHaveBeenCalledWith("POST", "/sandboxes/abc/restore", {
+      isSafeToRetry: true,
+    });
+  });
+
   it("listTemplates maps the catalog", async () => {
     const mock = getMockHttp(client);
     mock.requestJson.mockResolvedValue({

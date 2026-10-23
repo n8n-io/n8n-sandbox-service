@@ -17,8 +17,9 @@ import (
 // raw so that null, which clears a window back to the global one, differs
 // from leaving it out.
 type patchSandboxRequest struct {
-	IdleStopAfter   json.RawMessage `json:"idle_stop_after"`
-	IdleDeleteAfter json.RawMessage `json:"idle_delete_after"`
+	IdleStopAfter    json.RawMessage `json:"idle_stop_after"`
+	IdleDeleteAfter  json.RawMessage `json:"idle_delete_after"`
+	IdleArchiveAfter json.RawMessage `json:"idle_archive_after"`
 }
 
 // windowPatch applies one raw field to cur: absent keeps it, null clears it.
@@ -59,8 +60,8 @@ func handlePatchSandbox(s store.SandboxStore, cfg *config.APIConfig) http.Handle
 			writeError(w, http.StatusBadRequest, "invalid JSON body")
 			return
 		}
-		if req.IdleStopAfter == nil && req.IdleDeleteAfter == nil {
-			writeError(w, http.StatusBadRequest, "idle_stop_after or idle_delete_after is required")
+		if req.IdleStopAfter == nil && req.IdleDeleteAfter == nil && req.IdleArchiveAfter == nil {
+			writeError(w, http.StatusBadRequest, "idle_stop_after, idle_archive_after or idle_delete_after is required")
 			return
 		}
 
@@ -96,17 +97,26 @@ func handlePatchSandbox(s store.SandboxStore, cfg *config.APIConfig) http.Handle
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if stop > 0 && del > 0 && stop > del {
-			writeError(w, http.StatusBadRequest, "idle_stop_after must not exceed idle_delete_after")
+		arch, err := windowPatch("idle_archive_after", req.IdleArchiveAfter, rec.IdleArchiveAfter, limit)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if err := s.UpdateIdleWindows(id, stop, del); err != nil {
+		if arch > 0 && arch != rec.IdleArchiveAfter && (!cfg.ArchiveEnabled() || rec.Ephemeral) {
+			writeError(w, http.StatusBadRequest, "idle_archive_after needs an archive store and a sandbox that is not ephemeral")
+			return
+		}
+		if err := checkWindowOrder(stop, arch, del); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := s.UpdateIdleWindows(id, stop, arch, del); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		slog.InfoContext(r.Context(), "sandbox idle windows updated", "sandbox_id", id,
 			"idle_stop_after", stop, "idle_delete_after", del)
-		rec.IdleStopAfter, rec.IdleDeleteAfter = stop, del
+		rec.IdleStopAfter, rec.IdleArchiveAfter, rec.IdleDeleteAfter = stop, arch, del
 		writeJSON(w, http.StatusOK, sandboxResponse(rec))
 	}
 }

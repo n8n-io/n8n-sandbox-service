@@ -283,3 +283,7 @@ func TestPostgresListIdlePerSandboxWindows(t *testing.T) {
 	})
 	testListIdlePerSandboxWindows(t, s, prefix)
 }
+
+func TestPostgresArchiveLifecycle(t *testing.T) {
+	testArchiveLifecycle(t, openTestPostgresStore(t), uuid.New().String()[:8]+"-")
+}

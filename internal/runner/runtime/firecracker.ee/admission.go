@@ -173,6 +173,16 @@ func (r *Runtime) pinTemplateSnapshot(a templateAssets) (runnerruntime.TemplateI
 	// sandbox's disk. Reported, not required: a size it cannot read only
 	// leaves the template's disk unknown to the API.
 	info := runnerruntime.TemplateInfo{Name: a.Name, VCPUs: int32(params.VCPUCount), MemoryMB: int64(params.MemSizeMiB)}
+	// The version is what a cold boot replays: the boot parameters and the
+	// kernel. An archive restores only onto the same.
+	if raw, err := os.ReadFile(a.bootParamsPath()); err == nil {
+		h := sha256.New()
+		h.Write(raw)
+		if pin, err := r.deps.statTemplateKernel(a.kernelPath()); err == nil {
+			h.Write([]byte(pin.String()))
+		}
+		info.Version = hex.EncodeToString(h.Sum(nil))[:16]
+	}
 	if size, err := r.deps.fileSize(a.rootfsPath()); err == nil {
 		info.DiskMB = size >> 20
 	} else {

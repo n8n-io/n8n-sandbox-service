@@ -183,3 +183,33 @@ func SetModelBlocked(ctx context.Context, target, apiKey string, tlsCfg *TLS, sa
 	_, err = pb.NewSandboxControlClient(conn).SetModelBlocked(withCallMetadata(ctx, apiKey), &pb.SetModelBlockedRequest{SandboxId: sandboxID, Blocked: blocked})
 	return err
 }
+
+// ArchiveSandbox calls SandboxControl.ArchiveSandbox and closes the connection.
+func ArchiveSandbox(ctx context.Context, target, apiKey string, tlsCfg *TLS, sandboxID, uploadURL string, key []byte) (*pb.ArchiveSandboxResponse, error) {
+	opts, err := dialOpts(target, tlsCfg)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := grpc.NewClient(target, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("runnerctl dial: %w", err)
+	}
+	defer conn.Close()
+	return pb.NewSandboxControlClient(conn).ArchiveSandbox(withCallMetadata(ctx, apiKey), &pb.ArchiveSandboxRequest{SandboxId: sandboxID, UploadUrl: uploadURL, Key: key})
+}
+
+// RestoreSandbox calls SandboxControl.RestoreSandbox and closes the connection.
+func RestoreSandbox(ctx context.Context, target, apiKey string, tlsCfg *TLS, sandboxID, createOptionsJSON, downloadURL string, key []byte) (*pb.CreateSandboxResponse, error) {
+	opts, err := dialOpts(target, tlsCfg)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := grpc.NewClient(target, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("runnerctl dial: %w", err)
+	}
+	defer conn.Close()
+	return pb.NewSandboxControlClient(conn).RestoreSandbox(withCallMetadata(ctx, apiKey), &pb.RestoreSandboxRequest{
+		SandboxId: sandboxID, CreateOptionsJson: createOptionsJSON, DownloadUrl: downloadURL, Key: key,
+	})
+}

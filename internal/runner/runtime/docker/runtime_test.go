@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -29,13 +31,15 @@ type fakeDockerBackend struct {
 	// image and limits of the last create.
 	image  string
 	limits *ResourceLimits
+	// changes of the last import.
+	changes []string
 }
 
 func (f *fakeDockerBackend) ping(context.Context) error {
 	return errors.New("unexpected ping")
 }
 
-func (f *fakeDockerBackend) createContainer(_ context.Context, _, _, image, network string, limits *ResourceLimits, _ bool) (string, error) {
+func (f *fakeDockerBackend) createContainer(_ context.Context, _, _, _, image, network string, limits *ResourceLimits, _ bool) (string, error) {
 	*f.events = append(*f.events, "create")
 	f.network = network
 	f.image, f.limits = image, limits
@@ -66,6 +70,28 @@ func (f *fakeDockerBackend) containerIP(context.Context, string) (string, error)
 		return "", f.containerIPErr
 	}
 	return f.ip, nil
+}
+
+func (f *fakeDockerBackend) exportContainer(_ context.Context, _ string, w io.Writer) error {
+	*f.events = append(*f.events, "export")
+	_, err := io.WriteString(w, "TAR")
+	return err
+}
+
+func (f *fakeDockerBackend) importImage(_ context.Context, r io.Reader, image string, changes []string) error {
+	b, _ := io.ReadAll(r)
+	*f.events = append(*f.events, "import:"+image+":"+string(b))
+	f.changes = changes
+	return nil
+}
+
+func (f *fakeDockerBackend) imageConfig(context.Context, string) (*imageRunConfig, error) {
+	return &imageRunConfig{Cmd: []string{"/sandbox-daemon"}, Env: []string{"PATH=/usr/bin:/bin", "A=b c"}, User: "1000:1000", WorkingDir: "/home/user"}, nil
+}
+
+func (f *fakeDockerBackend) removeImage(_ context.Context, image string) error {
+	*f.events = append(*f.events, "rmi:"+image)
+	return nil
 }
 
 func (f *fakeDockerBackend) inspectContainer(context.Context, string) (*containerInspect, error) {
@@ -131,7 +157,7 @@ func TestDockerContainerCreateArgs(t *testing.T) {
 		DiskMB:     1024,
 	}
 
-	got := dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerNoEgressNetwork, limits, true, []string{"1.1.1.1", "8.8.8.8"}, false)
+	got := dockerContainerCreateArgs("sandbox-id", "default", "sandbox-name", "sandbox-image", runnerNoEgressNetwork, limits, true, []string{"1.1.1.1", "8.8.8.8"}, false)
 	want := []string{
 		"container", "create",
 		"--name", "sandbox-name",
@@ -140,6 +166,7 @@ func TestDockerContainerCreateArgs(t *testing.T) {
 		"--network", runnerNoEgressNetwork,
 		"--label", containerLabelManaged + "=" + containerLabelManagedVal,
 		"--label", containerLabelSandboxID + "=sandbox-id",
+		"--label", containerLabelTemplate + "=default",
 		"--user", "1000:1000",
 		"--env", "HOME=/home/user",
 		"--env", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
@@ -177,7 +204,7 @@ func TestDockerContainerCreateArgsSkipIPv6SysctlsOnIPv4OnlyHost(t *testing.T) {
 		return got
 	}
 
-	got := sysctls(dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerBridgeNetwork, nil, false, nil, false))
+	got := sysctls(dockerContainerCreateArgs("sandbox-id", "default", "sandbox-name", "sandbox-image", runnerBridgeNetwork, nil, false, nil, false))
 	want := []string{
 		"net.ipv6.conf.all.disable_ipv6=1",
 		"net.ipv6.conf.default.disable_ipv6=1",
@@ -187,7 +214,7 @@ func TestDockerContainerCreateArgsSkipIPv6SysctlsOnIPv4OnlyHost(t *testing.T) {
 		t.Fatalf("sysctls by default = %#v, want %#v", got, want)
 	}
 
-	if got := sysctls(dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerBridgeNetwork, nil, false, nil, true)); got != nil {
+	if got := sysctls(dockerContainerCreateArgs("sandbox-id", "default", "sandbox-name", "sandbox-image", runnerBridgeNetwork, nil, false, nil, true)); got != nil {
 		t.Fatalf("sysctls on IPv4-only host = %#v, want nil", got)
 	}
 }
@@ -259,7 +286,7 @@ func TestDockerContainerCreateArgsAlwaysApplySecurityPolicy(t *testing.T) {
 	}
 
 	for _, enableCgroups := range []bool{false, true} {
-		gotArgs := dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerBridgeNetwork, nil, enableCgroups, nil, false)
+		gotArgs := dockerContainerCreateArgs("sandbox-id", "default", "sandbox-name", "sandbox-image", runnerBridgeNetwork, nil, enableCgroups, nil, false)
 		var got []string
 		for i := 0; i < len(gotArgs); i++ {
 			if gotArgs[i] != "--cap-drop" && gotArgs[i] != "--cap-add" && gotArgs[i] != "--security-opt" {
@@ -792,5 +819,63 @@ func TestProxySandboxIsIdentifiedByItsAddress(t *testing.T) {
 	m.trackProxyAddr(&m.publicNetwork, id, "172.18.0.9")
 	if _, ok := m.identifyProxyClient("172.18.0.9:1"); ok {
 		t.Fatal("public sandbox identified")
+	}
+}
+
+// An export streams the stopped container; an import makes the sandbox's own
+// image with the template's run config and creates from it.
+func TestExportAndImport(t *testing.T) {
+	events := []string{}
+	backend := &fakeDockerBackend{events: &events, containerID: "container-1", ip: "172.18.0.2"}
+	m := newRuntime(&config.Config{}, Config{SandboxImage: "img/default"}, backend)
+	m.imageReady.Store(true)
+	m.applyPolicy = func(string, string, string, string, int, bool) error { return nil }
+	m.teardownRules = func(string) error { return nil }
+	m.waitForDaemon = func(context.Context, string) error { return nil }
+	const id = "11111111-1111-4111-8111-111111111111"
+
+	var buf strings.Builder
+	if err := m.ExportSandbox(context.Background(), id, &buf); err != nil || buf.String() != "TAR" {
+		t.Fatalf("export: %q %v", buf.String(), err)
+	}
+	if _, err := m.ImportSandbox(context.Background(), id, &CreateOptions{}, strings.NewReader("TAR")); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if !slices.Contains(events, "import:sandbox-restored:"+id+":TAR") || backend.image != "sandbox-restored:"+id {
+		t.Fatalf("events %v, image %q", events, backend.image)
+	}
+	want := []string{`CMD ["/sandbox-daemon"]`, `ENV PATH="/usr/bin:/bin"`, `ENV A="b c"`, "USER 1000:1000", "WORKDIR /home/user"}
+	if !slices.Equal(backend.changes, want) {
+		t.Fatalf("changes = %q", backend.changes)
+	}
+	if err := m.DeleteSandbox(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(events, "rmi:sandbox-restored:"+id) {
+		t.Fatalf("restored image not removed: %v", events)
+	}
+}
+
+// Under a disk quota an archive is at most the template's image and quota:
+// sparse files come out of an export at full size, so the cap is on the tar.
+func TestArchiveLimit(t *testing.T) {
+	backend := &fakeDockerBackend{events: &[]string{}, containerID: "container-1"}
+	m := newRuntime(&config.Config{}, Config{SandboxImage: "img/default", DiskQuotaActive: true, DefaultDiskQuotaMB: 1}, backend)
+	limit, err := m.archiveLimit(context.Background(), "")
+	if want := int64(1<<20 + (1<<20)/10 + 64<<20); err != nil || limit != want {
+		t.Fatalf("limit = %d %v, want %d", limit, err, want)
+	}
+	if _, err := io.Copy(&capWriter{w: io.Discard, left: 10}, strings.NewReader(strings.Repeat("x", 11))); !errors.Is(err, errArchiveTooLarge) {
+		t.Fatalf("writer over the cap: %v", err)
+	}
+	if _, err := io.Copy(io.Discard, &capReader{r: strings.NewReader(strings.Repeat("x", 11)), left: 10}); !errors.Is(err, errArchiveTooLarge) {
+		t.Fatalf("reader over the cap: %v", err)
+	}
+	if n, err := io.Copy(io.Discard, &capReader{r: strings.NewReader("0123456789"), left: 10}); err != nil || n != 10 {
+		t.Fatalf("reader at the cap: %d %v", n, err)
+	}
+	m = newRuntime(&config.Config{}, Config{SandboxImage: "img/default"}, backend)
+	if limit, _ := m.archiveLimit(context.Background(), ""); limit != 0 {
+		t.Fatalf("no quota, limit %d", limit)
 	}
 }

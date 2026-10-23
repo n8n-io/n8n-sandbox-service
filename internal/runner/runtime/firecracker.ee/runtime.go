@@ -455,6 +455,13 @@ func (r *Runtime) Capacity(context.Context) (runnerruntime.Capacity, error) {
 // CreateSandbox restores one microVM snapshot into a per-slot jail and netns,
 // then exposes the guest daemon through a host-local TCP proxy.
 func (r *Runtime) CreateSandbox(ctx context.Context, sandboxID string, opts *runnerruntime.CreateOptions) (*runnerruntime.SandboxInfo, error) {
+	return r.createSandbox(ctx, sandboxID, opts, nil)
+}
+
+// createSandbox is CreateSandbox, or, with archive set, ImportSandbox: the
+// rootfs is written from the archive instead of cloned, and the guest cold
+// boots it, since no memory snapshot matches it.
+func (r *Runtime) createSandbox(ctx context.Context, sandboxID string, opts *runnerruntime.CreateOptions, archive io.Reader) (*runnerruntime.SandboxInfo, error) {
 	if len(sandboxID) < 12 {
 		return nil, fmt.Errorf("sandbox ID must be at least 12 characters, got %d", len(sandboxID))
 	}
@@ -511,6 +518,23 @@ func (r *Runtime) CreateSandbox(ctx context.Context, sandboxID string, opts *run
 	}
 
 	timer := newStepTimer(metrics.OpCreate, r.metrics)
+	if archive != nil {
+		if err := r.restoreRootfs(state, archive); err != nil {
+			cleanupOnError()
+			return nil, err
+		}
+		if err := r.activateSandboxVM(ctx, state, timer); err != nil {
+			cleanupOnError()
+			return nil, err
+		}
+		r.mu.Lock()
+		state.running = true
+		state.transition = transitionNone
+		info := *state.info
+		r.mu.Unlock()
+		slog.Info("firecracker sandbox restored from archive", "sandbox_id", sandboxID, "vm_id", state.vmID, "slot", state.slot)
+		return &info, nil
+	}
 	templateRootfs := assets.rootfsPath()
 	slog.Debug("firecracker cloning rootfs", "sandbox_id", sandboxID, "template", templateRootfs, "dest", state.rootfsPath)
 	if err := timer.step(stepCloneRootfs, func() error {

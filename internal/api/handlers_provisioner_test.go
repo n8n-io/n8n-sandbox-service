@@ -325,7 +325,7 @@ func TestSandboxHandlersRejectUnknownRoleWithoutMiddleware(t *testing.T) {
 
 	for name, h := range map[string]http.Handler{
 		"list":   handleListSandboxes(s),
-		"create": handleCreateSandbox(s, registry.New(45*time.Second), cfg, metrics.NewAPIRecorder(false), newTenantQuota(s.CountByTenant)),
+		"create": handleCreateSandbox(s, registry.New(45*time.Second), cfg, metrics.NewAPIRecorder(false), newTenantQuota(s.CountByTenant), nil),
 	} {
 		method := http.MethodGet
 		if name == "create" {

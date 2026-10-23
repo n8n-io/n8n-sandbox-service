@@ -134,6 +134,13 @@ API_DOCKER_RUN+=(
 )
 e2e_api_container_env_args "$API_KEY" "$REG_TOKEN" "$RUNNER_INTERNAL_API_KEY" "$TLS_DIR"
 API_DOCKER_RUN+=("${E2E_API_CONTAINER_ENV_ARGS[@]}")
+# An archive store in the API container, served to the runner by its name.
+od -An -tx1 -N32 /dev/urandom | tr -d ' \n' >"$TLS_DIR/api/archive.key"
+API_DOCKER_RUN+=(
+	-e "SANDBOX_API_ARCHIVE_DIR=/tmp/sandbox-archives"
+	-e "SANDBOX_API_ARCHIVE_URL=http://${API_CONTAINER_NAME}:8080"
+	-e "SANDBOX_API_ARCHIVE_KEY_FILE=/grpc-tls/archive.key"
+)
 API_DOCKER_RUN+=(--name "$API_CONTAINER_NAME" "$API_IMAGE")
 docker run "${API_DOCKER_RUN[@]}"
 
@@ -166,7 +173,7 @@ docker run -d \
 	-e "SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE=/grpc-tls/ca.crt" \
 	-e "SANDBOX_RUNNER_ID=e2e-runner-$$" \
 	-e "SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB=50" \
-	-e "SANDBOX_RUNNER_DISK_QUOTA_POOL_SIZE_GB=2" \
+	-e "SANDBOX_RUNNER_DISK_QUOTA_POOL_SIZE_GB=4" \
 	-e "SANDBOX_RUNNER_MAX_INFLIGHT_PER_SANDBOX=16" \
 	-e "SANDBOX_RUNNER_DOCKER_DNS_SERVERS=$RUNNER_DNS_SERVERS" \
 	--name "$RUNNER_CONTAINER_NAME" \

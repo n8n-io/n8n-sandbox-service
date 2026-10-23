@@ -51,8 +51,10 @@ const (
 	IdleStop IdlePhase = iota
 	// IdleEphemeral: running ephemeral rows, deleted by idle_stop_after.
 	IdleEphemeral
-	// IdleDelete: stopped rows, by idle_delete_after.
+	// IdleDelete: stopped and archived rows, by idle_delete_after.
 	IdleDelete
+	// IdleArchive: stopped regular rows, by idle_archive_after.
+	IdleArchive
 )
 
 // idleFilter is the WHERE clause of phase with ? placeholders for now,
@@ -65,8 +67,10 @@ func idleFilter(phase IdlePhase) string {
 		where, col = `status = 'running' AND ephemeral = false`, "idle_stop_after"
 	case IdleEphemeral:
 		where, col = `status = 'running' AND ephemeral = true`, "idle_stop_after"
+	case IdleArchive:
+		where, col = `status = 'stopped' AND ephemeral = false`, "idle_archive_after"
 	default:
-		where, col = `status = 'stopped'`, "idle_delete_after"
+		where, col = `status IN ('stopped', 'archived')`, "idle_delete_after"
 	}
 	// Casts let Postgres type the bare parameters.
 	return where + ` AND ((` + col + ` > 0 AND last_active_at <= CAST(? AS BIGINT) - ` + col + `) OR (` +
@@ -94,6 +98,16 @@ type SandboxRecord struct {
 	IdleDeleteAfter       int64  // Seconds; 0 = the API's global window
 	EgressProxy           string // Validated EgressProxySpec as JSON when Egress is "proxy", else empty
 	ModelBlocked          bool   // New requests to the proxy sandbox's model hosts are refused
+	IdleArchiveAfter      int64  // Seconds; 0 = the API's global window
+	// The archive of an "archived" or "restoring" sandbox: its object in the
+	// archive store, its key wrapped by the API's master key, its sealed size,
+	// the template version it restores onto, and when it was made.
+	ArchiveObject    string
+	ArchiveKey       string
+	ArchiveSize      int64
+	ArchiveVersion   string
+	ArchivedAt       int64
+	RestoreStartedAt int64 // When a restore began; 0 when none runs
 }
 
 // Tenant is a provisioned consumer of the sandbox API (e.g. an n8n instance).
@@ -132,7 +146,29 @@ type SandboxStore interface {
 	UpdateLastActive(id string) error
 	// UpdateIdleWindows sets a sandbox's own idle windows (seconds, 0 = the
 	// API's global window).
-	UpdateIdleWindows(id string, stopAfter, deleteAfter int64) error
+	UpdateIdleWindows(id string, stopAfter, archiveAfter, deleteAfter int64) error
+	// SetArchived records a stopped sandbox's archive and marks it archived.
+	// Its runner fields stay until ClearRunner, once the runner's copy is gone.
+	SetArchived(id, object, key, version string, size, at int64) error
+	// ClearRunner forgets the runner an archived sandbox was on; it leaves a
+	// sandbox in any other status alone.
+	ClearRunner(id string) error
+	// BeginRestore marks a sandbox restoring at at if it is still in status
+	// from with restore_started_at fromStarted, as read, and reports whether
+	// it did: one API pod restores it, not several.
+	BeginRestore(id, from string, fromStarted, at int64) (bool, error)
+	// SetRestored records a restored sandbox on its runner, running, with its
+	// archive fields cleared, if the restore begun at started is still the
+	// sandbox's; it reports whether it was.
+	SetRestored(id string, started int64, runnerID, httpBase, controlAddr, containerIP string, at int64) (bool, error)
+	// AbortRestore puts a sandbox back to archived if the restore begun at
+	// started is still the sandbox's.
+	AbortRestore(id string, started int64) error
+	// ListByRunner returns the sandboxes stored on runnerID.
+	ListByRunner(runnerID string) ([]*SandboxRecord, error)
+	// ListArchivedOnRunner returns archived sandboxes whose runner copy is not
+	// yet confirmed deleted.
+	ListArchivedOnRunner() ([]*SandboxRecord, error)
 	// UpdateEgressProxy stores a proxy sandbox's replaced spec (canonical JSON).
 	UpdateEgressProxy(id, spec string) error
 	// SetModelBlocked records whether a proxy sandbox's model egress is blocked.
@@ -201,6 +237,13 @@ func scanRecord(row scanner) (*SandboxRecord, error) {
 		&r.IdleDeleteAfter,
 		&r.EgressProxy,
 		&r.ModelBlocked,
+		&r.IdleArchiveAfter,
+		&r.ArchiveObject,
+		&r.ArchiveKey,
+		&r.ArchiveSize,
+		&r.ArchiveVersion,
+		&r.ArchivedAt,
+		&r.RestoreStartedAt,
 	)
 	if err != nil {
 		return nil, err

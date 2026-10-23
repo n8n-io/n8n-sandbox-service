@@ -245,6 +245,25 @@ sends selects the policy. What the proxy then allows is in
 The runner refuses a template it does not serve, rather than booting another
 image in its place.
 
+Archives hold whatever a tenant wrote to its sandbox's disk. Each is sealed by
+the runner with AES-256-GCM under a key made for that archive alone (chunk
+order and the final chunk authenticated), so the store alone reveals nothing
+and an altered, truncated or swapped object fails to restore, which deletes the
+sandbox rather than booting it. Only that, or the store no longer having the
+object, counts as lost: a failed or cut-off download leaves the sandbox
+archived. The key is kept in the API's database wrapped
+by `SANDBOX_API_ARCHIVE_KEY_FILE`; database and store together are needed to
+read an archive, and the master key with either. Runners hold no store
+credentials: they get a URL for one object and one method, valid an hour
+(signed by the API for its directory, presigned for S3); an upload URL writes
+its object once and never replaces it (`If-None-Match: *`), and errors drop the
+URL. Object names are
+`<tenant>/<sandbox>/<random>`. A restore boots only the template version the
+archive was made from. On Docker, where the disk quota counts allocated blocks
+and an export writes sparse files out in full, an archive is capped at the
+template's image size plus its disk quota (plus 10% and 64 MiB for tar
+headers), on export and again on import; with no quota there is no cap.
+
 The Firecracker runtime gives every slot its own network namespace with a
 dedicated TAP device and veth uplink. The guest subnet is identical in every
 namespace, and there is no bridge between them, so guests have no layer-2 path

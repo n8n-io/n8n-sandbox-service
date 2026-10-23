@@ -5,6 +5,7 @@ package docker
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -414,7 +416,149 @@ func (m *Runtime) DeleteSandbox(ctx context.Context, sandboxID string) error {
 	}
 	m.clearRestarted(sandboxID)
 	m.untrackProxy(sandboxID)
+	// A restored sandbox has an image of its own; most have none to remove.
+	_ = m.docker.removeImage(ctx, restoredImage(sandboxID))
 	return nil
+}
+
+// restoredImage names the image a restored sandbox runs from.
+func restoredImage(sandboxID string) string { return "sandbox-restored:" + sandboxID }
+
+// ExportSandbox streams a stopped sandbox's whole filesystem as a tar: the
+// template's files and every change since, deletions included.
+func (m *Runtime) ExportSandbox(ctx context.Context, sandboxID string, w io.Writer) error {
+	containerID, err := m.FindContainerIDByLabel(ctx, sandboxID)
+	if err != nil {
+		return err
+	}
+	inspect, err := m.docker.inspectContainer(ctx, containerID)
+	if err != nil {
+		return err
+	}
+	if inspect.State.Running {
+		return fmt.Errorf("%w: stop it before archiving", runnerruntime.ErrSandboxNotRunning)
+	}
+	limit, err := m.archiveLimit(ctx, inspect.Config.Labels[containerLabelTemplate])
+	if err != nil {
+		return err
+	}
+	if limit > 0 {
+		w = &capWriter{w: w, left: limit}
+	}
+	return m.docker.exportContainer(ctx, containerID, w)
+}
+
+// errArchiveTooLarge is an export bigger than its template's image and disk
+// quota allow: sparse files, which a quota does not count, come out of an
+// export at their full size.
+var errArchiveTooLarge = errors.New("archive is larger than the template's image and disk quota")
+
+// archiveLimit bounds an export of template, as a tar: its image and its disk
+// quota, with room for tar headers. 0 is no bound, where no quota applies.
+func (m *Runtime) archiveLimit(ctx context.Context, template string) (int64, error) {
+	if template == "" {
+		template = runnerruntime.DefaultTemplate
+	}
+	limits := m.limitsFor(template)
+	if limits.DiskMB <= 0 {
+		return 0, nil
+	}
+	image, ok := m.imageFor(template)
+	if !ok {
+		return 0, fmt.Errorf("unknown template %q", template)
+	}
+	cfg, err := m.docker.imageConfig(ctx, image)
+	if err != nil {
+		return 0, err
+	}
+	limit := cfg.Size + limits.DiskMB<<20
+	return limit + limit/10 + 64<<20, nil
+}
+
+type capWriter struct {
+	w    io.Writer
+	left int64
+}
+
+func (c *capWriter) Write(b []byte) (int, error) {
+	if int64(len(b)) > c.left {
+		return 0, errArchiveTooLarge
+	}
+	c.left -= int64(len(b))
+	return c.w.Write(b)
+}
+
+type capReader struct {
+	r    io.Reader
+	left int64
+}
+
+func (c *capReader) Read(b []byte) (int, error) {
+	n, err := c.r.Read(b)
+	if c.left -= int64(n); c.left < 0 {
+		return 0, errArchiveTooLarge
+	}
+	return n, err
+}
+
+// ImportSandbox makes an image of an export, with the run config of the
+// template's image, and creates the sandbox from it.
+func (m *Runtime) ImportSandbox(ctx context.Context, sandboxID string, opts *CreateOptions, r io.Reader) (*runnerruntime.SandboxInfo, error) {
+	if opts == nil {
+		opts = &CreateOptions{}
+	}
+	templateImage, ok := m.imageFor(opts.Template)
+	if !ok {
+		return nil, fmt.Errorf("unknown template %q", opts.Template)
+	}
+	cfg, err := m.docker.imageConfig(ctx, templateImage)
+	if err != nil {
+		return nil, err
+	}
+	limit, err := m.archiveLimit(ctx, opts.Template)
+	if err != nil {
+		return nil, err
+	}
+	if limit > 0 {
+		r = &capReader{r: r, left: limit}
+	}
+	image := restoredImage(sandboxID)
+	if err := m.docker.importImage(ctx, r, image, importChanges(cfg)); err != nil {
+		return nil, fmt.Errorf("import archive: %w", err)
+	}
+	info, err := m.createContainer(ctx, sandboxID, opts, image)
+	if err != nil {
+		_ = m.docker.removeImage(context.WithoutCancel(ctx), image)
+		return nil, err
+	}
+	return info, nil
+}
+
+// importChanges carries the template image's run config onto an imported
+// image, which has none of its own.
+func importChanges(c *imageRunConfig) []string {
+	var out []string
+	if len(c.Entrypoint) > 0 {
+		raw, _ := json.Marshal(c.Entrypoint)
+		out = append(out, "ENTRYPOINT "+string(raw))
+	}
+	if len(c.Cmd) > 0 {
+		raw, _ := json.Marshal(c.Cmd)
+		out = append(out, "CMD "+string(raw))
+	}
+	for _, e := range c.Env {
+		if k, v, ok := strings.Cut(e, "="); ok {
+			raw, _ := json.Marshal(v)
+			out = append(out, "ENV "+k+"="+string(raw))
+		}
+	}
+	if c.User != "" {
+		out = append(out, "USER "+c.User)
+	}
+	if c.WorkingDir != "" {
+		out = append(out, "WORKDIR "+c.WorkingDir)
+	}
+	return out
 }
 
 // StopSandbox stops a sandbox without removing it. Its address goes with it.
@@ -428,6 +572,12 @@ func (m *Runtime) StopSandbox(ctx context.Context, sandboxID string) error {
 
 // CreateContainer creates and starts a new container.
 func (m *Runtime) CreateContainer(ctx context.Context, sandboxID string, opts *CreateOptions) (*ContainerInfo, error) {
+	return m.createContainer(ctx, sandboxID, opts, "")
+}
+
+// createContainer is CreateContainer from image, or the template's image
+// when it is "".
+func (m *Runtime) createContainer(ctx context.Context, sandboxID string, opts *CreateOptions, image string) (*ContainerInfo, error) {
 	if !m.imageReady.Load() {
 		return nil, fmt.Errorf("sandbox image not yet available")
 	}
@@ -442,14 +592,21 @@ func (m *Runtime) CreateContainer(ctx context.Context, sandboxID string, opts *C
 	}
 
 	containerName := "sandbox-" + sandboxID[:12]
-	image, ok := m.imageFor(opts.Template)
+	templateImage, ok := m.imageFor(opts.Template)
 	if !ok {
 		return nil, fmt.Errorf("unknown template %q", opts.Template)
+	}
+	if image == "" {
+		image = templateImage
 	}
 	limits := m.limitsFor(opts.Template)
 	n := m.networkFor(opts.Egress)
 
-	containerID, err := m.docker.createContainer(ctx, sandboxID, containerName, image, n.networkName, limits, m.config.EnableCgroups)
+	template := opts.Template
+	if template == "" {
+		template = runnerruntime.DefaultTemplate
+	}
+	containerID, err := m.docker.createContainer(ctx, sandboxID, template, containerName, image, n.networkName, limits, m.config.EnableCgroups)
 	if err != nil {
 		return nil, fmt.Errorf("create container: %w", err)
 	}

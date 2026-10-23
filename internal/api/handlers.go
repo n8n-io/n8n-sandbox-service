@@ -60,7 +60,7 @@ func newRunnerTransport(cfg *config.APIConfig) (http.RoundTripper, error) {
 	return tr, nil
 }
 
-func sandboxProxyHandler(s store.SandboxStore, cfg *config.APIConfig, transport http.RoundTripper) func(bool) http.HandlerFunc {
+func sandboxProxyHandler(s store.SandboxStore, cfg *config.APIConfig, transport http.RoundTripper, arch *archiver) func(bool) http.HandlerFunc {
 	return func(limitBody bool) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			id := r.PathValue("id")
@@ -83,6 +83,15 @@ func sandboxProxyHandler(s store.SandboxStore, cfg *config.APIConfig, transport 
 			// 404 regardless of whether its row still has routing information.
 			if isPastIdleDeleteWindow(rec, cfg, time.Now().Unix()) {
 				writeError(w, http.StatusNotFound, "sandbox not found")
+				return
+			}
+			// An archived sandbox comes back on any runner; the request that
+			// finds it starts the restore and is told to come back.
+			if rec.Status == statusArchived || rec.Status == statusRestoring {
+				if arch != nil {
+					arch.startRestore(rec)
+				}
+				writeRestoring(w)
 				return
 			}
 
@@ -133,8 +142,11 @@ type SandboxResponse struct {
 	Egress       string `json:"egress"`
 	Template     string `json:"template"`
 	// Seconds; left out when the sandbox uses the API's global window.
-	IdleStopAfter   int64 `json:"idle_stop_after,omitempty"`
-	IdleDeleteAfter int64 `json:"idle_delete_after,omitempty"`
+	IdleStopAfter    int64 `json:"idle_stop_after,omitempty"`
+	IdleDeleteAfter  int64 `json:"idle_delete_after,omitempty"`
+	IdleArchiveAfter int64 `json:"idle_archive_after,omitempty"`
+	// ArchivedAt is when the sandbox was archived; present while archived or restoring.
+	ArchivedAt int64 `json:"archived_at,omitempty"`
 	// TenantID is the owning tenant, or store.AdminTenantID for a sandbox
 	// created with an admin key. A tenant only ever sees its own id here.
 	TenantID string `json:"tenant_id"`
@@ -156,9 +168,11 @@ func sandboxResponse(rec *store.SandboxRecord) *SandboxResponse {
 		Egress:       rec.Egress,
 		Template:     recordTemplate(rec),
 		// Not acted on yet: the sweeper uses the global windows.
-		IdleStopAfter:   rec.IdleStopAfter,
-		IdleDeleteAfter: rec.IdleDeleteAfter,
-		TenantID:        tenantID,
+		IdleStopAfter:    rec.IdleStopAfter,
+		IdleDeleteAfter:  rec.IdleDeleteAfter,
+		IdleArchiveAfter: rec.IdleArchiveAfter,
+		ArchivedAt:       rec.ArchivedAt,
+		TenantID:         tenantID,
 	}
 }
 
@@ -286,7 +300,7 @@ func runnerControlTLS(cfg *config.APIConfig) *runnerctl.TLS {
 // see. The runtime's own create budget plus a margin for the round trip.
 const runnerCreateBudget = runnerruntime.CreateBudget + time.Minute
 
-func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, rec *metrics.APIRecorder, quota *tenantQuota) http.HandlerFunc {
+func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, rec *metrics.APIRecorder, quota *tenantQuota, arch *archiver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		success := false
 		defer func() { rec.ObserveSandboxOp(metrics.OpCreate, success) }()
@@ -363,7 +377,7 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 					success = writeExistingSandbox(w, existing, params)
 					return
 				}
-				if !deleteSandboxRecord(w, r, s, cfg, existing) {
+				if !deleteSandboxRecord(w, r, s, cfg, existing, arch) {
 					return
 				}
 			}
@@ -494,6 +508,7 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 			Template:              params.template,
 			IdleStopAfter:         params.idleStopAfter,
 			IdleDeleteAfter:       params.idleDeleteAfter,
+			IdleArchiveAfter:      params.idleArchiveAfter,
 			EgressProxy:           params.egressProxyJSON,
 		}
 		if err := s.Create(record); err != nil {
@@ -563,7 +578,24 @@ func writeExistingSandbox(w http.ResponseWriter, existing *store.SandboxRecord, 
 	return true
 }
 
-func deleteSandboxRecord(w http.ResponseWriter, r *http.Request, s store.SandboxStore, cfg *config.APIConfig, rec *store.SandboxRecord) bool {
+func deleteSandboxRecord(w http.ResponseWriter, r *http.Request, s store.SandboxStore, cfg *config.APIConfig, rec *store.SandboxRecord, arch *archiver) bool {
+	switch rec.Status {
+	case statusRestoring:
+		// The restore would recreate it on a runner, untracked.
+		writeRestoring(w)
+		return false
+	case statusArchived:
+		if arch == nil {
+			writeError(w, http.StatusInternalServerError, "sandbox is archived but no archive store is configured")
+			return false
+		}
+		if err := arch.deleteArchived(r.Context(), rec); err != nil {
+			slog.WarnContext(r.Context(), "delete archived sandbox", "sandbox_id", rec.ID, "err", err)
+			writeError(w, http.StatusBadGateway, "failed to delete archived sandbox")
+			return false
+		}
+		return true
+	}
 	if err := runnerctl.DeleteSandbox(r.Context(), rec.RunnerControlGRPCAddr, cfg.RunnerAPIKey, runnerControlTLS(cfg), rec.ID); err != nil {
 		writeError(w, http.StatusBadGateway, "failed to delete container: "+err.Error())
 		return false
@@ -575,7 +607,7 @@ func deleteSandboxRecord(w http.ResponseWriter, r *http.Request, s store.Sandbox
 	return true
 }
 
-func handleDeleteSandbox(s store.SandboxStore, cfg *config.APIConfig, mrec *metrics.APIRecorder) http.HandlerFunc {
+func handleDeleteSandbox(s store.SandboxStore, cfg *config.APIConfig, mrec *metrics.APIRecorder, arch *archiver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		success := false
 		defer func() { mrec.ObserveSandboxOp(metrics.OpDelete, success) }()
@@ -605,7 +637,7 @@ func handleDeleteSandbox(s store.SandboxStore, cfg *config.APIConfig, mrec *metr
 			return
 		}
 
-		if !deleteSandboxRecord(w, r, s, cfg, rec) {
+		if !deleteSandboxRecord(w, r, s, cfg, rec, arch) {
 			return
 		}
 

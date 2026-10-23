@@ -32,6 +32,18 @@ type Template struct {
 	VCPUs    int32  `json:"vcpus"`
 	MemoryMB int64  `json:"memory_mb"`
 	DiskMB   int64  `json:"disk_mb"`
+	Version  string `json:"version,omitempty"`
+}
+
+// TemplateVersion is the version of template the runner serves, "" when it
+// does not say.
+func (r *Runner) TemplateVersion(template string) string {
+	for _, t := range r.Templates {
+		if t.Name == template {
+			return t.Version
+		}
+	}
+	return ""
 }
 
 // DefaultTemplate is the template of a create that names none.

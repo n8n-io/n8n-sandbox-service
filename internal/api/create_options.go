@@ -40,11 +40,12 @@ type createSandboxRequest struct {
 	Ephemeral bool    `json:"ephemeral"`
 	// The fields below are nil when left out, so a reconnect can tell "not
 	// named" from "named as the default". "" is the default, as on create.
-	Egress          *string         `json:"egress"`
-	Template        *string         `json:"template"`
-	IdleStopAfter   *int64          `json:"idle_stop_after"`
-	IdleDeleteAfter *int64          `json:"idle_delete_after"`
-	EgressProxy     json.RawMessage `json:"egress_proxy"`
+	Egress           *string         `json:"egress"`
+	Template         *string         `json:"template"`
+	IdleStopAfter    *int64          `json:"idle_stop_after"`
+	IdleDeleteAfter  *int64          `json:"idle_delete_after"`
+	IdleArchiveAfter *int64          `json:"idle_archive_after"`
+	EgressProxy      json.RawMessage `json:"egress_proxy"`
 }
 
 // createParams is a validated create request.
@@ -54,13 +55,15 @@ type createParams struct {
 	template    string // stored form; runnerruntime.DefaultTemplate when left out
 	// templateGiven, idleStopGiven and idleDeleteGiven are true when the
 	// request named the field, so a reconnect has to match it.
-	templateGiven   bool
-	idleStopAfter   int64 // seconds; 0 = global window
-	idleStopGiven   bool
-	idleDeleteAfter int64 // seconds; 0 = global window
-	idleDeleteGiven bool
-	egressProxy     *runnerruntime.EgressProxySpec
-	egressProxyJSON string // canonical JSON of egressProxy, stored and compared on reconnect
+	templateGiven    bool
+	idleStopAfter    int64 // seconds; 0 = global window
+	idleStopGiven    bool
+	idleDeleteAfter  int64 // seconds; 0 = global window
+	idleDeleteGiven  bool
+	idleArchiveAfter int64 // seconds; 0 = global window
+	idleArchiveGiven bool
+	egressProxy      *runnerruntime.EgressProxySpec
+	egressProxyJSON  string // canonical JSON of egressProxy, stored and compared on reconnect
 }
 
 // parseCreateRequest validates a create body. Every error is a 400. idleLimit
@@ -93,7 +96,15 @@ func parseCreateRequest(req *createSandboxRequest, cfg *config.APIConfig, idleLi
 		}
 	}
 
-	if req.IdleStopAfter != nil || req.IdleDeleteAfter != nil {
+	if req.IdleArchiveAfter != nil {
+		if !cfg.ArchiveEnabled() {
+			return nil, errors.New("idle_archive_after needs an archive store, and this API has none")
+		}
+		if req.Ephemeral {
+			return nil, errors.New("idle_archive_after is not allowed with ephemeral: ephemeral sandboxes are never archived")
+		}
+	}
+	if req.IdleStopAfter != nil || req.IdleDeleteAfter != nil || req.IdleArchiveAfter != nil {
 		limit, err := idleLimit()
 		if err != nil {
 			return nil, err
@@ -110,9 +121,15 @@ func parseCreateRequest(req *createSandboxRequest, cfg *config.APIConfig, idleLi
 			}
 			p.idleDeleteAfter, p.idleDeleteGiven = *req.IdleDeleteAfter, true
 		}
+		if req.IdleArchiveAfter != nil {
+			if err := checkIdleWindow("idle_archive_after", *req.IdleArchiveAfter, limit); err != nil {
+				return nil, err
+			}
+			p.idleArchiveAfter, p.idleArchiveGiven = *req.IdleArchiveAfter, true
+		}
 	}
-	if p.idleStopGiven && p.idleDeleteGiven && p.idleStopAfter > p.idleDeleteAfter {
-		return nil, errors.New("idle_stop_after must not exceed idle_delete_after")
+	if err := checkWindowOrder(p.idleStopAfter, p.idleArchiveAfter, p.idleDeleteAfter); err != nil {
+		return nil, err
 	}
 
 	specGiven := len(req.EgressProxy) > 0 && !bytes.Equal(bytes.TrimSpace(req.EgressProxy), []byte("null"))
@@ -205,6 +222,9 @@ func (p *createParams) conflict(existing *store.SandboxRecord) (msg, reason stri
 	if p.idleDeleteGiven && p.idleDeleteAfter != existing.IdleDeleteAfter {
 		return "sandbox exists with a different idle_delete_after", reasonIdleWindowMismatch
 	}
+	if p.idleArchiveGiven && p.idleArchiveAfter != existing.IdleArchiveAfter {
+		return "sandbox exists with a different idle_archive_after", reasonIdleWindowMismatch
+	}
 	return "", ""
 }
 
@@ -215,4 +235,21 @@ func recordTemplate(rec *store.SandboxRecord) string {
 		return runnerruntime.DefaultTemplate
 	}
 	return rec.Template
+}
+
+// checkWindowOrder requires stop <= archive <= delete among the windows set
+// (0 is unset).
+func checkWindowOrder(stop, archive, del int64) error {
+	set := []struct {
+		name string
+		v    int64
+	}{{"idle_stop_after", stop}, {"idle_archive_after", archive}, {"idle_delete_after", del}}
+	for i := range set {
+		for j := i + 1; j < len(set); j++ {
+			if set[i].v > 0 && set[j].v > 0 && set[i].v > set[j].v {
+				return fmt.Errorf("%s must not exceed %s", set[i].name, set[j].name)
+			}
+		}
+	}
+	return nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"strings"
 	"time"
@@ -46,6 +47,10 @@ func toGRPCError(err error) error {
 	}
 	if errors.Is(err, context.Canceled) {
 		return status.Error(codes.Canceled, context.Canceled.Error())
+	}
+	// The API deletes a sandbox whose archive is gone; nothing else may say so.
+	if errors.Is(err, errArchiveLost) {
+		return status.Error(codes.DataLoss, errArchiveLost.Error())
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return status.Error(codes.DeadlineExceeded, context.DeadlineExceeded.Error())
@@ -95,6 +100,13 @@ func (s *SandboxControlGRPC) CreateSandbox(ctx context.Context, req *pb.CreateSa
 	if err := s.checkAPIKey(ctx); err != nil {
 		return nil, err
 	}
+	return s.create(ctx, req.GetSandboxId(), req.GetCreateOptionsJson(), nil)
+}
+
+// create is CreateSandbox, or with archive set RestoreSandbox: archive opens
+// the sandbox's disk, and is only called once every check has passed, so a
+// refused restore downloads nothing.
+func (s *SandboxControlGRPC) create(ctx context.Context, rawID, optionsJSON string, archive func(context.Context) (io.ReadCloser, error)) (*pb.CreateSandboxResponse, error) {
 	// A capacity refusal makes the API retry the create on another runner.
 	if s.Cordon.Cordoned() {
 		return nil, runnerctl.CapacityRefusal("runner is cordoned")
@@ -102,13 +114,20 @@ func (s *SandboxControlGRPC) CreateSandbox(ctx context.Context, req *pb.CreateSa
 	if err := s.Runtime.Ready(ctx); err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
-	sandboxID := strings.TrimSpace(req.GetSandboxId())
+	sandboxID := strings.TrimSpace(rawID)
 	if !isValidID(sandboxID) {
 		return nil, status.Error(codes.InvalidArgument, "invalid sandbox id")
 	}
+	var archiver runnerruntime.Archiver
+	if archive != nil {
+		var ok bool
+		if archiver, ok = s.Runtime.(runnerruntime.Archiver); !ok {
+			return nil, status.Error(codes.Unimplemented, "this runner cannot restore archives")
+		}
+	}
 	// An unknown egress is refused rather than defaulted, so an API ahead of this
 	// runner cannot have a policy it asked for silently dropped.
-	opts, err := runnerruntime.ParseCreateOptions(req.GetCreateOptionsJson())
+	opts, err := runnerruntime.ParseCreateOptions(optionsJSON)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid create options: "+err.Error())
 	}
@@ -140,7 +159,12 @@ func (s *SandboxControlGRPC) CreateSandbox(ctx context.Context, req *pb.CreateSa
 	}
 	ctx = withTrace(ctx)
 	start := time.Now()
-	info, err := s.Runtime.CreateSandbox(ctx, sandboxID, opts)
+	var info *runnerruntime.SandboxInfo
+	if archive == nil {
+		info, err = s.Runtime.CreateSandbox(ctx, sandboxID, opts)
+	} else {
+		info, err = restoreFrom(ctx, archiver, sandboxID, opts, archive)
+	}
 	s.Rec.ObserveContainerOp(metrics.OpCreate, err == nil && info != nil, time.Since(start))
 	if err == nil && info == nil {
 		err = errors.New("create sandbox returned nil info")

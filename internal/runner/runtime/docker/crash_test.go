@@ -3,6 +3,7 @@ package docker
 import (
 	"context"
 	"errors"
+	"io"
 	"sync"
 	"testing"
 	"time"
@@ -81,12 +82,21 @@ func (f *crashBackend) removeContainer(context.Context, string) error {
 	defer f.mu.Unlock()
 	return f.removeErr
 }
-func (f *crashBackend) createContainer(context.Context, string, string, string, string, *ResourceLimits, bool) (string, error) {
+func (f *crashBackend) createContainer(context.Context, string, string, string, string, string, *ResourceLimits, bool) (string, error) {
 	return "", errors.New("unexpected createContainer")
 }
 func (f *crashBackend) inspectNetwork(context.Context, string) (*networkInspect, error) {
 	return nil, errors.New("unexpected inspectNetwork")
 }
+func (f *crashBackend) exportContainer(context.Context, string, io.Writer) error { return nil }
+func (f *crashBackend) importImage(context.Context, io.Reader, string, []string) error {
+	return nil
+}
+func (f *crashBackend) imageConfig(context.Context, string) (*imageRunConfig, error) {
+	return &imageRunConfig{}, nil
+}
+func (f *crashBackend) removeImage(context.Context, string) error { return nil }
+
 func (f *crashBackend) pullImage(context.Context, string) error { return nil }
 func (f *crashBackend) run(context.Context, ...string) (string, error) {
 	return "", errors.New("unexpected run")

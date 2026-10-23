@@ -3,6 +3,8 @@ package config
 import (
 	"log/slog"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -754,5 +756,33 @@ func TestLoadAPIRejectsInvalidRequestLimit(t *testing.T) {
 				t.Fatalf("expected LoadAPI() to reject SANDBOX_API_MAX_INFLIGHT_PER_TENANT=%s", value)
 			}
 		})
+	}
+}
+
+func TestLoadAPIArchiveStore(t *testing.T) {
+	keyFile := filepath.Join(t.TempDir(), "key")
+	if err := os.WriteFile(keyFile, []byte(strings.Repeat("ab", 32)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	setRequiredAPIEnv(t)
+	t.Setenv("SANDBOX_API_ARCHIVE_DIR", t.TempDir())
+	t.Setenv("SANDBOX_API_ARCHIVE_URL", "http://api:8080")
+	t.Setenv("SANDBOX_API_ARCHIVE_KEY_FILE", keyFile)
+	t.Setenv("SANDBOX_API_IDLE_ARCHIVE_AFTER", "2h")
+	cfg, err := LoadAPI()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.ArchiveEnabled() || len(cfg.ArchiveKey) != 32 || cfg.IdleArchiveAfter != 2*time.Hour {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+	t.Setenv("SANDBOX_API_ARCHIVE_KEY_FILE", "")
+	if _, err := LoadAPI(); err == nil {
+		t.Fatal("archive store without a key accepted")
+	}
+	t.Setenv("SANDBOX_API_ARCHIVE_KEY_FILE", keyFile)
+	t.Setenv("SANDBOX_API_ARCHIVE_S3_BUCKET", "b")
+	if _, err := LoadAPI(); err == nil {
+		t.Fatal("dir and bucket together accepted")
 	}
 }

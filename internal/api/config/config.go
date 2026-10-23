@@ -3,6 +3,8 @@
 package config
 
 import (
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -155,6 +157,20 @@ type APIConfig struct {
 	// MaxIdleWindow caps the idle_stop_after and idle_delete_after a create may
 	// set for its sandbox. 0 refuses both.
 	MaxIdleWindow time.Duration
+
+	// Archive store: a directory the API serves to runners at ArchiveURL,
+	// and the master key that wraps each archive's key. Archiving is on when
+	// both are set. Parsed from SANDBOX_API_ARCHIVE_DIR, SANDBOX_API_ARCHIVE_URL
+	// and SANDBOX_API_ARCHIVE_KEY_FILE (64 hex characters).
+	ArchiveDir string
+	ArchiveURL string
+	ArchiveKey []byte
+	// Or an S3-compatible bucket: SANDBOX_API_ARCHIVE_S3_ENDPOINT, _BUCKET,
+	// _REGION, _ACCESS_KEY_ID and _SECRET_ACCESS_KEY_FILE.
+	ArchiveS3Endpoint, ArchiveS3Bucket, ArchiveS3Region, ArchiveS3AccessKey, ArchiveS3SecretKey string
+	// IdleArchiveAfter archives a stopped sandbox idle this long; 0 is off.
+	// Parsed from SANDBOX_API_IDLE_ARCHIVE_AFTER.
+	IdleArchiveAfter time.Duration
 
 	// Templates is the catalog creates may name, "default" always among them.
 	// Parsed from SANDBOX_API_TEMPLATES (comma-separated).
@@ -397,6 +413,43 @@ func LoadAPI() (*APIConfig, error) {
 		}
 		cfg.MaxIdleWindow = d
 	}
+	cfg.ArchiveDir = strings.TrimSpace(os.Getenv("SANDBOX_API_ARCHIVE_DIR"))
+	cfg.ArchiveURL = strings.TrimSpace(os.Getenv("SANDBOX_API_ARCHIVE_URL"))
+	if f := strings.TrimSpace(os.Getenv("SANDBOX_API_ARCHIVE_KEY_FILE")); f != "" {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			return nil, fmt.Errorf("SANDBOX_API_ARCHIVE_KEY_FILE: %w", err)
+		}
+		key, err := hex.DecodeString(strings.TrimSpace(string(raw)))
+		if err != nil || len(key) != 32 {
+			return nil, errors.New("SANDBOX_API_ARCHIVE_KEY_FILE must hold 64 hex characters (a 32-byte key)")
+		}
+		cfg.ArchiveKey = key
+	}
+	cfg.ArchiveS3Endpoint = strings.TrimSpace(os.Getenv("SANDBOX_API_ARCHIVE_S3_ENDPOINT"))
+	cfg.ArchiveS3Bucket = strings.TrimSpace(os.Getenv("SANDBOX_API_ARCHIVE_S3_BUCKET"))
+	cfg.ArchiveS3Region = strings.TrimSpace(os.Getenv("SANDBOX_API_ARCHIVE_S3_REGION"))
+	cfg.ArchiveS3AccessKey = strings.TrimSpace(os.Getenv("SANDBOX_API_ARCHIVE_S3_ACCESS_KEY_ID"))
+	if f := strings.TrimSpace(os.Getenv("SANDBOX_API_ARCHIVE_S3_SECRET_ACCESS_KEY_FILE")); f != "" {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			return nil, fmt.Errorf("SANDBOX_API_ARCHIVE_S3_SECRET_ACCESS_KEY_FILE: %w", err)
+		}
+		cfg.ArchiveS3SecretKey = strings.TrimSpace(string(raw))
+	}
+	if cfg.ArchiveS3Bucket != "" && cfg.ArchiveDir != "" {
+		return nil, errors.New("set SANDBOX_API_ARCHIVE_DIR or SANDBOX_API_ARCHIVE_S3_BUCKET, not both")
+	}
+	if (cfg.ArchiveDir != "") != (cfg.ArchiveURL != "") || (cfg.ArchiveEnabled() && cfg.ArchiveKey == nil) {
+		return nil, errors.New("an archive store needs SANDBOX_API_ARCHIVE_KEY_FILE, and SANDBOX_API_ARCHIVE_DIR goes with SANDBOX_API_ARCHIVE_URL")
+	}
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_IDLE_ARCHIVE_AFTER")); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d < 0 || (d > 0 && !cfg.ArchiveEnabled()) {
+			return nil, fmt.Errorf("SANDBOX_API_IDLE_ARCHIVE_AFTER must be a non-negative duration, with an archive store, got %q", v)
+		}
+		cfg.IdleArchiveAfter = d
+	}
 	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_TEMPLATES")); v != "" {
 		templates, err := parseTemplateCatalog(v)
 		if err != nil {
@@ -595,4 +648,9 @@ func parseTemplateCatalog(v string) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+// ArchiveEnabled reports whether an archive store is configured.
+func (c *APIConfig) ArchiveEnabled() bool {
+	return c.ArchiveDir != "" || c.ArchiveS3Bucket != ""
 }

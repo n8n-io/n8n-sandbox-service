@@ -24,7 +24,7 @@ import (
 func templateInfos(ts []runnerruntime.TemplateInfo) []*pb.TemplateInfo {
 	out := make([]*pb.TemplateInfo, 0, len(ts))
 	for _, t := range ts {
-		out = append(out, &pb.TemplateInfo{Name: t.Name, Vcpus: t.VCPUs, MemoryMb: t.MemoryMB, DiskMb: t.DiskMB})
+		out = append(out, &pb.TemplateInfo{Name: t.Name, Vcpus: t.VCPUs, MemoryMb: t.MemoryMB, DiskMb: t.DiskMB, Version: t.Version})
 	}
 	return out
 }

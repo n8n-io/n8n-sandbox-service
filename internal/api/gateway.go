@@ -5,6 +5,7 @@ package api
 import (
 	"net/http"
 
+	"github.com/n8n-io/sandbox-service/internal/api/archivestore"
 	"github.com/n8n-io/sandbox-service/internal/api/config"
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
@@ -21,7 +22,11 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	if err != nil {
 		return nil, err
 	}
-	sandboxProxy := sandboxProxyHandler(s, cfg, runnerTransport)
+	arch, archiveDir, err := newArchiver(s, reg, cfg)
+	if err != nil {
+		return nil, err
+	}
+	sandboxProxy := sandboxProxyHandler(s, cfg, runnerTransport, arch)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -47,13 +52,20 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	mux.HandleFunc("GET /sandboxes", handleListSandboxes(s))
 	// A create holds its slot until the runner is done, even after the client
 	// has gone, so a burst of creates is bounded like any other request.
-	mux.HandleFunc("POST /sandboxes", limitTenant(handleCreateSandbox(s, reg, cfg, rec, newTenantQuota(s.CountByTenant))))
+	mux.HandleFunc("POST /sandboxes", limitTenant(handleCreateSandbox(s, reg, cfg, rec, newTenantQuota(s.CountByTenant), arch)))
 	mux.HandleFunc("GET /sandboxes/{id}", handleGetSandbox(s, cfg))
 	mux.HandleFunc("PATCH /sandboxes/{id}", handlePatchSandbox(s, cfg))
 	mux.HandleFunc("PUT /sandboxes/{id}/egress-proxy", handlePutEgressProxy(s, reg, cfg))
 	mux.HandleFunc("GET /sandboxes/{id}/model-egress", handleGetModelEgress(s, cfg))
 	mux.HandleFunc("PUT /sandboxes/{id}/model-egress", handlePutModelEgress(s, reg, cfg))
-	mux.HandleFunc("DELETE /sandboxes/{id}", handleDeleteSandbox(s, cfg, rec))
+	mux.HandleFunc("DELETE /sandboxes/{id}", handleDeleteSandbox(s, cfg, rec, arch))
+	mux.HandleFunc("POST /sandboxes/{id}/archive", handleArchiveSandbox(s, reg, cfg, arch))
+	mux.HandleFunc("POST /sandboxes/{id}/restore", handleRestoreSandbox(s, cfg, arch))
+	if archiveDir != nil {
+		// Authenticated by the URL's signature, not an API key.
+		mux.Handle("PUT "+archivestore.HandlerPrefix, archiveDir)
+		mux.Handle("GET "+archivestore.HandlerPrefix, archiveDir)
+	}
 
 	mux.HandleFunc("GET /admin/tenants", handleListTenants(s))
 	mux.HandleFunc("POST /admin/tenants", handleCreateTenant(s, cfg))
@@ -66,9 +78,9 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	mux.HandleFunc("GET /admin/scaler", handleGetScaler(cfg))
 	mux.HandleFunc("GET /templates", handleListTemplates(reg, cfg))
 	mux.HandleFunc("GET /admin/runners", handleListRunners(reg))
-	mux.HandleFunc("GET /admin/runners/{id}/drain", handleRunnerDrain(reg, cfg))
-	mux.HandleFunc("POST /admin/runners/{id}/drain", handleRunnerDrain(reg, cfg))
-	mux.HandleFunc("DELETE /admin/runners/{id}/drain", handleRunnerDrain(reg, cfg))
+	mux.HandleFunc("GET /admin/runners/{id}/drain", handleRunnerDrain(s, reg, cfg, arch))
+	mux.HandleFunc("POST /admin/runners/{id}/drain", handleRunnerDrain(s, reg, cfg, arch))
+	mux.HandleFunc("DELETE /admin/runners/{id}/drain", handleRunnerDrain(s, reg, cfg, arch))
 
 	mux.HandleFunc("POST /sandboxes/{id}/executions", limitTenant(sandboxProxy(false)))
 	mux.HandleFunc("GET /sandboxes/{id}/executions/{exec_id}", limitTenant(sandboxProxy(false)))

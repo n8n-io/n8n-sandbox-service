@@ -20,7 +20,14 @@ CREATE TABLE IF NOT EXISTS sandboxes (
 	idle_stop_after           BIGINT NOT NULL DEFAULT 0,
 	idle_delete_after         BIGINT NOT NULL DEFAULT 0,
 	egress_proxy              TEXT NOT NULL DEFAULT '',
-	model_blocked             BOOLEAN NOT NULL DEFAULT false
+	model_blocked             BOOLEAN NOT NULL DEFAULT false,
+	idle_archive_after        BIGINT NOT NULL DEFAULT 0,
+	archive_object            TEXT NOT NULL DEFAULT '',
+	archive_key               TEXT NOT NULL DEFAULT '',
+	archive_size              BIGINT NOT NULL DEFAULT 0,
+	archive_version           TEXT NOT NULL DEFAULT '',
+	archived_at               BIGINT NOT NULL DEFAULT 0,
+	restore_started_at        BIGINT NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS sandboxes_idle_reap_idx
 	ON sandboxes (status, last_active_at);
@@ -88,7 +95,14 @@ const postgresAddCreateOptionCols = `ALTER TABLE sandboxes
 	ADD COLUMN IF NOT EXISTS idle_stop_after BIGINT NOT NULL DEFAULT 0,
 	ADD COLUMN IF NOT EXISTS idle_delete_after BIGINT NOT NULL DEFAULT 0,
 	ADD COLUMN IF NOT EXISTS egress_proxy TEXT NOT NULL DEFAULT '',
-	ADD COLUMN IF NOT EXISTS model_blocked BOOLEAN NOT NULL DEFAULT false`
+	ADD COLUMN IF NOT EXISTS model_blocked BOOLEAN NOT NULL DEFAULT false,
+	ADD COLUMN IF NOT EXISTS idle_archive_after BIGINT NOT NULL DEFAULT 0,
+	ADD COLUMN IF NOT EXISTS archive_object TEXT NOT NULL DEFAULT '',
+	ADD COLUMN IF NOT EXISTS archive_key TEXT NOT NULL DEFAULT '',
+	ADD COLUMN IF NOT EXISTS archive_size BIGINT NOT NULL DEFAULT 0,
+	ADD COLUMN IF NOT EXISTS archive_version TEXT NOT NULL DEFAULT '',
+	ADD COLUMN IF NOT EXISTS archived_at BIGINT NOT NULL DEFAULT 0,
+	ADD COLUMN IF NOT EXISTS restore_started_at BIGINT NOT NULL DEFAULT 0`
 
 // Backfill legacy empty tenant_id to the admin sentinel.
 const postgresBackfillAdminTenantID = `UPDATE sandboxes SET tenant_id = '__admin__' WHERE tenant_id = ''`
