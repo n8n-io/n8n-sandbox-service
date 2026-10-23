@@ -61,6 +61,8 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	mux.HandleFunc("DELETE /admin/tenants/{id}/keys/{keyId}", handleRevokeTenantKey(s))
 	mux.HandleFunc("GET /admin/scaler", handleGetScaler(cfg))
 	mux.HandleFunc("GET /admin/runners", handleListRunners(reg))
+	mux.HandleFunc("PUT /admin/runners/{id}/cordon", handleSetRunnerCordon(reg, cfg, true))
+	mux.HandleFunc("DELETE /admin/runners/{id}/cordon", handleSetRunnerCordon(reg, cfg, false))
 
 	mux.HandleFunc("POST /sandboxes/{id}/executions", limitTenant(sandboxProxy(false)))
 	mux.HandleFunc("GET /sandboxes/{id}/executions/{exec_id}", limitTenant(sandboxProxy(false)))

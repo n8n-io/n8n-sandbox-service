@@ -4,9 +4,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/n8n-io/sandbox-service/internal/api/config"
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
@@ -148,5 +152,107 @@ func TestRequireAdminRejectsScaler(t *testing.T) {
 	rr := httptest.NewRecorder()
 	if requireAdmin(rr, req) || rr.Code != http.StatusForbidden {
 		t.Fatalf("expected requireAdmin to reject a scaler, got %d", rr.Code)
+	}
+}
+
+func TestSetRunnerCordon(t *testing.T) {
+	router, reg := newRunnersGateway(t)
+	fake := &fakeSandboxControl{}
+	reg.Upsert("r-a", "https://127.0.0.1:9", startFakeRunnerControl(t, fake), true, false, 8, 2, 0)
+
+	for _, step := range []struct {
+		method, key string
+		want        bool
+	}{
+		{http.MethodPut, provAdminKey, true},
+		{http.MethodPut, scalerKey, true},
+		{http.MethodDelete, scalerKey, false},
+	} {
+		rr := doJSON(t, router, step.method, "/admin/runners/r-a/cordon", step.key, "")
+		if rr.Code != http.StatusOK {
+			t.Fatalf("%s: expected 200, got %d body=%s", step.method, rr.Code, rr.Body.String())
+		}
+		var got runnerCordonResponse
+		if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if got.ID != "r-a" || got.Cordoned != step.want {
+			t.Fatalf("%s: response = %+v, want r-a cordoned=%v", step.method, got, step.want)
+		}
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if want := []bool{true, true, false}; !slices.Equal(fake.cordonCalls, want) {
+		t.Fatalf("SetCordon calls = %v, want %v", fake.cordonCalls, want)
+	}
+	for _, key := range fake.cordonKeys {
+		if key != "runner-key" {
+			t.Fatalf("SetCordon reached the runner with x-api-key %q, want the runner key", key)
+		}
+	}
+}
+
+func TestSetRunnerCordonErrors(t *testing.T) {
+	router, reg := newRunnersGateway(t)
+	refusing := &fakeSandboxControl{cordonErr: status.Error(codes.Unauthenticated, "invalid api key")}
+	reg.Upsert("r-refusing", "https://127.0.0.1:9", startFakeRunnerControl(t, refusing), true, false, 8, 0, 0)
+	reg.Upsert("r-gone", "https://127.0.0.1:9", "127.0.0.1:1", true, false, 8, 0, 0)
+
+	for _, tc := range []struct {
+		runner string
+		want   int
+	}{
+		{"r-unknown", http.StatusNotFound},
+		{"r-refusing", http.StatusBadGateway},
+		{"r-gone", http.StatusServiceUnavailable},
+	} {
+		rr := doJSON(t, router, http.MethodPut, "/admin/runners/"+tc.runner+"/cordon", provAdminKey, "")
+		if rr.Code != tc.want {
+			t.Errorf("%s: expected %d, got %d body=%s", tc.runner, tc.want, rr.Code, rr.Body.String())
+		}
+	}
+}
+
+func TestSetRunnerCordonRejectsProvisionerAndTenantKeys(t *testing.T) {
+	router, reg := newRunnersGateway(t)
+	fake := &fakeSandboxControl{}
+	reg.Upsert("r-a", "https://127.0.0.1:9", startFakeRunnerControl(t, fake), true, false, 8, 2, 0)
+	created := provisionerCreateTenant(t, router, `{"name":"inst","external_ref":"inst-1"}`)
+	if created.Key == nil {
+		t.Fatal("expected a tenant key")
+	}
+
+	for name, key := range map[string]string{"provisioner": provKey, "tenant": created.Key.APIKey} {
+		for _, method := range []string{http.MethodPut, http.MethodDelete} {
+			rr := doJSON(t, router, method, "/admin/runners/r-a/cordon", key, "")
+			if rr.Code != http.StatusForbidden {
+				t.Errorf("%s key %s: expected 403, got %d body=%s", name, method, rr.Code, rr.Body.String())
+			}
+		}
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.cordonCalls) != 0 {
+		t.Fatalf("a rejected caller reached the runner: %v", fake.cordonCalls)
+	}
+}
+
+func TestScalerMayCall(t *testing.T) {
+	for path, want := range map[string]bool{
+		"/admin/runners":                    true,
+		"/admin/runners/r-a/cordon":         true,
+		"/admin/runners/":                   false,
+		"/admin/runners/a/b/cordon":         false,
+		"/admin/runners/r-a/cordon/x":       false,
+		"/admin/runners/r-a":                false,
+		"/admin/runnersx/r-a/cordon":        false,
+		"/admin/tenants/r-a/cordon":         false,
+		"/admin/runners/../tenants/cordon":  false,
+		"/admin/runners/r-a/../../x/cordon": false,
+	} {
+		if got := scalerMayCall(path); got != want {
+			t.Errorf("scalerMayCall(%q) = %v, want %v", path, got, want)
+		}
 	}
 }
