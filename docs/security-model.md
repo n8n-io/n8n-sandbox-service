@@ -29,7 +29,7 @@ Requests carry an `X-Api-Key` header. There are four key classes:
 - Provisioner keys, listed in `SANDBOX_API_PROVISIONER_KEYS`: tenant create,
   limit update and delete only, see below.
 - Scaler keys, listed in `SANDBOX_API_SCALER_KEYS`: runner capacity listing
-  only, see below.
+  and cordoning only, see below.
 - Tenant keys, minted by an admin or returned on tenant create, stored only as
   a SHA-256 hash alongside an 8-character lookup prefix, so a database read
   does not yield usable credentials. Revocation sets `revoked_at`, which the
@@ -95,8 +95,10 @@ before they are returned.
 
 The class exists for the capacity autoscaler, which would otherwise need an
 admin key. A scaler key may only call `GET /admin/runners`, which returns
-runner ids, health and capacity but no addresses. Startup fails if a scaler key
-is also an admin or provisioner key.
+runner ids, health and capacity but no addresses, and cordon or uncordon a
+runner, which the API does with its own runner credentials. A leaked scaler
+key can therefore cordon every runner and stop new creates fleet-wide. Startup
+fails if a scaler key is also an admin or provisioner key.
 
 ### Concurrency limits
 
@@ -434,7 +436,7 @@ The boundaries above are covered by tests rather than asserted on paper.
 | Tenant quota under concurrent creates, on one API pod and on two | [internal/api/handlers_create_sandbox_test.go](../internal/api/handlers_create_sandbox_test.go), [internal/api/tenant_quota_test.go](../internal/api/tenant_quota_test.go), [internal/api/store/store_test.go](../internal/api/store/store_test.go), [internal/api/store/postgres_integration_test.go](../internal/api/store/postgres_integration_test.go), [e2e/tests/sandbox-api.spec.ts](../e2e/tests/sandbox-api.spec.ts), [e2e/tests/multi-pod-api.spec.ts](../e2e/tests/multi-pod-api.spec.ts) |
 | Admin route gating and key revocation | [internal/api/handlers_tenants_test.go](../internal/api/handlers_tenants_test.go) |
 | Provisioner keys: the three allowed routes, `403` on every other route, quota bounds, no fall-through to the admin pseudo-tenant | [internal/api/handlers_provisioner_test.go](../internal/api/handlers_provisioner_test.go), [internal/api/config/config_test.go](../internal/api/config/config_test.go), [e2e/tests/provisioner-key.spec.ts](../e2e/tests/provisioner-key.spec.ts) |
-| Scaler keys: `GET /admin/runners` only, `403` on every other path, no overlap with the other key sets | [internal/api/handlers_runners_test.go](../internal/api/handlers_runners_test.go), [internal/api/config/config_test.go](../internal/api/config/config_test.go), [e2e/tests/admin-runners.spec.ts](../e2e/tests/admin-runners.spec.ts) |
+| Scaler keys: `GET /admin/runners` and runner cordon only, `403` on every other path, no overlap with the other key sets | [internal/api/handlers_runners_test.go](../internal/api/handlers_runners_test.go), [internal/api/config/config_test.go](../internal/api/config/config_test.go), [e2e/tests/admin-runners.spec.ts](../e2e/tests/admin-runners.spec.ts) |
 | Concurrency limits: per tenant (creates included) and per sandbox, the execution `DELETE` limits and timeout, the `timeout_ms` cap | [internal/api/middleware_limits_test.go](../internal/api/middleware_limits_test.go), [internal/runner/middleware_limits_test.go](../internal/runner/middleware_limits_test.go), [internal/limits/limits_test.go](../internal/limits/limits_test.go), [e2e/tests/request-limits.spec.ts](../e2e/tests/request-limits.spec.ts) |
 | Runner listeners require a CA-signed client certificate; the API verifies each runner's host name and refuses a non-https base | [internal/runner/mtls_test.go](../internal/runner/mtls_test.go), [internal/api/runnertls_test.go](../internal/api/runnertls_test.go), [internal/api/registry/validate_test.go](../internal/api/registry/validate_test.go) |
 | No caller-set header but `Content-Type` passed on to the daemon; daemon redirects refused; daemon signal headers stripped, sandbox-gone body ignored | [internal/runner/proxy_test.go](../internal/runner/proxy_test.go), [internal/api/handlers_reap_test.go](../internal/api/handlers_reap_test.go), [e2e/tests/runner-restart.spec.ts](../e2e/tests/runner-restart.spec.ts) |
