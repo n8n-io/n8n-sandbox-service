@@ -396,6 +396,7 @@ root filesystem image.
 runner, as do the runner's `/livez` and `/readyz`; other methods never reach
 their handlers. The endpoints expose fleet-level
 counters — sandbox and runner counts, capacity, request and operation rates —
+plus the file path and expiry of each TLS certificate the process presents,
 and carry no tenant or sandbox identifiers. Sandboxes cannot reach the runner's,
 per the section above; the API serves its own on the public HTTP port by default,
 so a deployment that enables ingress publishes them. Set

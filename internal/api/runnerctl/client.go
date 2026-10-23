@@ -37,7 +37,10 @@ func dialOpts(target string, tlsCfg *TLS) ([]grpc.DialOption, error) {
 	if err != nil {
 		return nil, err
 	}
-	return []grpc.DialOption{grpc.WithTransportCredentials(creds)}, nil
+	return []grpc.DialOption{
+		grpc.WithTransportCredentials(creds),
+		grpc.WithUnaryInterceptor(grpctls.NotePeerUnaryClientInterceptor),
+	}, nil
 }
 
 // withCallMetadata attaches the runner API key and, when the caller is inside a

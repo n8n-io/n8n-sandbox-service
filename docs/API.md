@@ -127,6 +127,7 @@ Metric families include:
 - `sandbox_create_placements_total{role="api",result}` — how each create found a runner that did not refuse it for capacity: `first_choice`, or `retried` after a refusal; or found none: `exhausted` (every runner tried refused) or `no_runner` (none eligible). Whether the create then succeeded is in `sandbox_sandbox_operations_total`.
 - `sandbox_sandboxes_active{role="api"}` — current sandbox count from the store.
 - `sandbox_runners_registered{role="api"}` — runners registered with the API.
+- `sandbox_tls_certificate_expiry_timestamp_seconds{role="api",path}` — expiry of each TLS certificate the API presents, by file.
 - `go_*` and `process_*` — Go runtime and process collectors.
 
 **Response:** `200 OK` with `Content-Type: text/plain; version=0.0.4`.

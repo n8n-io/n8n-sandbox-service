@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/n8n-io/sandbox-service/internal/api/grpc/pb"
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
+	"github.com/n8n-io/sandbox-service/internal/grpctls"
 )
 
 // RunnerRegistryServer implements runner registration over gRPC.
@@ -119,8 +121,7 @@ func (s *RunnerRegistryServer) Connect(stream grpc.BidiStreamingServer[pb.Runner
 		)
 		if !registered {
 			registered = true
-			slog.Info(
-				"runner registered",
+			attrs := []any{
 				"runner_id", committedRunnerID,
 				"http_base_url", httpBase,
 				"control_grpc_addr", controlGRPC,
@@ -128,7 +129,15 @@ func (s *RunnerRegistryServer) Connect(stream grpc.BidiStreamingServer[pb.Runner
 				"capacity_total", hb.GetCapacityTotal(),
 				"capacity_used", hb.GetCapacityUsed(),
 				"capacity_stopped", hb.GetCapacityStopped(),
-			)
+			}
+			// The certificate this stream authenticated with, so a renewal can be
+			// traced to the runners that picked it up.
+			if cert := grpctls.PeerCertificate(stream.Context()); cert != nil {
+				attrs = append(attrs,
+					"client_cert_serial", grpctls.CertSerial(cert),
+					"client_cert_not_after", cert.NotAfter.UTC().Format(time.RFC3339))
+			}
+			slog.Info("runner registered", attrs...)
 		}
 		if err := stream.Send(&pb.ControlMessage{Ack: true}); err != nil {
 			slog.Warn("runner registration ack failed", "runner_id", committedRunnerID, "error", err)

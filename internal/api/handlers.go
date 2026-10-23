@@ -614,6 +614,11 @@ func newRunnerReverseProxy(runnerURL *url.URL, runnerAPIKey string, transport ht
 			}
 		},
 		ModifyResponse: func(resp *http.Response) error {
+			// Before the redirect check: a refused redirect still came from a
+			// runner that authenticated with this certificate.
+			if resp.TLS != nil && len(resp.TLS.PeerCertificates) > 0 {
+				grpctls.NotePeer(resp.TLS.PeerCertificates[0])
+			}
 			// Before onResponse, so a redirect never counts as sandbox activity.
 			if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 				loc := resp.Header.Get("Location")
