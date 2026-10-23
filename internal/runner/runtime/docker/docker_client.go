@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -115,19 +114,35 @@ type dockerClient struct {
 	host       string
 	dnsServers []string
 	api        *dockerAPI
-	// onlyIPv4 is set when the host kernel has no IPv6. The net.ipv6 sysctls
-	// don't exist there and docker refuses to create the container with them.
+	// onlyIPv4 is set when the host kernel was booted with ipv6.disable=1. The
+	// net.ipv6 sysctls don't exist there and the container fails to start with
+	// them.
 	onlyIPv4 bool
 }
 
-// hostIPv6Path exists only when the kernel has IPv6 (absent with ipv6.disable=1).
-const hostIPv6Path = "/proc/sys/net/ipv6"
+// hostIPv6DisablePath reads 1 when the kernel was booted with ipv6.disable=1.
+const hostIPv6DisablePath = "/sys/module/ipv6/parameters/disable"
 
-// hostOnlyIPv4 reports whether procPath is missing. Any other error counts as
-// IPv6 present, so the container keeps IPv6 disabled.
-func hostOnlyIPv4(procPath string) bool {
-	_, err := os.Stat(procPath)
-	return errors.Is(err, fs.ErrNotExist)
+// hostOnlyIPv4 reports whether the file at path reads 1. Anything else,
+// including a missing file (IPv6 built as a module that is not loaded), counts
+// as IPv6 present, so the container keeps IPv6 disabled.
+func hostOnlyIPv4(path string) bool {
+	b, err := os.ReadFile(path)
+	return err == nil && strings.TrimSpace(string(b)) == "1"
+}
+
+// explainIPv6SysctlError adds the cause to a container start that failed
+// because the kernel has no net.ipv6 sysctls: IPv6 is a loadable module that
+// is not loaded yet.
+func explainIPv6SysctlError(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "sysctl net.ipv6.") || !strings.Contains(msg, "no such file or directory") {
+		return err
+	}
+	return fmt.Errorf("host kernel has no net.ipv6 sysctls: IPv6 as a loadable kernel module is not supported unless the ipv6 module is loaded on the host before the sandbox starts (or the host boots with ipv6.disable=1): %w", err)
 }
 
 func (dc *dockerClient) run(ctx context.Context, args ...string) (string, error) {
@@ -242,7 +257,7 @@ func dockerDNSArgs(servers []string) []string {
 
 func (dc *dockerClient) startContainer(ctx context.Context, containerID string) error {
 	_, err := dc.run(ctx, "container", "start", containerID)
-	return err
+	return explainIPv6SysctlError(err)
 }
 
 func (dc *dockerClient) stopContainer(ctx context.Context, containerID string) error {

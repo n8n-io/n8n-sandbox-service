@@ -233,10 +233,13 @@ on the bridge. The shared chains are rebuilt from empty at runner startup,
 before any sandbox exists, so an upgrade never swaps rules under a running
 container.
 
-Containers are created with IPv6 disabled; on a host booted without IPv6
-(`/proc/sys/net/ipv6` absent) they have none to disable. The bridge rules apply to bridged
-traffic only on a host running `br_netfilter` with `bridge-nf-call-iptables`
-enabled. The runner refuses to start unless the sysctl reads `1` in its own
+Containers are created with IPv6 disabled; on a host booted with
+`ipv6.disable=1` (`/sys/module/ipv6/parameters/disable` reads `1`, checked at
+runner startup) they have none to disable. If IPv6 is a kernel module that is
+not loaded, sandboxes fail to start until it is.
+
+The bridge rules apply to bridged traffic only on a host running
+`br_netfilter` with `bridge-nf-call-iptables` enabled. The runner refuses to start unless the sysctl reads `1` in its own
 network namespace, where the bridges are; it does not notice the sysctl being
 turned off afterwards.
 [scripts/setup-sysbox.sh](../scripts/setup-sysbox.sh) loads the module, and the

@@ -18,6 +18,9 @@ containers direct access to the host Docker daemon.
   the iptables rules. The runner refuses to start unless the sysctl reads `1`
   in its network namespace. `scripts/setup-sysbox.sh` loads the module; the
   sysctl defaults to `1` once it is loaded. The check runs only at startup.
+- Disables IPv6 in every container, unless the host booted with
+  `ipv6.disable=1` (read from `/sys/module/ipv6/parameters/disable` at
+  startup). IPv6 as a kernel module must be loaded before sandboxes start.
 - Proxies API traffic to the sandbox daemon on port `8081`.
 
 ## Supported Features

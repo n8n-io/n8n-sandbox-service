@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -186,14 +188,48 @@ func TestDockerContainerCreateArgsSkipIPv6SysctlsOnIPv4OnlyHost(t *testing.T) {
 	}
 }
 
+// Only an explicit ipv6.disable=1 skips the sysctls. A missing parameter file
+// (IPv6 module not loaded) keeps IPv6 disabled in the container.
 func TestHostOnlyIPv4(t *testing.T) {
 	dir := t.TempDir()
-	if hostOnlyIPv4(dir) {
-		t.Fatalf("hostOnlyIPv4(%q) = true for an existing path, want false", dir)
+	for _, tc := range []struct {
+		content string
+		want    bool
+	}{
+		{"1\n", true},
+		{"0\n", false},
+		{"", false},
+	} {
+		path := filepath.Join(dir, "disable")
+		if err := os.WriteFile(path, []byte(tc.content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got := hostOnlyIPv4(path); got != tc.want {
+			t.Fatalf("hostOnlyIPv4 with %q = %v, want %v", tc.content, got, tc.want)
+		}
 	}
-	missing := filepath.Join(dir, "ipv6")
-	if !hostOnlyIPv4(missing) {
-		t.Fatalf("hostOnlyIPv4(%q) = false for a missing path, want true", missing)
+	if hostOnlyIPv4(filepath.Join(dir, "missing")) {
+		t.Fatal("hostOnlyIPv4 for a missing file = true, want false")
+	}
+}
+
+func TestExplainIPv6SysctlError(t *testing.T) {
+	if explainIPv6SysctlError(nil) != nil {
+		t.Fatal("explainIPv6SysctlError(nil) != nil")
+	}
+
+	other := errors.New("docker container start abc: Error response from daemon: no such container")
+	if got := explainIPv6SysctlError(other); got != other {
+		t.Fatalf("unrelated error rewritten: %v", got)
+	}
+
+	sysctlErr := errors.New("docker container start abc: Error response from daemon: failed to create task for container: failed to create shim task: OCI runtime create failed: runc create failed: unable to start container process: error during container init: open sysctl net.ipv6.conf.default.disable_ipv6 file: unsafe procfs detected: openat2 fsmount:fscontext:proc/./sys/net/ipv6/conf/default/disable_ipv6: no such file or directory: exit status 1")
+	got := explainIPv6SysctlError(sysctlErr)
+	if !errors.Is(got, sysctlErr) {
+		t.Fatalf("explained error does not wrap the original: %v", got)
+	}
+	if !strings.Contains(got.Error(), "ipv6 module is loaded") {
+		t.Fatalf("explained error lacks the cause: %v", got)
 	}
 }
 
