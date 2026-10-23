@@ -82,6 +82,11 @@ func handleSetRunnerCordon(reg registry.RunnerRegistry, cfg *config.APIConfig, c
 		if caller, ok := authFromContext(r.Context()); ok {
 			fields.Add("auth_role", string(caller.Role))
 		}
+		// The Postgres registry keeps rows for runners that are long gone.
+		if time.Since(run.LastSeen) > cfg.HeartbeatGrace {
+			writeError(w, http.StatusServiceUnavailable, "runner unavailable")
+			return
+		}
 
 		ctx, cancel := context.WithTimeout(r.Context(), runnerCordonTimeout)
 		defer cancel()

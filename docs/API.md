@@ -994,7 +994,7 @@ Admin or scaler. `PUT` cordons the runner: it keeps its sandboxes but gets no ne
 {"id": "runner-1", "cordoned": true}
 ```
 
-**Errors:** `403` provisioner or tenant key, `404` unknown runner, `409` another runner now has its address, `502` the runner did not apply it, `503` the runner is unreachable
+**Errors:** `403` provisioner or tenant key, `404` unknown runner, `409` another runner now has its address, `502` the runner did not apply it, `503` the runner is unreachable or has stopped heartbeating
 
 **Example:**
 
