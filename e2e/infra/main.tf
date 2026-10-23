@@ -116,4 +116,8 @@ resource "azurerm_linux_virtual_machine" "e2e" {
   }
 
   tags = local.tags
+
+  # Creating the VM and the NSG association both write the NIC, and Azure
+  # rejects concurrent writes with 409 ConflictingConcurrentWriteNotAllowed.
+  depends_on = [azurerm_network_interface_security_group_association.e2e]
 }

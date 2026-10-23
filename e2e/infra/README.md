@@ -18,7 +18,13 @@ The same Terraform VM shape is also reused by the Firecracker e2e lane via
 preflight, Firecracker/jailer, rootfs from `Dockerfile.sandbox` + CI `vmlinux`,
 golden snapshot). The Firecracker workflow runs on manual dispatch, on PRs
 labeled `e2e-firecracker`, and as a job of `Service Release Validate` on every
-service release PR.
+service release PR. It also runs `e2e/infra/scripts/cleanup-e2e-vm.sh` in a
+separate step, so a cancelled run still destroys its VMs.
+
+Every 6 hours, the `Sweep stale E2E VMs` workflow runs
+`e2e/infra/scripts/sweep-e2e-vms.sh`. It deletes the VMs, NICs, public IPs,
+NSGs, disks and VNets tagged `purpose=sandbox-service-e2e` that are more than
+1 hour old, and fails if a deletion fails.
 
 ## Prerequisites
 
