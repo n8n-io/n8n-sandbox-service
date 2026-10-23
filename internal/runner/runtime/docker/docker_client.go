@@ -114,7 +114,7 @@ type dockerBackend interface {
 type dockerClient struct {
 	host       string
 	dnsServers []string
-  api        *dockerAPI
+	api        *dockerAPI
 	// onlyIPv4 is set when the host kernel has no IPv6. The net.ipv6 sysctls
 	// don't exist there and docker refuses to create the container with them.
 	onlyIPv4 bool
@@ -128,7 +128,6 @@ const hostIPv6Path = "/proc/sys/net/ipv6"
 func hostOnlyIPv4(procPath string) bool {
 	_, err := os.Stat(procPath)
 	return errors.Is(err, fs.ErrNotExist)
-
 }
 
 func (dc *dockerClient) run(ctx context.Context, args ...string) (string, error) {

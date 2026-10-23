@@ -94,7 +94,7 @@ var _ runnerruntime.Runtime = (*Runtime)(nil)
 // New creates a new Docker runtime. It reconciles any previous containers and ensures
 // the runner networks exist.
 func New(runnerConfig *config.Config, cfg Config) (*Runtime, error) {
-  api, err := newDockerAPI(cfg.Host)
+	api, err := newDockerAPI(cfg.Host)
 	if err != nil {
 		return nil, fmt.Errorf("SANDBOX_RUNNER_DOCKER_HOST: %w", err)
 	}
