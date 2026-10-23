@@ -168,7 +168,7 @@ func TestSandboxControlGRPCCordon(t *testing.T) {
 	cd := cordon.New()
 	srv := &SandboxControlGRPC{
 		Runtime: &fakeRuntime{},
-		Cfg:     &config.Config{APIKeys: map[string]struct{}{"runner-key": {}}},
+		Cfg:     &config.Config{RunnerID: "runner-a", APIKeys: map[string]struct{}{"runner-key": {}}},
 		Rec:     metrics.NewRunnerRecorder(false),
 		Cordon:  cd,
 	}
@@ -202,6 +202,32 @@ func TestSandboxControlGRPCCordon(t *testing.T) {
 		if got != step.want || cd.Cordoned() != step.want {
 			t.Fatalf("cordoned: response %v, state %v, want %v", got, cd.Cordoned(), step.want)
 		}
+	}
+}
+
+// A request naming another runner, which used to be at this address, is
+// refused; naming this runner, or no runner, is not.
+func TestSandboxControlGRPCCordonChecksRunnerID(t *testing.T) {
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-api-key", "runner-key"))
+	cd := cordon.New()
+	srv := &SandboxControlGRPC{
+		Runtime: &fakeRuntime{},
+		Cfg:     &config.Config{RunnerID: "runner-a", APIKeys: map[string]struct{}{"runner-key": {}}},
+		Rec:     metrics.NewRunnerRecorder(false),
+		Cordon:  cd,
+	}
+
+	if _, err := srv.SetCordon(ctx, &pb.SetCordonRequest{Cordoned: true, RunnerId: "runner-b"}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("SetCordon for runner-b: error = %v, want FailedPrecondition", err)
+	}
+	if cd.Cordoned() {
+		t.Fatal("a request for another runner cordoned this one")
+	}
+	for _, id := range []string{"runner-a", ""} {
+		if _, err := srv.SetCordon(ctx, &pb.SetCordonRequest{Cordoned: true, RunnerId: id}); err != nil || !cd.Cordoned() {
+			t.Fatalf("SetCordon for runner %q: error = %v, cordoned = %v; want cordoned", id, err, cd.Cordoned())
+		}
+		cd.Set(false)
 	}
 }
 
