@@ -15,6 +15,10 @@ REGISTRY_PORT="${REGISTRY_PORT:-5050}"
 REGISTRY_INTERNAL_ADDR="${REGISTRY_NAME}:5000"
 PUSH_SANDBOX_IMAGE="localhost:${REGISTRY_PORT}/n8n-sandbox:e2e-${ARCH}"
 REMOTE_SANDBOX_IMAGE="${REGISTRY_INTERNAL_ADDR}/n8n-sandbox:e2e-${ARCH}"
+# A second template, "small": the same image under its own tag, with its own
+# memory limit.
+PUSH_SMALL_IMAGE="localhost:${REGISTRY_PORT}/n8n-sandbox:e2e-small-${ARCH}"
+REMOTE_SMALL_IMAGE="${REGISTRY_INTERNAL_ADDR}/n8n-sandbox:e2e-small-${ARCH}"
 RUNNER_CONTAINER_NAME="sandbox-runner-e2e-$$"
 API_CONTAINER_NAME="sandbox-api-e2e-$$"
 POSTGRES_CONTAINER_NAME="sandbox-postgres-e2e-$$"
@@ -102,6 +106,8 @@ fi
 echo "Pushing sandbox image to local registry..."
 docker tag "$SANDBOX_IMAGE" "$PUSH_SANDBOX_IMAGE"
 docker push "$PUSH_SANDBOX_IMAGE"
+docker tag "$SANDBOX_IMAGE" "$PUSH_SMALL_IMAGE"
+docker push "$PUSH_SMALL_IMAGE"
 
 RUNTIME_ARGS=()
 if [[ "${PRIVILEGED:-}" == "1" ]] || [[ "$(uname)" == "Darwin" ]]; then
@@ -140,6 +146,7 @@ API_DOCKER_RUN+=(
 	-e "SANDBOX_API_ARCHIVE_DIR=/tmp/sandbox-archives"
 	-e "SANDBOX_API_ARCHIVE_URL=http://${API_CONTAINER_NAME}:8080"
 	-e "SANDBOX_API_ARCHIVE_KEY_FILE=/grpc-tls/archive.key"
+	-e "SANDBOX_API_TEMPLATES=small"
 )
 API_DOCKER_RUN+=(--name "$API_CONTAINER_NAME" "$API_IMAGE")
 docker run "${API_DOCKER_RUN[@]}"
@@ -148,6 +155,10 @@ e2e_wait_for_api_http "$PORT" "$API_CONTAINER_NAME"
 
 RUNNER_CONTROL_HOST_PORT="${RUNNER_CONTROL_HOST_PORT:-19091}"
 
+# The egress proxy's secret store: tests write <tenant_id>/<secret_ref> here.
+EGRESS_SECRETS_DIR="$TLS_DIR/egress-secrets"
+mkdir -p "$EGRESS_SECRETS_DIR"
+
 echo "Starting runner service..."
 docker run -d \
 	"${RUNTIME_ARGS[@]}" \
@@ -155,9 +166,12 @@ docker run -d \
 	--network-alias "$RUNNER_CONTROL_ALIAS" \
 	-p "${RUNNER_CONTROL_HOST_PORT}:9091" \
 	-v "$TLS_DIR/runner:/grpc-tls:ro" \
+	-v "$EGRESS_SECRETS_DIR:/egress-secrets:ro" \
+	-e "SANDBOX_EGRESS_PROXY_SECRETS_DIR=/egress-secrets" \
 	-e "SANDBOX_RUNNER_API_KEYS=$RUNNER_INTERNAL_API_KEY" \
 	-e "SANDBOX_RUNNER_METRICS_ENABLED=true" \
 	-e "SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE=$REMOTE_SANDBOX_IMAGE" \
+	-e "SANDBOX_RUNNER_DOCKER_TEMPLATES={\"small\":{\"image\":\"$REMOTE_SMALL_IMAGE\",\"memory_mb\":256}}" \
 	-e "SANDBOX_RUNNER_DOCKER_INSECURE_REGISTRIES=$REGISTRY_INTERNAL_ADDR" \
 	-e "SANDBOX_RUNNER_API_GRPC_ADDR=${API_CONTAINER_NAME}:9090" \
 	-e "SANDBOX_RUNNER_REGISTRATION_TOKEN=$REG_TOKEN" \
@@ -180,13 +194,13 @@ docker run -d \
 	"$RUNNER_IMAGE"
 
 echo "Waiting for runner service..."
-for i in $(seq 1 60); do
+for i in $(seq 1 180); do
 	if docker exec "$RUNNER_CONTAINER_NAME" wget -q -O - --no-check-certificate https://localhost:8080/readyz >/dev/null 2>&1; then
 		echo "Runner is ready."
 		break
 	fi
-	if [[ "$i" -eq 60 ]]; then
-		echo "Runner failed to start within 60s"
+	if [[ "$i" -eq 180 ]]; then
+		echo "Runner failed to start within 180s"
 		docker logs "$RUNNER_CONTAINER_NAME"
 		exit 1
 	fi
@@ -200,6 +214,7 @@ e2e_install_playwright_deps_if_needed "$SCRIPT_DIR"
 
 export E2E_API_CONTAINER_NAME="$API_CONTAINER_NAME"
 export E2E_RUNNER_CONTAINER_NAME="$RUNNER_CONTAINER_NAME"
+export E2E_EGRESS_SECRETS_DIR="$EGRESS_SECRETS_DIR"
 export E2E_RUNNER_DOCKER_DNS_SERVERS="$RUNNER_DNS_SERVERS"
 export E2E_PROJECT_DIR="$PROJECT_DIR"
 export E2E_RUNNER_API_KEY="$RUNNER_INTERNAL_API_KEY"

@@ -5,6 +5,7 @@
 package credentials
 
 import (
+	"bytes"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -93,7 +94,9 @@ func (s *Store) Secret(tenant, ref string) ([]byte, error) {
 	if err != nil || len(raw) > maxSecretBytes {
 		return nil, ErrUnavailable
 	}
-	value := []byte(strings.TrimRight(string(raw), "\r\n"))
+	// Surrounding blanks are trimmed: an upstream drops them from a header
+	// value, so an echo of the secret would not match it with them.
+	value := []byte(strings.Trim(strings.TrimRight(string(raw), "\r\n"), " \t"))
 	if len(value) == 0 || strings.ContainsAny(string(value), "\r\n\x00") {
 		return nil, ErrUnavailable // a header value cannot carry it
 	}
@@ -125,4 +128,159 @@ func Inject(h http.Header, c runnerruntime.EgressCredential, secret []byte) {
 	default:
 		h.Set(name, "Bearer "+string(secret))
 	}
+}
+
+// Masks are the forms of secret a response could echo: the secret itself,
+// the header value Inject sets (and a basic credential's token), each also as
+// an echo would escape it in JSON or a URL.
+func Masks(c runnerruntime.EgressCredential, secret []byte) [][]byte {
+	if len(secret) == 0 {
+		return nil
+	}
+	h := http.Header{}
+	Inject(h, c, secret)
+	forms := []string{string(secret)}
+	if v := h.Get(HeaderName(c)); v != string(secret) {
+		forms = append(forms, v)
+		if c.Scheme == runnerruntime.CredentialBasic {
+			forms = append(forms, strings.TrimPrefix(v, "Basic "))
+		}
+	}
+	seen := map[string]bool{}
+	var masks [][]byte
+	for _, f := range forms {
+		for _, v := range escapedForms(f) {
+			if !seen[v] {
+				seen[v] = true
+				masks = append(masks, []byte(v))
+			}
+		}
+	}
+	return masks
+}
+
+// escapedForms is s as an echo might write it: as is, JSON-escaped ("\/",
+// "\u002b" in either case) and percent-encoded (either case, space as %20 or
+// "+").
+func escapedForms(s string) []string {
+	var jsonSlash, jsonLower, jsonUpper, pctUpper, pctLower, pctPlus strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		unreserved := c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || strings.IndexByte("-._~", c) >= 0
+		if c == '/' {
+			jsonSlash.WriteString(`\/`)
+		} else {
+			jsonSlash.WriteByte(c)
+		}
+		if strings.IndexByte("+/=&<>", c) >= 0 {
+			fmt.Fprintf(&jsonLower, `\u%04x`, c)
+			fmt.Fprintf(&jsonUpper, `\u%04X`, c)
+		} else {
+			jsonLower.WriteByte(c)
+			jsonUpper.WriteByte(c)
+		}
+		switch {
+		case unreserved:
+			pctUpper.WriteByte(c)
+			pctLower.WriteByte(c)
+			pctPlus.WriteByte(c)
+		case c == ' ':
+			pctUpper.WriteString("%20")
+			pctLower.WriteString("%20")
+			pctPlus.WriteByte('+')
+		default:
+			fmt.Fprintf(&pctUpper, "%%%02X", c)
+			fmt.Fprintf(&pctLower, "%%%02x", c)
+			fmt.Fprintf(&pctPlus, "%%%02X", c)
+		}
+	}
+	return []string{s, jsonSlash.String(), jsonLower.String(), jsonUpper.String(), pctUpper.String(), pctLower.String(), pctPlus.String()}
+}
+
+// ScrubHeader masks every mask in h's values.
+func ScrubHeader(h http.Header, masks [][]byte) {
+	for k, vs := range h {
+		for i, v := range vs {
+			b := []byte(v)
+			if maskAll(b, masks) {
+				h[k][i] = string(b)
+			}
+		}
+	}
+}
+
+// Scrub returns r with every mask overwritten by '*' of the same length, so
+// a response keeps its length. It holds back only a tail that could begin a
+// mask, so a stream is not delayed past the bytes it must check.
+func Scrub(r io.Reader, masks [][]byte) io.Reader {
+	if len(masks) == 0 {
+		return r
+	}
+	return &scrubber{r: r, masks: masks, buf: make([]byte, 32<<10)}
+}
+
+type scrubber struct {
+	r       io.Reader
+	masks   [][]byte
+	buf     []byte
+	pending []byte // read, masked, possibly the start of a mask
+	out     []byte // ready to hand out
+	err     error
+}
+
+func (s *scrubber) Read(p []byte) (int, error) {
+	for len(s.out) == 0 {
+		if s.err != nil {
+			// Nothing more will arrive: a held-back tail can no longer
+			// become a mask.
+			s.out, s.pending = s.pending, nil
+			if len(s.out) == 0 {
+				return 0, s.err
+			}
+			break
+		}
+		n, err := s.r.Read(s.buf)
+		s.err = err
+		s.pending = append(s.pending, s.buf[:n]...)
+		maskAll(s.pending, s.masks)
+		keep := heldBack(s.pending, s.masks)
+		s.out = append([]byte(nil), s.pending[:len(s.pending)-keep]...)
+		s.pending = append([]byte(nil), s.pending[len(s.pending)-keep:]...)
+	}
+	n := copy(p, s.out)
+	s.out = s.out[n:]
+	return n, nil
+}
+
+// maskAll overwrites each mask in b and reports whether it found one.
+func maskAll(b []byte, masks [][]byte) bool {
+	found := false
+	for _, m := range masks {
+		for i := 0; len(m) > 0; {
+			j := bytes.Index(b[i:], m)
+			if j < 0 {
+				break
+			}
+			for k := i + j; k < i+j+len(m); k++ {
+				b[k] = '*'
+			}
+			i, found = i+j+len(m), true
+		}
+	}
+	return found
+}
+
+// heldBack is the length of b's longest suffix that is a proper prefix of a
+// mask.
+func heldBack(b []byte, masks [][]byte) int {
+	keep := 0
+	for _, m := range masks {
+		for n := min(len(m)-1, len(b)); n > keep; n-- {
+			if bytes.HasSuffix(b, m[:n]) {
+				keep = n
+				break
+			}
+		}
+	}
+	return keep
 }

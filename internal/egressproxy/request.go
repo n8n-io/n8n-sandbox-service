@@ -126,6 +126,7 @@ func (s *Server) requestHandler(sb *sandbox, t target) http.Handler {
 			// Usage is read from the response, so it must not be compressed.
 			out.Header.Del("Accept-Encoding")
 		}
+		var masks [][]byte
 		if c, ok := p.creds[t.key]; ok && (t.scheme == "https" || c.AllowPlainHTTP) {
 			secret, err := s.secret(sb, c.SecretRef)
 			if err != nil {
@@ -134,6 +135,13 @@ func (s *Server) requestHandler(sb *sandbox, t target) http.Handler {
 				return
 			}
 			credentials.Inject(out.Header, c, secret)
+			// A response that echoes the credential is scrubbed, which needs
+			// it uncompressed.
+			masks = credentials.Masks(c, secret)
+			out.Header.Del("Accept-Encoding")
+			// A range of an echo could split the secret past every mask.
+			out.Header.Del("Range")
+			out.Header.Del("If-Range")
 		} else {
 			// A credential header the guest made up never reaches the host the
 			// proxy holds a credential for.
@@ -153,8 +161,16 @@ func (s *Server) requestHandler(sb *sandbox, t target) http.Handler {
 		defer resp.Body.Close()
 
 		body := io.Reader(resp.Body)
+		if len(masks) > 0 {
+			if !scrubbable(resp) {
+				http.Error(w, "upstream sent a response the proxy cannot scrub", http.StatusBadGateway)
+				return
+			}
+			credentials.ScrubHeader(resp.Header, masks)
+			body = credentials.Scrub(body, masks)
+		}
 		if stripAdvert && resp.StatusCode == http.StatusOK {
-			if body, err = gitfilter.StripPushCert(resp.Body); err != nil {
+			if body, err = gitfilter.StripPushCert(body); err != nil {
 				http.Error(w, "upstream answered a malformed advertisement", http.StatusBadGateway)
 				return
 			}
@@ -344,4 +360,20 @@ func (s *Server) transport(t target) *http.Transport {
 	}
 	actual, _ := s.transports.LoadOrStore(key, tr)
 	return actual.(*http.Transport)
+}
+
+// scrubbable reports whether a credentialed response can be scrubbed whole:
+// not compressed in any listed encoding, and not a partial range.
+func scrubbable(resp *http.Response) bool {
+	if resp.StatusCode == http.StatusPartialContent {
+		return false
+	}
+	for _, v := range resp.Header.Values("Content-Encoding") {
+		for _, enc := range strings.Split(v, ",") {
+			if enc = strings.TrimSpace(enc); enc != "" && !strings.EqualFold(enc, "identity") {
+				return false
+			}
+		}
+	}
+	return true
 }

@@ -1,5 +1,8 @@
 import { test, expect } from '@playwright/test';
 import './matchers';
+import { randomBytes } from 'node:crypto';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { client, createSandbox, deleteSandbox, ensureTenantAuth, execWithTransientRetry } from './helpers';
 
 // An egress "proxy" sandbox reaches the hosts its spec allows, through the
@@ -68,6 +71,47 @@ test.describe('Egress proxy', () => {
       expect(await client.getModelEgress(id)).toBe(false);
       expect(await client.setModelEgress(id, true)).toBe(true);
       expect(await client.getModelEgress(id)).toBe(true);
+    } finally {
+      await deleteSandbox(id);
+    }
+  });
+
+  // The proxy injects a credential the guest never sees: not in its
+  // environment, not on its disk, not in a response.
+  test('an injected credential never reaches the guest', async () => {
+    const secretsDir = process.env.E2E_EGRESS_SECRETS_DIR;
+    test.skip(!secretsDir, 'needs E2E_EGRESS_SECRETS_DIR, the runner secret store');
+    test.setTimeout(240_000);
+    await ensureTenantAuth();
+    const probe = await createSandbox();
+    const tenantId = (await client.getSandbox(probe)).tenantId!;
+    await deleteSandbox(probe);
+    // Split, so no command the guest runs carries the joined secret.
+    const [a, b] = [randomBytes(12).toString('hex'), randomBytes(12).toString('hex')];
+    mkdirSync(join(secretsDir!, tenantId), { recursive: true });
+    writeFileSync(join(secretsDir!, tenantId, 'e2e-token'), a + b, { mode: 0o644 });
+
+    const id = await createSandbox({
+      egress: 'proxy',
+      egressProxy: { ...spec, credentials: [{ host: ALLOWED, secret_ref: 'e2e-token' }] },
+    });
+    try {
+      const used = await run(id, `curl -fsS -D - --max-time 15 https://${ALLOWED}/`);
+      expect(used.exitCode, used.stderr).toBe(0);
+      expect(used.stdout).not.toContain(a + b);
+
+      const env = await run(id, `A=${a}; B=${b}; env | grep -cF "$A$B"; true`);
+      expect(env.stdout.trim()).toBe('0');
+      // A canary proves the search really covered the disk: it finds the
+      // canary, and nothing holding the secret.
+      const c = randomBytes(12).toString('hex');
+      const disk = await execWithTransientRetry(
+        id,
+        `A=${a}; B=${b}; C=${c}; printf '%s' "$A$C" > /tmp/canary; ` +
+          `timeout 150 grep -rIlsF --exclude-dir=proc --exclude-dir=sys --exclude-dir=dev -e "$A$B" -e "$A$C" / | head -5; true`,
+        { timeoutMs: 180_000 },
+      );
+      expect(disk.stdout.trim()).toBe('/tmp/canary');
     } finally {
       await deleteSandbox(id);
     }

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -182,7 +183,8 @@ func TestSinkDropsRefusedBatch(t *testing.T) {
 }
 
 // BenchmarkStreamOverhead is what metering adds to a streamed response, per
-// request: a few hundred events passed through the Reader.
+// request: a few hundred events passed through the Reader. It reports the p99
+// per request and fails above the 1 ms budget.
 func BenchmarkStreamOverhead(b *testing.B) {
 	var sb strings.Builder
 	sb.WriteString(strings.SplitAfter(anthropicSSE, "\n\n")[0])
@@ -194,16 +196,25 @@ func BenchmarkStreamOverhead(b *testing.B) {
 	buf := make([]byte, 4096)
 	b.SetBytes(int64(len(body)))
 	b.ReportAllocs()
+	var took []time.Duration
 	for b.Loop() {
+		start := time.Now()
 		r := NewReader(strings.NewReader(body), Anthropic, true)
 		for {
 			if _, err := r.Read(buf); err != nil {
 				break
 			}
 		}
+		took = append(took, time.Since(start))
 		if !r.Usage().Complete {
 			b.Fatal("usage not read")
 		}
+	}
+	slices.Sort(took)
+	p99 := took[len(took)*99/100]
+	b.ReportMetric(float64(p99.Nanoseconds()), "p99-ns/req")
+	if len(took) >= 100 && p99 > time.Millisecond {
+		b.Fatalf("p99 %s per streamed request, over the 1 ms budget", p99)
 	}
 }
 

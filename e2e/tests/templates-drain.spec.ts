@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import './matchers';
+import { execFileSync } from 'node:child_process';
 import {
   ADMIN_API_KEY,
   BASE_URL,
@@ -24,6 +25,35 @@ test.describe('Templates', () => {
     expect(def, JSON.stringify(templates)).toBeDefined();
     expect(def!.runners).toBeGreaterThan(0);
     expect(def!.memoryMb).toBeGreaterThan(0);
+  });
+
+  // Each template lands on a runner serving it and boots its own image, with
+  // its own limits.
+  test('a create with each template boots that template', async () => {
+    const runner = process.env.E2E_RUNNER_CONTAINER_NAME;
+    test.skip(!runner, 'needs E2E_RUNNER_CONTAINER_NAME to inspect the container');
+    await ensureTenantAuth();
+    const small = (await client.listTemplates()).find((t) => t.name === 'small');
+    test.skip(!small, 'the e2e lane serves no "small" template');
+    expect(small!.runners).toBeGreaterThan(0);
+    for (const template of ['default', 'small']) {
+      const id = await createSandbox({ template });
+      try {
+        expect((await client.getSandbox(id)).template ?? 'default').toBe(template);
+        const container = execFileSync(
+          'docker',
+          ['exec', runner!, 'docker', 'ps', '--filter', `label=sandbox-service.id=${id}`, '--format', '{{.Image}} {{.Label "sandbox-service.template"}}'],
+          { encoding: 'utf8' },
+        ).trim();
+        const [image, label] = container.split(' ');
+        expect(label).toBe(template);
+        expect(image).toMatch(template === 'small' ? /:e2e-small-/ : /:e2e-(?!small)/);
+        const mem = await client.exec(id, { command: 'cat /sys/fs/cgroup/memory.max' });
+        if (template === 'small') expect(mem.stdout.trim()).toBe(String(256 * 1024 * 1024));
+      } finally {
+        await deleteSandbox(id);
+      }
+    }
   });
 
   test('an unknown template is refused', async () => {

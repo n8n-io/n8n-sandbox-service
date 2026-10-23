@@ -2,12 +2,14 @@ package egressproxy
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -213,14 +215,33 @@ func TestConnectTunnelsUninspectedHost(t *testing.T) {
 // for another Host on the connection is refused, and redirects and upgrades
 // are not followed.
 func TestInspectedHostInjectsCredential(t *testing.T) {
-	var gotAuth []string
+	// Nothing the proxy logs may carry the secret.
+	var logs bytes.Buffer
+	defer func(l *slog.Logger) { slog.SetDefault(l) }(slog.Default())
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
+	var gotAuth, gotRange []string
 	up := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = append(gotAuth, r.Header.Get("Authorization"))
-		if r.URL.Path == "/redirect" {
+		gotRange = append(gotRange, r.Header.Get("Range"))
+		switch r.URL.Path {
+		case "/redirect":
 			http.Redirect(w, r, "https://evil.test/steal", http.StatusFound)
 			return
+		case "/gzip":
+			w.Header().Set("Content-Encoding", "gzip")
+		case "/second-encoding":
+			w.Header()["Content-Encoding"] = []string{"identity", "gzip"}
+		case "/partial":
+			w.Header().Set("X-Echo", r.Header.Get("Authorization"))
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = io.WriteString(w, "ret")
+			return
 		}
-		_, _ = io.WriteString(w, "auth echoed? no")
+		// An upstream that echoes the request's credential, as a debug
+		// endpoint or an error page might.
+		w.Header().Set("X-Echo", r.Header.Get("Authorization"))
+		_, _ = io.WriteString(w, "you sent: "+r.Header.Get("Authorization"))
 	}))
 	defer up.Close()
 	_, port := hostPort(t, up.URL)
@@ -241,8 +262,31 @@ func TestInspectedHostInjectsCredential(t *testing.T) {
 	if resp.StatusCode != 200 || len(gotAuth) != 1 || gotAuth[0] != "Bearer git-secret" {
 		t.Fatalf("status %d upstream auth %v", resp.StatusCode, gotAuth)
 	}
-	if strings.Contains(string(body), "git-secret") {
-		t.Fatal("secret in the response")
+	if strings.Contains(string(body), "git-secret") || strings.Contains(resp.Header.Get("X-Echo"), "git-secret") {
+		t.Fatalf("secret in the response: %q %q", body, resp.Header.Get("X-Echo"))
+	}
+	if !strings.HasPrefix(string(body), "you sent: Bearer ***") {
+		t.Fatalf("echo not masked in place: %q", body)
+	}
+	// A response the proxy cannot scrub whole is refused: compressed in any
+	// listed encoding, or a range, which could split the secret past the mask.
+	for _, path := range []string{"/gzip", "/second-encoding", "/partial"} {
+		req, _ := http.NewRequest("GET", "https://"+host+path, nil)
+		req.Header.Set("Range", "bytes=0-2")
+		resp, err = h.guest.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ = io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadGateway || strings.Contains(string(body), "git-secret") {
+			t.Fatalf("%s: %d %q", path, resp.StatusCode, body)
+		}
+	}
+	for _, rg := range gotRange {
+		if rg != "" {
+			t.Fatalf("Range reached the credentialed host: %q", gotRange)
+		}
 	}
 
 	resp, err = h.guest.Get("https://" + host + "/redirect")
@@ -264,6 +308,12 @@ func TestInspectedHostInjectsCredential(t *testing.T) {
 	// rather than routed to it.
 	if got := rawInspectedRequest(t, h, host, "other.test"); !strings.Contains(got, RefusalHeader+": "+ReasonHostNotAllowed) {
 		t.Fatalf("other Host inside the tunnel: %q", got)
+	}
+	if strings.Contains(logs.String(), "git-secret") {
+		t.Fatalf("secret logged: %s", logs.String())
+	}
+	if !strings.Contains(logs.String(), "egress refused") {
+		t.Fatal("refusals were not logged, so the log check proves nothing")
 	}
 }
 

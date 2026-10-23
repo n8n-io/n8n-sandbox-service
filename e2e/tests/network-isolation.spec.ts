@@ -507,6 +507,61 @@ test.describe('Egress none', () => {
   });
 });
 
+test.describe('Egress proxy', () => {
+  // A proxy sandbox reaches its allowlist through the runner's proxy and
+  // nothing else: no direct path, no DNS, and no private range even when the
+  // proxy is asked for it by address.
+  const ALLOWED = 'example.com';
+  const spec = { allow: [{ name: 'web', hosts: [ALLOWED] }] };
+  const BOUNDED_RESOLVER = `RES_OPTIONS='timeout:1 attempts:2'`;
+  // Loopback is left out: NO_PROXY names it, so it is the guest's own.
+  const PRIVATE = ['10.0.0.1', '172.16.0.1', '192.168.0.1', '169.254.169.254'];
+  const run = (id: string, cmd: string) => execWithTransientRetry(id, cmd, { timeoutMs: 30_000 });
+
+  const expectConfined = async (id: string) => {
+    const allowed = await run(id, `curl -fsS -o /dev/null --max-time 15 https://${ALLOWED}/`);
+    expect(allowed.exitCode, allowed.stderr).toBe(0);
+    // Around the proxy (curl honours HTTP_PROXY unless told not to).
+    const direct = await run(id, `curl --noproxy '*' --connect-timeout 3 -s -o /dev/null http://1.1.1.1/`);
+    expect(direct.exitCode, 'direct connection out').not.toBe(0);
+    const dns = await run(id, `${BOUNDED_RESOLVER} ${resolve(ALLOWED)}`);
+    expect(dns.stdout.trim(), 'guest DNS').toBe('');
+    for (const ip of PRIVATE) {
+      const viaProxy = await run(id, `curl -sS -D - -o /dev/null --max-time 10 http://${ip}/`);
+      expect(viaProxy.stdout, `${ip} through the proxy`).toContain('X-Sandbox-Egress-Refusal:');
+      const around = await run(id, `curl --noproxy '*' --connect-timeout 3 -s -o /dev/null http://${ip}/`);
+      expect(around.exitCode, `${ip} directly`).not.toBe(0);
+    }
+  };
+
+  test('sandbox reaches its allowlist only, through the proxy', async () => {
+    const id = await createSandbox({ egress: 'proxy', egressProxy: spec });
+    try {
+      expect((await client.getSandbox(id)).egress).toBe('proxy');
+      await expectConfined(id);
+    } finally {
+      await cleanUpSandbox(id);
+    }
+  });
+
+  test('the proxy mode survives a stop and wake', async () => {
+    test.skip(
+      !process.env.E2E_RUNNER_CONTROL_GRPC_ADDR || !process.env.E2E_RUNNER_API_KEY,
+      'needs the runner control address (from e2e/run.sh)',
+    );
+    const id = await createSandbox({ egress: 'proxy', egressProxy: spec });
+    try {
+      await expectConfined(id);
+      stopSandboxViaRunner(id);
+      const woke = await execWithTransientRetry(id, 'echo after-wake', { timeoutMs: 30_000 });
+      expect(woke).toHaveSucceeded();
+      await expectConfined(id);
+    } finally {
+      await deleteSandbox(id);
+    }
+  });
+});
+
 // The Firecracker runner builds each slot's network namespace in the background
 // and rebuilds it after every release, so the second sandbox on a slot runs in a
 // namespace the wirer built. Slots are not in the API, so the runner's metrics

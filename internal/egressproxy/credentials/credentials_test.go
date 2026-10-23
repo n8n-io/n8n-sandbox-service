@@ -1,11 +1,16 @@
 package credentials
 
 import (
+	"bytes"
+	"encoding/base64"
 	"errors"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
@@ -113,5 +118,95 @@ func TestInject(t *testing.T) {
 		if h.Get("Proxy-Authorization") != "" {
 			t.Error("Proxy-Authorization forwarded")
 		}
+	}
+}
+
+// A response echoing a credential, whole or split across reads, comes out
+// masked and the same length; a stream is not held back.
+func TestScrub(t *testing.T) {
+	c := runnerruntime.EgressCredential{Host: "git.internal", SecretRef: "t", Scheme: runnerruntime.CredentialBasic, Username: "factory"}
+	masks := Masks(c, []byte("s3cret-token"))
+	b64 := base64.StdEncoding.EncodeToString([]byte("factory:s3cret-token"))
+	in := "token=s3cret-token auth=Basic " + b64 + " again s3cret-token."
+	for name, r := range map[string]io.Reader{
+		"whole":    strings.NewReader(in),
+		"one byte": iotest.OneByteReader(strings.NewReader(in)),
+	} {
+		out, err := io.ReadAll(Scrub(r, masks))
+		if err != nil || len(out) != len(in) || strings.Contains(string(out), "s3cret") || strings.Contains(string(out), b64) {
+			t.Errorf("%s: %q %v", name, out, err)
+		}
+	}
+	// An event that cannot begin a mask is handed out at once.
+	pr, pw := io.Pipe()
+	go func() { _, _ = pw.Write([]byte("data: {}\n\n")) }()
+	got := make([]byte, 64)
+	if n, _ := Scrub(pr, masks).Read(got); string(got[:n]) != "data: {}\n\n" {
+		t.Fatalf("stream held back: %q", got[:n])
+	}
+	_ = pw.Close()
+
+	// An echo that escapes the secret as JSON or a URL would.
+	slashy := Masks(runnerruntime.EgressCredential{Scheme: runnerruntime.CredentialHeader, Header: "x-api-key"}, []byte("ab/c+d=e"))
+	for _, echo := range []string{`{"key":"ab\/c+d=e"}`, `{"key":"ab\u002fc\u002bd\u003de"}`, `?key=ab%2Fc%2Bd%3De`, `?key=ab%2fc%2bd%3de`} {
+		out, _ := io.ReadAll(Scrub(strings.NewReader(echo), slashy))
+		if strings.Contains(string(out), "ab") {
+			t.Errorf("escaped echo %q came out %q", echo, out)
+		}
+	}
+
+	h := http.Header{"X-Echo": {"Bearer s3cret-token"}}
+	ScrubHeader(h, masks)
+	if strings.Contains(h.Get("X-Echo"), "s3cret") {
+		t.Fatalf("header %q", h.Get("X-Echo"))
+	}
+}
+
+// FuzzScrub: the length never changes and no mask survives, however the
+// body is split.
+func FuzzScrub(f *testing.F) {
+	f.Add([]byte("xx s3cret s3c s3cret"), uint8(3))
+	f.Fuzz(func(t *testing.T, body []byte, chunk uint8) {
+		masks := [][]byte{[]byte("s3cret"), []byte("cret-s")}
+		r := io.Reader(bytes.NewReader(body))
+		if chunk > 0 {
+			r = &chunked{b: body, n: int(chunk)}
+		}
+		out, _ := io.ReadAll(Scrub(r, masks))
+		if len(out) != len(body) {
+			t.Fatalf("length %d, want %d", len(out), len(body))
+		}
+		for _, m := range masks {
+			if bytes.Contains(out, m) {
+				t.Fatalf("mask %q survived in %q", m, out)
+			}
+		}
+	})
+}
+
+type chunked struct {
+	b []byte
+	n int
+}
+
+func (c *chunked) Read(p []byte) (int, error) {
+	if len(c.b) == 0 {
+		return 0, io.EOF
+	}
+	n := min(c.n, len(c.b), len(p))
+	copy(p, c.b[:n])
+	c.b = c.b[n:]
+	return n, nil
+}
+
+// Blanks around a secret are trimmed, so an upstream's echo, which drops
+// them, still matches its mask.
+func TestSecretTrimsBlanks(t *testing.T) {
+	dir := t.TempDir()
+	writeSecret(t, dir, "t1/k", " \ttok \n")
+	s, _ := Open(dir)
+	defer s.Close()
+	if v, err := s.Secret("t1", "k"); err != nil || string(v) != "tok" {
+		t.Fatalf("secret %q %v", v, err)
 	}
 }

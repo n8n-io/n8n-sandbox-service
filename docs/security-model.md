@@ -238,7 +238,13 @@ sends selects the policy. What the proxy then allows is in
   directory its own `os.Root`, so neither `..` nor a symlink leaves it; the API
   sets the tenant), replace whatever the guest sent, and are sent only to the
   CONNECT target over verified TLS, or plain HTTP where the spec allows it.
-  Redirects are returned, not followed.
+  Redirects are returned, not followed. A response that echoes the secret, or
+  the header value it was sent as, has it overwritten with `*` (same length) in
+  headers and body, as is and JSON- or percent-escaped. Credentialed requests
+  go out without `Accept-Encoding`, `Range` or `If-Range`, and a compressed or
+  `206` response to one is refused, since it cannot be scrubbed whole. A
+  partial echo (an upstream quoting the first characters of a key) is not
+  masked.
 - On a model host only the metered and token-free paths pass, so spending
   cannot go around the meter, and the model block refuses new requests at once.
 
@@ -520,7 +526,7 @@ The boundaries above are covered by tests rather than asserted on paper.
 | Docker capability policy, absence of a root path, and denied network administration; no user namespaces on either runtime | [e2e/tests/sandbox-capabilities.spec.ts](../e2e/tests/sandbox-capabilities.spec.ts) |
 | Unprivileged npm and PyPI installation, and the build toolchain | [e2e/tests/sandbox-packages.spec.ts](../e2e/tests/sandbox-packages.spec.ts) |
 | Blocked list and egress rule generation | [internal/runner/runtime/netpolicy/private_ranges_test.go](../internal/runner/runtime/netpolicy/private_ranges_test.go), [internal/runner/runtime/docker/netrules/netrules_test.go](../internal/runner/runtime/docker/netrules/netrules_test.go), [internal/runner/runtime/firecracker.ee/network/egress_test.go](../internal/runner/runtime/firecracker.ee/network/egress_test.go) |
-| Egress proxy: allow list, address checks and rebinding, inspection and Host binding, credential injection and tenant scoping, redirects and upgrades, model paths, block and metering | [internal/egressproxy/proxy_test.go](../internal/egressproxy/proxy_test.go), [internal/egressproxy/credentials/credentials_test.go](../internal/egressproxy/credentials/credentials_test.go), [internal/egressproxy/metering/usage_test.go](../internal/egressproxy/metering/usage_test.go), [internal/runner/egress_test.go](../internal/runner/egress_test.go) |
+| Egress proxy: allow list, address checks and rebinding, inspection and Host binding, credential injection, tenant scoping, response scrubbing and log redaction, redirects and upgrades, model paths, block and metering | [internal/egressproxy/proxy_test.go](../internal/egressproxy/proxy_test.go), [internal/egressproxy/credentials/credentials_test.go](../internal/egressproxy/credentials/credentials_test.go), [internal/egressproxy/metering/usage_test.go](../internal/egressproxy/metering/usage_test.go), [internal/runner/egress_test.go](../internal/runner/egress_test.go) |
 | Git repository and ref filter, fuzzed, and against a real `git` client and `git http-backend` | [internal/egressproxy/gitfilter/gitfilter_test.go](../internal/egressproxy/gitfilter/gitfilter_test.go), [internal/egressproxy/git_differential_test.go](../internal/egressproxy/git_differential_test.go) |
 | Egress mode: API to runner to network and rules, refused when the runner does not confirm it | [internal/api/handlers_create_sandbox_test.go](../internal/api/handlers_create_sandbox_test.go), [internal/runner/grpc_control_test.go](../internal/runner/grpc_control_test.go), [internal/runner/runtime/docker/runtime_test.go](../internal/runner/runtime/docker/runtime_test.go), [internal/runner/runtime/firecracker.ee/network_wirer_test.go](../internal/runner/runtime/firecracker.ee/network_wirer_test.go) |
 
