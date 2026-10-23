@@ -166,8 +166,8 @@ To follow a renewal through both processes:
   a certificate this process presents, logged once per process for each
   certificate it loads from a file.
 - `tls certificate reload failed, keeping the previous certificate` (warning):
-  the files changed but don't load. Repeated at most once a minute while they
-  stay broken.
+  the files changed but don't load. Logged again on each further change, and
+  otherwise at most once a minute while they stay broken.
 - `tls peer certificate first seen` (`subject`, `serial`, `not_after`): the first
   authenticated request or call in which the other side presented this
   certificate. The runner logs the API's client certificate (HTTP and control

@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -176,23 +177,27 @@ func TestConfigsForTheSameFilesShareOneReloader(t *testing.T) {
 	}
 }
 
+// A call the server answers with an error still reached a server that
+// authenticated with its certificate, so it is noted as well.
 func TestNotePeerUnaryClientInterceptorNotesTheServerCertificate(t *testing.T) {
-	leaf := newTestPair(t, "runner-control").leaf
-	invoker := func(_ context.Context, _ string, _, _ any, _ *grpc.ClientConn, opts ...grpc.CallOption) error {
-		for _, o := range opts {
-			if po, ok := o.(grpc.PeerCallOption); ok {
-				*po.PeerAddr = peer.Peer{AuthInfo: credentials.TLSInfo{
-					State: tls.ConnectionState{PeerCertificates: []*x509.Certificate{leaf}},
-				}}
+	for _, callErr := range []error{nil, errors.New("runner not ready")} {
+		leaf := newTestPair(t, "runner-control").leaf
+		invoker := func(_ context.Context, _ string, _, _ any, _ *grpc.ClientConn, opts ...grpc.CallOption) error {
+			for _, o := range opts {
+				if po, ok := o.(grpc.PeerCallOption); ok {
+					*po.PeerAddr = peer.Peer{AuthInfo: credentials.TLSInfo{
+						State: tls.ConnectionState{PeerCertificates: []*x509.Certificate{leaf}},
+					}}
+				}
 			}
+			return callErr
 		}
-		return nil
-	}
-	if err := NotePeerUnaryClientInterceptor(context.Background(), "/m", nil, nil, nil, invoker); err != nil {
-		t.Fatal(err)
-	}
-	if NotePeer(leaf) {
-		t.Fatal("the interceptor did not note the server certificate")
+		if err := NotePeerUnaryClientInterceptor(context.Background(), "/m", nil, nil, nil, invoker); !errors.Is(err, callErr) {
+			t.Fatalf("call returning %v: interceptor returned %v", callErr, err)
+		}
+		if NotePeer(leaf) {
+			t.Fatalf("call returning %v: the interceptor did not note the server certificate", callErr)
+		}
 	}
 }
 

@@ -43,16 +43,16 @@ func PeerCertificate(ctx context.Context) *x509.Certificate {
 }
 
 // NotePeerUnaryClientInterceptor passes the server certificate of every call
-// that succeeded to NotePeer.
+// that got a stream on a TLS connection to NotePeer, whether or not the call
+// succeeded: the handshake already authenticated the server. gRPC fills in the
+// peer only once a stream exists, so a call that fails before that notes nothing.
 func NotePeerUnaryClientInterceptor(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 	var p peer.Peer
-	if err := invoker(ctx, method, req, reply, cc, append(opts, grpc.Peer(&p))...); err != nil {
-		return err
-	}
+	err := invoker(ctx, method, req, reply, cc, append(opts, grpc.Peer(&p))...)
 	if info, ok := p.AuthInfo.(credentials.TLSInfo); ok && len(info.State.PeerCertificates) > 0 {
 		NotePeer(info.State.PeerCertificates[0])
 	}
-	return nil
+	return err
 }
 
 // maxSeenPeers bounds the peers remembered so far. A deployment has one entry
