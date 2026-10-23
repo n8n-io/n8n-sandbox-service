@@ -11,33 +11,15 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/runnerctl"
 )
 
-func usage() {
-	fmt.Fprintf(os.Stderr, "usage: %s stop <sandbox-id> | cordon | uncordon | cordon-status\n", os.Args[0])
-	os.Exit(2)
-}
-
 func main() {
-	if len(os.Args) < 2 {
-		usage()
+	if len(os.Args) != 3 || os.Args[1] != "stop" {
+		fmt.Fprintf(os.Stderr, "usage: %s stop <sandbox-id>\n", os.Args[0])
+		os.Exit(2)
 	}
-	cmd := os.Args[1]
-	var sandboxID string
-	switch cmd {
-	case "stop":
-		if len(os.Args) != 3 {
-			usage()
-		}
-		sandboxID = strings.TrimSpace(os.Args[2])
-		if sandboxID == "" {
-			fmt.Fprintln(os.Stderr, "sandbox id is required")
-			os.Exit(2)
-		}
-	case "cordon", "uncordon", "cordon-status":
-		if len(os.Args) != 2 {
-			usage()
-		}
-	default:
-		usage()
+	sandboxID := strings.TrimSpace(os.Args[2])
+	if sandboxID == "" {
+		fmt.Fprintln(os.Stderr, "sandbox id is required")
+		os.Exit(2)
 	}
 
 	target := strings.TrimSpace(os.Getenv("E2E_RUNNER_CONTROL_GRPC_ADDR"))
@@ -60,26 +42,8 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-
-	if cmd == "stop" {
-		if err := runnerctl.StopSandbox(ctx, target, apiKey, tlsCfg, sandboxID); err != nil {
-			fmt.Fprintf(os.Stderr, "stop sandbox: %v\n", err)
-			os.Exit(1)
-		}
-		return
-	}
-
-	// Prints the cordon state after the call, true or false.
-	var cordoned bool
-	var err error
-	if cmd == "cordon-status" {
-		cordoned, err = runnerctl.GetCordon(ctx, target, apiKey, tlsCfg)
-	} else {
-		cordoned, err = runnerctl.SetCordon(ctx, target, apiKey, tlsCfg, "", cmd == "cordon")
-	}
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "%s: %v\n", cmd, err)
+	if err := runnerctl.StopSandbox(ctx, target, apiKey, tlsCfg, sandboxID); err != nil {
+		fmt.Fprintf(os.Stderr, "stop sandbox: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println(cordoned)
 }

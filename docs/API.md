@@ -8,7 +8,7 @@ There are four key classes:
 
 - `SANDBOX_API_KEYS` are admin keys. An admin key can create/list/delete any sandbox, manage tenants and mint tenant API keys via the admin API.
 - `SANDBOX_API_PROVISIONER_KEYS` are provisioner keys: `POST /admin/tenants`, `PATCH /admin/tenants/{id}` and `DELETE /admin/tenants/{id}` only, `403` everywhere else. Why the class exists and what it does not protect: [security-model.md](security-model.md#provisioner-keys).
-- `SANDBOX_API_SCALER_KEYS` are scaler keys: `GET /admin/runners` only, `403` on every other path ([security-model.md](security-model.md#scaler-keys)).
+- `SANDBOX_API_SCALER_KEYS` are scaler keys: `GET /admin/runners` and `PUT`/`DELETE /admin/runners/{id}/cordon` only, `403` on every other path ([security-model.md](security-model.md#scaler-keys)).
 - Tenant keys are minted by an admin (or returned when a tenant is created). A tenant key may only create sandboxes for that tenant and may only list/get/delete/proxy its own sandboxes. Self-hosted operators can ignore tenant APIs entirely and keep using the admin key.
 
 Tenant keys are returned in plaintext once on create; only a hash is stored.
@@ -954,7 +954,7 @@ Admin only. Revoke an API key (`204`). Revoked keys are rejected from the next r
 
 Admin or scaler. Lists every registered runner, ordered by `id`, with the capacity it last reported. Runners that stopped heartbeating stay in the list: the in-memory registry drops a runner when it disconnects, the Postgres registry never does. Filter on `healthy` and `last_seen` to keep the live ones. Runner addresses are not returned.
 
-`cordoned` is `true` while the runner is cordoned: it keeps its sandboxes but takes no new ones.
+`cordoned` is `true` while the runner is [cordoned](#put-adminrunnersidcordon--delete-adminrunnersidcordon).
 
 **Response:** `200 OK`
 
@@ -982,6 +982,24 @@ Admin or scaler. Lists every registered runner, ordered by `id`, with the capaci
 
 ```bash
 curl http://localhost:8080/admin/runners -H "X-Api-Key: SCALER_KEY"
+```
+
+### PUT /admin/runners/{id}/cordon · DELETE /admin/runners/{id}/cordon
+
+Admin or scaler. `PUT` cordons the runner: it keeps its sandboxes but gets no new ones. `DELETE` uncordons it. Both are idempotent. A runner restart clears the cordon.
+
+**Response:** `200 OK`
+
+```json
+{"id": "runner-1", "cordoned": true}
+```
+
+**Errors:** `403` provisioner or tenant key, `404` unknown runner, `409` another runner now has its address, `502` the runner did not apply it, `503` the runner is unreachable
+
+**Example:**
+
+```bash
+curl -X PUT http://localhost:8080/admin/runners/runner-1/cordon -H "X-Api-Key: SCALER_KEY"
 ```
 
 ---

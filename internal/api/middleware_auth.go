@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"net/http"
+	"path"
 	"strings"
 
 	"github.com/n8n-io/sandbox-service/internal/api/store"
@@ -28,7 +29,19 @@ const (
 // than tenant create, limit update and delete require admin.
 const provisionerPathPrefix = "/admin/tenants"
 
-const scalerPath = "/admin/runners"
+// scalerMayCall reports whether a scaler key may call urlPath. A * matches one
+// path segment.
+func scalerMayCall(urlPath string) bool {
+	for _, pattern := range []string{
+		"/admin/runners",
+		"/admin/runners/*/cordon",
+	} {
+		if ok, _ := path.Match(pattern, urlPath); ok {
+			return true
+		}
+	}
+	return false
+}
 
 // publicPaths skip auth and the access log.
 var publicPaths = probes.New("/healthz", "/metrics")
@@ -98,8 +111,8 @@ func AuthMiddleware(adminKeys, provisionerKeys, scalerKeys map[string]struct{}, 
 			}
 
 			if constantTimeContains(scalerKeys, key) {
-				if r.URL.Path != scalerPath {
-					writeError(w, http.StatusForbidden, "scaler API key may only list runners")
+				if !scalerMayCall(r.URL.Path) {
+					writeError(w, http.StatusForbidden, "scaler API key may only list and cordon runners")
 					return
 				}
 				next.ServeHTTP(w, r.WithContext(withAuthIdentity(r.Context(), authIdentity{Role: roleScaler})))
