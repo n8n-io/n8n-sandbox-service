@@ -57,6 +57,9 @@ resource "azurerm_linux_virtual_machine" "peer" {
   }
 
   tags = local.tags
+
+  # See azurerm_linux_virtual_machine.e2e.
+  depends_on = [azurerm_network_interface_security_group_association.peer]
 }
 
 resource "azurerm_network_interface_security_group_association" "peer" {
