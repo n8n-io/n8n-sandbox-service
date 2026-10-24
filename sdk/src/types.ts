@@ -24,6 +24,12 @@ export type EgressMode = "public" | "none" | "proxy";
 export interface EgressProxySpec {
   /** Named groups of allowed hosts (lowercase DNS names, optional `:port`, no IPs). */
   allow: { name: string; hosts: string[] }[];
+  /**
+   * Also let through any other host whose every address is public, on port 443
+   * or 80, uninspected. Refused (`400 allow_public_disabled`) unless the
+   * service enables it.
+   */
+  allow_public?: boolean;
   /** Git repositories on allowed hosts the sandbox may fetch (`read`) or also push (`write`). */
   repos?: { host: string; path: string; access: "read" | "write" }[];
   /** Refs a push may update; an entry ending in `/` is a prefix under `refs/heads/`. */

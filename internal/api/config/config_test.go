@@ -711,6 +711,21 @@ func TestLoadAPIRejectsInvalidSQLiteWAL(t *testing.T) {
 	}
 }
 
+func TestLoadAPIEgressAllowPublic(t *testing.T) {
+	setRequiredAPIEnv(t)
+	if cfg, err := LoadAPI(); err != nil || cfg.EgressAllowPublic {
+		t.Fatalf("default: %v, EgressAllowPublic %v", err, cfg != nil && cfg.EgressAllowPublic)
+	}
+	t.Setenv("SANDBOX_API_EGRESS_ALLOW_PUBLIC", "true")
+	if cfg, err := LoadAPI(); err != nil || !cfg.EgressAllowPublic {
+		t.Fatalf("enabled: %v", err)
+	}
+	t.Setenv("SANDBOX_API_EGRESS_ALLOW_PUBLIC", "maybe")
+	if _, err := LoadAPI(); err == nil {
+		t.Fatal("expected error for invalid SANDBOX_API_EGRESS_ALLOW_PUBLIC")
+	}
+}
+
 func setRequiredAPIEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("SANDBOX_API_KEYS", "test-key")

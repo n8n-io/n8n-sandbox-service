@@ -42,6 +42,10 @@ const (
 type EgressProxySpec struct {
 	// Allow is every destination the proxy lets through, by named entry.
 	Allow []EgressAllowEntry `json:"allow"`
+	// AllowPublic also lets through any other host whose every address is
+	// public, on the scheme's default port, tunnelled as is: no credential,
+	// repo filter or metering applies to a host Allow does not name.
+	AllowPublic bool `json:"allow_public,omitempty"`
 	// Repos are the Git repositories the sandbox may use, on Allow hosts.
 	Repos []EgressRepo `json:"repos,omitempty"`
 	// PushRefs are the refs a push to a RepoWrite repository may update. An

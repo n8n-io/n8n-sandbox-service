@@ -222,7 +222,17 @@ sends selects the policy. What the proxy then allows is in
   runner's namespace, where they reach the host's services. Only hosts the
   operator lists in `SANDBOX_EGRESS_PROXY_INTERNAL_HOSTS` may resolve into a
   blocked range, and that list serves every tenant: on a shared internal
-  service, per-tenant credentials are the only separation.
+  service, per-tenant credentials are the only separation. The exemption
+  holds only for a spec whose `allow` names the host.
+- `allow_public` opens a proxy sandbox to every public host, as `public`
+  egress does, but on ports 443 and 80 only and with the proxy's address
+  checks; the hosts its spec names keep their credentials, repo filter and
+  metering. Only the operator can enable it
+  (`SANDBOX_API_EGRESS_ALLOW_PUBLIC`): a tenant cannot open its own sandbox.
+  Data can leave to any public host from such a sandbox, and metering, the
+  model block and the Git filter then bind only requests that use a
+  credential the proxy holds: a key or token of the guest's own reaches its
+  provider under any name.
 - What one guest holds on the runner is bounded: 256 proxy connections, a
   10-minute idle limit on tunnels, 1 MiB of push command list, 16 MiB of a
   Responses request body (read to refuse `background: true`, which would spend

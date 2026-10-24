@@ -43,6 +43,9 @@ var blockedV4 = func() []netip.Prefix {
 // the runner's own addresses: the proxy dials from the runner's network
 // namespace, where those reach the host's own services.
 func blocked(addr netip.Addr) bool {
+	if !addr.IsValid() {
+		return true
+	}
 	addr = addr.Unmap()
 	if localAddrs.has(addr) {
 		return true

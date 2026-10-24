@@ -82,7 +82,7 @@ type sandbox struct {
 	conns      atomic.Int32
 
 	mu      sync.Mutex
-	tunnels map[net.Conn]string // open tunnels by destination key
+	tunnels map[net.Conn]target // open tunnels and where they go
 }
 
 // New returns a Server with no sandboxes.
@@ -119,15 +119,15 @@ func (s *Server) Set(sandboxID, tenant string, spec *runnerruntime.EgressProxySp
 	s.mu.Lock()
 	sb, ok := s.sandboxes[sandboxID]
 	if !ok {
-		sb = &sandbox{id: sandboxID, tenant: tenant, tunnels: map[net.Conn]string{}}
+		sb = &sandbox{id: sandboxID, tenant: tenant, tunnels: map[net.Conn]target{}}
 		s.sandboxes[sandboxID] = sb
 	}
 	s.mu.Unlock()
 	sb.policy.Store(p)
 	sb.mu.Lock()
-	for conn, key := range sb.tunnels {
+	for conn, t := range sb.tunnels {
 		// A host that became inspected must not keep a tunnel nothing sees into.
-		if !p.allow[key] || p.inspected[key] {
+		if !p.permits(t) || p.inspected[t.key] {
 			_ = conn.Close()
 		}
 	}
@@ -233,10 +233,13 @@ func (t target) authority() string { return net.JoinHostPort(t.host, strconv.Ito
 // resolveTarget checks a destination against the policy and resolves it.
 func (s *Server) resolveTarget(ctx context.Context, sb *sandbox, host string, port, defaultPort int, scheme string) (target, string, error) {
 	t := target{host: host, port: port, key: destKey(host, port, defaultPort), scheme: scheme}
-	if !sb.policy.Load().allow[t.key] {
+	p := sb.policy.Load()
+	if !p.allows(t.key) {
 		return t, ReasonHostNotAllowed, errors.New("destination not allowed")
 	}
-	addr, err := resolveChecked(ctx, s.cfg.Resolver, host, s.cfg.InternalHosts[host])
+	// An internal host is exempt from the address check only when the spec
+	// names it: allow_public never reaches one.
+	addr, err := resolveChecked(ctx, s.cfg.Resolver, host, s.cfg.InternalHosts[host] && p.allow[t.key])
 	if errors.Is(err, errAddressNotAllowed) {
 		return t, ReasonAddressNotAllowed, err
 	}
@@ -286,7 +289,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request, sb *sandb
 func (s *Server) tunnel(guest net.Conn, sb *sandbox, t target) {
 	defer guest.Close()
 	sb.mu.Lock()
-	sb.tunnels[guest] = t.key
+	sb.tunnels[guest] = t
 	sb.mu.Unlock()
 	defer func() {
 		sb.mu.Lock()
@@ -300,7 +303,7 @@ func (s *Server) tunnel(guest net.Conn, sb *sandbox, t target) {
 		return
 	}
 	defer upstream.Close()
-	if p := sb.policy.Load(); !p.allow[t.key] || p.inspected[t.key] {
+	if p := sb.policy.Load(); !p.permits(t) || p.inspected[t.key] {
 		return
 	}
 	g, u := &idleConn{Conn: guest}, &idleConn{Conn: upstream}

@@ -459,3 +459,185 @@ func TestUnknownSandboxRefused(t *testing.T) {
 	resp, err := client.Get("http://anything.test/")
 	expectRefusal(t, resp, err, 403, ReasonHostNotAllowed)
 }
+
+// publicOn makes name resolve to a public address that the proxy's dials
+// reach at addr, so a test can stand a public host up on loopback.
+func (h *harness) publicOn(name, addr string) {
+	h.t.Helper()
+	public := netip.MustParseAddr("93.184.215.14")
+	h.srv.cfg.Resolver.(fakeResolver)[name] = []netip.Addr{public}
+	dial := h.srv.cfg.Dial
+	h.srv.cfg.Dial = func(ctx context.Context, network, to string) (net.Conn, error) {
+		if host, _, _ := net.SplitHostPort(to); host == public.String() {
+			to = addr
+		}
+		return dial(ctx, network, to)
+	}
+}
+
+// allow_public lets any public host through on the scheme's default port,
+// with no credential of the spec's and no exemption for an internal host
+// the spec does not name; a listed host keeps its rules.
+func TestAllowPublic(t *testing.T) {
+	var gotAuth []string
+	var mu sync.Mutex
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		gotAuth = append(gotAuth, r.Header.Get("Authorization"))
+		mu.Unlock()
+		_, _ = io.WriteString(w, "public "+r.Host)
+	}))
+	defer up.Close()
+	_, port := hostPort(t, up.URL)
+	h := newHarness(t, `{"allow":[{"name":"git","hosts":["svc.test:`+port+`"]}],"allow_public":true,`+
+		`"credentials":[{"host":"svc.test:`+port+`","secret_ref":"factory/git-token","allow_plain_http":true}]}`, nil, "svc.test", "git.internal")
+	h.publicOn("public.test", strings.TrimPrefix(up.URL, "http://"))
+
+	resp, err := h.guest.Get("http://public.test/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || string(body) != "public public.test" {
+		t.Fatalf("public host: %d %s", resp.StatusCode, body)
+	}
+
+	resp, err = h.guest.Get("http://public.test:" + port + "/")
+	expectRefusal(t, resp, err, 403, ReasonHostNotAllowed)
+	for _, host := range []string{"internal-only.test", "rebind.test", "mapped.test", "loopback.test", "git.internal"} {
+		resp, err = h.guest.Get("http://" + host + "/")
+		expectRefusal(t, resp, err, 403, ReasonAddressNotAllowed)
+	}
+	resp, err = h.guest.Get("http://127.0.0.1/")
+	expectRefusal(t, resp, err, 403, ReasonHostNotAllowed)
+
+	// The listed host still gets its credential; the public one never did.
+	resp, err = h.guest.Get("http://svc.test:" + port + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	mu.Lock()
+	defer mu.Unlock()
+	if len(gotAuth) != 2 || gotAuth[0] != "" || gotAuth[1] != "Bearer git-secret" {
+		t.Fatalf("Authorization seen upstream: %q", gotAuth)
+	}
+}
+
+// Turning allow_public off closes the tunnels it let through.
+func TestSetClosesPublicTunnels(t *testing.T) {
+	up, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer up.Close()
+	go func() {
+		for {
+			c, err := up.Accept()
+			if err != nil {
+				return
+			}
+			go func() { _, _ = io.Copy(c, c) }()
+		}
+	}()
+	h := newHarness(t, `{"allow":[],"allow_public":true}`, nil)
+	h.publicOn("echo.test", up.Addr().String())
+	c, err := net.Dial("tcp", strings.TrimPrefix(h.proxy.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	fmt.Fprint(c, "CONNECT echo.test:443 HTTP/1.1\r\nHost: echo.test:443\r\n\r\n")
+	br := bufio.NewReader(c)
+	if resp, err := http.ReadResponse(br, nil); err != nil || resp.StatusCode != 200 {
+		t.Fatalf("CONNECT: %v", err)
+	}
+	fmt.Fprint(c, "ping\n")
+	if line, _ := br.ReadString('\n'); line != "ping\n" {
+		t.Fatalf("echo %q", line)
+	}
+	h.set(`{"allow":[]}`)
+	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := br.ReadString('\n'); err == nil {
+		t.Fatal("tunnel survived allow_public turned off")
+	}
+}
+
+// redirectDial sends the proxy's dials to from (an address the test cannot
+// listen on, such as port 443) to to.
+func (h *harness) redirectDial(from, to string) {
+	dial := h.srv.cfg.Dial
+	h.srv.cfg.Dial = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if addr == from {
+			addr = to
+		}
+		return dial(ctx, network, addr)
+	}
+}
+
+// An internal host dropped from allow is not reached through allow_public:
+// neither a request on an inspected session already open to it nor a tunnel
+// to it survives the spec, though allow_public would let the name through.
+func TestDroppedInternalHostIsNotKeptByAllowPublic(t *testing.T) {
+	up := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "internal")
+	}))
+	defer up.Close()
+	roots := x509.NewCertPool()
+	roots.AddCert(up.Certificate())
+	// httptest certificates name example.com, here an internal host.
+	h := newHarness(t, `{"allow":[{"name":"git","hosts":["example.com"]}],"allow_public":true,
+		"credentials":[{"host":"example.com","secret_ref":"factory/git-token"}]}`, roots, "example.com")
+	h.redirectDial("127.0.0.1:443", strings.TrimPrefix(up.URL, "https://"))
+
+	resp, err := h.guest.Get("https://example.com/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || string(body) != "internal" {
+		t.Fatalf("listed internal host: %d %s", resp.StatusCode, body)
+	}
+	h.set(`{"allow":[],"allow_public":true}`)
+	resp, err = h.guest.Get("https://example.com/")
+	expectRefusal(t, resp, err, 403, ReasonHostNotAllowed)
+
+	// An uninspected tunnel to it is closed by the same change.
+	echo, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer echo.Close()
+	go func() {
+		for {
+			c, err := echo.Accept()
+			if err != nil {
+				return
+			}
+			go func() { _, _ = io.Copy(c, c) }()
+		}
+	}()
+	h.set(`{"allow":[{"name":"git","hosts":["example.com"]}],"allow_public":true}`)
+	h.redirectDial("127.0.0.1:443", echo.Addr().String())
+	c, err := net.Dial("tcp", strings.TrimPrefix(h.proxy.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	fmt.Fprint(c, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n")
+	br := bufio.NewReader(c)
+	if resp, err := http.ReadResponse(br, nil); err != nil || resp.StatusCode != 200 {
+		t.Fatalf("CONNECT: %v", err)
+	}
+	fmt.Fprint(c, "ping\n")
+	if line, _ := br.ReadString('\n'); line != "ping\n" {
+		t.Fatalf("echo %q", line)
+	}
+	h.set(`{"allow":[],"allow_public":true}`)
+	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := br.ReadString('\n'); err == nil {
+		t.Fatal("tunnel to a dropped internal host survived under allow_public")
+	}
+}

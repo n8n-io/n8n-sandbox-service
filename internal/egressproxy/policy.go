@@ -14,6 +14,7 @@ import (
 // as the spec writes it, "name" for the default port or "name:port".
 type policy struct {
 	allow     map[string]bool
+	public    bool // allow_public
 	inspected map[string]bool
 	repos     map[string][]gitfilter.Repo
 	pushRefs  []string
@@ -31,6 +32,7 @@ func compile(spec *runnerruntime.EgressProxySpec) *policy {
 		creds:     map[string]runnerruntime.EgressCredential{},
 		models:    map[string]metering.Provider{},
 		labels:    spec.Labels,
+		public:    spec.AllowPublic,
 	}
 	for _, e := range spec.Allow {
 		for _, h := range e.Hosts {
@@ -50,6 +52,20 @@ func compile(spec *runnerruntime.EgressProxySpec) *policy {
 		p.inspected[m.Host] = true
 	}
 	return p
+}
+
+// allows reports whether the policy lets key through: a listed destination,
+// or with allow_public any host on its scheme's default port, which is the
+// only key with no port.
+func (p *policy) allows(key string) bool {
+	return p.allow[key] || (p.public && !strings.Contains(key, ":"))
+}
+
+// permits reports whether the policy still lets an open connection to t
+// through. Through allow_public that needs a public address too: a host the
+// spec no longer names may have been reached at an internal one.
+func (p *policy) permits(t target) bool {
+	return p.allow[t.key] || (p.allows(t.key) && !blocked(t.addr))
 }
 
 // destKey is the policy key of host:port, where defaultPort is the scheme's.

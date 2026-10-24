@@ -26,6 +26,7 @@ const (
 	reasonEgressProxyMismatch = "egress_proxy_mismatch"
 	reasonTemplateMismatch    = "template_mismatch"
 	reasonIdleWindowMismatch  = "idle_window_mismatch"
+	reasonAllowPublicDisabled = "allow_public_disabled"
 )
 
 // createError is a 400 with a reason.
@@ -139,7 +140,7 @@ func parseCreateRequest(req *createSandboxRequest, cfg *config.APIConfig, idleLi
 	case egress != runnerruntime.EgressProxy && specGiven:
 		return nil, errors.New(`egress_proxy is only allowed with egress "proxy"`)
 	case specGiven:
-		spec, err := parseEgressProxySpec(req.EgressProxy)
+		spec, err := parseEgressProxySpec(req.EgressProxy, cfg)
 		if err != nil {
 			return nil, err
 		}
@@ -254,13 +255,16 @@ func checkWindowOrder(stop, archive, del int64) error {
 // parseEgressProxySpec decodes and validates an egress_proxy object. allow is
 // required: [] is a spec that refuses every host, a missing or null allow is
 // an error rather than read as one.
-func parseEgressProxySpec(raw []byte) (runnerruntime.EgressProxySpec, error) {
+func parseEgressProxySpec(raw []byte, cfg *config.APIConfig) (runnerruntime.EgressProxySpec, error) {
 	var spec runnerruntime.EgressProxySpec
 	if err := json.Unmarshal(raw, &spec); err != nil {
 		return spec, err
 	}
 	if spec.Allow == nil {
 		return spec, errors.New("egress_proxy.allow is required ([] refuses every host)")
+	}
+	if spec.AllowPublic && !cfg.EgressAllowPublic {
+		return spec, &createError{msg: "egress_proxy.allow_public is not enabled on this service", reason: reasonAllowPublicDisabled}
 	}
 	return spec, spec.Validate()
 }

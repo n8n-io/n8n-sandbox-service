@@ -158,6 +158,10 @@ type APIConfig struct {
 	// set for its sandbox. 0 refuses both.
 	MaxIdleWindow time.Duration
 
+	// EgressAllowPublic lets an egress_proxy spec set allow_public. Parsed
+	// from SANDBOX_API_EGRESS_ALLOW_PUBLIC (default false).
+	EgressAllowPublic bool
+
 	// Archive store: a directory the API serves to runners at ArchiveURL,
 	// and the master key that wraps each archive's key. Archiving is on when
 	// both are set. Parsed from SANDBOX_API_ARCHIVE_DIR, SANDBOX_API_ARCHIVE_URL
@@ -337,6 +341,14 @@ func LoadAPI() (*APIConfig, error) {
 			return nil, fmt.Errorf("SANDBOX_API_METRICS_ENABLED must be a boolean, got %q", v)
 		}
 		cfg.MetricsEnabled = b
+	}
+
+	if v := os.Getenv("SANDBOX_API_EGRESS_ALLOW_PUBLIC"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("SANDBOX_API_EGRESS_ALLOW_PUBLIC must be a boolean, got %q", v)
+		}
+		cfg.EgressAllowPublic = b
 	}
 
 	if v := os.Getenv("SANDBOX_API_ENABLE_CORS"); v != "" {

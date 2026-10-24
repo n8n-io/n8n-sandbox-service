@@ -80,6 +80,7 @@ func TestCreateSandboxRefusesBadCreateOptions(t *testing.T) {
 		{name: "spec ip literal", body: `{"egress":"proxy","egress_proxy":{"allow":[{"name":"x","hosts":["169.254.169.254"]}]}}`},
 		{name: "spec repo path with .git", body: `{"egress":"proxy","egress_proxy":{"allow":[{"name":"g","hosts":["git.example.com"]}],"repos":[{"host":"git.example.com","path":"o/r.git","access":"read"}]}}`},
 		{name: "spec label forging a log line", body: `{"egress":"proxy","egress_proxy":{"allow":[],"labels":{"session_id":"a\nlevel=error"}}}`},
+		{name: "allow_public not enabled", body: `{"egress":"proxy","egress_proxy":{"allow":[],"allow_public":true}}`},
 		{name: "spec repo host not allowed", body: `{"egress":"proxy","egress_proxy":{"allow":[],"repos":[{"host":"git.example.com","path":"o/r","access":"read"}]}}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -93,10 +94,10 @@ func TestCreateSandboxRefusesBadCreateOptions(t *testing.T) {
 			if rr.Code != http.StatusBadRequest {
 				t.Fatalf("got %d body=%s, want 400", rr.Code, rr.Body.String())
 			}
-			wantReason := ""
-			if tc.name == "unknown template" {
-				wantReason = reasonUnknownTemplate
-			}
+			wantReason := map[string]string{
+				"unknown template":         reasonUnknownTemplate,
+				"allow_public not enabled": reasonAllowPublicDisabled,
+			}[tc.name]
 			var body APIError
 			if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil || body.Reason != wantReason {
 				t.Fatalf("reason = %q, want %q (body %s)", body.Reason, wantReason, rr.Body.String())

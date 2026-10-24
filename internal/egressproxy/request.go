@@ -54,7 +54,7 @@ func (s *Server) requestHandler(sb *sandbox, t target) http.Handler {
 			defaultPort = 80
 		}
 		host, port, ok := parseAuthority(r.Host, defaultPort)
-		if !ok || destKey(host, port, defaultPort) != t.key || !p.allow[t.key] {
+		if !ok || destKey(host, port, defaultPort) != t.key || !p.permits(t) {
 			s.refuseLogged(w, r, sb, http.StatusForbidden, ReasonHostNotAllowed, provider, r.Host)
 			return
 		}
@@ -150,7 +150,7 @@ func (s *Server) requestHandler(sb *sandbox, t target) http.Handler {
 
 		started := time.Now()
 		out = out.WithContext(context.WithValue(out.Context(), dialAddrKey{}, net.JoinHostPort(t.addr.String(), strconv.Itoa(t.port))))
-		resp, err := s.transport(t).RoundTrip(out)
+		resp, err := s.transport(t, p.allow[t.key]).RoundTrip(out)
 		if err != nil {
 			if metered {
 				s.record(sb, p, t, provider, r.URL.Path, nil, metering.Usage{}, started)
@@ -320,11 +320,19 @@ type transportKey struct {
 // dialAddrKey carries the address a request's destination was checked at.
 type dialAddrKey struct{}
 
-// transport returns the pooled upstream for t. It dials only the address the
-// request carries, the one just checked, and verifies the certificate against
-// t's host; it never follows a redirect, which RoundTrip does not do. A pooled
-// connection was dialled to an address checked when it was opened.
-func (s *Server) transport(t target) *http.Transport {
+// transport returns the upstream for t, pooled when the spec names t's host:
+// a host reached only through allow_public gets one of its own, kept out of
+// the pool so a guest naming endless hosts cannot churn it for every
+// sandbox. It dials only the address the request carries, the one just
+// checked, and verifies the certificate against t's host; it never follows a
+// redirect, which RoundTrip does not do. A pooled connection was dialled to
+// an address checked when it was opened.
+func (s *Server) transport(t target, pooled bool) *http.Transport {
+	if !pooled {
+		tr := s.newTransport(t)
+		tr.DisableKeepAlives = true
+		return tr
+	}
 	key := transportKey{t.scheme, t.host, t.port}
 	if tr, ok := s.transports.Load(key); ok {
 		return tr.(*http.Transport)
@@ -339,7 +347,12 @@ func (s *Server) transport(t target) *http.Transport {
 		})
 		s.transportCount.Store(1)
 	}
-	tr := &http.Transport{
+	actual, _ := s.transports.LoadOrStore(key, s.newTransport(t))
+	return actual.(*http.Transport)
+}
+
+func (s *Server) newTransport(t target) *http.Transport {
+	return &http.Transport{
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
 			addr, ok := ctx.Value(dialAddrKey{}).(string)
 			if !ok {
@@ -358,8 +371,6 @@ func (s *Server) transport(t target) *http.Transport {
 		ResponseHeaderTimeout: 10 * time.Minute,
 		Proxy:                 nil,
 	}
-	actual, _ := s.transports.LoadOrStore(key, tr)
-	return actual.(*http.Transport)
 }
 
 // scrubbable reports whether a credentialed response can be scrubbed whole:

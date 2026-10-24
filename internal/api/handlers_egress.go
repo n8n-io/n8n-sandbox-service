@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -82,8 +83,13 @@ func handlePutEgressProxy(s store.SandboxStore, reg registry.RunnerRegistry, cfg
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
-		spec, err := parseEgressProxySpec(bytes.TrimSpace(raw))
+		spec, err := parseEgressProxySpec(bytes.TrimSpace(raw), cfg)
 		if err != nil {
+			var ce *createError
+			if errors.As(err, &ce) {
+				writeErrorReason(w, http.StatusBadRequest, ce.msg, ce.reason)
+				return
+			}
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}

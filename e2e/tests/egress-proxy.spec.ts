@@ -49,6 +49,27 @@ test.describe('Egress proxy', () => {
     }
   });
 
+  // The e2e API sets SANDBOX_API_EGRESS_ALLOW_PUBLIC.
+  test('allow_public reaches any public host on 443 and 80, and no private one', async () => {
+    const id = await createSandbox({ egress: 'proxy', egressProxy: { allow: [], allow_public: true } });
+    try {
+      const https = await run(id, `curl -fsS -o /dev/null -w '%{http_code}' --max-time 15 https://www.iana.org/`);
+      expect(https.exitCode, https.stderr).toBe(0);
+      const plain = await run(id, `curl -sS -D - -o /dev/null --max-time 15 http://${ALLOWED}/`);
+      expect(plain.stdout).not.toContain('X-Sandbox-Egress-Refusal');
+
+      const otherPort = await run(id, `curl -sS -D - -o /dev/null --max-time 10 http://${ALLOWED}:8080/`);
+      expect(otherPort.stdout).toContain('X-Sandbox-Egress-Refusal: host_not_allowed');
+      // NO_PROXY lists localhost; send it to the proxy, which must refuse it.
+      const loopback = await run(id, `curl --noproxy '' -sS -D - -o /dev/null --max-time 10 http://localhost/`);
+      expect(loopback.stdout).toContain('X-Sandbox-Egress-Refusal: address_not_allowed');
+      const literal = await run(id, `curl -sS -D - -o /dev/null --max-time 10 http://169.254.169.254/`);
+      expect(literal.stdout).toContain('X-Sandbox-Egress-Refusal: host_not_allowed');
+    } finally {
+      await deleteSandbox(id);
+    }
+  });
+
   test('a replaced spec applies to the next request', async () => {
     await ensureTenantAuth();
     const id = await createSandbox({ egress: 'proxy', egressProxy: spec });

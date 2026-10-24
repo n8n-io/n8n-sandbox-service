@@ -42,6 +42,7 @@ All services are configured via environment variables.
 | `SANDBOX_API_IDLE_DELETE_AFTER` | `24h` | Idle time after which the sweeper deletes a sandbox; wakes are refused past this window. `0` disables |
 | `SANDBOX_API_TEMPLATES` | `default` | Comma-separated template catalog creates may name; `default` is always in it. Runners list what they serve in their heartbeats, and a sandbox is placed only on one serving its template |
 | `SANDBOX_API_MAX_IDLE_WINDOW` | `24h` | Largest `idle_stop_after` / `idle_delete_after` a create or `PATCH /sandboxes/{id}` may set (at least `1m`); a tenant's `max_idle_window` can narrow it. `0` refuses both |
+| `SANDBOX_API_EGRESS_ALLOW_PUBLIC` | `false` | Lets an `egress_proxy` spec set `allow_public`: any public host on 443 or 80, uninspected. Off, such a create or `PUT …/egress-proxy` is `400` `allow_public_disabled`; turning it off leaves existing sandboxes as they are |
 | `SANDBOX_API_IDLE_DELETE_SAFETY_BUFFER` | `1m` | Added to a sandbox's idle window before deletion as a race guard (applied when either window above is > 0) |
 | `SANDBOX_API_IDLE_SWEEP_INTERVAL` | `1m` | How often the idle sweeper runs |
 | `SANDBOX_API_IDLE_SWEEP_CONCURRENCY` | `8` | Runner stop/delete calls one sweep keeps in flight (1–16), spread across runners. With Postgres the sandbox-lock pool is this plus 5 |
@@ -109,7 +110,7 @@ Both runtimes serve the [egress proxy](API.md#the-egress-proxy) to `egress: "pro
 | --- | --- | --- |
 | `SANDBOX_EGRESS_PROXY_PORT` | `3128` | Proxy port on each proxy sandbox's gateway |
 | `SANDBOX_EGRESS_PROXY_CA_CERT_FILE`, `SANDBOX_EGRESS_PROXY_CA_KEY_FILE` | *(unset)* | ECDSA CA the proxy signs inspected hosts' certificates with. Unset, the runner generates one in memory at startup, so its key never touches disk and a restart, which deletes every sandbox, rotates it |
-| `SANDBOX_EGRESS_PROXY_INTERNAL_HOSTS` | *(unset)* | Comma-separated host names (no ports) that may resolve into the blocked ranges, such as the in-cluster Git service. Nothing else on the runner's network is reachable |
+| `SANDBOX_EGRESS_PROXY_INTERNAL_HOSTS` | *(unset)* | Comma-separated host names (no ports) that may resolve into the blocked ranges, such as the in-cluster Git service. Nothing else on the runner's network is reachable, and a host is exempt only for a spec whose `allow` names it, never through `allow_public` |
 | `SANDBOX_EGRESS_PROXY_UPSTREAM_CA_FILE` | *(unset)* | PEM roots added to the system pool for verifying upstream TLS |
 | `SANDBOX_EGRESS_PROXY_SECRETS_DIR` | *(unset)* | Secret store: one file per `<tenant_id>/<secret_ref>`, each tenant's directory a root of its own; re-read at most 30 s after a change. Unset, every create naming a credential is refused (`400` `unknown_secret_ref`) |
 | `SANDBOX_EGRESS_USAGE_SINK_URL` | *(unset)* | Where usage records are posted. Unset, creates naming `model_hosts` are refused (`501`) |

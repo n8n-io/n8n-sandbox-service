@@ -133,3 +133,35 @@ func TestCreateSandboxUnknownSecretRef(t *testing.T) {
 		t.Fatalf("stored %d", n)
 	}
 }
+
+// allow_public is the operator's to enable: refused on create and PUT until
+// it is, then passed to the runner as given.
+func TestAllowPublicNeedsTheOperator(t *testing.T) {
+	ctl := &fakeSandboxControl{}
+	router, _, cfg := newIdleTestGateway(t, "admin-key", ctl)
+	const id = "f3f3f3f3-f3f3-4f3f-8f3f-f3f3f3f3f3f3"
+	seedProxySandbox(t, router, id)
+	path := "/sandboxes/" + id + "/egress-proxy"
+	open := `{"allow":[],"allow_public":true}`
+
+	rr := doJSON(t, router, http.MethodPut, path, "admin-key", open)
+	var body APIError
+	_ = json.Unmarshal(rr.Body.Bytes(), &body)
+	if rr.Code != http.StatusBadRequest || body.Reason != reasonAllowPublicDisabled {
+		t.Fatalf("put while disabled: %d %s", rr.Code, rr.Body.String())
+	}
+	if len(ctl.egressSpecs) != 0 {
+		t.Fatalf("runner got %v while disabled", ctl.egressSpecs)
+	}
+
+	cfg.EgressAllowPublic = true
+	if rr := doJSON(t, router, http.MethodPut, path, "admin-key", open); rr.Code != http.StatusNoContent {
+		t.Fatalf("put while enabled: %d %s", rr.Code, rr.Body.String())
+	}
+	if len(ctl.egressSpecs) != 1 || ctl.egressSpecs[0] != `{"allow":[],"allow_public":true}` {
+		t.Fatalf("runner got %v", ctl.egressSpecs)
+	}
+	if rr := postCreateSandbox(t, router, "admin-key", `{"egress":"proxy","egress_proxy":`+open+`}`); rr.Code != http.StatusCreated {
+		t.Fatalf("create while enabled: %d %s", rr.Code, rr.Body.String())
+	}
+}
