@@ -249,7 +249,7 @@ When no runner is eligible, it is the same except for `error`: `no sandbox runne
 }
 ```
 
-  - `allow` (up to 64): named groups of 1–16 hosts each. A host is a lowercase DNS name with an optional `:port` other than `80` or `443` (the defaults, left out); IP addresses (hex forms included) and wildcards are refused.
+  - `allow` (required, up to 64; `[]` refuses every host, a missing or `null` one is `400`): named groups of 1–16 hosts each. A host is a lowercase DNS name with an optional `:port` other than `80` or `443` (the defaults, left out); IP addresses (hex forms included) and wildcards are refused.
   - `repos` (up to 64): Git repositories on an `allow` host. `path` is lowercase, without `.git`. `access` is `read` (fetch) or `write` (fetch and push to `push_refs`).
   - `push_refs` (up to 16): refs under `refs/heads/`; one ending in `/` is a prefix, any other is one ref.
   - `credentials` (up to 32): per `allow` host, a reference to the secret to inject. Only the reference is stored. `scheme` is `bearer` (default), `basic` (needs `username`) or `header` (needs `header`, a lowercase name that is not hop-by-hop, `host`, `cookie`, `content-*` or `proxy-*`); `allow_plain_http` (boolean).

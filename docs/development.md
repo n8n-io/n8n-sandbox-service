@@ -111,6 +111,8 @@ Extra Playwright arguments can be appended (e.g. `./e2e/run-all.sh --grep patter
 
 `run-all.sh` runs `make docker-local` once. Per-topology scripts skip rebuilding when invoked from it (`E2E_SKIP_BUILD=1`). To rebuild before each phase, run topology scripts individually.
 
+A multi-hour execution on the factory pool's exec cap is opt-in: `E2E_LONG_EXEC_HOURS=5 E2E_RUNNER_MAX_EXEC_TIMEOUT=8h ./e2e/run.sh --grep "Long execution"`.
+
 Idle-TTL, Postgres, multi-pod and Firecracker lanes: [e2e/README.md](../e2e/README.md).
 
 ## Playground

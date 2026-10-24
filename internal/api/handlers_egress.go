@@ -82,12 +82,8 @@ func handlePutEgressProxy(s store.SandboxStore, reg registry.RunnerRegistry, cfg
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
-		var spec runnerruntime.EgressProxySpec
-		if err := json.Unmarshal(bytes.TrimSpace(raw), &spec); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		if err := spec.Validate(); err != nil {
+		spec, err := parseEgressProxySpec(bytes.TrimSpace(raw))
+		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}

@@ -33,6 +33,8 @@ type fakeDockerBackend struct {
 	limits *ResourceLimits
 	// changes of the last import.
 	changes []string
+	// absent: no container for the sandbox until one is created.
+	absent bool
 }
 
 func (f *fakeDockerBackend) ping(context.Context) error {
@@ -41,6 +43,7 @@ func (f *fakeDockerBackend) ping(context.Context) error {
 
 func (f *fakeDockerBackend) createContainer(_ context.Context, _, _, _, image, network string, limits *ResourceLimits, _ bool) (string, error) {
 	*f.events = append(*f.events, "create")
+	f.absent = false
 	f.network = network
 	f.image, f.limits = image, limits
 	return f.containerID, nil
@@ -115,6 +118,9 @@ func (f *fakeDockerBackend) inspectNetwork(context.Context, string) (*networkIns
 
 func (f *fakeDockerBackend) findContainerByLabels(context.Context, ...string) ([]string, error) {
 	*f.events = append(*f.events, "find")
+	if f.absent {
+		return nil, nil
+	}
 	return []string{f.containerID}, nil
 }
 
@@ -490,6 +496,7 @@ func TestCreateContainerCleansUpAfterContextCancellation(t *testing.T) {
 		events:      &events,
 		containerID: containerID,
 		ip:          "172.18.0.2",
+		absent:      true,
 	})
 	m.imageReady.Store(true)
 	m.applyPolicy = func(string, string, string, string, int, bool) error {
@@ -511,7 +518,7 @@ func TestCreateContainerCleansUpAfterContextCancellation(t *testing.T) {
 	if _, err := m.CreateContainer(ctx, "sandbox-id-1234", nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("CreateContainer() error = %v, want %v", err, context.Canceled)
 	}
-	wantEvents := []string{"create", "start", "containerIP", "applyPolicy", "waitForDaemon", "remove", "teardown"}
+	wantEvents := []string{"find", "create", "start", "containerIP", "applyPolicy", "waitForDaemon", "remove", "teardown"}
 	if !reflect.DeepEqual(events, wantEvents) {
 		t.Fatalf("events = %v, want %v", events, wantEvents)
 	}
@@ -546,7 +553,7 @@ func TestCreateAndWakeApplyTheNetworkPolicyOfTheSandboxEgress(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			events := []string{}
-			backend := &fakeDockerBackend{events: &events, containerID: "container-1", ip: "172.18.0.2"}
+			backend := &fakeDockerBackend{events: &events, containerID: "container-1", ip: "172.18.0.2", absent: true}
 			m := newRuntime(&config.Config{}, Config{}, backend)
 			m.publicNetwork.iface, m.publicNetwork.gatewayIP = "runner-bridge", "172.18.0.1"
 			m.noEgressNetwork.iface, m.noEgressNetwork.gatewayIP = runnerNoEgressBridge, "172.19.0.1"
@@ -740,9 +747,23 @@ func TestWaitForDaemonRefusesRedirects(t *testing.T) {
 
 // A create boots its template's image with its limits, an unset limit taking
 // the default; Templates lists the default first.
+// A second create for an id that has a container is refused, whatever name
+// the first one carries.
+func TestCreateRefusesAnIDThatHasAContainer(t *testing.T) {
+	events := []string{}
+	m := newRuntime(&config.Config{}, Config{SandboxImage: "img"}, &fakeDockerBackend{events: &events, containerID: "container-1"})
+	m.imageReady.Store(true)
+	if _, err := m.CreateContainer(context.Background(), "11111111-1111-4111-8111-111111111111", nil); err == nil {
+		t.Fatal("create succeeded")
+	}
+	if !reflect.DeepEqual(events, []string{"find"}) {
+		t.Fatalf("events = %v", events)
+	}
+}
+
 func TestCreateUsesTemplateImageAndLimits(t *testing.T) {
 	events := []string{}
-	backend := &fakeDockerBackend{events: &events, containerID: "container-1", ip: "172.18.0.2"}
+	backend := &fakeDockerBackend{events: &events, containerID: "container-1", ip: "172.18.0.2", absent: true}
 	m := newRuntime(&config.Config{}, Config{
 		SandboxImage: "img/default", DefaultMemoryMB: 512, DefaultCPUPercent: 100, DefaultPidsMax: 256,
 		DiskQuotaActive: true, DefaultDiskQuotaMB: 2048,
@@ -760,6 +781,7 @@ func TestCreateUsesTemplateImageAndLimits(t *testing.T) {
 		backend.limits.PidsMax != 256 || backend.limits.DiskMB != 20480 {
 		t.Fatalf("image %q limits %+v", backend.image, backend.limits)
 	}
+	backend.absent = true
 	if _, err := m.CreateContainer(context.Background(), "22222222-2222-4222-8222-222222222222", &CreateOptions{}); err != nil {
 		t.Fatalf("default create: %v", err)
 	}
@@ -779,7 +801,7 @@ func TestCreateUsesTemplateImageAndLimits(t *testing.T) {
 // to the proxy until it stops or is deleted.
 func TestProxySandboxIsIdentifiedByItsAddress(t *testing.T) {
 	events := []string{}
-	backend := &fakeDockerBackend{events: &events, containerID: "container-1", ip: "172.20.0.5"}
+	backend := &fakeDockerBackend{events: &events, containerID: "container-1", ip: "172.20.0.5", absent: true}
 	m := newRuntime(&config.Config{}, Config{SandboxImage: "img", EgressProxyPort: 3128}, backend)
 	m.proxyNetwork.iface, m.proxyNetwork.gatewayIP = runnerEgressProxyBridge, "172.20.0.1"
 	m.imageReady.Store(true)
@@ -838,6 +860,7 @@ func TestExportAndImport(t *testing.T) {
 	if err := m.ExportSandbox(context.Background(), id, &buf); err != nil || buf.String() != "TAR" {
 		t.Fatalf("export: %q %v", buf.String(), err)
 	}
+	backend.absent = true // the archive removed it
 	if _, err := m.ImportSandbox(context.Background(), id, &CreateOptions{}, strings.NewReader("TAR")); err != nil {
 		t.Fatalf("import: %v", err)
 	}

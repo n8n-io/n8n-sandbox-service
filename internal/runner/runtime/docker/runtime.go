@@ -591,7 +591,17 @@ func (m *Runtime) createContainer(ctx context.Context, sandboxID string, opts *C
 		return nil, fmt.Errorf("sandbox ID must be at least 12 characters, got %d", len(sandboxID))
 	}
 
-	containerName := "sandbox-" + sandboxID[:12]
+	// The whole id: callers choose ids, and two that share a prefix are
+	// still two sandboxes.
+	containerName := "sandbox-" + sandboxID
+	// A container from before ids named it whole keeps an older name, so the
+	// name no longer refuses a second container for the id: the label does.
+	switch _, err := m.FindContainerIDByLabel(ctx, sandboxID); {
+	case err == nil:
+		return nil, fmt.Errorf("sandbox %s already has a container", sandboxID)
+	case !errors.Is(err, ErrSandboxNotFound):
+		return nil, fmt.Errorf("find container: %w", err)
+	}
 	templateImage, ok := m.imageFor(opts.Template)
 	if !ok {
 		return nil, fmt.Errorf("unknown template %q", opts.Template)

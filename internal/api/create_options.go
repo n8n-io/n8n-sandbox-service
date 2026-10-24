@@ -139,11 +139,8 @@ func parseCreateRequest(req *createSandboxRequest, cfg *config.APIConfig, idleLi
 	case egress != runnerruntime.EgressProxy && specGiven:
 		return nil, errors.New(`egress_proxy is only allowed with egress "proxy"`)
 	case specGiven:
-		var spec runnerruntime.EgressProxySpec
-		if err := json.Unmarshal(req.EgressProxy, &spec); err != nil {
-			return nil, err
-		}
-		if err := spec.Validate(); err != nil {
+		spec, err := parseEgressProxySpec(req.EgressProxy)
+		if err != nil {
 			return nil, err
 		}
 		canonical, err := json.Marshal(&spec)
@@ -252,4 +249,18 @@ func checkWindowOrder(stop, archive, del int64) error {
 		}
 	}
 	return nil
+}
+
+// parseEgressProxySpec decodes and validates an egress_proxy object. allow is
+// required: [] is a spec that refuses every host, a missing or null allow is
+// an error rather than read as one.
+func parseEgressProxySpec(raw []byte) (runnerruntime.EgressProxySpec, error) {
+	var spec runnerruntime.EgressProxySpec
+	if err := json.Unmarshal(raw, &spec); err != nil {
+		return spec, err
+	}
+	if spec.Allow == nil {
+		return spec, errors.New("egress_proxy.allow is required ([] refuses every host)")
+	}
+	return spec, spec.Validate()
 }

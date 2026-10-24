@@ -159,6 +159,12 @@ RUNNER_CONTROL_HOST_PORT="${RUNNER_CONTROL_HOST_PORT:-19091}"
 EGRESS_SECRETS_DIR="$TLS_DIR/egress-secrets"
 mkdir -p "$EGRESS_SECRETS_DIR"
 
+# Opt-in usage sink, so model_hosts creates are served (svctest needs them).
+RUNNER_SINK_ENV=()
+if [[ -n "${E2E_USAGE_SINK_URL:-}" ]]; then
+	RUNNER_SINK_ENV=(-e "SANDBOX_EGRESS_USAGE_SINK_URL=$E2E_USAGE_SINK_URL")
+fi
+
 echo "Starting runner service..."
 docker run -d \
 	"${RUNTIME_ARGS[@]}" \
@@ -167,6 +173,7 @@ docker run -d \
 	-p "${RUNNER_CONTROL_HOST_PORT}:9091" \
 	-v "$TLS_DIR/runner:/grpc-tls:ro" \
 	-v "$EGRESS_SECRETS_DIR:/egress-secrets:ro" \
+	${RUNNER_SINK_ENV[@]+"${RUNNER_SINK_ENV[@]}"} \
 	-e "SANDBOX_EGRESS_PROXY_SECRETS_DIR=/egress-secrets" \
 	-e "SANDBOX_RUNNER_API_KEYS=$RUNNER_INTERNAL_API_KEY" \
 	-e "SANDBOX_RUNNER_METRICS_ENABLED=true" \
@@ -186,6 +193,7 @@ docker run -d \
 	-e "SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE=/grpc-tls/control-grpc-server.key" \
 	-e "SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE=/grpc-tls/ca.crt" \
 	-e "SANDBOX_RUNNER_ID=e2e-runner-$$" \
+	-e "SANDBOX_RUNNER_MAX_EXEC_TIMEOUT=${E2E_RUNNER_MAX_EXEC_TIMEOUT:-15m}" \
 	-e "SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB=50" \
 	-e "SANDBOX_RUNNER_DISK_QUOTA_POOL_SIZE_GB=4" \
 	-e "SANDBOX_RUNNER_MAX_INFLIGHT_PER_SANDBOX=16" \

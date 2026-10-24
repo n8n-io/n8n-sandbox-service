@@ -73,6 +73,8 @@ func TestCreateSandboxRefusesBadCreateOptions(t *testing.T) {
 		{name: "idle not an integer", body: `{"idle_stop_after":"10m"}`},
 		{name: "proxy without spec", body: `{"egress":"proxy"}`},
 		{name: "proxy with null spec", body: `{"egress":"proxy","egress_proxy":null}`},
+		{name: "spec without allow", body: `{"egress":"proxy","egress_proxy":{}}`},
+		{name: "spec with null allow", body: `{"egress":"proxy","egress_proxy":{"allow":null}}`},
 		{name: "spec without proxy", body: `{"egress":"none","egress_proxy":` + proxySpec + `}`},
 		{name: "spec unknown field", body: `{"egress":"proxy","egress_proxy":{"allow":[],"allow_all":true}}`},
 		{name: "spec ip literal", body: `{"egress":"proxy","egress_proxy":{"allow":[{"name":"x","hosts":["169.254.169.254"]}]}}`},

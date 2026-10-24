@@ -92,7 +92,7 @@ async function waitInnerDockerReady(
 }
 
 function sandboxInnerContainerName(sandboxUUID: string): string {
-  return `sandbox-${sandboxUUID.slice(0, 12)}`;
+  return `sandbox-${sandboxUUID}`;
 }
 
 function runnerHostListsSandbox(runnerContainer: string, sandboxUUID: string): boolean {
