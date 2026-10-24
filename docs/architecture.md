@@ -61,7 +61,7 @@ The system has three tiers:
 2. **Runner** — manages sandbox lifecycle (containers or microVMs); proxies exec/file operations to daemons
 3. **Daemon** — lightweight HTTP server running inside each sandbox; executes commands and manages files
 
-Multiple runners can register with a single API gateway for horizontal scaling. The API distributes sandbox creation across eligible runners using load-aware placement (lowest `capacity_used`).
+Multiple runners can register with a single API gateway for horizontal scaling. The API distributes sandbox creation across eligible runners that serve the requested template, using load-aware placement (lowest `capacity_used`).
 
 ### Multi-pod API (Postgres)
 
@@ -89,7 +89,7 @@ The API gateway is the single public-facing service. It exposes a REST API for s
 | gRPC server | `internal/api/grpc/` | `RunnerRegistry` service — accepts runner heartbeat streams |
 | Store | `internal/api/store/` | Sandbox metadata (`sqlite` default, `postgres` for multi-pod) |
 | Sweeper lock | `internal/api/store/postgres.go` | Postgres advisory lock for idle sweeper leadership |
-| Idle sweeper | `internal/api/ttl.go` | Periodic scan to stop/delete idle sandboxes by their own windows or the global ones (ephemeral ones are deleted, never stopped), bounded concurrency with per-call runner deadlines |
+| Idle sweeper | `internal/api/ttl.go` | Periodic scan to stop, archive or delete idle sandboxes by their own windows or the global ones (ephemeral ones are deleted, never stopped), bounded concurrency with per-call runner deadlines |
 | Config | `internal/api/config/` | Environment variable parsing and validation |
 
 **Middleware chain:** Recovery → CORS (optional) → Logging → Auth (API key) → Metrics (optional)
@@ -166,11 +166,11 @@ Each hop uses `httputil.ReverseProxy` with URL rewriting. The runner can wake a 
 ### Creating a Sandbox
 
 1. Client sends `POST /sandboxes` with API key
-2. API picks the eligible runner with the lowest reported `capacity_used`
+2. API picks the eligible (healthy, uncordoned) runner serving the requested template with the lowest reported `capacity_used`
 3. API calls `SandboxControl.CreateSandbox` on the selected runner (gRPC). A Firecracker runner with no free slot refuses before creating anything, with `ResourceExhausted` and an `ErrorInfo` detail (`sandbox-runner`/`CAPACITY_EXHAUSTED`) that tells the refusal from gRPC's own uses of that code. Only that refusal makes the API repeat steps 2–3 without the runner, up to three runners; it answers `503` when every runner tried refused or none is eligible. Any other runner error ends the create with `500`
-4. Runner creates the sandbox: a container from the sandbox image with resource limits and labels, or a microVM restored from the golden snapshot
+4. Runner creates the sandbox: a container `sandbox-<id>` from the template's image with its resource limits and labels (refused if a container already carries the id's label), or a microVM restored from the golden snapshot
 5. Runner waits for the daemon inside it to become healthy
-6. API stores the sandbox record (ID, tenant, status, runner assignment)
+6. API stores the sandbox record (ID, tenant, status, runner assignment, template, egress and create options)
 7. API returns the sandbox ID and status to the client
 
 ### Executing a Command
@@ -184,7 +184,7 @@ Each hop uses `httputil.ReverseProxy` with URL rewriting. The runner can wake a 
 
 ### File Operations
 
-File read, write, list, stat, copy, move, and delete follow the same two-hop reverse proxy path. The daemon performs all file system operations inside the container. Request body size is capped (default 10 MB).
+File read, write, list, stat, copy, move, and delete follow the same two-hop reverse proxy path. The daemon performs all file system operations inside the container as the guest user, taking every path from `/`; a path that user may not use is `403`. Request body size is capped (default 10 MB).
 
 ### Recovering a Crashed Guest
 
@@ -204,11 +204,11 @@ Trust boundaries, the mechanism enforcing each, and the non-guarantees are in [s
 
 ### API store
 
-SQLite at `SANDBOX_API_DATA_DIR/api.db` (default) or Postgres. Tables: `sandboxes` (ID, tenant, status, timestamps, runner routing), `tenants`, `api_keys` (hashed), and on Postgres `runners` (heartbeats; SQLite keeps the runner registry in memory). Migrations run automatically on startup. The SQLite file uses WAL with `synchronous=NORMAL` unless `SANDBOX_API_SQLITE_WAL=false`.
+SQLite at `SANDBOX_API_DATA_DIR/api.db` (default) or Postgres. Tables: `sandboxes` (ID, tenant, status, timestamps, runner routing, template, egress and proxy spec, idle windows, archive object and wrapped key), `tenants` (quota, `max_idle_window`), `api_keys` (hashed), and on Postgres `runners` (heartbeats; SQLite keeps the runner registry in memory). Migrations run automatically on startup. The SQLite file uses WAL with `synchronous=NORMAL` unless `SANDBOX_API_SQLITE_WAL=false`.
 
 ### Runner stateless
 
-Runners hold no persistent state. On startup each runtime removes every sandbox left over from a previous run and starts empty; sandboxes do not survive a runner restart.
+Runners hold no persistent state. On startup each runtime removes every sandbox left over from a previous run and starts empty; sandboxes do not survive a runner restart, except archived ones, whose disks are in the archive store and restore onto any runner serving their template.
 
 ### Daemon In-Memory
 
