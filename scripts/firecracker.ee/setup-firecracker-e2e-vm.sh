@@ -268,4 +268,29 @@ sudo ln -sf snapshot_state /srv/firecracker/snapshots/state
 sudo chown -R 1000:1000 /srv/firecracker/template /srv/firecracker/snapshots
 sudo chmod 0644 /srv/firecracker/snapshots/snapshot_mem /srv/firecracker/snapshots/snapshot_state
 
+# A second template, "small": the same rootfs and kernel with a smaller golden
+# snapshot, so the e2e lane covers templates as the Docker lane does.
+if [[ "${FIRECRACKER_E2E_SMALL_TEMPLATE:-1}" == "1" ]]; then
+	echo "==> Creating the small Firecracker e2e template..."
+	sudo rm -rf /srv/firecracker/templates/small /srv/firecracker/snapshots-small
+	sudo mkdir -p /srv/firecracker/templates/small /srv/firecracker/snapshots-small
+	sudo cp --sparse=always /srv/firecracker/template/rootfs.ext4 /srv/firecracker/template/vmlinux \
+		/srv/firecracker/templates/small/
+	sudo env \
+		MEM_MIB="${FIRECRACKER_E2E_SMALL_MEM_MIB:-256}" \
+		VCPUS=1 \
+		bash "${SCRIPT_DIR}/create-golden-snapshot.sh" \
+		--kernel /srv/firecracker/templates/small/vmlinux \
+		--ext4 /srv/firecracker/templates/small/rootfs.ext4 \
+		--daemon-bin ./bin/sandbox-daemon \
+		--out /srv/firecracker/snapshots-small
+	sudo ln -sf snapshot_mem /srv/firecracker/snapshots-small/mem
+	sudo ln -sf snapshot_state /srv/firecracker/snapshots-small/state
+	sudo chown -R 1000:1000 /srv/firecracker/templates /srv/firecracker/snapshots-small
+	sudo chmod 0755 /srv/firecracker/templates /srv/firecracker/templates/small /srv/firecracker/snapshots-small
+	sudo chmod 0664 /srv/firecracker/templates/small/rootfs.ext4
+	sudo chmod 0644 /srv/firecracker/templates/small/vmlinux \
+		/srv/firecracker/snapshots-small/snapshot_mem /srv/firecracker/snapshots-small/snapshot_state
+fi
+
 echo "==> Firecracker VM setup complete"

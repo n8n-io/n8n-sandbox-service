@@ -30,26 +30,39 @@ test.describe('Templates', () => {
   // Each template lands on a runner serving it and boots its own image, with
   // its own limits.
   test('a create with each template boots that template', async () => {
-    const runner = process.env.E2E_RUNNER_CONTAINER_NAME;
-    test.skip(!runner, 'needs E2E_RUNNER_CONTAINER_NAME to inspect the container');
     await ensureTenantAuth();
-    const small = (await client.listTemplates()).find((t) => t.name === 'small');
+    const templates = await client.listTemplates();
+    const small = templates.find((t) => t.name === 'small');
     test.skip(!small, 'the e2e lane serves no "small" template');
     expect(small!.runners).toBeGreaterThan(0);
+    expect(small!.memoryMb).toBeLessThan(templates.find((t) => t.name === 'default')!.memoryMb);
+    // Docker: the container's image, label and memory limit. Firecracker: the
+    // memory image cloned from its template's golden snapshot, whose size is
+    // the guest's memory (the guest mounts no /proc to ask it).
+    const runner = process.env.E2E_RUNNER_CONTAINER_NAME;
+    const fcDataDir = process.env.E2E_FIRECRACKER_RUNNER_DATA_DIR;
+    test.skip(!runner && !fcDataDir, 'needs E2E_RUNNER_CONTAINER_NAME or E2E_FIRECRACKER_RUNNER_DATA_DIR');
     for (const template of ['default', 'small']) {
       const id = await createSandbox({ template });
       try {
         expect((await client.getSandbox(id)).template ?? 'default').toBe(template);
-        const container = execFileSync(
-          'docker',
-          ['exec', runner!, 'docker', 'ps', '--filter', `label=sandbox-service.id=${id}`, '--format', '{{.Image}} {{.Label "sandbox-service.template"}}'],
-          { encoding: 'utf8' },
-        ).trim();
-        const [image, label] = container.split(' ');
-        expect(label).toBe(template);
-        expect(image).toMatch(template === 'small' ? /:e2e-small-/ : /:e2e-(?!small)/);
-        const mem = await client.exec(id, { command: 'cat /sys/fs/cgroup/memory.max' });
-        if (template === 'small') expect(mem.stdout.trim()).toBe(String(256 * 1024 * 1024));
+        if (runner) {
+          const container = execFileSync(
+            'docker',
+            ['exec', runner, 'docker', 'ps', '--filter', `label=sandbox-service.id=${id}`, '--format', '{{.Image}} {{.Label "sandbox-service.template"}}'],
+            { encoding: 'utf8' },
+          ).trim();
+          const [image, label] = container.split(' ');
+          expect(label).toBe(template);
+          expect(image).toMatch(template === 'small' ? /:e2e-small-/ : /:e2e-(?!small)/);
+          const mem = await client.exec(id, { command: 'cat /sys/fs/cgroup/memory.max' });
+          if (template === 'small') expect(mem.stdout.trim()).toBe(String(256 * 1024 * 1024));
+        } else {
+          const bytes = execFileSync('sudo', ['stat', '-c', '%s', `${fcDataDir}/${id}/snapshot_mem`], { encoding: 'utf8' }).trim();
+          const want = templates.find((t) => t.name === template)!.memoryMb;
+          expect(Number(bytes)).toBe(want * 1024 * 1024);
+          expect(await client.exec(id, { command: 'true' })).toHaveSucceeded();
+        }
       } finally {
         await deleteSandbox(id);
       }

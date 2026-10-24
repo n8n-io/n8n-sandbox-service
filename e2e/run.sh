@@ -7,9 +7,12 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/lib/common.sh"
 
 ARCH="$(e2e_docker_arch)"
-API_IMAGE="n8n-sandbox-service-api:latest-${ARCH}"
-RUNNER_IMAGE="n8n-sandbox-service-runner-dind:latest-${ARCH}"
-SANDBOX_IMAGE="n8n-sandbox:latest-${ARCH}"
+# E2E_IMAGE_TAG builds and runs <tag>-<arch> images, so stacks run side by
+# side need not share (and rebuild) one set.
+IMAGE_TAG="${E2E_IMAGE_TAG:-latest}"
+API_IMAGE="n8n-sandbox-service-api:${IMAGE_TAG}-${ARCH}"
+RUNNER_IMAGE="n8n-sandbox-service-runner-dind:${IMAGE_TAG}-${ARCH}"
+SANDBOX_IMAGE="n8n-sandbox:${IMAGE_TAG}-${ARCH}"
 REGISTRY_NAME="${N8N_SANDBOX_REGISTRY_NAME:-n8n-sandbox-registry}"
 REGISTRY_PORT="${REGISTRY_PORT:-5050}"
 REGISTRY_INTERNAL_ADDR="${REGISTRY_NAME}:5000"
@@ -73,7 +76,7 @@ trap cleanup EXIT
 
 if [[ "${E2E_SKIP_BUILD:-}" != "1" ]]; then
 	echo "Building service and sandbox images..."
-	make -C "$PROJECT_DIR" docker-local
+	make -C "$PROJECT_DIR" docker-local IMAGE_TAG="$IMAGE_TAG"
 fi
 
 e2e_bootstrap_mtls_maybe "$PROJECT_DIR" "$TLS_DIR_OWNED" "$TLS_DIR" "$API_TLS_DNS" "$RUNNER_CONTROL_ALIAS"

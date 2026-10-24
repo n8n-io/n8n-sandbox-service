@@ -115,6 +115,9 @@ bash "$PROJECT_DIR/scripts/bootstrap-mtls.sh" \
 	--force
 
 mkdir -p "$API_DATA_DIR"
+# An archive store in the API's data dir, served to the runner on this host.
+rm -rf "$API_DATA_DIR/archives"
+od -An -tx1 -N32 /dev/urandom | tr -d ' \n' >"$TLS_DIR/api/archive.key"
 sudo mkdir -p "$RUNNER_DATA_DIR"
 rm -f "$API_LOG" "$RUNNER_LOG"
 
@@ -124,16 +127,30 @@ e2e_kill_tcp_listeners \
 	"$(e2e_addr_port "$RUNNER_ADDR")" \
 	"$(e2e_addr_port "$RUNNER_CONTROL_LISTEN_ADDR")"
 
+# The small template, when the host setup built one, served as on Docker.
+FC_SMALL_TEMPLATE_DIR="${E2E_FIRECRACKER_SMALL_TEMPLATE_DIR:-/srv/firecracker/templates/small}"
+FC_SMALL_SNAPSHOT_DIR="${E2E_FIRECRACKER_SMALL_SNAPSHOT_DIR:-/srv/firecracker/snapshots-small}"
+API_TEMPLATE_ENV=()
+RUNNER_TEMPLATE_ENV=()
+if [[ -f "$FC_SMALL_TEMPLATE_DIR/rootfs.ext4" && -e "$FC_SMALL_SNAPSHOT_DIR/mem" ]]; then
+	API_TEMPLATE_ENV=(SANDBOX_API_TEMPLATES=small)
+	RUNNER_TEMPLATE_ENV=("SANDBOX_RUNNER_FIRECRACKER_TEMPLATES={\"small\":{\"template_dir\":\"$FC_SMALL_TEMPLATE_DIR\",\"snapshot_mem_path\":\"$FC_SMALL_SNAPSHOT_DIR/mem\",\"snapshot_state_path\":\"$FC_SMALL_SNAPSHOT_DIR/state\"}}")
+fi
+
 echo "Starting API host process on port ${PORT}..."
 API_ENV=(
 	SANDBOX_API_LISTEN_ADDR="127.0.0.1:${PORT}"
 	SANDBOX_API_GRPC_LISTEN_ADDR="$API_GRPC_ADDR"
 	SANDBOX_API_DATA_DIR="$API_DATA_DIR"
+	SANDBOX_API_ARCHIVE_DIR="$API_DATA_DIR/archives"
+	SANDBOX_API_ARCHIVE_URL="http://127.0.0.1:${PORT}"
+	SANDBOX_API_ARCHIVE_KEY_FILE="$TLS_DIR/api/archive.key"
 	SANDBOX_API_KEYS="$API_KEY"
 	SANDBOX_API_PROVISIONER_KEYS="$E2E_PROVISIONER_API_KEY"
 	SANDBOX_API_SCALER_KEYS="$E2E_SCALER_API_KEY"
 	SANDBOX_API_METRICS_ENABLED=true
 	SANDBOX_API_EGRESS_ALLOW_PUBLIC=true
+	${API_TEMPLATE_ENV[@]+"${API_TEMPLATE_ENV[@]}"}
 	SANDBOX_API_RUNNER_REGISTRATION_TOKEN="$REG_TOKEN"
 	SANDBOX_API_RUNNER_API_KEY="$RUNNER_INTERNAL_API_KEY"
 	SANDBOX_API_GRPC_TLS_CERT_FILE="$TLS_DIR/api/grpc-server.crt"
@@ -161,6 +178,10 @@ API_PID=$!
 
 wait_for_http "API" "http://127.0.0.1:${PORT}/healthz"
 
+# The egress proxy's secret store: tests write <tenant_id>/<secret_ref> here.
+EGRESS_SECRETS_DIR="$TLS_DIR/egress-secrets"
+mkdir -p "$EGRESS_SECRETS_DIR"
+
 echo "Starting Firecracker runner host process..."
 RUNNER_ENV=(
 	PATH="/usr/local/go/bin:$PATH"
@@ -187,6 +208,8 @@ RUNNER_ENV=(
 	SANDBOX_RUNNER_CAPACITY_TOTAL="$RUNNER_CAPACITY_TOTAL"
 	SANDBOX_RUNNER_FIRECRACKER_PROXY_PORT_START="$FIRECRACKER_PROXY_PORT_START"
 	SANDBOX_RUNNER_MAX_INFLIGHT_PER_SANDBOX=16
+	SANDBOX_EGRESS_PROXY_SECRETS_DIR="$EGRESS_SECRETS_DIR"
+	${RUNNER_TEMPLATE_ENV[@]+"${RUNNER_TEMPLATE_ENV[@]}"}
 )
 RUNNER_BIN="$PROJECT_DIR/bin/runner-firecracker"
 FC_RUNNER_ENV_FILE="${E2E_FIRECRACKER_RUNNER_ENV_FILE:-$SCRIPT_DIR/.fc-runner-env.$$}"
@@ -214,6 +237,8 @@ wait_for_http "Firecracker runner" "https://${RUNNER_ADDR}/readyz"
 wait_for_runner_registered
 
 export E2E_PROJECT_DIR="$PROJECT_DIR"
+export E2E_EGRESS_SECRETS_DIR="$EGRESS_SECRETS_DIR"
+export E2E_FIRECRACKER_RUNNER_DATA_DIR="$RUNNER_DATA_DIR"
 export E2E_RUNNER_HTTP_ADDR="$RUNNER_ADDR"
 export E2E_RUNNER_CAPACITY_TOTAL="$RUNNER_CAPACITY_TOTAL"
 export E2E_RUNNER_API_KEY="$RUNNER_INTERNAL_API_KEY"

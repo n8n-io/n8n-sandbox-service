@@ -93,6 +93,8 @@ clean:
 	rm -rf $(BINDIR)
 
 ARCH := $(shell uname -m | sed 's/aarch64/arm64/' | sed 's/x86_64/amd64/')
+# Tag of the images the docker-* targets build, as <IMAGE_TAG>-<arch>.
+IMAGE_TAG ?= latest
 
 ## docker: Build API + runner images for linux/amd64.
 docker: docker-api-amd64 docker-runner-amd64 docker-firecracker-runner-amd64
@@ -108,31 +110,31 @@ docker-amd64: docker-api-amd64 docker-runner-amd64 docker-firecracker-runner-amd
 
 ## docker-api-arm64: Build the API image for linux/arm64.
 docker-api-arm64:
-	docker buildx build -f Dockerfile.api --platform linux/arm64 -t n8n-sandbox-service-api:latest-arm64 --load .
+	docker buildx build -f Dockerfile.api --platform linux/arm64 -t n8n-sandbox-service-api:$(IMAGE_TAG)-arm64 --load .
 
 ## docker-api-amd64: Build the API image for linux/amd64.
 docker-api-amd64:
-	docker buildx build -f Dockerfile.api --platform linux/amd64 -t n8n-sandbox-service-api:latest-amd64 --load .
+	docker buildx build -f Dockerfile.api --platform linux/amd64 -t n8n-sandbox-service-api:$(IMAGE_TAG)-amd64 --load .
 
 ## docker-runner-arm64: Build the runner image for linux/arm64.
 docker-runner-arm64:
-	docker buildx build -f Dockerfile.runner-dind --platform linux/arm64 -t n8n-sandbox-service-runner-dind:latest-arm64 --load .
+	docker buildx build -f Dockerfile.runner-dind --platform linux/arm64 -t n8n-sandbox-service-runner-dind:$(IMAGE_TAG)-arm64 --load .
 
 ## docker-runner-amd64: Build the runner image for linux/amd64.
 docker-runner-amd64:
-	docker buildx build -f Dockerfile.runner-dind --platform linux/amd64 -t n8n-sandbox-service-runner-dind:latest-amd64 --load .
+	docker buildx build -f Dockerfile.runner-dind --platform linux/amd64 -t n8n-sandbox-service-runner-dind:$(IMAGE_TAG)-amd64 --load .
 
 ## docker-firecracker-runner-amd64: Build the Firecracker runner image for linux/amd64.
 docker-firecracker-runner-amd64:
-	docker buildx build -f Dockerfile.ee.runner-firecracker --platform linux/amd64 -t n8n-sandbox-service-runner-firecracker:latest-amd64 --load .
+	docker buildx build -f Dockerfile.ee.runner-firecracker --platform linux/amd64 -t n8n-sandbox-service-runner-firecracker:$(IMAGE_TAG)-amd64 --load .
 
 ## docker-sandbox-arm64: Build the sandbox image for linux/arm64.
 docker-sandbox-arm64:
-	docker buildx build -f Dockerfile.sandbox --platform linux/arm64 -t n8n-sandbox:latest-arm64 --load .
+	docker buildx build -f Dockerfile.sandbox --platform linux/arm64 -t n8n-sandbox:$(IMAGE_TAG)-arm64 --load .
 
 ## docker-sandbox-amd64: Build the sandbox image for linux/amd64.
 docker-sandbox-amd64:
-	docker buildx build -f Dockerfile.sandbox --platform linux/amd64 -t n8n-sandbox:latest-amd64 --load .
+	docker buildx build -f Dockerfile.sandbox --platform linux/amd64 -t n8n-sandbox:$(IMAGE_TAG)-amd64 --load .
 
 ## sdk: Install, build, typecheck, and test the SDK.
 sdk: sdk-install sdk-build sdk-typecheck sdk-test
