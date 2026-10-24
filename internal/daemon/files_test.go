@@ -1,6 +1,9 @@
 package daemon
 
 import (
+	"fmt"
+	"io/fs"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -67,4 +70,25 @@ func tempBaseDir(t *testing.T) string {
 		t.Fatalf("eval symlinks: %v", err)
 	}
 	return resolvedBase
+}
+
+// A path the guest user may not write is the caller's error, not the daemon's.
+func TestFileOpStatusCodeForbidsWhatTheGuestMayNotTouch(t *testing.T) {
+	err := fmt.Errorf("file_write mkdir /notes: %w", &fs.PathError{Op: "mkdir", Path: "/notes", Err: fs.ErrPermission})
+	if got := fileOpStatusCode(err); got != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", got)
+	}
+}
+
+// A recursive list fails like a flat one when the directory itself is missing.
+func TestHandleFileListRecursiveMissingRoot(t *testing.T) {
+	missing := filepath.Join(tempBaseDir(t), "missing")
+	for _, recursive := range []bool{false, true} {
+		_, err := HandleFileList(missing, recursive, "")
+		if err == nil {
+			t.Errorf("recursive=%v: listed a missing directory", recursive)
+		} else if got := fileOpStatusCode(err); got != http.StatusNotFound {
+			t.Errorf("recursive=%v: status %d, want 404", recursive, got)
+		}
+	}
 }

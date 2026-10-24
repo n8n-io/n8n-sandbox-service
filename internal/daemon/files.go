@@ -45,6 +45,9 @@ func HandleFileList(path string, recursive bool, extension string) ([]FileInfo, 
 	var infos []FileInfo
 	err := filepath.WalkDir(resolved, func(walkPath string, d os.DirEntry, err error) error {
 		if err != nil {
+			if walkPath == resolved {
+				return err // the directory asked for is missing or unreadable
+			}
 			return nil // skip entries we cannot access
 		}
 		// Skip the root directory itself

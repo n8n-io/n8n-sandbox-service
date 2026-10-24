@@ -125,6 +125,10 @@ if [[ "${E2E_IDLE_TTL_SUITE:-}" == "1" ]]; then
 		-e "SANDBOX_API_IDLE_SWEEP_INTERVAL=1s"
 	)
 fi
+# Opt-in idle window cap, e.g. the factory pool's 168h (svctest needs it).
+if [[ -n "${E2E_API_MAX_IDLE_WINDOW:-}" ]]; then
+	API_IDLE_ENV+=(-e "SANDBOX_API_MAX_IDLE_WINDOW=$E2E_API_MAX_IDLE_WINDOW")
+fi
 
 echo "Starting API service on port $PORT..."
 API_DOCKER_RUN=(-d)

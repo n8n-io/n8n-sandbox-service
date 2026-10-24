@@ -638,6 +638,8 @@ curl -X DELETE http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440
 
 List files in a sandbox directory.
 
+File paths are absolute: a `path` is taken from `/`, so `notes.txt` is `/notes.txt`, not relative to an execution's working directory. A path the sandbox does not permit reading or writing is `403` on every file endpoint below; a recursive list skips entries under it that it cannot read.
+
 **Path Parameters:**
 - `id` — Sandbox UUID
 

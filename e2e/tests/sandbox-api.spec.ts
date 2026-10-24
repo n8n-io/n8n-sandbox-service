@@ -477,6 +477,14 @@ test.describe('File operations', () => {
     expect(resp.status).toBe(400);
   });
 
+  test('a path the sandbox may not write returns 403', async ({ request }) => {
+    const resp = await request.put(`/sandboxes/${sandboxId}/files?path=${encodeURIComponent('/forbidden/a.txt')}`, {
+      headers: { 'X-Api-Key': await getApiKey(), 'Content-Type': 'application/octet-stream' },
+      data: 'x',
+    });
+    expect(resp.status()).toBe(403);
+  });
+
   test('download non-existent file returns 404', async ({ request }) => {
     const resp = await apiRequest(
       request,

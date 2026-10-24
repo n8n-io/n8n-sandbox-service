@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -389,6 +390,8 @@ func decodeJSONBody(body io.Reader, dst any) error {
 func fileOpStatusCode(err error) int {
 	msg := strings.ToLower(err.Error())
 	switch {
+	case errors.Is(err, fs.ErrPermission):
+		return http.StatusForbidden
 	case strings.Contains(msg, "already exists"):
 		return http.StatusConflict
 	case strings.Contains(msg, "not found"), strings.Contains(msg, "no such file or directory"):
