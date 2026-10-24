@@ -288,6 +288,7 @@ test.describe('Runner failure resilience', () => {
         data: { command: 'true' },
       });
       expect(bad.status()).toBe(503);
+      expect(bad.headers()['retry-after']).toBeTruthy();
       const errBody = (await bad.json()) as { error?: string };
       expect(errBody.error?.toLowerCase()).toContain('runner unavailable');
 
