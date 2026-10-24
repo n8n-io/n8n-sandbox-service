@@ -119,6 +119,7 @@ Opt-in settings for `e2e/run.sh`, none set by default:
 - `E2E_USAGE_SINK_URL`: the runner's usage sink, so `model_hosts` creates are served. `E2E_API_MAX_IDLE_WINDOW` (e.g. `168h`): the API's idle window cap.
 - `E2E_RUNNER_TEMPLATES` and `E2E_API_TEMPLATES`: the runner's `SANDBOX_RUNNER_DOCKER_TEMPLATES` JSON, with `{registry}` for the e2e registry, and its names for the API, replacing the `small` template. `E2E_PUSH_IMAGES` (space-separated local images) are pushed there first, as `{registry}/<last path segment>`.
 - `E2E_EGRESS_PROXY_INTERNAL_HOSTS`: hosts the egress proxy may reach in private ranges, e.g. services on a network you `docker network connect` the runner container to.
+- `E2E_USAGE_SINK_TOKEN_FILE` and `E2E_EGRESS_PROXY_UPSTREAM_CA_FILE`: host files mounted read-only into the runner as its sink bearer token and as PEM roots for upstream TLS.
 - `E2E_RUNNER_DISK_QUOTA_MB` (default `50`) and `E2E_RUNNER_DISK_POOL_GB` (default `4`): per-sandbox disk and the runner's pool.
 
 Ports and the registry are set with `PORT`, `RUNNER_CONTROL_HOST_PORT`, `REGISTRY_PORT` and `N8N_SANDBOX_REGISTRY_NAME`; containers and the network are named after the script's pid.

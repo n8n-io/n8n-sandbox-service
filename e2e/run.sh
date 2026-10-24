@@ -191,6 +191,16 @@ fi
 if [[ -n "${E2E_EGRESS_PROXY_INTERNAL_HOSTS:-}" ]]; then
 	RUNNER_OPT_ENV+=(-e "SANDBOX_EGRESS_PROXY_INTERNAL_HOSTS=$E2E_EGRESS_PROXY_INTERNAL_HOSTS")
 fi
+# Files on the host, mounted read-only: the sink's bearer token, and PEM roots
+# for upstreams on a private CA.
+if [[ -n "${E2E_USAGE_SINK_TOKEN_FILE:-}" ]]; then
+	RUNNER_OPT_ENV+=(-v "$E2E_USAGE_SINK_TOKEN_FILE:/egress-config/sink-token:ro"
+		-e "SANDBOX_EGRESS_USAGE_SINK_TOKEN_FILE=/egress-config/sink-token")
+fi
+if [[ -n "${E2E_EGRESS_PROXY_UPSTREAM_CA_FILE:-}" ]]; then
+	RUNNER_OPT_ENV+=(-v "$E2E_EGRESS_PROXY_UPSTREAM_CA_FILE:/egress-config/upstream-ca.pem:ro"
+		-e "SANDBOX_EGRESS_PROXY_UPSTREAM_CA_FILE=/egress-config/upstream-ca.pem")
+fi
 
 echo "Starting runner service..."
 docker run -d \
