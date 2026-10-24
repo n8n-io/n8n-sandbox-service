@@ -47,11 +47,12 @@ cleanup() {
 		docker network disconnect "$NETWORK_NAME" "$REGISTRY_NAME" >/dev/null 2>&1 || true
 	fi
 
-	docker network rm "$NETWORK_NAME" >/dev/null 2>&1 || true
+	# A registry this run started is still on the network: remove it first.
 	if $STARTED_REGISTRY; then
 		docker stop "$REGISTRY_NAME" >/dev/null 2>&1 || true
 		docker rm "$REGISTRY_NAME" >/dev/null 2>&1 || true
 	fi
+	docker network rm "$NETWORK_NAME" >/dev/null 2>&1 || true
 	if [[ "$TLS_DIR_OWNED" == "1" ]]; then
 		rm -rf "$TLS_DIR"
 	fi
