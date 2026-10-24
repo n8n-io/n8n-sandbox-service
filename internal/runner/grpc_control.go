@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -133,9 +134,10 @@ func (s *SandboxControlGRPC) create(ctx context.Context, rawID, optionsJSON stri
 	}
 	// A template this runner does not serve is refused, never booted as
 	// another, so a sandbox never runs an image it did not ask for. The API
-	// only places a sandbox on a runner that lists its template.
+	// only places a sandbox on a runner that lists its template; one that
+	// dropped it since is refused like a full runner, so another is tried.
 	if !runnerruntime.ServesTemplate(s.Runtime.Templates(), opts.Template) {
-		return nil, status.Errorf(codes.InvalidArgument, "runner has no template %q", opts.Template)
+		return nil, runnerctl.CapacityRefusal(fmt.Sprintf("runner has no template %q", opts.Template))
 	}
 	var host runnerruntime.EgressProxyHost
 	// A create for a sandbox the proxy already knows is refused before touching

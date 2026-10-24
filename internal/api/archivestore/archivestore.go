@@ -136,6 +136,9 @@ func (d *Dir) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodPut:
+		// An archive can take longer to upload than the API server's read
+		// timeout allows a request; the signed URL's expiry bounds it instead.
+		_ = http.NewResponseController(w).SetReadDeadline(time.Unix(exp, 0))
 		err := d.put(object, r.Body)
 		if errors.Is(err, os.ErrExist) {
 			http.Error(w, "object exists", http.StatusPreconditionFailed)

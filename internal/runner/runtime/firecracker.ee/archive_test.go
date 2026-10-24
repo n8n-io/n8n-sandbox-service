@@ -3,6 +3,7 @@ package firecracker
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,6 +51,60 @@ func TestImportColdBootsTheArchive(t *testing.T) {
 	rt.mu.Unlock()
 	if err := rt.ExportSandbox(context.Background(), id, &out); err != nil || !bytes.Equal(out.Bytes(), disk) {
 		t.Fatalf("export: %v", err)
+	}
+}
+
+// A stop syncs the guest before the pause, so the rootfs an archive copies
+// holds what the guest wrote. A guest that did not sync is woken and stopped
+// again before its export; one that still does not is exported as it is.
+func TestStopSyncsTheGuestBeforeArchiving(t *testing.T) {
+	rt := testRuntimeT(t, 2)
+	stubCreateDeps(rt)
+	var steps []string
+	syncErr := error(nil)
+	rt.deps.syncGuest = func(context.Context, string) error { steps = append(steps, "sync"); return syncErr }
+	rt.deps.pauseVM = func(context.Context, string) error { steps = append(steps, "pause"); return nil }
+	rt.deps.createSnapshot = func(context.Context, string) error { return nil }
+
+	stopAndExport := func(id string) error {
+		t.Helper()
+		if _, err := rt.CreateSandbox(context.Background(), id, nil); err != nil {
+			t.Fatalf("create %s: %v", id, err)
+		}
+		if err := os.WriteFile(filepath.Join(rt.runnerConfig.DataDir, id, "rootfs.ext4"), []byte("disk"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := rt.StopSandbox(context.Background(), id); err != nil {
+			t.Fatalf("stop %s: %v", id, err)
+		}
+		return rt.ExportSandbox(context.Background(), id, &bytes.Buffer{})
+	}
+
+	if err := stopAndExport("sandbox-id-synced1"); err != nil {
+		t.Fatalf("export after a synced stop: %v", err)
+	}
+	if strings.Join(steps, ",") != "sync,pause" {
+		t.Fatalf("steps = %v, want the sync before the pause", steps)
+	}
+	// The retry's sync lands: the export follows a wake and a synced stop.
+	steps, syncErr = nil, errors.New("guest did not answer")
+	rt.deps.syncGuest = func(context.Context, string) error {
+		steps = append(steps, "sync")
+		err := syncErr
+		syncErr = nil
+		return err
+	}
+	if err := stopAndExport("sandbox-id-resynced"); err != nil {
+		t.Fatalf("export after a retried sync: %v", err)
+	}
+	if strings.Join(steps, ",") != "sync,pause,sync,pause" || rt.isUnflushed("sandbox-id-resynced") {
+		t.Fatalf("steps = %v, unflushed %v", steps, rt.isUnflushed("sandbox-id-resynced"))
+	}
+
+	// A guest that never syncs is still exported, rather than held for good.
+	rt.deps.syncGuest = func(context.Context, string) error { return errors.New("guest did not answer") }
+	if err := stopAndExport("sandbox-id-neversync"); err != nil {
+		t.Fatalf("export of a guest that never syncs: %v", err)
 	}
 }
 

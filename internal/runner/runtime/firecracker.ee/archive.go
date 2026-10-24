@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -16,6 +17,9 @@ var _ runnerruntime.Archiver = (*Runtime)(nil)
 // transitions so nothing wakes it mid-copy. The memory snapshot stays: an
 // archive holds files, and the restored guest cold boots.
 func (r *Runtime) ExportSandbox(ctx context.Context, sandboxID string, w io.Writer) error {
+	if r.isUnflushed(sandboxID) {
+		r.resync(ctx, sandboxID)
+	}
 	state, _, cancel, err := r.beginTransition(ctx, sandboxID, transitionStopping)
 	if err != nil {
 		return err
@@ -23,10 +27,16 @@ func (r *Runtime) ExportSandbox(ctx context.Context, sandboxID string, w io.Writ
 	defer cancel()
 	defer r.endTransition(state)
 	r.mu.Lock()
-	stopped, path := state.stopped && !state.running, state.rootfsPath
+	stopped, unflushed, path := state.stopped && !state.running, state.unflushed, state.rootfsPath
 	r.mu.Unlock()
 	if !stopped {
 		return fmt.Errorf("%w: stop it before archiving", runnerruntime.ErrSandboxNotRunning)
+	}
+	if unflushed {
+		// The guest would not sync, twice: what it wrote is its own, and the
+		// rootfs is as consistent as after a crash. Refusing would keep the
+		// sandbox off the archive store, and a drain waiting, for good.
+		slog.Warn("firecracker exporting a rootfs its guest did not sync", "sandbox_id", sandboxID)
 	}
 	f, err := os.Open(path)
 	if err != nil {
@@ -35,6 +45,25 @@ func (r *Runtime) ExportSandbox(ctx context.Context, sandboxID string, w io.Writ
 	defer f.Close()
 	_, err = io.Copy(w, f)
 	return err
+}
+
+func (r *Runtime) isUnflushed(sandboxID string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	state := r.sandboxes[sandboxID]
+	return state != nil && state.unflushed
+}
+
+// resync wakes a sandbox whose guest did not sync before its stop and stops
+// it again, which syncs it first. A failure leaves it unflushed.
+func (r *Runtime) resync(ctx context.Context, sandboxID string) {
+	if _, err := r.EnsureSandboxRunning(ctx, sandboxID); err != nil {
+		slog.Warn("firecracker wake to sync before archiving failed", "sandbox_id", sandboxID, "err", err)
+		return
+	}
+	if err := r.StopSandbox(ctx, sandboxID); err != nil {
+		slog.Warn("firecracker stop after the sync wake failed", "sandbox_id", sandboxID, "err", err)
+	}
 }
 
 // ImportSandbox creates sandboxID with its rootfs read from archive and cold

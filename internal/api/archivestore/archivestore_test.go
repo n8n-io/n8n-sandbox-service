@@ -87,3 +87,36 @@ func TestValidObject(t *testing.T) {
 		}
 	}
 }
+
+// An upload slower than the serving API's read timeout still lands: its
+// signed URL's expiry bounds it instead.
+func TestDirUploadOutlastsTheServerReadTimeout(t *testing.T) {
+	srv := httptest.NewUnstartedServer(nil)
+	srv.Config.ReadTimeout = 200 * time.Millisecond
+	srv.Start()
+	defer srv.Close()
+	d, err := NewDir(t.TempDir(), srv.URL, []byte("signing-key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.Config.Handler = d
+	const obj = "tenant-1/sb-1/slow"
+	up, _ := d.UploadURL(obj)
+
+	pr, pw := io.Pipe()
+	go func() {
+		for i := 0; i < 5; i++ {
+			time.Sleep(150 * time.Millisecond)
+			_, _ = pw.Write([]byte("chunk"))
+		}
+		_ = pw.Close()
+	}()
+	req, _ := http.NewRequest(http.MethodPut, up, pr)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil || resp.StatusCode != http.StatusCreated {
+		t.Fatalf("slow put: %v %v", resp, err)
+	}
+	if n, err := d.Size(context.Background(), obj); err != nil || n != 25 {
+		t.Fatalf("size %d %v", n, err)
+	}
+}

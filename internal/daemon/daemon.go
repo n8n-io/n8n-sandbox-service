@@ -114,6 +114,13 @@ func NewHandler() *Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
+	// The runner calls this before pausing a microVM, so writes still in the
+	// guest's page cache reach the rootfs an archive copies.
+	mux.HandleFunc("POST /sync", func(w http.ResponseWriter, r *http.Request) {
+		syscall.Sync()
+		w.WriteHeader(http.StatusNoContent)
+	})
+
 	mux.HandleFunc("POST /executions", func(w http.ResponseWriter, r *http.Request) {
 		var req execRequest
 		if err := decodeJSONBody(r.Body, &req); err != nil {

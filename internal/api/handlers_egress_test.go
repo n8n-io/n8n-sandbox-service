@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -163,5 +164,36 @@ func TestAllowPublicNeedsTheOperator(t *testing.T) {
 	}
 	if rr := postCreateSandbox(t, router, "admin-key", `{"egress":"proxy","egress_proxy":`+open+`}`); rr.Code != http.StatusCreated {
 		t.Fatalf("create while enabled: %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+// A runner that predates a field refuses it as invalid. The API validated
+// the request, so that is a 501 the caller does not retry, on create and PUT.
+func TestRunnerRefusingValidOptionsIsNotImplemented(t *testing.T) {
+	ctl := &fakeSandboxControl{}
+	router, s, _ := newIdleTestGateway(t, "admin-key", ctl)
+	const id = "f4f4f4f4-f4f4-4f4f-8f4f-f4f4f4f4f4f4"
+	seedProxySandbox(t, router, id)
+
+	ctl.mu.Lock()
+	ctl.egressErr = status.Error(codes.InvalidArgument, `invalid egress_proxy: unknown field "new_field"`)
+	ctl.mu.Unlock()
+	rr := doJSON(t, router, http.MethodPut, "/sandboxes/"+id+"/egress-proxy", "admin-key", `{"allow":[]}`)
+	var body APIError
+	_ = json.Unmarshal(rr.Body.Bytes(), &body)
+	if rr.Code != http.StatusNotImplemented || body.Reason != reasonNotImplemented || rr.Header().Get("Retry-After") != "" {
+		t.Fatalf("put: %d %q %s", rr.Code, rr.Header().Get("Retry-After"), rr.Body.String())
+	}
+
+	ctl.mu.Lock()
+	ctl.createErr = status.Error(codes.InvalidArgument, `invalid create options: unknown field "new_field"`)
+	ctl.mu.Unlock()
+	rr = postCreateSandbox(t, router, "admin-key", `{"egress":"proxy","egress_proxy":`+proxySpec+`}`)
+	_ = json.Unmarshal(rr.Body.Bytes(), &body)
+	if rr.Code != http.StatusNotImplemented || body.Reason != reasonNotImplemented || strings.Contains(rr.Body.String(), "new_field") {
+		t.Fatalf("create: %d %s", rr.Code, rr.Body.String())
+	}
+	if n, _ := s.Count(); n != 1 {
+		t.Fatalf("stored %d sandboxes, want only the seeded one", n)
 	}
 }

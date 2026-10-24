@@ -52,6 +52,14 @@ func (r *Runtime) StopSandbox(ctx context.Context, sandboxID string) error {
 	if err := r.ensureDiskSpaceForSnapshot(ctx, state); err != nil {
 		return err
 	}
+	r.mu.Lock()
+	daemonURL := state.daemonURL
+	r.mu.Unlock()
+	unflushed := false
+	if err := r.deps.syncGuest(ctx, daemonURL); err != nil {
+		slog.Warn("firecracker guest sync before stop failed; the sandbox cannot be archived until it runs and stops again", "sandbox_id", sandboxID, "err", err)
+		unflushed = true
+	}
 	if err := r.deps.pauseVM(ctx, state.socketPath); err != nil {
 		return fmt.Errorf("pause firecracker vm: %w", err)
 	}
@@ -86,6 +94,7 @@ func (r *Runtime) StopSandbox(ctx context.Context, sandboxID string) error {
 	r.mu.Lock()
 	state.running = false
 	state.stopped = true
+	state.unflushed = unflushed
 	state.stoppedAt = time.Now()
 	if state.slot >= 0 && r.slotOwnedByLocked(state.slot, state.id) {
 		r.releaseSlotLocked(state.slot)
@@ -177,6 +186,7 @@ func (r *Runtime) ensureSandboxRunningOnce(ctx context.Context, sandboxID string
 		r.mu.Lock()
 		state.running = false
 		state.stopped = true
+		state.unflushed = false // the memory is gone; the rootfs is all there is
 		if state.slot >= 0 && r.slotOwnedByLocked(state.slot, state.id) {
 			r.releaseSlotLocked(state.slot)
 		}

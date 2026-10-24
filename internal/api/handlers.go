@@ -439,8 +439,14 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 			writeErrorReason(w, http.StatusNotImplemented, "the requested egress is not supported by the sandbox runners", reasonNotImplemented)
 			return
 		}
+		// The API validated the options, so a runner refusing them as invalid
+		// predates one of them: retrying the same create cannot succeed.
+		if status.Code(err) == codes.InvalidArgument {
+			writeErrorReason(w, http.StatusNotImplemented, "a sandbox runner refused these create options; it may predate one of them", reasonNotImplemented)
+			return
+		}
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			writeError(w, http.StatusInternalServerError, "runner create failed")
 			return
 		}
 		run, gresp := placed.run, placed.resp

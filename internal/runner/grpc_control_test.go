@@ -63,7 +63,8 @@ func TestSandboxControlGRPCCreateSandboxParsesOptions(t *testing.T) {
 		{name: "malformed", createOptionsJSON: `{"egress":`, wantErr: codes.InvalidArgument},
 		{name: "null", createOptionsJSON: "null", wantErr: codes.InvalidArgument},
 		{name: "not an object", createOptionsJSON: "[]", wantErr: codes.InvalidArgument},
-		{name: "other template", createOptionsJSON: `{"template":"python"}`, wantErr: codes.InvalidArgument},
+		// Refused like a full runner, so the API tries another one.
+		{name: "other template", createOptionsJSON: `{"template":"python"}`, wantErr: codes.ResourceExhausted},
 		{name: "invalid template", createOptionsJSON: `{"template":"../x"}`, wantErr: codes.InvalidArgument},
 		{name: "proxy", createOptionsJSON: `{"egress":"proxy","tenant":"t1","egress_proxy":{"allow":[{"name":"a","hosts":["example.com"]}]}}`, wantErr: codes.Unimplemented},
 		{name: "proxy without spec", createOptionsJSON: `{"egress":"proxy"}`, wantErr: codes.InvalidArgument},
@@ -81,6 +82,9 @@ func TestSandboxControlGRPCCreateSandboxParsesOptions(t *testing.T) {
 			if tc.wantErr != codes.OK {
 				if status.Code(err) != tc.wantErr {
 					t.Fatalf("CreateSandbox() error = %v, want %v", err, tc.wantErr)
+				}
+				if tc.wantErr == codes.ResourceExhausted && !runnerctl.IsCapacityRefusal(err) {
+					t.Fatalf("CreateSandbox() error = %v, want a capacity refusal", err)
 				}
 				if rt.opts != nil {
 					t.Fatal("runtime was called despite invalid options")
@@ -276,7 +280,7 @@ func TestSandboxControlGRPCCreateSandboxServedTemplate(t *testing.T) {
 		t.Fatalf("python: resp=%v err=%v opts=%+v", resp, err, rt.opts)
 	}
 	_, err = srv.CreateSandbox(ctx, &pb.CreateSandboxRequest{SandboxId: "11111111-1111-4111-8111-111111111111", CreateOptionsJson: `{"template":"go"}`})
-	if status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("go: %v", err)
+	if !runnerctl.IsCapacityRefusal(err) {
+		t.Fatalf("go: %v, want a capacity refusal", err)
 	}
 }

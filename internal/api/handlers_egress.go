@@ -66,6 +66,9 @@ func writeRunnerEgressError(w http.ResponseWriter, r *http.Request, rec *store.S
 		writeError(w, http.StatusNotFound, "sandbox not found on its runner")
 	case codes.Unimplemented:
 		writeErrorReason(w, http.StatusNotImplemented, "the sandbox's runner cannot serve this egress_proxy", reasonNotImplemented)
+	case codes.InvalidArgument:
+		// The API validated the spec: a runner that refuses it predates a field.
+		writeErrorReason(w, http.StatusNotImplemented, "the sandbox's runner refused this egress_proxy; it may predate one of its fields", reasonNotImplemented)
 	default:
 		slog.WarnContext(r.Context(), "runner egress call failed", "sandbox_id", rec.ID, "runner_id", rec.RunnerID, "err", err)
 		w.Header().Set("Retry-After", "1")

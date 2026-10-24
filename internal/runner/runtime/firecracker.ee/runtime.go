@@ -252,6 +252,10 @@ type sandboxState struct {
 	// paused guest: anything else that ends the microVM in between — a crash, or a
 	// wake that failed after the restore — leaves the pair mismatched.
 	mustColdBoot bool
+	// unflushed is a stop whose guest did not confirm a sync before the
+	// pause: writes may be only in its memory snapshot, not on the rootfs, so
+	// the rootfs alone cannot be archived. Any end of that memory clears it.
+	unflushed bool
 }
 
 // deleting reports whether the sandbox has been claimed for teardown. r.mu must
@@ -324,6 +328,7 @@ type dependencies struct {
 	listenEgress        func(netnsPath, network, address string) (net.Listener, error)
 	newProxy            func(ctx context.Context, sandboxID string, listenAddr string, netnsName string, guestAddr string) (daemonProxy, error)
 	probeDaemon         func(ctx context.Context, baseURL string) error
+	syncGuest           func(ctx context.Context, baseURL string) error
 	freeBytesInDir      func(path string) (int64, error)
 }
 
@@ -354,6 +359,7 @@ func defaultDependencies(fc Config) dependencies {
 		probeDaemon: func(ctx context.Context, baseURL string) error {
 			return probeDaemon(ctx, baseURL, fc.DaemonWaitTimeout)
 		},
+		syncGuest:      syncGuest,
 		freeBytesInDir: freeBytesInDir,
 	}
 }
@@ -1006,6 +1012,30 @@ func joinErrors(errs []error) error {
 		return nil
 	}
 	return fmt.Errorf("%w", errs[0])
+}
+
+// guestSyncTimeout bounds the sync before a pause; a guest that does not
+// answer is stopped anyway, and marked unflushed.
+const guestSyncTimeout = 30 * time.Second
+
+// syncGuest asks the guest daemon to flush its page cache to the rootfs.
+func syncGuest(ctx context.Context, baseURL string) error {
+	ctx, cancel := context.WithTimeout(ctx, guestSyncTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/sync", nil)
+	if err != nil {
+		return err
+	}
+	client := http.Client{CheckRedirect: runnerruntime.RefuseRedirect}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("guest sync: status %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // probeDaemon waits until the runner's host-local daemon proxy can reach the
