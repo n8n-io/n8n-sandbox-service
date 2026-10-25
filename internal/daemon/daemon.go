@@ -73,6 +73,8 @@ func (h *Handler) Close() {
 
 // Run serves the daemon HTTP API until SIGTERM/SIGINT is received.
 func Run(listenAddr string) error {
+	startReaper()
+	logReaperStart()
 	h := NewHandler()
 	defer h.Close()
 
