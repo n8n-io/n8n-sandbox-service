@@ -480,9 +480,10 @@ requests in its own memory, so across replicas a tenant can hold up to
 
 **Per-sandbox disk usage is not bounded by default.** On the Sysbox runtime a
 per-sandbox disk quota applies only when `SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB`
-is non-zero and the runner's entrypoint managed to mount its quota pool at
-startup; it defaults to `0`, and sandboxes then share the runner's storage with
-no per-sandbox limit. The Firecracker runtime gives each sandbox a fixed-size
+or a template's `disk_quota_mb` is non-zero; it defaults to `0`, and sandboxes
+then share the runner's storage with no per-sandbox limit. If a quota is
+configured but the entrypoint cannot mount its quota pool, the runner refuses to
+start unless `SANDBOX_RUNNER_ALLOW_UNENFORCED_DISK_QUOTA=true`. The Firecracker runtime gives each sandbox a fixed-size
 root filesystem image.
 
 **Health and metrics endpoints are unauthenticated.** `GET` and `HEAD` on

@@ -15,13 +15,28 @@ fi
 
 # Disk-quota storage pool: a loopback xfs+prjquota image used as the inner
 # dockerd's data root, so `--storage-opt size=` can cap each sandbox. Only set
-# up when the operator has asked for quotas (SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB>0).
-# If the kernel lacks xfs quota support (e.g. Docker Desktop linuxkit), the
-# mount fails and dockerd starts with default storage (no enforcement).
+# up when a quota is requested: SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB>0 or a
+# template with disk_quota_mb>0. If the kernel lacks xfs quota support (e.g.
+# Docker Desktop linuxkit), the mount fails and the runner refuses to start,
+# unless SANDBOX_RUNNER_ALLOW_UNENFORCED_DISK_QUOTA=true, which runs dockerd
+# with default storage (no enforcement).
 POOL_PATH=${SANDBOX_RUNNER_DISK_QUOTA_POOL_PATH:-/var/lib/docker.img}
 DOCKER_DATA_ROOT=/var/lib/docker
 DEFAULT_DISK_QUOTA_MB=${SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB:-0}
 CAPACITY_TOTAL=${SANDBOX_RUNNER_CAPACITY_TOTAL:-1000}
+ALLOW_UNENFORCED=${SANDBOX_RUNNER_ALLOW_UNENFORCED_DISK_QUOTA:-false}
+
+QUOTA_REQUESTED=false
+if [ "$DEFAULT_DISK_QUOTA_MB" -gt 0 ]; then
+	QUOTA_REQUESTED=true
+elif [ -n "${SANDBOX_RUNNER_DOCKER_TEMPLATES:-}" ] &&
+	printf '%s' "$SANDBOX_RUNNER_DOCKER_TEMPLATES" | grep -Eq '"disk_quota_mb"[[:space:]]*:[[:space:]]*[1-9]'; then
+	QUOTA_REQUESTED=true
+	if [ -z "${SANDBOX_RUNNER_DISK_QUOTA_POOL_SIZE_GB:-}" ]; then
+		echo "[start-runner] a template sets disk_quota_mb but the default quota is 0; set SANDBOX_RUNNER_DISK_QUOTA_POOL_SIZE_GB to size the storage pool" >&2
+		exit 1
+	fi
+fi
 
 # Default pool size = per-sandbox quota × runner capacity × 1.2 (20% headroom
 # for sandbox image layers shared across sandboxes), rounded up to whole GB.
@@ -67,8 +82,8 @@ setup_quota_pool() {
 }
 
 STORAGE_ARGS=""
-if [ "$DEFAULT_DISK_QUOTA_MB" -le 0 ]; then
-	echo "[start-runner] disk quota enforcement: not requested (SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB unset or 0)"
+if [ "$QUOTA_REQUESTED" = false ]; then
+	echo "[start-runner] disk quota enforcement: not requested (no default or template disk quota)"
 	if [ -n "${SANDBOX_RUNNER_DOCKER_STORAGE_DRIVER:-}" ]; then
 		mkdir -p "$DOCKERD_CONFIG_DIR"
 		cat >"$DOCKERD_CONFIG_FILE" <<EOF
@@ -88,8 +103,11 @@ elif setup_quota_pool; then
 	STORAGE_ARGS="--storage-driver=overlay2 --data-root=${DOCKER_DATA_ROOT}"
 	export SANDBOX_RUNNER_DISK_QUOTA_ACTIVE=true
 	echo "[start-runner] disk quota enforcement: ENABLED (pool ${POOL_SIZE_GB}G, per-sandbox ${DEFAULT_DISK_QUOTA_MB}M)"
+elif [ "$ALLOW_UNENFORCED" = true ]; then
+	echo "[start-runner] disk quota enforcement: DISABLED (kernel lacks xfs quota support or mount failed); sandboxes will use dockerd default storage and quotas are NOT applied" >&2
 else
-	echo "[start-runner] disk quota enforcement: DISABLED (kernel lacks xfs quota support or mount failed); sandboxes will use dockerd default storage" >&2
+	echo "[start-runner] disk quota requested but the xfs+prjquota storage pool could not be set up (kernel lacks xfs quota support or mount failed); refusing to start. Set SANDBOX_RUNNER_ALLOW_UNENFORCED_DISK_QUOTA=true to run without quotas" >&2
+	exit 1
 fi
 
 # shellcheck disable=SC2086

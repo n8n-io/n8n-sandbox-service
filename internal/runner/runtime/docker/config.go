@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -54,6 +55,11 @@ type Config struct {
 	// Set by scripts/start-runner.sh after a successful storage-pool mount.
 	// Parsed from SANDBOX_RUNNER_DISK_QUOTA_ACTIVE (default false).
 	DiskQuotaActive bool
+
+	// AllowUnenforcedDiskQuota lets the runner start when a disk quota is
+	// configured but DiskQuotaActive is false; the quota is then not applied.
+	// Parsed from SANDBOX_RUNNER_ALLOW_UNENFORCED_DISK_QUOTA (default false).
+	AllowUnenforcedDiskQuota bool
 
 	// EnableCgroups controls whether cgroup setup is enforced for sandbox creation.
 	// Parsed from SANDBOX_RUNNER_ENABLE_CGROUPS (default true).
@@ -177,6 +183,14 @@ func LoadConfig() (Config, error) {
 		cfg.DiskQuotaActive = active
 	}
 
+	if v := os.Getenv("SANDBOX_RUNNER_ALLOW_UNENFORCED_DISK_QUOTA"); v != "" {
+		allow, err := strconv.ParseBool(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("SANDBOX_RUNNER_ALLOW_UNENFORCED_DISK_QUOTA must be a boolean, got %q", v)
+		}
+		cfg.AllowUnenforcedDiskQuota = allow
+	}
+
 	if v := os.Getenv("SANDBOX_RUNNER_ENABLE_CGROUPS"); v != "" {
 		enabled, err := strconv.ParseBool(v)
 		if err != nil {
@@ -208,7 +222,33 @@ func LoadConfig() (Config, error) {
 		cfg.Templates = templates
 	}
 
+	if name := cfg.unenforcedDiskQuota(); name != "" && !cfg.AllowUnenforcedDiskQuota {
+		return Config{}, fmt.Errorf("a disk quota is configured for %s but the runner cannot enforce it (the xfs+prjquota storage pool is not active); fix the storage or set SANDBOX_RUNNER_ALLOW_UNENFORCED_DISK_QUOTA=true to run without quotas", name)
+	}
+
 	return cfg, nil
+}
+
+// unenforcedDiskQuota names the first template with a disk quota that the
+// runner cannot enforce, or "" when there is none.
+func (c Config) unenforcedDiskQuota() string {
+	if c.DiskQuotaActive {
+		return ""
+	}
+	if c.DefaultDiskQuotaMB > 0 {
+		return "the default template"
+	}
+	names := make([]string, 0, len(c.Templates))
+	for name, t := range c.Templates {
+		if t.DiskQuotaMB > 0 {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	if len(names) > 0 {
+		return fmt.Sprintf("template %q", names[0])
+	}
+	return ""
 }
 
 // parseDNSServers rejects a server inside the egress denylist: queries to an
