@@ -110,6 +110,11 @@ else
 	exit 1
 fi
 
+# A container restart keeps /run in the container layer, so the previous run's
+# containerd pid file and sockets survive. dockerd then finds containerd
+# "still running" under a pid that is now another process, and times out.
+rm -rf /run/docker/containerd /var/run/docker.pid /var/run/docker.sock
+
 # shellcheck disable=SC2086
 dockerd-entrypoint.sh $INSECURE_ARGS $STORAGE_ARGS $DOCKERD_ARGS >"$DOCKERD_LOG" 2>&1 &
 DOCKERD_PID=$!
