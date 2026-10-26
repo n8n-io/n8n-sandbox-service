@@ -1,0 +1,14 @@
+.github/pull_request_template.md
+  h_8fb27e0cdf6d1e 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "780d7a29a5dc8763c640da207e64075519e8cf3f",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
