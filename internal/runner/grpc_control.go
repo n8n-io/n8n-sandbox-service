@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -38,6 +39,33 @@ type SandboxControlGRPC struct {
 	// Egress is the egress proxy; nil, or a runtime that is no
 	// EgressProxyHost, refuses egress-proxy creates as Unimplemented.
 	Egress *egressproxy.Server
+
+	creating inflight
+}
+
+// inflight is the sandbox ids with a create in progress.
+type inflight struct {
+	mu  sync.Mutex
+	ids map[string]struct{}
+}
+
+func (f *inflight) begin(id string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.ids[id]; ok {
+		return false
+	}
+	if f.ids == nil {
+		f.ids = map[string]struct{}{}
+	}
+	f.ids[id] = struct{}{}
+	return true
+}
+
+func (f *inflight) end(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.ids, id)
 }
 
 var _ pb.SandboxControlServer = (*SandboxControlGRPC)(nil)
@@ -139,12 +167,16 @@ func (s *SandboxControlGRPC) create(ctx context.Context, rawID, optionsJSON stri
 	if !runnerruntime.ServesTemplate(s.Runtime.Templates(), opts.Template) {
 		return nil, runnerctl.CapacityRefusal(fmt.Sprintf("runner has no template %q", opts.Template))
 	}
-	var host runnerruntime.EgressProxyHost
-	// A create for a sandbox the proxy already knows is refused before touching
-	// it, so a failure below cannot roll back another create's sandbox.
-	if s.Egress != nil && s.Egress.Has(sandboxID) {
+	// A create for a sandbox in flight or live is refused before touching it, so
+	// a failure below cannot roll back another create's sandbox.
+	if !s.creating.begin(sandboxID) {
 		return nil, status.Error(codes.AlreadyExists, "sandbox already exists")
 	}
+	defer s.creating.end(sandboxID)
+	if s.egressRecordLive(ctx, sandboxID) {
+		return nil, status.Error(codes.AlreadyExists, "sandbox already exists")
+	}
+	var host runnerruntime.EgressProxyHost
 	if opts.Egress == runnerruntime.EgressProxy {
 		var err error
 		if host, err = s.admitEgressProxy(opts); err != nil {
@@ -308,6 +340,22 @@ func (s *SandboxControlGRPC) admitEgressProxy(opts *runnerruntime.CreateOptions)
 		}
 	}
 	return host, nil
+}
+
+// egressRecordLive reports whether the proxy knows sandboxID and the runtime
+// may still have it. A record whose container is gone (removed behind the
+// runner's back; the API dropped its row on the runner's 404) is dropped, so a
+// create under the same id succeeds; any doubt keeps the refusal.
+func (s *SandboxControlGRPC) egressRecordLive(ctx context.Context, sandboxID string) bool {
+	if s.Egress == nil || !s.Egress.Has(sandboxID) {
+		return false
+	}
+	if _, err := s.Runtime.GetSandboxInfo(ctx, sandboxID); !errors.Is(err, runnerruntime.ErrSandboxNotFound) {
+		return true
+	}
+	slog.WarnContext(ctx, "dropping the egress record of a sandbox whose container is gone", "sandbox_id", sandboxID)
+	s.Egress.Remove(sandboxID)
+	return false
 }
 
 func (s *SandboxControlGRPC) installEgressCA(ctx context.Context, sandboxID string) error {
