@@ -222,6 +222,53 @@ func TestConnectEmptyRunnerIDAfterCommitUsesCommittedID(t *testing.T) {
 	}
 }
 
+// Cordon arrives on the heartbeat and is stored with the runner, so placement
+// skips it, and an uncordon heartbeat makes it eligible again.
+func TestConnectStoresCordon(t *testing.T) {
+	reg := registry.New(time.Hour)
+	token := "test-token"
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := grpc.NewServer()
+	pb.RegisterRunnerRegistryServer(srv, &RunnerRegistryServer{Token: token, Reg: reg})
+	go func() { _ = srv.Serve(lis) }()
+	defer srv.Stop()
+
+	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	ctx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+token)
+	stream, err := pb.NewRunnerRegistryClient(conn).Connect(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.CloseSend()
+
+	for _, cordoned := range []bool{false, true, false} {
+		hb := testHeartbeat("cordon-runner")
+		hb.Cordoned = cordoned
+		if err := stream.Send(hb); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := stream.Recv(); err != nil {
+			t.Fatal(err)
+		}
+		run, ok := reg.Get("cordon-runner")
+		if !ok || run.Cordoned != cordoned {
+			t.Fatalf("after heartbeat cordoned=%v: registry has %+v", cordoned, run)
+		}
+		_, err := reg.PickLowestUsed()
+		if cordoned != errors.Is(err, registry.ErrNoRunners) {
+			t.Fatalf("after heartbeat cordoned=%v: PickLowestUsed() error = %v", cordoned, err)
+		}
+	}
+}
+
 func TestConnectRequiresControlGRPCAddr(t *testing.T) {
 	reg := registry.New(time.Hour)
 	token := "test-token"

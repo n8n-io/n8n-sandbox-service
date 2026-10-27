@@ -65,5 +65,7 @@ const postgresAddEphemeralCol = `ALTER TABLE sandboxes ADD COLUMN IF NOT EXISTS 
 
 const postgresAddEgressCol = `ALTER TABLE sandboxes ADD COLUMN IF NOT EXISTS egress TEXT NOT NULL DEFAULT 'public'`
 
+const postgresAddRunnerCordonedCol = `ALTER TABLE runners ADD COLUMN IF NOT EXISTS cordoned BOOLEAN NOT NULL DEFAULT false`
+
 // Backfill legacy empty tenant_id to the admin sentinel.
 const postgresBackfillAdminTenantID = `UPDATE sandboxes SET tenant_id = '__admin__' WHERE tenant_id = ''`

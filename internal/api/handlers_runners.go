@@ -10,6 +10,7 @@ import (
 type runnerResponse struct {
 	ID              string `json:"id"`
 	Healthy         bool   `json:"healthy"`
+	Cordoned        bool   `json:"cordoned"`
 	CapacityTotal   int32  `json:"capacity_total"`
 	CapacityUsed    int32  `json:"capacity_used"`
 	CapacityStopped int32  `json:"capacity_stopped"`
@@ -36,6 +37,7 @@ func handleListRunners(reg registry.RunnerRegistry) http.HandlerFunc {
 			out.Runners = append(out.Runners, runnerResponse{
 				ID:              run.ID,
 				Healthy:         run.Healthy,
+				Cordoned:        run.Cordoned,
 				CapacityTotal:   run.CapacityTotal,
 				CapacityUsed:    run.CapacityUsed,
 				CapacityStopped: run.CapacityStopped,

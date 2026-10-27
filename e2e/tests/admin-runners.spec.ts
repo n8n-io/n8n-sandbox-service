@@ -9,7 +9,7 @@ test.describe('GET /admin/runners', () => {
     expect(body.runners.length).toBeGreaterThan(0);
     for (const runner of body.runners) {
       expect(Object.keys(runner).sort()).toEqual(
-        ['capacity_stopped', 'capacity_total', 'capacity_used', 'healthy', 'id', 'last_seen'],
+        ['capacity_stopped', 'capacity_total', 'capacity_used', 'cordoned', 'healthy', 'id', 'last_seen'],
       );
     }
   });

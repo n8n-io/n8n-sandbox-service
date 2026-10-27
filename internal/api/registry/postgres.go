@@ -22,7 +22,7 @@ func NewPostgres(db *sql.DB, heartbeatGrace time.Duration) *PostgresRegistry {
 	return &PostgresRegistry{db: db, heartbeatGrace: heartbeatGrace}
 }
 
-func (r *PostgresRegistry) Upsert(id, httpBaseURL, controlGRPCAddr string, healthy bool, capTotal, capUsed, capStopped int32) {
+func (r *PostgresRegistry) Upsert(id, httpBaseURL, controlGRPCAddr string, healthy, cordoned bool, capTotal, capUsed, capStopped int32) {
 	if id == "" || httpBaseURL == "" {
 		return
 	}
@@ -30,18 +30,19 @@ func (r *PostgresRegistry) Upsert(id, httpBaseURL, controlGRPCAddr string, healt
 	controlGRPCAddr = strings.TrimSpace(controlGRPCAddr)
 	const q = `
 		INSERT INTO runners
-			(id, http_base_url, control_grpc_addr, healthy, capacity_total, capacity_used, capacity_stopped, last_seen)
+			(id, http_base_url, control_grpc_addr, healthy, cordoned, capacity_total, capacity_used, capacity_stopped, last_seen)
 		VALUES
-			($1, $2, $3, $4, $5, $6, $7, now())
+			($1, $2, $3, $4, $5, $6, $7, $8, now())
 		ON CONFLICT (id) DO UPDATE SET
 			http_base_url = EXCLUDED.http_base_url,
 			control_grpc_addr = EXCLUDED.control_grpc_addr,
 			healthy = EXCLUDED.healthy,
+			cordoned = EXCLUDED.cordoned,
 			capacity_total = EXCLUDED.capacity_total,
 			capacity_used = EXCLUDED.capacity_used,
 			capacity_stopped = EXCLUDED.capacity_stopped,
 			last_seen = now()`
-	_, _ = r.db.Exec(q, id, httpBaseURL, controlGRPCAddr, healthy, capTotal, capUsed, capStopped)
+	_, _ = r.db.Exec(q, id, httpBaseURL, controlGRPCAddr, healthy, cordoned, capTotal, capUsed, capStopped)
 }
 
 // Remove is a no-op for Postgres; stale runners are detected via last_seen.
@@ -49,7 +50,7 @@ func (r *PostgresRegistry) Remove(id string) {}
 
 func (r *PostgresRegistry) Get(id string) (*Runner, bool) {
 	const q = `
-		SELECT id, http_base_url, control_grpc_addr, healthy, capacity_total, capacity_used, capacity_stopped, last_seen
+		SELECT id, http_base_url, control_grpc_addr, healthy, cordoned, capacity_total, capacity_used, capacity_stopped, last_seen
 		FROM runners
 		WHERE id = $1`
 	row := r.db.QueryRow(q, id)
@@ -94,7 +95,7 @@ func (r *PostgresRegistry) Len() int {
 
 func (r *PostgresRegistry) List() ([]Runner, error) {
 	const q = `
-		SELECT id, http_base_url, control_grpc_addr, healthy, capacity_total, capacity_used, capacity_stopped, last_seen
+		SELECT id, http_base_url, control_grpc_addr, healthy, cordoned, capacity_total, capacity_used, capacity_stopped, last_seen
 		FROM runners
 		ORDER BY id COLLATE "C"`
 	rows, err := r.db.Query(q)
@@ -130,9 +131,10 @@ func (r *PostgresRegistry) PickLowestUsed(exclude ...string) (*Runner, error) {
 	defer func() { _ = tx.Rollback() }()
 
 	const q = `
-		SELECT id, http_base_url, control_grpc_addr, healthy, capacity_total, capacity_used, capacity_stopped, last_seen
+		SELECT id, http_base_url, control_grpc_addr, healthy, cordoned, capacity_total, capacity_used, capacity_stopped, last_seen
 		FROM runners
 		WHERE healthy = true
+		  AND cordoned = false
 		  AND last_seen >= now() - ($1 * interval '1 second')
 		  AND (capacity_total = 0 OR capacity_used < capacity_total)
 		  AND NOT (id = ANY($2))
@@ -166,6 +168,7 @@ func scanRunner(row runnerScanner) (*Runner, error) {
 		&run.HTTPBaseURL,
 		&run.ControlGRPCAddr,
 		&run.Healthy,
+		&run.Cordoned,
 		&run.CapacityTotal,
 		&run.CapacityUsed,
 		&run.CapacityStopped,
