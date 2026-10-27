@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	"github.com/n8n-io/sandbox-service/internal/api/config"
@@ -41,6 +42,28 @@ type fakeSandboxControl struct {
 	createHook func(ctx context.Context)
 	stopHook   func(ctx context.Context)
 	deleteHook func(ctx context.Context)
+	// Every SetCordon value, and the x-api-key and runner id it came with, in order.
+	cordonCalls []bool
+	cordonKeys  []string
+	cordonIDs   []string
+	// Returned by every SetCordon RPC when set, after recording it.
+	cordonErr error
+}
+
+func (f *fakeSandboxControl) SetCordon(ctx context.Context, req *pb.SetCordonRequest) (*pb.SetCordonResponse, error) {
+	key := ""
+	if md, ok := metadata.FromIncomingContext(ctx); ok && len(md.Get("x-api-key")) > 0 {
+		key = md.Get("x-api-key")[0]
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cordonCalls = append(f.cordonCalls, req.GetCordoned())
+	f.cordonKeys = append(f.cordonKeys, key)
+	f.cordonIDs = append(f.cordonIDs, req.GetRunnerId())
+	if f.cordonErr != nil {
+		return nil, f.cordonErr
+	}
+	return &pb.SetCordonResponse{Cordoned: req.GetCordoned()}, nil
 }
 
 func (f *fakeSandboxControl) CreateSandbox(ctx context.Context, req *pb.CreateSandboxRequest) (*pb.CreateSandboxResponse, error) {
