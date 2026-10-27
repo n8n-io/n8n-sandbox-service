@@ -74,8 +74,9 @@ func LsRefsRequest(caps []string) []byte {
 	return b.Bytes()
 }
 
-// MaxRequestBytes bounds a v2 request body, held in memory to be checked.
-const MaxRequestBytes = 32 << 20
+// MaxRequestBytes bounds a v2 request body, held in memory to be checked: a
+// fetch's wants and haves, some 50 bytes each.
+const MaxRequestBytes = 4 << 20
 
 // ReadRequest parses a whole protocol v2 request: "command=<name>",
 // capability lines, a delimiter, arguments, a flush, and nothing after it.

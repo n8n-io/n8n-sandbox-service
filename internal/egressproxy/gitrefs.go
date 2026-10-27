@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/n8n-io/sandbox-service/internal/egressproxy/gitfilter"
 )
@@ -57,7 +58,7 @@ func (s *Server) checkFetch(r *http.Request, sb *sandbox, p *policy, t target) (
 			return listingNone, ReasonPathNotAllowed
 		}
 		// A fetch of ids alone lists no refs first, so the proxy lists them.
-		if !sb.allListed(wants) {
+		if !sb.allListed(wants) && sb.mayList(time.Now()) {
 			if err := s.listRefs(r, sb, p, t, req.Caps); err != nil {
 				return listingNone, ReasonRefNotAllowed
 			}

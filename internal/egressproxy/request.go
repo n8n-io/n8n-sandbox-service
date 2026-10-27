@@ -92,6 +92,11 @@ func (s *Server) requestHandler(sb *sandbox, t target) http.Handler {
 				listing = listingPush
 			case gitfilter.OpFetch:
 				if p.refs.Active() {
+					release, ok := sb.acquireGit(r.Context())
+					if !ok {
+						return
+					}
+					defer release()
 					var reason string
 					if listing, reason = s.checkFetch(r, sb, p, t); reason != "" {
 						s.refuseLogged(w, r, sb, http.StatusForbidden, reason, "", t.key)

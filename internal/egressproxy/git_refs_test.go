@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -32,6 +33,7 @@ type refsFixture struct {
 	secretBlob        string
 	spec              string
 	pushes            int
+	uploads           atomic.Int32 // upload-pack POSTs that reached the server
 }
 
 const refsSpec = `"hide_refs":["refs/heads/factory/","refs/heads/factory-wip/"],
@@ -94,6 +96,9 @@ func newRefsFixture(t *testing.T) *refsFixture {
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/git-receive-pack") {
 			f.pushes++
+		}
+		if strings.HasSuffix(r.URL.Path, "/git-upload-pack") {
+			f.uploads.Add(1)
 		}
 		backend.ServeHTTP(w, r)
 	}))
@@ -248,6 +253,25 @@ func TestGitRefVisibility(t *testing.T) {
 			v2Request("fetch", "want "+f.otherTip, "no-progress", "done"))
 		if resp.StatusCode != http.StatusForbidden || resp.Header.Get(RefusalHeader) != ReasonRefNotAllowed {
 			t.Fatalf("fetch of a hidden tip: %d %q", resp.StatusCode, resp.Header.Get(RefusalHeader))
+		}
+	})
+
+	t.Run("the proxy lists refs for a sandbox at most once a second", func(t *testing.T) {
+		f.h.set(f.spec)
+		for i, id := range []string{strings.Repeat("ab", 20), strings.Repeat("cd", 20), strings.Repeat("ef", 20)} {
+			before := f.uploads.Load()
+			resp, _ := f.raw("POST", "/git-upload-pack", "version=2", "application/x-git-upload-pack-request",
+				v2Request("fetch", "want "+id, "done"))
+			if resp.StatusCode != http.StatusForbidden || resp.Header.Get(RefusalHeader) != ReasonRefNotAllowed {
+				t.Fatalf("made-up id %d: %d %q", i, resp.StatusCode, resp.Header.Get(RefusalHeader))
+			}
+			want := int32(0) // within the interval, nothing reaches the server
+			if i == 0 {
+				want = 1 // the proxy's own listing
+			}
+			if got := f.uploads.Load() - before; got != want {
+				t.Fatalf("made-up id %d: %d requests upstream, want %d", i, got, want)
+			}
 		}
 	})
 
