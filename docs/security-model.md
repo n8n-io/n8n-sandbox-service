@@ -244,6 +244,14 @@ sends selects the policy. What the proxy then allows is in
   is refused whole, before any of it is forwarded, if its command list names a
   ref outside `push_refs` or is not the plain form (no push certificate, whose
   capability is stripped from the advertisement).
+- With `hide_refs`, a guest cannot list, fetch by name, or fetch by object id
+  what those refs hold: fetches must use protocol v2, listings are filtered,
+  and a fetch may want only ids the proxy listed to it as visible tips,
+  because the Git server sends any object it holds to a v2 want. Not covered:
+  a guest that already knows a hidden object's id can push a commit or tree
+  naming it, which the server accepts since it holds the object, and fetch it
+  back from its own ref. The proxy never discloses such an id; data that must
+  stay unreadable belongs in another repository.
 - Credentials are read per tenant from the secret store (each tenant's
   directory its own `os.Root`, so neither `..` nor a symlink leaves it; the API
   sets the tenant), replace whatever the guest sent, and are sent only to the

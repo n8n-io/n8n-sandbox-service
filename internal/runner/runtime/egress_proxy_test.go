@@ -9,6 +9,8 @@ const validProxyOptions = `{"egress":"proxy","tenant":"t1","egress_proxy":{
 	"allow":[{"name":"git","hosts":["git.example.com","forgejo:3000"]},{"name":"anthropic","hosts":["api.anthropic.com"]}],
 	"repos":[{"host":"git.example.com","path":"org/repo","access":"write"},{"host":"forgejo:3000","path":"org/other","access":"read"}],
 	"push_refs":["refs/heads/factory/abc/","refs/heads/factory-wip/s1"],
+	"hide_refs":["refs/heads/factory/","refs/heads/factory-wip/"],
+	"show_refs":["refs/heads/factory/abc/","refs/heads/factory-wip/abc."],
 	"credentials":[{"host":"api.anthropic.com","secret_ref":"factory/anthropic-key","scheme":"header","header":"x-api-key"},
 		{"host":"forgejo:3000","secret_ref":"factory/git-token","scheme":"basic","username":"factory-agent","allow_plain_http":true},
 		{"host":"git.example.com","secret_ref":"factory/git-token"}],
@@ -70,6 +72,15 @@ func TestParseCreateOptionsRefusesBadEgressProxy(t *testing.T) {
 		{"ref lock", `"refs/heads/factory-wip/s1"`, `"refs/heads/x.lock"`},
 		{"ref glob", `"refs/heads/factory-wip/s1"`, `"refs/heads/*"`},
 		{"ref space", `"refs/heads/factory-wip/s1"`, `"refs/heads/a b"`},
+		{"hide ref outside refs", `"refs/heads/factory/","refs/heads/factory-wip/"]`, `"heads/factory/"]`},
+		{"hide ref all refs", `"refs/heads/factory/","refs/heads/factory-wip/"]`, `"refs/"]`},
+		{"hide ref glob", `"refs/heads/factory/","refs/heads/factory-wip/"]`, `"refs/heads/factory/*"]`},
+		{"hide ref dotdot", `"refs/heads/factory/","refs/heads/factory-wip/"]`, `"refs/heads/a..b/"]`},
+		{"hide ref double slash", `"refs/heads/factory/","refs/heads/factory-wip/"]`, `"refs/heads//"]`},
+		{"show ref dot prefix of a dot", `"refs/heads/factory-wip/abc."`, `"refs/heads/factory-wip/abc.."`},
+		{"show ref slash dot", `"refs/heads/factory-wip/abc."`, `"refs/heads/factory-wip/."`},
+		{"show ref lock", `"refs/heads/factory-wip/abc."`, `"refs/heads/x.lock"`},
+		{"show without hide", `"hide_refs":["refs/heads/factory/","refs/heads/factory-wip/"],`, ``},
 		{"credential host not allowed", `"host":"api.anthropic.com","secret_ref"`, `"host":"api.openai.com","secret_ref"`},
 		{"secret ref traversal", `"factory/anthropic-key"`, `"factory/../root"`},
 		{"secret ref empty", `"factory/anthropic-key"`, `""`},
@@ -145,6 +156,11 @@ func TestCreateOptionsEqual(t *testing.T) {
 	b.EgressProxy.PushRefs = append(b.EgressProxy.PushRefs, "refs/heads/main")
 	if a.Equal(b) {
 		t.Fatal("different push_refs compare equal")
+	}
+	c, _ := ParseCreateOptions(validProxyOptions)
+	c.EgressProxy.ShowRefs = append(c.EgressProxy.ShowRefs, "refs/heads/factory/other/")
+	if a.Equal(c) {
+		t.Fatal("different show_refs compare equal")
 	}
 	if !(&CreateOptions{Egress: EgressPublic}).Equal(&CreateOptions{Egress: EgressPublic}) {
 		t.Fatal("plain options not equal")

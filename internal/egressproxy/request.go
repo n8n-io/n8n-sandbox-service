@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -64,7 +65,7 @@ func (s *Server) requestHandler(sb *sandbox, t target) http.Handler {
 			return
 		}
 
-		var stripAdvert bool
+		var listing gitListing
 		if repos, ok := p.repos[t.key]; ok {
 			op, _, reason := gitfilter.Check(r.Method, r.URL.EscapedPath(), r.URL.RawQuery, repos)
 			if reason != "" {
@@ -88,7 +89,15 @@ func (s *Server) requestHandler(sb *sandbox, t target) http.Handler {
 					r.Header.Del("Content-Encoding")
 				}
 			case gitfilter.OpAdvertisePush:
-				stripAdvert = true
+				listing = listingPush
+			case gitfilter.OpFetch:
+				if p.refs.Active() {
+					var reason string
+					if listing, reason = s.checkFetch(r, sb, p, t); reason != "" {
+						s.refuseLogged(w, r, sb, http.StatusForbidden, reason, "", t.key)
+						return
+					}
+				}
 			}
 		}
 
@@ -117,39 +126,14 @@ func (s *Server) requestHandler(sb *sandbox, t target) http.Handler {
 			}
 		}
 
-		out := r.Clone(r.Context())
-		out.RequestURI = ""
-		out.URL = &url.URL{Scheme: t.scheme, Host: t.authority(), Path: r.URL.Path, RawPath: r.URL.RawPath, RawQuery: r.URL.RawQuery}
-		out.Host = r.Host
-		stripHop(out.Header)
-		if metered {
-			// Usage is read from the response, so it must not be compressed.
-			out.Header.Del("Accept-Encoding")
-		}
-		var masks [][]byte
-		if c, ok := p.creds[t.key]; ok && (t.scheme == "https" || c.AllowPlainHTTP) {
-			secret, err := s.secret(sb, c.SecretRef)
-			if err != nil {
-				slog.Error("egress credential unavailable", "sandbox_id", sb.id, "tenant_id", sb.tenant, "secret_ref", c.SecretRef, "err", err)
-				refuse(w, http.StatusBadGateway, ReasonCredentialUnavailable, provider, "")
-				return
-			}
-			credentials.Inject(out.Header, c, secret)
-			// A response that echoes the credential is scrubbed, which needs
-			// it uncompressed.
-			masks = credentials.Masks(c, secret)
-			out.Header.Del("Accept-Encoding")
-			// A range of an echo could split the secret past every mask.
-			out.Header.Del("Range")
-			out.Header.Del("If-Range")
-		} else {
-			// A credential header the guest made up never reaches the host the
-			// proxy holds a credential for.
-			out.Header.Del("Proxy-Authorization")
+		out, masks, err := s.upstream(sb, p, t, r, metered || listing != listingNone)
+		if err != nil {
+			slog.Error("egress credential unavailable", "sandbox_id", sb.id, "tenant_id", sb.tenant, "err", err)
+			refuse(w, http.StatusBadGateway, ReasonCredentialUnavailable, provider, "")
+			return
 		}
 
 		started := time.Now()
-		out = out.WithContext(context.WithValue(out.Context(), dialAddrKey{}, net.JoinHostPort(t.addr.String(), strconv.Itoa(t.port))))
 		resp, err := s.transport(t, p.allow[t.key]).RoundTrip(out)
 		if err != nil {
 			if metered {
@@ -169,9 +153,9 @@ func (s *Server) requestHandler(sb *sandbox, t target) http.Handler {
 			credentials.ScrubHeader(resp.Header, masks)
 			body = credentials.Scrub(body, masks)
 		}
-		if stripAdvert && resp.StatusCode == http.StatusOK {
-			if body, err = gitfilter.StripPushCert(body); err != nil {
-				http.Error(w, "upstream answered a malformed advertisement", http.StatusBadGateway)
+		if listing != listingNone && resp.StatusCode == http.StatusOK {
+			if body, err = filterListing(listing, body, resp, sb, p); err != nil {
+				http.Error(w, "upstream answered a malformed or encoded ref listing", http.StatusBadGateway)
 				return
 			}
 			resp.Header.Del("Content-Length")
@@ -195,6 +179,41 @@ func (s *Server) requestHandler(sb *sandbox, t target) http.Handler {
 			s.record(sb, p, t, provider, r.URL.Path, resp, meter.Usage(), started)
 		}
 	})
+}
+
+// upstream builds the request forwarded to t, with the destination's
+// credential injected; masks scrub that credential from the response. With
+// identity set it asks for an unencoded response, which the proxy reads.
+func (s *Server) upstream(sb *sandbox, p *policy, t target, r *http.Request, identity bool) (*http.Request, [][]byte, error) {
+	out := r.Clone(r.Context())
+	out.RequestURI = ""
+	out.URL = &url.URL{Scheme: t.scheme, Host: t.authority(), Path: r.URL.Path, RawPath: r.URL.RawPath, RawQuery: r.URL.RawQuery}
+	out.Host = r.Host
+	stripHop(out.Header)
+	if identity {
+		out.Header.Del("Accept-Encoding")
+	}
+	var masks [][]byte
+	if c, ok := p.creds[t.key]; ok && (t.scheme == "https" || c.AllowPlainHTTP) {
+		secret, err := s.secret(sb, c.SecretRef)
+		if err != nil {
+			return nil, nil, fmt.Errorf("secret %s: %w", c.SecretRef, err)
+		}
+		credentials.Inject(out.Header, c, secret)
+		// A response that echoes the credential is scrubbed, which needs
+		// it uncompressed.
+		masks = credentials.Masks(c, secret)
+		out.Header.Del("Accept-Encoding")
+		// A range of an echo could split the secret past every mask.
+		out.Header.Del("Range")
+		out.Header.Del("If-Range")
+	} else {
+		// A credential header the guest made up never reaches the host the
+		// proxy holds a credential for.
+		out.Header.Del("Proxy-Authorization")
+	}
+	out = out.WithContext(context.WithValue(out.Context(), dialAddrKey{}, net.JoinHostPort(t.addr.String(), strconv.Itoa(t.port))))
+	return out, masks, nil
 }
 
 // maxMeteredRequestBody bounds a /v1/responses request body, read whole to

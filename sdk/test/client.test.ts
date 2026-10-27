@@ -259,6 +259,8 @@ describe("SandboxClient", () => {
       allow: [{ name: "git", hosts: ["git.example.com"] }],
       repos: [{ host: "git.example.com", path: "org/repo", access: "write" as const }],
       push_refs: ["refs/heads/factory/i1/"],
+      hide_refs: ["refs/heads/factory/"],
+      show_refs: ["refs/heads/factory/i1/"],
     };
 
     const result = await client.createSandbox({

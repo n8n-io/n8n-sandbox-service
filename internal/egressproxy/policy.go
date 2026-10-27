@@ -18,6 +18,7 @@ type policy struct {
 	inspected map[string]bool
 	repos     map[string][]gitfilter.Repo
 	pushRefs  []string
+	refs      gitfilter.Refs
 	creds     map[string]runnerruntime.EgressCredential
 	models    map[string]metering.Provider
 	labels    map[string]string
@@ -29,6 +30,7 @@ func compile(spec *runnerruntime.EgressProxySpec) *policy {
 		inspected: map[string]bool{},
 		repos:     map[string][]gitfilter.Repo{},
 		pushRefs:  spec.PushRefs,
+		refs:      gitfilter.Refs{Hide: spec.HideRefs, Show: spec.ShowRefs},
 		creds:     map[string]runnerruntime.EgressCredential{},
 		models:    map[string]metering.Provider{},
 		labels:    spec.Labels,
