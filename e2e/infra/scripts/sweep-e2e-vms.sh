@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Finds and deletes all Azure resources tagged with purpose=sandbox-service-e2e.
-# Intended as a scheduled safety net to clean up leaked VMs from failed
-# e2e workflow runs. Requires: RESOURCE_GROUP env var and authenticated az CLI.
+# Deletes the VMs, NICs, public IPs, NSGs, disks and VNets tagged with
+# purpose=sandbox-service-e2e that are older than 1 hour, plus the OS disks of
+# the VMs it deletes. Intended as a scheduled safety net for resources leaked by
+# failed or cancelled e2e runs.
+# Exits non-zero when a deletion fails.
+# Requires: RESOURCE_GROUP env var and authenticated az CLI.
 set -euo pipefail
 
 : "${RESOURCE_GROUP:?RESOURCE_GROUP is required}"
@@ -30,62 +33,100 @@ print(int(dt.timestamp()))
 PY
 }
 
-echo "==> Finding VMs tagged ${TAG} in ${RESOURCE_GROUP}..."
-VM_IDS=$(az vm list \
+lower() {
+	tr '[:upper:]' '[:lower:]' <<<"$1"
+}
+
+# Only the types e2e/infra creates, dependents first: VMs, then NICs, then what
+# they reference, then VNets. Prints nothing for any other type.
+delete_pass() {
+	case "$(lower "$1")" in
+	microsoft.compute/virtualmachines) echo 1 ;;
+	microsoft.network/networkinterfaces) echo 2 ;;
+	microsoft.network/publicipaddresses | microsoft.network/networksecuritygroups | microsoft.compute/disks) echo 3 ;;
+	microsoft.network/virtualnetworks) echo 4 ;;
+	esac
+}
+
+echo "==> Finding resources tagged ${TAG} in ${RESOURCE_GROUP}..."
+RESOURCES=$(az resource list \
 	--resource-group "$RESOURCE_GROUP" \
-	--query "[?tags.purpose=='sandbox-service-e2e'].id" \
+	--query "[?tags.purpose=='sandbox-service-e2e'].[id, type, createdTime]" \
 	-o tsv)
 
-if [[ -z "$VM_IDS" ]]; then
-	echo "No e2e VMs found. Nothing to clean up."
+STALE=()
+while IFS=$'\t' read -r id type created; do
+	[[ -n "$id" ]] || continue
+	name="${id##*/}"
+	pass=$(delete_pass "$type")
+	if [[ -z "$pass" ]]; then
+		echo "==> Skipping ${name}; unexpected type ${type}"
+		continue
+	fi
+	if [[ -z "$created" ]]; then
+		echo "==> Skipping ${name}; creation time is unavailable"
+		continue
+	fi
+	created_epoch=$(iso_to_epoch "$created" 2>/dev/null) || {
+		echo "==> Skipping ${name}; could not parse creation time: ${created}"
+		continue
+	}
+	if [[ "$created_epoch" -gt "$CUTOFF_EPOCH" ]]; then
+		echo "==> Skipping ${name}; less than 1 hour old"
+		continue
+	fi
+	STALE+=("${pass} ${id}")
+done <<<"$RESOURCES"
+
+if [[ ${#STALE[@]} -eq 0 ]]; then
+	echo "No stale e2e resources found. Nothing to clean up."
 	exit 0
 fi
 
-VM_COUNT=$(echo "$VM_IDS" | wc -l | tr -d ' ')
-echo "==> Found ${VM_COUNT} tagged VM(s); deleting only VMs older than 1 hour"
+echo "==> Deleting ${#STALE[@]} stale resource(s)..."
 
-for VM_ID in $VM_IDS; do
-	VM_NAME=$(az vm show --ids "$VM_ID" --query "name" -o tsv)
-	VM_CREATED_AT=$(az vm show --ids "$VM_ID" --query "timeCreated" -o tsv 2>/dev/null) || true
-	if [[ -z "$VM_CREATED_AT" || "$VM_CREATED_AT" == "null" ]]; then
-		echo "==> Skipping ${VM_NAME}; VM creation time is unavailable"
-		continue
+FAILED=0
+DELETED=""
+
+delete_resource() {
+	local id="$1"
+	if grep -Fxq "$(lower "$id")" <<<"$DELETED"; then
+		return 0
 	fi
-	VM_CREATED_EPOCH=$(iso_to_epoch "$VM_CREATED_AT" 2>/dev/null) || {
-		echo "==> Skipping ${VM_NAME}; could not parse creation time: ${VM_CREATED_AT}"
-		continue
-	}
-	if [[ "$VM_CREATED_EPOCH" -gt "$CUTOFF_EPOCH" ]]; then
-		echo "==> Skipping ${VM_NAME}; VM is less than 1 hour old"
-		continue
+	echo "==> Deleting ${id##*/}..."
+	if az resource delete --ids "$id" -o none; then
+		DELETED+="$(lower "$id")"$'\n'
+	else
+		echo "ERROR: could not delete ${id##*/}" >&2
+		FAILED=$((FAILED + 1))
+		return 1
 	fi
+}
 
-	echo "==> Deleting VM ${VM_NAME} and associated resources..."
-
-	NIC_ID=$(az vm show --ids "$VM_ID" --query 'networkProfile.networkInterfaces[0].id' -o tsv 2>/dev/null) || true
-	OS_DISK_ID=$(az vm show --ids "$VM_ID" --query 'storageProfile.osDisk.managedDisk.id' -o tsv 2>/dev/null) || true
-
-	PUBLIC_IP_ID=""
-	NSG_ID=""
-	SUBNET_ID=""
-	VNET_ID=""
-	if [[ -n "$NIC_ID" ]]; then
-		PUBLIC_IP_ID=$(az network nic show --ids "$NIC_ID" --query 'ipConfigurations[0].publicIPAddress.id' -o tsv 2>/dev/null) || true
-		NSG_ID=$(az network nic show --ids "$NIC_ID" --query 'networkSecurityGroup.id' -o tsv 2>/dev/null) || true
-		SUBNET_ID=$(az network nic show --ids "$NIC_ID" --query 'ipConfigurations[0].subnet.id' -o tsv 2>/dev/null) || true
-		if [[ -n "$SUBNET_ID" ]]; then
-			VNET_ID="${SUBNET_ID%/subnets/*}"
+for pass in 1 2 3 4; do
+	for entry in "${STALE[@]}"; do
+		[[ "${entry%% *}" == "$pass" ]] || continue
+		id="${entry#* }"
+		if [[ "$pass" != 1 ]]; then
+			delete_resource "$id" || true
+			continue
 		fi
-	fi
-
-	az vm delete --ids "$VM_ID" --yes --force-deletion none 2>/dev/null || true
-	[[ -n "$NIC_ID" ]] && az network nic delete --ids "$NIC_ID" 2>/dev/null || true
-	[[ -n "$PUBLIC_IP_ID" ]] && az network public-ip delete --ids "$PUBLIC_IP_ID" 2>/dev/null || true
-	[[ -n "$OS_DISK_ID" ]] && az disk delete --ids "$OS_DISK_ID" --yes 2>/dev/null || true
-	[[ -n "$NSG_ID" ]] && az network nsg delete --ids "$NSG_ID" 2>/dev/null || true
-	[[ -n "$VNET_ID" ]] && az network vnet delete --ids "$VNET_ID" 2>/dev/null || true
-
-	echo "==> Deleted ${VM_NAME}"
+		# Deleting a VM leaves its OS disk behind, tagged or not. Only delete
+		# it when it is in the same resource group.
+		os_disk=$(az vm show --ids "$id" --query 'storageProfile.osDisk.managedDisk.id' -o tsv) || os_disk=""
+		if [[ -n "$os_disk" && "$(lower "$os_disk")" != "$(lower "${id%%/providers/*}")/providers/microsoft.compute/disks/"* ]]; then
+			echo "==> Not deleting OS disk ${os_disk##*/}; it is in another resource group"
+			os_disk=""
+		fi
+		if delete_resource "$id" && [[ -n "$os_disk" ]]; then
+			delete_resource "$os_disk" || true
+		fi
+	done
 done
+
+if [[ "$FAILED" -gt 0 ]]; then
+	echo "==> Sweep finished with ${FAILED} failed deletion(s)" >&2
+	exit 1
+fi
 
 echo "==> Sweep complete"
