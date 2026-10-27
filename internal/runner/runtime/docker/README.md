@@ -16,8 +16,8 @@ containers direct access to the host Docker daemon.
   over the 15-character interface limit). The host must have `br_netfilter`
   loaded with `bridge-nf-call-iptables=1`, or bridged sandbox traffic bypasses
   the iptables rules. The runner refuses to start unless the sysctl reads `1`
-  in its network namespace; before kernel 5.3, where the sysctl is host-wide
-  and not visible there, it requires
+  in its network namespace; before kernel 5.3 the sysctl is host-wide, and when
+  it is absent from that namespace the runner requires
   `SANDBOX_RUNNER_DOCKER_ACK_BR_NETFILTER_IS_LOADED=true` instead.
   `scripts/setup-sysbox.sh` loads the module; the sysctl defaults to `1` once
   it is loaded. The check runs only at startup.
