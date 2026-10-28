@@ -131,7 +131,7 @@ func (s *RunnerRegistryServer) Connect(stream grpc.BidiStreamingServer[pb.Runner
 				"capacity_total", hb.GetCapacityTotal(),
 				"capacity_used", hb.GetCapacityUsed(),
 				"capacity_stopped", hb.GetCapacityStopped(),
-}
+			}
 			// The certificate this stream authenticated with, so a renewal can be
 			// traced to the runners that picked it up.
 			if cert := grpctls.PeerCertificate(stream.Context()); cert != nil {
