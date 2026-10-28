@@ -131,6 +131,36 @@ func buildInflightGauge(reg *prometheus.Registry, role string) prometheus.Gauge 
 	return inflight
 }
 
+// tlsExpiryCollector reports, at scrape time, when each TLS certificate the
+// process presents expires, one series per certificate file.
+type tlsExpiryCollector struct {
+	desc *prometheus.Desc
+	read func() map[string]time.Time
+}
+
+func (c *tlsExpiryCollector) Describe(ch chan<- *prometheus.Desc) { ch <- c.desc }
+
+func (c *tlsExpiryCollector) Collect(ch chan<- prometheus.Metric) {
+	for path, notAfter := range c.read() {
+		// Not MustNewConstMetric: a path that is not valid UTF-8 must not panic the scrape.
+		if m, err := prometheus.NewConstMetric(c.desc, prometheus.GaugeValue, float64(notAfter.Unix()), path); err == nil {
+			ch <- m
+		}
+	}
+}
+
+func registerTLSCertificateExpiry(reg *prometheus.Registry, role string, read func() map[string]time.Time) {
+	reg.MustRegister(&tlsExpiryCollector{
+		desc: prometheus.NewDesc(
+			prometheus.BuildFQName(Namespace, "", "tls_certificate_expiry_timestamp_seconds"),
+			"Expiry (notAfter, Unix seconds) of each TLS certificate the process presents, labeled by certificate file. Renewed files are picked up before each scrape.",
+			[]string{"path"},
+			prometheus.Labels{"role": role},
+		),
+		read: read,
+	})
+}
+
 // APIRecorder owns the metric instruments emitted by the API binary.
 //
 // A recorder built with NewAPIRecorder(false) is a no-op: every observation
@@ -282,6 +312,15 @@ func (r *APIRecorder) SetRunnersRegistered(f func() float64) {
 		},
 		f,
 	))
+}
+
+// SetTLSCertificateExpiry registers a scrape-time gauge that calls read for the
+// expiry of each TLS certificate file the API presents.
+func (r *APIRecorder) SetTLSCertificateExpiry(read func() map[string]time.Time) {
+	if r.reg == nil {
+		return
+	}
+	registerTLSCertificateExpiry(r.reg, RoleAPI, read)
 }
 
 // containerOpBuckets sizes the runner's container-op latency histogram for the
@@ -526,6 +565,15 @@ func (r *RunnerRecorder) SetUnwiredSlots(f func() float64) {
 		},
 		f,
 	))
+}
+
+// SetTLSCertificateExpiry registers a scrape-time gauge that calls read for the
+// expiry of each TLS certificate file the runner presents.
+func (r *RunnerRecorder) SetTLSCertificateExpiry(read func() map[string]time.Time) {
+	if r == nil || r.reg == nil {
+		return
+	}
+	registerTLSCertificateExpiry(r.reg, RoleRunner, read)
 }
 
 // ContainerOpCount returns the counter value for a runner container operation.

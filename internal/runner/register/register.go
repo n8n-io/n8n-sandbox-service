@@ -92,7 +92,19 @@ func connectOnce(ctx context.Context, cfg *config.Config, rt runnerruntime.Runti
 	if err != nil {
 		return err
 	}
-	slog.Info("runner registration stream established", "runner_id", cfg.RunnerID, "api_grpc_addr", cfg.APIGRPCAddr)
+	attrs := []any{"runner_id", cfg.RunnerID, "api_grpc_addr", cfg.APIGRPCAddr}
+	// The certificate the API presented, so a renewal on the API side can be
+	// traced to the runners that saw it. Connect returns once the transport
+	// stream exists, so its context already carries the peer; reading it only
+	// turns off transparent retries for this stream, and connectOnce reconnects
+	// on its own. Not Header(): the API sends headers with its first ack, which
+	// waits for the heartbeat below.
+	if cert := grpctls.PeerCertificate(stream.Context()); cert != nil {
+		attrs = append(attrs,
+			"server_cert_serial", grpctls.CertSerial(cert),
+			"server_cert_not_after", cert.NotAfter.UTC().Format(time.RFC3339))
+	}
+	slog.Info("runner registration stream established", attrs...)
 
 	errCh := make(chan error, 1)
 	go func() {

@@ -243,7 +243,11 @@ not loaded, sandboxes fail to start until it is.
 The bridge rules apply to bridged traffic only on a host running
 `br_netfilter` with `bridge-nf-call-iptables` enabled. The runner refuses to start unless the sysctl reads `1` in its own
 network namespace, where the bridges are; it does not notice the sysctl being
-turned off afterwards.
+turned off afterwards. Before kernel 5.3 the sysctl is host-wide and exists
+only in the host network namespace. When it is absent from the runner's, the
+runner cannot check it: it refuses to start unless
+`SANDBOX_RUNNER_DOCKER_ACK_BR_NETFILTER_IS_LOADED=true`, and then trusts the
+operator that the host has the module loaded and the sysctl at `1`.
 [scripts/setup-sysbox.sh](../scripts/setup-sysbox.sh) loads the module, and the
 kernel enables the sysctl by default once it is loaded.
 
@@ -398,6 +402,7 @@ root filesystem image.
 runner, as do the runner's `/livez` and `/readyz`; other methods never reach
 their handlers. The endpoints expose fleet-level
 counters — sandbox and runner counts, capacity, request and operation rates —
+plus the file path and expiry of each TLS certificate the process presents,
 and carry no tenant or sandbox identifiers. Sandboxes cannot reach the runner's,
 per the section above; the API serves its own on the public HTTP port by default,
 so a deployment that enables ingress publishes them. Set
