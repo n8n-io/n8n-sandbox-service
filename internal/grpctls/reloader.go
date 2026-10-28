@@ -32,8 +32,8 @@ type KeyPairReloader struct {
 
 	mu       sync.Mutex
 	cert     *tls.Certificate
-	loaded   fileStamp // files the current cert came from
-	failed   fileStamp // files the last failed load read
+	loaded   fileStamp // mtimes of files the current cert came from
+	failed   fileStamp // mtimes of files the last failed load read
 	lastTry  time.Time
 	lastWarn time.Time
 }
@@ -95,7 +95,7 @@ func (k *KeyPairReloader) current() (*tls.Certificate, error) {
 		var cert *tls.Certificate
 		if cert, stamp, err = k.load(); err == nil {
 			k.cert, k.loaded, k.failed = cert, stamp, fileStamp{}
-			noteLoaded(k.CertPath, cert.Leaf)
+			logLoaded(k.CertPath, cert.Leaf)
 			return cert, nil
 		}
 	}
@@ -126,7 +126,7 @@ func (k *KeyPairReloader) GetClientCertificate(*tls.CertificateRequestInfo) (*tl
 }
 
 // Prime loads the pair for the first time and fails if it cannot. It also makes
-// the certificate visible to CertificateExpiry.
+// the certificate visible to CertificateExpiryByCertPath.
 func (k *KeyPairReloader) Prime() error {
 	if err := k.prime(); err != nil {
 		return err
@@ -145,7 +145,7 @@ func (k *KeyPairReloader) prime() error {
 		return err
 	}
 	k.cert, k.loaded, k.failed = cert, stamp, fileStamp{}
-	noteLoaded(k.CertPath, cert.Leaf)
+	logLoaded(k.CertPath, cert.Leaf)
 	return nil
 }
 
@@ -188,11 +188,11 @@ func allReloaders() []*KeyPairReloader {
 	return out
 }
 
-// CertificateExpiry returns, per certificate file this process presents, when
+// CertificateExpiryByCertPath returns, per certificate file this process presents, when
 // the certificate it presents on its next handshake expires. It picks up renewed
 // files first, so a long-lived connection that is still on an older certificate
 // does not hold the value back.
-func CertificateExpiry() map[string]time.Time {
+func CertificateExpiryByCertPath() map[string]time.Time {
 	out := map[string]time.Time{}
 	for _, k := range allReloaders() {
 		cert, err := k.current()
@@ -211,9 +211,9 @@ var loadedCerts = struct {
 	byPath map[string]string
 }{byPath: map[string]string{}}
 
-// noteLoaded logs a certificate the first time this process loads it from path
+// logLoaded logs a certificate the first time this process loads it from path
 // and reports whether it did.
-func noteLoaded(path string, leaf *x509.Certificate) bool {
+func logLoaded(path string, leaf *x509.Certificate) bool {
 	fp := fingerprint(leaf)
 	loadedCerts.mu.Lock()
 	prev, seen := loadedCerts.byPath[path]

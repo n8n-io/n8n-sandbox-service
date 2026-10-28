@@ -201,7 +201,7 @@ func TestNotePeerUnaryClientInterceptorNotesTheServerCertificate(t *testing.T) {
 	}
 }
 
-func TestCertificateExpiryPicksUpRenewedFiles(t *testing.T) {
+func TestCertificateExpiryByCertPathPicksUpRenewedFiles(t *testing.T) {
 	dir := t.TempDir()
 	certPath := filepath.Join(dir, "cert.pem")
 	keyPath := filepath.Join(dir, "key.pem")
@@ -213,7 +213,7 @@ func TestCertificateExpiryPicksUpRenewedFiles(t *testing.T) {
 	if err := r.Prime(); err != nil {
 		t.Fatal(err)
 	}
-	if got := CertificateExpiry()[certPath]; !got.Equal(first.notAfter) {
+	if got := CertificateExpiryByCertPath()[certPath]; !got.Equal(first.notAfter) {
 		t.Fatalf("expiry = %v, want %v", got, first.notAfter)
 	}
 
@@ -222,12 +222,12 @@ func TestCertificateExpiryPicksUpRenewedFiles(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	writeFile(t, certPath, second.certPEM)
 	writeFile(t, keyPath, second.keyPEM)
-	if got := CertificateExpiry()[certPath]; !got.Equal(second.notAfter) {
+	if got := CertificateExpiryByCertPath()[certPath]; !got.Equal(second.notAfter) {
 		t.Fatalf("expiry after renewal = %v, want %v", got, second.notAfter)
 	}
 }
 
-func TestNoteLoadedLogsEachCertificateOncePerPath(t *testing.T) {
+func TestLogLoadedLogsEachCertificateOncePerPath(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "cert.pem")
 	a := newTestPair(t, "a").leaf
 	b := newTestPair(t, "b").leaf
@@ -235,8 +235,8 @@ func TestNoteLoadedLogsEachCertificateOncePerPath(t *testing.T) {
 		leaf *x509.Certificate
 		want bool
 	}{{a, true}, {a, false}, {b, true}, {b, false}, {a, true}} {
-		if got := noteLoaded(path, tc.leaf); got != tc.want {
-			t.Errorf("call %d: noteLoaded = %v, want %v", i, got, tc.want)
+		if got := logLoaded(path, tc.leaf); got != tc.want {
+			t.Errorf("call %d: logLoaded = %v, want %v", i, got, tc.want)
 		}
 	}
 }
