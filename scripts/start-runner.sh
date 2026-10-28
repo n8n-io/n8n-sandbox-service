@@ -50,7 +50,9 @@ setup_quota_pool() {
 			echo "[start-runner] truncate failed for ${POOL_PATH}" >&2
 			return 1
 		fi
-		if ! mkfs.xfs -m crc=1,reflink=1 -L sandboxes -q "$POOL_PATH"; then
+		# xfsprogs 6.18+ enables parent pointers and exchange-range by
+		# default, which hosts older than Linux 6.12 cannot mount.
+		if ! mkfs.xfs -m crc=1,reflink=1 -i exchange=0 -n parent=0 -L sandboxes -q "$POOL_PATH"; then
 			echo "[start-runner] mkfs.xfs failed for ${POOL_PATH}" >&2
 			rm -f "$POOL_PATH"
 			return 1
