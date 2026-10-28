@@ -39,6 +39,21 @@ func TestReconcileSandboxDataDirsRemovesEntries(t *testing.T) {
 	}
 }
 
+// A missing data dir is created at startup: every create reads the volume's free
+// space through it, the admission canary's included.
+func TestReconcileSandboxDataDirsCreatesMissingDir(t *testing.T) {
+	dataDir := filepath.Join(t.TempDir(), "sandboxes")
+	rt := newTestRuntime(1)
+	rt.runnerConfig.DataDir = dataDir
+
+	if err := rt.reconcileSandboxDataDirs(context.Background()); err != nil {
+		t.Fatalf("reconcileSandboxDataDirs() failed: %v", err)
+	}
+	if info, err := os.Stat(dataDir); err != nil || !info.IsDir() {
+		t.Fatalf("data dir after reconcile: %v, want a directory", err)
+	}
+}
+
 func TestReconcileJailerStateRunsCleanupScript(t *testing.T) {
 	var gotScript string
 	rt := newTestRuntime(1)

@@ -36,6 +36,11 @@ func (r *Runtime) reconcileSandboxDataDirs(ctx context.Context) error {
 	entries, err := os.ReadDir(dataDir)
 	if err != nil {
 		if os.IsNotExist(err) {
+			// Created here rather than by the first create, which has to read the
+			// volume's free space before it clones anything into it.
+			if err := os.MkdirAll(dataDir, 0o755); err != nil {
+				return fmt.Errorf("create data dir %s: %w", dataDir, err)
+			}
 			return nil
 		}
 		return fmt.Errorf("read data dir %s: %w", dataDir, err)

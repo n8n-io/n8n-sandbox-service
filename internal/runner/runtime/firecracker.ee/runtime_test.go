@@ -67,12 +67,12 @@ func stubCreateDeps(rt *Runtime) {
 		return nil
 	}
 	rt.deps.pauseVM = func(context.Context, string) error { return nil }
+	rt.deps.resumeVM = func(context.Context, string) error { return nil }
 	rt.deps.createSnapshot = func(context.Context, string) error { return nil }
 	rt.deps.loadSnapshot = func(context.Context, string, Config) error { return nil }
 	rt.deps.coldBoot = func(context.Context, string, *bootParams) error { return nil }
 	rt.deps.newProxy = func(context.Context, string, string, string, string) (daemonProxy, error) { return &fakeProxy{}, nil }
 	rt.deps.probeDaemon = func(context.Context, string) error { return nil }
-	rt.deps.freeBytesInDir = freeBytesInDir
 }
 
 func testConfig() Config {
@@ -128,8 +128,13 @@ func newTestRuntime(capacity int32) *Runtime {
 	// Environment for the same reason: every sandbox is also reserved against the
 	// template kernel it would cold boot from, and no test has one on disk.
 	rt.deps.statTemplateKernel = func(string) (kernelPin, error) { return testKernelPin, nil }
+	// And a data volume with room to spare, rather than whatever disk the tests
+	// happen to run on.
+	rt.deps.volumeSpace = func(string) (volumeSpace, error) { return testVolumeSpace, nil }
 	return rt
 }
+
+var testVolumeSpace = volumeSpace{free: 400 << 30, total: 440 << 30}
 
 // testKernelPin is what the template kernel stats as under test, so a test that
 // rebuilds the template only has to return something other than this.

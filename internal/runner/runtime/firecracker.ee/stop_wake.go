@@ -8,22 +8,12 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"sort"
-	"syscall"
 	"time"
 
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 	fcnetwork "github.com/n8n-io/sandbox-service/internal/runner/runtime/firecracker.ee/network"
 )
-
-// stoppedSnapshotHeadroomBytes is extra free-space reserved on top of the
-// current per-sandbox snapshot_mem size before StopSandbox writes a new full
-// snapshot. snapshot/create rewrites mem/state in place and may briefly need
-// more disk than the prior file size (metadata, partial writes, filesystem
-// rounding). The headroom avoids failing stop on a full volume when free space
-// only barely equals the existing snapshot size.
-const stoppedSnapshotHeadroomBytes = 64 << 20 // 64 MiB
 
 // transitionPollInterval paces waiting for another lifecycle transition on the
 // same sandbox to finish.
@@ -49,13 +39,15 @@ func (r *Runtime) StopSandbox(ctx context.Context, sandboxID string) error {
 		return runnerruntime.ErrSandboxNotRunning
 	}
 
-	if err := r.ensureDiskSpaceForSnapshot(ctx, state); err != nil {
+	if err := r.ensureDiskSpaceForSnapshot(state); err != nil {
 		return err
 	}
 	if err := r.deps.pauseVM(ctx, state.socketPath); err != nil {
+		r.resumeAfterFailedStop(ctx, state)
 		return fmt.Errorf("pause firecracker vm: %w", err)
 	}
 	if err := r.deps.createSnapshot(ctx, state.socketPath); err != nil {
+		r.resumeAfterFailedStop(ctx, state)
 		return fmt.Errorf("create firecracker snapshot: %w", err)
 	}
 	// Taken from a paused guest, so this snapshot and the rootfs describe the same
@@ -86,7 +78,6 @@ func (r *Runtime) StopSandbox(ctx context.Context, sandboxID string) error {
 	r.mu.Lock()
 	state.running = false
 	state.stopped = true
-	state.stoppedAt = time.Now()
 	if state.slot >= 0 && r.slotOwnedByLocked(state.slot, state.id) {
 		r.releaseSlotLocked(state.slot)
 	}
@@ -97,6 +88,24 @@ func (r *Runtime) StopSandbox(ctx context.Context, sandboxID string) error {
 
 	slog.Info("firecracker sandbox stopped", "sandbox_id", sandboxID, "vm_id", state.vmID)
 	return teardownErr
+}
+
+// resumeAfterFailedStop resumes the guest of a stop that failed after asking for
+// the pause. The sandbox stays running, so its guest has to run too: left paused,
+// every request proxied to it would hang until a later stop got through. The
+// pause itself may have taken effect even though its call failed, and a snapshot
+// can fail after the disk check, for one because other stops and guests took the
+// space in between. Whatever a failed snapshot left in snapshot_mem is never
+// restored: the guest has been pinned to cold boot since it was activated, and
+// only a snapshot that succeeds lifts the pin. A resume of a guest that never got
+// paused does no harm; at worst it fails and is logged. Resumed under a budget of
+// its own, since the stop may have failed on its deadline.
+func (r *Runtime) resumeAfterFailedStop(ctx context.Context, state *sandboxState) {
+	resumeCtx, cancel := withCleanupBudget(ctx)
+	defer cancel()
+	if err := r.deps.resumeVM(resumeCtx, state.socketPath); err != nil {
+		slog.Warn("firecracker resume after failed stop failed", "sandbox_id", state.id, "err", err)
+	}
 }
 
 // EnsureSandboxRunning brings a stopped sandbox back: normally by restoring its
@@ -446,86 +455,6 @@ func (r *Runtime) reserveWakeSlot(state *sandboxState) error {
 	state.socketPath = filepath.Join(r.config.JailerBaseDir, "firecracker", state.vmID, "root", "firecracker.socket")
 	state.daemonURL = fmt.Sprintf("http://%s", net.JoinHostPort(r.config.ProxyListenIP, fmt.Sprintf("%d", r.config.ProxyPortStart+slot)))
 	return nil
-}
-
-func (r *Runtime) ensureDiskSpaceForSnapshot(ctx context.Context, state *sandboxState) error {
-	needed, err := snapshotWriteBytes(state.snapshotMemPath)
-	if err != nil {
-		return err
-	}
-	needed += stoppedSnapshotHeadroomBytes
-
-	r.mu.Lock()
-	attempts := len(r.sandboxes) + 1
-	r.mu.Unlock()
-
-	for attempt := 0; attempt < attempts; attempt++ {
-		free, err := r.deps.freeBytesInDir(r.runnerConfig.DataDir)
-		if err != nil {
-			return err
-		}
-		if free >= needed {
-			return nil
-		}
-		if !r.evictOldestStoppedSandbox(ctx) {
-			return fmt.Errorf("insufficient disk space for firecracker snapshot")
-		}
-	}
-	return fmt.Errorf("insufficient disk space for firecracker snapshot")
-}
-
-func (r *Runtime) evictOldestStoppedSandbox(ctx context.Context) bool {
-	r.mu.Lock()
-	var candidates []*sandboxState
-	for _, state := range r.sandboxes {
-		if !state.stopped || state.running {
-			continue
-		}
-		// A waking sandbox is still flagged stopped until its microVM is up.
-		// Evicting it here would delete its data dir out from under the wake.
-		// This also skips sandboxes already claimed for delete.
-		if state.transition != transitionNone {
-			continue
-		}
-		candidates = append(candidates, state)
-	}
-	if len(candidates) == 0 {
-		r.mu.Unlock()
-		return false
-	}
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].stoppedAt.Before(candidates[j].stoppedAt)
-	})
-	oldest := candidates[0]
-	oldest.transition = transitionDeleting
-	r.mu.Unlock()
-
-	slog.Warn(
-		"evicting oldest stopped firecracker sandbox for disk space",
-		"sandbox_id", oldest.id,
-		"stopped_at", oldest.stoppedAt,
-	)
-	if r.metrics != nil {
-		r.metrics.ObserveContainerOp(metrics.OpEvict, true, 0)
-	}
-	_ = r.deleteSandbox(ctx, oldest)
-	return true
-}
-
-func snapshotWriteBytes(memPath string) (int64, error) {
-	info, err := os.Stat(memPath)
-	if err != nil {
-		return 0, fmt.Errorf("stat snapshot mem: %w", err)
-	}
-	return info.Size(), nil
-}
-
-func freeBytesInDir(path string) (int64, error) {
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(path, &stat); err != nil {
-		return 0, fmt.Errorf("statfs %s: %w", path, err)
-	}
-	return int64(stat.Bavail) * int64(stat.Bsize), nil
 }
 
 func containsProcessFinished(err error) bool {

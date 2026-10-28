@@ -62,8 +62,16 @@ The guest runs no NTP. A restored guest would resume with the wall clock it had 
 
 CPU, memory and disk are fixed when the golden snapshot and `rootfs.ext4` are built, not by runner env vars: `VCPUS`/`MEM_MIB` in `create-golden-snapshot.sh`, `FIRECRACKER_ROOTFS_SIZE_MB` (default 2048) in `build-rootfs-template.sh`. Each sandbox gets a sparse copy of the rootfs; filling it yields ENOSPC in the guest. Rebuild on the host to change limits.
 
+## Data volume
+
+Every sandbox, running or stopped, keeps its rootfs and memory snapshot under `SANDBOX_RUNNER_DATA_DIR`. They are reflinked from the template and golden snapshot where the filesystem supports it, so a new sandbox takes almost no space and grows as its guest writes; a stop writes the whole memory snapshot. `disk.go` holds the two checks:
+
+- A create is refused like a create with no free slot (`ErrCapacityExhausted`, so the API tries another runner) while the volume has less than 5% free.
+- A stop needs the size of the sandbox's memory snapshot plus 64 MiB free, and fails before pausing the guest otherwise. A snapshot that still runs out of space, because other stops or guests took it in the meantime, fails the stop too, and the guest is resumed. Either way the sandbox keeps running on its slot, and the idle sweeper retries. The runner never deletes a sandbox to make room: it does not know who owns them.
+
+Wakes are not checked: a stopped sandbox already holds its space. Sandboxes already on the volume can still fill the last 5%, after which their writes fail with ENOSPC in the guest and stops fail.
+
 ## Limitations
 
 - Sandboxes are not reattached after a runner restart; startup reconcile removes orphaned data directories, jail state and slot namespaces (a jail directory still holding an active bind mount is logged and left in place).
-- LRU eviction of stopped sandboxes when disk is low is runner-local and does not notify the API.
 - Egress policy is per-netns iptables, not nftables sets; no per-sandbox allowlists.

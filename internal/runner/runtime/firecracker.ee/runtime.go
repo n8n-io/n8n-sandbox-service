@@ -56,7 +56,7 @@ type Runtime struct {
 var _ runnerruntime.Runtime = (*Runtime)(nil)
 
 // SetMetricsRecorder attaches the runner metrics recorder for operations that
-// complete inside the runtime (for example LRU evictions).
+// complete inside the runtime (for example crash recoveries).
 func (r *Runtime) SetMetricsRecorder(rec *metrics.RunnerRecorder) {
 	r.metrics = rec
 	rec.SetUnwiredSlots(func() float64 { return float64(r.unwiredSlots()) })
@@ -219,7 +219,6 @@ type sandboxState struct {
 	running    bool
 	stopped    bool
 	transition sandboxTransition
-	stoppedAt  time.Time
 
 	// generation counts the microVM incarnations this sandbox has had. It is
 	// bumped in teardownRunningVM, before the process is killed, and captured by
@@ -300,6 +299,7 @@ type dependencies struct {
 	cloneRootfs         func(ctx context.Context, templatePath, destPath string) error
 	cloneGoldenSnapshot func(ctx context.Context, goldenMemPath, goldenStatePath, dataDir string) error
 	pauseVM             func(ctx context.Context, socketPath string) error
+	resumeVM            func(ctx context.Context, socketPath string) error
 	createSnapshot      func(ctx context.Context, socketPath string) error
 	loadSnapshot        func(ctx context.Context, socketPath string, cfg Config) error
 	coldBoot            func(ctx context.Context, socketPath string, params *bootParams) error
@@ -307,7 +307,7 @@ type dependencies struct {
 	statTemplateKernel  func(path string) (kernelPin, error)
 	newProxy            func(ctx context.Context, sandboxID string, listenAddr string, netnsName string, guestAddr string) (daemonProxy, error)
 	probeDaemon         func(ctx context.Context, baseURL string) error
-	freeBytesInDir      func(path string) (int64, error)
+	volumeSpace         func(path string) (volumeSpace, error)
 }
 
 func defaultDependencies(fc Config) dependencies {
@@ -318,6 +318,7 @@ func defaultDependencies(fc Config) dependencies {
 		cloneRootfs:         cloneRootfs,
 		cloneGoldenSnapshot: cloneGoldenSnapshotAssets,
 		pauseVM:             pauseVM,
+		resumeVM:            resumeVM,
 		createSnapshot:      createSnapshot,
 		loadSnapshot:        loadSnapshot,
 		coldBoot:            coldBoot,
@@ -329,7 +330,7 @@ func defaultDependencies(fc Config) dependencies {
 		probeDaemon: func(ctx context.Context, baseURL string) error {
 			return probeDaemon(ctx, baseURL, fc.DaemonWaitTimeout)
 		},
-		freeBytesInDir: freeBytesInDir,
+		volumeSpace: statVolume,
 	}
 }
 
@@ -588,11 +589,19 @@ func (r *Runtime) reserveSandbox(sandboxID string, blockEgress bool) (*sandboxSt
 		return nil, err
 	}
 
+	// Read before the lock like the files above, and reported after the duplicate
+	// check: a refusal sends the create to another runner, which must not happen
+	// to a sandbox this runner already holds.
+	diskErr := r.checkCreateDiskSpace()
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if _, ok := r.sandboxes[sandboxID]; ok {
 		return nil, fmt.Errorf("sandbox already exists: %s", sandboxID)
+	}
+	if diskErr != nil {
+		return nil, diskErr
 	}
 	slot := r.reserveSlotLocked(sandboxID)
 	if slot < 0 {
