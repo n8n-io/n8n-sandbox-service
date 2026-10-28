@@ -69,6 +69,8 @@ message GetCordonResponse {
 
 message SetCordonRequest {
   bool cordoned = 1;
+  // Optional. When set, a runner with another id refuses the request.
+  string runner_id = 2;
 }
 
 // The state after the call.

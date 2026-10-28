@@ -16,7 +16,7 @@ All services are configured via environment variables.
 | --- | --- | --- |
 | `SANDBOX_API_KEYS` | *(required)* | Comma-separated admin API keys. Full access to all sandboxes and `/admin/tenants` key management. Self-hosted can use these alone without minting tenant keys. |
 | `SANDBOX_API_PROVISIONER_KEYS` | *(empty)* | Comma-separated provisioner API keys ([security-model.md](security-model.md#provisioner-keys)). When set, startup fails if a key is also in `SANDBOX_API_KEYS` or if `SANDBOX_API_DEFAULT_MAX_SANDBOXES` is `0`. |
-| `SANDBOX_API_SCALER_KEYS` | *(empty)* | Comma-separated scaler API keys: `GET /admin/runners` only ([security-model.md](security-model.md#scaler-keys)). Startup fails if a key is also in `SANDBOX_API_KEYS` or `SANDBOX_API_PROVISIONER_KEYS`. |
+| `SANDBOX_API_SCALER_KEYS` | *(empty)* | Comma-separated scaler API keys: `GET /admin/runners` and `PUT`/`DELETE /admin/runners/{id}/cordon` only ([security-model.md](security-model.md#scaler-keys)). Startup fails if a key is also in `SANDBOX_API_KEYS` or `SANDBOX_API_PROVISIONER_KEYS`. |
 | `SANDBOX_API_RUNNER_REGISTRATION_TOKEN` | *(required)* | Shared secret; runners authenticate to the private gRPC registration service with `Authorization: Bearer …` |
 | `SANDBOX_API_RUNNER_API_KEY` | *(empty)* | Optional API key injected by the API when calling runner HTTP; the runner also requires the client certificate above |
 | `SANDBOX_API_LOG_LEVEL` | `info` | Minimum log severity (`debug`, `info`, `warn`, `error`; case-insensitive) |
@@ -104,6 +104,7 @@ These variables are parsed by the Docker/sysbox runner entrypoint.
 | `SANDBOX_RUNNER_DISK_QUOTA_POOL_SIZE_GB` | *(derived)* | Size of the xfs+prjquota storage pool backing the inner dockerd. Defaults to `ceil(SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB × SANDBOX_RUNNER_CAPACITY_TOTAL × 1.2 / 1024)` (per-sandbox quota times runner capacity, plus 20% headroom for sandbox image layers). Set explicitly to override. |
 | `SANDBOX_RUNNER_DOCKER_INSECURE_REGISTRIES` | *(empty)* | Comma-separated insecure registries passed to dockerd |
 | `SANDBOX_RUNNER_DOCKER_DNS_SERVERS` | *(unset)* | Comma-separated IPv4 resolvers for sandbox DNS, e.g. `1.1.1.1,8.8.8.8`. Unset, sandboxes resolve through the runner's own resolver. See [Sandbox DNS](security-model.md#sandbox-dns). |
+| `SANDBOX_RUNNER_DOCKER_ACK_BR_NETFILTER_IS_LOADED` | `false` | On kernels before 5.3, where the runner cannot read `bridge-nf-call-iptables`, set `true` to confirm the host has `br_netfilter` loaded with the sysctl at `1`; the runner refuses to start otherwise. No effect on newer kernels. See [Guest-to-host and network](security-model.md#guest-to-host-and-network). |
 | `SANDBOX_RUNNER_DOCKER_STORAGE_DRIVER` | *(dockerd default)* | Storage driver for the inner dockerd when disk quotas are off (e.g. `vfs` where nested overlayfs is unavailable). Ignored with quotas on, which always use `overlay2`. Read by `scripts/start-runner.sh`. |
 
 ### Firecracker runner backend config

@@ -184,6 +184,10 @@ func (s *SandboxControlGRPC) SetCordon(ctx context.Context, req *pb.SetCordonReq
 	if err := s.checkAPIKey(ctx); err != nil {
 		return nil, err
 	}
+	// Another runner may now hold the address the caller has for this one.
+	if id := req.GetRunnerId(); id != "" && id != s.Cfg.RunnerID {
+		return nil, status.Errorf(codes.FailedPrecondition, "this is runner %q, not %q", s.Cfg.RunnerID, id)
+	}
 	if s.Cordon.Set(req.GetCordoned()) {
 		remote := ""
 		if p, ok := peer.FromContext(ctx); ok {

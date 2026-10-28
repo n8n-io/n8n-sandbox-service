@@ -9,12 +9,12 @@ test.describe('GET /admin/runners', () => {
     expect(body.runners.length).toBeGreaterThan(0);
     for (const runner of body.runners) {
       expect(Object.keys(runner).sort()).toEqual(
-        ['capacity_stopped', 'capacity_total', 'capacity_used', 'healthy', 'id', 'last_seen'],
+        ['capacity_stopped', 'capacity_total', 'capacity_used', 'cordoned', 'healthy', 'id', 'last_seen'],
       );
     }
   });
 
-  test('a scaler key may list runners and nothing else', async ({ request }) => {
+  test('a scaler key may list and cordon runners and reach no other admin or sandbox route', async ({ request }) => {
     const scaler = { 'X-Api-Key': SCALER_API_KEY };
     const resp = await request.get('/admin/runners', { headers: scaler });
     expect(resp.status()).toBe(200);

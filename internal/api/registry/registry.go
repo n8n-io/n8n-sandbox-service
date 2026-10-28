@@ -16,6 +16,9 @@ type Runner struct {
 	HTTPBaseURL     string // Endpoints proxied to the sandbox
 	ControlGRPCAddr string // Sandbox lifecycle methods
 	Healthy         bool
+	// Cordoned is set by an operator on the runner: it keeps its sandboxes but
+	// takes no new ones.
+	Cordoned        bool
 	CapacityTotal   int32
 	CapacityUsed    int32
 	CapacityStopped int32
@@ -24,7 +27,7 @@ type Runner struct {
 
 // RunnerRegistry tracks runners and supports load-aware placement.
 type RunnerRegistry interface {
-	Upsert(id, httpBaseURL, controlGRPCAddr string, healthy bool, capTotal, capUsed, capStopped int32)
+	Upsert(id, httpBaseURL, controlGRPCAddr string, healthy, cordoned bool, capTotal, capUsed, capStopped int32)
 	Remove(id string)
 	Get(id string) (*Runner, bool)
 	GoneLongEnough(runnerID string, buffer time.Duration, now time.Time) bool
@@ -32,6 +35,7 @@ type RunnerRegistry interface {
 	// List returns every registered runner, stale ones included, ordered by ID.
 	List() ([]Runner, error)
 	// PickLowestUsed returns the eligible runner with the lowest capacity_used,
-	// skipping the runners in exclude.
+	// skipping the runners in exclude. Unhealthy, cordoned, full and stale
+	// runners are not eligible.
 	PickLowestUsed(exclude ...string) (*Runner, error)
 }

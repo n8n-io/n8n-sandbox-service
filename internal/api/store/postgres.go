@@ -64,6 +64,10 @@ func NewPostgres(cfg config.PostgresConfig) (*PostgresStore, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: run runners schema: %w", err)
 	}
+	if _, err := db.Exec(postgresAddRunnerCordonedCol); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: add runners cordoned column: %w", err)
+	}
 	if _, err := db.Exec(postgresTenantsSchema); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: run tenants schema: %w", err)
