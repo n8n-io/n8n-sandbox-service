@@ -124,3 +124,28 @@ func TestLoadConfigRejectsInvalidDefaultDiskQuotaMB(t *testing.T) {
 		t.Fatal("expected LoadConfig to reject non-numeric SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB")
 	}
 }
+
+func TestLoadConfigParsesAckBridgeNetfilter(t *testing.T) {
+	t.Setenv("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE", "test-image")
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+	if cfg.AckBridgeNetfilterLoaded {
+		t.Error("expected AckBridgeNetfilterLoaded false by default")
+	}
+
+	t.Setenv(envAckBridgeNetfilter, "true")
+	if cfg, err = LoadConfig(); err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+	if !cfg.AckBridgeNetfilterLoaded {
+		t.Error("expected AckBridgeNetfilterLoaded true")
+	}
+
+	t.Setenv(envAckBridgeNetfilter, "yes please")
+	if _, err := LoadConfig(); err == nil {
+		t.Fatalf("expected LoadConfig to reject non-boolean %s", envAckBridgeNetfilter)
+	}
+}

@@ -60,7 +60,15 @@ type Config struct {
 	// Unset, Docker forwards to the runner's own resolver. Parsed from
 	// SANDBOX_RUNNER_DOCKER_DNS_SERVERS (comma-separated IPv4, default unset).
 	DNSServers []string
+
+	// AckBridgeNetfilterLoaded is the operator's statement that the host has
+	// br_netfilter loaded with bridge-nf-call-iptables=1, for kernels before 5.3
+	// where the runner cannot read the sysctl. No effect on newer kernels.
+	// Parsed from SANDBOX_RUNNER_DOCKER_ACK_BR_NETFILTER_IS_LOADED (default false).
+	AckBridgeNetfilterLoaded bool
 }
+
+const envAckBridgeNetfilter = "SANDBOX_RUNNER_DOCKER_ACK_BR_NETFILTER_IS_LOADED"
 
 func defaultConfig() Config {
 	return Config{
@@ -140,6 +148,14 @@ func LoadConfig() (Config, error) {
 			return Config{}, fmt.Errorf("SANDBOX_RUNNER_DOCKER_DNS_SERVERS: %w", err)
 		}
 		cfg.DNSServers = servers
+	}
+
+	if v := os.Getenv(envAckBridgeNetfilter); v != "" {
+		ack, err := strconv.ParseBool(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("%s must be a boolean, got %q", envAckBridgeNetfilter, v)
+		}
+		cfg.AckBridgeNetfilterLoaded = ack
 	}
 
 	return cfg, nil
