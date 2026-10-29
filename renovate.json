@@ -1,11 +1,14 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Only the pins in the sandbox image are enrolled: sandbox-workspace/package.json and the global typescript in Dockerfile.sandbox. Lock file maintenance refreshes the transitive deps in sandbox-workspace/package-lock.json weekly; Renovate cannot raise vulnerability-driven PRs for transitive npm deps.",
+  "description": "Only the pins in the sandbox image are enrolled: sandbox-workspace/package.json, the global typescript in Dockerfile.sandbox and the venv's pip in sandbox-venv/requirements.txt, whose hashes Renovate refreshes with hashin. Lock file maintenance refreshes the transitive deps in sandbox-workspace/package-lock.json weekly; Renovate cannot raise vulnerability-driven PRs for transitive npm deps.",
   "extends": ["config:recommended", ":maintainLockFilesWeekly"],
-  "enabledManagers": ["npm", "custom.regex"],
-  "includePaths": ["sandbox-workspace/**", "Dockerfile.sandbox"],
+  "enabledManagers": ["npm", "pip_requirements", "custom.regex"],
+  "includePaths": ["sandbox-workspace/**", "sandbox-venv/**", "Dockerfile.sandbox"],
   "npm": {
     "managerFilePatterns": ["/^sandbox-workspace/package\\.json$/"]
+  },
+  "pip_requirements": {
+    "managerFilePatterns": ["/^sandbox-venv/requirements\\.txt$/"]
   },
   "packageRules": [
     {
