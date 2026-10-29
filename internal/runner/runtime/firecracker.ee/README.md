@@ -64,7 +64,7 @@ CPU, memory and disk are fixed when the golden snapshot and `rootfs.ext4` are bu
 
 ## Data volume
 
-Each sandbox keeps its rootfs and memory snapshot under `SANDBOX_RUNNER_DATA_DIR` until it is deleted. On XFS with reflink both start as copies that share blocks with the template, so a new sandbox takes almost no space; it grows as the guest writes and when a stop saves its memory. The checks are in `disk.go`:
+Each sandbox keeps its rootfs and memory snapshot under `SANDBOX_RUNNER_DATA_DIR` until it is deleted. On XFS with reflink, the rootfs shares blocks with the template and the memory snapshot with the golden snapshot, so a new sandbox takes almost no space; it grows as the guest writes and when a stop saves its memory. The checks are in `disk.go`:
 
 - **Create:** refused while the volume has less than 5% free, like when no slot is free, so the API tries another runner.
 - **Stop:** needs room for the memory snapshot, or it fails before pausing the guest; the sandbox keeps running and the idle sweeper retries. If the snapshot fails after the pause, the guest is resumed, or shut down like a crashed guest if that fails too.

@@ -36,7 +36,7 @@ func (r *Runtime) reconcileSandboxDataDirs(ctx context.Context) error {
 	entries, err := os.ReadDir(dataDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// Not created here: inside its volume, a missing data dir means the
+			// Not created here: inside its volume, a missing data dir can mean the
 			// volume is not mounted, and creating it would put sandboxes on the disk
 			// underneath. Creates fail until it exists.
 			return fmt.Errorf("data dir %s does not exist; creates fail until it does", dataDir)
