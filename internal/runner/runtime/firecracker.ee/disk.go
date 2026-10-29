@@ -9,12 +9,9 @@ import (
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 )
 
-// stoppedSnapshotHeadroomBytes is extra free-space reserved on top of the
-// current per-sandbox snapshot_mem size before StopSandbox writes a new full
-// snapshot. snapshot/create rewrites mem/state in place and may briefly need
-// more disk than the prior file size (metadata, partial writes, filesystem
-// rounding). The headroom avoids failing stop on a full volume when free space
-// only barely equals the existing snapshot size.
+// stoppedSnapshotHeadroomBytes is the free space a stop needs on top of the
+// snapshot's size: writing a snapshot can briefly take a little more than the
+// file itself.
 const stoppedSnapshotHeadroomBytes = 64 << 20 // 64 MiB
 
 // createFloorDivisor sets the free space a create needs: 1/20 of the volume, 5%.

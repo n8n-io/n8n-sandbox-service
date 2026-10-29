@@ -94,17 +94,16 @@ func (r *Runtime) StopSandbox(ctx context.Context, sandboxID string) error {
 	return teardownErr
 }
 
-// resumeAfterFailedStop resumes the guest of a stop that failed after asking for
-// the pause: the sandbox stays running, and requests to a paused guest hang. A
-// partial snapshot is never restored, because only a successful snapshot lifts
-// the pin to cold boot.
+// resumeAfterFailedStop un-pauses the guest when a stop fails. The sandbox still
+// counts as running, and requests to a paused guest would hang. A half-written
+// snapshot is never used: only a stop that succeeds marks it as safe to restore.
 //
-// Firecracker accepts a resume of a running guest, so a failed resume means the
-// guest may still be paused. It is then torn down like a crashed guest: the next
-// request cold boots it and is told its memory is gone.
+// Resuming a guest that isn't paused succeeds, so if the resume fails, the guest
+// may still be paused. It is then shut down like a crashed guest: the next
+// request boots it fresh and is told its memory is lost.
 //
-// The resume gets its own short limit, so a stuck Firecracker API cannot use up
-// the cleanup budget the teardown needs.
+// The resume gets its own short time limit, so a hung Firecracker API still
+// leaves time for the shutdown.
 func (r *Runtime) resumeAfterFailedStop(ctx context.Context, state *sandboxState) {
 	cleanupCtx, cancel := withCleanupBudget(ctx)
 	defer cancel()
