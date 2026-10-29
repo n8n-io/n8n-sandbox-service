@@ -337,6 +337,9 @@ every sandbox built from it. What is verified today:
   workflow opens a PR when a newer kernel of the pinned line appears.
 - The Node.js tarball in the sandbox image is checked against the SHA-256
   values recorded in [Dockerfile.sandbox](../Dockerfile.sandbox).
+- The pip in the sandbox's virtual environment is installed as a wheel in
+  hash-checking mode, from the version and SHA-256 values in
+  [sandbox-venv/requirements.txt](../sandbox-venv/requirements.txt).
 - Service images are published by version. The release workflow mirrors each
   version into the deployment registry by digest and refuses to replace a
   version that is already there.
