@@ -77,9 +77,14 @@ WORKDIR /home/user
 # externally-managed marker. Both sit under /home/user, the only directory uid
 # 1000 owns on either runtime. internal/daemon/exec.go puts them on PATH.
 #
-# ensurepip seeds pip 23.0.1, which builds an sdist the legacy setup.py way.
+# ensurepip seeds pip 23.0.1, which builds an sdist the legacy setup.py way, so
+# the venv gets the pip pinned and hashed in sandbox-venv/requirements.txt.
+# --only-binary refuses the sdist, which would run code to build.
+COPY --chown=1000:1000 sandbox-venv/requirements.txt /tmp/pip-requirements.txt
 RUN python3 -m venv venv \
-    && venv/bin/pip install --no-cache-dir --quiet --upgrade pip \
+    && venv/bin/pip install --no-cache-dir --quiet --require-hashes --only-binary :all: \
+         -r /tmp/pip-requirements.txt \
+    && rm /tmp/pip-requirements.txt \
     && printf 'prefix=/home/user/.npm-global\n' > .npmrc \
     && mkdir -p .npm-global/bin
 
