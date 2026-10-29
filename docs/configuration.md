@@ -73,7 +73,7 @@ The idle sweeper waits `SANDBOX_API_ORPHAN_REAP_BUFFER` (default `5m`) after a r
 | `SANDBOX_RUNNER_HTTP_BASE_URL` | *(required)* | Base URL the API uses to reach this runner; its host must match a SAN on the runner's control cert (e.g. `https://runner:8080`). An `http://` value is upgraded to `https://` with a warning, since the listener only serves TLS; the API rejects any registration whose base URL is not `https://` |
 | `SANDBOX_RUNNER_ID` | hostname | Stable runner id sent to the API |
 | `SANDBOX_RUNNER_CAPACITY_TOTAL` | `1000` | Reported capacity for placement (`0` = unlimited) |
-| `SANDBOX_RUNNER_DATA_DIR` | `/var/sandboxes` | Per-sandbox data directory (the Firecracker runner keeps each sandbox's rootfs and memory snapshot here; see [Data volume](#data-volume)) |
+| `SANDBOX_RUNNER_DATA_DIR` | `/var/sandboxes` | Per-sandbox data directory (Firecracker: see [Data volume](#data-volume)) |
 | `SANDBOX_RUNNER_MAX_FILE_BYTES` | `10485760` | Maximum body the runner accepts on file write/append (10 MB); the API applies `SANDBOX_API_MAX_FILE_BYTES` first |
 | `SANDBOX_RUNNER_MAX_INFLIGHT_PER_SANDBOX` | `256` | Requests one sandbox may have in progress at once; more get `429` ([what counts](API.md#http-429--too-many-requests-in-progress)). Room for clients that write many files in parallel, while still bounding what one sandbox holds on its runner. `0` = no limit, for execution `DELETE`s too |
 | `SANDBOX_RUNNER_MAX_EXEC_TIMEOUT` | `15m` | Largest `timeout_ms` an exec may ask for; a larger one gets `400`. A first estimate: long enough for builds and test suites, and what ends a forgotten command, which keeps running after its stream closes. `0` (no limit) or at least `5m`, the timeout a command gets when it sets none |
@@ -166,7 +166,10 @@ assets (see [`internal/runner/runtime/firecracker.ee/README.md`](../internal/run
 
 #### Data volume
 
-The filesystem holding `SANDBOX_RUNNER_DATA_DIR` keeps every sandbox's rootfs and memory snapshot until the sandbox is deleted. Both start as reflinked copies of the template and golden snapshot where the filesystem supports it, and take space as the guest writes and when a stop writes the snapshot. The directory must exist; the runner does not create it. Point it at a directory inside the data volume rather than at its mount point, so a volume that is not mounted fails the admission canary and the runner stays unready, instead of putting sandboxes on the filesystem underneath. The runner refuses creates while that filesystem has less than 5% free; the API then tries another runner, as for a runner with no free slot. A stop without room for its snapshot fails and is retried by the idle sweeper; the runner never deletes a sandbox to make room. Put the data directory, the template and the golden snapshot on one dedicated filesystem with reflink support (XFS with `reflink=1`), so a create clones instead of copying and the 5% is measured against sandbox data only. [Details](../internal/runner/runtime/firecracker.ee/README.md#data-volume).
+- Put `SANDBOX_RUNNER_DATA_DIR`, the template and the golden snapshot on one dedicated XFS filesystem with `reflink=1`, so new sandboxes are cheap copies.
+- Use a directory inside that filesystem, not its mount point. The runner does not create it, so an unmounted volume leaves the runner unready instead of filling the wrong disk.
+
+How the runner uses the volume and what happens when it fills up: [runtime README](../internal/runner/runtime/firecracker.ee/README.md#data-volume).
 
 #### File descriptors
 

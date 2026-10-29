@@ -589,9 +589,8 @@ func (r *Runtime) reserveSandbox(sandboxID string, blockEgress bool) (*sandboxSt
 		return nil, err
 	}
 
-	// Read before the lock like the files above, and reported after the duplicate
-	// check: a refusal sends the create to another runner, which must not happen
-	// to a sandbox this runner already holds.
+	// Read before the lock like the files above. Reported after the duplicate
+	// check, so a sandbox this runner holds is never sent to another runner.
 	diskErr := r.checkCreateDiskSpace()
 
 	r.mu.Lock()
@@ -600,8 +599,8 @@ func (r *Runtime) reserveSandbox(sandboxID string, blockEgress bool) (*sandboxSt
 	if _, ok := r.sandboxes[sandboxID]; ok {
 		return nil, fmt.Errorf("sandbox already exists: %s", sandboxID)
 	}
-	// A full runner refuses as full even when its volume cannot be read: that
-	// refusal sends the create to another runner, where a read error fails it.
+	// A full runner says so even if its volume can't be read, so the API still
+	// tries another runner.
 	if diskErr != nil && r.occupiedSlotsLocked() < len(r.slots) {
 		return nil, diskErr
 	}

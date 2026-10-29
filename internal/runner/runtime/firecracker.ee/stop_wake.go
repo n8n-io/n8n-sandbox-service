@@ -19,9 +19,8 @@ import (
 // same sandbox to finish.
 const transitionPollInterval = 50 * time.Millisecond
 
-// resumeAfterFailedStopTimeout bounds the resume of a guest whose stop failed. A
-// resume is one Firecracker API call that normally answers in milliseconds. A
-// var so tests can shrink it.
+// resumeAfterFailedStopTimeout bounds resumeAfterFailedStop's resume, which
+// normally takes milliseconds. A var so tests can shrink it.
 var resumeAfterFailedStopTimeout = 10 * time.Second
 
 // StopSandbox pauses the microVM, writes a per-sandbox snapshot, tears down host
@@ -96,26 +95,16 @@ func (r *Runtime) StopSandbox(ctx context.Context, sandboxID string) error {
 }
 
 // resumeAfterFailedStop resumes the guest of a stop that failed after asking for
-// the pause. The sandbox stays running, so its guest has to run too: left paused,
-// every request proxied to it would hang until a later stop got through. The
-// pause itself may have taken effect even though its call failed, and a snapshot
-// can fail after the disk check, for one because other stops and guests took the
-// space in between. Whatever a failed snapshot left in snapshot_mem is never
-// restored: the guest has been pinned to cold boot since it was activated, and
-// only a snapshot that succeeds lifts the pin. Resumed under a budget of its own,
-// since the stop may have failed on its deadline.
+// the pause: the sandbox stays running, and requests to a paused guest hang. A
+// partial snapshot is never restored, because only a successful snapshot lifts
+// the pin to cold boot.
 //
-// Firecracker answers a resume of a running guest with success, so a resume that
-// fails means the guest's state is unknown and possibly still paused. It is then
-// torn down and left stopped, as after a guest death: the next request cold boots
-// it from its rootfs and is told the memory is gone, instead of hanging on a
-// guest nothing will resume.
+// Firecracker accepts a resume of a running guest, so a failed resume means the
+// guest may still be paused. It is then torn down like a crashed guest: the next
+// request cold boots it and is told its memory is gone.
 //
-// The resume gets a short limit inside the cleanup budget: the Firecracker API
-// client has no timeout of its own, and a stuck API is the case this exists for.
-// Left to run out the whole budget, it would leave the teardown an expired
-// context, whose host commands fail at once and leave the jail's mounts for the
-// next wake of this sandbox to trip over.
+// The resume gets its own short limit, so a stuck Firecracker API cannot use up
+// the cleanup budget the teardown needs.
 func (r *Runtime) resumeAfterFailedStop(ctx context.Context, state *sandboxState) {
 	cleanupCtx, cancel := withCleanupBudget(ctx)
 	defer cancel()

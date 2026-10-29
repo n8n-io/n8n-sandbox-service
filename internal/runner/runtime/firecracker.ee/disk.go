@@ -17,23 +17,20 @@ import (
 // only barely equals the existing snapshot size.
 const stoppedSnapshotHeadroomBytes = 64 << 20 // 64 MiB
 
-// createFloorDivisor sets the free space a create needs on the data volume: one
-// twentieth, 5%. A create takes almost nothing up front, because the rootfs and
-// snapshot are reflinked, and grows as its guest writes. The floor stops new
-// sandboxes from arriving on a volume that is filling up, and leaves the rest
-// as room for the sandboxes already there to grow into.
+// createFloorDivisor sets the free space a create needs: 1/20 of the volume, 5%.
+// New sandboxes take almost no space at first and grow as they write, so the
+// floor is room for the sandboxes already there to grow into.
 const createFloorDivisor = 20
 
-// volumeSpace is the space on the filesystem holding the sandbox data dir, in
-// bytes. free is what an unprivileged writer can still allocate, which is what
-// the guests' writes through Firecracker and the runner's clones draw on.
+// volumeSpace is the free and total space, in bytes, of the filesystem holding
+// the sandbox data dir. free is what an unprivileged writer can still use.
 type volumeSpace struct {
 	free  int64
 	total int64
 }
 
-// statVolume leaves the path out of its error, which can reach the client whose
-// create failed; the path is the runner's SANDBOX_RUNNER_DATA_DIR.
+// statVolume's error leaves out the path: it can reach the client whose create
+// failed.
 func statVolume(path string) (volumeSpace, error) {
 	var stat syscall.Statfs_t
 	if err := syscall.Statfs(path, &stat); err != nil {
@@ -46,8 +43,8 @@ func statVolume(path string) (volumeSpace, error) {
 }
 
 // checkCreateDiskSpace refuses a create while the data volume is below its
-// floor. The refusal wraps ErrCapacityExhausted, so the API places the sandbox
-// on another runner; nothing has been created yet at this point.
+// floor. The refusal wraps ErrCapacityExhausted, so the API tries another
+// runner; nothing has been created yet.
 func (r *Runtime) checkCreateDiskSpace() error {
 	space, err := r.deps.volumeSpace(r.runnerConfig.DataDir)
 	if err != nil {
@@ -61,15 +58,10 @@ func (r *Runtime) checkCreateDiskSpace() error {
 	return nil
 }
 
-// ensureDiskSpaceForSnapshot fails a stop that has no room to write its
-// snapshot. It runs before the guest is paused, so a refused stop leaves the
-// sandbox running and the idle sweeper tries again later. Concurrent stops and
-// running guests can still take the space before the snapshot is written; that
-// stop fails too, and StopSandbox resumes the guest.
-//
-// It never makes room by deleting another sandbox. The runner does not know who
-// owns its sandboxes, so whatever it deleted could belong to another tenant, and
-// the API would not be told.
+// ensureDiskSpaceForSnapshot fails a stop with no room for its snapshot, before
+// the guest is paused, so the sandbox keeps running and the idle sweeper retries.
+// It never deletes another sandbox to make room: the runner does not know who
+// owns them.
 func (r *Runtime) ensureDiskSpaceForSnapshot(state *sandboxState) error {
 	needed, err := snapshotWriteBytes(state.snapshotMemPath)
 	if err != nil {
