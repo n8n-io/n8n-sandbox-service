@@ -108,6 +108,96 @@ func TestRuntimeStopSandboxResumesGuestWhenSnapshotFails(t *testing.T) {
 	}
 }
 
+// A guest that cannot be resumed after a failed snapshot may still be paused, so
+// it is torn down and left stopped like a guest that died: the next request cold
+// boots it and is told its memory is gone, instead of hanging on it.
+func TestRuntimeStopSandboxTearsDownGuestThatCannotResume(t *testing.T) {
+	rt := testRuntimeT(t, 1)
+	stubCreateDeps(rt)
+	proc := &fakeProcess{}
+	rt.deps.start = func(context.Context, func(error), string, ...string) (process, error) {
+		return proc, nil
+	}
+
+	const sandboxID = "sandbox-id-123456"
+	if _, err := rt.CreateSandbox(context.Background(), sandboxID, nil); err != nil {
+		t.Fatalf("CreateSandbox() failed: %v", err)
+	}
+	rt.deps.createSnapshot = func(context.Context, string) error {
+		return errors.New("write snapshot_mem: no space left on device")
+	}
+	rt.deps.resumeVM = func(context.Context, string) error {
+		return errors.New("firecracker API PATCH /vm: context deadline exceeded")
+	}
+
+	if err := rt.StopSandbox(context.Background(), sandboxID); err == nil {
+		t.Fatal("StopSandbox() succeeded, want the snapshot failure reported")
+	}
+	if !proc.killed {
+		t.Fatal("the guest that could not be resumed was not torn down")
+	}
+	if _, err := rt.DaemonURL(context.Background(), sandboxID); !errors.Is(err, runnerruntime.ErrSandboxNotRunning) {
+		t.Fatalf("DaemonURL() error = %v, want ErrSandboxNotRunning", err)
+	}
+	if got := capacityOf(t, rt); got.Used != 0 || got.Stopped != 1 {
+		t.Fatalf("capacity = %+v, want used 0 and stopped 1", got)
+	}
+
+	var coldBooted bool
+	rt.deps.coldBoot = func(context.Context, string, *bootParams) error {
+		coldBooted = true
+		return nil
+	}
+	wake, err := rt.EnsureSandboxRunning(context.Background(), sandboxID)
+	if err != nil {
+		t.Fatalf("EnsureSandboxRunning() failed: %v", err)
+	}
+	if !coldBooted || !wake.Recovered {
+		t.Fatalf("wake cold booted = %v, recovered = %v; want a cold boot reported as a recovery", coldBooted, wake.Recovered)
+	}
+}
+
+// A resume stuck on an unresponsive Firecracker API gives up on its own limit, so
+// the teardown after it still has time to clean the jail; an expired context would
+// fail those host commands at once and leave the mounts behind.
+func TestRuntimeStopSandboxStuckResumeLeavesTeardownTime(t *testing.T) {
+	rt := testRuntimeT(t, 1)
+	stubCreateDeps(rt)
+	restore := resumeAfterFailedStopTimeout
+	resumeAfterFailedStopTimeout = 10 * time.Millisecond
+	t.Cleanup(func() { resumeAfterFailedStopTimeout = restore })
+
+	const sandboxID = "sandbox-id-123456"
+	if _, err := rt.CreateSandbox(context.Background(), sandboxID, nil); err != nil {
+		t.Fatalf("CreateSandbox() failed: %v", err)
+	}
+	rt.deps.createSnapshot = func(context.Context, string) error {
+		return errors.New("write snapshot_mem: no space left on device")
+	}
+	rt.deps.resumeVM = func(ctx context.Context, _ string) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	var cleanupRan, cleanupCtxLive atomic.Bool
+	rt.deps.run = func(ctx context.Context, _ string, args ...string) error {
+		if len(args) > 0 && strings.Contains(args[len(args)-1], "rm -rf") {
+			cleanupRan.Store(true)
+			cleanupCtxLive.Store(ctx.Err() == nil)
+		}
+		return nil
+	}
+
+	if err := rt.StopSandbox(context.Background(), sandboxID); err == nil {
+		t.Fatal("StopSandbox() succeeded, want the snapshot failure reported")
+	}
+	if !cleanupRan.Load() {
+		t.Fatal("the jail was not cleaned after the resume gave up")
+	}
+	if !cleanupCtxLive.Load() {
+		t.Fatal("jail cleanup ran with an expired context")
+	}
+}
+
 // A pause whose call failed may still have paused the guest, so it is resumed
 // the same way; a stop that succeeds resumes nothing.
 func TestRuntimeStopSandboxResumesOnlyAfterAFailedStop(t *testing.T) {

@@ -600,7 +600,9 @@ func (r *Runtime) reserveSandbox(sandboxID string, blockEgress bool) (*sandboxSt
 	if _, ok := r.sandboxes[sandboxID]; ok {
 		return nil, fmt.Errorf("sandbox already exists: %s", sandboxID)
 	}
-	if diskErr != nil {
+	// A full runner refuses as full even when its volume cannot be read: that
+	// refusal sends the create to another runner, where a read error fails it.
+	if diskErr != nil && r.occupiedSlotsLocked() < len(r.slots) {
 		return nil, diskErr
 	}
 	slot := r.reserveSlotLocked(sandboxID)

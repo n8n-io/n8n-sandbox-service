@@ -36,12 +36,12 @@ func (r *Runtime) reconcileSandboxDataDirs(ctx context.Context) error {
 	entries, err := os.ReadDir(dataDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// Created here rather than by the first create, which has to read the
-			// volume's free space before it clones anything into it.
-			if err := os.MkdirAll(dataDir, 0o755); err != nil {
-				return fmt.Errorf("create data dir %s: %w", dataDir, err)
-			}
-			return nil
+			// Not created here: a data dir inside its volume is missing when the
+			// volume is not mounted, and creating it would put sandboxes on whatever
+			// filesystem is underneath. Every create reads the volume's free space
+			// through it, so creates, the admission canary's included, fail until it
+			// exists.
+			return fmt.Errorf("data dir %s does not exist; creates fail until it does", dataDir)
 		}
 		return fmt.Errorf("read data dir %s: %w", dataDir, err)
 	}

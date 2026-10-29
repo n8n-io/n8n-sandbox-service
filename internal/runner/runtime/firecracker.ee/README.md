@@ -66,10 +66,10 @@ CPU, memory and disk are fixed when the golden snapshot and `rootfs.ext4` are bu
 
 Every sandbox, running or stopped, keeps its rootfs and memory snapshot under `SANDBOX_RUNNER_DATA_DIR`. They are reflinked from the template and golden snapshot where the filesystem supports it, so a new sandbox takes almost no space and grows as its guest writes; a stop writes the whole memory snapshot. `disk.go` holds the two checks:
 
-- A create is refused like a create with no free slot (`ErrCapacityExhausted`, so the API tries another runner) while the volume has less than 5% free.
-- A stop needs the size of the sandbox's memory snapshot plus 64 MiB free, and fails before pausing the guest otherwise. A snapshot that still runs out of space, because other stops or guests took it in the meantime, fails the stop too, and the guest is resumed. Either way the sandbox keeps running on its slot, and the idle sweeper retries. The runner never deletes a sandbox to make room: it does not know who owns them.
+- A create is refused like a create with no free slot (`ErrCapacityExhausted`, so the API tries another runner) while the volume has less than 5% free. A runner whose slots are all taken refuses for that first.
+- A stop needs the size of the sandbox's memory snapshot plus 64 MiB free, and fails before pausing the guest otherwise. A snapshot that still runs out of space, because other stops or guests took it in the meantime, fails the stop too, and the guest is resumed. Either way the sandbox keeps running on its slot, and the idle sweeper retries. A guest that cannot be resumed is torn down and handled like a guest that died: the next request cold boots it and gets `409 sandbox_restarted`. The runner never deletes a sandbox to make room: it does not know who owns them.
 
-Wakes are not checked: a stopped sandbox already holds its space. Sandboxes already on the volume can still fill the last 5%, after which their writes fail with ENOSPC in the guest and stops fail.
+The runner does not create `SANDBOX_RUNNER_DATA_DIR`: startup reconcile logs a missing one, and creates, the admission canary's included, fail until it exists. Placed inside its volume rather than at the mount point, it goes missing when the volume is not mounted, and sandboxes never land on the filesystem underneath. Wakes are not checked: a stopped sandbox already holds its space. Sandboxes already on the volume can still fill the last 5%, after which their writes fail with ENOSPC in the guest and stops fail.
 
 ## Limitations
 

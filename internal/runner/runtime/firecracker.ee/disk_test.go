@@ -99,7 +99,7 @@ func TestRuntimeCreateSandboxFailsWhenVolumeUnreadable(t *testing.T) {
 	rt := testRuntimeT(t, 2)
 	stubCreateDeps(rt)
 	rt.deps.volumeSpace = func(string) (volumeSpace, error) {
-		return volumeSpace{}, errors.New("statfs /var/sandboxes: no such file or directory")
+		return volumeSpace{}, errors.New("read free space of the sandbox data dir: no such file or directory")
 	}
 
 	_, err := rt.CreateSandbox(context.Background(), "sandbox-id-123456", nil)
@@ -108,6 +108,23 @@ func TestRuntimeCreateSandboxFailsWhenVolumeUnreadable(t *testing.T) {
 	}
 	if got := capacityOf(t, rt); got.Used != 0 {
 		t.Fatalf("capacity after the failure = %+v, want no slot held", got)
+	}
+}
+
+// A runner with no free slot refuses as full even when its volume cannot be
+// read, so the API still places the create on another runner.
+func TestRuntimeCreateSandboxRefusesFullRunnerWhenVolumeUnreadable(t *testing.T) {
+	rt := testRuntimeT(t, 1)
+	stubCreateDeps(rt)
+	if _, err := rt.CreateSandbox(context.Background(), "sandbox-id-123456", nil); err != nil {
+		t.Fatalf("CreateSandbox() failed: %v", err)
+	}
+	rt.deps.volumeSpace = func(string) (volumeSpace, error) {
+		return volumeSpace{}, errors.New("read free space of the sandbox data dir: input/output error")
+	}
+
+	if _, err := rt.CreateSandbox(context.Background(), "sandbox-id-abcdef", nil); !errors.Is(err, runnerruntime.ErrCapacityExhausted) {
+		t.Fatalf("CreateSandbox() on a full runner: error = %v, want ErrCapacityExhausted", err)
 	}
 }
 

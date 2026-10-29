@@ -19,6 +19,11 @@ import (
 // same sandbox to finish.
 const transitionPollInterval = 50 * time.Millisecond
 
+// resumeAfterFailedStopTimeout bounds the resume of a guest whose stop failed. A
+// resume is one Firecracker API call that normally answers in milliseconds. A
+// var so tests can shrink it.
+var resumeAfterFailedStopTimeout = 10 * time.Second
+
 // StopSandbox pauses the microVM, writes a per-sandbox snapshot, tears down host
 // VM resources, and frees the runner slot.
 func (r *Runtime) StopSandbox(ctx context.Context, sandboxID string) error {
@@ -97,15 +102,44 @@ func (r *Runtime) StopSandbox(ctx context.Context, sandboxID string) error {
 // can fail after the disk check, for one because other stops and guests took the
 // space in between. Whatever a failed snapshot left in snapshot_mem is never
 // restored: the guest has been pinned to cold boot since it was activated, and
-// only a snapshot that succeeds lifts the pin. A resume of a guest that never got
-// paused does no harm; at worst it fails and is logged. Resumed under a budget of
-// its own, since the stop may have failed on its deadline.
+// only a snapshot that succeeds lifts the pin. Resumed under a budget of its own,
+// since the stop may have failed on its deadline.
+//
+// Firecracker answers a resume of a running guest with success, so a resume that
+// fails means the guest's state is unknown and possibly still paused. It is then
+// torn down and left stopped, as after a guest death: the next request cold boots
+// it from its rootfs and is told the memory is gone, instead of hanging on a
+// guest nothing will resume.
+//
+// The resume gets a short limit inside the cleanup budget: the Firecracker API
+// client has no timeout of its own, and a stuck API is the case this exists for.
+// Left to run out the whole budget, it would leave the teardown an expired
+// context, whose host commands fail at once and leave the jail's mounts for the
+// next wake of this sandbox to trip over.
 func (r *Runtime) resumeAfterFailedStop(ctx context.Context, state *sandboxState) {
-	resumeCtx, cancel := withCleanupBudget(ctx)
+	cleanupCtx, cancel := withCleanupBudget(ctx)
 	defer cancel()
-	if err := r.deps.resumeVM(resumeCtx, state.socketPath); err != nil {
-		slog.Warn("firecracker resume after failed stop failed", "sandbox_id", state.id, "err", err)
+	resumeCtx, cancelResume := context.WithTimeout(cleanupCtx, resumeAfterFailedStopTimeout)
+	err := r.deps.resumeVM(resumeCtx, state.socketPath)
+	cancelResume()
+	if err == nil {
+		return
 	}
+	slog.Warn("firecracker resume after failed stop failed, tearing the guest down",
+		"sandbox_id", state.id, "vm_id", state.vmID, "err", err)
+	if err := r.teardownRunningVM(cleanupCtx, state); err != nil {
+		slog.Warn("firecracker teardown after failed resume failed", "sandbox_id", state.id, "err", err)
+	}
+	r.mu.Lock()
+	state.running = false
+	state.stopped = true
+	if state.slot >= 0 && r.slotOwnedByLocked(state.slot, state.id) {
+		r.releaseSlotLocked(state.slot)
+	}
+	state.slot = -1
+	state.process = nil
+	state.proxy = nil
+	r.mu.Unlock()
 }
 
 // EnsureSandboxRunning brings a stopped sandbox back: normally by restoring its
