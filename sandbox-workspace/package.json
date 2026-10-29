@@ -3,7 +3,7 @@
   "private": true,
   "dependencies": {
     "@n8n/workflow-sdk": "0.36.5",
-    "tsx": "4.19.3",
+    "tsx": "4.23.15",
     "typescript": "7.0.2"
   },
   "devDependencies": {
