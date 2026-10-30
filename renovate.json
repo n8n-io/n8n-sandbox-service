@@ -1,11 +1,14 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Only the pins in the sandbox image are enrolled: sandbox-workspace/package.json and the global typescript in Dockerfile.sandbox. Lock file maintenance refreshes the transitive deps in sandbox-workspace/package-lock.json weekly; Renovate cannot raise vulnerability-driven PRs for transitive npm deps.",
+  "description": "Only the pins in the sandbox image are enrolled: sandbox-workspace/package.json, the global typescript in Dockerfile.sandbox and the venv's pip in sandbox-venv/requirements.txt, whose hashes Renovate refreshes with hashin. Lock file maintenance refreshes the transitive deps in sandbox-workspace/package-lock.json weekly; Renovate cannot raise vulnerability-driven PRs for transitive npm deps.",
   "extends": ["config:recommended", ":maintainLockFilesWeekly"],
-  "enabledManagers": ["npm", "custom.regex"],
-  "includePaths": ["sandbox-workspace/**", "Dockerfile.sandbox"],
+  "enabledManagers": ["npm", "pip_requirements", "custom.regex"],
+  "includePaths": ["sandbox-workspace/**", "sandbox-venv/**", "Dockerfile.sandbox"],
   "npm": {
     "managerFilePatterns": ["/^sandbox-workspace/package\\.json$/"]
+  },
+  "pip_requirements": {
+    "managerFilePatterns": ["/^sandbox-venv/requirements\\.txt$/"]
   },
   "packageRules": [
     {
@@ -13,16 +16,40 @@
       "matchFileNames": ["sandbox-workspace/package.json"],
       "matchPackageNames": ["@n8n/workflow-sdk"],
       "followTag": "stable",
-      "minimumReleaseAge": "3 days",
+      "minimumReleaseAge": "1 day",
       "schedule": ["* 0-6 * * 1"]
     },
     {
-      "description": "n8n pins these itself in the package.json it writes. Change them when n8n does, not when npm has a newer release: updates wait for approval on the dependency dashboard, while security fixes still open on their own. The global typescript in Dockerfile.sandbox follows the same pin, so tsc on PATH and the workspace's copy stay one version.",
+      "description": "n8n pins these itself in the package.json it writes. Follow the versions in n8n's stable git tag instead of npm: the custom datasources read them from n8n's source, so a lookup failure on the dependency dashboard means n8n moved or renamed a pin. The global typescript in Dockerfile.sandbox follows the same pin, so tsc on PATH and the workspace's copy stay one version. tsx takes npm updates: n8n's release build writes \"tsx\": \"*\".",
       "matchFileNames": ["sandbox-workspace/package.json", "Dockerfile.sandbox"],
-      "matchPackageNames": ["tsx", "typescript", "@types/node"],
-      "dependencyDashboardApproval": true
+      "matchPackageNames": ["typescript", "@types/node"],
+      "versioning": "npm"
+    },
+    {
+      "matchPackageNames": ["typescript"],
+      "overrideDatasource": "custom.n8n-stable-typescript"
+    },
+    {
+      "matchPackageNames": ["@types/node"],
+      "overrideDatasource": "custom.n8n-stable-types-node"
     }
   ],
+  "customDatasources": {
+    "n8n-stable-typescript": {
+      "defaultRegistryUrlTemplate": "https://raw.githubusercontent.com/n8n-io/n8n/stable/packages/@n8n/instance-ai/src/workspace/sandbox-typescript.ts",
+      "format": "plain",
+      "transformTemplates": [
+        "{\"releases\": [releases.$match(version, /^(?:export )?const SANDBOX_TYPESCRIPT_VERSION = '([^']+)'/).{\"version\": groups[0]}]}"
+      ]
+    },
+    "n8n-stable-types-node": {
+      "defaultRegistryUrlTemplate": "https://raw.githubusercontent.com/n8n-io/n8n/stable/packages/@n8n/instance-ai/src/workspace/sandbox-setup.ts",
+      "format": "plain",
+      "transformTemplates": [
+        "{\"releases\": [releases.$match(version, /^(?:export )?const SANDBOX_TYPES_NODE_VERSION = '([^']+)'/).{\"version\": groups[0]}]}"
+      ]
+    }
+  },
   "customManagers": [
     {
       "customType": "regex",
