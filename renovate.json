@@ -46,11 +46,12 @@
       "enabled": false
     },
     {
-      "description": "dockerd, containerd and runc in the runner come from this image. Stay on Docker 29, and treat the Alpine release in the tag as part of the version, so a newer Alpine build is picked up once upstream stops publishing the current one. Release candidates do not match.",
+      "description": "dockerd, containerd and runc in the runner come from this image. Stay on Docker 29, and treat the Alpine release in the tag as part of the version, so a newer Alpine build is picked up once upstream stops publishing the current one. Release candidates do not match. The digest is pinned because Docker Hub tags are mutable: a rebuild under the same tag arrives as a digest update PR instead of changing the image silently.",
       "matchManagers": ["dockerfile"],
       "matchPackageNames": ["docker"],
       "versioning": "regex:^(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)-(?<compatibility>dind)-alpine(?<build>\\d+)\\.(?<revision>\\d+)$",
-      "allowedVersions": "/^29\\./"
+      "allowedVersions": "/^29\\./",
+      "pinDigests": true
     }
   ],
   "customDatasources": {

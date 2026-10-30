@@ -10,7 +10,7 @@ COPY . .
 
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/runner ./cmd/runner-docker
 
-FROM docker:29.9.2-dind-alpine3.24 AS runner
+FROM docker:29.9.2-dind-alpine3.24@sha256:9e79b879b177fbd72c34376a3dd3d91747da5db49e1f560f76aea59561471977 AS runner
 
 # The base image no longer ships xfsprogs; start-runner.sh needs mkfs.xfs for
 # the disk-quota storage pool.
