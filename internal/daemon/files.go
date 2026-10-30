@@ -325,6 +325,11 @@ func HandleFileArchive(path string, body io.Reader) (ArchiveResult, error) {
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
+			// The tar ends before the gzip stream does: reading on to the end is
+			// what checks the gzip footer.
+			if _, err := io.Copy(io.Discard, src); err != nil {
+				return res, fmt.Errorf("file_archive: %w: %w", errInvalidArchive, err)
+			}
 			return res, nil
 		}
 		if err != nil {

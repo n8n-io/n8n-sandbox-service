@@ -293,8 +293,17 @@ describe("SandboxClient", () => {
       headers: { "Content-Type": "application/gzip" },
       isSafeToRetry: true,
     });
+    // Each one-byte file takes a 512-byte header and one 512-byte data block.
     const tar = gunzipSync(options.data);
-    expect(tar.subarray(0, 100).toString().split("\0")[0]).toBe("home/user/a.txt");
+    const name = (offset: number) =>
+      tar
+        .subarray(offset, offset + 100)
+        .toString()
+        .split("\0")[0];
+    expect(name(0)).toBe("home/user/a.txt");
+    expect(tar.subarray(512, 513).toString()).toBe("a");
+    expect(name(1024)).toBe("home/user/b.txt");
+    expect(tar.subarray(1536, 1537).toString()).toBe("b");
   });
 
   it("listFiles sends GET /sandboxes/{id}/files with params", async () => {

@@ -626,7 +626,7 @@ Write many files in one request from a tar archive, plain or gzip-compressed. Pa
 - Body: a tar archive whose entry paths are relative to `path`
 - Max size: 10 MB, compressed (configurable via `SANDBOX_API_MAX_FILE_BYTES`)
 
-Only regular files and directories are accepted. An entry with an absolute path or a `..` component, a link, device, FIFO or sparse file, or a path that resolves outside `path` (for example through a symlink already in the sandbox) is refused with `400` naming the entry. Modes, owners and times in the archive are ignored: files get `0644`, directories `0755`.
+Only regular files and directories are accepted. An entry with an absolute path or a `..` component, a link, device, FIFO or sparse file, or a path that resolves outside `path` (for example through a symlink already in the sandbox) is refused with `400` naming the entry. Modes, owners and times in the archive are ignored: new files get `0644` and new directories `0755`, while existing ones keep theirs, as with `PUT /sandboxes/{id}/files`.
 
 Entries are written in order. The first one that fails stops the request, and the entries before it stay written. Only the sandbox's disk limits how much an archive unpacks to, as for any other write.
 

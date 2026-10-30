@@ -117,8 +117,17 @@ func TestHandleFileArchiveWritesFiles(t *testing.T) {
 			if err := os.MkdirAll(target, 0o755); err != nil {
 				t.Fatalf("mkdir target: %v", err)
 			}
-			if err := os.WriteFile(filepath.Join(target, "x.txt"), []byte("old content"), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(target, "x.txt"), []byte("old content"), 0o600); err != nil {
 				t.Fatalf("write existing file: %v", err)
+			}
+			// What the daemon's 0755 turns into under this process's umask.
+			reference := filepath.Join(t.TempDir(), "reference")
+			if err := os.Mkdir(reference, 0o755); err != nil {
+				t.Fatalf("mkdir reference: %v", err)
+			}
+			refInfo, err := os.Stat(reference)
+			if err != nil {
+				t.Fatalf("stat reference: %v", err)
 			}
 
 			setuid := tarFile("deep/nested/y.txt", "yy")
@@ -144,6 +153,9 @@ func TestHandleFileArchiveWritesFiles(t *testing.T) {
 			if got := readString(t, filepath.Join(target, "x.txt")); got != "new" {
 				t.Fatalf("existing file not overwritten: %q", got)
 			}
+			if fi, err := os.Stat(filepath.Join(target, "x.txt")); err != nil || fi.Mode().Perm() != 0o600 {
+				t.Fatalf("existing file should keep its mode 0600, got %v (err %v)", fi.Mode(), err)
+			}
 			if got := readString(t, filepath.Join(target, "deep", "nested", "y.txt")); got != "yy" {
 				t.Fatalf("nested file: %q", got)
 			}
@@ -154,8 +166,12 @@ func TestHandleFileArchiveWritesFiles(t *testing.T) {
 			if fi.Mode()&(os.ModeSetuid|0o111) != 0 {
 				t.Fatalf("archive mode was applied: %v", fi.Mode())
 			}
-			if fi, err := os.Stat(filepath.Join(target, "empty")); err != nil || !fi.IsDir() {
+			fi, err = os.Stat(filepath.Join(target, "empty"))
+			if err != nil || !fi.IsDir() {
 				t.Fatalf("empty directory not created: %v", err)
+			}
+			if fi.Mode().Perm() != refInfo.Mode().Perm() {
+				t.Fatalf("archive directory mode was applied: got %v, want %v", fi.Mode().Perm(), refInfo.Mode().Perm())
 			}
 		})
 	}
@@ -294,6 +310,29 @@ func TestHandleFileArchiveRefusals(t *testing.T) {
 			}
 			if _, statErr := os.Lstat(filepath.Join(target, "outside.txt")); !os.IsNotExist(statErr) {
 				t.Fatalf("a refused entry was written, stat err: %v", statErr)
+			}
+		})
+	}
+}
+
+// The tar ends before the gzip stream does, so a broken gzip footer only shows
+// when the stream is read to its end.
+func TestHandleFileArchiveChecksGzipFooter(t *testing.T) {
+	valid := gzipped(t, buildTar(t, tarFile("a.txt", "a")))
+	badChecksum := bytes.Clone(valid)
+	badChecksum[len(badChecksum)-8] ^= 0xff
+
+	for name, body := range map[string][]byte{
+		"bad checksum":   badChecksum,
+		"missing footer": valid[:len(valid)-8],
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := HandleFileArchive(tempBaseDir(t), bytes.NewReader(body))
+			if err == nil {
+				t.Fatal("expected the broken gzip stream to be refused")
+			}
+			if code := fileOpStatusCode(err); code != http.StatusBadRequest {
+				t.Fatalf("expected %d, got %d: %v", http.StatusBadRequest, code, err)
 			}
 		})
 	}
