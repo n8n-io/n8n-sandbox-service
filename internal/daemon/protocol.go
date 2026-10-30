@@ -14,7 +14,7 @@ const (
 )
 
 // Response is one NDJSON event of an exec stream (started/stdout/stderr/exit/error).
-// File routes return plain JSON ([]FileInfo, FileStatInfo) instead.
+// File routes return plain JSON ([]FileInfo, FileStatInfo, ArchiveResult) instead.
 type Response struct {
 	// Seq is a monotonically increasing sequence number for exec session events.
 	// Keep Seq and Type as the first marshaled fields: the runner exec proxy
@@ -73,4 +73,10 @@ type FileStatInfo struct {
 	Size       int64     `json:"size"`
 	CreatedAt  time.Time `json:"created_at"`
 	ModifiedAt time.Time `json:"modified_at"`
+}
+
+// ArchiveResult counts what the archive route wrote.
+type ArchiveResult struct {
+	Files int   `json:"files"`
+	Bytes int64 `json:"bytes"`
 }

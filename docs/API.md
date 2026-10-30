@@ -85,7 +85,7 @@ What the client loses:
 - Running processes. A dev server or worker started by an earlier execution is dead and nothing restarts it; its files remain, so relaunch it.
 - Completed executions. History is in memory only, so `GET /sandboxes/{id}/executions/{exec_id}` returns `404 execution not found` even for a command that finished before the crash. `DELETE` of one returns `204` instead, since the crash already did what the delete asks for.
 - Idempotency of a caller-supplied `exec_id`. Re-posting an id that ran before the restart runs the command again instead of returning the earlier result.
-- Writes that had not reached the disk. On Firecracker the crash is a guest kernel panic, so it takes the guest page cache with it, and neither a shell redirect nor `PUT /files` flushes. A file written seconds before the crash can be missing or truncated where an older one is intact. Run `sync` in the sandbox if a write has to survive a crash it is racing.
+- Writes that had not reached the disk. On Firecracker the crash is a guest kernel panic, so it takes the guest page cache with it, and neither a shell redirect nor a write through the file routes flushes. A file written seconds before the crash can be missing or truncated where an older one is intact. Run `sync` in the sandbox if a write has to survive a crash it is racing.
 
 An ordinary wake from an idle stop stays transparent: no `409`, no header. On the Sysbox runtime that wake costs the same three things, because a stopped container is started again rather than resumed; on Firecracker an idle stop snapshots the paused guest, so memory does survive it. The `409` is not what tells them apart — `status` is. An idle stop sets `status` to `stopped`, so a client can see it in `GET /sandboxes/{id}` and know what it lost, whereas a crash leaves `status` at `running`. The `409` exists for the case that has no other signal. An ephemeral sandbox never reaches `stopped`; it is deleted instead (see `ephemeral` under `POST /sandboxes`).
 
@@ -607,6 +607,44 @@ curl -X PUT "http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-44665544000
   -H "X-Api-Key: YOUR_API_KEY" \
   -H "Content-Type: application/octet-stream" \
   --data-binary @local-file.txt
+```
+
+---
+
+### POST /sandboxes/{id}/files/archive
+
+Write many files in one request from a tar archive, plain or gzip-compressed. Parent directories are created and existing files are overwritten, as with `PUT /sandboxes/{id}/files`.
+
+**Path Parameters:**
+- `id` — Sandbox UUID
+
+**Query Parameters:**
+- `path` — Directory to unpack into (required); created if missing
+
+**Request:**
+- `Content-Type: application/x-tar` or `application/gzip`; gzip is recognised from the body, not the header
+- Body: a tar archive whose entry paths are relative to `path`
+- Max size: 10 MB, compressed (configurable via `SANDBOX_API_MAX_FILE_BYTES`)
+
+Only regular files and directories are accepted. An entry with an absolute path or a `..` component, a link, device, FIFO or sparse file, or a path that resolves outside `path` (for example through a symlink already in the sandbox) is refused with `400` naming the entry. Modes, owners and times in the archive are ignored: new files get `0644` and new directories `0755`, while existing ones keep theirs, as with `PUT /sandboxes/{id}/files`.
+
+Entries are written in order. The first one that fails stops the request, and the entries before it stay written. Only the sandbox's disk limits how much an archive unpacks to, as for any other write.
+
+**Response:** `200 OK` with the number of regular files written and their total size.
+
+```json
+{"files": 150, "bytes": 123456}
+```
+
+**Errors:** `400` invalid id, missing path, unreadable archive or refused entry, `404` sandbox not found, `429` [too many requests in progress](#http-429--too-many-requests-in-progress)
+
+**Example:**
+
+```bash
+tar -czf - -C ./kb . | curl -X POST "http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/files/archive?path=/home/user/kb" \
+  -H "X-Api-Key: YOUR_API_KEY" \
+  -H "Content-Type: application/gzip" \
+  --data-binary @-
 ```
 
 ---

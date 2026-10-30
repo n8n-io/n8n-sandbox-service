@@ -1,4 +1,5 @@
 import type { HttpClient } from "./http";
+import { gzipTar } from "./tar";
 import type {
   CopyFileRequest,
   DeleteFileOptions,
@@ -28,6 +29,27 @@ export async function writeFile(
     params: { path, overwrite: String(overwrite) },
     headers: { "Content-Type": "application/octet-stream" },
     data: asBuffer(content),
+  });
+}
+
+export async function writeFiles(
+  http: HttpClient,
+  id: string,
+  files: Array<{ path: string; content: FileContent }>,
+): Promise<void> {
+  // Archive paths are relative, so the archive is unpacked into "/".
+  const archive = gzipTar(
+    files.map(({ path, content }) => ({
+      path: path.replace(/^\/+/, ""),
+      content: asBuffer(content),
+    })),
+  );
+  // Writing the same files again leaves the same result, so a retry is safe.
+  await http.requestVoid("POST", `/sandboxes/${id}/files/archive`, {
+    params: { path: "/" },
+    headers: { "Content-Type": "application/gzip" },
+    data: archive,
+    isSafeToRetry: true,
   });
 }
 

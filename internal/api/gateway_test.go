@@ -2,10 +2,12 @@ package api
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -44,6 +46,37 @@ func TestGatewayHandlesSandboxList(t *testing.T) {
 	expected := `[]`
 	if strings.TrimSpace(rr.Body.String()) != expected {
 		t.Fatalf("expected %s, got %s", expected, rr.Body.String())
+	}
+}
+
+// The archive route has no size limit of its own, only the body cap.
+func TestGatewayCapsArchiveBody(t *testing.T) {
+	var received atomic.Int64
+	runner := newTestRunnerServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n, _ := io.Copy(io.Discard, r.Body)
+		received.Add(n)
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	router, s := newTestGateway(t, "admin-key")
+	sid := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	if err := s.Create(&store.SandboxRecord{
+		ID: sid, Status: "running", CreatedAt: 1, LastActiveAt: 1,
+		TenantID: store.AdminTenantID, RunnerHTTPBase: runner.URL,
+	}); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/sandboxes/"+sid+"/files/archive?path=/tmp", strings.NewReader(strings.Repeat("x", 2048)))
+	req.Header.Set("X-Api-Key", "admin-key")
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected %d, got %d body=%s", http.StatusBadRequest, rr.Code, rr.Body.String())
+	}
+	if n := received.Load(); n > 1024 {
+		t.Fatalf("runner received %d bytes, past the 1024-byte cap", n)
 	}
 }
 

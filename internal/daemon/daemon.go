@@ -269,6 +269,21 @@ func NewHandler() *Handler {
 		w.WriteHeader(http.StatusOK)
 	})
 
+	mux.HandleFunc("POST /files/archive", func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Query().Get("path")
+		if path == "" {
+			writeError(w, http.StatusBadRequest, "missing directory path")
+			return
+		}
+
+		res, err := HandleFileArchive(path, r.Body)
+		if err != nil {
+			writeError(w, fileOpStatusCode(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
+	})
+
 	mux.HandleFunc("DELETE /files", func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Query().Get("path")
 		if path == "" {
@@ -387,8 +402,13 @@ func decodeJSONBody(body io.Reader, dst any) error {
 }
 
 func fileOpStatusCode(err error) int {
+	if errors.Is(err, errInvalidArchive) {
+		return http.StatusBadRequest
+	}
 	msg := strings.ToLower(err.Error())
 	switch {
+	case strings.Contains(msg, "path escapes from parent"):
+		return http.StatusBadRequest
 	case strings.Contains(msg, "already exists"):
 		return http.StatusConflict
 	case strings.Contains(msg, "not found"), strings.Contains(msg, "no such file or directory"):

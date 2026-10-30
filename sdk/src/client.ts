@@ -2,6 +2,7 @@ import { exec, resumeExecution, deleteExecution } from "./exec";
 import {
   readFile,
   writeFile,
+  writeFiles,
   appendFile,
   deleteFile,
   copyFile,
@@ -107,6 +108,18 @@ export class SandboxClient {
     overwrite?: boolean,
   ): Promise<void> {
     return writeFile(this.http, id, path, content, overwrite);
+  }
+
+  /**
+   * Writes many files into a sandbox in one request, creating parent directories
+   * and overwriting existing files. Files are written in order; if one fails, the
+   * ones before it stay written.
+   */
+  async writeFiles(
+    id: string,
+    files: Array<{ path: string; content: FileContent }>,
+  ): Promise<void> {
+    return writeFiles(this.http, id, files);
   }
 
   /**

@@ -1,14 +1,22 @@
 package daemon
 
 import (
+	"archive/tar"
+	"bufio"
+	"compress/gzip"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 )
+
+// errInvalidArchive marks an archive the archive route refuses: one it cannot
+// read, or an entry it does not accept.
+var errInvalidArchive = errors.New("invalid archive")
 
 // resolvePath resolves path from the sandbox filesystem root.
 func resolvePath(path string) string {
@@ -287,6 +295,122 @@ func HandleFileMkdir(path string, recursive bool) error {
 		}
 	}
 	return nil
+}
+
+// HandleFileArchive unpacks a tar archive, plain or gzip-compressed, into the
+// directory at path, creating it and any missing parent directories, and
+// overwrites existing files. Only regular files and directories are accepted.
+// Entries are written in order: the first failure stops the unpack and leaves
+// the entries before it in place. Every write goes through an os.Root on the
+// target directory, so no entry lands outside it, not even through a symlink
+// that is already there.
+func HandleFileArchive(path string, body io.Reader) (ArchiveResult, error) {
+	var res ArchiveResult
+	resolved := resolvePath(path)
+
+	if err := os.MkdirAll(resolved, 0o755); err != nil {
+		return res, fmt.Errorf("file_archive mkdir %s: %w", resolved, err)
+	}
+	root, err := os.OpenRoot(resolved)
+	if err != nil {
+		return res, fmt.Errorf("file_archive open %s: %w", resolved, err)
+	}
+	defer root.Close()
+
+	src, err := gunzipIfCompressed(body)
+	if err != nil {
+		return res, fmt.Errorf("file_archive: %w: %w", errInvalidArchive, err)
+	}
+	tr := tar.NewReader(src)
+	for {
+		hdr, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			// The tar ends before the gzip stream does: reading on to the end is
+			// what checks the gzip footer.
+			if _, err := io.Copy(io.Discard, src); err != nil {
+				return res, fmt.Errorf("file_archive: %w: %w", errInvalidArchive, err)
+			}
+			return res, nil
+		}
+		if err != nil {
+			return res, fmt.Errorf("file_archive: %w: %w", errInvalidArchive, err)
+		}
+
+		// A pax global header holds metadata for the whole archive, not a file.
+		if hdr.Typeflag == tar.TypeXGlobalHeader {
+			continue
+		}
+
+		name := hdr.Name
+		if !filepath.IsLocal(name) || slices.Contains(strings.Split(name, "/"), "..") {
+			return res, fmt.Errorf("file_archive entry %q: %w: path must be relative and must not contain ..", name, errInvalidArchive)
+		}
+		// The reader hands pax sparse files over as regular ones and fills their
+		// holes with zeros the archive does not carry. Refusing them keeps what is
+		// written to what the archive holds.
+		for key := range hdr.PAXRecords {
+			if strings.HasPrefix(key, "GNU.sparse.") {
+				return res, fmt.Errorf("file_archive entry %q: %w: sparse files are not allowed", name, errInvalidArchive)
+			}
+		}
+
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			if err := root.MkdirAll(name, 0o755); err != nil {
+				return res, fmt.Errorf("file_archive entry %q: %w", name, err)
+			}
+		case tar.TypeReg:
+			n, err := writeArchiveFile(root, name, archiveEntryReader{tr})
+			if err != nil {
+				return res, fmt.Errorf("file_archive entry %q: %w", name, err)
+			}
+			res.Files++
+			res.Bytes += n
+		default:
+			return res, fmt.Errorf("file_archive entry %q: %w: only regular files and directories are allowed", name, errInvalidArchive)
+		}
+	}
+}
+
+// gunzipIfCompressed returns a reader that decompresses r when it starts with
+// the gzip magic bytes, and r's bytes unchanged otherwise.
+func gunzipIfCompressed(r io.Reader) (io.Reader, error) {
+	br := bufio.NewReader(r)
+	if magic, err := br.Peek(2); err == nil && magic[0] == 0x1f && magic[1] == 0x8b {
+		return gzip.NewReader(br)
+	}
+	return br, nil
+}
+
+// archiveEntryReader marks errors reading an entry's content as an invalid
+// archive, so a truncated or corrupt body is told apart from a failed write.
+type archiveEntryReader struct {
+	tr *tar.Reader
+}
+
+func (a archiveEntryReader) Read(p []byte) (int, error) {
+	n, err := a.tr.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) {
+		err = fmt.Errorf("%w: %w", errInvalidArchive, err)
+	}
+	return n, err
+}
+
+func writeArchiveFile(root *os.Root, name string, content io.Reader) (int64, error) {
+	if dir := filepath.Dir(name); dir != "." {
+		if err := root.MkdirAll(dir, 0o755); err != nil {
+			return 0, err
+		}
+	}
+	f, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return 0, err
+	}
+	n, err := io.Copy(f, content)
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	return n, err
 }
 
 // HandleFileStat returns metadata about the file or directory at path.
