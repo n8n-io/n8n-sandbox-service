@@ -23,7 +23,7 @@ services:
     image: n8n-sandbox:latest-${ARCH}
 
   sandbox-push:
-    image: docker:29.3.1-cli
+    image: docker:29.9.2-cli
     depends_on:
       registry:
         condition: service_healthy
