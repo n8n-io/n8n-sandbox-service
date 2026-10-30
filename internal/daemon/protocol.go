@@ -74,3 +74,9 @@ type FileStatInfo struct {
 	CreatedAt  time.Time `json:"created_at"`
 	ModifiedAt time.Time `json:"modified_at"`
 }
+
+// ArchiveResult counts what the archive route wrote.
+type ArchiveResult struct {
+	Files int   `json:"files"`
+	Bytes int64 `json:"bytes"`
+}

@@ -73,6 +73,7 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	mux.HandleFunc("GET /sandboxes/{id}/files/content", limitTenant(sandboxProxy(false)))
 	mux.HandleFunc("PUT /sandboxes/{id}/files", limitTenant(sandboxProxy(true)))
 	mux.HandleFunc("POST /sandboxes/{id}/files", limitTenant(sandboxProxy(true)))
+	mux.HandleFunc("POST /sandboxes/{id}/files/archive", limitTenant(sandboxProxy(true)))
 	mux.HandleFunc("DELETE /sandboxes/{id}/files", limitTenant(sandboxProxy(false)))
 	mux.HandleFunc("POST /sandboxes/{id}/mkdir", limitTenant(sandboxProxy(false)))
 	mux.HandleFunc("GET /sandboxes/{id}/stat", limitTenant(sandboxProxy(false)))

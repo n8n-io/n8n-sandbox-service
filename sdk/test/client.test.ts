@@ -1,3 +1,4 @@
+import { gunzipSync } from "node:zlib";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { SandboxClient } from "../src/client.js";
 import { EgressMismatchError, SandboxServiceError } from "../src/errors.js";
@@ -272,6 +273,28 @@ describe("SandboxClient", () => {
         headers: { "Content-Type": "application/octet-stream" },
       }),
     );
+  });
+
+  it("writeFiles sends one gzipped archive to POST /sandboxes/{id}/files/archive", async () => {
+    const mock = getMockHttp(client);
+    mock.requestVoid.mockResolvedValue(undefined);
+
+    await client.writeFiles("abc", [
+      { path: "/home/user/a.txt", content: "a" },
+      { path: "/home/user/b.txt", content: Buffer.from("b") },
+    ]);
+
+    expect(mock.requestVoid).toHaveBeenCalledTimes(1);
+    const [method, path, options] = mock.requestVoid.mock.calls[0];
+    expect(method).toBe("POST");
+    expect(path).toBe("/sandboxes/abc/files/archive");
+    expect(options).toMatchObject({
+      params: { path: "/" },
+      headers: { "Content-Type": "application/gzip" },
+      isSafeToRetry: true,
+    });
+    const tar = gunzipSync(options.data);
+    expect(tar.subarray(0, 100).toString().split("\0")[0]).toBe("home/user/a.txt");
   });
 
   it("listFiles sends GET /sandboxes/{id}/files with params", async () => {

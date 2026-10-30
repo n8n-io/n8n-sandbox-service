@@ -120,6 +120,36 @@ func TestFileCopyRejectsOversizedJSONBody(t *testing.T) {
 	}
 }
 
+func TestFileArchiveEndpoint(t *testing.T) {
+	handler := NewHandler()
+	target := tempBaseDir(t)
+
+	post := func(query string, body []byte) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/files/archive"+query, bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/x-tar")
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		return rr
+	}
+
+	rr := post("?path="+target, buildTar(t, tarFile("a.txt", "hello")))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if got := strings.TrimSpace(rr.Body.String()); got != `{"files":1,"bytes":5}` {
+		t.Fatalf("unexpected body: %s", got)
+	}
+
+	if rr := post("", buildTar(t, tarFile("a.txt", "hello"))); rr.Code != http.StatusBadRequest {
+		t.Fatalf("missing path: expected 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	rr = post("?path="+target, buildTar(t, tarFile("../a.txt", "x")))
+	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), `\"../a.txt\"`) {
+		t.Fatalf("refused entry: expected 400 naming the entry, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestExecEndpointAppliesDefaultTimeout(t *testing.T) {
 	oldTimeout := defaultExecTimeout
 	defaultExecTimeout = 50 * time.Millisecond

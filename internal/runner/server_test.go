@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -76,6 +77,32 @@ func (f *fakeRuntime) DaemonURL(context.Context, string) (string, error) {
 }
 
 func (f *fakeRuntime) Shutdown(context.Context) {}
+
+// The archive route has no size limit of its own, only the body cap.
+func TestRunnerCapsArchiveBody(t *testing.T) {
+	var received atomic.Int64
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n, _ := io.Copy(io.Discard, r.Body)
+		received.Add(n)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer daemon.Close()
+
+	cfg := &config.Config{APIKeys: map[string]struct{}{"k": {}}, MaxFileBytes: 1024}
+	router := NewRouter(&fakeRuntime{daemonURL: daemon.URL}, cfg, metrics.NewRunnerRecorder(false))
+
+	req := authedRequest(context.Background(), http.MethodPost,
+		"/sandboxes/550e8400-e29b-41d4-a716-446655440000/files/archive?path=/tmp", strings.Repeat("x", 2048))
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected %d, got %d body=%s", http.StatusBadRequest, rr.Code, rr.Body.String())
+	}
+	if n := received.Load(); n > 1024 {
+		t.Fatalf("daemon received %d bytes, past the 1024-byte cap", n)
+	}
+}
 
 func TestRunnerLivenessEndpointsDoNotCheckRuntime(t *testing.T) {
 	router := NewRouter(&fakeRuntime{readyErr: errors.New("runtime down")}, &config.Config{}, metrics.NewRunnerRecorder(false))
