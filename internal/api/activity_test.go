@@ -295,6 +295,25 @@ func TestActivityRecorderRunWaitsForRunningWritesAndDropsQueuedOnes(t *testing.T
 	}
 }
 
+// A write that gets a writer slot after the stop does not run, even when the
+// slot frees up before it sees done.
+func TestActivityRecorderSkipsAWriteThatGetsASlotAfterStop(t *testing.T) {
+	s := &blockingActivityStore{release: make(chan struct{})}
+	a := NewActivityRecorder(s, nil)
+	for i := range activityWriters + 1 {
+		a.begin(row(fmt.Sprintf("sb-%d", i), "stopped", 0))()
+	}
+	waitFor(t, "the writers to fill", func() bool { return s.inFlight.Load() == activityWriters })
+	a.mu.Lock()
+	a.stopped = true // without closing done, so the freed slot wins
+	a.mu.Unlock()
+	close(s.release)
+	a.writes.Wait()
+	if n := s.calls.Load(); n != activityWriters {
+		t.Fatalf("writes = %d, want %d: the one queued past the stop must not run", n, activityWriters)
+	}
+}
+
 func TestActivityLagIsTwiceTheWriteIntervalPlusTheWriteTimeout(t *testing.T) {
 	if got := activityLag(nil); got != 65*time.Second {
 		t.Fatalf("default lag = %s, want 65s", got)

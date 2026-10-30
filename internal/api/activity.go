@@ -156,8 +156,13 @@ func (a *ActivityRecorder) writeLocked(id string, e *sandboxActivity, at int64) 
 		var err error
 		select {
 		case a.writers <- struct{}{}:
-			// Include the requests that arrived while this write waited.
 			a.mu.Lock()
+			if a.stopped { // select may pick the slot over done
+				a.mu.Unlock()
+				<-a.writers
+				return
+			}
+			// Include the requests that arrived while this write waited.
 			e := a.entry(id)
 			at = max(at, e.last)
 			if e.open > 0 {
