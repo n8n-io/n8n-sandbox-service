@@ -14,10 +14,10 @@ import (
 // file itself.
 const stoppedSnapshotHeadroomBytes = 64 << 20 // 64 MiB
 
-// createFloorDivisor sets the free space a create needs: 1/20 of the volume, 5%.
-// New sandboxes take almost no space at first and grow as they write, so the
-// floor is room for the sandboxes already there to grow into.
-const createFloorDivisor = 20
+// createFloorPercent is the free space a create needs, as a percentage of the
+// volume. New sandboxes take almost no space at first and grow as they write,
+// so the floor is room for the sandboxes already there to grow into.
+const createFloorPercent = 5
 
 // volumeSpace is the free and total space, in bytes, of the filesystem holding
 // the sandbox data dir. free is what an unprivileged writer can still use.
@@ -47,7 +47,7 @@ func (r *Runtime) checkCreateDiskSpace() error {
 	if err != nil {
 		return err
 	}
-	floor := space.total / createFloorDivisor
+	floor := space.total * createFloorPercent / 100
 	if space.free < floor {
 		return fmt.Errorf("firecracker data volume has %d MiB free, below its %d MiB floor: %w",
 			space.free>>20, floor>>20, runnerruntime.ErrCapacityExhausted)

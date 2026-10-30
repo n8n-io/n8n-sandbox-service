@@ -16,7 +16,7 @@ import (
 func TestRuntimeCreateSandboxRefusesBelowDiskFloor(t *testing.T) {
 	rt := testRuntimeT(t, 4)
 	stubCreateDeps(rt)
-	floor := testVolumeSpace.total / createFloorDivisor
+	floor := testVolumeSpace.total * createFloorPercent / 100
 	free := floor - 1
 	rt.deps.volumeSpace = func(string) (volumeSpace, error) {
 		return volumeSpace{free: free, total: testVolumeSpace.total}, nil

@@ -591,6 +591,8 @@ func (r *Runtime) reserveSandbox(sandboxID string, blockEgress bool) (*sandboxSt
 
 	// Read before the lock like the files above. Reported after the duplicate
 	// check, so a sandbox this runner holds is never sent to another runner.
+	// Concurrent creates can pass it together, which is harmless: a create only
+	// reflinks, and its space is used later, as the guest writes.
 	diskErr := r.checkCreateDiskSpace()
 
 	r.mu.Lock()
