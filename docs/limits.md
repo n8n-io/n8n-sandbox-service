@@ -79,7 +79,7 @@ Output arrives in pieces of at most 64 KiB; there is no limit on total output.
 | A started or woken sandbox's daemon to answer | 60 s |
 | `PUT`/`DELETE /admin/runners/{id}/cordon`, `GET /admin/scaler` | 10 s, 5 s |
 
-The API sets no deadline on its database calls or on a runner's response headers, so a database or runner that hangs holds requests until their clients give up.
+The API sets no deadline on its request-path database calls or on a runner's response headers, so a database or runner that hangs holds requests until their clients give up. Background activity writes time out after 5 s.
 
 ## Resources per sandbox
 

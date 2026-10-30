@@ -208,9 +208,9 @@ The idle sweeper stops and deletes sandboxes by `last_active_at`. Writing it on 
 3. A response is still streaming, such as a long exec: written every `T`, for at most `SANDBOX_API_MAX_RESPONSE_ACTIVITY` (30 min) per response.
 4. A write failed: retried at the next `T` with the latest request time.
 
-Writes never delay a response, at most four run at once per replica, and each times out after 5 s.
+Writes never delay a response, at most four run at once per replica, and each times out 5 s after it starts.
 
-**Why the idle windows grow by `2T + 5 s` (65 s):** a request can skip its write because the row is up to `T` old, and its response can then stream for up to another `T` before the next write, which takes up to 5 s. So `last_active_at` trails the last use by at most that much, and the sweeper and the `404` fence wait that much longer, so nothing is stopped or deleted earlier than configured.
+**Why the idle windows grow by `2T + 5 s` (65 s):** a request can skip its write because the row is up to `T` old, and its response can then stream for up to another `T` before the next write, which takes up to 5 s. So `last_active_at` trails the last use by at most that much, and the sweeper and the `404` fence wait that much longer, so nothing is stopped or deleted earlier than configured. This holds while the database keeps up: a failed write is retried only at the next `T`, and a write that waits for one of the four writers sends the latest request time once it runs.
 
 ### Tenant key cache
 

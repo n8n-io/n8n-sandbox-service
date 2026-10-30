@@ -80,8 +80,8 @@ func apiKeyPrefix(plaintext string) string {
 }
 
 // AuthMiddleware checks X-Api-Key against env admin keys, then env provisioner
-// keys, then env scaler keys, then DB-backed tenant keys, whose lookups keys
-// caches. GET and HEAD on /healthz and /metrics are always allowed through.
+// keys, then env scaler keys, then DB-backed tenant keys, whose lookups are
+// cached. GET and HEAD on /healthz and /metrics are always allowed through.
 func AuthMiddleware(adminKeys, provisionerKeys, scalerKeys map[string]struct{}, s store.SandboxStore, keys *apiKeyCache) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

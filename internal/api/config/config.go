@@ -170,18 +170,18 @@ type APIConfig struct {
 	// sandbox's last_active_at. The idle windows are extended by twice this
 	// plus 5s, because last_active_at can trail the last request by that much
 	// (docs/architecture.md, "Sandbox activity"). Parsed from
-	// SANDBOX_API_ACTIVITY_WRITE_INTERVAL (default 30s; 0 = default).
+	// SANDBOX_API_ACTIVITY_WRITE_INTERVAL (1s–5m, default 30s).
 	ActivityWriteInterval time.Duration
 	// MaxResponseActivity is how long a response that is still open, such as an
 	// exec stream, keeps its sandbox from going idle. Keep it at least the
 	// runner's max exec timeout. Parsed from SANDBOX_API_MAX_RESPONSE_ACTIVITY
-	// (default 30m; 0 = default).
+	// (at least 1m, default 30m).
 	MaxResponseActivity time.Duration
 
 	// APIKeyCacheTTL is how long each API pod remembers a tenant key lookup,
 	// unknown keys included, so a revoked key keeps working on other pods for
 	// up to this long (docs/architecture.md, "Tenant key cache"). Parsed from
-	// SANDBOX_API_KEY_CACHE_TTL (default 15s; 0 = no cache).
+	// SANDBOX_API_KEY_CACHE_TTL (0–1m, default 15s; 0 = no cache).
 	APIKeyCacheTTL time.Duration
 
 	// LogLevel controls the minimum log severity.

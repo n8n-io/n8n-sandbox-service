@@ -39,12 +39,12 @@ func maxResponseActivity(cfg *config.APIConfig) time.Duration {
 // "Sandbox activity" in docs/architecture.md.
 type ActivityRecorder struct {
 	store    store.SandboxStore
-	tick     time.Duration
-	interval int64 // seconds
+	interval time.Duration
 	maxOpen  time.Duration
 	now      func() time.Time
 	writes   sync.WaitGroup
 	writers  chan struct{}
+	done     chan struct{} // closed on stop: queued writes give up
 
 	mu        sync.Mutex
 	sandboxes map[string]*sandboxActivity
@@ -52,34 +52,34 @@ type ActivityRecorder struct {
 }
 
 type sandboxActivity struct {
-	open    int   // responses still streaming
-	last    int64 // the latest request on this pod
-	written int64 // when this pod last wrote last_active_at
+	open    int       // responses still streaming
+	last    int64     // the latest request on this pod, unix seconds
+	written time.Time // when this pod last wrote last_active_at
 	writing bool
 	retry   bool // a write failed; the next tick writes last
 }
 
 func NewActivityRecorder(s store.SandboxStore, cfg *config.APIConfig) *ActivityRecorder {
-	interval := activityWriteInterval(cfg)
 	return &ActivityRecorder{
 		store:     s,
-		tick:      interval,
-		interval:  int64(interval / time.Second),
+		interval:  activityWriteInterval(cfg),
 		maxOpen:   maxResponseActivity(cfg),
 		now:       time.Now,
 		writers:   make(chan struct{}, activityWriters),
+		done:      make(chan struct{}),
 		sandboxes: make(map[string]*sandboxActivity),
 	}
 }
 
 func (a *ActivityRecorder) Run(ctx context.Context) {
-	ticker := time.NewTicker(a.tick)
+	ticker := time.NewTicker(a.interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			a.mu.Lock()
 			a.stopped = true
+			close(a.done)
 			a.mu.Unlock()
 			a.writes.Wait()
 			return
@@ -90,30 +90,30 @@ func (a *ActivityRecorder) Run(ctx context.Context) {
 }
 
 func (a *ActivityRecorder) writeOpen() {
-	now := a.now().Unix()
+	now := a.now()
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for id, e := range a.sandboxes {
 		switch {
 		case e.open > 0:
-			a.writeLocked(id, e, now)
+			a.writeLocked(id, e, now.Unix())
 		case e.retry:
 			a.writeLocked(id, e, e.last)
-		case !e.writing && now-e.written >= a.interval:
+		case !e.writing && now.Sub(e.written) >= a.interval:
 			delete(a.sandboxes, id)
 		}
 	}
 }
 
 func (a *ActivityRecorder) begin(rec *store.SandboxRecord) (end func()) {
-	now := a.now().Unix()
+	now := a.now()
 	a.mu.Lock()
 	e := a.entry(rec.ID)
 	e.open++
-	e.last = max(e.last, now)
-	recent := now-rec.LastActiveAt < a.interval || now-e.written < a.interval
+	e.last = max(e.last, now.Unix())
+	recent := now.Sub(time.Unix(rec.LastActiveAt, 0)) < a.interval || now.Sub(e.written) < a.interval
 	if rec.Status != "running" || !recent {
-		a.writeLocked(rec.ID, e, now)
+		a.writeLocked(rec.ID, e, now.Unix())
 	}
 	a.mu.Unlock()
 
@@ -142,25 +142,36 @@ func (a *ActivityRecorder) entry(id string) *sandboxActivity {
 	return e
 }
 
+// writeLocked writes at, or a later request's time, as last_active_at in the
+// background. e.written is always a time the row will hold once it succeeds.
 func (a *ActivityRecorder) writeLocked(id string, e *sandboxActivity, at int64) {
 	if e.writing || a.stopped {
 		return
 	}
 	prev := e.written
-	e.writing, e.written, e.retry = true, at, false
+	e.writing, e.written, e.retry = true, time.Unix(at, 0), false
 	a.writes.Add(1)
 	go func() {
 		defer a.writes.Done()
-		ctx, cancel := context.WithTimeout(context.Background(), activityWriteTimeout)
 		var err error
 		select {
 		case a.writers <- struct{}{}:
+			// Include the requests that arrived while this write waited.
+			a.mu.Lock()
+			e := a.entry(id)
+			at = max(at, e.last)
+			if e.open > 0 {
+				at = max(at, a.now().Unix())
+			}
+			e.written = time.Unix(at, 0)
+			a.mu.Unlock()
+			ctx, cancel := context.WithTimeout(context.Background(), activityWriteTimeout)
 			_, err = a.store.RecordActivity(ctx, id, at)
+			cancel()
 			<-a.writers
-		case <-ctx.Done():
-			err = ctx.Err()
+		case <-a.done:
+			return
 		}
-		cancel()
 		a.mu.Lock()
 		e := a.entry(id)
 		e.writing = false

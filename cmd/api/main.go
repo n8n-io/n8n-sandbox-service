@@ -207,7 +207,11 @@ func main() {
 		slog.Error("graceful shutdown failed", "error", err)
 	}
 	activityCancel()
-	<-activityDone
+	// Within the same deadline: a write cut off here is lost with the pod.
+	select {
+	case <-activityDone:
+	case <-ctx.Done():
+	}
 	// Metrics last, so a scrape in flight during a normal drain still completes.
 	// The deadline above is deliberately shared: once it is spent the kubelet is
 	// at terminationGracePeriodSeconds and about to SIGKILL us, so that case is

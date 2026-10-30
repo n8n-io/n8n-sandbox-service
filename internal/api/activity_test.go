@@ -135,21 +135,44 @@ func TestActivityRecorderTickRetriesAFailedWriteWithTheLatestRequest(t *testing.
 	s.drain()
 
 	s.setFail(nil)
-	setClock(t0 + 30)
+	setClock(t0 + 290)
 	a.writeOpen()
 	wantWrites(t, a, s, activityWrite{id: "sb", at: t0 + 2})
 	a.writeOpen()
 	wantWrites(t, a, s)
+
+	// The retry wrote the old request time, so a request now is new activity.
+	setClock(t0 + 300)
+	a.begin(row("sb", "running", t0+2))()
+	wantWrites(t, a, s, activityWrite{id: "sb", at: t0 + 300})
+}
+
+func TestActivityRecorderKeepsSubSecondIntervals(t *testing.T) {
+	a, s, setClock := newTestActivityRecorder(t, &config.APIConfig{ActivityWriteInterval: 1500 * time.Millisecond})
+	a.begin(row("sb", "running", 1))()
+	wantWrites(t, a, s, activityWrite{id: "sb", at: t0})
+	setClock(t0 + 1)
+	a.begin(row("sb", "running", 1))()
+	wantWrites(t, a, s)
+	setClock(t0 + 2)
+	a.begin(row("sb", "running", 1))()
+	wantWrites(t, a, s, activityWrite{id: "sb", at: t0 + 2})
 }
 
 // blockingActivityStore holds every RecordActivity until release is closed.
 type blockingActivityStore struct {
 	store.SandboxStore
-	inFlight, peak atomic.Int32
-	release        chan struct{}
+	calls, inFlight, peak atomic.Int32
+	release               chan struct{}
+	mu                    sync.Mutex
+	written               []activityWrite
 }
 
-func (s *blockingActivityStore) RecordActivity(context.Context, string, int64) (bool, error) {
+func (s *blockingActivityStore) RecordActivity(_ context.Context, id string, at int64) (bool, error) {
+	s.calls.Add(1)
+	s.mu.Lock()
+	s.written = append(s.written, activityWrite{id: id, at: at})
+	s.mu.Unlock()
 	n := s.inFlight.Add(1)
 	for p := s.peak.Load(); n > p && !s.peak.CompareAndSwap(p, n); p = s.peak.Load() {
 	}
@@ -208,24 +231,67 @@ func TestActivityRecorderStopsCountingAResponseAfterMaxResponseActivity(t *testi
 	wantWrites(t, a, s)
 }
 
-// Run stops on cancel and waits for the writes in flight.
-func TestActivityRecorderRunWaitsForWritesInFlight(t *testing.T) {
-	a, s, _ := newTestActivityRecorder(t, nil)
+// A write that waited for a writer sends the latest request, so the requests
+// that arrived meanwhile, and skipped their own write, are not lost.
+func TestActivityRecorderQueuedWriteSendsTheLatestRequest(t *testing.T) {
+	s := &blockingActivityStore{release: make(chan struct{})}
+	a := NewActivityRecorder(s, nil)
+	var clock atomic.Int64
+	clock.Store(t0)
+	a.now = func() time.Time { return time.Unix(clock.Load(), 0) }
+	for i := range activityWriters {
+		a.begin(row(fmt.Sprintf("busy-%d", i), "stopped", 0))()
+	}
+	waitFor(t, "the writers to fill", func() bool { return s.inFlight.Load() == activityWriters })
+	a.begin(row("queued", "stopped", 0))()
+	clock.Store(t0 + 10)
+	a.begin(row("queued", "stopped", 0))()
+
+	close(s.release)
+	a.writes.Wait()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var queued []activityWrite
+	for _, w := range s.written {
+		if w.id == "queued" {
+			queued = append(queued, w)
+		}
+	}
+	if len(queued) != 1 || queued[0].at != t0+10 {
+		t.Fatalf("queued writes = %+v, want one with the latest request %d", queued, t0+10)
+	}
+}
+
+// On stop, Run waits for the writes the database is running and drops the
+// ones still queued for a writer.
+func TestActivityRecorderRunWaitsForRunningWritesAndDropsQueuedOnes(t *testing.T) {
+	s := &blockingActivityStore{release: make(chan struct{})}
+	a := NewActivityRecorder(s, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		a.Run(ctx)
 		close(done)
 	}()
-	a.begin(row("sb", "stopped", t0))()
-	cancel()
-	<-done
-	if got := s.drain(); len(got) != 1 {
-		t.Fatalf("writes after Run returned = %+v, want the one in flight", got)
+	for i := range activityWriters + 1 {
+		a.begin(row(fmt.Sprintf("sb-%d", i), "stopped", 0))()
 	}
-	a.begin(row("sb2", "stopped", t0))()
-	if got := s.drain(); len(got) != 0 {
-		t.Fatalf("writes after stop = %+v, want none", got)
+	waitFor(t, "the writers to fill", func() bool { return s.inFlight.Load() == activityWriters })
+
+	cancel()
+	select {
+	case <-done:
+		t.Fatal("Run returned while writes were running")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(s.release)
+	<-done
+	if n := s.calls.Load(); n != activityWriters {
+		t.Fatalf("writes = %d, want %d: the queued one should be dropped", n, activityWriters)
+	}
+	a.begin(row("sb-late", "stopped", 0))()
+	if n := s.calls.Load(); n != activityWriters {
+		t.Fatalf("writes after stop = %d, want none new", n)
 	}
 }
 
