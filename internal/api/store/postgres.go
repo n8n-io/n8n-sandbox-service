@@ -212,13 +212,21 @@ func (s *PostgresStore) UpdateStatus(id, status string) error {
 	return nil
 }
 
-func (s *PostgresStore) UpdateLastActive(id string) error {
-	const q = `UPDATE sandboxes SET last_active_at = $1 WHERE id = $2`
-	now := time.Now().Unix()
-	if _, err := s.db.Exec(q, now, id); err != nil {
-		return fmt.Errorf("store: update last_active_at for %s: %w", id, err)
+func (s *PostgresStore) RecordActivity(ctx context.Context, id string, at int64) (bool, error) {
+	// Skips the write when another API pod has already stored a newer time.
+	const q = `
+		UPDATE sandboxes
+		   SET last_active_at = GREATEST(last_active_at, $1), status = 'running'
+		 WHERE id = $2 AND (last_active_at < $1 OR status <> 'running')`
+	res, err := s.db.ExecContext(ctx, q, at, id)
+	if err != nil {
+		return false, fmt.Errorf("store: record activity for %s: %w", id, err)
 	}
-	return nil
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("store: record activity for %s: %w", id, err)
+	}
+	return n > 0, nil
 }
 
 func (s *PostgresStore) Delete(id string) error {

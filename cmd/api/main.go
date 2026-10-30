@@ -105,7 +105,17 @@ func main() {
 	defer sweepCancel()
 	api.StartIdleSweeper(sweepCtx, sandboxStore, runnerReg, cfg, sweepLockDB)
 
-	handler, err := api.NewGatewayRouter(sandboxStore, cfg, runnerReg, mrec)
+	// Stopped after the HTTP server has drained, so open streams keep counting.
+	activity := api.NewActivityRecorder(sandboxStore, cfg)
+	activityCtx, activityCancel := context.WithCancel(context.Background())
+	defer activityCancel()
+	activityDone := make(chan struct{})
+	go func() {
+		defer close(activityDone)
+		activity.Run(activityCtx)
+	}()
+
+	handler, err := api.NewGatewayRouter(sandboxStore, cfg, runnerReg, mrec, activity)
 	if err != nil {
 		slog.Error("failed to create api router", "error", err)
 		os.Exit(1)
@@ -196,6 +206,8 @@ func main() {
 	if err := srv.Shutdown(ctx); err != nil {
 		slog.Error("graceful shutdown failed", "error", err)
 	}
+	activityCancel()
+	<-activityDone
 	// Metrics last, so a scrape in flight during a normal drain still completes.
 	// The deadline above is deliberately shared: once it is spent the kubelet is
 	// at terminationGracePeriodSeconds and about to SIGKILL us, so that case is

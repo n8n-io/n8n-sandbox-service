@@ -29,7 +29,7 @@ func newTestGateway(t *testing.T, adminKey string) (http.Handler, store.SandboxS
 		RunnerAPIKey:        "runner-key",
 		MaxFileBytes:        1024,
 		DefaultMaxSandboxes: 50,
-	}), registry.New(45*time.Second), metrics.NewAPIRecorder(false))
+	}), registry.New(45*time.Second), metrics.NewAPIRecorder(false), NewActivityRecorder(s, nil))
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}

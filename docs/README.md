@@ -15,6 +15,7 @@
 - [Security model](security-model.md) — trust boundaries, what is enforced where, non-guarantees
 - [Configuration](configuration.md) — every environment variable for API, runner and daemon; metrics; disk quotas
 - [REST API](API.md) — endpoint reference and error contract
+- [Limits](limits.md) — every limit on requests, sandboxes, executions, sizes and time, in one place
 - [TypeScript SDK](../sdk/README.md) — client library
 - Runtime internals: [Docker/Sysbox](../internal/runner/runtime/docker/README.md) · [Firecracker](../internal/runner/runtime/firecracker.ee/README.md)
 

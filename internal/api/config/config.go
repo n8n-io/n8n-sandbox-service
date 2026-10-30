@@ -29,6 +29,13 @@ const (
 	defaultMaxSandboxes     = 50
 
 	defaultMaxInflightPerTenant = 512
+
+	DefaultActivityWriteInterval = 30 * time.Second
+	maxActivityWriteInterval     = 5 * time.Minute
+	DefaultMaxResponseActivity   = 30 * time.Minute
+	minMaxResponseActivity       = time.Minute
+	defaultAPIKeyCacheTTL        = 15 * time.Second
+	maxAPIKeyCacheTTL            = time.Minute
 )
 
 const (
@@ -159,6 +166,23 @@ type APIConfig struct {
 	// OrphanReapBuffer is how long after a runner deregisters before the idle
 	// sweeper removes its orphaned sandbox rows from the store.
 	OrphanReapBuffer time.Duration
+	// ActivityWriteInterval is how often, at most, each API pod writes a
+	// sandbox's last_active_at. The idle windows are extended by twice this
+	// plus 5s, because last_active_at can trail the last request by that much
+	// (docs/architecture.md, "Sandbox activity"). Parsed from
+	// SANDBOX_API_ACTIVITY_WRITE_INTERVAL (default 30s; 0 = default).
+	ActivityWriteInterval time.Duration
+	// MaxResponseActivity is how long a response that is still open, such as an
+	// exec stream, keeps its sandbox from going idle. Keep it at least the
+	// runner's max exec timeout. Parsed from SANDBOX_API_MAX_RESPONSE_ACTIVITY
+	// (default 30m; 0 = default).
+	MaxResponseActivity time.Duration
+
+	// APIKeyCacheTTL is how long each API pod remembers a tenant key lookup,
+	// unknown keys included, so a revoked key keeps working on other pods for
+	// up to this long (docs/architecture.md, "Tenant key cache"). Parsed from
+	// SANDBOX_API_KEY_CACHE_TTL (default 15s; 0 = no cache).
+	APIKeyCacheTTL time.Duration
 
 	// LogLevel controls the minimum log severity.
 	// Parsed from SANDBOX_API_LOG_LEVEL (default info).
@@ -178,20 +202,23 @@ type APIConfig struct {
 // LoadAPI reads API gateway configuration from environment variables.
 func LoadAPI() (*APIConfig, error) {
 	cfg := &APIConfig{
-		ListenAddr:           defaultListenAddr,
-		GRPCListenAddr:       defaultGRPCListenAddr,
-		MaxFileBytes:         defaultMaxFileBytes,
-		DefaultMaxSandboxes:  defaultMaxSandboxes,
-		MaxInflightPerTenant: defaultMaxInflightPerTenant,
-		DataDir:              "/var/lib/n8n-sandbox-api",
-		SQLiteWAL:            true,
-		Store:                StoreSQLite,
-		Postgres:             PostgresConfig{Port: defaultPostgresPort, SSLMode: defaultPostgresSSLMode},
-		HeartbeatGrace:       defaultHeartbeatGrace,
-		OrphanReapBuffer:     defaultOrphanReapBuffer,
-		IdleStopAfter:        defaultIdleStopAfter,
-		IdleDeleteAfter:      defaultIdleDeleteAfter,
-		LogLevel:             defaultLogLevel,
+		ListenAddr:            defaultListenAddr,
+		GRPCListenAddr:        defaultGRPCListenAddr,
+		MaxFileBytes:          defaultMaxFileBytes,
+		DefaultMaxSandboxes:   defaultMaxSandboxes,
+		MaxInflightPerTenant:  defaultMaxInflightPerTenant,
+		DataDir:               "/var/lib/n8n-sandbox-api",
+		SQLiteWAL:             true,
+		Store:                 StoreSQLite,
+		Postgres:              PostgresConfig{Port: defaultPostgresPort, SSLMode: defaultPostgresSSLMode},
+		HeartbeatGrace:        defaultHeartbeatGrace,
+		OrphanReapBuffer:      defaultOrphanReapBuffer,
+		IdleStopAfter:         defaultIdleStopAfter,
+		IdleDeleteAfter:       defaultIdleDeleteAfter,
+		ActivityWriteInterval: DefaultActivityWriteInterval,
+		MaxResponseActivity:   DefaultMaxResponseActivity,
+		APIKeyCacheTTL:        defaultAPIKeyCacheTTL,
+		LogLevel:              defaultLogLevel,
 	}
 
 	// SANDBOX_API_LOG_LEVEL (optional)
@@ -412,6 +439,30 @@ func LoadAPI() (*APIConfig, error) {
 			return nil, fmt.Errorf("SANDBOX_API_ORPHAN_REAP_BUFFER must be a positive duration, got %q", v)
 		}
 		cfg.OrphanReapBuffer = d
+	}
+
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_ACTIVITY_WRITE_INTERVAL")); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d < time.Second || d > maxActivityWriteInterval {
+			return nil, fmt.Errorf("SANDBOX_API_ACTIVITY_WRITE_INTERVAL must be a duration between 1s and %s, got %q", maxActivityWriteInterval, v)
+		}
+		cfg.ActivityWriteInterval = d
+	}
+
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_MAX_RESPONSE_ACTIVITY")); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d < minMaxResponseActivity {
+			return nil, fmt.Errorf("SANDBOX_API_MAX_RESPONSE_ACTIVITY must be a duration of at least %s, got %q", minMaxResponseActivity, v)
+		}
+		cfg.MaxResponseActivity = d
+	}
+
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_KEY_CACHE_TTL")); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d < 0 || d > maxAPIKeyCacheTTL {
+			return nil, fmt.Errorf("SANDBOX_API_KEY_CACHE_TTL must be 0 or a duration up to %s, got %q", maxAPIKeyCacheTTL, v)
+		}
+		cfg.APIKeyCacheTTL = d
 	}
 
 	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_STORE")); v != "" {

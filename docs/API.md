@@ -2,6 +2,8 @@
 
 All endpoints except `/healthz` and `/metrics` require the `X-Api-Key` header for authentication. `/metrics` is only exposed when `SANDBOX_API_METRICS_ENABLED=true` and is intended to be scraped over a private network; `SANDBOX_API_METRICS_LISTEN_ADDR` can move it to a port of its own, off the port that serves this API.
 
+Every limit — requests in progress, quotas, sizes, timeouts, idle windows — is in [limits.md](limits.md).
+
 ### API keys and tenants
 
 There are four key classes:
@@ -11,7 +13,7 @@ There are four key classes:
 - `SANDBOX_API_SCALER_KEYS` are scaler keys: `GET /admin/runners` and `PUT`/`DELETE /admin/runners/{id}/cordon` only, `403` on every other path ([security-model.md](security-model.md#scaler-keys)).
 - Tenant keys are minted by an admin (or returned when a tenant is created). A tenant key may only create sandboxes for that tenant and may only list/get/delete/proxy its own sandboxes. Self-hosted operators can ignore tenant APIs entirely and keep using the admin key.
 
-Tenant keys are returned in plaintext once on create; only a hash is stored.
+Tenant keys are returned in plaintext once on create; only a hash is stored. Each API replica remembers a tenant key lookup for `SANDBOX_API_KEY_CACHE_TTL` (default `15s`), so a revoked key, or the key of a deleted tenant, can still be accepted by other replicas for up to that long.
 
 ### Request tracing
 
@@ -280,7 +282,9 @@ curl -X POST http://localhost:8080/sandboxes \
 
 Get sandbox details.
 
-This is a read-only status check: it does not update `last_active_at` or extend idle timers. Only proxied traffic (exec, files, etc.) counts as activity, and only when the sandbox actually serves it — a request that fails with **502** or **503** leaves `last_active_at` and `status` untouched, so retrying against a broken sandbox cannot hold it open past its idle timers. A **4xx** still counts, since the sandbox was reachable and rejected the request — except a runner sandbox-gone **404**, which never counts as activity even if removing the store row fails. Activity is recorded when the response starts, not while it streams, so a command that runs longer than the idle stop timer can be stopped by the sweeper mid-run.
+This is a read-only status check: it does not update `last_active_at` or extend idle timers. Only proxied traffic (exec, files, etc.) counts as activity, and only when the sandbox actually serves it — a request that fails with **502** or **503** leaves `last_active_at` and `status` untouched, so retrying against a broken sandbox cannot hold it open past its idle timers. A **4xx** still counts, since the sandbox was reachable and rejected the request — except a runner sandbox-gone **404**, which never counts as activity even if removing the store row fails. A response counts until it ends, for at most `SANDBOX_API_MAX_RESPONSE_ACTIVITY` (default `30m`), so a sandbox is not stopped while an exec stream is still open.
+
+`last_active_at` is written at most every `SANDBOX_API_ACTIVITY_WRITE_INTERVAL` (default `30s`), so it can trail the last request by up to twice that plus 5 s; the idle windows are extended by the same amount ([how](architecture.md#sandbox-activity)). After a wake, `status` reads `running` at once.
 
 **Path Parameters:**
 - `id` — Sandbox UUID
@@ -945,7 +949,7 @@ Admin only. Mint an additional API key for the tenant. Returns plaintext `api_ke
 
 ### DELETE /admin/tenants/{id}/keys/{keyId}
 
-Admin only. Revoke an API key (`204`). Revoked keys are rejected from the next request on.
+Admin only. Revoke an API key (`204`). The API replica that handles the revoke rejects the key from the next request on; the others within `SANDBOX_API_KEY_CACHE_TTL` (default `15s`). Exec streams that are already open keep running.
 
 ---
 

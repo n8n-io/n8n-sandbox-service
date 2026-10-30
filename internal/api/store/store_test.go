@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -342,6 +343,59 @@ func TestTenantAndAPIKeyCRUD(t *testing.T) {
 	active, err = s.ListActiveAPIKeysByPrefix("deadbeef")
 	if err != nil || len(active) != 0 {
 		t.Fatalf("after revoke: len=%d err=%v", len(active), err)
+	}
+}
+
+func TestRecordActivity(t *testing.T) {
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	defer s.Close()
+	testRecordActivity(t, s, "activity-1")
+}
+
+// testRecordActivity runs against both backends; id must not exist yet.
+func testRecordActivity(t *testing.T, s SandboxStore, id string) {
+	t.Helper()
+	ctx := context.Background()
+	if err := s.Create(&SandboxRecord{ID: id, Status: "running", CreatedAt: 100, LastActiveAt: 100}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Delete(id) })
+
+	check := func(step string, at int64, wantWritten bool, wantActive int64, wantStatus string) {
+		t.Helper()
+		written, err := s.RecordActivity(ctx, id, at)
+		if err != nil {
+			t.Fatalf("%s: record activity: %v", step, err)
+		}
+		if written != wantWritten {
+			t.Fatalf("%s: written = %v, want %v", step, written, wantWritten)
+		}
+		got, err := s.Get(id)
+		if err != nil || got == nil {
+			t.Fatalf("%s: get: %+v err=%v", step, got, err)
+		}
+		if got.LastActiveAt != wantActive || got.Status != wantStatus {
+			t.Fatalf("%s: last_active_at=%d status=%q, want %d %q", step, got.LastActiveAt, got.Status, wantActive, wantStatus)
+		}
+	}
+
+	check("newer time", 200, true, 200, "running")
+	check("same time", 200, false, 200, "running")
+	// Another API pod may write an older time after a newer one.
+	check("older time", 150, false, 200, "running")
+
+	if err := s.UpdateStatus(id, "stopped"); err != nil {
+		t.Fatalf("update status: %v", err)
+	}
+	// A wake: running again, without moving the time back.
+	check("older time on a stopped row", 150, true, 200, "running")
+
+	written, err := s.RecordActivity(ctx, id+"-missing", 300)
+	if err != nil || written {
+		t.Fatalf("missing row: written=%v err=%v, want false and no error", written, err)
 	}
 }
 

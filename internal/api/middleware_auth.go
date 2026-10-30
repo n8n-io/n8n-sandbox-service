@@ -80,9 +80,9 @@ func apiKeyPrefix(plaintext string) string {
 }
 
 // AuthMiddleware checks X-Api-Key against env admin keys, then env provisioner
-// keys, then env scaler keys, then DB-backed tenant keys. GET and HEAD on
-// /healthz and /metrics are always allowed through.
-func AuthMiddleware(adminKeys, provisionerKeys, scalerKeys map[string]struct{}, s store.SandboxStore) func(http.Handler) http.Handler {
+// keys, then env scaler keys, then DB-backed tenant keys, whose lookups keys
+// caches. GET and HEAD on /healthz and /metrics are always allowed through.
+func AuthMiddleware(adminKeys, provisionerKeys, scalerKeys map[string]struct{}, s store.SandboxStore, keys *apiKeyCache) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if publicPaths.Public(r) {
@@ -119,27 +119,41 @@ func AuthMiddleware(adminKeys, provisionerKeys, scalerKeys map[string]struct{}, 
 				return
 			}
 
-			prefix := apiKeyPrefix(key)
-			candidates, err := s.ListActiveAPIKeysByPrefix(prefix)
+			keyHash := hashAPIKey(key)
+			tenantID, err := keys.lookup(keyHash, func() (string, error) {
+				return lookupTenantKey(s, key, keyHash)
+			})
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, "auth lookup failed")
 				return
 			}
-			wantHash := hashAPIKey(key)
-			for _, c := range candidates {
-				if subtle.ConstantTimeCompare([]byte(c.KeyHash), []byte(wantHash)) == 1 {
-					obs.FieldsFrom(r.Context()).Add("tenant_id", c.TenantID)
-					next.ServeHTTP(w, r.WithContext(withAuthIdentity(r.Context(), authIdentity{
-						Role:     roleTenant,
-						TenantID: c.TenantID,
-					})))
-					return
-				}
+			if tenantID != "" {
+				obs.FieldsFrom(r.Context()).Add("tenant_id", tenantID)
+				next.ServeHTTP(w, r.WithContext(withAuthIdentity(r.Context(), authIdentity{
+					Role:     roleTenant,
+					TenantID: tenantID,
+				})))
+				return
 			}
 
 			writeError(w, http.StatusUnauthorized, "invalid API key")
 		})
 	}
+}
+
+// lookupTenantKey returns the tenant of the active key whose hash is keyHash,
+// or "" when there is none.
+func lookupTenantKey(s store.SandboxStore, key, keyHash string) (string, error) {
+	candidates, err := s.ListActiveAPIKeysByPrefix(apiKeyPrefix(key))
+	if err != nil {
+		return "", err
+	}
+	for _, c := range candidates {
+		if subtle.ConstantTimeCompare([]byte(c.KeyHash), []byte(keyHash)) == 1 {
+			return c.TenantID, nil
+		}
+	}
+	return "", nil
 }
 
 // constantTimeContains checks if key exists in the allowed set using constant-time comparison.

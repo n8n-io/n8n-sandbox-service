@@ -93,7 +93,7 @@ func newLimitTestGateway(t *testing.T, runner *blockingRunner, tune func(*config
 	}
 	tune(cfg)
 	rec := metrics.NewAPIRecorder(true)
-	router, err := NewGatewayRouter(s, withRunnerTLS(cfg), registry.New(45*time.Second), rec)
+	router, err := NewGatewayRouter(s, withRunnerTLS(cfg), registry.New(45*time.Second), rec, NewActivityRecorder(s, nil))
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}
