@@ -144,7 +144,6 @@ func TestRunnerRecorderObservations(t *testing.T) {
 	r.ObserveContainerOp(OpCreate, false, 500*time.Millisecond)
 	r.ObserveContainerOp(OpEnsureRunning, true, 100*time.Millisecond)
 	r.ObserveContainerOp(OpStop, true, 50*time.Millisecond)
-	r.ObserveContainerOp(OpEvict, true, 0)
 
 	if got := testutil.ToFloat64(r.containerOps.WithLabelValues(OpCreate, "success")); got != 1 {
 		t.Errorf("container_operations_total{create,success} = %v, want 1", got)
@@ -154,9 +153,6 @@ func TestRunnerRecorderObservations(t *testing.T) {
 	}
 	if got := testutil.ToFloat64(r.containerOps.WithLabelValues(OpStop, "success")); got != 1 {
 		t.Errorf("container_operations_total{stop,success} = %v, want 1", got)
-	}
-	if got := testutil.ToFloat64(r.containerOps.WithLabelValues(OpEvict, "success")); got != 1 {
-		t.Errorf("container_operations_total{evict,success} = %v, want 1", got)
 	}
 
 	body := scrape(t, r.Registry())

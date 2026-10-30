@@ -398,7 +398,9 @@ per-sandbox disk quota applies only when `SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB`
 is non-zero and the runner's entrypoint managed to mount its quota pool at
 startup; it defaults to `0`, and sandboxes then share the runner's storage with
 no per-sandbox limit. The Firecracker runtime gives each sandbox a fixed-size
-root filesystem image.
+root filesystem image, but all sandboxes on a runner share its data volume, so
+one tenant's sandboxes can fill it for every sandbox on that runner
+([details](../internal/runner/runtime/firecracker.ee/README.md#data-volume)).
 
 **Health and metrics endpoints are unauthenticated.** `GET` and `HEAD` on
 `/healthz` and `/metrics` bypass auth and the access log on both the API and the
@@ -452,6 +454,7 @@ The boundaries above are covered by tests rather than asserted on paper.
 | Docker capability policy, absence of a root path, and denied network administration; no user namespaces on either runtime | [e2e/tests/sandbox-capabilities.spec.ts](../e2e/tests/sandbox-capabilities.spec.ts) |
 | Unprivileged npm and PyPI installation, and the build toolchain | [e2e/tests/sandbox-packages.spec.ts](../e2e/tests/sandbox-packages.spec.ts) |
 | Blocked list and egress rule generation | [internal/runner/runtime/netpolicy/private_ranges_test.go](../internal/runner/runtime/netpolicy/private_ranges_test.go), [internal/runner/runtime/docker/netrules/netrules_test.go](../internal/runner/runtime/docker/netrules/netrules_test.go), [internal/runner/runtime/firecracker.ee/network/egress_test.go](../internal/runner/runtime/firecracker.ee/network/egress_test.go) |
+| Firecracker: creates refused below 5% free disk, no sandbox deleted to make room | [internal/runner/runtime/firecracker.ee/disk_test.go](../internal/runner/runtime/firecracker.ee/disk_test.go), [internal/runner/runtime/firecracker.ee/stop_wake_test.go](../internal/runner/runtime/firecracker.ee/stop_wake_test.go) |
 | Egress mode: API to runner to network and rules, refused when the runner does not confirm it | [internal/api/handlers_create_sandbox_test.go](../internal/api/handlers_create_sandbox_test.go), [internal/runner/grpc_control_test.go](../internal/runner/grpc_control_test.go), [internal/runner/runtime/docker/runtime_test.go](../internal/runner/runtime/docker/runtime_test.go), [internal/runner/runtime/firecracker.ee/network_wirer_test.go](../internal/runner/runtime/firecracker.ee/network_wirer_test.go) |
 
 The network isolation suite runs against both the Sysbox and the Firecracker

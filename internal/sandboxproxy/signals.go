@@ -33,7 +33,7 @@ func StripSignals(h http.Header) {
 }
 
 // RunnerReportsSandboxGone reports whether a runner HTTP response means the sandbox
-// was evicted, deleted, or is otherwise unknown to that runner. Only the header
+// was deleted or is otherwise unknown to that runner. Only the header
 // counts, since the runner relays daemon bodies.
 func RunnerReportsSandboxGone(resp *http.Response) bool {
 	return resp != nil && resp.Header.Get(SandboxGoneHeader) == "1"
