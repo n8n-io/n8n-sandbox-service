@@ -53,8 +53,7 @@ current_cpu_flags() {
 	sed -n 's/^flags[[:space:]]*: //p' /proc/cpuinfo | head -n 1
 }
 
-# Checks one KVM module parameter and records its value. The Firecracker e2e VM
-# requires nested virtualization support from the Azure host.
+# Checks one KVM module parameter and records its value.
 require_kvm_param() {
 	local path=$1 label=$2 expected_regex=$3 value
 	if [[ ! -r "$path" ]]; then
@@ -70,10 +69,59 @@ require_kvm_param() {
 	fi
 }
 
-# Fails fast when the Azure VM cannot run nested Firecracker microVMs. Without
-# these checks, setup can fail much later while booting the snapshot builder VM.
+# Requires nested=N|0; returns 2 if the sysfs path is missing, else require_kvm_param's status.
+require_nested_off() {
+	if [[ ! -r "$1" ]]; then
+		echo "ERROR: missing required KVM parameter for Firecracker: $2 ($1)" >&2
+		return 2
+	fi
+	require_kvm_param "$1" "$2" '^(N|0)$'
+}
+
+# True if KVM users are running or /dev/kvm use cannot be checked (unsafe to unload).
+kvm_in_use_for_nested_reload() {
+	local name
+	for name in firecracker jailer sandbox-runner; do
+		if pgrep -x "$name" >/dev/null 2>&1; then
+			return 0
+		fi
+	done
+	if ! command -v fuser >/dev/null 2>&1; then
+		echo "WARN: fuser not found (psmisc); cannot check who holds /dev/kvm." >&2
+		return 0
+	fi
+	if [[ -e /dev/kvm ]] && sudo fuser /dev/kvm >/dev/null 2>&1; then
+		return 0
+	fi
+	return 1
+}
+
+# Reloads kvm_intel/amd with nested=0 when safe; refuses if KVM is in use (reboot instead).
+disable_nested_kvm() {
+	local vendor value
+	for vendor in kvm_intel kvm_amd; do
+		[[ -r "/sys/module/${vendor}/parameters/nested" ]] || continue
+		value="$(cat "/sys/module/${vendor}/parameters/nested")"
+		[[ "$value" =~ ^(Y|1)$ ]] || continue
+		if kvm_in_use_for_nested_reload; then
+			echo "ERROR: ${vendor} has nested=${value} but Firecracker, jailer, or a sandbox runner is using KVM, or that could not be checked; not reloading. Reboot this host instead of re-running setup." >&2
+			exit 1
+		fi
+		echo "==> Reloading ${vendor} with nested=0..."
+		if ! sudo modprobe -r "$vendor"; then
+			echo "ERROR: failed to unload ${vendor} (nested=${value}); reboot this host instead of re-running setup." >&2
+			exit 1
+		fi
+		if ! sudo modprobe "$vendor" nested=0; then
+			echo "ERROR: failed to reload ${vendor} with nested=0; reboot this host instead of re-running setup." >&2
+			exit 1
+		fi
+	done
+}
+
+# Fails fast unless /dev/kvm, host vmx/svm, and nested=off are in place for Firecracker.
 firecracker_host_preflight() {
-	local failed=0 flags cpu_model
+	local failed=0 nested_failed=0 nested_rc=0 flags cpu_model
 
 	echo "==> Checking Firecracker host KVM capabilities..."
 	cpu_model="$(current_cpu_model || true)"
@@ -96,17 +144,30 @@ firecracker_host_preflight() {
 	fi
 
 	if [[ -d /sys/module/kvm_intel || " ${flags} " == *" vmx "* ]]; then
-		require_kvm_param /sys/module/kvm_intel/parameters/nested "Intel nested virtualization" '^(Y|1)$' || failed=1
+		require_nested_off /sys/module/kvm_intel/parameters/nested "Intel nested virtualization (must be off for sandboxes)" || nested_rc=$?
 		require_kvm_param /sys/module/kvm_intel/parameters/ept "Intel EPT" '^(Y|1)$' || failed=1
 	elif [[ -d /sys/module/kvm_amd || " ${flags} " == *" svm "* ]]; then
-		require_kvm_param /sys/module/kvm_amd/parameters/nested "AMD nested virtualization" '^(Y|1)$' || failed=1
+		require_nested_off /sys/module/kvm_amd/parameters/nested "AMD nested virtualization (must be off for sandboxes)" || nested_rc=$?
 	else
 		echo "ERROR: neither kvm_intel nor kvm_amd appears to be loaded." >&2
 		failed=1
 	fi
 
+	if [[ "$nested_rc" -eq 2 ]]; then
+		failed=1
+	elif [[ "$nested_rc" -ne 0 ]]; then
+		nested_failed=1
+	fi
+
+	# Always print nested guidance, even when another check also failed.
+	if [[ "$nested_failed" -ne 0 ]]; then
+		echo "ERROR: nested KVM is not off; reboot this host, or reload the KVM module with nested=0 before any microVM runs, then re-run setup." >&2
+	fi
 	if [[ "$failed" -ne 0 ]]; then
 		echo "ERROR: Firecracker host preflight failed; discard this VM and provision another host." >&2
+		exit 1
+	fi
+	if [[ "$nested_failed" -ne 0 ]]; then
 		exit 1
 	fi
 }
@@ -211,6 +272,7 @@ write_manifest() {
 EOF
 }
 
+disable_nested_kvm
 firecracker_host_preflight
 
 sudo env \

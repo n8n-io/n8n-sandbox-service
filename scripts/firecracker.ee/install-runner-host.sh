@@ -33,6 +33,7 @@ Options:
   --download-ci-assets      Download the Firecracker CI vmlinux pinned in firecracker-ci-assets.sh into FIRECRACKER_CI_ASSETS_DIR
   -h, --help                Show this help
 
+
 Environment:
   FIRECRACKER_VERSION           Firecracker release tag (default: pinned in firecracker-release.sh)
   FIRECRACKER_TARBALL_SHA256    Required when FIRECRACKER_VERSION is not the pinned default
@@ -90,6 +91,48 @@ configure_persistent_ip_forward() {
 net.ipv4.ip_forward = 1
 EOF
 	sysctl --system >/dev/null
+}
+
+KVM_MODPROBE_CONF=/etc/modprobe.d/n8n-sandbox-kvm.conf
+# Exit 3: conf written but loaded module still has nested on — reboot, then re-run.
+EXIT_REBOOT_REQUIRED=3
+
+configure_nested_kvm_disabled() {
+	local vendor value pending=0
+	echo "==> Disabling nested KVM..."
+	cat >"$KVM_MODPROBE_CONF" <<'EOF'
+options kvm_intel nested=0
+options kvm_amd nested=0
+EOF
+	for vendor in kvm_intel kvm_amd; do
+		[[ -r "/sys/module/${vendor}/parameters/nested" ]] || continue
+		value="$(cat "/sys/module/${vendor}/parameters/nested")"
+		[[ "$value" =~ ^(Y|1)$ ]] && pending=1
+	done
+	if [[ "$pending" -eq 1 && -d /sys/module/kvm ]] && command -v update-initramfs >/dev/null 2>&1; then
+		update-initramfs -u
+	fi
+}
+
+# Fails (exit 3) if live kvm_* nested is still Y|1; exit 1 if no vendor module is loaded.
+check_nested_kvm_disabled() {
+	local vendor value found=0
+	for vendor in kvm_intel kvm_amd; do
+		if [[ ! -r "/sys/module/${vendor}/parameters/nested" ]]; then
+			continue
+		fi
+		found=1
+		value="$(cat "/sys/module/${vendor}/parameters/nested")"
+		if [[ "$value" =~ ^(Y|1)$ ]]; then
+			echo "ERROR: nested virtualization is enabled on ${vendor} (nested=${value}); it must be off so sandboxes cannot run a hypervisor." >&2
+			echo "${KVM_MODPROBE_CONF} is written; reboot required, then re-run this script." >&2
+			exit "$EXIT_REBOOT_REQUIRED"
+		fi
+	done
+	if [[ "$found" -eq 0 ]]; then
+		echo "ERROR: neither kvm_intel nor kvm_amd is loaded; cannot verify nested virtualization is off." >&2
+		exit 1
+	fi
 }
 
 configure_host_nat() {
@@ -172,6 +215,8 @@ fi
 
 prepare_firecracker_dirs
 configure_persistent_ip_forward
+configure_nested_kvm_disabled
+check_nested_kvm_disabled
 configure_host_nat
 prepare_runtime_dirs
 
