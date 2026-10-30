@@ -3,59 +3,236 @@ package firecracker
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/n8n-io/sandbox-service/internal/metrics"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 )
 
-func TestRuntimeStopSandboxEvictsOldestStoppedWhenDiskFull(t *testing.T) {
+// A stop with no room for its snapshot fails rather than delete a stopped
+// sandbox to make room: the runner cannot tell whose that sandbox is. It fails
+// before the pause, so the guest it refused to stop keeps running.
+func TestRuntimeStopSandboxFailsWithoutDeletingWhenDiskFull(t *testing.T) {
 	rt := testRuntimeT(t, 4)
 	stubCreateDeps(rt)
-	rec := metrics.NewRunnerRecorder(true)
-	rt.SetMetricsRecorder(rec)
 
-	rt.deps.pauseVM = func(context.Context, string) error { return nil }
-	rt.deps.createSnapshot = func(context.Context, string) error { return nil }
+	const stoppedID = "sandbox-id-old123456"
+	const runningID = "sandbox-id-new123456"
 
-	const oldID = "sandbox-id-old123456"
-	const newID = "sandbox-id-new123456"
-
-	if _, err := rt.CreateSandbox(context.Background(), oldID, nil); err != nil {
-		t.Fatalf("CreateSandbox(%s) failed: %v", oldID, err)
+	if _, err := rt.CreateSandbox(context.Background(), stoppedID, nil); err != nil {
+		t.Fatalf("CreateSandbox(%s) failed: %v", stoppedID, err)
 	}
-	if err := rt.StopSandbox(context.Background(), oldID); err != nil {
-		t.Fatalf("StopSandbox(%s) failed: %v", oldID, err)
+	if err := rt.StopSandbox(context.Background(), stoppedID); err != nil {
+		t.Fatalf("StopSandbox(%s) failed: %v", stoppedID, err)
+	}
+	if _, err := rt.CreateSandbox(context.Background(), runningID, nil); err != nil {
+		t.Fatalf("CreateSandbox(%s) failed: %v", runningID, err)
+	}
+
+	rt.deps.volumeSpace = func(string) (volumeSpace, error) {
+		return volumeSpace{free: 0, total: testVolumeSpace.total}, nil
+	}
+	var paused atomic.Bool
+	rt.deps.pauseVM = func(context.Context, string) error {
+		paused.Store(true)
+		return nil
+	}
+
+	if err := rt.StopSandbox(context.Background(), runningID); err == nil || !strings.Contains(err.Error(), "insufficient disk space") {
+		t.Fatalf("StopSandbox(%s) error = %v, want insufficient disk space", runningID, err)
+	}
+	if paused.Load() {
+		t.Fatal("StopSandbox paused the guest before failing for disk space")
+	}
+
+	if _, err := rt.GetSandboxInfo(context.Background(), stoppedID); err != nil {
+		t.Fatalf("GetSandboxInfo(%s) error = %v, want the stopped sandbox kept", stoppedID, err)
+	}
+	if _, err := os.Stat(sandboxDataDir(rt.runnerConfig.DataDir, stoppedID)); err != nil {
+		t.Fatalf("stopped sandbox data dir: %v, want it kept", err)
+	}
+	if _, err := rt.DaemonURL(context.Background(), runningID); err != nil {
+		t.Fatalf("DaemonURL(%s) error = %v, want the refused sandbox still running", runningID, err)
+	}
+	if got := capacityOf(t, rt); got.Used != 1 || got.Stopped != 1 {
+		t.Fatalf("capacity = %+v, want used 1 and stopped 1", got)
+	}
+}
+
+// A snapshot that fails after the pause, here for want of space the check before
+// it did not see go, fails the stop. The sandbox stays running, so its guest is
+// resumed instead of being left paused under requests that would hang, and the
+// half-written snapshot stays unusable: the pin to cold boot is not lifted.
+func TestRuntimeStopSandboxResumesGuestWhenSnapshotFails(t *testing.T) {
+	rt := testRuntimeT(t, 1)
+	stubCreateDeps(rt)
+
+	const sandboxID = "sandbox-id-123456"
+	if _, err := rt.CreateSandbox(context.Background(), sandboxID, nil); err != nil {
+		t.Fatalf("CreateSandbox() failed: %v", err)
+	}
+	rt.deps.createSnapshot = func(context.Context, string) error {
+		return errors.New("write snapshot_mem: no space left on device")
+	}
+	var pausedSocket, resumedSocket string
+	rt.deps.pauseVM = func(_ context.Context, socketPath string) error {
+		pausedSocket = socketPath
+		return nil
+	}
+	rt.deps.resumeVM = func(_ context.Context, socketPath string) error {
+		resumedSocket = socketPath
+		return nil
+	}
+
+	if err := rt.StopSandbox(context.Background(), sandboxID); err == nil {
+		t.Fatal("StopSandbox() succeeded, want the snapshot failure reported")
+	}
+	if resumedSocket == "" || resumedSocket != pausedSocket {
+		t.Fatalf("resumed %q after pausing %q, want the paused guest resumed", resumedSocket, pausedSocket)
+	}
+	if _, err := rt.DaemonURL(context.Background(), sandboxID); err != nil {
+		t.Fatalf("DaemonURL() error = %v, want the sandbox still running", err)
 	}
 	rt.mu.Lock()
-	rt.sandboxes[oldID].stoppedAt = time.Now().Add(-time.Hour)
+	pinned := rt.sandboxes[sandboxID].mustColdBoot
 	rt.mu.Unlock()
+	if !pinned {
+		t.Fatal("a failed snapshot lifted the pin to cold boot")
+	}
+	if got := capacityOf(t, rt); got.Used != 1 || got.Stopped != 0 {
+		t.Fatalf("capacity = %+v, want used 1 and stopped 0", got)
+	}
+}
 
-	if _, err := rt.CreateSandbox(context.Background(), newID, nil); err != nil {
-		t.Fatalf("CreateSandbox(%s) failed: %v", newID, err)
+// A guest that cannot be resumed after a failed snapshot may still be paused, so
+// it is torn down and left stopped like a guest that died: the next request cold
+// boots it and is told its memory is gone, instead of hanging on it.
+func TestRuntimeStopSandboxTearsDownGuestThatCannotResume(t *testing.T) {
+	rt := testRuntimeT(t, 1)
+	stubCreateDeps(rt)
+	proc := &fakeProcess{}
+	rt.deps.start = func(context.Context, func(error), string, ...string) (process, error) {
+		return proc, nil
 	}
 
-	var freeCalls atomic.Int32
-	rt.deps.freeBytesInDir = func(string) (int64, error) {
-		if freeCalls.Add(1) == 1 {
-			return 0, nil
+	const sandboxID = "sandbox-id-123456"
+	if _, err := rt.CreateSandbox(context.Background(), sandboxID, nil); err != nil {
+		t.Fatalf("CreateSandbox() failed: %v", err)
+	}
+	rt.deps.createSnapshot = func(context.Context, string) error {
+		return errors.New("write snapshot_mem: no space left on device")
+	}
+	rt.deps.resumeVM = func(context.Context, string) error {
+		return errors.New("firecracker API PATCH /vm: context deadline exceeded")
+	}
+
+	if err := rt.StopSandbox(context.Background(), sandboxID); err == nil {
+		t.Fatal("StopSandbox() succeeded, want the snapshot failure reported")
+	}
+	if !proc.killed {
+		t.Fatal("the guest that could not be resumed was not torn down")
+	}
+	if _, err := rt.DaemonURL(context.Background(), sandboxID); !errors.Is(err, runnerruntime.ErrSandboxNotRunning) {
+		t.Fatalf("DaemonURL() error = %v, want ErrSandboxNotRunning", err)
+	}
+	if got := capacityOf(t, rt); got.Used != 0 || got.Stopped != 1 {
+		t.Fatalf("capacity = %+v, want used 0 and stopped 1", got)
+	}
+
+	var coldBooted bool
+	rt.deps.coldBoot = func(context.Context, string, *bootParams) error {
+		coldBooted = true
+		return nil
+	}
+	wake, err := rt.EnsureSandboxRunning(context.Background(), sandboxID)
+	if err != nil {
+		t.Fatalf("EnsureSandboxRunning() failed: %v", err)
+	}
+	if !coldBooted || !wake.Recovered {
+		t.Fatalf("wake cold booted = %v, recovered = %v; want a cold boot reported as a recovery", coldBooted, wake.Recovered)
+	}
+}
+
+// A resume stuck on an unresponsive Firecracker API gives up on its own limit, so
+// the teardown after it still has time to clean the jail; an expired context would
+// fail those host commands at once and leave the mounts behind.
+func TestRuntimeStopSandboxStuckResumeLeavesTeardownTime(t *testing.T) {
+	rt := testRuntimeT(t, 1)
+	stubCreateDeps(rt)
+	restore := resumeAfterFailedStopTimeout
+	resumeAfterFailedStopTimeout = 10 * time.Millisecond
+	t.Cleanup(func() { resumeAfterFailedStopTimeout = restore })
+
+	const sandboxID = "sandbox-id-123456"
+	if _, err := rt.CreateSandbox(context.Background(), sandboxID, nil); err != nil {
+		t.Fatalf("CreateSandbox() failed: %v", err)
+	}
+	rt.deps.createSnapshot = func(context.Context, string) error {
+		return errors.New("write snapshot_mem: no space left on device")
+	}
+	rt.deps.resumeVM = func(ctx context.Context, _ string) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	var cleanupRan, cleanupCtxLive atomic.Bool
+	rt.deps.run = func(ctx context.Context, _ string, args ...string) error {
+		if len(args) > 0 && strings.Contains(args[len(args)-1], "rm -rf") {
+			cleanupRan.Store(true)
+			cleanupCtxLive.Store(ctx.Err() == nil)
 		}
-		return 1 << 30, nil
+		return nil
 	}
 
-	if err := rt.StopSandbox(context.Background(), newID); err != nil {
-		t.Fatalf("StopSandbox(%s) failed: %v", newID, err)
+	if err := rt.StopSandbox(context.Background(), sandboxID); err == nil {
+		t.Fatal("StopSandbox() succeeded, want the snapshot failure reported")
+	}
+	if !cleanupRan.Load() {
+		t.Fatal("the jail was not cleaned after the resume gave up")
+	}
+	if !cleanupCtxLive.Load() {
+		t.Fatal("jail cleanup ran with an expired context")
+	}
+}
+
+// A pause whose call failed may still have paused the guest, so it is resumed
+// the same way; a stop that succeeds resumes nothing.
+func TestRuntimeStopSandboxResumesOnlyAfterAFailedStop(t *testing.T) {
+	rt := testRuntimeT(t, 2)
+	stubCreateDeps(rt)
+	var resumes atomic.Int32
+	rt.deps.resumeVM = func(context.Context, string) error {
+		resumes.Add(1)
+		return nil
 	}
 
-	if _, err := rt.GetSandboxInfo(context.Background(), oldID); !errors.Is(err, runnerruntime.ErrSandboxNotFound) {
-		t.Fatalf("GetSandboxInfo(%s) error = %v, want ErrSandboxNotFound after eviction", oldID, err)
+	const stoppedID = "sandbox-id-123456"
+	if _, err := rt.CreateSandbox(context.Background(), stoppedID, nil); err != nil {
+		t.Fatalf("CreateSandbox(%s) failed: %v", stoppedID, err)
 	}
-	if got := rec.ContainerOpCount(metrics.OpEvict, true); got != 1 {
-		t.Fatalf("evict metric = %v, want 1", got)
+	if err := rt.StopSandbox(context.Background(), stoppedID); err != nil {
+		t.Fatalf("StopSandbox(%s) failed: %v", stoppedID, err)
+	}
+	if got := resumes.Load(); got != 0 {
+		t.Fatalf("resumes after a successful stop = %d, want 0", got)
+	}
+
+	const runningID = "sandbox-id-abcdef"
+	if _, err := rt.CreateSandbox(context.Background(), runningID, nil); err != nil {
+		t.Fatalf("CreateSandbox(%s) failed: %v", runningID, err)
+	}
+	rt.deps.pauseVM = func(context.Context, string) error { return context.DeadlineExceeded }
+	if err := rt.StopSandbox(context.Background(), runningID); err == nil {
+		t.Fatal("StopSandbox() succeeded, want the pause failure reported")
+	}
+	if got := resumes.Load(); got != 1 {
+		t.Fatalf("resumes after a failed pause = %d, want 1", got)
+	}
+	if _, err := rt.DaemonURL(context.Background(), runningID); err != nil {
+		t.Fatalf("DaemonURL(%s) error = %v, want the sandbox still running", runningID, err)
 	}
 }
 

@@ -30,7 +30,6 @@ const (
 	OpDelete        = "delete"
 	OpStop          = "stop"
 	OpEnsureRunning = "ensure_running"
-	OpEvict         = "evict"
 	// OpRecover is the wake of a sandbox whose guest died. Kept apart from
 	// ensure_running because it does different work — a cold boot instead of a
 	// snapshot restore — and mixing the two would hide both in one percentile.

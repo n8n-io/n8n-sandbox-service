@@ -3,7 +3,6 @@ package firecracker
 import (
 	"context"
 	"log/slog"
-	"time"
 )
 
 // handleGuestDeath reacts to a Firecracker process that exited without the
@@ -60,7 +59,6 @@ func (r *Runtime) handleGuestDeath(died *sandboxState, generation uint64, waitEr
 	r.mu.Lock()
 	state.running = false
 	state.stopped = true
-	state.stoppedAt = time.Now()
 	if state.slot >= 0 && r.slotOwnedByLocked(state.slot, state.id) {
 		r.releaseSlotLocked(state.slot)
 	}

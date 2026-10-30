@@ -62,8 +62,22 @@ The guest runs no NTP. A restored guest would resume with the wall clock it had 
 
 CPU, memory and disk are fixed when the golden snapshot and `rootfs.ext4` are built, not by runner env vars: `VCPUS`/`MEM_MIB` in `create-golden-snapshot.sh`, `FIRECRACKER_ROOTFS_SIZE_MB` (default 2048) in `build-rootfs-template.sh`. Each sandbox gets a sparse copy of the rootfs; filling it yields ENOSPC in the guest. Rebuild on the host to change limits.
 
+## Data volume
+
+Each sandbox keeps its rootfs and memory snapshot under `SANDBOX_RUNNER_DATA_DIR` until it is deleted. On XFS with reflink, the rootfs shares blocks with the template and the memory snapshot with the golden snapshot, so a new sandbox takes almost no space; it grows as the guest writes and when a stop saves its memory. The checks are in `disk.go`:
+
+- **Create:** refused while the volume has less than 5% free, like when no slot is free, so the API tries another runner.
+- **Stop:** needs room for the memory snapshot, or it fails before pausing the guest; the sandbox keeps running and the idle sweeper retries. If the snapshot fails after the pause, the guest is resumed, or shut down like a crashed guest if that fails too.
+- **Wake:** not checked; the sandbox already holds its space.
+
+The runner never deletes a sandbox to make room. Sandboxes already on the volume can still fill the last 5%; their writes then fail.
+
+Setup:
+
+- Put `SANDBOX_RUNNER_DATA_DIR`, the template and the golden snapshot on one dedicated XFS filesystem with `reflink=1`.
+- Use a directory inside that filesystem, not its mount point. The runner does not create it, so an unmounted volume leaves the runner unready instead of filling the wrong disk.
+
 ## Limitations
 
 - Sandboxes are not reattached after a runner restart; startup reconcile removes orphaned data directories, jail state and slot namespaces (a jail directory still holding an active bind mount is logged and left in place).
-- LRU eviction of stopped sandboxes when disk is low is runner-local and does not notify the API.
 - Egress policy is per-netns iptables, not nftables sets; no per-sandbox allowlists.
