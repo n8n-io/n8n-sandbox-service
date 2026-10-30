@@ -11,6 +11,10 @@ Full tarball contract: [BUNDLE.md](../BUNDLE.md).
 - `crane` or `docker` on PATH — section 1 unpacks the pinned sandbox OCI image
   with whichever is present. Later sections use Docker to run the API and runner.
   `install-runner-host.sh` does not install either.
+- Nested KVM off on the host (`kvm_intel`/`kvm_amd` `nested` is `N`/`0`).
+  `install-runner-host.sh` writes `/etc/modprobe.d/n8n-sandbox-kvm.conf` and
+  exits with status 3 while the loaded module still reports `Y`/`1`; reboot and re-run. This
+  includes re-running it on a host installed before this requirement.
 - Outbound HTTPS (GitHub Releases, Docker Hub, Firecracker CI on S3)
 - Go (the version in `go.mod`) only if building the runner from source instead of pulling the Docker image
 
