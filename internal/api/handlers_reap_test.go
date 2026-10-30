@@ -49,7 +49,7 @@ func TestSandboxProxyReapsStoreOnRunnerSandboxGone(t *testing.T) {
 		APIKeys:      map[string]struct{}{"public-key": {}},
 		RunnerAPIKey: "runner-key",
 		MaxFileBytes: 1024,
-	}), registry.New(45*time.Second), metrics.NewAPIRecorder(false))
+	}), registry.New(45*time.Second), metrics.NewAPIRecorder(false), NewActivityRecorder(s, nil))
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}
@@ -118,11 +118,12 @@ func TestSandboxProxyDoesNotMarkActiveWhenReapDeleteFails(t *testing.T) {
 		t.Fatalf("Create() failed: %v", err)
 	}
 
+	activity := NewActivityRecorder(s, nil)
 	router, err := NewGatewayRouter(deleteFailingStore{s}, withRunnerTLS(&config.APIConfig{
 		APIKeys:      map[string]struct{}{"public-key": {}},
 		RunnerAPIKey: "runner-key",
 		MaxFileBytes: 1024,
-	}), registry.New(45*time.Second), metrics.NewAPIRecorder(false))
+	}), registry.New(45*time.Second), metrics.NewAPIRecorder(false), activity)
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}
@@ -136,6 +137,7 @@ func TestSandboxProxyDoesNotMarkActiveWhenReapDeleteFails(t *testing.T) {
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("exec status = %d, want 404", rr.Code)
 	}
+	activity.writes.Wait()
 
 	rec, err := s.Get(sandboxID)
 	if err != nil {
@@ -181,7 +183,7 @@ func TestSandboxProxyKeepsStoreOnRunnerExecutionNotFound(t *testing.T) {
 		APIKeys:      map[string]struct{}{"public-key": {}},
 		RunnerAPIKey: "runner-key",
 		MaxFileBytes: 1024,
-	}), registry.New(45*time.Second), metrics.NewAPIRecorder(false))
+	}), registry.New(45*time.Second), metrics.NewAPIRecorder(false), NewActivityRecorder(s, nil))
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}

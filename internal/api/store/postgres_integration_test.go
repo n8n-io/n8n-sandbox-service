@@ -103,12 +103,9 @@ func TestPostgresStoreCRUD(t *testing.T) {
 	if err := s.UpdateStatus(rec.ID, "stopped"); err != nil {
 		t.Fatalf("update status: %v", err)
 	}
-	if err := s.UpdateLastActive(rec.ID); err != nil {
-		t.Fatalf("update last active: %v", err)
-	}
 	got, err = s.Get(rec.ID)
-	if err != nil || got == nil || got.Status != "stopped" || got.LastActiveAt <= rec.LastActiveAt {
-		t.Fatalf("after stop: %+v err=%v, want stopped with a newer last_active_at", got, err)
+	if err != nil || got == nil || got.Status != "stopped" {
+		t.Fatalf("after stop: %+v err=%v, want stopped", got, err)
 	}
 
 	// Stopped: no longer a stop candidate, now a delete candidate.
@@ -138,6 +135,10 @@ func sandboxIDs(rows []*SandboxRecord) []string {
 
 func containsSandbox(rows []*SandboxRecord, id string) bool {
 	return slices.Contains(sandboxIDs(rows), id)
+}
+
+func TestPostgresRecordActivity(t *testing.T) {
+	testRecordActivity(t, openTestPostgresStore(t), "pg-activity-"+uuid.New().String())
 }
 
 func TestPostgresUpdateTenantLimits(t *testing.T) {

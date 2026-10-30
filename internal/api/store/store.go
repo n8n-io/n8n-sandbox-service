@@ -91,7 +91,9 @@ type SandboxStore interface {
 	Create(record *SandboxRecord) error
 	Get(id string) (*SandboxRecord, error)
 	UpdateStatus(id, status string) error
-	UpdateLastActive(id string) error
+	// RecordActivity sets status running and moves last_active_at forward to
+	// at, never back.
+	RecordActivity(ctx context.Context, id string, at int64) (written bool, err error)
 	Delete(id string) error
 	LockSandbox(ctx context.Context, id string) (unlock func(), err error)
 	ListForIdleReapDelete(cutoff int64) ([]*SandboxRecord, error)

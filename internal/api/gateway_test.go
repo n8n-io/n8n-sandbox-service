@@ -26,7 +26,7 @@ func TestGatewayHandlesSandboxList(t *testing.T) {
 		APIKeys:      map[string]struct{}{"public-key": {}},
 		RunnerAPIKey: "runner-key",
 		MaxFileBytes: 1024,
-	}, registry.New(45*time.Second), metrics.NewAPIRecorder(false))
+	}, registry.New(45*time.Second), metrics.NewAPIRecorder(false), NewActivityRecorder(s, nil))
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestGatewayRejectsMissingPublicAPIKey(t *testing.T) {
 		APIKeys:      map[string]struct{}{"public-key": {}},
 		RunnerAPIKey: "runner-key",
 		MaxFileBytes: 1024,
-	}, registry.New(45*time.Second), metrics.NewAPIRecorder(false))
+	}, registry.New(45*time.Second), metrics.NewAPIRecorder(false), NewActivityRecorder(s, nil))
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestGatewayMetricsEndpointEnabledBypassesAuth(t *testing.T) {
 	router, err := NewGatewayRouter(s, &config.APIConfig{
 		APIKeys:      map[string]struct{}{"public-key": {}},
 		MaxFileBytes: 1024,
-	}, registry.New(45*time.Second), metrics.NewAPIRecorder(true))
+	}, registry.New(45*time.Second), metrics.NewAPIRecorder(true), NewActivityRecorder(s, nil))
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestGatewayRejectsOtherMethodsOnPublicPaths(t *testing.T) {
 	router, err := NewGatewayRouter(s, &config.APIConfig{
 		APIKeys:      map[string]struct{}{"public-key": {}},
 		MaxFileBytes: 1024,
-	}, registry.New(45*time.Second), metrics.NewAPIRecorder(true))
+	}, registry.New(45*time.Second), metrics.NewAPIRecorder(true), NewActivityRecorder(s, nil))
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestGatewayMetricsEndpointDisabledReturns404(t *testing.T) {
 	router, err := NewGatewayRouter(s, &config.APIConfig{
 		APIKeys:      map[string]struct{}{"public-key": {}},
 		MaxFileBytes: 1024,
-	}, registry.New(45*time.Second), metrics.NewAPIRecorder(false))
+	}, registry.New(45*time.Second), metrics.NewAPIRecorder(false), NewActivityRecorder(s, nil))
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}
@@ -208,7 +208,7 @@ func TestGatewayOmitsMetricsWhenOnDedicatedListener(t *testing.T) {
 		MaxFileBytes:      1024,
 		ListenAddr:        ":8080",
 		MetricsListenAddr: ":9100",
-	}, registry.New(45*time.Second), metrics.NewAPIRecorder(true))
+	}, registry.New(45*time.Second), metrics.NewAPIRecorder(true), NewActivityRecorder(s, nil))
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}

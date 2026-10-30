@@ -90,6 +90,8 @@ The API gateway is the single public-facing service. It exposes a REST API for s
 | Store | `internal/api/store/` | Sandbox metadata (`sqlite` default, `postgres` for multi-pod) |
 | Sweeper lock | `internal/api/store/postgres.go` | Postgres advisory lock for idle sweeper leadership |
 | Idle sweeper | `internal/api/ttl.go` | Periodic scan to stop/delete idle sandboxes (ephemeral ones are deleted, never stopped), bounded concurrency with per-call runner deadlines |
+| Activity recorder | `internal/api/activity.go` | Writes `last_active_at` in the background ([Sandbox activity](#sandbox-activity)) |
+| Key cache | `internal/api/apikey_cache.go` | Per-replica cache of tenant key lookups ([Tenant key cache](#tenant-key-cache)) |
 | Config | `internal/api/config/` | Environment variable parsing and validation |
 
 **Middleware chain:** Recovery → CORS (optional) → Logging → Auth (API key) → Metrics (optional)
@@ -192,6 +194,27 @@ A sandbox can lose its guest (daemon exit, kernel panic, OOM) without losing its
 **Docker.** Containers run with `--restart unless-stopped`, so Docker restarts the container itself. The runner learns of the death from a `docker events` stream filtered to `die`; deliberate stops and removes are recorded before the call and matched against events, and exit codes are ignored (an exit `0` still lost everything running). The sandbox is reported not running until the wake path reapplies network policy to the possibly new container IP, waits for the daemon, and reports the restart. If the event stream drops, the watcher reconnects; a death missed meanwhile is served without its `409`.
 
 The report is spent by the first request that wakes the sandbox, so `DELETE /sandboxes/{id}/executions/{exec_id}` — which the SDK sends in the background after every command — returns `204` without waking a stopped sandbox, leaving the `409` for the next request a client reads.
+
+### Sandbox activity
+
+The idle sweeper stops and deletes sandboxes by `last_active_at`. Writing it on every request would put a database write on every response, and a burst to one sandbox would queue on its row. So each API replica writes it in the background (`internal/api/activity.go`), only when needed.
+
+**What counts:** an exec or file response from the sandbox. `GET /sandboxes/{id}`, `5xx` responses, runner redirects and runner "sandbox gone" answers do not.
+
+**When `last_active_at` is written**, with `T` = `SANDBOX_API_ACTIVITY_WRITE_INTERVAL` (30 s):
+
+1. A request finds the sandbox stopped: written at once, so its status turns `running`.
+2. A request finds `last_active_at` older than `T`, and this replica has not written it within `T` either: written at once. A burst therefore costs one write per replica.
+3. A response is still streaming, such as a long exec: written every `T`, for at most `SANDBOX_API_MAX_RESPONSE_ACTIVITY` (30 min) per response.
+4. A write failed: retried at the next `T` with the latest request time.
+
+Writes never delay a response, at most four run at once per replica, and each times out 5 s after it starts.
+
+**Why the idle windows grow by `2T + 5 s` (65 s):** a request can skip its write because the row is up to `T` old, and its response can then stream for up to another `T` before the next write, which takes up to 5 s. So `last_active_at` trails the last use by at most that much, and the sweeper and the `404` fence wait that much longer, so nothing is stopped or deleted earlier than configured. This holds while the database keeps up: a failed write is retried only at the next `T`, and a write that waits for one of the four writers sends the latest request time once it runs.
+
+### Tenant key cache
+
+Each API replica remembers tenant key lookups, unknown keys included, for `SANDBOX_API_KEY_CACHE_TTL` (15 s), keyed by the key's SHA-256 hash. Revoking a key or deleting its tenant clears it on that replica at once; other replicas accept it until their entry expires. Concurrent lookups of one key share one query, errors are not cached, and the cache starts over when it holds 10,000 entries.
 
 ## Security Model
 
