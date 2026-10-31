@@ -272,7 +272,7 @@ func serveControlGRPC(t *testing.T, pki testPKI, cd *cordon.State) string {
 	srv := grpc.NewServer(grpc.Creds(creds))
 	pb.RegisterSandboxControlServer(srv, &SandboxControlGRPC{
 		Runtime: &fakeRuntime{},
-		Cfg:     &config.Config{APIKeys: map[string]struct{}{"secret": {}}},
+		Cfg:     &config.Config{RunnerID: "runner-a", APIKeys: map[string]struct{}{"secret": {}}},
 		Rec:     metrics.NewRunnerRecorder(false),
 		Cordon:  cd,
 	})
@@ -288,17 +288,17 @@ func TestCordonOverControlGRPC(t *testing.T) {
 	ctx := context.Background()
 	tlsCfg := &runnerctl.TLS{CAFile: pki.caFile, CertFile: pki.clientCertFile, KeyFile: pki.clientKeyFile, ServerName: "localhost"}
 
-	if got, err := runnerctl.SetCordon(ctx, addr, "secret", tlsCfg, true); err != nil || !got {
+	if got, err := runnerctl.SetCordon(ctx, addr, "secret", tlsCfg, "runner-a", true); err != nil || !got {
 		t.Fatalf("SetCordon(true) = %v, %v; want true", got, err)
 	}
 	if got, err := runnerctl.GetCordon(ctx, addr, "secret", tlsCfg); err != nil || !got {
 		t.Fatalf("GetCordon() = %v, %v; want true", got, err)
 	}
-	if got, err := runnerctl.SetCordon(ctx, addr, "secret", tlsCfg, false); err != nil || got {
+	if got, err := runnerctl.SetCordon(ctx, addr, "secret", tlsCfg, "runner-a", false); err != nil || got {
 		t.Fatalf("SetCordon(false) = %v, %v; want false", got, err)
 	}
 
-	if _, err := runnerctl.SetCordon(ctx, addr, "wrong", tlsCfg, true); status.Code(err) != codes.Unauthenticated {
+	if _, err := runnerctl.SetCordon(ctx, addr, "wrong", tlsCfg, "runner-a", true); status.Code(err) != codes.Unauthenticated {
 		t.Fatalf("SetCordon with a wrong key: error = %v, want Unauthenticated", err)
 	}
 

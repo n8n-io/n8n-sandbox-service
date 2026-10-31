@@ -1,14 +1,22 @@
 package api
 
 import (
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
+	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/n8n-io/sandbox-service/internal/api/store"
+	"github.com/n8n-io/sandbox-service/internal/grpctls"
 )
 
 // TestSandboxProxyRefusesRunnerRedirect: a runner answering a proxied route
@@ -84,5 +92,44 @@ func TestSandboxProxyRefusesRunnerRedirect(t *testing.T) {
 	}
 	if logged != int(upstreamHits.Load()) {
 		t.Fatalf("expected %d events with runner_redirect_location, got %d", upstreamHits.Load(), logged)
+	}
+}
+
+// A refused redirect still came from a runner that authenticated with its
+// server certificate, so the proxy notes that certificate as for any response.
+// The certificate is the test's own: the package PKI's is noted by every proxy
+// test, which would make the assertion depend on test order.
+func TestRunnerProxyNotesPeerCertificateOfRedirect(t *testing.T) {
+	key, _, der := issue(nil, nil, &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "redirecting-runner"},
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+	})
+	cert, err := tls.X509KeyPair(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), keyPEM(key))
+	if err != nil {
+		t.Fatalf("server key pair: %v", err)
+	}
+	runner := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", "https://attacker.example/")
+		w.WriteHeader(http.StatusFound)
+	}))
+	runner.TLS = &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
+	runner.StartTLS()
+	defer runner.Close()
+
+	u, err := url.Parse(runner.URL)
+	if err != nil {
+		t.Fatalf("parse runner url: %v", err)
+	}
+	rr := httptest.NewRecorder()
+	newRunnerReverseProxy(u, "", runner.Client().Transport, nil).
+		ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/files", nil))
+
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("expected %d, got %d body=%s", http.StatusBadGateway, rr.Code, rr.Body.String())
+	}
+	if grpctls.NotePeer(runner.Certificate()) {
+		t.Fatal("the proxy did not note the certificate of a runner that answered with a redirect")
 	}
 }

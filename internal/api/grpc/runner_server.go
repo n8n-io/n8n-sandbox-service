@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/n8n-io/sandbox-service/internal/api/grpc/pb"
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
+	"github.com/n8n-io/sandbox-service/internal/grpctls"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 )
 
@@ -109,7 +111,7 @@ func (s *RunnerRegistryServer) Connect(stream grpc.BidiStreamingServer[pb.Runner
 	// Bind to the first non-empty runner_id for this stream and reject changes so we
 	// never leave an earlier ID registered when the client disconnects.
 	var committedRunnerID, committedHTTPBase, committedControlGRPC string
-	var registered bool
+	var registered, cordoned bool
 	defer func() {
 		if committedRunnerID != "" {
 			s.Reg.Remove(committedRunnerID)
@@ -183,17 +185,28 @@ func (s *RunnerRegistryServer) Connect(stream grpc.BidiStreamingServer[pb.Runner
 		}
 		if !registered {
 			registered = true
-			slog.Info(
-				"runner registered",
+			attrs := []any{
 				"runner_id", committedRunnerID,
 				"http_base_url", httpBase,
 				"control_grpc_addr", controlGRPC,
 				"healthy", hb.GetHealthy(),
+				"cordoned", hb.GetCordoned(),
 				"capacity_total", hb.GetCapacityTotal(),
 				"capacity_used", hb.GetCapacityUsed(),
 				"capacity_stopped", hb.GetCapacityStopped(),
-			)
+			}
+			// The certificate this stream authenticated with, so a renewal can be
+			// traced to the runners that picked it up.
+			if cert := grpctls.PeerCertificate(stream.Context()); cert != nil {
+				attrs = append(attrs,
+					"client_cert_serial", grpctls.CertSerial(cert),
+					"client_cert_not_after", cert.NotAfter.UTC().Format(time.RFC3339))
+			}
+			slog.Info("runner registered", attrs...)
+		} else if hb.GetCordoned() != cordoned {
+			slog.Info("runner cordon changed", "runner_id", committedRunnerID, "cordoned", hb.GetCordoned())
 		}
+		cordoned = hb.GetCordoned()
 		if err := stream.Send(&pb.ControlMessage{Ack: true}); err != nil {
 			slog.Warn("runner registration ack failed", "runner_id", committedRunnerID, "error", err)
 			return err

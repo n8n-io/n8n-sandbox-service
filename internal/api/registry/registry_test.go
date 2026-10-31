@@ -8,13 +8,13 @@ import (
 
 func TestRegistryPlacementUsesSlotBlockingCapacityOnly(t *testing.T) {
 	reg := New(45 * time.Second)
-	reg.Upsert("r1", "http://127.0.0.1:8080", "127.0.0.1:9091", true, 2, 2, 10)
+	reg.Upsert("r1", "http://127.0.0.1:8080", "127.0.0.1:9091", true, false, 2, 2, 10)
 
 	if _, err := reg.PickRoundRobin(); !errors.Is(err, ErrNoRunners) {
 		t.Fatalf("PickRoundRobin() error = %v, want ErrNoRunners when used >= total", err)
 	}
 
-	reg.Upsert("r1", "http://127.0.0.1:8080", "127.0.0.1:9091", true, 4, 2, 10)
+	reg.Upsert("r1", "http://127.0.0.1:8080", "127.0.0.1:9091", true, false, 4, 2, 10)
 	run, err := reg.PickRoundRobin()
 	if err != nil {
 		t.Fatalf("PickRoundRobin() failed: %v", err)

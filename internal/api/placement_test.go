@@ -34,7 +34,7 @@ func newPlacementTestGateway(t *testing.T, fakes ...*fakeSandboxControl) (http.H
 
 	reg := registry.New(45 * time.Second)
 	for i, fake := range fakes {
-		reg.Upsert(fmt.Sprintf("runner-%d", i+1), "https://127.0.0.1:9", startFakeRunnerControl(t, fake), true, 10, 0, 0)
+		reg.Upsert(fmt.Sprintf("runner-%d", i+1), "https://127.0.0.1:9", startFakeRunnerControl(t, fake), true, false, 10, 0, 0)
 	}
 	rec := metrics.NewAPIRecorder(true)
 	router, err := NewGatewayRouter(s, cfg, reg, rec)

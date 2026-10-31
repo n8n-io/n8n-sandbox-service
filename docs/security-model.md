@@ -29,7 +29,7 @@ Requests carry an `X-Api-Key` header. There are four key classes:
 - Provisioner keys, listed in `SANDBOX_API_PROVISIONER_KEYS`: tenant create,
   limit update and delete only, see below.
 - Scaler keys, listed in `SANDBOX_API_SCALER_KEYS`: runner capacity listing
-  only, see below.
+  and cordoning only, see below.
 - Tenant keys, minted by an admin or returned on tenant create, stored only as
   a SHA-256 hash alongside an 8-character lookup prefix, so a database read
   does not yield usable credentials. Revocation sets `revoked_at`, which the
@@ -95,8 +95,10 @@ before they are returned.
 
 The class exists for the capacity autoscaler, which would otherwise need an
 admin key. A scaler key may only call `GET /admin/runners`, which returns
-runner ids, health and capacity but no addresses. Startup fails if a scaler key
-is also an admin or provisioner key.
+runner ids, health and capacity but no addresses, and cordon or uncordon a
+runner, which the API does with its own runner credentials. A leaked scaler
+key can therefore cordon every runner and stop new creates fleet-wide. Startup
+fails if a scaler key is also an admin or provisioner key.
 
 ### Concurrency limits
 
@@ -327,7 +329,11 @@ not loaded, sandboxes fail to start until it is.
 The bridge rules apply to bridged traffic only on a host running
 `br_netfilter` with `bridge-nf-call-iptables` enabled. The runner refuses to start unless the sysctl reads `1` in its own
 network namespace, where the bridges are; it does not notice the sysctl being
-turned off afterwards.
+turned off afterwards. Before kernel 5.3 the sysctl is host-wide and exists
+only in the host network namespace. When it is absent from the runner's, the
+runner cannot check it: it refuses to start unless
+`SANDBOX_RUNNER_DOCKER_ACK_BR_NETFILTER_IS_LOADED=true`, and then trusts the
+operator that the host has the module loaded and the sysctl at `1`.
 [scripts/setup-sysbox.sh](../scripts/setup-sysbox.sh) loads the module, and the
 kernel enables the sysctl by default once it is loaded.
 
@@ -417,6 +423,9 @@ every sandbox built from it. What is verified today:
   workflow opens a PR when a newer kernel of the pinned line appears.
 - The Node.js tarball in the sandbox image is checked against the SHA-256
   values recorded in [Dockerfile.sandbox](../Dockerfile.sandbox).
+- The pip in the sandbox's virtual environment is installed as a wheel in
+  hash-checking mode, from the version and SHA-256 values in
+  [sandbox-venv/requirements.txt](../sandbox-venv/requirements.txt).
 - Service images are published by version. The release workflow mirrors each
   version into the deployment registry by digest and refuses to replace a
   version that is already there.
@@ -484,13 +493,16 @@ or a template's `disk_quota_mb` is non-zero; it defaults to `0`, and sandboxes
 then share the runner's storage with no per-sandbox limit. If a quota is
 configured but the entrypoint cannot mount its quota pool, the runner refuses to
 start unless `SANDBOX_RUNNER_ALLOW_UNENFORCED_DISK_QUOTA=true`. The Firecracker runtime gives each sandbox a fixed-size
-root filesystem image.
+root filesystem image, but all sandboxes on a runner share its data volume, so
+one tenant's sandboxes can fill it for every sandbox on that runner
+([details](../internal/runner/runtime/firecracker.ee/README.md#data-volume)).
 
 **Health and metrics endpoints are unauthenticated.** `GET` and `HEAD` on
 `/healthz` and `/metrics` bypass auth and the access log on both the API and the
 runner, as do the runner's `/livez` and `/readyz`; other methods never reach
 their handlers. The endpoints expose fleet-level
 counters — sandbox and runner counts, capacity, request and operation rates —
+plus the file path and expiry of each TLS certificate the process presents,
 and carry no tenant or sandbox identifiers. Sandboxes cannot reach the runner's,
 per the section above; the API serves its own on the public HTTP port by default,
 so a deployment that enables ingress publishes them. Set
@@ -529,7 +541,7 @@ The boundaries above are covered by tests rather than asserted on paper.
 | Tenant quota under concurrent creates, on one API pod and on two | [internal/api/handlers_create_sandbox_test.go](../internal/api/handlers_create_sandbox_test.go), [internal/api/tenant_quota_test.go](../internal/api/tenant_quota_test.go), [internal/api/store/store_test.go](../internal/api/store/store_test.go), [internal/api/store/postgres_integration_test.go](../internal/api/store/postgres_integration_test.go), [e2e/tests/sandbox-api.spec.ts](../e2e/tests/sandbox-api.spec.ts), [e2e/tests/multi-pod-api.spec.ts](../e2e/tests/multi-pod-api.spec.ts) |
 | Admin route gating and key revocation | [internal/api/handlers_tenants_test.go](../internal/api/handlers_tenants_test.go) |
 | Provisioner keys: the three allowed routes, `403` on every other route, quota bounds, no fall-through to the admin pseudo-tenant | [internal/api/handlers_provisioner_test.go](../internal/api/handlers_provisioner_test.go), [internal/api/config/config_test.go](../internal/api/config/config_test.go), [e2e/tests/provisioner-key.spec.ts](../e2e/tests/provisioner-key.spec.ts) |
-| Scaler keys: `GET /admin/runners` only, `403` on every other path, no overlap with the other key sets | [internal/api/handlers_runners_test.go](../internal/api/handlers_runners_test.go), [internal/api/config/config_test.go](../internal/api/config/config_test.go), [e2e/tests/admin-runners.spec.ts](../e2e/tests/admin-runners.spec.ts) |
+| Scaler keys: `GET /admin/runners` and runner cordon only, `403` on every other path, no overlap with the other key sets | [internal/api/handlers_runners_test.go](../internal/api/handlers_runners_test.go), [internal/api/config/config_test.go](../internal/api/config/config_test.go), [e2e/tests/admin-runners.spec.ts](../e2e/tests/admin-runners.spec.ts) |
 | Concurrency limits: per tenant (creates included) and per sandbox, the execution `DELETE` limits and timeout, the `timeout_ms` cap | [internal/api/middleware_limits_test.go](../internal/api/middleware_limits_test.go), [internal/runner/middleware_limits_test.go](../internal/runner/middleware_limits_test.go), [internal/limits/limits_test.go](../internal/limits/limits_test.go), [e2e/tests/request-limits.spec.ts](../e2e/tests/request-limits.spec.ts) |
 | Runner listeners require a CA-signed client certificate; the API verifies each runner's host name and refuses a non-https base | [internal/runner/mtls_test.go](../internal/runner/mtls_test.go), [internal/api/runnertls_test.go](../internal/api/runnertls_test.go), [internal/api/registry/validate_test.go](../internal/api/registry/validate_test.go) |
 | No caller-set header but `Content-Type` passed on to the daemon; daemon redirects refused; daemon signal headers stripped, sandbox-gone body ignored | [internal/runner/proxy_test.go](../internal/runner/proxy_test.go), [internal/api/handlers_reap_test.go](../internal/api/handlers_reap_test.go), [e2e/tests/runner-restart.spec.ts](../e2e/tests/runner-restart.spec.ts) |
@@ -539,6 +551,7 @@ The boundaries above are covered by tests rather than asserted on paper.
 | Blocked list and egress rule generation | [internal/runner/runtime/netpolicy/private_ranges_test.go](../internal/runner/runtime/netpolicy/private_ranges_test.go), [internal/runner/runtime/docker/netrules/netrules_test.go](../internal/runner/runtime/docker/netrules/netrules_test.go), [internal/runner/runtime/firecracker.ee/network/egress_test.go](../internal/runner/runtime/firecracker.ee/network/egress_test.go) |
 | Egress proxy: allow list, address checks and rebinding, inspection and Host binding, credential injection, tenant scoping, response scrubbing and log redaction, redirects and upgrades, model paths, block and metering | [internal/egressproxy/proxy_test.go](../internal/egressproxy/proxy_test.go), [internal/egressproxy/credentials/credentials_test.go](../internal/egressproxy/credentials/credentials_test.go), [internal/egressproxy/metering/usage_test.go](../internal/egressproxy/metering/usage_test.go), [internal/runner/egress_test.go](../internal/runner/egress_test.go) |
 | Git repository and ref filter, fuzzed, and against a real `git` client and `git http-backend` | [internal/egressproxy/gitfilter/gitfilter_test.go](../internal/egressproxy/gitfilter/gitfilter_test.go), [internal/egressproxy/git_differential_test.go](../internal/egressproxy/git_differential_test.go) |
+| Firecracker: creates refused below 5% free disk, no sandbox deleted to make room | [internal/runner/runtime/firecracker.ee/disk_test.go](../internal/runner/runtime/firecracker.ee/disk_test.go), [internal/runner/runtime/firecracker.ee/stop_wake_test.go](../internal/runner/runtime/firecracker.ee/stop_wake_test.go) |
 | Egress mode: API to runner to network and rules, refused when the runner does not confirm it | [internal/api/handlers_create_sandbox_test.go](../internal/api/handlers_create_sandbox_test.go), [internal/runner/grpc_control_test.go](../internal/runner/grpc_control_test.go), [internal/runner/runtime/docker/runtime_test.go](../internal/runner/runtime/docker/runtime_test.go), [internal/runner/runtime/firecracker.ee/network_wirer_test.go](../internal/runner/runtime/firecracker.ee/network_wirer_test.go) |
 
 The network isolation suite runs against both the Sysbox and the Firecracker

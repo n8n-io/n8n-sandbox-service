@@ -49,3 +49,10 @@ jobs:
           name: e2e-firecracker-logs
           path: /tmp/e2e-firecracker-artifacts/
           retention-days: 7
+
+      # run-firecracker-azure.sh destroys the VMs itself, but a cancelled run
+      # kills it before that finishes. Destroying an already-empty state is a no-op.
+      - name: Cleanup Azure VM
+        if: always()
+        continue-on-error: true
+        run: bash e2e/infra/scripts/cleanup-e2e-vm.sh

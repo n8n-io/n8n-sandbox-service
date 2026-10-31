@@ -16,7 +16,7 @@ All services are configured via environment variables.
 | --- | --- | --- |
 | `SANDBOX_API_KEYS` | *(required)* | Comma-separated admin API keys. Full access to all sandboxes and `/admin/tenants` key management. Self-hosted can use these alone without minting tenant keys. |
 | `SANDBOX_API_PROVISIONER_KEYS` | *(empty)* | Comma-separated provisioner API keys ([security-model.md](security-model.md#provisioner-keys)). When set, startup fails if a key is also in `SANDBOX_API_KEYS` or if `SANDBOX_API_DEFAULT_MAX_SANDBOXES` is `0`. |
-| `SANDBOX_API_SCALER_KEYS` | *(empty)* | Comma-separated scaler API keys: `GET /admin/runners` only ([security-model.md](security-model.md#scaler-keys)). Startup fails if a key is also in `SANDBOX_API_KEYS` or `SANDBOX_API_PROVISIONER_KEYS`. |
+| `SANDBOX_API_SCALER_KEYS` | *(empty)* | Comma-separated scaler API keys: `GET /admin/runners` and `PUT`/`DELETE /admin/runners/{id}/cordon` only ([security-model.md](security-model.md#scaler-keys)). Startup fails if a key is also in `SANDBOX_API_KEYS` or `SANDBOX_API_PROVISIONER_KEYS`. |
 | `SANDBOX_API_RUNNER_REGISTRATION_TOKEN` | *(required)* | Shared secret; runners authenticate to the private gRPC registration service with `Authorization: Bearer …` |
 | `SANDBOX_API_RUNNER_API_KEY` | *(empty)* | Optional API key injected by the API when calling runner HTTP; the runner also requires the client certificate above |
 | `SANDBOX_API_LOG_LEVEL` | `info` | Minimum log severity (`debug`, `info`, `warn`, `error`; case-insensitive) |
@@ -87,7 +87,7 @@ Set one store to enable [archive and restore](API.md#archive-and-restore), with 
 | `SANDBOX_RUNNER_HTTP_BASE_URL` | *(required)* | Base URL the API uses to reach this runner; its host must match a SAN on the runner's control cert (e.g. `https://runner:8080`). An `http://` value is upgraded to `https://` with a warning, since the listener only serves TLS; the API rejects any registration whose base URL is not `https://` |
 | `SANDBOX_RUNNER_ID` | hostname | Stable runner id sent to the API |
 | `SANDBOX_RUNNER_CAPACITY_TOTAL` | `1000` | Reported capacity for placement (`0` = unlimited) |
-| `SANDBOX_RUNNER_DATA_DIR` | `/var/sandboxes` | Per-sandbox data directory (the Firecracker runner keeps each sandbox's rootfs here) |
+| `SANDBOX_RUNNER_DATA_DIR` | `/var/sandboxes` | Per-sandbox data directory (Firecracker: see [Data volume](../internal/runner/runtime/firecracker.ee/README.md#data-volume)) |
 | `SANDBOX_RUNNER_MAX_FILE_BYTES` | `10485760` | Maximum body the runner accepts on file write/append (10 MB); the API applies `SANDBOX_API_MAX_FILE_BYTES` first |
 | `SANDBOX_RUNNER_MAX_INFLIGHT_PER_SANDBOX` | `256` | Requests one sandbox may have in progress at once; more get `429` ([what counts](API.md#http-429--too-many-requests-in-progress)). Room for clients that write many files in parallel, while still bounding what one sandbox holds on its runner. `0` = no limit, for execution `DELETE`s too |
 | `SANDBOX_RUNNER_MAX_EXEC_TIMEOUT` | `15m` | Largest `timeout_ms` an exec may ask for; a larger one gets `400`. A first estimate: long enough for builds and test suites, and what ends a forgotten command, which keeps running after its stream closes. `0` (no limit) or at least `5m`, the timeout a command gets when it sets none; there is no upper bound, so a pool for multi-hour runs sets e.g. `8h` |
@@ -134,6 +134,7 @@ These variables are parsed by the Docker/sysbox runner entrypoint.
 | `SANDBOX_RUNNER_DISK_QUOTA_POOL_SIZE_GB` | *(derived)* | Size of the xfs+prjquota storage pool backing the inner dockerd. Defaults to `ceil(SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB × SANDBOX_RUNNER_CAPACITY_TOTAL × 1.2 / 1024)` (per-sandbox quota times runner capacity, plus 20% headroom for sandbox image layers). Set explicitly to override. |
 | `SANDBOX_RUNNER_DOCKER_INSECURE_REGISTRIES` | *(empty)* | Comma-separated insecure registries passed to dockerd |
 | `SANDBOX_RUNNER_DOCKER_DNS_SERVERS` | *(unset)* | Comma-separated IPv4 resolvers for sandbox DNS, e.g. `1.1.1.1,8.8.8.8`. Unset, sandboxes resolve through the runner's own resolver. See [Sandbox DNS](security-model.md#sandbox-dns). |
+| `SANDBOX_RUNNER_DOCKER_ACK_BR_NETFILTER_IS_LOADED` | `false` | On kernels before 5.3, where the runner cannot read `bridge-nf-call-iptables`, set `true` to confirm the host has `br_netfilter` loaded with the sysctl at `1`; the runner refuses to start otherwise. No effect on newer kernels. See [Guest-to-host and network](security-model.md#guest-to-host-and-network). |
 | `SANDBOX_RUNNER_DOCKER_STORAGE_DRIVER` | *(dockerd default)* | Storage driver for the inner dockerd when disk quotas are off (e.g. `vfs` where nested overlayfs is unavailable). Ignored with quotas on, which always use `overlay2`. Read by `scripts/start-runner.sh`. |
 
 ### Firecracker runner backend config
@@ -240,6 +241,7 @@ Series exposed today:
 - `sandbox_http_requests_in_flight`, requests in progress, and `sandbox_http_requests_limited_total{limit}`, requests refused by the per-tenant (`tenant`, API) or per-sandbox (`sandbox`, runner) limits, execution `DELETE` ones included (both binaries). Like `sandbox_http_requests_total`, they only see requests that passed authentication. The gauge counts the whole process, not one tenant or sandbox; the counter shows how often each limit is reached.
 - API: `sandbox_sandbox_operations_total{operation,result}`, `sandbox_sandboxes_active`, `sandbox_runners_registered`, and `sandbox_create_placements_total{result}`, how each create found a runner (`first_choice`, `retried`, `exhausted`, `no_runner`). `retried` grows while the fleet is full but creates still succeed, so watch it alongside the failures.
 - Runner: `sandbox_container_operations_total{operation,result}`, `sandbox_container_operation_duration_seconds{operation}`, `sandbox_containers_active`, plus `sandbox_guest_deaths_total`, sandbox guests that died on their own, `sandbox_recoveries_total{result}`, attempts to bring one back, and `sandbox_runner_cordoned`, `1` while the runner is cordoned.
+- `sandbox_tls_certificate_expiry_timestamp_seconds{path}`, the expiry of each TLS certificate the process presents, by file (both binaries). See [observability.md](observability.md#tls-certificates).
 - Firecracker runner: `sandbox_lifecycle_step_duration_seconds{operation,step}`, the per-step breakdown of a create, wake or recovery, and `sandbox_slots_unwired`, slots whose network namespace is not yet built (zero in steady state). See [observability.md](observability.md).
 - Plus the standard `go_*` and `process_*` collectors.
 

@@ -78,6 +78,12 @@ type Config struct {
 	// EgressProxyPort is the port of the egress proxy on the proxy network's
 	// gateway. Parsed from SANDBOX_EGRESS_PROXY_PORT (default 3128).
 	EgressProxyPort int
+
+	// AckBridgeNetfilterLoaded is the operator's statement that the host has
+	// br_netfilter loaded with bridge-nf-call-iptables=1, for kernels before 5.3
+	// where the runner cannot read the sysctl. No effect on newer kernels.
+	// Parsed from SANDBOX_RUNNER_DOCKER_ACK_BR_NETFILTER_IS_LOADED (default false).
+	AckBridgeNetfilterLoaded bool
 }
 
 // Template is a named sandbox image with its own limits; a limit left 0 is
@@ -117,6 +123,8 @@ func parseTemplates(v string) (map[string]Template, error) {
 	}
 	return out, nil
 }
+
+const envAckBridgeNetfilter = "SANDBOX_RUNNER_DOCKER_ACK_BR_NETFILTER_IS_LOADED"
 
 func defaultConfig() Config {
 	return Config{
@@ -207,6 +215,13 @@ func LoadConfig() (Config, error) {
 		cfg.DNSServers = servers
 	}
 
+	if v := os.Getenv(envAckBridgeNetfilter); v != "" {
+		ack, err := strconv.ParseBool(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("%s must be a boolean, got %q", envAckBridgeNetfilter, v)
+		}
+		cfg.AckBridgeNetfilterLoaded = ack
+	}
 	if v := strings.TrimSpace(os.Getenv("SANDBOX_EGRESS_PROXY_PORT")); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 1 || n > 65535 {

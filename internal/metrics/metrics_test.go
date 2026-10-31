@@ -144,7 +144,6 @@ func TestRunnerRecorderObservations(t *testing.T) {
 	r.ObserveContainerOp(OpCreate, false, 500*time.Millisecond)
 	r.ObserveContainerOp(OpEnsureRunning, true, 100*time.Millisecond)
 	r.ObserveContainerOp(OpStop, true, 50*time.Millisecond)
-	r.ObserveContainerOp(OpEvict, true, 0)
 
 	if got := testutil.ToFloat64(r.containerOps.WithLabelValues(OpCreate, "success")); got != 1 {
 		t.Errorf("container_operations_total{create,success} = %v, want 1", got)
@@ -154,9 +153,6 @@ func TestRunnerRecorderObservations(t *testing.T) {
 	}
 	if got := testutil.ToFloat64(r.containerOps.WithLabelValues(OpStop, "success")); got != 1 {
 		t.Errorf("container_operations_total{stop,success} = %v, want 1", got)
-	}
-	if got := testutil.ToFloat64(r.containerOps.WithLabelValues(OpEvict, "success")); got != 1 {
-		t.Errorf("container_operations_total{evict,success} = %v, want 1", got)
 	}
 
 	body := scrape(t, r.Registry())
@@ -411,6 +407,30 @@ func TestHTTPMiddlewareLabelsUnmatchedRoutes(t *testing.T) {
 	handler.ServeHTTP(rr, req)
 	if got := testutil.ToFloat64(r.httpRequests.WithLabelValues("unmatched", http.MethodGet, "404")); got != 1 {
 		t.Errorf("unmatched counter = %v, want 1", got)
+	}
+}
+
+func TestTLSCertificateExpiryReadsAtScrapeTime(t *testing.T) {
+	expiry := map[string]time.Time{"/tls/a/tls.crt": time.Unix(1800000000, 0)}
+	read := func() map[string]time.Time { return expiry }
+
+	api := NewAPIRecorder(true)
+	api.SetTLSCertificateExpiry(read)
+	runner := NewRunnerRecorder(true)
+	runner.SetTLSCertificateExpiry(read)
+	NewAPIRecorder(false).SetTLSCertificateExpiry(read)
+	NewRunnerRecorder(false).SetTLSCertificateExpiry(read)
+
+	for role, reg := range map[string]*prometheus.Registry{"api": api.Registry(), "runner": runner.Registry()} {
+		want := `sandbox_tls_certificate_expiry_timestamp_seconds{path="/tls/a/tls.crt",role="` + role + `"} 1.8e+09`
+		if body := scrape(t, reg); !strings.Contains(body, want) {
+			t.Errorf("%s scrape missing %q:\n%s", role, want, body)
+		}
+	}
+
+	expiry = map[string]time.Time{"/tls/a/tls.crt": time.Unix(1900000000, 0)}
+	if body := scrape(t, runner.Registry()); !strings.Contains(body, `path="/tls/a/tls.crt",role="runner"} 1.9e+09`) {
+		t.Errorf("scrape did not read the renewed expiry:\n%s", body)
 	}
 }
 

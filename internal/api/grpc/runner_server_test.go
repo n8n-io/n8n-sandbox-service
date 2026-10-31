@@ -1,16 +1,25 @@
 package grpcapi
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
+	"math/big"
 	"net"
 	"testing"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
 	"github.com/n8n-io/sandbox-service/internal/api/grpc/pb"
@@ -222,6 +231,53 @@ func TestConnectEmptyRunnerIDAfterCommitUsesCommittedID(t *testing.T) {
 	}
 }
 
+// Cordon arrives on the heartbeat and is stored with the runner, so placement
+// skips it, and an uncordon heartbeat makes it eligible again.
+func TestConnectStoresCordon(t *testing.T) {
+	reg := registry.New(time.Hour)
+	token := "test-token"
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := grpc.NewServer()
+	pb.RegisterRunnerRegistryServer(srv, &RunnerRegistryServer{Token: token, Reg: reg})
+	go func() { _ = srv.Serve(lis) }()
+	defer srv.Stop()
+
+	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	ctx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+token)
+	stream, err := pb.NewRunnerRegistryClient(conn).Connect(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.CloseSend()
+
+	for _, cordoned := range []bool{false, true, false} {
+		hb := testHeartbeat("cordon-runner")
+		hb.Cordoned = cordoned
+		if err := stream.Send(hb); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := stream.Recv(); err != nil {
+			t.Fatal(err)
+		}
+		run, ok := reg.Get("cordon-runner")
+		if !ok || run.Cordoned != cordoned {
+			t.Fatalf("after heartbeat cordoned=%v: registry has %+v", cordoned, run)
+		}
+		_, err := reg.PickLowestUsed()
+		if cordoned != errors.Is(err, registry.ErrNoRunners) {
+			t.Fatalf("after heartbeat cordoned=%v: PickLowestUsed() error = %v", cordoned, err)
+		}
+	}
+}
+
 func TestConnectRequiresControlGRPCAddr(t *testing.T) {
 	reg := registry.New(time.Hour)
 	token := "test-token"
@@ -323,4 +379,57 @@ func TestConnectRecordsCordonTemplatesAndActivity(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("activity not recorded")
 	}
+}
+
+// fakeRegistrationStream feeds one heartbeat to Connect and then ends the stream.
+type fakeRegistrationStream struct {
+	grpc.ServerStream
+	ctx  context.Context
+	sent bool
+}
+
+func (s *fakeRegistrationStream) Context() context.Context { return s.ctx }
+
+func (s *fakeRegistrationStream) Recv() (*pb.RunnerHeartbeat, error) {
+	if s.sent {
+		return nil, io.EOF
+	}
+	s.sent = true
+	return testHeartbeat("r1"), nil
+}
+
+func (s *fakeRegistrationStream) Send(*pb.ControlMessage) error { return nil }
+
+func TestConnectLogsTheRunnerClientCertificate(t *testing.T) {
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	notAfter := time.Date(2027, 1, 20, 8, 39, 49, 0, time.UTC)
+	cert := &x509.Certificate{SerialNumber: big.NewInt(0x0853fb42), NotAfter: notAfter}
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer test-token"))
+	ctx = peer.NewContext(ctx, &peer.Peer{
+		AuthInfo: credentials.TLSInfo{State: tls.ConnectionState{PeerCertificates: []*x509.Certificate{cert}}},
+	})
+
+	srv := &RunnerRegistryServer{Token: "test-token", Reg: registry.New(time.Hour)}
+	if err := srv.Connect(&fakeRegistrationStream{ctx: ctx}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
+		var ev map[string]any
+		if err := json.Unmarshal(line, &ev); err != nil {
+			t.Fatal(err)
+		}
+		if ev["msg"] != "runner registered" {
+			continue
+		}
+		if ev["client_cert_serial"] != "0853FB42" || ev["client_cert_not_after"] != "2027-01-20T08:39:49Z" {
+			t.Fatalf("runner registered without the client certificate: %v", ev)
+		}
+		return
+	}
+	t.Fatalf("no runner registered event in:\n%s", buf.String())
 }

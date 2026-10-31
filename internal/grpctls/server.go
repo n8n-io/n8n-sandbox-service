@@ -27,8 +27,8 @@ func NewServerTLSConfig(serverCertFile, serverKeyFile, clientCAFile string, clie
 		return nil, fmt.Errorf("grpctls: no PEM certificates in %s", clientCAFile)
 	}
 
-	reloader := &KeyPairReloader{CertPath: serverCertFile, KeyPath: serverKeyFile}
-	if err := reloader.Prime(); err != nil {
+	reloader, err := reloaderFor(serverCertFile, serverKeyFile)
+	if err != nil {
 		return nil, fmt.Errorf("grpctls: load server key pair: %w", err)
 	}
 

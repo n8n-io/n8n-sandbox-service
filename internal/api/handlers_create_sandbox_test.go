@@ -220,9 +220,10 @@ func newIdleTestGatewayPods(t *testing.T, adminKey string, fake *fakeSandboxCont
 	cfg.APIKeys = map[string]struct{}{adminKey: {}}
 	cfg.MaxFileBytes = 1024
 	cfg.DefaultMaxSandboxes = 50
+	cfg.HeartbeatGrace = 45 * time.Second
 
-	reg := registry.New(45 * time.Second)
-	reg.Upsert("runner-1", "https://127.0.0.1:9", startFakeRunnerControl(t, fake), true, 10, 0, 0)
+	reg := registry.New(cfg.HeartbeatGrace)
+	reg.Upsert("runner-1", "https://127.0.0.1:9", startFakeRunnerControl(t, fake), true, false, 10, 0, 0)
 
 	routers := make([]http.Handler, pods)
 	for i := range routers {
@@ -428,7 +429,7 @@ func TestCreateSandboxCountsUnclearSaveAsSaved(t *testing.T) {
 				t.Fatalf("create tenant: %v", err)
 			}
 			reg := registry.New(45 * time.Second)
-			reg.Upsert("runner-1", "https://127.0.0.1:9", startFakeRunnerControl(t, &fakeSandboxControl{}), true, 10, 0, 0)
+			reg.Upsert("runner-1", "https://127.0.0.1:9", startFakeRunnerControl(t, &fakeSandboxControl{}), true, false, 10, 0, 0)
 			q := newTenantQuota(s.CountByTenant)
 			// Keeps the tenant's entry, and so its counts, after the create.
 			hold, _, _ := q.reserve(tenantID, 2)

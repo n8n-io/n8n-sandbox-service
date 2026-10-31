@@ -558,33 +558,6 @@ export function stopSandboxViaRunner(sandboxId: string): void {
   });
 }
 
-export function runnerCordonConfigured(): boolean {
-  return Boolean(
-    process.env.E2E_RUNNER_CONTROL_GRPC_ADDR &&
-      process.env.E2E_RUNNER_API_KEY &&
-      process.env.E2E_RUNNER_CONTROL_TLS_CA &&
-      process.env.E2E_RUNNER_CONTROL_TLS_CERT &&
-      process.env.E2E_RUNNER_CONTROL_TLS_KEY,
-  );
-}
-
-/**
- * Calls the runner's GetCordon or SetCordon RPC with the API's client
- * certificate and runner key, and returns whether the runner is cordoned after.
- */
-export function runnerCordon(command: 'cordon' | 'uncordon' | 'cordon-status'): boolean {
-  if (!runnerCordonConfigured()) {
-    throw new Error('E2E_RUNNER_CONTROL_GRPC_ADDR, E2E_RUNNER_API_KEY and E2E_RUNNER_CONTROL_TLS_* must be set');
-  }
-  const out = execFileSync('go', ['run', './cmd/e2e-runnerctl', command], {
-    cwd: e2eProjectDir(),
-    stdio: ['pipe', 'pipe', 'pipe'],
-    encoding: 'utf8',
-    env: { ...process.env },
-  });
-  return out.trim() === 'true';
-}
-
 // The runner serves TLS with a private CA, so -k here and --no-check-certificate
 // below: these probes only need to reach the unauthenticated endpoints.
 export function scrapeRunnerMetricsAt(addr: string): string {

@@ -167,7 +167,7 @@ Each hop uses `httputil.ReverseProxy` with URL rewriting. The runner can wake a 
 
 1. Client sends `POST /sandboxes` with API key
 2. API picks the eligible (healthy, uncordoned) runner serving the requested template with the lowest reported `capacity_used`
-3. API calls `SandboxControl.CreateSandbox` on the selected runner (gRPC). A Firecracker runner with no free slot refuses before creating anything, with `ResourceExhausted` and an `ErrorInfo` detail (`sandbox-runner`/`CAPACITY_EXHAUSTED`) that tells the refusal from gRPC's own uses of that code. Only that refusal makes the API repeat steps 2–3 without the runner, up to three runners; it answers `503` when every runner tried refused or none is eligible. Any other runner error ends the create with `500`
+3. API calls `SandboxControl.CreateSandbox` on the selected runner (gRPC). A Firecracker runner with no free slot or under 5% free space on its data volume refuses before creating anything, with `ResourceExhausted` and an `ErrorInfo` detail (`sandbox-runner`/`CAPACITY_EXHAUSTED`) that tells the refusal from gRPC's own uses of that code. Only that refusal makes the API repeat steps 2–3 without the runner, up to three runners; it answers `503` when every runner tried refused or none is eligible. Any other runner error ends the create with `500`
 4. Runner creates the sandbox: a container `sandbox-<id>` from the template's image with its resource limits and labels (refused if a container already carries the id's label), or a microVM restored from the golden snapshot
 5. Runner waits for the daemon inside it to become healthy
 6. API stores the sandbox record (ID, tenant, status, runner assignment, template, egress and create options)

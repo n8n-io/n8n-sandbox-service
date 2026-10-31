@@ -16,11 +16,12 @@ type Runner struct {
 	HTTPBaseURL     string // Endpoints proxied to the sandbox
 	ControlGRPCAddr string // Sandbox lifecycle methods
 	Healthy         bool
+	// Cordoned is set by an operator on the runner: it keeps its sandboxes but
+	// takes no new ones.
+	Cordoned        bool
 	CapacityTotal   int32
 	CapacityUsed    int32
 	CapacityStopped int32
-	// Cordoned: an operator drained the runner, so placement skips it.
-	Cordoned bool
 	// Templates the runner serves; empty means "default" alone.
 	Templates []Template
 	LastSeen  time.Time
@@ -67,7 +68,7 @@ func (r *Runner) Serves(template string) bool {
 
 // RunnerRegistry tracks runners and supports load-aware placement.
 type RunnerRegistry interface {
-	Upsert(id, httpBaseURL, controlGRPCAddr string, healthy bool, capTotal, capUsed, capStopped int32)
+	Upsert(id, httpBaseURL, controlGRPCAddr string, healthy, cordoned bool, capTotal, capUsed, capStopped int32)
 	// UpsertRunner records a heartbeat; LastSeen is set to now.
 	UpsertRunner(run Runner)
 	Remove(id string)
@@ -77,7 +78,8 @@ type RunnerRegistry interface {
 	// List returns every registered runner, stale ones included, ordered by ID.
 	List() ([]Runner, error)
 	// PickLowestUsed returns the eligible runner with the lowest capacity_used,
-	// skipping the runners in exclude. It places the default template.
+	// skipping the runners in exclude. Unhealthy, cordoned, full and stale
+	// runners are not eligible. It places the default template.
 	PickLowestUsed(exclude ...string) (*Runner, error)
 	// PickForTemplate is PickLowestUsed among the runners serving template.
 	PickForTemplate(template string, exclude ...string) (*Runner, error)

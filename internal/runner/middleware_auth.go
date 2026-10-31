@@ -3,6 +3,7 @@ package runner
 import (
 	"net/http"
 
+	"github.com/n8n-io/sandbox-service/internal/grpctls"
 	"github.com/n8n-io/sandbox-service/internal/probes"
 )
 
@@ -40,6 +41,7 @@ func AuthMiddleware(apiKeys map[string]struct{}) func(http.Handler) http.Handler
 				writeError(w, http.StatusUnauthorized, "invalid API key")
 				return
 			}
+			grpctls.NotePeer(r.TLS.PeerCertificates[0])
 			next.ServeHTTP(w, r)
 		})
 	}

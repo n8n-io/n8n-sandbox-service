@@ -39,6 +39,22 @@ func TestReconcileSandboxDataDirsRemovesEntries(t *testing.T) {
 	}
 }
 
+// A missing data dir is reported, not created: it may be the mount point of a
+// volume that is not mounted, and creating it would put sandboxes on the
+// filesystem underneath.
+func TestReconcileSandboxDataDirsReportsMissingDir(t *testing.T) {
+	dataDir := filepath.Join(t.TempDir(), "sandboxes")
+	rt := newTestRuntime(1)
+	rt.runnerConfig.DataDir = dataDir
+
+	if err := rt.reconcileSandboxDataDirs(context.Background()); err == nil || !strings.Contains(err.Error(), dataDir) {
+		t.Fatalf("reconcileSandboxDataDirs() error = %v, want the missing data dir named", err)
+	}
+	if _, err := os.Stat(dataDir); !os.IsNotExist(err) {
+		t.Fatalf("data dir after reconcile: stat error = %v, want it still missing", err)
+	}
+}
+
 func TestReconcileJailerStateRunsCleanupScript(t *testing.T) {
 	var gotScript string
 	rt := newTestRuntime(1)

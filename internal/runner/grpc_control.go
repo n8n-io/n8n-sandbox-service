@@ -18,6 +18,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/grpc/pb"
 	"github.com/n8n-io/sandbox-service/internal/api/runnerctl"
 	"github.com/n8n-io/sandbox-service/internal/egressproxy"
+	"github.com/n8n-io/sandbox-service/internal/grpctls"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/obs"
 	"github.com/n8n-io/sandbox-service/internal/runner/activity"
@@ -93,6 +94,7 @@ func (s *SandboxControlGRPC) checkAPIKey(ctx context.Context) error {
 	if _, ok := s.Cfg.APIKeys[key]; !ok {
 		return status.Error(codes.Unauthenticated, "invalid api key")
 	}
+	grpctls.NotePeer(grpctls.PeerCertificate(ctx))
 	return nil
 }
 
@@ -258,6 +260,10 @@ func (s *SandboxControlGRPC) GetCordon(ctx context.Context, _ *pb.GetCordonReque
 func (s *SandboxControlGRPC) SetCordon(ctx context.Context, req *pb.SetCordonRequest) (*pb.SetCordonResponse, error) {
 	if err := s.checkAPIKey(ctx); err != nil {
 		return nil, err
+	}
+	// Another runner may now hold the address the caller has for this one.
+	if id := req.GetRunnerId(); id != "" && id != s.Cfg.RunnerID {
+		return nil, status.Errorf(codes.FailedPrecondition, "this is runner %q, not %q", s.Cfg.RunnerID, id)
 	}
 	if s.Cordon.Set(req.GetCordoned()) {
 		remote := ""

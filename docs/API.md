@@ -8,7 +8,7 @@ There are four key classes:
 
 - `SANDBOX_API_KEYS` are admin keys. An admin key can create/list/delete any sandbox, manage tenants and mint tenant API keys via the admin API.
 - `SANDBOX_API_PROVISIONER_KEYS` are provisioner keys: `POST /admin/tenants`, `PATCH /admin/tenants/{id}` and `DELETE /admin/tenants/{id}` only, `403` everywhere else. Why the class exists and what it does not protect: [security-model.md](security-model.md#provisioner-keys).
-- `SANDBOX_API_SCALER_KEYS` are scaler keys: `GET /admin/runners` only, `403` on every other path ([security-model.md](security-model.md#scaler-keys)).
+- `SANDBOX_API_SCALER_KEYS` are scaler keys: `GET /admin/runners` and `PUT`/`DELETE /admin/runners/{id}/cordon` only, `403` on every other path ([security-model.md](security-model.md#scaler-keys)).
 - Tenant keys are minted by an admin (or returned when a tenant is created). A tenant key may only create sandboxes for that tenant and may only list/get/delete/proxy its own sandboxes. Self-hosted operators can ignore tenant APIs entirely and keep using the admin key.
 
 Tenant keys are returned in plaintext once on create; only a hash is stored.
@@ -91,7 +91,7 @@ What the client loses:
 
 An ordinary wake from an idle stop stays transparent: no `409`, no header. On the Sysbox runtime that wake costs the same three things, because a stopped container is started again rather than resumed; on Firecracker an idle stop snapshots the paused guest, so memory does survive it. The `409` is not what tells them apart — `status` is. An idle stop sets `status` to `stopped`, so a client can see it in `GET /sandboxes/{id}` and know what it lost, whereas a crash leaves `status` at `running`. The `409` exists for the case that has no other signal. An ephemeral sandbox never reaches `stopped`; it is deleted instead (see `ephemeral` under `POST /sandboxes`).
 
-**404** `sandbox not found` — Unknown id, the sandbox is past its idle delete-after wake window (`SANDBOX_API_IDLE_DELETE_AFTER`, default `24h`; the idle-stop window for an ephemeral sandbox, see `POST /sandboxes`), or the runner no longer tracks the sandbox (eviction, delete, or runner restart). On exec/file proxy routes, when the runner signals sandbox gone (`X-Sandbox-Gone: 1`), the API removes the store row so subsequent `GET /sandboxes/{id}` also returns 404. Other runner **404** responses (for example `execution not found` or missing file paths) do **not** delete the sandbox. Exec and file routes may return **503** or **502** from the runner after the API successfully reaches the runner; the API may return **503** `runner unavailable` before the runner is contacted.
+**404** `sandbox not found` — Unknown id, the sandbox is past its idle delete-after wake window (`SANDBOX_API_IDLE_DELETE_AFTER`, default `24h`; the idle-stop window for an ephemeral sandbox, see `POST /sandboxes`), or the runner no longer tracks the sandbox (delete or runner restart). On exec/file proxy routes, when the runner signals sandbox gone (`X-Sandbox-Gone: 1`), the API removes the store row so subsequent `GET /sandboxes/{id}` also returns 404. Other runner **404** responses (for example `execution not found` or missing file paths) do **not** delete the sandbox. Exec and file routes may return **503** or **502** from the runner after the API successfully reaches the runner; the API may return **503** `runner unavailable` before the runner is contacted.
 
 ---
 
@@ -129,6 +129,7 @@ Metric families include:
 - `sandbox_create_placements_total{role="api",result}` — how each create found a runner that did not refuse it for capacity: `first_choice`, or `retried` after a refusal; or found none: `exhausted` (every runner tried refused) or `no_runner` (none eligible). Whether the create then succeeded is in `sandbox_sandbox_operations_total`.
 - `sandbox_sandboxes_active{role="api"}` — current sandbox count from the store.
 - `sandbox_runners_registered{role="api"}` — runners registered with the API.
+- `sandbox_tls_certificate_expiry_timestamp_seconds{role="api",path}` — expiry of each TLS certificate the API presents, by file.
 - `go_*` and `process_*` — Go runtime and process collectors.
 
 **Response:** `200 OK` with `Content-Type: text/plain; version=0.0.4`.
@@ -1080,6 +1081,8 @@ Admin only. Revoke an API key (`204`). Revoked keys are rejected from the next r
 
 Admin or scaler. Lists every registered runner, ordered by `id`, with the capacity it last reported. Runners that stopped heartbeating stay in the list: the in-memory registry drops a runner when it disconnects, the Postgres registry never does. Filter on `healthy` and `last_seen` to keep the live ones. Runner addresses are not returned.
 
+`cordoned` is `true` while the runner is [cordoned](#put-adminrunnersidcordon--delete-adminrunnersidcordon).
+
 **Response:** `200 OK`
 
 ```json
@@ -1088,6 +1091,7 @@ Admin or scaler. Lists every registered runner, ordered by `id`, with the capaci
     {
       "id": "runner-1",
       "healthy": true,
+      "cordoned": false,
       "capacity_total": 20,
       "capacity_used": 7,
       "capacity_stopped": 2,
@@ -1107,6 +1111,24 @@ Admin or scaler. Lists every registered runner, ordered by `id`, with the capaci
 
 ```bash
 curl http://localhost:8080/admin/runners -H "X-Api-Key: SCALER_KEY"
+```
+
+### PUT /admin/runners/{id}/cordon · DELETE /admin/runners/{id}/cordon
+
+Admin or scaler. `PUT` cordons the runner: it keeps its sandboxes but gets no new ones. `DELETE` uncordons it. Both are idempotent. A runner restart clears the cordon.
+
+**Response:** `200 OK`
+
+```json
+{"id": "runner-1", "cordoned": true}
+```
+
+**Errors:** `403` provisioner or tenant key, `404` unknown runner, `409` another runner now has its address, `502` the runner did not apply it, `503` the runner is unreachable or has stopped heartbeating
+
+**Example:**
+
+```bash
+curl -X PUT http://localhost:8080/admin/runners/runner-1/cordon -H "X-Api-Key: SCALER_KEY"
 ```
 
 ---

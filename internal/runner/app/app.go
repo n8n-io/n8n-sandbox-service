@@ -88,6 +88,7 @@ func Run(cfg *config.Config, rt runnerruntime.Runtime) {
 			}
 			return 0
 		})
+		mrec.SetTLSCertificateExpiry(grpctls.CertificateExpiryByCertPath)
 		slog.Info("metrics endpoint enabled", "path", "/metrics")
 	}
 

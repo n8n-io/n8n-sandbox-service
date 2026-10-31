@@ -70,8 +70,8 @@ func testPostgresConfig(t *testing.T) config.PostgresConfig {
 func TestPostgresRegistryPickLowestUsed(t *testing.T) {
 	reg, _ := openTestPostgresRegistry(t)
 
-	reg.Upsert("pg-test-high", "http://127.0.0.1:8080", "127.0.0.1:9091", true, 10, 8, 0)
-	reg.Upsert("pg-test-low", "http://127.0.0.1:8081", "127.0.0.1:9092", true, 10, 2, 0)
+	reg.Upsert("pg-test-high", "http://127.0.0.1:8080", "127.0.0.1:9091", true, false, 10, 8, 0)
+	reg.Upsert("pg-test-low", "http://127.0.0.1:8081", "127.0.0.1:9092", true, false, 10, 2, 0)
 
 	run, err := reg.PickLowestUsed()
 	if err != nil {
@@ -85,8 +85,8 @@ func TestPostgresRegistryPickLowestUsed(t *testing.T) {
 func TestPostgresRegistryPickLowestUsedSkipsExcluded(t *testing.T) {
 	reg, _ := openTestPostgresRegistry(t)
 
-	reg.Upsert("pg-test-high", "http://127.0.0.1:8080", "127.0.0.1:9091", true, 10, 8, 0)
-	reg.Upsert("pg-test-low", "http://127.0.0.1:8081", "127.0.0.1:9092", true, 10, 2, 0)
+	reg.Upsert("pg-test-high", "http://127.0.0.1:8080", "127.0.0.1:9091", true, false, 10, 8, 0)
+	reg.Upsert("pg-test-low", "http://127.0.0.1:8081", "127.0.0.1:9092", true, false, 10, 2, 0)
 
 	run, err := reg.PickLowestUsed("pg-test-low")
 	if err != nil {
@@ -100,10 +100,34 @@ func TestPostgresRegistryPickLowestUsedSkipsExcluded(t *testing.T) {
 	}
 }
 
+func TestPostgresRegistryPickLowestUsedSkipsCordoned(t *testing.T) {
+	reg, _ := openTestPostgresRegistry(t)
+
+	reg.Upsert("pg-test-high", "http://127.0.0.1:8080", "127.0.0.1:9091", true, false, 10, 8, 0)
+	reg.Upsert("pg-test-low", "http://127.0.0.1:8081", "127.0.0.1:9092", true, true, 10, 2, 0)
+
+	run, err := reg.PickLowestUsed()
+	if err != nil {
+		t.Fatalf("PickLowestUsed: %v", err)
+	}
+	if run.ID != "pg-test-high" {
+		t.Fatalf("got runner %q, want pg-test-high (pg-test-low is cordoned)", run.ID)
+	}
+	if got, ok := reg.Get("pg-test-low"); !ok || !got.Cordoned {
+		t.Fatalf("Get(pg-test-low) = %+v, want cordoned", got)
+	}
+
+	reg.Upsert("pg-test-low", "http://127.0.0.1:8081", "127.0.0.1:9092", true, false, 10, 2, 0)
+	run, err = reg.PickLowestUsed()
+	if err != nil || run.ID != "pg-test-low" {
+		t.Fatalf("PickLowestUsed after uncordon = %v, %v; want pg-test-low", run, err)
+	}
+}
+
 func TestPostgresRegistryGoneLongEnough(t *testing.T) {
 	reg, db := openTestPostgresRegistry(t)
 
-	reg.Upsert("pg-test-stale", "http://127.0.0.1:8080", "127.0.0.1:9091", true, 10, 0, 0)
+	reg.Upsert("pg-test-stale", "http://127.0.0.1:8080", "127.0.0.1:9091", true, false, 10, 0, 0)
 	_, err := db.Exec(`UPDATE runners SET last_seen = now() - interval '10 minutes' WHERE id = $1`, "pg-test-stale")
 	if err != nil {
 		t.Fatalf("update last_seen: %v", err)
@@ -117,8 +141,8 @@ func TestPostgresRegistryGoneLongEnough(t *testing.T) {
 func TestPostgresRegistryListIncludesStaleRunners(t *testing.T) {
 	reg, db := openTestPostgresRegistry(t)
 
-	reg.Upsert("pg-test-list-b", "http://127.0.0.1:8081", "127.0.0.1:9092", false, 10, 4, 1)
-	reg.Upsert("pg-test-list-a", "http://127.0.0.1:8080", "127.0.0.1:9091", true, 8, 2, 0)
+	reg.Upsert("pg-test-list-b", "http://127.0.0.1:8081", "127.0.0.1:9092", false, true, 10, 4, 1)
+	reg.Upsert("pg-test-list-a", "http://127.0.0.1:8080", "127.0.0.1:9091", true, false, 8, 2, 0)
 	_, err := db.Exec(`UPDATE runners SET last_seen = now() - interval '10 minutes' WHERE id = $1`, "pg-test-list-b")
 	if err != nil {
 		t.Fatalf("update last_seen: %v", err)
@@ -137,7 +161,7 @@ func TestPostgresRegistryListIncludesStaleRunners(t *testing.T) {
 	if len(got) != 2 || got[0].ID != "pg-test-list-a" || got[1].ID != "pg-test-list-b" {
 		t.Fatalf("List() = %+v, want pg-test-list-a then pg-test-list-b", got)
 	}
-	if b := got[1]; b.Healthy || b.CapacityTotal != 10 || b.CapacityUsed != 4 || b.CapacityStopped != 1 {
+	if b := got[1]; b.Healthy || !b.Cordoned || b.CapacityTotal != 10 || b.CapacityUsed != 4 || b.CapacityStopped != 1 {
 		t.Fatalf("List() pg-test-list-b = %+v, want unhealthy 10/4/1", b)
 	}
 	if age := time.Since(got[1].LastSeen); age < 9*time.Minute {

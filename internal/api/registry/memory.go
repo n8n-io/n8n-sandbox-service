@@ -34,9 +34,9 @@ func New(heartbeatGrace time.Duration) *MemoryRegistry {
 	return NewMemory(heartbeatGrace)
 }
 
-func (r *MemoryRegistry) Upsert(id, httpBaseURL, controlGRPCAddr string, healthy bool, capTotal, capUsed, capStopped int32) {
+func (r *MemoryRegistry) Upsert(id, httpBaseURL, controlGRPCAddr string, healthy, cordoned bool, capTotal, capUsed, capStopped int32) {
 	r.UpsertRunner(Runner{ID: id, HTTPBaseURL: httpBaseURL, ControlGRPCAddr: controlGRPCAddr, Healthy: healthy,
-		CapacityTotal: capTotal, CapacityUsed: capUsed, CapacityStopped: capStopped})
+		Cordoned: cordoned, CapacityTotal: capTotal, CapacityUsed: capUsed, CapacityStopped: capStopped})
 }
 
 func (r *MemoryRegistry) UpsertRunner(run Runner) {

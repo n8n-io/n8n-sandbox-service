@@ -23,9 +23,9 @@ func NewPostgres(db *sql.DB, heartbeatGrace time.Duration) *PostgresRegistry {
 	return &PostgresRegistry{db: db, heartbeatGrace: heartbeatGrace}
 }
 
-func (r *PostgresRegistry) Upsert(id, httpBaseURL, controlGRPCAddr string, healthy bool, capTotal, capUsed, capStopped int32) {
+func (r *PostgresRegistry) Upsert(id, httpBaseURL, controlGRPCAddr string, healthy, cordoned bool, capTotal, capUsed, capStopped int32) {
 	r.UpsertRunner(Runner{ID: id, HTTPBaseURL: httpBaseURL, ControlGRPCAddr: controlGRPCAddr, Healthy: healthy,
-		CapacityTotal: capTotal, CapacityUsed: capUsed, CapacityStopped: capStopped})
+		Cordoned: cordoned, CapacityTotal: capTotal, CapacityUsed: capUsed, CapacityStopped: capStopped})
 }
 
 func (r *PostgresRegistry) UpsertRunner(run Runner) {
@@ -193,6 +193,7 @@ func scanRunner(row runnerScanner) (*Runner, error) {
 		&run.HTTPBaseURL,
 		&run.ControlGRPCAddr,
 		&run.Healthy,
+		&run.Cordoned,
 		&run.CapacityTotal,
 		&run.CapacityUsed,
 		&run.CapacityStopped,
