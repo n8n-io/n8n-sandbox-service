@@ -12,11 +12,15 @@
   },
   "packageRules": [
     {
+      "description": "Match the minimumReleaseAge in sdk/pnpm-workspace.yaml. Scoped to npm: the custom datasources publish no release timestamps, which minimumReleaseAge would hold back indefinitely.",
+      "matchDatasources": ["npm"],
+      "minimumReleaseAge": "2 days"
+    },
+    {
       "description": "The n8n assistant writes its own package.json into the workspace and runs npm install, which only finds nothing to do when the image has the same versions. Follow the SDK version of n8n's stable line, which is released almost daily, once a week.",
       "matchFileNames": ["sandbox-workspace/package.json"],
       "matchPackageNames": ["@n8n/workflow-sdk"],
       "followTag": "stable",
-      "minimumReleaseAge": "1 day",
       "schedule": ["* 0-6 * * 1"]
     },
     {
