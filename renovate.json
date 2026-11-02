@@ -12,11 +12,16 @@
   },
   "packageRules": [
     {
+      "description": "Match the minimumReleaseAge in sdk/pnpm-workspace.yaml. typescript and @types/node are excluded: this rule matches them before the rules below switch them to the custom datasources, which publish no release timestamps, so minimumReleaseAge would hold them back indefinitely. Lock file maintenance ignores minimumReleaseAge; sandbox-workspace/.npmrc enforces the same age in npm instead.",
+      "matchDatasources": ["npm"],
+      "matchPackageNames": ["!typescript", "!@types/node"],
+      "minimumReleaseAge": "2 days"
+    },
+    {
       "description": "The n8n assistant writes its own package.json into the workspace and runs npm install, which only finds nothing to do when the image has the same versions. Follow the SDK version of n8n's stable line, which is released almost daily, once a week.",
       "matchFileNames": ["sandbox-workspace/package.json"],
       "matchPackageNames": ["@n8n/workflow-sdk"],
       "followTag": "stable",
-      "minimumReleaseAge": "1 day",
       "schedule": ["* 0-6 * * 1"]
     },
     {
