@@ -89,8 +89,10 @@ RUN python3 -m venv venv \
     && mkdir -p .npm-global/bin
 
 RUN mkdir -p workspace/src workspace/chunks workspace/node-types
+# sandbox-workspace/.npmrc only governs how the lock file is resolved; drop it
+# so it does not apply to npm installs run inside the sandbox.
 COPY --chown=1000:1000 sandbox-workspace/ workspace/
-RUN cd workspace && npm ci --ignore-scripts
+RUN cd workspace && npm ci --ignore-scripts && rm .npmrc
 
 EXPOSE 8081
 
