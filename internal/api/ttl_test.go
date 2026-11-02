@@ -575,12 +575,19 @@ func TestIdleStopSweepIsolatesHangingRunner(t *testing.T) {
 
 	var hang atomic.Bool
 	hang.Store(true)
-	hanging := &fakeSandboxControl{stopHook: func(ctx context.Context) {
+	// Held until the first sweep is over, not until the call's context ends: a
+	// stop answered then could still reach a client that has not yet acted on
+	// its own deadline, and count as done.
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseAll := func() { releaseOnce.Do(func() { close(release) }) }
+	hanging := &fakeSandboxControl{stopHook: func(context.Context) {
 		if hang.Load() {
-			<-ctx.Done()
+			<-release
 		}
 	}}
 	hangingAddr := startFakeRunnerControl(t, hanging)
+	t.Cleanup(releaseAll) // before the server stops
 
 	s := newSweepStore(t)
 	cfg := idleSweepConfig()
@@ -617,6 +624,7 @@ func TestIdleStopSweepIsolatesHangingRunner(t *testing.T) {
 	}
 
 	hang.Store(false)
+	releaseAll()
 	stats = sweepIdleStopSandboxes(context.Background(), s, registry.New(45*time.Second), cfg, runnerControlTLS(cfg), now.Add(cfg.IdleSweepInterval))
 	if stats.acted != 2 || stats.failed != 0 {
 		t.Fatalf("retry stats = %+v, want the 2 abandoned stops to succeed", stats)
