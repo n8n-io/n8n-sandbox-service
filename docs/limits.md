@@ -78,7 +78,9 @@ Output arrives in pieces of at most 64 KiB; there is no limit on total output.
 | A started or woken sandbox's daemon to answer | 60 s |
 | `PUT`/`DELETE /admin/runners/{id}/cordon`, `GET /admin/scaler` | 10 s, 5 s |
 
-The API sets no deadline on its request-path database calls or on a runner's response headers, so a database or runner that hangs holds requests until their clients give up. Each API replica uses at most 25 database connections, 1 with SQLite, and a request waits for a free one.
+The API sets no deadline on its request-path database calls or on a runner's response headers, so a database or runner that hangs holds requests until their clients give up.
+
+Each API replica uses at most 25 database connections, 1 with SQLite, and a request waits for a free one. With Postgres it opens up to `SANDBOX_API_IDLE_SWEEP_CONCURRENCY` + 5 more (13 by default) for sandbox locks. A create that names an `id` and a `DELETE /sandboxes/{id}` each hold one until they finish, and a sweep holds up to `SANDBOX_API_IDLE_SWEEP_CONCURRENCY`, leaving 5 for requests on the sweeping replica; further ones wait. Size Postgres `max_connections` for both pools on every replica.
 
 ## Resources per sandbox
 
