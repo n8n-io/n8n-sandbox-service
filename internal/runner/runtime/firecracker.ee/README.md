@@ -20,7 +20,7 @@ Each sandbox slot gets its own network namespace:
 |-------|------|
 | TAP `fc-tap-0` | Virtio NIC; gateway `172.16.0.1`, guest `172.16.0.10` (baked into the snapshot) |
 | veth `fc-uplink` (netns) ↔ `fc-veth-{slot}` (host) | Routes guest traffic to the host routing table |
-| Host proxy `127.0.0.1:{port}` | Runner listens on the host, dials the guest daemon from inside the netns |
+| Host proxy `127.0.0.1:{port}` | Runner listens on the host, dials the guest daemon from inside the netns on an OS thread that is discarded afterwards |
 
 ```
 Guest 172.16.0.10 ── virtio ── TAP (172.16.0.1)
