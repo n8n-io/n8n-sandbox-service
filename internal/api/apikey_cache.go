@@ -63,7 +63,7 @@ func (c *apiKeyCache) lookup(keyHash string, load func() (string, error)) (strin
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		if c.gen == gen {
-			if len(c.byKeyHash) >= maxAPIKeyCacheEntries {
+			if _, refresh := c.byKeyHash[keyHash]; !refresh && len(c.byKeyHash) >= maxAPIKeyCacheEntries {
 				c.makeRoom(c.now())
 			}
 			c.byKeyHash[keyHash] = apiKeyCacheEntry{tenantID: tenantID, expires: started.Add(c.ttl)}

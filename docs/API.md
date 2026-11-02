@@ -945,7 +945,7 @@ Admin only. Mint an additional API key for the tenant. Returns plaintext `api_ke
 
 ### DELETE /admin/tenants/{id}/keys/{keyId}
 
-Admin only. Revoke an API key (`204`). The API replica that handles the revoke rejects the key from the next request on; the others within `SANDBOX_API_KEY_CACHE_TTL` (default `15s`). Exec streams that are already open keep running.
+Admin only. Revoke an API key (`204`). The API replica that handles the revoke rejects the key from the next request on; other replicas may still accept it for up to `SANDBOX_API_KEY_CACHE_TTL` (default `15s`). Exec streams that are already open keep running.
 
 ---
 

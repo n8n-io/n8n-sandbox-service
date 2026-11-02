@@ -377,10 +377,11 @@ caller can learn that an ID is taken. This is deliberate, so that a client can
 reconnect to its own deterministic IDs. Since IDs are UUIDs, it confirms an ID
 the caller already holds and does not help discover new ones.
 
-**A revoked tenant key keeps working on other API replicas for up to
-`SANDBOX_API_KEY_CACHE_TTL`** (default `15s`), and open exec streams survive
-the revoke. To contain a leaked key, revoke it, wait out that TTL, then delete
-the tenant's sandboxes.
+**A revoked tenant key, or the key of a deleted tenant, keeps working on other
+API replicas for up to `SANDBOX_API_KEY_CACHE_TTL`** (default `15s`), and open
+exec streams survive the revoke. To contain a leaked key, revoke it and retry
+until that returns `204` (after an error the key may still be valid on every
+replica), wait out that TTL, then delete the tenant's sandboxes.
 
 **A burst of creates spread over API pods briefly exceeds a tenant's quota on
 runners.** Before the runner call, each API pod counts a tenant's creates in

@@ -199,6 +199,36 @@ func TestAPIKeyCacheMakesRoomWhenFull(t *testing.T) {
 	}
 }
 
+// Reloading an expired key in a full cache replaces its entry and drops no
+// other one.
+func TestAPIKeyCacheRefreshInAFullCacheKeepsTheOthers(t *testing.T) {
+	c, advance := newTestAPIKeyCache(t, time.Minute)
+	known, _ := countingLoad("tenant-a", nil)
+	if _, err := c.lookup("known", known); err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	advance(time.Minute)
+	unknown, _ := countingLoad("", nil)
+	for i := range maxAPIKeyCacheEntries - 1 {
+		if _, err := c.lookup(fmt.Sprintf("live-%d", i), unknown); err != nil {
+			t.Fatalf("lookup: %v", err)
+		}
+	}
+
+	again, loads := countingLoad("tenant-a", nil)
+	if got, _ := c.lookup("known", again); got != "tenant-a" || *loads != 1 {
+		t.Fatalf("expired key: %q loads=%d, want tenant-a from a fresh load", got, *loads)
+	}
+	if n := len(c.byKeyHash); n != maxAPIKeyCacheEntries {
+		t.Fatalf("entries after the refresh = %d, want %d", n, maxAPIKeyCacheEntries)
+	}
+	live, liveLoads := countingLoad("", nil)
+	_, _ = c.lookup("live-0", live)
+	if *liveLoads != 0 {
+		t.Fatal("a live entry was dropped by the refresh")
+	}
+}
+
 // A lookup that starts after a revoke must not wait for, and share the answer
 // of, one that started before it.
 func TestAPIKeyCacheLookupAfterInvalidationDoesNotJoinAnEarlierOne(t *testing.T) {

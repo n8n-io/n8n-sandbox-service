@@ -196,7 +196,7 @@ The report is spent by the first request that wakes the sandbox, so `DELETE /san
 
 ### Tenant key cache
 
-Each API replica remembers tenant key lookups, unknown keys included, for `SANDBOX_API_KEY_CACHE_TTL` (15 s), keyed by the key's SHA-256 hash. Revoking a key or deleting its tenant clears it on that replica at once, also when another replica already deleted the tenant; other replicas accept it until their entry expires. Concurrent lookups of one key share one query, and errors are not cached. At 10,000 entries the cache drops the expired ones, or all of them when that frees less than a quarter.
+Each API replica remembers tenant key lookups, unknown keys included, for `SANDBOX_API_KEY_CACHE_TTL` (15 s), keyed by the key's SHA-256 hash. Revoking a key or deleting its tenant clears it on that replica at once, also when another replica already deleted the tenant; other replicas accept it until their entry expires. Concurrent lookups of one key share one query, and errors are not cached. At 10,000 entries the cache drops the expired ones, or all of them when that frees less than a quarter. `SANDBOX_API_KEY_CACHE_TTL=0` turns all of this off: every request reads the store.
 
 ## Security Model
 
