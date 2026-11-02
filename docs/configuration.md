@@ -42,7 +42,6 @@ All services are configured via environment variables.
 | `SANDBOX_API_IDLE_DELETE_AFTER` | `24h` | Idle time after which the sweeper deletes a sandbox; wakes are refused past this window. `0` disables |
 | `SANDBOX_API_ACTIVITY_WRITE_INTERVAL` | `30s` | How often, at most, each replica writes a sandbox's `last_active_at` (`1s`–`5m`; [how](architecture.md#sandbox-activity)). Longer means fewer database writes, and idle stops and deletes that act up to twice that plus 5s later |
 | `SANDBOX_API_MAX_RESPONSE_ACTIVITY` | `30m` | How long a response that is still open, such as an exec stream, keeps its sandbox from going idle (at least `1m`). Keep it at least `SANDBOX_RUNNER_MAX_EXEC_TIMEOUT` |
-| `SANDBOX_API_KEY_CACHE_TTL` | `15s` | How long each replica remembers a tenant key lookup (`0`–`1m`, `0` = no cache). A revoked key still works on other replicas for up to this long |
 | `SANDBOX_API_IDLE_DELETE_SAFETY_BUFFER` | `1m` | Added to a sandbox's idle window before deletion as a race guard (applied when either window above is > 0) |
 | `SANDBOX_API_IDLE_SWEEP_INTERVAL` | `1m` | How often the idle sweeper runs |
 | `SANDBOX_API_IDLE_SWEEP_CONCURRENCY` | `8` | Runner stop/delete calls one sweep keeps in flight (1–16), spread across runners. With Postgres the sandbox-lock pool is this plus 5 |

@@ -34,8 +34,6 @@ const (
 	maxActivityWriteInterval     = 5 * time.Minute
 	DefaultMaxResponseActivity   = 30 * time.Minute
 	minMaxResponseActivity       = time.Minute
-	defaultAPIKeyCacheTTL        = 15 * time.Second
-	maxAPIKeyCacheTTL            = time.Minute
 )
 
 const (
@@ -178,12 +176,6 @@ type APIConfig struct {
 	// (at least 1m, default 30m).
 	MaxResponseActivity time.Duration
 
-	// APIKeyCacheTTL is how long each API pod remembers a tenant key lookup,
-	// unknown keys included, so a revoked key keeps working on other pods for
-	// up to this long (docs/architecture.md, "Tenant key cache"). Parsed from
-	// SANDBOX_API_KEY_CACHE_TTL (0–1m, default 15s; 0 = no cache).
-	APIKeyCacheTTL time.Duration
-
 	// LogLevel controls the minimum log severity.
 	// Parsed from SANDBOX_API_LOG_LEVEL (default info).
 	LogLevel slog.Level
@@ -217,7 +209,6 @@ func LoadAPI() (*APIConfig, error) {
 		IdleDeleteAfter:       defaultIdleDeleteAfter,
 		ActivityWriteInterval: DefaultActivityWriteInterval,
 		MaxResponseActivity:   DefaultMaxResponseActivity,
-		APIKeyCacheTTL:        defaultAPIKeyCacheTTL,
 		LogLevel:              defaultLogLevel,
 	}
 
@@ -455,14 +446,6 @@ func LoadAPI() (*APIConfig, error) {
 			return nil, fmt.Errorf("SANDBOX_API_MAX_RESPONSE_ACTIVITY must be a duration of at least %s, got %q", minMaxResponseActivity, v)
 		}
 		cfg.MaxResponseActivity = d
-	}
-
-	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_KEY_CACHE_TTL")); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil || d < 0 || d > maxAPIKeyCacheTTL {
-			return nil, fmt.Errorf("SANDBOX_API_KEY_CACHE_TTL must be 0 or a duration up to %s, got %q", maxAPIKeyCacheTTL, v)
-		}
-		cfg.APIKeyCacheTTL = d
 	}
 
 	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_STORE")); v != "" {

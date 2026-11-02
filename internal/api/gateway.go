@@ -27,7 +27,6 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 		return nil, err
 	}
 	sandboxProxy := sandboxProxyHandler(s, cfg, runnerTransport, activity)
-	keys := newAPIKeyCache(cfg.APIKeyCacheTTL)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -61,10 +60,10 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	mux.HandleFunc("POST /admin/tenants", handleCreateTenant(s, cfg))
 	mux.HandleFunc("GET /admin/tenants/{id}", handleGetTenant(s))
 	mux.HandleFunc("PATCH /admin/tenants/{id}", handleUpdateTenant(s, cfg))
-	mux.HandleFunc("DELETE /admin/tenants/{id}", handleDeleteTenant(s, keys))
+	mux.HandleFunc("DELETE /admin/tenants/{id}", handleDeleteTenant(s))
 	mux.HandleFunc("GET /admin/tenants/{id}/keys", handleListTenantKeys(s))
 	mux.HandleFunc("POST /admin/tenants/{id}/keys", handleCreateTenantKey(s))
-	mux.HandleFunc("DELETE /admin/tenants/{id}/keys/{keyId}", handleRevokeTenantKey(s, keys))
+	mux.HandleFunc("DELETE /admin/tenants/{id}/keys/{keyId}", handleRevokeTenantKey(s))
 	mux.HandleFunc("GET /admin/scaler", handleGetScaler(cfg))
 	mux.HandleFunc("GET /admin/runners", handleListRunners(reg))
 	mux.HandleFunc("PUT /admin/runners/{id}/cordon", handleSetRunnerCordon(reg, cfg, true))
@@ -87,7 +86,7 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	if rec.Enabled() {
 		handler = metrics.HTTPMiddleware(rec)(handler)
 	}
-	handler = AuthMiddleware(cfg.APIKeys, cfg.ProvisionerKeys, cfg.ScalerKeys, s, keys)(handler)
+	handler = AuthMiddleware(cfg.APIKeys, cfg.ProvisionerKeys, cfg.ScalerKeys, s)(handler)
 	handler = publicPaths.RejectOtherMethods(handler)
 	handler = LoggingMiddleware(handler)
 	if cfg.EnableCORS {

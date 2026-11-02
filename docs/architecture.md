@@ -91,7 +91,6 @@ The API gateway is the single public-facing service. It exposes a REST API for s
 | Sweeper lock | `internal/api/store/postgres.go` | Postgres advisory lock for idle sweeper leadership |
 | Idle sweeper | `internal/api/ttl.go` | Periodic scan to stop/delete idle sandboxes (ephemeral ones are deleted, never stopped), bounded concurrency with per-call runner deadlines |
 | Activity recorder | `internal/api/activity.go` | Writes `last_active_at` in the background ([Sandbox activity](#sandbox-activity)) |
-| Key cache | `internal/api/apikey_cache.go` | Per-replica cache of tenant key lookups ([Tenant key cache](#tenant-key-cache)) |
 | Config | `internal/api/config/` | Environment variable parsing and validation |
 
 **Middleware chain:** Recovery → CORS (optional) → Logging → Auth (API key) → Metrics (optional)
@@ -211,10 +210,6 @@ The idle sweeper stops and deletes sandboxes by `last_active_at`. Writing it on 
 Writes never delay a response, at most four run at once per replica, and each times out 5 s after it starts.
 
 **Why the idle windows grow by `2T + 5 s` (65 s):** a request can skip its write because the row is up to `T` old, and its response can then stream for up to another `T` before the next write, which takes up to 5 s. So `last_active_at` trails the last use by at most that much, and the sweeper and the `404` fence wait that much longer, so nothing is stopped or deleted earlier than configured. This holds while the database keeps up: a failed write is retried only at the next `T`, and a write that waits for one of the four writers sends the latest request time once it runs.
-
-### Tenant key cache
-
-Each API replica remembers tenant key lookups, unknown keys included, for `SANDBOX_API_KEY_CACHE_TTL` (15 s), keyed by the key's SHA-256 hash. Revoking a key or deleting its tenant clears it on that replica at once; other replicas accept it until their entry expires. Concurrent lookups of one key share one query, errors are not cached, and the cache starts over when it holds 10,000 entries.
 
 ## Security Model
 
