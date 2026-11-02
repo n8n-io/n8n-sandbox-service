@@ -4,8 +4,6 @@ package firecracker
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"net"
 	"os"
 	"runtime"
@@ -13,9 +11,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// dialContextInNetNS temporarily moves the current OS thread into netnsPath,
-// dials the guest address from there, and restores the original namespace.
-// The thread is locked because Linux network namespaces are thread-local.
+// dialContextInNetNS dials the guest address from inside netnsPath on an OS
+// thread of its own, because Linux network namespaces are thread-local.
 func dialContextInNetNS(ctx context.Context, netnsPath string, network string, address string) (net.Conn, error) {
 	resultCh := make(chan netnsDialResult, 1)
 	go func() {
@@ -32,10 +29,13 @@ type netnsDialResult struct {
 	err  error
 }
 
-// Run namespace switching on one locked OS thread because Linux network
-// namespaces are thread-local, not goroutine-local.
-func dialContextInNetNSOnLockedThread(ctx context.Context, netnsPath string, network string, address string) (conn net.Conn, err error) {
-	current, err := os.Open("/proc/self/ns/net")
+// The thread stays locked, so Go ends it with the goroutine rather than reuse
+// it in a sandbox namespace.
+func dialContextInNetNSOnLockedThread(ctx context.Context, netnsPath string, network string, address string) (net.Conn, error) {
+	runtime.LockOSThread()
+
+	// Not /proc/self, which is the main thread.
+	current, err := os.Open("/proc/thread-self/ns/net")
 	if err != nil {
 		return nil, err
 	}
@@ -47,27 +47,11 @@ func dialContextInNetNSOnLockedThread(ctx context.Context, netnsPath string, net
 	}
 	defer target.Close()
 
-	runtime.LockOSThread()
-	unlockThread := true
-	defer func() {
-		if unlockThread {
-			runtime.UnlockOSThread()
-		}
-	}()
-
 	if err := unix.Setns(int(target.Fd()), unix.CLONE_NEWNET); err != nil {
 		return nil, err
 	}
-	defer func() {
-		if restoreErr := unix.Setns(int(current.Fd()), unix.CLONE_NEWNET); restoreErr != nil {
-			unlockThread = false
-			if conn != nil {
-				_ = conn.Close()
-				conn = nil
-			}
-			err = errors.Join(err, fmt.Errorf("restore network namespace: %w", restoreErr))
-		}
-	}()
+	// Go parks the main thread instead of ending it, so switch back.
+	defer unix.Setns(int(current.Fd()), unix.CLONE_NEWNET)
 
 	var dialer net.Dialer
 	return dialer.DialContext(ctx, network, address)
