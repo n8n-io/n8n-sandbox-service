@@ -251,9 +251,10 @@ func TestActivityRecorderRunWritesOnTickOnRequestAndOnStop(t *testing.T) {
 
 // After a failed write, Run waits for the next tick instead of writing again
 // for every wake, so a database that refuses writes is not asked once per
-// request.
+// request. Once a write succeeds, wakes write at once again.
 func TestActivityRecorderRunRetriesAFailedWriteAtTheNextTickOnly(t *testing.T) {
-	a, s, _ := newTestActivityRecorder(t, &config.APIConfig{ActivityWriteInterval: time.Hour})
+	const interval = time.Second
+	a, s, _ := newTestActivityRecorder(t, &config.APIConfig{ActivityWriteInterval: interval})
 	s.setFail(errors.New("database is read-only"))
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -274,6 +275,21 @@ func TestActivityRecorderRunRetriesAFailedWriteAtTheNextTickOnly(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	if n := s.count(); n != 1 {
 		t.Fatalf("writes after a failed one = %d, want 1 until the next tick", n)
+	}
+
+	s.setFail(nil)
+	waitFor(t, "the tick to retry", func() bool { return s.count() == 2 })
+	if retry := s.drain()[1]; len(retry) != 21 {
+		t.Fatalf("retry wrote %d sandboxes, want all 21", len(retry))
+	}
+
+	a.trackResponse(row("after", "stopped", t0))()
+	deadline := time.Now().Add(interval / 2)
+	for s.count() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("a wake after a successful write waited for the tick")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 

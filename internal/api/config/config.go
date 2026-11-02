@@ -165,9 +165,10 @@ type APIConfig struct {
 	// sweeper removes its orphaned sandbox rows from the store.
 	OrphanReapBuffer time.Duration
 	// ActivityWriteInterval is how often each API pod writes the
-	// last_active_at of the sandboxes it served, in one statement. The idle
-	// windows are extended by twice this, because last_active_at can trail the
-	// last request by that much (docs/architecture.md, "Sandbox activity").
+	// last_active_at of the sandboxes it served, in one statement.
+	// last_active_at can trail the last request by twice this, so the stop
+	// window and the request-path fence are extended by twice this, and deletes
+	// by four times (docs/architecture.md, "Sandbox activity").
 	// Parsed from SANDBOX_API_ACTIVITY_WRITE_INTERVAL (1s–1m, default 5s).
 	ActivityWriteInterval time.Duration
 	// MaxResponseActivity is how long a response that is still open, such as an

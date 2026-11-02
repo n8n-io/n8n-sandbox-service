@@ -81,19 +81,21 @@ func NewActivityRecorder(s store.SandboxStore, cfg *config.APIConfig) *ActivityR
 func (a *ActivityRecorder) Run(ctx context.Context) {
 	ticker := time.NewTicker(a.interval)
 	defer ticker.Stop()
-	failed := false
+	writeNow := a.writeNow
 	for {
 		select {
 		case <-ctx.Done():
 			a.write()
 			return
 		case <-ticker.C:
-		case <-a.writeNow:
-			if failed {
-				continue // retried at the next tick, not once per request
-			}
+		case <-writeNow:
 		}
-		failed = !a.write()
+		if a.write() {
+			writeNow = a.writeNow
+		} else {
+			// Retried at the next tick, not once per request.
+			writeNow = nil
+		}
 	}
 }
 
