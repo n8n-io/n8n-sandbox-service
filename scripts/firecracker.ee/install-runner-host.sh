@@ -111,7 +111,7 @@ EOF
 	update-initramfs -u
 }
 
-# Fails (exit 3) if live kvm_* nested is still Y|1; exit 1 if no vendor module is loaded.
+# Require nested=N|0; exit 3 for Y|1 (reboot), else 1 if missing/unexpected.
 check_nested_kvm_disabled() {
 	local vendor value found=0
 	for vendor in kvm_intel kvm_amd; do
@@ -120,11 +120,15 @@ check_nested_kvm_disabled() {
 		fi
 		found=1
 		value="$(cat "/sys/module/${vendor}/parameters/nested")"
+		if [[ "$value" =~ ^(N|0)$ ]]; then
+			continue
+		fi
+		echo "ERROR: nested virtualization is not off on ${vendor} (nested=${value}); it must be N or 0 so sandboxes cannot run a hypervisor." >&2
 		if [[ "$value" =~ ^(Y|1)$ ]]; then
-			echo "ERROR: nested virtualization is enabled on ${vendor} (nested=${value}); it must be off so sandboxes cannot run a hypervisor." >&2
 			echo "${KVM_MODPROBE_CONF} is written; reboot required, then re-run this script." >&2
 			exit "$EXIT_REBOOT_REQUIRED"
 		fi
+		exit 1
 	done
 	if [[ "$found" -eq 0 ]]; then
 		echo "ERROR: neither kvm_intel nor kvm_amd is loaded; cannot verify nested virtualization is off." >&2

@@ -96,6 +96,11 @@ kvm_in_use_for_nested_reload() {
 	return 1
 }
 
+# Best-effort nested=0 conf before reboot errors; ignore persist failures.
+persist_nested_kvm_conf() {
+	sudo bash "${SCRIPT_DIR}/install-runner-host.sh" --persist-nested-kvm-conf || true
+}
+
 # Reloads kvm_intel/amd with nested=0 when safe; refuses if KVM is in use (reboot instead).
 disable_nested_kvm() {
 	local vendor value
