@@ -2,8 +2,6 @@
 
 All endpoints except `/healthz` and `/metrics` require the `X-Api-Key` header for authentication. `/metrics` is only exposed when `SANDBOX_API_METRICS_ENABLED=true` and is intended to be scraped over a private network; `SANDBOX_API_METRICS_LISTEN_ADDR` can move it to a port of its own, off the port that serves this API.
 
-Every limit — requests in progress, quotas, sizes, timeouts, idle windows — is in [limits.md](limits.md).
-
 ### API keys and tenants
 
 There are four key classes:
