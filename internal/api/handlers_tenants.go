@@ -253,7 +253,7 @@ func handleUpdateTenant(s store.SandboxStore, cfg *config.APIConfig) http.Handle
 }
 
 // handleDeleteTenant is safe for provisioners because of the 409 below.
-func handleDeleteTenant(s store.SandboxStore) http.HandlerFunc {
+func handleDeleteTenant(s store.SandboxStore, keyCache *apiKeyCache) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := requireAdminOrProvisioner(w, r); !ok {
 			return
@@ -269,10 +269,15 @@ func handleDeleteTenant(s store.SandboxStore) http.HandlerFunc {
 			return
 		}
 		if t == nil {
+			// Deleted on another replica, maybe: this one may still remember its keys.
+			keyCache.invalidateTenant(id)
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		if err := s.DeleteTenant(id); err != nil {
+		err = s.DeleteTenant(id)
+		// Even on an error: the delete may have committed anyway.
+		keyCache.invalidateTenant(id)
+		if err != nil {
 			if errors.Is(err, store.ErrTenantHasSandboxes) {
 				writeError(w, http.StatusConflict, "tenant has sandboxes; delete them first")
 				return
@@ -344,7 +349,7 @@ func handleCreateTenantKey(s store.SandboxStore) http.HandlerFunc {
 	}
 }
 
-func handleRevokeTenantKey(s store.SandboxStore) http.HandlerFunc {
+func handleRevokeTenantKey(s store.SandboxStore, keyCache *apiKeyCache) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !requireAdmin(w, r) {
 			return
@@ -364,7 +369,10 @@ func handleRevokeTenantKey(s store.SandboxStore) http.HandlerFunc {
 			writeError(w, http.StatusNotFound, "api key not found")
 			return
 		}
-		if err := s.RevokeAPIKey(keyID); err != nil {
+		err = s.RevokeAPIKey(keyID)
+		// Even on an error: the revoke may have committed anyway.
+		keyCache.invalidate(k.KeyHash)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}

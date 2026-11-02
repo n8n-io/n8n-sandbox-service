@@ -33,7 +33,7 @@ Requests carry an `X-Api-Key` header. There are four key classes:
 - Tenant keys, minted by an admin or returned on tenant create, stored only as
   a SHA-256 hash alongside an 8-character lookup prefix, so a database read
   does not yield usable credentials. Revocation sets `revoked_at`, which the
-  lookup query filters on.
+  lookup query filters on, after a short cache (see the non-guarantees).
 
 ### Provisioner keys
 
@@ -376,6 +376,11 @@ that already belongs to another tenant returns `409` rather than `404`, so a
 caller can learn that an ID is taken. This is deliberate, so that a client can
 reconnect to its own deterministic IDs. Since IDs are UUIDs, it confirms an ID
 the caller already holds and does not help discover new ones.
+
+**A revoked tenant key keeps working on other API replicas for up to
+`SANDBOX_API_KEY_CACHE_TTL`** (default `15s`), and open exec streams survive
+the revoke. To contain a leaked key, revoke it, wait out that TTL, then delete
+the tenant's sandboxes.
 
 **A burst of creates spread over API pods briefly exceeds a tenant's quota on
 runners.** Before the runner call, each API pod counts a tenant's creates in
