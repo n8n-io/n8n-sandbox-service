@@ -19,6 +19,7 @@ FIRECRACKER_RELEASE_BIN="${FIRECRACKER_RELEASE_BIN:-${SCRIPT_DIR}/firecracker-re
 
 SKIP_PACKAGES=0
 SKIP_FIRECRACKER=0
+PERSIST_NESTED_KVM_CONF_ONLY=0
 
 usage() {
 	cat >&2 <<EOF
@@ -31,8 +32,8 @@ Options:
   --skip-packages           Skip apt package install
   --skip-firecracker        Skip Firecracker/jailer install
   --download-ci-assets      Download the Firecracker CI vmlinux pinned in firecracker-ci-assets.sh into FIRECRACKER_CI_ASSETS_DIR
+  --persist-nested-kvm-conf Only write the nested=0 modprobe conf and update the initramfs, then exit
   -h, --help                Show this help
-
 
 Environment:
   FIRECRACKER_VERSION           Firecracker release tag (default: pinned in firecracker-release.sh)
@@ -98,20 +99,16 @@ KVM_MODPROBE_CONF=/etc/modprobe.d/n8n-sandbox-kvm.conf
 EXIT_REBOOT_REQUIRED=3
 
 configure_nested_kvm_disabled() {
-	local vendor value pending=0
 	echo "==> Disabling nested KVM..."
+	if ! command -v update-initramfs >/dev/null 2>&1; then
+		echo "ERROR: update-initramfs not found; needed so nested=0 survives a reboot when kvm loads from the initramfs." >&2
+		exit 1
+	fi
 	cat >"$KVM_MODPROBE_CONF" <<'EOF'
 options kvm_intel nested=0
 options kvm_amd nested=0
 EOF
-	for vendor in kvm_intel kvm_amd; do
-		[[ -r "/sys/module/${vendor}/parameters/nested" ]] || continue
-		value="$(cat "/sys/module/${vendor}/parameters/nested")"
-		[[ "$value" =~ ^(Y|1)$ ]] && pending=1
-	done
-	if [[ "$pending" -eq 1 && -d /sys/module/kvm ]] && command -v update-initramfs >/dev/null 2>&1; then
-		update-initramfs -u
-	fi
+	update-initramfs -u
 }
 
 # Fails (exit 3) if live kvm_* nested is still Y|1; exit 1 if no vendor module is loaded.
@@ -178,6 +175,10 @@ while [[ $# -gt 0 ]]; do
 		DOWNLOAD_FIRECRACKER_CI_ASSETS=1
 		shift
 		;;
+	--persist-nested-kvm-conf)
+		PERSIST_NESTED_KVM_CONF_ONLY=1
+		shift
+		;;
 	-h | --help)
 		usage
 		exit 0
@@ -195,6 +196,11 @@ require_root
 if [[ "$(uname -m)" != "x86_64" ]]; then
 	echo "ERROR: Firecracker runner host setup supports amd64/x86_64 only; got $(uname -m)" >&2
 	exit 1
+fi
+
+if [[ "$PERSIST_NESTED_KVM_CONF_ONLY" -eq 1 ]]; then
+	configure_nested_kvm_disabled
+	exit 0
 fi
 
 if [[ "$SKIP_PACKAGES" -eq 0 ]]; then

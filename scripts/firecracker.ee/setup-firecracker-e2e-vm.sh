@@ -104,15 +104,18 @@ disable_nested_kvm() {
 		value="$(cat "/sys/module/${vendor}/parameters/nested")"
 		[[ "$value" =~ ^(Y|1)$ ]] || continue
 		if kvm_in_use_for_nested_reload; then
+			persist_nested_kvm_conf
 			echo "ERROR: ${vendor} has nested=${value} but Firecracker, jailer, or a sandbox runner is using KVM, or that could not be checked; not reloading. Reboot this host instead of re-running setup." >&2
 			exit 1
 		fi
 		echo "==> Reloading ${vendor} with nested=0..."
 		if ! sudo modprobe -r "$vendor"; then
+			persist_nested_kvm_conf
 			echo "ERROR: failed to unload ${vendor} (nested=${value}); reboot this host instead of re-running setup." >&2
 			exit 1
 		fi
 		if ! sudo modprobe "$vendor" nested=0; then
+			persist_nested_kvm_conf
 			echo "ERROR: failed to reload ${vendor} with nested=0; reboot this host instead of re-running setup." >&2
 			exit 1
 		fi
