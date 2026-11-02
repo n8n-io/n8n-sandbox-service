@@ -38,7 +38,7 @@ export async function writeFiles(
   files: Array<{ path: string; content: FileContent }>,
 ): Promise<void> {
   // Archive paths are relative, so the archive is unpacked into "/".
-  const archive = gzipTar(
+  const archive = await gzipTar(
     files.map(({ path, content }) => ({
       path: path.replace(/^\/+/, ""),
       content: asBuffer(content),

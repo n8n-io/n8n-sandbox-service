@@ -153,13 +153,17 @@ func TestHandleFileArchiveWritesFiles(t *testing.T) {
 			if got := readString(t, filepath.Join(target, "x.txt")); got != "new" {
 				t.Fatalf("existing file not overwritten: %q", got)
 			}
-			if fi, err := os.Stat(filepath.Join(target, "x.txt")); err != nil || fi.Mode().Perm() != 0o600 {
-				t.Fatalf("existing file should keep its mode 0600, got %v (err %v)", fi.Mode(), err)
+			fi, err := os.Stat(filepath.Join(target, "x.txt"))
+			if err != nil {
+				t.Fatalf("stat existing file: %v", err)
+			}
+			if fi.Mode().Perm() != 0o600 {
+				t.Fatalf("existing file should keep its mode 0600, got %v", fi.Mode().Perm())
 			}
 			if got := readString(t, filepath.Join(target, "deep", "nested", "y.txt")); got != "yy" {
 				t.Fatalf("nested file: %q", got)
 			}
-			fi, err := os.Stat(filepath.Join(target, "deep", "nested", "y.txt"))
+			fi, err = os.Stat(filepath.Join(target, "deep", "nested", "y.txt"))
 			if err != nil {
 				t.Fatalf("stat nested file: %v", err)
 			}

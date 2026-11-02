@@ -1,4 +1,7 @@
-import { gzipSync } from "node:zlib";
+import { promisify } from "node:util";
+import { gzip } from "node:zlib";
+
+const gzipAsync = promisify(gzip);
 
 const BLOCK_SIZE = 512;
 const USTAR_NAME_BYTES = 100;
@@ -7,7 +10,7 @@ const USTAR_NAME_BYTES = 100;
  * Builds a gzip-compressed tar archive of regular files. A path longer than the
  * 100 bytes a ustar header holds is carried in a pax extended header.
  */
-export function gzipTar(files: Array<{ path: string; content: Buffer }>): Buffer {
+export async function gzipTar(files: Array<{ path: string; content: Buffer }>): Promise<Buffer> {
   const blocks: Buffer[] = [];
   for (const { path, content } of files) {
     // A ustar name ends at the first NUL, which would write a shorter path.
@@ -20,7 +23,7 @@ export function gzipTar(files: Array<{ path: string; content: Buffer }>): Buffer
     blocks.push(...tarEntry(path, "0", content));
   }
   blocks.push(Buffer.alloc(2 * BLOCK_SIZE));
-  return gzipSync(Buffer.concat(blocks));
+  return gzipAsync(Buffer.concat(blocks));
 }
 
 function tarEntry(name: string, typeflag: string, content: Buffer): Buffer[] {

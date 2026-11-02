@@ -76,7 +76,7 @@ describe("gzipTar", () => {
   });
 
   // The system tar is an implementation independent of this one.
-  it("builds an archive the system tar unpacks", () => {
+  it("builds an archive the system tar unpacks", async () => {
     dir = mkdtempSync(join(tmpdir(), "sdk-tar-"));
     const longPath = `${"long-directory-name/".repeat(8)}ünïcode-file.txt`;
     const files = [
@@ -87,7 +87,7 @@ describe("gzipTar", () => {
     ];
     expect(Buffer.byteLength(longPath)).toBeGreaterThan(100);
 
-    execFileSync("tar", ["-xzf", "-", "-C", dir], { input: gzipTar(files) });
+    execFileSync("tar", ["-xzf", "-", "-C", dir], { input: await gzipTar(files) });
 
     for (const { path, content } of files) {
       expect(readFileSync(join(dir, path)).equals(content), path).toBe(true);
@@ -98,33 +98,35 @@ describe("gzipTar", () => {
     { name: "exactly 100 bytes, no pax header", path: pathOfLength(100) },
     { name: "101 bytes, the first with a pax header", path: pathOfLength(101) },
     { name: "a character cut at byte 100", path: `${"a".repeat(99)}ü/file.txt` },
-  ])("keeps a path of $name", ({ path }) => {
+  ])("keeps a path of $name", async ({ path }) => {
     const files = [{ path, content: Buffer.from("x") }];
 
-    expect(readArchive(gzipTar(files))).toEqual(files);
+    expect(readArchive(await gzipTar(files))).toEqual(files);
   });
 
   // A pax record is " path=<value>\n" (7 bytes plus the path) behind its own
   // length, so these put the length on and around a change in its digit count.
   it.each([996, 997, 998, 9995, 9996])(
     "writes a pax record whose length counts its own digits (%i bytes after the length)",
-    (restBytes) => {
+    async (restBytes) => {
       const files = [{ path: pathOfLength(restBytes - 7), content: Buffer.from("x") }];
 
-      expect(readArchive(gzipTar(files))).toEqual(files);
+      expect(readArchive(await gzipTar(files))).toEqual(files);
     },
   );
 
-  it("sizes entries in bytes", () => {
+  it("sizes entries in bytes", async () => {
     const files = [
       { path: "multibyte.txt", content: Buffer.from("héllo ✓", "utf-8") },
       { path: "after.txt", content: Buffer.from("after") },
     ];
 
-    expect(readArchive(gzipTar(files))).toEqual(files);
+    expect(readArchive(await gzipTar(files))).toEqual(files);
   });
 
-  it("refuses a path with a NUL byte instead of cutting it short", () => {
-    expect(() => gzipTar([{ path: "x.sh\0.txt", content: Buffer.from("x") }])).toThrow(/NUL byte/);
+  it("refuses a path with a NUL byte instead of cutting it short", async () => {
+    await expect(gzipTar([{ path: "x.sh\0.txt", content: Buffer.from("x") }])).rejects.toThrow(
+      /NUL byte/,
+    );
   });
 });
