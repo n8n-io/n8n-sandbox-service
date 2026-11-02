@@ -50,7 +50,7 @@ func dialContextInNetNSOnLockedThread(ctx context.Context, netnsPath string, net
 	if err := unix.Setns(int(target.Fd()), unix.CLONE_NEWNET); err != nil {
 		return nil, err
 	}
-	// Go parks the main thread instead of ending it, so switch back.
+	// If this is the main thread, Go parks it instead of ending it, so switch back.
 	defer unix.Setns(int(current.Fd()), unix.CLONE_NEWNET)
 
 	var dialer net.Dialer
