@@ -46,7 +46,7 @@ Exec and file requests the sandbox served count as use, `GET /sandboxes/{id}` do
 | --- | --- | --- | --- |
 | Run time of a command | 5 min | `timeout_ms` | the command is killed; the `exit` event has `timed_out: true` |
 | Largest `timeout_ms` | 15 min | `SANDBOX_RUNNER_MAX_EXEC_TIMEOUT`, `0` = no limit | `400` |
-| Commands per sandbox | no limit | | bounded by the requests in progress and the sandbox's processes and memory |
+| Commands per sandbox | no limit | | a command outlives its stream, so the requests in progress do not cap them; until they exit or time out they share the sandbox's processes and memory, which also holds their kept output |
 | Output kept per execution | 16 MiB | `SANDBOX_EXEC_MAX_EVENT_BYTES` | the oldest events are dropped; asking for them gets `410`, and a stream that falls that far behind ends without `exit` |
 | How long a finished execution is kept | 10 min, checked every minute | `SANDBOX_EXEC_RETAIN` | `GET` answers `404`; a `POST` with the same `exec_id` runs the command again |
 | Cancelling with `DELETE` | 10 s | fixed | `503` |
@@ -72,13 +72,13 @@ Output arrives in pieces of at most 64 KiB; there is no limit on total output.
 | Sending the request headers (API, runner and daemon) | 10 s |
 | Sending the whole request, so also an upload | 30 s |
 | An idle keep-alive connection | 120 s |
-| A response, including a stream | no limit |
+| A response, including a stream | no limit; 30 s on the API's dedicated metrics listener |
 | Creating a sandbox | 3 min on the runner; the API waits up to 4 min and finishes the create even if the client has gone |
 | Stopping, waking or deleting a sandbox on the runner | 2 min; the sweeper waits up to 3 min |
 | A started or woken sandbox's daemon to answer | 60 s |
 | `PUT`/`DELETE /admin/runners/{id}/cordon`, `GET /admin/scaler` | 10 s, 5 s |
 
-The API sets no deadline on its request-path database calls or on a runner's response headers, so a database or runner that hangs holds requests until their clients give up.
+The API sets no deadline on its request-path database calls or on a runner's response headers, so a database or runner that hangs holds requests until their clients give up. Each API replica uses at most 25 database connections, 1 with SQLite, and a request waits for a free one.
 
 ## Resources per sandbox
 
