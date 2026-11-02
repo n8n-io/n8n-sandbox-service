@@ -306,6 +306,25 @@ describe("SandboxClient", () => {
     expect(tar.subarray(1536, 1537).toString()).toBe("b");
   });
 
+  it.each([
+    { kind: "multibyte string", content: "héllo ✓", bytes: Buffer.from("héllo ✓", "utf-8") },
+    {
+      kind: "Uint8Array",
+      content: new Uint8Array([0, 1, 2, 255]),
+      bytes: Buffer.from([0, 1, 2, 255]),
+    },
+  ])("writeFiles archives $kind content as its bytes", async ({ content, bytes }) => {
+    const mock = getMockHttp(client);
+    mock.requestVoid.mockResolvedValue(undefined);
+
+    await client.writeFiles("abc", [{ path: "/f", content }]);
+
+    const tar = gunzipSync(mock.requestVoid.mock.calls[0][2].data);
+    const size = parseInt(tar.subarray(124, 136).toString().split("\0")[0], 8);
+    expect(size).toBe(bytes.length);
+    expect(tar.subarray(512, 512 + size).equals(bytes)).toBe(true);
+  });
+
   it("listFiles sends GET /sandboxes/{id}/files with params", async () => {
     const mock = getMockHttp(client);
     mock.requestJson.mockResolvedValue([
