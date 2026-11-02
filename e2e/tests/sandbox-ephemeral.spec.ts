@@ -18,7 +18,8 @@ test.describe('ephemeral sandbox', () => {
     expect(execRes).toHaveSucceeded();
 
     // Idle suite: stop_after=3s, buffer=2s (Docker) / 5s (Firecracker), sweep=1s,
-    // plus the 7s activity lag (twice the 1s write interval, plus 5s).
+    // plus the 2s activity lag (twice the 1s write interval), which the delete
+    // waits twice.
     // GET /sandboxes/{id} is fenced (404) as soon as the stop window passes; the
     // unfenced list keeps the row until the sweeper has deleted it, which is what
     // proves cleanup. The fence must be up before the row goes, and the row is

@@ -196,20 +196,13 @@ The report is spent by the first request that wakes the sandbox, so `DELETE /san
 
 ### Sandbox activity
 
-The idle sweeper stops and deletes sandboxes by `last_active_at`. Writing it on every request would put a database write on every response, and a burst to one sandbox would queue on its row. So each API replica writes it in the background (`internal/api/activity.go`), only when needed.
+The idle sweeper stops and deletes sandboxes by `last_active_at`. Writing it on every request would put a database write on every response, and a burst to one sandbox would queue on its row. So each API replica collects the sandboxes it serves in memory and writes them in the background (`internal/api/activity.go`), all in one statement.
 
-**What counts:** an exec or file response from the sandbox. `GET /sandboxes/{id}`, `5xx` responses, runner redirects and runner "sandbox gone" answers do not.
+**What counts:** an exec or file response from the sandbox, from when it starts until it ends. `GET /sandboxes/{id}`, `5xx` responses, runner redirects and runner "sandbox gone" answers do not.
 
-**When `last_active_at` is written**, with `T` = `SANDBOX_API_ACTIVITY_WRITE_INTERVAL` (30 s):
+**When `last_active_at` is written**, with `T` = `SANDBOX_API_ACTIVITY_WRITE_INTERVAL` (5 s): every `T`, one statement per replica sets each sandbox it served since the last write to the time its latest response started or ended, or of the write while a response is still open, for at most `SANDBOX_API_MAX_RESPONSE_ACTIVITY` (30 min) per response. A burst to one sandbox therefore costs one row per replica. The statement never moves `last_active_at` back, and it sets `status` to `running`. A request that wakes a stopped sandbox, or comes after a quiet spell, asks for the write at once instead of at the next `T`, so `GET` shows the sandbox running about one database round trip later. A failed write is retried at the next `T`. Writes never delay a response, and each gets up to `T`.
 
-1. A request finds the sandbox stopped: written at once, so its status turns `running`.
-2. A request finds `last_active_at` older than `T`, and this replica has not written it within `T` either: written at once. A burst therefore costs one write per replica.
-3. A response is still streaming, such as a long exec: written every `T`, for at most `SANDBOX_API_MAX_RESPONSE_ACTIVITY` (30 min) per response.
-4. A write failed: retried at the next `T` with the latest request time.
-
-Writes never delay a response, at most four run at once per replica, and each times out 5 s after it starts.
-
-**Why the idle windows grow by `2T + 5 s` (65 s):** a request can skip its write because the row is up to `T` old, and its response can then stream for up to another `T` before the next write, which takes up to 5 s. So `last_active_at` trails the last use by at most that much, and the sweeper and the `404` fence wait that much longer, so nothing is stopped or deleted earlier than configured. This holds while the database keeps up: a failed write is retried only at the next `T`, and a write that waits for one of the four writers sends the latest request time once it runs.
+**Why the idle windows grow by `2T` (10 s):** a request waits up to `T` for the next write, which takes up to `T`. So `last_active_at` trails the last use by at most `2T`, and the stop sweep and the `404` fence wait that much longer. Deletes wait `2T` twice, so that a request let through just before the fence is written before the sweeper looks. Two limits remain: the sweeper does not see a request until its write lands, which for a request after a quiet spell is usually one database round trip later; and while writes fail, nothing is written.
 
 ## Security Model
 

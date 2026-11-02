@@ -14,7 +14,8 @@ test.describe('idle stop / wake / delete', () => {
   test('stop after idle, exec wakes, then row is deleted', async ({ request }) => {
     const id = await createSandbox();
 
-    // Both suites add the 7s activity lag (twice the 1s write interval, plus 5s).
+    // Both suites add the 2s activity lag (twice the 1s write interval), and
+    // deletes wait it twice.
     // Docker idle suite: stop_after=3s, delete_after=10s.
     // Firecracker idle suite: stop_after=3s, delete_after=90s (stop/snapshot can
     // take tens of seconds with a large rootfs; a short delete window races stop).

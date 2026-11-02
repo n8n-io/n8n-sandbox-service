@@ -4,10 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
-	"strings"
+	"maps"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,25 +13,24 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/store"
 )
 
-type activityWrite struct {
-	id string
-	at int64
-}
-
-// activityStore records RecordActivity calls and fails them while fail is set.
-// The recorder needs no other store method.
+// activityStore records the batches RecordActivity gets, and fails them while
+// fail is set. The recorder needs no other store method.
 type activityStore struct {
 	store.SandboxStore
-	mu    sync.Mutex
-	calls []activityWrite
-	fail  error
+	mu      sync.Mutex
+	batches []map[string]int64
+	timeout time.Duration // left on the context of the last call
+	fail    error
 }
 
-func (s *activityStore) RecordActivity(_ context.Context, id string, at int64) (bool, error) {
+func (s *activityStore) RecordActivity(ctx context.Context, batch map[string]int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.calls = append(s.calls, activityWrite{id: id, at: at})
-	return s.fail == nil, s.fail
+	s.batches = append(s.batches, maps.Clone(batch))
+	if deadline, ok := ctx.Deadline(); ok {
+		s.timeout = time.Until(deadline)
+	}
+	return s.fail
 }
 
 func (s *activityStore) setFail(err error) {
@@ -42,14 +39,19 @@ func (s *activityStore) setFail(err error) {
 	s.fail = err
 }
 
-// drain returns the calls since the last drain, sorted by sandbox id.
-func (s *activityStore) drain() []activityWrite {
+func (s *activityStore) count() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	calls := s.calls
-	s.calls = nil
-	slices.SortFunc(calls, func(a, b activityWrite) int { return strings.Compare(a.id, b.id) })
-	return calls
+	return len(s.batches)
+}
+
+// drain returns the batches since the last drain.
+func (s *activityStore) drain() []map[string]int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	batches := s.batches
+	s.batches = nil
+	return batches
 }
 
 // t0 is the test recorder's starting clock.
@@ -74,12 +76,16 @@ func newTestActivityRecorder(t *testing.T, cfg *config.APIConfig) (*ActivityReco
 	return a, s, setClock
 }
 
-func wantWrites(t *testing.T, a *ActivityRecorder, s *activityStore, want ...activityWrite) {
+func wantBatches(t *testing.T, s *activityStore, want ...map[string]int64) {
 	t.Helper()
-	a.writes.Wait()
 	got := s.drain()
-	if len(got) != len(want) || (len(want) > 0 && !slices.Equal(got, want)) {
-		t.Fatalf("writes = %+v, want %+v", got, want)
+	if len(got) != len(want) {
+		t.Fatalf("batches = %v, want %v", got, want)
+	}
+	for i := range want {
+		if !maps.Equal(got[i], want[i]) {
+			t.Fatalf("batches = %v, want %v", got, want)
+		}
 	}
 }
 
@@ -87,238 +93,233 @@ func row(id, status string, lastActiveAt int64) *store.SandboxRecord {
 	return &store.SandboxRecord{ID: id, Status: status, LastActiveAt: lastActiveAt}
 }
 
-// A request writes last_active_at unless it was written in the last interval,
-// as the row shows or as this pod remembers, or the sandbox was not running.
-func TestActivityRecorderWritesUnlessRecentlyWritten(t *testing.T) {
-	a, s, setClock := newTestActivityRecorder(t, nil) // 30s interval
+func (a *ActivityRecorder) tracked(id string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	_, ok := a.bySandboxID[id]
+	return ok
+}
 
-	a.begin(row("fresh", "running", t0-29))()
-	wantWrites(t, a, s)
+// A burst of requests costs one row in one statement, with the latest request.
+func TestActivityRecorderWritesEachSandboxOnceWithItsLatestRequest(t *testing.T) {
+	a, s, setClock := newTestActivityRecorder(t, nil)
+	a.write()
+	wantBatches(t, s) // nothing to write, no statement
 
-	a.begin(row("stale", "running", t0-30))()
-	wantWrites(t, a, s, activityWrite{id: "stale", at: t0})
-
-	// A burst read the old row before the first write landed.
 	for range 100 {
-		a.begin(row("stale", "running", t0-30))()
+		a.trackResponse(row("a", "running", t0))()
 	}
-	wantWrites(t, a, s)
+	setClock(t0 + 2)
+	a.trackResponse(row("a", "running", t0))()
+	a.trackResponse(row("b", "running", t0))()
+	a.write()
+	wantBatches(t, s, map[string]int64{"a": t0 + 2, "b": t0 + 2})
 
-	a.begin(row("stopped", "stopped", t0))()
-	wantWrites(t, a, s, activityWrite{id: "stopped", at: t0})
-
-	setClock(t0 + 30)
-	a.begin(row("stale", "running", t0-30))()
-	wantWrites(t, a, s, activityWrite{id: "stale", at: t0 + 30})
+	// A second already written is not written again.
+	a.trackResponse(row("a", "running", t0))()
+	a.write()
+	wantBatches(t, s)
+	if a.tracked("a") || a.tracked("b") {
+		t.Fatal("sandboxes still tracked after a write with nothing new")
+	}
 }
 
-func TestActivityRecorderRetriesAfterAFailedWrite(t *testing.T) {
-	a, s, _ := newTestActivityRecorder(t, nil)
-	s.setFail(errors.New("database unavailable"))
-	a.begin(row("sb", "running", 1))()
-	wantWrites(t, a, s, activityWrite{id: "sb", at: t0})
-
-	s.setFail(nil)
-	a.begin(row("sb", "running", 1))()
-	wantWrites(t, a, s, activityWrite{id: "sb", at: t0})
-}
-
-// Requests that skipped their write because one was in flight relied on it, so
-// when it fails the next tick writes the latest request, response open or not.
-func TestActivityRecorderTickRetriesAFailedWriteWithTheLatestRequest(t *testing.T) {
+func TestActivityRecorderRetriesAFailedWriteWithTheLatestRequest(t *testing.T) {
 	a, s, setClock := newTestActivityRecorder(t, nil)
 	s.setFail(errors.New("database unavailable"))
-	a.begin(row("sb", "running", 1))()
-	setClock(t0 + 2)
-	a.begin(row("sb", "running", 1))()
-	a.writes.Wait()
-	s.drain()
+	a.trackResponse(row("a", "running", t0))()
+	a.trackResponse(row("b", "running", t0))()
+	a.write()
+	wantBatches(t, s, map[string]int64{"a": t0, "b": t0})
 
 	s.setFail(nil)
-	setClock(t0 + 290)
-	a.writeOpen()
-	wantWrites(t, a, s, activityWrite{id: "sb", at: t0 + 2})
-	a.writeOpen()
-	wantWrites(t, a, s)
-
-	// The retry wrote the old request time, so a request now is new activity.
-	setClock(t0 + 300)
-	a.begin(row("sb", "running", t0+2))()
-	wantWrites(t, a, s, activityWrite{id: "sb", at: t0 + 300})
+	setClock(t0 + 3)
+	a.trackResponse(row("a", "running", t0))()
+	a.write()
+	wantBatches(t, s, map[string]int64{"a": t0 + 3, "b": t0})
+	a.write()
+	wantBatches(t, s)
 }
 
-func TestActivityRecorderKeepsSubSecondIntervals(t *testing.T) {
-	a, s, setClock := newTestActivityRecorder(t, &config.APIConfig{ActivityWriteInterval: 1500 * time.Millisecond})
-	a.begin(row("sb", "running", 1))()
-	wantWrites(t, a, s, activityWrite{id: "sb", at: t0})
-	setClock(t0 + 1)
-	a.begin(row("sb", "running", 1))()
-	wantWrites(t, a, s)
-	setClock(t0 + 2)
-	a.begin(row("sb", "running", 1))()
-	wantWrites(t, a, s, activityWrite{id: "sb", at: t0 + 2})
-}
-
-// blockingActivityStore holds every RecordActivity until release is closed.
-type blockingActivityStore struct {
-	store.SandboxStore
-	calls, inFlight, peak atomic.Int32
-	release               chan struct{}
-	mu                    sync.Mutex
-	written               []activityWrite
-}
-
-func (s *blockingActivityStore) RecordActivity(_ context.Context, id string, at int64) (bool, error) {
-	s.calls.Add(1)
-	s.mu.Lock()
-	s.written = append(s.written, activityWrite{id: id, at: at})
-	s.mu.Unlock()
-	n := s.inFlight.Add(1)
-	for p := s.peak.Load(); n > p && !s.peak.CompareAndSwap(p, n); p = s.peak.Load() {
-	}
-	<-s.release
-	s.inFlight.Add(-1)
-	return true, nil
-}
-
-// A tick with many open responses must not take every database connection.
-func TestActivityRecorderBoundsConcurrentWrites(t *testing.T) {
-	s := &blockingActivityStore{release: make(chan struct{})}
-	a := NewActivityRecorder(s, nil)
-	for i := range 3 * activityWriters {
-		a.begin(row(fmt.Sprintf("sb-%d", i), "stopped", 0))()
-	}
-	waitFor(t, "the writers to fill", func() bool { return s.inFlight.Load() == activityWriters })
-	time.Sleep(20 * time.Millisecond)
-	close(s.release)
-	a.writes.Wait()
-	if p := s.peak.Load(); p != activityWriters {
-		t.Fatalf("peak concurrent writes = %d, want %d", p, activityWriters)
-	}
-}
-
-// A response still streaming is written every interval, so a long command
-// keeps its sandbox from going idle. Once it ends, it stops counting.
-func TestActivityRecorderWritesOpenResponsesEveryInterval(t *testing.T) {
+// A response still streaming is written at every write, so a long command
+// keeps its sandbox from going idle. When it ends, the end is written once.
+func TestActivityRecorderWritesOpenResponsesUntilTheyEnd(t *testing.T) {
 	a, s, setClock := newTestActivityRecorder(t, nil)
-	end := a.begin(row("sb", "running", t0))
-	wantWrites(t, a, s)
-
-	for _, at := range []int64{t0 + 30, t0 + 60} {
+	end := a.trackResponse(row("sb", "running", t0))
+	for _, at := range []int64{t0, t0 + 5, t0 + 10} {
 		setClock(at)
-		a.writeOpen()
-		wantWrites(t, a, s, activityWrite{id: "sb", at: at})
+		a.write()
+		wantBatches(t, s, map[string]int64{"sb": at})
 	}
 
+	setClock(t0 + 12)
 	end()
 	end() // the proxy may close a body twice
-	setClock(t0 + 90)
-	a.writeOpen()
-	wantWrites(t, a, s)
-	if _, ok := a.sandboxes["sb"]; ok {
-		t.Fatal("sandbox still tracked an interval after its last write")
+	setClock(t0 + 15)
+	a.write()
+	wantBatches(t, s, map[string]int64{"sb": t0 + 12})
+	a.write()
+	wantBatches(t, s)
+	if a.tracked("sb") {
+		t.Fatal("sandbox still tracked after its response ended and was written")
 	}
 }
 
+// Past MaxResponseActivity a response stops counting, so a client that stops
+// reading cannot keep its sandbox from idling. Its end then counts for nothing.
 func TestActivityRecorderStopsCountingAResponseAfterMaxResponseActivity(t *testing.T) {
 	a, s, setClock := newTestActivityRecorder(t, &config.APIConfig{MaxResponseActivity: 20 * time.Millisecond})
-	end := a.begin(row("sb", "running", t0))
-	defer end()
-	waitFor(t, "the response to stop counting", func() bool { return a.inflight("sb") == 0 })
+	end := a.trackResponse(row("sb", "running", t0))
+	a.write()
+	wantBatches(t, s, map[string]int64{"sb": t0})
+	waitFor(t, "the response to stop counting", func() bool { return a.numActiveRequests("sb") == 0 })
 
-	setClock(t0 + 30)
-	a.writeOpen()
-	wantWrites(t, a, s)
+	setClock(t0 + 5)
+	a.write()
+	wantBatches(t, s)
+	end()
+	a.write()
+	wantBatches(t, s)
 }
 
-// A write that waited for a writer sends the latest request, so the requests
-// that arrived meanwhile, and skipped their own write, are not lost.
-func TestActivityRecorderQueuedWriteSendsTheLatestRequest(t *testing.T) {
-	s := &blockingActivityStore{release: make(chan struct{})}
-	a := NewActivityRecorder(s, nil)
-	var clock atomic.Int64
-	clock.Store(t0)
-	a.now = func() time.Time { return time.Unix(clock.Load(), 0) }
-	for i := range activityWriters {
-		a.begin(row(fmt.Sprintf("busy-%d", i), "stopped", 0))()
-	}
-	waitFor(t, "the writers to fill", func() bool { return s.inFlight.Load() == activityWriters })
-	a.begin(row("queued", "stopped", 0))()
-	clock.Store(t0 + 10)
-	a.begin(row("queued", "stopped", 0))()
-
-	close(s.release)
-	a.writes.Wait()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var queued []activityWrite
-	for _, w := range s.written {
-		if w.id == "queued" {
-			queued = append(queued, w)
+// A wake, or a request after a quiet spell, asks Run to write at once.
+func TestActivityRecorderAsksForAWriteOnWakeAndAfterQuiet(t *testing.T) {
+	a, _, _ := newTestActivityRecorder(t, nil) // 5s interval: a 10s lag
+	asked := func() bool {
+		select {
+		case <-a.writeNow:
+			return true
+		default:
+			return false
 		}
 	}
-	if len(queued) != 1 || queued[0].at != t0+10 {
-		t.Fatalf("queued writes = %+v, want one with the latest request %d", queued, t0+10)
+	for _, tc := range []struct {
+		name string
+		rec  *store.SandboxRecord
+		want bool
+	}{
+		{"running, written within the lag", row("fresh", "running", t0-10), false},
+		{"running, written before the lag", row("quiet", "running", t0-11), true},
+		{"stopped", row("woken", "stopped", t0), true},
+	} {
+		a.trackResponse(tc.rec)()
+		if got := asked(); got != tc.want {
+			t.Fatalf("%s: asked for a write = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
 
-// On stop, Run waits for the writes the database is running and drops the
-// ones still queued for a writer.
-func TestActivityRecorderRunWaitsForRunningWritesAndDropsQueuedOnes(t *testing.T) {
-	s := &blockingActivityStore{release: make(chan struct{})}
-	a := NewActivityRecorder(s, nil)
+// Run writes every interval, when asked, and once more when it stops; each
+// write may take up to one interval.
+func TestActivityRecorderRunWritesOnTickOnRequestAndOnStop(t *testing.T) {
+	run := func(t *testing.T, interval time.Duration) (*ActivityRecorder, *activityStore, func()) {
+		t.Helper()
+		a, s, _ := newTestActivityRecorder(t, &config.APIConfig{ActivityWriteInterval: interval})
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			a.Run(ctx)
+			close(done)
+		}()
+		stop := func() {
+			cancel()
+			<-done
+		}
+		t.Cleanup(stop)
+		return a, s, stop
+	}
+
+	t.Run("tick", func(t *testing.T) {
+		a, s, _ := run(t, 10*time.Millisecond)
+		a.trackResponse(row("sb", "running", t0))()
+		waitFor(t, "a tick to write", func() bool { return s.count() == 1 })
+		wantBatches(t, s, map[string]int64{"sb": t0})
+	})
+
+	t.Run("asked and stop", func(t *testing.T) {
+		a, s, stop := run(t, time.Hour)
+		a.trackResponse(row("woken", "stopped", t0))()
+		waitFor(t, "the wake to be written", func() bool { return s.count() == 1 })
+		a.trackResponse(row("later", "running", t0))()
+		stop()
+		wantBatches(t, s, map[string]int64{"woken": t0}, map[string]int64{"later": t0})
+		if s.timeout <= 59*time.Minute || s.timeout > time.Hour {
+			t.Fatalf("write timeout = %s, want one interval (1h)", s.timeout)
+		}
+	})
+}
+
+// After a failed write, Run waits for the next tick instead of writing again
+// for every wake, so a database that refuses writes is not asked once per
+// request.
+func TestActivityRecorderRunRetriesAFailedWriteAtTheNextTickOnly(t *testing.T) {
+	a, s, _ := newTestActivityRecorder(t, &config.APIConfig{ActivityWriteInterval: time.Hour})
+	s.setFail(errors.New("database is read-only"))
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		a.Run(ctx)
 		close(done)
 	}()
-	for i := range activityWriters + 1 {
-		a.begin(row(fmt.Sprintf("sb-%d", i), "stopped", 0))()
-	}
-	waitFor(t, "the writers to fill", func() bool { return s.inFlight.Load() == activityWriters })
+	defer func() {
+		cancel()
+		<-done
+	}()
 
-	cancel()
-	select {
-	case <-done:
-		t.Fatal("Run returned while writes were running")
-	case <-time.After(50 * time.Millisecond):
+	a.trackResponse(row("first", "stopped", t0))()
+	waitFor(t, "the failed write", func() bool { return s.count() == 1 })
+	for i := range 20 {
+		a.trackResponse(row(fmt.Sprintf("woken-%d", i), "stopped", t0))()
 	}
-	close(s.release)
-	<-done
-	if n := s.calls.Load(); n != activityWriters {
-		t.Fatalf("writes = %d, want %d: the queued one should be dropped", n, activityWriters)
-	}
-	a.begin(row("sb-late", "stopped", 0))()
-	if n := s.calls.Load(); n != activityWriters {
-		t.Fatalf("writes after stop = %d, want none new", n)
+	time.Sleep(50 * time.Millisecond)
+	if n := s.count(); n != 1 {
+		t.Fatalf("writes after a failed one = %d, want 1 until the next tick", n)
 	}
 }
 
-// A write that gets a writer slot after the stop does not run, even when the
-// slot frees up before it sees done.
-func TestActivityRecorderSkipsAWriteThatGetsASlotAfterStop(t *testing.T) {
-	s := &blockingActivityStore{release: make(chan struct{})}
-	a := NewActivityRecorder(s, nil)
-	for i := range activityWriters + 1 {
-		a.begin(row(fmt.Sprintf("sb-%d", i), "stopped", 0))()
+// Requests may arrive while a write runs; none of them is lost.
+func TestActivityRecorderKeepsRequestsThatArriveDuringWrites(t *testing.T) {
+	a, s, _ := newTestActivityRecorder(t, nil)
+	stop := make(chan struct{})
+	writerDone := make(chan struct{})
+	go func() {
+		defer close(writerDone)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				a.write()
+			}
+		}
+	}()
+	var requests sync.WaitGroup
+	for i := range 8 {
+		requests.Go(func() {
+			for range 200 {
+				a.trackResponse(row(fmt.Sprintf("sb-%d", i%3), "running", t0))()
+			}
+		})
 	}
-	waitFor(t, "the writers to fill", func() bool { return s.inFlight.Load() == activityWriters })
-	a.mu.Lock()
-	a.stopped = true // without closing done, so the freed slot wins
-	a.mu.Unlock()
-	close(s.release)
-	a.writes.Wait()
-	if n := s.calls.Load(); n != activityWriters {
-		t.Fatalf("writes = %d, want %d: the one queued past the stop must not run", n, activityWriters)
+	requests.Wait()
+	close(stop)
+	<-writerDone
+	a.write()
+
+	written := make(map[string]int64)
+	for _, b := range s.drain() {
+		maps.Copy(written, b)
+	}
+	if want := map[string]int64{"sb-0": t0, "sb-1": t0, "sb-2": t0}; !maps.Equal(written, want) {
+		t.Fatalf("written = %v, want %v", written, want)
 	}
 }
 
-func TestActivityLagIsTwiceTheWriteIntervalPlusTheWriteTimeout(t *testing.T) {
-	if got := activityLag(nil); got != 65*time.Second {
-		t.Fatalf("default lag = %s, want 65s", got)
+func TestActivityLagIsTwiceTheWriteInterval(t *testing.T) {
+	if got := activityLag(nil); got != 10*time.Second {
+		t.Fatalf("default lag = %s, want 10s", got)
 	}
-	if got := activityLag(&config.APIConfig{ActivityWriteInterval: time.Second}); got != 7*time.Second {
-		t.Fatalf("lag = %s, want 7s", got)
+	if got := activityLag(&config.APIConfig{ActivityWriteInterval: time.Second}); got != 2*time.Second {
+		t.Fatalf("lag = %s, want 2s", got)
 	}
 }

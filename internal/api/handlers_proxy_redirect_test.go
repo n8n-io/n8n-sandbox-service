@@ -70,7 +70,7 @@ func TestSandboxProxyRefusesRunnerRedirect(t *testing.T) {
 
 	// The refusal must not count as activity, or a retrying client would keep
 	// the idle sweeper from ever reclaiming a sandbox on a misbehaving runner.
-	activity.writes.Wait()
+	activity.write()
 	rec, err := s.Get(sid)
 	if err != nil || rec == nil {
 		t.Fatalf("get sandbox: rec=%v err=%v", rec, err)

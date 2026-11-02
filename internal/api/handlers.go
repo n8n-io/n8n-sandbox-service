@@ -684,7 +684,7 @@ func trackSandboxActivity(activity *ActivityRecorder, rec *store.SandboxRecord, 
 	if resp.StatusCode >= http.StatusInternalServerError {
 		return
 	}
-	end := activity.begin(rec)
+	end := activity.trackResponse(rec)
 	// The upgrade path needs the body unwrapped. No runner route upgrades.
 	if resp.StatusCode == http.StatusSwitchingProtocols {
 		end()

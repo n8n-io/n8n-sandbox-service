@@ -15,7 +15,7 @@ import (
 )
 
 // newActivityTestGateway is newTestGateway with the activity recorder exposed,
-// so a test can wait for its writes.
+// so a test can run its writes. Nothing runs it otherwise.
 func newActivityTestGateway(t *testing.T, adminKey string) (http.Handler, store.SandboxStore, *ActivityRecorder) {
 	t.Helper()
 	s, err := store.New(":memory:")
@@ -36,12 +36,12 @@ func newActivityTestGateway(t *testing.T, adminKey string) (http.Handler, store.
 	return router, s, activity
 }
 
-// inflight returns how many responses from sandbox id are still streaming.
-func (a *ActivityRecorder) inflight(id string) int {
+// numActiveRequests returns how many responses from sandbox id are still open.
+func (a *ActivityRecorder) numActiveRequests(id string) int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if e, ok := a.sandboxes[id]; ok {
-		return e.open
+	if e, ok := a.bySandboxID[id]; ok {
+		return e.numActiveRequests
 	}
 	return 0
 }
@@ -87,7 +87,7 @@ func TestSandboxProxyDoesNotCountServerErrorsAsActivity(t *testing.T) {
 		if rr := call(); rr.Code != status {
 			t.Fatalf("upstream %d: proxy returned %d", status, rr.Code)
 		}
-		activity.writes.Wait()
+		activity.write()
 
 		rec, err := s.Get(sid)
 		if err != nil {
@@ -107,7 +107,7 @@ func TestSandboxProxyDoesNotCountServerErrorsAsActivity(t *testing.T) {
 	if rr := call(); rr.Code != http.StatusOK {
 		t.Fatalf("upstream 200: proxy returned %d", rr.Code)
 	}
-	activity.writes.Wait()
+	activity.write()
 	rec, err := s.Get(sid)
 	if err != nil {
 		t.Fatalf("get sandbox: %v", err)
@@ -147,7 +147,7 @@ func TestSandboxProxyCountsClientErrorsAsActivity(t *testing.T) {
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("proxy returned %d, want 400", rr.Code)
 	}
-	activity.writes.Wait()
+	activity.write()
 
 	rec, err := s.Get(sid)
 	if err != nil {
@@ -186,7 +186,7 @@ func TestSandboxProxyDoesNotCountUnreachableRunnerAsActivity(t *testing.T) {
 	if rr.Code != http.StatusServiceUnavailable {
 		t.Fatalf("proxy returned %d, want 503", rr.Code)
 	}
-	activity.writes.Wait()
+	activity.write()
 
 	rec, err := s.Get(sid)
 	if err != nil {
@@ -259,9 +259,9 @@ func TestSandboxProxyFencesExpiredSandboxWithoutRunnerBase(t *testing.T) {
 	}
 }
 
-// A response that is still streaming, such as a long exec, is written every
-// interval until it ends. Otherwise a command longer than the idle stop window
-// would have its sandbox stopped under it.
+// A response that is still streaming, such as a long exec, is written at every
+// write until it ends, and then its end. Otherwise a command longer than the
+// idle stop window would have its sandbox stopped under it.
 func TestSandboxProxyCountsStreamingResponseUntilItEnds(t *testing.T) {
 	release := make(chan struct{})
 	runner := newTestRunnerServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -295,37 +295,33 @@ func TestSandboxProxyCountsStreamingResponseUntilItEnds(t *testing.T) {
 		router.ServeHTTP(rr, req)
 		done <- rr.Code
 	}()
-	waitFor(t, "the stream to start", func() bool { return activity.inflight(sid) == 1 })
+	waitFor(t, "the stream to start", func() bool { return activity.numActiveRequests(sid) == 1 })
 
 	for _, at := range []int64{1_000_000, 1_003_600, 1_007_200} {
 		clock.Store(at)
-		if at > 1_000_000 {
-			activity.writeOpen()
-		}
-		activity.writes.Wait()
+		activity.write()
 		if got := mustGet(t, s, sid).LastActiveAt; got != at {
 			t.Fatalf("at %d while streaming: last_active_at = %d, want %d", at, got, at)
 		}
 	}
 
+	clock.Store(1_008_000)
 	close(release)
 	if code := <-done; code != http.StatusOK {
 		t.Fatalf("proxy returned %d, want 200", code)
 	}
-	if n := activity.inflight(sid); n != 0 {
-		t.Fatalf("in flight after the stream ended = %d, want 0", n)
+	if n := activity.numActiveRequests(sid); n != 0 {
+		t.Fatalf("active requests after the stream ended = %d, want 0", n)
 	}
 	clock.Store(1_010_800)
-	activity.writeOpen()
-	activity.writes.Wait()
-	if got := mustGet(t, s, sid).LastActiveAt; got != 1_007_200 {
-		t.Fatalf("after the stream: last_active_at = %d, want 1007200 unchanged", got)
+	activity.write()
+	if got := mustGet(t, s, sid).LastActiveAt; got != 1_008_000 {
+		t.Fatalf("after the stream: last_active_at = %d, want its end, 1008000", got)
 	}
 }
 
 // A request that wakes a stopped sandbox, or comes after a quiet spell, is
-// written at once: GET shows the sandbox running straight away, and the
-// sweeper never acts on the old row while the request is served.
+// written at once rather than at the next tick (an hour away here).
 func TestSandboxProxyWritesWakeAndReturnAfterQuietAtOnce(t *testing.T) {
 	runner := newTestRunnerServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

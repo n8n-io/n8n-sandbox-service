@@ -209,8 +209,8 @@ func TestIdleStopSweepDeletesEphemeralInsteadOfStopping(t *testing.T) {
 	cfg := idleSweepConfig()
 
 	now := time.Now()
-	// Past the stop window and past the delete safety buffer.
-	stale := now.Add(-cfg.IdleStopAfter - activityLag(cfg) - cfg.IdleDeleteSafetyBuffer - time.Second).Unix()
+	// Past the stop window, twice the activity lag and the delete safety buffer.
+	stale := now.Add(-cfg.IdleStopAfter - 2*activityLag(cfg) - cfg.IdleDeleteSafetyBuffer - time.Second).Unix()
 	const ephemeralID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 	const regularID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 	seedRunningSandbox(t, s, ephemeralID, addr, stale, true)
@@ -243,7 +243,7 @@ func TestIdleSweepDeletesEphemeralWhenIdleStopDisabled(t *testing.T) {
 	cfg.IdleStopAfter = 0
 
 	now := time.Now()
-	stale := now.Add(-cfg.IdleDeleteAfter - activityLag(cfg) - cfg.IdleDeleteSafetyBuffer - time.Second).Unix()
+	stale := now.Add(-cfg.IdleDeleteAfter - 2*activityLag(cfg) - cfg.IdleDeleteSafetyBuffer - time.Second).Unix()
 	const ephemeralID = "ffffffff-ffff-4fff-8fff-ffffffffffff"
 	const regularID = "abababab-abab-4bab-8bab-abababababab"
 	seedRunningSandbox(t, s, ephemeralID, addr, stale, true)
@@ -270,9 +270,9 @@ func TestIdleSweepDeletesEphemeralWhenIdleStopDisabled(t *testing.T) {
 	}
 }
 
-// The request path refuses an ephemeral sandbox as soon as its stop window
-// passes, but the sweeper waits out the safety buffer before the irreversible
-// delete, so the fence is always up first.
+// The request path refuses an ephemeral sandbox as soon as its stop window and
+// the activity lag pass, but the sweeper waits out the lag again and the safety
+// buffer before the irreversible delete, so the fence is always up first.
 func TestIdleStopSweepHoldsEphemeralInsideSafetyBuffer(t *testing.T) {
 	fake := &fakeSandboxControl{}
 	addr := startFakeRunnerControl(t, fake)
@@ -280,7 +280,7 @@ func TestIdleStopSweepHoldsEphemeralInsideSafetyBuffer(t *testing.T) {
 	cfg := idleSweepConfig()
 
 	now := time.Now()
-	// Past the stop window, inside the buffer.
+	// Past the fence, short of the delete cutoff.
 	lastActive := now.Add(-cfg.IdleStopAfter - activityLag(cfg) - time.Second).Unix()
 	const id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 	seedRunningSandbox(t, s, id, addr, lastActive, true)
@@ -360,7 +360,7 @@ func TestIdleStopSweepRetriesEphemeralDeleteAfterRunnerFailure(t *testing.T) {
 	cfg := idleSweepConfig()
 
 	now := time.Now()
-	stale := now.Add(-cfg.IdleStopAfter - activityLag(cfg) - cfg.IdleDeleteSafetyBuffer - time.Second).Unix()
+	stale := now.Add(-cfg.IdleStopAfter - 2*activityLag(cfg) - cfg.IdleDeleteSafetyBuffer - time.Second).Unix()
 	const id = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 	seedRunningSandbox(t, s, id, addr, stale, true)
 
@@ -386,7 +386,9 @@ func TestIdleStopSweepRetriesEphemeralDeleteAfterRunnerFailure(t *testing.T) {
 }
 
 // last_active_at may trail the last request by the activity lag, so no sweep
-// acts on a sandbox until its window plus the lag has passed.
+// acts on a sandbox until its window plus the lag has passed. Deletes wait the
+// lag twice: once for the request-path fence, once for a request let through
+// just before it to be written.
 func TestIdleSweepsWaitOutTheActivityLag(t *testing.T) {
 	cfg := idleSweepConfig()
 	cases := []struct {
@@ -394,10 +396,11 @@ func TestIdleSweepsWaitOutTheActivityLag(t *testing.T) {
 		status    string
 		ephemeral bool
 		idleFor   time.Duration // before the lag
+		lags      time.Duration
 	}{
-		{"stop", "running", false, cfg.IdleStopAfter},
-		{"delete", "stopped", false, cfg.IdleDeleteAfter + cfg.IdleDeleteSafetyBuffer},
-		{"ephemeral delete", "running", true, cfg.IdleStopAfter + cfg.IdleDeleteSafetyBuffer},
+		{"stop", "running", false, cfg.IdleStopAfter, 1},
+		{"delete", "stopped", false, cfg.IdleDeleteAfter + cfg.IdleDeleteSafetyBuffer, 2},
+		{"ephemeral delete", "running", true, cfg.IdleStopAfter + cfg.IdleDeleteSafetyBuffer, 2},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -406,7 +409,7 @@ func TestIdleSweepsWaitOutTheActivityLag(t *testing.T) {
 			s := newSweepStore(t)
 			now := time.Now()
 			const id = "9a9a9a9a-9a9a-4a9a-8a9a-9a9a9a9a9a9a"
-			lastActive := now.Add(-tc.idleFor-activityLag(cfg)).Unix() + 1
+			lastActive := now.Add(-tc.idleFor-tc.lags*activityLag(cfg)).Unix() + 1
 			if err := s.Create(&store.SandboxRecord{
 				ID: id, Status: tc.status, CreatedAt: lastActive, LastActiveAt: lastActive,
 				RunnerHTTPBase: "https://127.0.0.1:9", RunnerControlGRPCAddr: addr,
@@ -463,8 +466,8 @@ func TestIsPastIdleDeleteWindow(t *testing.T) {
 		{"regular fractional window fenced past rounded-up edge", fractional, false, now - lag - 1002, true},
 		{"ephemeral fractional window not fenced at truncated edge", fractional, true, now - lag - 101, false},
 		{"ephemeral fractional window fenced past rounded-up edge", fractional, true, now - lag - 102, true},
-		{"the lag follows the write interval", shortLag, false, now - 7 - 1001, true},
-		{"the lag follows the write interval, inside", shortLag, false, now - 7 - 1000, false},
+		{"the lag follows the write interval", shortLag, false, now - 2 - 1001, true},
+		{"the lag follows the write interval, inside", shortLag, false, now - 2 - 1000, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

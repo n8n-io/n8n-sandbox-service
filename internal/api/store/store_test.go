@@ -355,48 +355,56 @@ func TestRecordActivity(t *testing.T) {
 	testRecordActivity(t, s, "activity-1")
 }
 
-// testRecordActivity runs against both backends; id must not exist yet.
-func testRecordActivity(t *testing.T, s SandboxStore, id string) {
+// testRecordActivity runs against both backends; no id starting with prefix
+// may exist yet.
+func testRecordActivity(t *testing.T, s SandboxStore, prefix string) {
 	t.Helper()
 	ctx := context.Background()
-	if err := s.Create(&SandboxRecord{ID: id, Status: "running", CreatedAt: 100, LastActiveAt: 100}); err != nil {
-		t.Fatalf("create: %v", err)
+	a, b := prefix+"-a", prefix+"-b"
+	for _, id := range []string{a, b} {
+		if err := s.Create(&SandboxRecord{ID: id, Status: "running", CreatedAt: 100, LastActiveAt: 100}); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		t.Cleanup(func() { _ = s.Delete(id) })
 	}
-	t.Cleanup(func() { _ = s.Delete(id) })
 
-	check := func(step string, at int64, wantWritten bool, wantActive int64, wantStatus string) {
+	type row struct {
+		lastActiveAt int64
+		status       string
+	}
+	check := func(step string, batch map[string]int64, want map[string]row) {
 		t.Helper()
-		written, err := s.RecordActivity(ctx, id, at)
-		if err != nil {
+		if err := s.RecordActivity(ctx, batch); err != nil {
 			t.Fatalf("%s: record activity: %v", step, err)
 		}
-		if written != wantWritten {
-			t.Fatalf("%s: written = %v, want %v", step, written, wantWritten)
-		}
-		got, err := s.Get(id)
-		if err != nil || got == nil {
-			t.Fatalf("%s: get: %+v err=%v", step, got, err)
-		}
-		if got.LastActiveAt != wantActive || got.Status != wantStatus {
-			t.Fatalf("%s: last_active_at=%d status=%q, want %d %q", step, got.LastActiveAt, got.Status, wantActive, wantStatus)
+		for id, w := range want {
+			got, err := s.Get(id)
+			if err != nil || got == nil {
+				t.Fatalf("%s: get %s: %+v err=%v", step, id, got, err)
+			}
+			if got.LastActiveAt != w.lastActiveAt || got.Status != w.status {
+				t.Fatalf("%s: %s last_active_at=%d status=%q, want %d %q", step, id, got.LastActiveAt, got.Status, w.lastActiveAt, w.status)
+			}
 		}
 	}
 
-	check("newer time", 200, true, 200, "running")
-	check("same time", 200, false, 200, "running")
+	check("newer times, and a sandbox without a row",
+		map[string]int64{a: 200, b: 300, prefix + "-missing": 400},
+		map[string]row{a: {200, "running"}, b: {300, "running"}})
 	// Another API pod may write an older time after a newer one.
-	check("older time", 150, false, 200, "running")
+	check("same and older times",
+		map[string]int64{a: 200, b: 250},
+		map[string]row{a: {200, "running"}, b: {300, "running"}})
 
-	if err := s.UpdateStatus(id, "stopped"); err != nil {
+	if err := s.UpdateStatus(a, "stopped"); err != nil {
 		t.Fatalf("update status: %v", err)
 	}
 	// A wake: running again, without moving the time back.
-	check("older time on a stopped row", 150, true, 200, "running")
+	check("older time on a stopped row",
+		map[string]int64{a: 150},
+		map[string]row{a: {200, "running"}, b: {300, "running"}})
 
-	written, err := s.RecordActivity(ctx, id+"-missing", 300)
-	if err != nil || written {
-		t.Fatalf("missing row: written=%v err=%v, want false and no error", written, err)
-	}
+	check("nothing", map[string]int64{}, map[string]row{a: {200, "running"}})
 }
 
 func TestUpdateTenantLimits(t *testing.T) {

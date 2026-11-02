@@ -30,8 +30,8 @@ const (
 
 	defaultMaxInflightPerTenant = 512
 
-	DefaultActivityWriteInterval = 30 * time.Second
-	maxActivityWriteInterval     = 5 * time.Minute
+	DefaultActivityWriteInterval = 5 * time.Second
+	maxActivityWriteInterval     = time.Minute
 	DefaultMaxResponseActivity   = 30 * time.Minute
 	minMaxResponseActivity       = time.Minute
 )
@@ -164,11 +164,11 @@ type APIConfig struct {
 	// OrphanReapBuffer is how long after a runner deregisters before the idle
 	// sweeper removes its orphaned sandbox rows from the store.
 	OrphanReapBuffer time.Duration
-	// ActivityWriteInterval is how often, at most, each API pod writes a
-	// sandbox's last_active_at. The idle windows are extended by twice this
-	// plus 5s, because last_active_at can trail the last request by that much
-	// (docs/architecture.md, "Sandbox activity"). Parsed from
-	// SANDBOX_API_ACTIVITY_WRITE_INTERVAL (1s–5m, default 30s).
+	// ActivityWriteInterval is how often each API pod writes the
+	// last_active_at of the sandboxes it served, in one statement. The idle
+	// windows are extended by twice this, because last_active_at can trail the
+	// last request by that much (docs/architecture.md, "Sandbox activity").
+	// Parsed from SANDBOX_API_ACTIVITY_WRITE_INTERVAL (1s–1m, default 5s).
 	ActivityWriteInterval time.Duration
 	// MaxResponseActivity is how long a response that is still open, such as an
 	// exec stream, keeps its sandbox from going idle. Keep it at least the

@@ -137,7 +137,7 @@ func TestSandboxProxyDoesNotMarkActiveWhenReapDeleteFails(t *testing.T) {
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("exec status = %d, want 404", rr.Code)
 	}
-	activity.writes.Wait()
+	activity.write()
 
 	rec, err := s.Get(sandboxID)
 	if err != nil {

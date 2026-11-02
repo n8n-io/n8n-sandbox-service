@@ -105,7 +105,8 @@ func main() {
 	defer sweepCancel()
 	api.StartIdleSweeper(sweepCtx, sandboxStore, runnerReg, cfg, sweepLockDB)
 
-	// Stopped after the HTTP server has drained, so open streams keep counting.
+	// Stopped after the HTTP server has drained, so open streams keep counting
+	// and its last write has every request.
 	activity := api.NewActivityRecorder(sandboxStore, cfg)
 	activityCtx, activityCancel := context.WithCancel(context.Background())
 	defer activityCancel()

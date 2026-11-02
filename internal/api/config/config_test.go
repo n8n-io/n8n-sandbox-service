@@ -470,8 +470,8 @@ func TestLoadAPIActivityWriteIntervalAndMaxResponseActivity(t *testing.T) {
 		if err != nil {
 			t.Fatalf("LoadAPI() failed: %v", err)
 		}
-		if cfg.ActivityWriteInterval != 30*time.Second {
-			t.Errorf("ActivityWriteInterval = %s, want 30s", cfg.ActivityWriteInterval)
+		if cfg.ActivityWriteInterval != 5*time.Second {
+			t.Errorf("ActivityWriteInterval = %s, want 5s", cfg.ActivityWriteInterval)
 		}
 		if cfg.MaxResponseActivity != 30*time.Minute {
 			t.Errorf("MaxResponseActivity = %s, want 30m", cfg.MaxResponseActivity)
@@ -480,21 +480,29 @@ func TestLoadAPIActivityWriteIntervalAndMaxResponseActivity(t *testing.T) {
 
 	t.Run("set", func(t *testing.T) {
 		setBase(t)
-		t.Setenv("SANDBOX_API_ACTIVITY_WRITE_INTERVAL", "1s")
+		t.Setenv("SANDBOX_API_ACTIVITY_WRITE_INTERVAL", "1m")
 		t.Setenv("SANDBOX_API_MAX_RESPONSE_ACTIVITY", "8h")
 		cfg, err := LoadAPI()
 		if err != nil {
 			t.Fatalf("LoadAPI() failed: %v", err)
 		}
-		if cfg.ActivityWriteInterval != time.Second {
-			t.Errorf("ActivityWriteInterval = %s, want 1s", cfg.ActivityWriteInterval)
+		if cfg.ActivityWriteInterval != time.Minute {
+			t.Errorf("ActivityWriteInterval = %s, want 1m", cfg.ActivityWriteInterval)
 		}
 		if cfg.MaxResponseActivity != 8*time.Hour {
 			t.Errorf("MaxResponseActivity = %s, want 8h", cfg.MaxResponseActivity)
 		}
 	})
 
-	for _, v := range []string{"0", "500ms", "6m", "-1s", "soon"} {
+	t.Run("accepts the lowest interval", func(t *testing.T) {
+		setBase(t)
+		t.Setenv("SANDBOX_API_ACTIVITY_WRITE_INTERVAL", "1s")
+		if cfg, err := LoadAPI(); err != nil || cfg.ActivityWriteInterval != time.Second {
+			t.Fatalf("LoadAPI() = %v, %v; want a 1s interval", cfg, err)
+		}
+	})
+
+	for _, v := range []string{"0", "999ms", "61s", "-1s", "soon"} {
 		t.Run("rejects interval "+v, func(t *testing.T) {
 			setBase(t)
 			t.Setenv("SANDBOX_API_ACTIVITY_WRITE_INTERVAL", v)
