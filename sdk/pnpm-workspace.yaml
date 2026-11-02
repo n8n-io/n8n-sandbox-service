@@ -6,3 +6,4 @@ allowBuilds:
 
 # Only install versions published at least 2 days (in minutes) ago.
 minimumReleaseAge: 2880
+minimumReleaseAgeIgnoreMissingTime: false
