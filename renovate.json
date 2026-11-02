@@ -1,9 +1,9 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Only the pins in the sandbox image are enrolled: sandbox-workspace/package.json, the global typescript in Dockerfile.sandbox and the venv's pip in sandbox-venv/requirements.txt, whose hashes Renovate refreshes with hashin. Lock file maintenance refreshes the transitive deps in sandbox-workspace/package-lock.json weekly; Renovate cannot raise vulnerability-driven PRs for transitive npm deps.",
+  "description": "Enrolled: the pins in the sandbox image (sandbox-workspace/package.json, the global typescript in Dockerfile.sandbox and the venv's pip in sandbox-venv/requirements.txt, whose hashes Renovate refreshes with hashin) and the runtime base images of Dockerfile.runner-dind and Dockerfile.api. Lock file maintenance refreshes the transitive deps in sandbox-workspace/package-lock.json weekly; Renovate cannot raise vulnerability-driven PRs for transitive npm deps.",
   "extends": ["config:recommended", ":maintainLockFilesWeekly"],
-  "enabledManagers": ["npm", "pip_requirements", "custom.regex"],
-  "includePaths": ["sandbox-workspace/**", "sandbox-venv/**", "Dockerfile.sandbox"],
+  "enabledManagers": ["npm", "pip_requirements", "dockerfile", "custom.regex"],
+  "includePaths": ["sandbox-workspace/**", "sandbox-venv/**", "Dockerfile.sandbox", "Dockerfile.runner-dind", "Dockerfile.api"],
   "npm": {
     "managerFilePatterns": ["/^sandbox-workspace/package\\.json$/"]
   },
@@ -32,6 +32,26 @@
     {
       "matchPackageNames": ["@types/node"],
       "overrideDatasource": "custom.n8n-stable-types-node"
+    },
+    {
+      "description": "Dockerfile.sandbox is in includePaths only for the typescript pin, read by the custom regex manager. The Dockerfile manager's default file patterns match it too.",
+      "matchManagers": ["dockerfile"],
+      "matchFileNames": ["Dockerfile.sandbox"],
+      "enabled": false
+    },
+    {
+      "description": "Only the runtime base images are enrolled. The golang builder stages are shared with Dockerfiles Renovate does not cover, and follow go.mod.",
+      "matchManagers": ["dockerfile"],
+      "matchPackageNames": ["golang"],
+      "enabled": false
+    },
+    {
+      "description": "dockerd, containerd and runc in the runner come from this image. Stay on Docker 29, and treat the Alpine release in the tag as part of the version, so a newer Alpine build is picked up once upstream stops publishing the current one. Release candidates do not match. The digest is pinned because Docker Hub tags are mutable: a rebuild under the same tag arrives as a digest update PR instead of changing the image silently.",
+      "matchManagers": ["dockerfile"],
+      "matchPackageNames": ["docker"],
+      "versioning": "regex:^(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)-(?<compatibility>dind)-alpine(?<build>\\d+)\\.(?<revision>\\d+)$",
+      "allowedVersions": "/^29\\./",
+      "pinDigests": true
     }
   ],
   "customDatasources": {
