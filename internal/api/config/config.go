@@ -29,6 +29,9 @@ const (
 	defaultMaxSandboxes     = 50
 
 	defaultMaxInflightPerTenant = 512
+
+	defaultAPIKeyCacheTTL = 15 * time.Second
+	maxAPIKeyCacheTTL     = time.Minute
 )
 
 const (
@@ -160,6 +163,12 @@ type APIConfig struct {
 	// sweeper removes its orphaned sandbox rows from the store.
 	OrphanReapBuffer time.Duration
 
+	// APIKeyCacheTTL is how long each API pod remembers a tenant key lookup,
+	// unknown keys included, so a revoked key keeps working on other pods for
+	// up to this long (docs/architecture.md, "Tenant key cache"). Parsed from
+	// SANDBOX_API_KEY_CACHE_TTL (0–1m, default 15s; 0 = no cache).
+	APIKeyCacheTTL time.Duration
+
 	// LogLevel controls the minimum log severity.
 	// Parsed from SANDBOX_API_LOG_LEVEL (default info).
 	LogLevel slog.Level
@@ -191,6 +200,7 @@ func LoadAPI() (*APIConfig, error) {
 		OrphanReapBuffer:     defaultOrphanReapBuffer,
 		IdleStopAfter:        defaultIdleStopAfter,
 		IdleDeleteAfter:      defaultIdleDeleteAfter,
+		APIKeyCacheTTL:       defaultAPIKeyCacheTTL,
 		LogLevel:             defaultLogLevel,
 	}
 
@@ -412,6 +422,14 @@ func LoadAPI() (*APIConfig, error) {
 			return nil, fmt.Errorf("SANDBOX_API_ORPHAN_REAP_BUFFER must be a positive duration, got %q", v)
 		}
 		cfg.OrphanReapBuffer = d
+	}
+
+	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_KEY_CACHE_TTL")); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d < 0 || d > maxAPIKeyCacheTTL {
+			return nil, fmt.Errorf("SANDBOX_API_KEY_CACHE_TTL must be 0 or a duration up to %s, got %q", maxAPIKeyCacheTTL, v)
+		}
+		cfg.APIKeyCacheTTL = d
 	}
 
 	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_STORE")); v != "" {

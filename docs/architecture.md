@@ -90,6 +90,7 @@ The API gateway is the single public-facing service. It exposes a REST API for s
 | Store | `internal/api/store/` | Sandbox metadata (`sqlite` default, `postgres` for multi-pod) |
 | Sweeper lock | `internal/api/store/postgres.go` | Postgres advisory lock for idle sweeper leadership |
 | Idle sweeper | `internal/api/ttl.go` | Periodic scan to stop/delete idle sandboxes (ephemeral ones are deleted, never stopped), bounded concurrency with per-call runner deadlines |
+| Key cache | `internal/api/apikey_cache.go` | Per-replica cache of tenant key lookups ([Tenant key cache](#tenant-key-cache)) |
 | Config | `internal/api/config/` | Environment variable parsing and validation |
 
 **Middleware chain:** Recovery → CORS (optional) → Logging → Auth (API key) → Metrics (optional)
@@ -192,6 +193,10 @@ A sandbox can lose its guest (daemon exit, kernel panic, OOM) without losing its
 **Docker.** Containers run with `--restart unless-stopped`, so Docker restarts the container itself. The runner learns of the death from a `docker events` stream filtered to `die`; deliberate stops and removes are recorded before the call and matched against events, and exit codes are ignored (an exit `0` still lost everything running). The sandbox is reported not running until the wake path reapplies network policy to the possibly new container IP, waits for the daemon, and reports the restart. If the event stream drops, the watcher reconnects; a death missed meanwhile is served without its `409`.
 
 The report is spent by the first request that wakes the sandbox, so `DELETE /sandboxes/{id}/executions/{exec_id}` — which the SDK sends in the background after every command — returns `204` without waking a stopped sandbox, leaving the `409` for the next request a client reads.
+
+### Tenant key cache
+
+Each API replica remembers tenant key lookups, unknown keys included, for `SANDBOX_API_KEY_CACHE_TTL` (15 s), keyed by the key's SHA-256 hash. Revoking a key or deleting its tenant clears it on that replica at once, also when another replica already deleted the tenant; other replicas accept it until their entry expires. Concurrent lookups of one key share one query, and errors are not cached. At 10,000 entries the cache drops the expired ones, or all of them when that frees less than a quarter. `SANDBOX_API_KEY_CACHE_TTL=0` turns all of this off: every request reads the store.
 
 ## Security Model
 
