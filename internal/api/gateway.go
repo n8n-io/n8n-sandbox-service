@@ -3,6 +3,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/n8n-io/sandbox-service/internal/api/config"
@@ -15,13 +16,17 @@ import (
 // NewGatewayRouter creates the public API gateway that manages state and
 // coordinates with registered runner services. If rec is enabled, HTTPMiddleware
 // wraps the request chain, and its /metrics handler is mounted here unless
-// cfg gives metrics a listener of their own.
-func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.RunnerRegistry, rec *metrics.APIRecorder) (http.Handler, error) {
+// cfg gives metrics a listener of their own. Proxied requests report sandbox
+// activity to activity, which the caller runs.
+func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.RunnerRegistry, rec *metrics.APIRecorder, activity *ActivityRecorder) (http.Handler, error) {
+	if activity == nil {
+		return nil, errors.New("api: an activity recorder is required")
+	}
 	runnerTransport, err := newRunnerTransport(cfg)
 	if err != nil {
 		return nil, err
 	}
-	sandboxProxy := sandboxProxyHandler(s, cfg, runnerTransport)
+	sandboxProxy := sandboxProxyHandler(s, cfg, runnerTransport, activity)
 	keyCache := newAPIKeyCache(cfg.APIKeyCacheTTL)
 
 	mux := http.NewServeMux()
