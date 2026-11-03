@@ -272,6 +272,7 @@ func TestProvisionerDeniedRoutes(t *testing.T) {
 		{http.MethodGet, "/sandboxes/" + sandboxID + "/files/content?path=/tmp/x", ""},
 		{http.MethodPut, "/sandboxes/" + sandboxID + "/files?path=/tmp/x", "data"},
 		{http.MethodPost, "/sandboxes/" + sandboxID + "/files?path=/tmp/x", "data"},
+		{http.MethodPost, "/sandboxes/" + sandboxID + "/files/archive?path=/tmp/x", "data"},
 		{http.MethodDelete, "/sandboxes/" + sandboxID + "/files?path=/tmp/x", ""},
 		{http.MethodPost, "/sandboxes/" + sandboxID + "/files/copy", `{"src":"/a","dest":"/b"}`},
 		{http.MethodPost, "/sandboxes/" + sandboxID + "/files/move", `{"src":"/a","dest":"/b"}`},

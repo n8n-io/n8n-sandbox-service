@@ -49,6 +49,7 @@ func TestTenantCannotProxyToOtherTenantSandbox(t *testing.T) {
 		{http.MethodGet, "/files/content?path=/tmp/x", ""},
 		{http.MethodPut, "/files?path=/tmp/x", "pwned"},
 		{http.MethodPost, "/files?path=/tmp/x", "pwned"},
+		{http.MethodPost, "/files/archive?path=/tmp/x", "pwned"},
 		{http.MethodDelete, "/files?path=/tmp/x", ""},
 		{http.MethodPost, "/files/copy", `{"src":"/tmp/a","dest":"/tmp/b"}`},
 		{http.MethodPost, "/files/move", `{"src":"/tmp/a","dest":"/tmp/b"}`},
