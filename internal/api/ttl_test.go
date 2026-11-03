@@ -88,6 +88,12 @@ func (f *fakeSandboxControl) StopSandbox(ctx context.Context, req *pb.StopSandbo
 	if f.stopHook != nil {
 		f.stopHook(ctx)
 	}
+	// A stop that ran out of time did not happen. grpc-go hands the client a
+	// reply that arrived before it noticed its own deadline, so an OK here
+	// would make a hanging runner's stop count as done.
+	if err := ctx.Err(); err != nil {
+		return nil, status.FromContextError(err).Err()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.stopped = append(f.stopped, req.GetSandboxId())
