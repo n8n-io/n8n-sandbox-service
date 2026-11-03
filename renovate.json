@@ -13,7 +13,7 @@
   "packageRules": [
     {
       "description": "Match the minimumReleaseAge in sdk/pnpm-workspace.yaml. typescript and @types/node are excluded: this rule matches them before the rules below switch them to the custom datasources, which publish no release timestamps, so minimumReleaseAge would hold them back indefinitely. Lock file maintenance ignores minimumReleaseAge; sandbox-workspace/.npmrc enforces the same age in npm instead.",
-      "matchDatasources": ["npm"],
+      "matchDatasources": ["npm", "pypi"],
       "matchPackageNames": ["!typescript", "!@types/node"],
       "minimumReleaseAge": "2 days"
     },
