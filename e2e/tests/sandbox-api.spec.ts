@@ -308,6 +308,35 @@ test.describe('File operations', () => {
     expect(resp.status()).toBe(409);
   });
 
+  test('writeFiles writes 150 files in one request', async ({ request }) => {
+    const root = '/home/user/archive';
+    // Past the 100 bytes a ustar header holds, so the SDK sends a pax header.
+    const longPath = `${root}/${'long-directory-name/'.repeat(6)}file.txt`;
+    const files = Array.from({ length: 149 }, (_, i) => ({
+      path: `${root}/dir-${i % 10}/sub/file-${i}.txt`,
+      content: `content ${i}\n`,
+    }));
+    files.push({ path: longPath, content: 'long' });
+
+    await client.writeFiles(sandboxId, files);
+
+    const count = await exec(sandboxId, `find ${root} -type f | wc -l`);
+    expect(count).toHaveSucceeded();
+    expect(count.stdout.trim()).toBe('150');
+    expect(await downloadFile(sandboxId, `${root}/dir-3/sub/file-13.txt`)).toBe('content 13\n');
+    expect(await downloadFile(sandboxId, longPath)).toBe('long');
+
+    await client.writeFiles(sandboxId, [{ path: `${root}/dir-3/sub/file-13.txt`, content: 'overwritten' }]);
+    expect(await downloadFile(sandboxId, `${root}/dir-3/sub/file-13.txt`)).toBe('overwritten');
+
+    const invalid = await apiRequest(request, 'POST', `/sandboxes/${sandboxId}/files/archive?path=/tmp`, {
+      data: 'not an archive',
+      rawHeaders: { 'X-Api-Key': await getApiKey(), 'Content-Type': 'application/x-tar' },
+    });
+    expect(invalid.status).toBe(400);
+    expect(invalid.body).toContain('invalid archive');
+  });
+
   test('stat file', async () => {
     await uploadFile(sandboxId, 'tmp/stat.txt', 'content');
     const stat = await client.stat(sandboxId, '/tmp/stat.txt');
@@ -799,6 +828,7 @@ test.describe('Deleted Sandbox 404 Tests', () => {
       { method: 'GET', path: `/sandboxes/${tempId}/files/content?path=/tmp/test.txt` },
       { method: 'PUT', path: `/sandboxes/${tempId}/files`, data: { path: '/tmp/test.txt', content: 'test' } },
       { method: 'POST', path: `/sandboxes/${tempId}/files`, data: { path: '/tmp/test.txt', content: 'test' } },
+      { method: 'POST', path: `/sandboxes/${tempId}/files/archive?path=/tmp`, data: 'test' },
       { method: 'DELETE', path: `/sandboxes/${tempId}/files?path=/tmp/test.txt` },
       { method: 'POST', path: `/sandboxes/${tempId}/files/copy`, data: { src: '/tmp/src.txt', dest: '/tmp/dest.txt' } },
       { method: 'POST', path: `/sandboxes/${tempId}/files/move`, data: { src: '/tmp/src.txt', dest: '/tmp/dest.txt' } },
@@ -873,6 +903,12 @@ test.describe('Tenant isolation', () => {
           contentType: 'application/octet-stream',
         },
         { method: 'DELETE', path: `/sandboxes/${id}/files?path=/tmp/x` },
+        {
+          method: 'POST',
+          path: `/sandboxes/${id}/files/archive?path=/tmp`,
+          data: 'pwned',
+          contentType: 'application/x-tar',
+        },
         {
           method: 'POST',
           path: `/sandboxes/${id}/files/copy`,

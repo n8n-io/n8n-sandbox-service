@@ -115,6 +115,13 @@ await client.writeFile(sandbox.id, '/home/user/hello.txt', 'Hello, world!');
 // Write without overwriting
 await client.writeFile(sandbox.id, '/home/user/hello.txt', 'new content', false);
 
+// Write many files in one request (one gzipped tar, parent directories created).
+// Files are written in order; if one fails, the ones before it stay written.
+await client.writeFiles(sandbox.id, [
+  { path: '/home/user/src/index.ts', content: 'export {};' },
+  { path: '/home/user/src/lib/util.ts', content: 'export const x = 1;' },
+]);
+
 // Read a file
 const buf = await client.readFile(sandbox.id, '/home/user/hello.txt');
 console.log(buf.toString());

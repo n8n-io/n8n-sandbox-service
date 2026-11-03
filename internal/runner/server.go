@@ -69,6 +69,7 @@ func NewRouter(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.Runner
 	mux.HandleFunc("GET /sandboxes/{id}/files/content", proxy)
 	mux.HandleFunc("PUT /sandboxes/{id}/files", uploadProxy)
 	mux.HandleFunc("POST /sandboxes/{id}/files", uploadProxy)
+	mux.HandleFunc("POST /sandboxes/{id}/files/archive", uploadProxy)
 	mux.HandleFunc("DELETE /sandboxes/{id}/files", proxy)
 	mux.HandleFunc("POST /sandboxes/{id}/mkdir", proxy)
 	mux.HandleFunc("GET /sandboxes/{id}/stat", proxy)
