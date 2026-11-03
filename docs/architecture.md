@@ -91,6 +91,7 @@ The API gateway is the single public-facing service. It exposes a REST API for s
 | Sweeper lock | `internal/api/store/postgres.go` | Postgres advisory lock for idle sweeper leadership |
 | Idle sweeper | `internal/api/ttl.go` | Periodic scan to stop/delete idle sandboxes (ephemeral ones are deleted, never stopped), bounded concurrency with per-call runner deadlines |
 | Activity recorder | `internal/api/activity.go` | Writes `last_active_at` in the background ([Sandbox activity](#sandbox-activity)) |
+| Key cache | `internal/api/apikey_cache.go` | Per-replica cache of tenant key lookups ([Tenant key cache](#tenant-key-cache)) |
 | Config | `internal/api/config/` | Environment variable parsing and validation |
 
 **Middleware chain:** Recovery → CORS (optional) → Logging → Auth (API key) → Metrics (optional)
@@ -203,6 +204,10 @@ The idle sweeper stops and deletes sandboxes by `last_active_at`. Writing it on 
 **When `last_active_at` is written**, with `T` = `SANDBOX_API_ACTIVITY_WRITE_INTERVAL` (5 s): every `T`, one statement per replica writes each sandbox it served since the last write. The time written is when its latest response started or ended or, while a response is still open, the time of the write; a response counts as open for at most `SANDBOX_API_MAX_RESPONSE_ACTIVITY` (30 min). A burst to one sandbox therefore costs one row per replica. The statement never moves `last_active_at` back, and it sets `status` to `running`. A request that wakes a stopped sandbox, or comes after a quiet spell, asks for the write at once instead of at the next `T`, so `GET` shows the sandbox running about one database round trip later. A failed write is retried at the next `T`. Writes never delay a response, and each gets up to `T`.
 
 **Why the idle windows grow by `2T` (10 s):** a request waits up to `T` for the next write, which takes up to `T`. So `last_active_at` trails the last use by at most `2T`, and the stop sweep and the `404` fence wait that much longer. Deletes wait `2T` twice, so that a request let through just before the fence is written before the sweeper looks. Two limits remain: the sweeper does not see a request until its write lands, which for a request after a quiet spell is usually one database round trip later; and while writes fail, nothing is written.
+
+### Tenant key cache
+
+Each API replica remembers tenant key lookups, unknown keys included, for `SANDBOX_API_KEY_CACHE_TTL` (15 s), keyed by the key's SHA-256 hash. Revoking a key or deleting its tenant clears it on that replica at once, also when another replica already deleted the tenant; other replicas accept it until their entry expires. Concurrent lookups of one key share one query, and errors are not cached. At 10,000 entries the cache drops the expired ones, or all of them when that frees less than a quarter. `SANDBOX_API_KEY_CACHE_TTL=0` turns all of this off: every request reads the store.
 
 ## Security Model
 
