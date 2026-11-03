@@ -1,6 +1,6 @@
 # Configuration
 
-All services are configured via environment variables.
+All services are configured via environment variables. [limits.md](limits.md) lists the limits clients and operators run into.
 
 ## Contents
 
