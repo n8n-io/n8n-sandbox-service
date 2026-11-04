@@ -2,13 +2,14 @@ import { test, expect } from '@playwright/test';
 import './matchers';
 import {
   addAddress,
+  callVolumeMount,
   createSandbox,
   deleteSandbox,
   exec,
   execWithTransientRetry,
   siblingOf,
 } from './helpers';
-import { DOCKER_ONLY } from './tags';
+import { DOCKER_ONLY, FIRECRACKER_ONLY } from './tags';
 
 // Every sandbox process starts as uid 1000, so nothing is effective. The
 // bounding set is where a restored capability would show up.
@@ -91,6 +92,31 @@ test.describe('Docker sandbox capability policy', DOCKER_ONLY, () => {
       const addresses = await exec(id, 'hostname -I');
       expect(addresses).toHaveSucceeded();
       expect(addresses.stdout.split(/\s+/)).not.toContain(extraIP);
+    } finally {
+      await deleteSandbox(id);
+    }
+  });
+});
+
+// The guest daemon drops root at create, before anything runs in the sandbox.
+test.describe('volume mount request', () => {
+  test('was already made when a sandbox process can send it', FIRECRACKER_ONLY, async () => {
+    const id = await createSandbox();
+    try {
+      const call = await execWithTransientRetry(id, callVolumeMount);
+      expect(call).toHaveSucceeded();
+      expect(call.stdout.trim()).toBe('409');
+    } finally {
+      await deleteSandbox(id);
+    }
+  });
+
+  test('is not served on Docker', DOCKER_ONLY, async () => {
+    const id = await createSandbox();
+    try {
+      const call = await execWithTransientRetry(id, callVolumeMount);
+      expect(call).toHaveSucceeded();
+      expect(call.stdout.trim()).toBe('501');
     } finally {
       await deleteSandbox(id);
     }

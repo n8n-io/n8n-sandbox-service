@@ -102,10 +102,12 @@ Steps, in order:
 | `cold_boot` | recover | Boot the sandbox's own rootfs, replacing the restore |
 | `start_proxy` | create, wake, recover | Start the host-side daemon proxy |
 | `probe_daemon` | create, wake, recover | First successful call to the in-guest daemon |
+| `mount_volumes` | create, recover | Volume mount request, after which the guest daemon drops root |
 
-A wake skips the two clone steps, since the sandbox's disk already exists. A
-recovery skips them too and swaps `load_snapshot` for `cold_boot` — the field to
-compare when reading recovery latency against an ordinary wake.
+A wake skips the two clone steps, since the sandbox's disk already exists, and
+`mount_volumes`. A recovery skips the clone steps too and swaps `load_snapshot`
+for `cold_boot` — the field to compare when reading recovery latency against an
+ordinary wake.
 
 ### Runner: guest deaths
 
@@ -146,6 +148,12 @@ Related series:
   `result="error"` is one the runner could not bring back, including a sandbox
   refused for want of capacity before any boot was attempted. `result` carries
   `success` or `error`, the same pair as every other `result` label here.
+- `sandbox_volume_mount_requests_total{result}` — the guest volume mount request
+  of each Firecracker create and cold boot. `result` is `success` or why it
+  failed: `no_response`, `invalid_request`, `already_mounted`, `unsupported`
+  (the daemon has no endpoint or no root; a failure only when volumes were
+  named), `drive` (a drive never showed its expected size), `mount_point`,
+  `mount`, or `error`. Every failure fails the create or wake.
 - `sandbox_container_operation_duration_seconds{operation}` — the totals the
   steps add up to, a recovery's under `operation="recover"` like its steps.
 - `sandbox_http_request_duration_seconds{role,route,method}` — end-to-end per

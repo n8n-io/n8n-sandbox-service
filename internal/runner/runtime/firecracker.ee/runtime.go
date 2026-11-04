@@ -307,6 +307,7 @@ type dependencies struct {
 	statTemplateKernel  func(path string) (kernelPin, error)
 	newProxy            func(ctx context.Context, sandboxID string, listenAddr string, netnsName string, guestAddr string) (daemonProxy, error)
 	probeDaemon         func(ctx context.Context, baseURL string) error
+	mountVolumeDrives   func(ctx context.Context, baseURL string, drives []volumeDrive) error
 	volumeSpace         func(path string) (volumeSpace, error)
 }
 
@@ -330,7 +331,8 @@ func defaultDependencies(fc Config) dependencies {
 		probeDaemon: func(ctx context.Context, baseURL string) error {
 			return probeDaemon(ctx, baseURL, fc.DaemonWaitTimeout)
 		},
-		volumeSpace: statVolume,
+		mountVolumeDrives: mountVolumeDrives,
+		volumeSpace:       statVolume,
 	}
 }
 

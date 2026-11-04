@@ -211,6 +211,22 @@ func TestRunnerRecorderGuestDeaths(t *testing.T) {
 	}
 }
 
+func TestRunnerRecorderVolumeMounts(t *testing.T) {
+	r := NewRunnerRecorder(true)
+
+	r.ObserveVolumeMount("success")
+	r.ObserveVolumeMount("success")
+	r.ObserveVolumeMount("drive")
+
+	if got := r.VolumeMountCount("success"); got != 2 {
+		t.Errorf("volume_mount_requests_total{result=success} = %v, want 2", got)
+	}
+	body := scrape(t, r.Registry())
+	if want := `sandbox_volume_mount_requests_total{result="drive",role="runner"} 1`; !strings.Contains(body, want) {
+		t.Errorf("scrape body missing %q", want)
+	}
+}
+
 func TestRunnerRecorderDisabled(t *testing.T) {
 	r := NewRunnerRecorder(false)
 	if r.Enabled() {
