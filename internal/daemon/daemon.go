@@ -17,6 +17,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/n8n-io/sandbox-service/internal/safetar"
 )
 
 const (
@@ -402,7 +404,7 @@ func decodeJSONBody(body io.Reader, dst any) error {
 }
 
 func fileOpStatusCode(err error) int {
-	if errors.Is(err, errInvalidArchive) {
+	if errors.Is(err, safetar.ErrInvalid) {
 		return http.StatusBadRequest
 	}
 	msg := strings.ToLower(err.Error())
