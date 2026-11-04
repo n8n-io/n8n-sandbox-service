@@ -2,11 +2,13 @@ package firecracker
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -69,9 +71,15 @@ func TestColdBootSendsTheGoldenBuildsBootRequests(t *testing.T) {
 		{http.MethodPut, "/machine-config", `{"vcpu_count":2,"mem_size_mib":2048,"smt":false}`},
 		{http.MethodPut, "/boot-source", `{"kernel_image_path":"/vmlinux","boot_args":"` + params.BootArgs + `"}`},
 		{http.MethodPut, "/drives/rootfs", `{"drive_id":"rootfs","path_on_host":"/rootfs.ext4","is_root_device":true,"is_read_only":false}`},
-		{http.MethodPut, "/network-interfaces/eth0", `{"iface_id":"eth0","guest_mac":"AA:FC:00:00:00:01","host_dev_name":"fc-tap-0"}`},
-		{http.MethodPut, "/actions", `{"action_type":"InstanceStart"}`},
 	}
+	for i := range params.VolumeDrives {
+		want = append(want, request{http.MethodPut, fmt.Sprintf("/drives/vol%d", i),
+			fmt.Sprintf(`{"drive_id":"vol%d","path_on_host":"/vol%d.img","is_root_device":false,"is_read_only":true}`, i, i)})
+	}
+	want = append(want,
+		request{http.MethodPut, "/network-interfaces/eth0", `{"iface_id":"eth0","guest_mac":"AA:FC:00:00:00:01","host_dev_name":"fc-tap-0"}`},
+		request{http.MethodPut, "/actions", `{"action_type":"InstanceStart"}`},
+	)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -81,6 +89,32 @@ func TestColdBootSendsTheGoldenBuildsBootRequests(t *testing.T) {
 	for i, w := range want {
 		if got[i] != w {
 			t.Errorf("request %d = %+v, want %+v", i, got[i], w)
+		}
+	}
+}
+
+func TestColdBootOfASnapshotWithoutVolumeDrivesAttachesNone(t *testing.T) {
+	var mu sync.Mutex
+	var paths []string
+	socket := listenUnixHTTP(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	params := testBootParams(testConfig())
+	params.SchemaVersion = bootParamsSchemaNoVolumeDrives
+	params.VolumeDrives = nil
+	if err := coldBoot(context.Background(), socket, &params); err != nil {
+		t.Fatalf("coldBoot() failed: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, p := range paths {
+		if p != "/drives/rootfs" && strings.HasPrefix(p, "/drives/") {
+			t.Errorf("coldBoot() attached %s for a snapshot without volume drives", p)
 		}
 	}
 }

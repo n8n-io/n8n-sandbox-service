@@ -795,7 +795,29 @@ chmod 0664 %[1]s/snapshot_mem %[1]s/snapshot_state %[6]s
 `, shellquote.Quote(jailRoot), shellquote.Quote(state.snapshotMemPath), shellquote.Quote(state.snapshotStatePath),
 		shellquote.Quote(state.rootfsPath), shellquote.Quote(filepath.Dir(rootfsTarget)), shellquote.Quote(rootfsTarget),
 		shellquote.Quote(filepath.Join(r.config.TemplateDir, "vmlinux")), shellquote.Quote(filepath.Dir(kernelTarget)), shellquote.Quote(kernelTarget))
+	script += volumeDrivePlaceholders(r.config.JailerBaseDir, jailRoot, state.bootParams.VolumeDrives)
 	return r.deps.run(ctx, "sudo", "/bin/sh", "-c", script)
+}
+
+const volumeDrivePlaceholderName = "volume-drive-placeholder"
+
+// volumeDrivePlaceholders hard-links each volume drive's jail path to one empty,
+// root-owned, read-only file: no mounts, and one inode for the drive serial.
+// Links are renamed in from the root-owned jail directory, because Firecracker's
+// uid can write to the jail root and a rename replaces a planted symlink.
+func volumeDrivePlaceholders(jailerBaseDir, jailRoot string, drives []volumeDrive) string {
+	if len(drives) == 0 {
+		return ""
+	}
+	placeholder := shellquote.Quote(filepath.Join(jailerBaseDir, volumeDrivePlaceholderName))
+	var b strings.Builder
+	fmt.Fprintf(&b, "if [ ! -f %[1]s ]; then (umask 0333 && : > %[1]s.$$ && mv -fT %[1]s.$$ %[1]s); fi\n", placeholder)
+	for _, drive := range drives {
+		name := strings.TrimPrefix(drive.Path, "/")
+		staged := shellquote.Quote(filepath.Join(filepath.Dir(jailRoot), "."+name))
+		fmt.Fprintf(&b, "ln -f %s %s\nmv -fT %s %s\n", placeholder, staged, staged, shellquote.Quote(filepath.Join(jailRoot, name)))
+	}
+	return b.String()
 }
 
 // setupNetwork is implemented in network_wirer.go alongside the slot wirer.

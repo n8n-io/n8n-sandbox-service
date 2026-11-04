@@ -3,6 +3,7 @@ package firecracker
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,11 +21,21 @@ func testBootParams(cfg Config) bootParams {
 		KernelImagePath:   "/vmlinux",
 		BootArgs:          "console=ttyS0 reboot=k panic=1 pci=off ipv6.disable=1 clocksource=kvm-clock init=/sandbox-daemon ip=172.16.0.10::172.16.0.1:255.255.255.0::eth0:off",
 		RootfsDrivePath:   "/rootfs.ext4",
+		VolumeDrives:      testVolumeDrives(8),
 		GuestMAC:          "AA:FC:00:00:00:01",
 		GuestIP:           cfg.GuestIP,
 		HostTapDeviceName: cfg.HostTapDeviceName,
 		DaemonPort:        cfg.DaemonPort,
 	}
+}
+
+// testVolumeDrives is what create-golden-snapshot.sh records for n drives.
+func testVolumeDrives(n int) []volumeDrive {
+	drives := make([]volumeDrive, n)
+	for i := range drives {
+		drives[i] = volumeDrive{DriveID: fmt.Sprintf("vol%d", i), Path: fmt.Sprintf("/vol%d.img", i)}
+	}
+	return drives
 }
 
 func writeBootParams(t *testing.T, path string, p bootParams) {
@@ -74,6 +85,23 @@ func TestLoadBootParamsAcceptsAValidSidecar(t *testing.T) {
 	}
 }
 
+func TestLoadBootParamsAcceptsASidecarFromBeforeVolumeDrives(t *testing.T) {
+	cfg := testConfig()
+	p := testBootParams(cfg)
+	p.SchemaVersion = bootParamsSchemaNoVolumeDrives
+	p.VolumeDrives = nil
+	path := filepath.Join(t.TempDir(), bootParamsFileName)
+	writeBootParams(t, path, p)
+
+	got, err := loadBootParams(path)
+	if err != nil {
+		t.Fatalf("loadBootParams() failed: %v", err)
+	}
+	if len(got.VolumeDrives) != 0 {
+		t.Fatalf("volume_drives = %+v, want none", got.VolumeDrives)
+	}
+}
+
 func TestLoadBootParamsRejectsUnusableSidecars(t *testing.T) {
 	cfg := testConfig()
 
@@ -99,6 +127,17 @@ func TestLoadBootParamsRejectsUnusableSidecars(t *testing.T) {
 		{"bad guest mac", func(p *bootParams) { p.GuestMAC = "zz" }, "guest_mac"},
 		{"no tap device", func(p *bootParams) { p.HostTapDeviceName = "" }, "host_tap_device_name"},
 		{"bad daemon port", func(p *bootParams) { p.DaemonPort = 70000 }, "daemon_port"},
+		{"volume drives in a schema 1 sidecar", func(p *bootParams) { p.SchemaVersion = bootParamsSchemaNoVolumeDrives }, "volume_drives"},
+		{"too many volume drives", func(p *bootParams) { p.VolumeDrives = testVolumeDrives(maxVolumeDrives + 1) }, "volume_drives"},
+		{"volume drive id out of order", func(p *bootParams) { p.VolumeDrives[1].DriveID = "vol7" }, "volume_drives[1] drive_id"},
+		{"volume drive id with a path", func(p *bootParams) { p.VolumeDrives[0].DriveID = "../machine-config" }, "volume_drives[0] drive_id"},
+		{"relative volume drive path", func(p *bootParams) { p.VolumeDrives[0].Path = "vol0.img" }, "volume_drives[0] path"},
+		{"volume drive outside the jail", func(p *bootParams) { p.VolumeDrives[0].Path = "/../../etc/passwd" }, "volume_drives[0] path"},
+		{"volume drive at the jail root", func(p *bootParams) { p.VolumeDrives[0].Path = "/" }, "volume_drives[0] path"},
+		{"volume drive on the rootfs", func(p *bootParams) { p.VolumeDrives[0].Path = "/rootfs.ext4" }, "volume_drives[0] path"},
+		{"volume drive on a file jailer creates", func(p *bootParams) { p.VolumeDrives[0].Path = "/dev/kvm" }, "volume_drives[0] path"},
+		{"two volume drives on one path", func(p *bootParams) { p.VolumeDrives[1].Path = "/vol0.img" }, "volume_drives[1] path"},
+		{"rootfs on a volume drive path", func(p *bootParams) { p.RootfsDrivePath = "/vol0.img" }, "volume_drives[0] path"},
 	}
 
 	for _, tt := range tests {
