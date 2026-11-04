@@ -138,6 +138,7 @@ func TestLoadBootParamsRejectsUnusableSidecars(t *testing.T) {
 		{"volume drive on a file jailer creates", func(p *bootParams) { p.VolumeDrives[0].Path = "/dev/kvm" }, "volume_drives[0] path"},
 		{"two volume drives on one path", func(p *bootParams) { p.VolumeDrives[1].Path = "/vol0.img" }, "volume_drives[1] path"},
 		{"rootfs on a volume drive path", func(p *bootParams) { p.RootfsDrivePath = "/vol0.img" }, "volume_drives[0] path"},
+		{"kernel on a volume drive path", func(p *bootParams) { p.KernelImagePath = "/vol0.img" }, "volume_drives[0] path"},
 	}
 
 	for _, tt := range tests {
