@@ -152,8 +152,9 @@ Related series:
   of each Firecracker create and cold boot. `result` is `success` or why it
   failed: `no_response`, `invalid_request`, `already_mounted`, `unsupported`
   (the daemon has no endpoint or no root; a failure only when volumes were
-  named), `drive` (a drive never showed its expected size), `mount_point`,
-  `mount`, or `error`. Every failure fails the create or wake.
+  named), `drive` (a drive could not be read or flushed, or never showed its
+  expected size), `mount_point`, `mount`, or `error`. Every failure fails the
+  create or wake.
 - `sandbox_container_operation_duration_seconds{operation}` — the totals the
   steps add up to, a recovery's under `operation="recover"` like its steps.
 - `sandbox_http_request_duration_seconds{role,route,method}` — end-to-end per

@@ -4,6 +4,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"runtime/debug"
 
 	"github.com/n8n-io/sandbox-service/internal/daemon/volumedrives"
 )
@@ -21,11 +22,16 @@ func (h *Handler) mountVolumes(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "volumes can only be mounted by the first request")
 		return
 	}
-	// Also on a panic: a daemon that keeps root after this request exits.
+	// Also on a panic: a daemon that keeps root after this request exits. It logs
+	// the panic itself, since exiting ends the process before net/http could.
 	droppedRoot := false
 	defer func() {
-		if !droppedRoot {
-			h.exit(1)
+		if droppedRoot {
+			return
+		}
+		defer h.exit(1)
+		if p := recover(); p != nil {
+			slog.Error("volume mount request panicked", "panic", p, "stack", string(debug.Stack()))
 		}
 	}()
 
@@ -42,7 +48,7 @@ func (h *Handler) mountVolumes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.dropRoot(); err != nil {
-		slog.Error("drop root after volume mounts", "err", err)
+		slog.Error("drop root after volume mounts", "err", err, "status", resp.Code, "request_err", resp.Error)
 		return
 	}
 	droppedRoot = true

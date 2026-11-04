@@ -1,9 +1,11 @@
 package daemon
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -163,28 +165,44 @@ func TestVolumeMountEndpointDropsRootWhenTheRequestFails(t *testing.T) {
 	}
 }
 
+// captureLogs redirects the default logger into the returned buffer.
+func captureLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	return &buf
+}
+
 func TestVolumeMountEndpointExitsWhenRootCannotBeDropped(t *testing.T) {
+	logs := captureLogs(t)
 	sys := newFakeSys()
 	sys.errs["drop root"] = errors.New("operation not permitted")
+	sys.errs["mount /dev/vdb /mnt/a"] = errors.New("bad superblock")
 	handler := newRootHandler(t, sys)
 
-	postVolumes(handler, `{"volumes":[]}`)
-	requireCalls(t, sys, "drop root", "exit 1")
+	postVolumes(handler, volumesBody(t, oneVolume))
+	requireCalls(t, sys, "flush /dev/vdb", "mkdir /mnt/a", "mount /dev/vdb /mnt/a", "drop root", "exit 1")
 	if rr := serve(handler, http.MethodGet, "/stat?path=/", ""); rr.Code != http.StatusServiceUnavailable {
 		t.Fatalf("GET /stat: status %d, want 503 while the daemon holds root", rr.Code)
 	}
+	if !strings.Contains(logs.String(), "operation not permitted") || !strings.Contains(logs.String(), "bad superblock") {
+		t.Fatalf("logs = %s, want both the drop failure and the mount failure", logs.String())
+	}
 }
 
-func TestVolumeMountEndpointExitsWhenTheMountPanics(t *testing.T) {
+func TestVolumeMountEndpointLogsAndExitsWhenTheMountPanics(t *testing.T) {
+	logs := captureLogs(t)
 	sys := newFakeSys()
 	sys.panicSize = true
 	handler := newRootHandler(t, sys)
 
-	func() {
-		defer func() { _ = recover() }()
-		postVolumes(handler, volumesBody(t, oneVolume))
-	}()
+	postVolumes(handler, volumesBody(t, oneVolume))
 	requireCalls(t, sys, "exit 1")
+	if !strings.Contains(logs.String(), `"panic":"boom"`) || !strings.Contains(logs.String(), "DeviceSize") {
+		t.Fatalf("logs = %s, want the panic and its stack", logs.String())
+	}
 }
 
 func TestVolumeMountEndpointHandlesOneOfConcurrentRequests(t *testing.T) {
