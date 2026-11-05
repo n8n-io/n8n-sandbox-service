@@ -1,8 +1,10 @@
 package config
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -762,6 +764,82 @@ func TestLoadAPIRejectsInvalidRequestLimit(t *testing.T) {
 			t.Setenv("SANDBOX_API_MAX_INFLIGHT_PER_TENANT", value)
 			if _, err := LoadAPI(); err == nil {
 				t.Fatalf("expected LoadAPI() to reject SANDBOX_API_MAX_INFLIGHT_PER_TENANT=%s", value)
+			}
+		})
+	}
+}
+
+func TestLoadAPIVolumeStoreDefaultsToNone(t *testing.T) {
+	setRequiredAPIEnv(t)
+	t.Setenv("SANDBOX_API_VOLUME_LOCAL_URL", "http://ignored")
+
+	cfg, err := LoadAPI()
+	if err != nil {
+		t.Fatalf("LoadAPI() failed: %v", err)
+	}
+	if cfg.VolumeStore != VolumeStoreNone || cfg.VolumeLocalURL != "" {
+		t.Errorf("VolumeStore = %q, VolumeLocalURL = %q; want neither", cfg.VolumeStore, cfg.VolumeLocalURL)
+	}
+}
+
+func TestLoadAPIVolumeStoreLocal(t *testing.T) {
+	setRequiredAPIEnv(t)
+	t.Setenv("SANDBOX_API_VOLUME_STORE", "local")
+	if _, err := LoadAPI(); err == nil {
+		t.Fatal("expected local to require SANDBOX_API_VOLUME_LOCAL_URL")
+	}
+
+	t.Setenv("SANDBOX_API_VOLUME_LOCAL_URL", " http://sandbox-api:8080/ ")
+	cfg, err := LoadAPI()
+	if err != nil {
+		t.Fatalf("LoadAPI() failed: %v", err)
+	}
+	if cfg.VolumeStore != VolumeStoreLocal || cfg.VolumeLocalURL != "http://sandbox-api:8080" {
+		t.Errorf("VolumeStore = %q, VolumeLocalURL = %q", cfg.VolumeStore, cfg.VolumeLocalURL)
+	}
+}
+
+func TestLoadAPIVolumeStoreRemote(t *testing.T) {
+	setRequiredAPIEnv(t)
+	t.Setenv("SANDBOX_API_VOLUME_STORE", "REMOTE")
+	if _, err := LoadAPI(); err == nil {
+		t.Fatal("expected remote to require SANDBOX_API_VOLUME_REMOTE_SOCKET")
+	}
+
+	t.Setenv("SANDBOX_API_VOLUME_REMOTE_SOCKET", " /run/volume-store/helper.sock ")
+	cfg, err := LoadAPI()
+	if err != nil {
+		t.Fatalf("LoadAPI() failed: %v", err)
+	}
+	if cfg.VolumeStore != VolumeStoreRemote || cfg.VolumeRemoteSocket != "/run/volume-store/helper.sock" {
+		t.Errorf("VolumeStore = %q, VolumeRemoteSocket = %q", cfg.VolumeStore, cfg.VolumeRemoteSocket)
+	}
+}
+
+func TestLoadAPIRejectsInvalidVolumeStoreConfig(t *testing.T) {
+	cases := []map[string]string{
+		{"SANDBOX_API_VOLUME_STORE": "s3"},
+		{"SANDBOX_API_VOLUME_STORE": "local", "SANDBOX_API_VOLUME_LOCAL_URL": "sandbox-api:8080"},
+		{"SANDBOX_API_VOLUME_STORE": "local", "SANDBOX_API_VOLUME_LOCAL_URL": "ftp://sandbox-api"},
+		{"SANDBOX_API_VOLUME_STORE": "local", "SANDBOX_API_VOLUME_LOCAL_URL": "http://user:pass@sandbox-api"},
+		{"SANDBOX_API_VOLUME_STORE": "local", "SANDBOX_API_VOLUME_LOCAL_URL": "http://sandbox-api/?x=1"},
+		{"SANDBOX_API_VOLUME_STORE": "local", "SANDBOX_API_VOLUME_LOCAL_URL": "http://sandbox-api/#x"},
+		{"SANDBOX_API_VOLUME_STORE": "azblob"},
+		{"SANDBOX_API_VOLUME_STORE": "remote", "SANDBOX_API_VOLUME_REMOTE_SOCKET": "helper.sock"},
+		{"SANDBOX_API_VOLUME_STORE": "remote", "SANDBOX_API_VOLUME_REMOTE_SOCKET": "/" + strings.Repeat("a", 107)},
+	}
+	for _, env := range cases {
+		t.Run(fmt.Sprint(env), func(t *testing.T) {
+			setRequiredAPIEnv(t)
+			for name, value := range env {
+				t.Setenv(name, value)
+			}
+			_, err := LoadAPI()
+			if err == nil {
+				t.Fatal("expected LoadAPI() to fail")
+			}
+			if strings.Contains(err.Error(), "pass") || strings.Contains(err.Error(), "sig=") {
+				t.Errorf("error repeats a secret: %v", err)
 			}
 		})
 	}

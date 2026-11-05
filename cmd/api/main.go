@@ -21,6 +21,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/grpc/pb"
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
+	"github.com/n8n-io/sandbox-service/internal/api/volumestore"
 	"github.com/n8n-io/sandbox-service/internal/grpctls"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/obs"
@@ -78,6 +79,12 @@ func main() {
 	}
 	defer sandboxStore.Close()
 
+	volumes, err := newVolumeStore(cfg)
+	if err != nil {
+		slog.Error("open volume store", "error", err)
+		os.Exit(1)
+	}
+
 	mrec := metrics.NewAPIRecorder(cfg.MetricsEnabled)
 	if mrec.Enabled() {
 		mrec.SetActiveSandboxes(func() float64 {
@@ -105,7 +112,7 @@ func main() {
 	defer sweepCancel()
 	api.StartIdleSweeper(sweepCtx, sandboxStore, runnerReg, cfg, sweepLockDB)
 
-	handler, err := api.NewGatewayRouter(sandboxStore, cfg, runnerReg, mrec)
+	handler, err := api.NewGatewayRouter(sandboxStore, cfg, runnerReg, mrec, volumes)
 	if err != nil {
 		slog.Error("failed to create api router", "error", err)
 		os.Exit(1)
@@ -207,4 +214,21 @@ func main() {
 	}
 
 	slog.Info("api stopped")
+}
+
+// newVolumeStore contacts nothing, so startup never waits on the store helper.
+func newVolumeStore(cfg *config.APIConfig) (volumestore.Store, error) {
+	switch cfg.VolumeStore {
+	case config.VolumeStoreLocal:
+		vs, err := volumestore.NewLocal(cfg.DataDir, cfg.VolumeLocalURL)
+		if err != nil {
+			return nil, err
+		}
+		slog.Info("using local volume store", "dir", filepath.Join(cfg.DataDir, "volumes"), "url", cfg.VolumeLocalURL)
+		return vs, nil
+	case config.VolumeStoreRemote:
+		slog.Info("using remote volume store", "socket", cfg.VolumeRemoteSocket)
+		return volumestore.NewRemote(cfg.VolumeRemoteSocket), nil
+	}
+	return nil, nil
 }

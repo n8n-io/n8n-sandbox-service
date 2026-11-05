@@ -31,7 +31,7 @@ func dedicatedMetricsSetup(t *testing.T) http.Handler {
 		MaxFileBytes:      1024,
 		ListenAddr:        ":8080",
 		MetricsListenAddr: ":9100",
-	}, registry.New(45*time.Second), rec)
+	}, registry.New(45*time.Second), rec, nil)
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}

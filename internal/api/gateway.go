@@ -8,6 +8,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/config"
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
+	"github.com/n8n-io/sandbox-service/internal/api/volumestore"
 	"github.com/n8n-io/sandbox-service/internal/limits"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 )
@@ -15,8 +16,9 @@ import (
 // NewGatewayRouter creates the public API gateway that manages state and
 // coordinates with registered runner services. If rec is enabled, HTTPMiddleware
 // wraps the request chain, and its /metrics handler is mounted here unless
-// cfg gives metrics a listener of their own.
-func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.RunnerRegistry, rec *metrics.APIRecorder) (http.Handler, error) {
+// cfg gives metrics a listener of their own. volumes may be nil; a local one
+// adds the route its read URLs point at.
+func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.RunnerRegistry, rec *metrics.APIRecorder, volumes volumestore.Store) (http.Handler, error) {
 	runnerTransport, err := newRunnerTransport(cfg)
 	if err != nil {
 		return nil, err
@@ -84,6 +86,9 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 		handler = metrics.HTTPMiddleware(rec)(handler)
 	}
 	handler = AuthMiddleware(cfg.APIKeys, cfg.ProvisionerKeys, cfg.ScalerKeys, s, keyCache)(handler)
+	if local, ok := volumes.(*volumestore.Local); ok {
+		handler = withVolumeObjects(handler, local, cfg.MaxInflightPerTenant, rec)
+	}
 	handler = publicPaths.RejectOtherMethods(handler)
 	handler = LoggingMiddleware(handler)
 	if cfg.EnableCORS {

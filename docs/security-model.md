@@ -67,6 +67,16 @@ of tenants.
 A consequence worth keeping in mind: any key on a tenant that was not created
 together with the tenant was minted by an admin.
 
+With `SANDBOX_API_VOLUME_STORE=local`, `GET /volume-objects/…` takes no API
+key: it serves one volume object to whoever holds a URL the API signed for it,
+an HMAC-SHA256 over method, path and an expiry at most an hour ahead, and
+answers a missing, altered or expired signature with `403`. It proxies nothing,
+the access log redacts the signature, and over plain `http` a URL seen on the
+network works until it expires. With `remote`, the
+[store helper](volume-store-helper.md) holds the storage credentials and issues
+the read URLs; it authenticates nobody on its socket, so only the API may reach
+it.
+
 Authorization runs on every sandbox request through `canAccessSandbox` in
 [internal/api/middleware_auth.go](../internal/api/middleware_auth.go):
 
