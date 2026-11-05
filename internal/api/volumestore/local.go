@@ -127,11 +127,11 @@ func (l *Local) Put(ctx context.Context, key Key, content io.Reader, opts PutOpt
 
 	hasher := sha256.New()
 	size, err := io.Copy(io.MultiWriter(tmp, hasher), readUpTo(ctxReader{ctx, content}, opts.MaxBytes))
-	if err != nil {
-		return Object{}, err
-	}
 	if size > opts.MaxBytes {
 		return Object{}, ErrTooLarge
+	}
+	if err != nil {
+		return Object{}, err
 	}
 	sum := hasher.Sum(nil)
 	if want != nil && !bytes.Equal(sum, want) {
@@ -267,7 +267,13 @@ func (l *Local) ReadURL(_ context.Context, key Key, ttl time.Duration) (string, 
 		return "", err
 	}
 	path := LocalObjectPath + key.objectName()
-	expires := strconv.FormatInt(l.now().Add(ttl).Unix(), 10)
+	// Rounded up, so the URL lasts at least ttl.
+	expiry := l.now().Add(ttl)
+	expiryUnix := expiry.Unix()
+	if expiry.Nanosecond() > 0 {
+		expiryUnix++
+	}
+	expires := strconv.FormatInt(expiryUnix, 10)
 	query := url.Values{
 		expiresParam:   {expires},
 		SignatureParam: {hex.EncodeToString(l.sign(http.MethodGet, path, expires))},

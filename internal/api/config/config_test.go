@@ -769,8 +769,18 @@ func TestLoadAPIRejectsInvalidRequestLimit(t *testing.T) {
 	}
 }
 
-func TestLoadAPIVolumeStoreDefaultsToNone(t *testing.T) {
+// setRequiredVolumeEnv clears the volume variables, so a value set where the
+// tests run cannot change their outcome.
+func setRequiredVolumeEnv(t *testing.T) {
+	t.Helper()
 	setRequiredAPIEnv(t)
+	for _, name := range []string{"SANDBOX_API_VOLUME_STORE", "SANDBOX_API_VOLUME_LOCAL_URL", "SANDBOX_API_VOLUME_REMOTE_SOCKET"} {
+		t.Setenv(name, "")
+	}
+}
+
+func TestLoadAPIVolumeStoreDefaultsToNone(t *testing.T) {
+	setRequiredVolumeEnv(t)
 	t.Setenv("SANDBOX_API_VOLUME_LOCAL_URL", "http://ignored")
 
 	cfg, err := LoadAPI()
@@ -783,7 +793,7 @@ func TestLoadAPIVolumeStoreDefaultsToNone(t *testing.T) {
 }
 
 func TestLoadAPIVolumeStoreLocal(t *testing.T) {
-	setRequiredAPIEnv(t)
+	setRequiredVolumeEnv(t)
 	t.Setenv("SANDBOX_API_VOLUME_STORE", "local")
 	if _, err := LoadAPI(); err == nil {
 		t.Fatal("expected local to require SANDBOX_API_VOLUME_LOCAL_URL")
@@ -800,7 +810,7 @@ func TestLoadAPIVolumeStoreLocal(t *testing.T) {
 }
 
 func TestLoadAPIVolumeStoreRemote(t *testing.T) {
-	setRequiredAPIEnv(t)
+	setRequiredVolumeEnv(t)
 	t.Setenv("SANDBOX_API_VOLUME_STORE", "REMOTE")
 	if _, err := LoadAPI(); err == nil {
 		t.Fatal("expected remote to require SANDBOX_API_VOLUME_REMOTE_SOCKET")
@@ -824,13 +834,15 @@ func TestLoadAPIRejectsInvalidVolumeStoreConfig(t *testing.T) {
 		{"SANDBOX_API_VOLUME_STORE": "local", "SANDBOX_API_VOLUME_LOCAL_URL": "http://user:pass@sandbox-api"},
 		{"SANDBOX_API_VOLUME_STORE": "local", "SANDBOX_API_VOLUME_LOCAL_URL": "http://sandbox-api/?x=1"},
 		{"SANDBOX_API_VOLUME_STORE": "local", "SANDBOX_API_VOLUME_LOCAL_URL": "http://sandbox-api/#x"},
+		{"SANDBOX_API_VOLUME_STORE": "local", "SANDBOX_API_VOLUME_LOCAL_URL": "http://:8080"},
+		{"SANDBOX_API_VOLUME_STORE": "local", "SANDBOX_API_VOLUME_LOCAL_URL": "https://sandbox.example.com/api"},
 		{"SANDBOX_API_VOLUME_STORE": "azblob"},
 		{"SANDBOX_API_VOLUME_STORE": "remote", "SANDBOX_API_VOLUME_REMOTE_SOCKET": "helper.sock"},
 		{"SANDBOX_API_VOLUME_STORE": "remote", "SANDBOX_API_VOLUME_REMOTE_SOCKET": "/" + strings.Repeat("a", 107)},
 	}
 	for _, env := range cases {
 		t.Run(fmt.Sprint(env), func(t *testing.T) {
-			setRequiredAPIEnv(t)
+			setRequiredVolumeEnv(t)
 			for name, value := range env {
 				t.Setenv(name, value)
 			}

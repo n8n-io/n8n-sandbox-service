@@ -147,6 +147,12 @@ func checkTTL(ttl time.Duration) (time.Duration, error) {
 	return min(ttl, MaxReadURLTTL), nil
 }
 
+// ceilSeconds rounds up, so a URL with whole-second expiry lasts at least
+// the ttl it was asked for.
+func ceilSeconds(duration time.Duration) int64 {
+	return int64((duration + time.Second - 1) / time.Second)
+}
+
 // ctxReader stops a long copy once ctx is done.
 type ctxReader struct {
 	ctx    context.Context

@@ -253,8 +253,6 @@ func TestVolumeObjectSignatureStaysOutOfAccessLog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sig, _ := url.Parse(signed)
-	secret := sig.Query().Get(volumestore.SignatureParam)
 	get(t, router, signed, "")
 	get(t, router, strings.Replace(signed, "?", "?%73ig=x&", 1), "")
 
@@ -264,7 +262,7 @@ func TestVolumeObjectSignatureStaysOutOfAccessLog(t *testing.T) {
 	}
 	for _, event := range events {
 		query, _ := event["query"].(string)
-		if !strings.Contains(query, "sig=REDACTED") || strings.Contains(query, secret) {
+		if query != "REDACTED" {
 			t.Errorf("logged query %q", query)
 		}
 	}
@@ -272,13 +270,15 @@ func TestVolumeObjectSignatureStaysOutOfAccessLog(t *testing.T) {
 
 func TestRedactSignature(t *testing.T) {
 	for raw, want := range map[string]string{
-		"":                       "",
-		"path=/tmp":              "path=/tmp",
-		"expires=1&sig=abc":      "expires=1&sig=REDACTED",
-		"sig=abc&sig=def":        "sig=REDACTED&sig=REDACTED",
-		"%73ig=abc&signature=x":  "%73ig=REDACTED&signature=x",
-		"sig":                    "sig=REDACTED",
-		"design=1&sig=abc&x=%zz": "design=1&sig=REDACTED&x=%zz",
+		"":                           "",
+		"path=/tmp":                  "path=/tmp",
+		"signature=x&design=1":       "signature=x&design=1",
+		"expires=1&sig=abc":          "REDACTED",
+		"expires=1&sig=abc&copy=abc": "REDACTED",
+		"expires=1&sig=abc&abc":      "REDACTED",
+		"%73ig=abc&signature=x":      "REDACTED",
+		"sig":                        "REDACTED",
+		"design=1&sig=abc&x=%zz":     "REDACTED",
 	} {
 		if got := redactSignature(raw); got != want {
 			t.Errorf("redactSignature(%q) = %q, want %q", raw, got, want)

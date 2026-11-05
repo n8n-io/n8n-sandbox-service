@@ -292,7 +292,7 @@ func (rs *Remote) ReadURL(ctx context.Context, key Key, ttl time.Duration) (stri
 	}
 	reqBody, err := json.Marshal(map[string]any{
 		"name":        key.objectName(),
-		"ttl_seconds": max(1, int64(ttl/time.Second)),
+		"ttl_seconds": ceilSeconds(ttl),
 	})
 	if err != nil {
 		return "", err

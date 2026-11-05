@@ -43,20 +43,17 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// redactSignature hides the value of a signed URL's signature, on any path,
-// so that it is gone even from requests that did not reach their route.
+// redactSignature replaces a query that carries a signed URL's signature, on
+// any path, with a constant: another parameter's name or value could repeat
+// the signature, and the request may never have reached its route.
 func redactSignature(rawQuery string) string {
-	if rawQuery == "" {
-		return ""
-	}
-	params := strings.Split(rawQuery, "&")
-	for index, param := range params {
+	for _, param := range strings.Split(rawQuery, "&") {
 		name, _, _ := strings.Cut(param, "=")
 		if decoded, err := url.QueryUnescape(name); err == nil && decoded == volumestore.SignatureParam {
-			params[index] = name + "=REDACTED"
+			return "REDACTED"
 		}
 	}
-	return strings.Join(params, "&")
+	return rawQuery
 }
 
 // statusWriter wraps http.ResponseWriter to capture the status code for logging.

@@ -527,15 +527,17 @@ func loadVolumeStore(cfg *APIConfig) error {
 }
 
 // parseLocalURL reads SANDBOX_API_VOLUME_LOCAL_URL without its trailing
-// slash. Errors leave the value out, since a rejected one may hold a secret.
+// slash. It takes no path: the object route is served at the root. Errors
+// leave the value out, since a rejected one may hold a secret.
 func parseLocalURL() (string, error) {
 	raw := strings.TrimSpace(os.Getenv("SANDBOX_API_VOLUME_LOCAL_URL"))
 	if raw == "" {
 		return "", fmt.Errorf("SANDBOX_API_VOLUME_LOCAL_URL must be set when SANDBOX_API_VOLUME_STORE=local")
 	}
 	parsed, err := url.Parse(raw)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || strings.ContainsAny(raw, "?#") {
-		return "", fmt.Errorf("SANDBOX_API_VOLUME_LOCAL_URL must be an http or https URL with no credentials, query or fragment")
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" ||
+		parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || strings.ContainsAny(raw, "?#") {
+		return "", fmt.Errorf("SANDBOX_API_VOLUME_LOCAL_URL must be an http or https URL with a host and port only: no credentials, path, query or fragment")
 	}
 	return strings.TrimRight(raw, "/"), nil
 }

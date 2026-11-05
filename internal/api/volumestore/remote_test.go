@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -61,10 +62,18 @@ func newFakeHelper(t *testing.T) (*fakeHelper, *Remote) {
 	return helper, NewRemote(socket)
 }
 
+// with runs inspect under the helper's lock, which ServeHTTP holds while it
+// reads or changes the same fields.
+func (f *fakeHelper) with(inspect func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	inspect()
+}
+
 func (f *fakeHelper) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	f.mu.Lock()
 	f.requests++
-	status, hang := f.status, f.hang
+	status, hang, earlyCreated := f.status, f.hang, f.earlyCreated
 	f.mu.Unlock()
 	if hang != nil {
 		<-hang
@@ -98,7 +107,7 @@ func (f *fakeHelper) ServeHTTP(writer http.ResponseWriter, request *http.Request
 	}
 	switch request.Method {
 	case http.MethodPut:
-		if f.earlyCreated {
+		if earlyCreated {
 			// Otherwise the server reads the rest of the body before answering.
 			_ = http.NewResponseController(writer).EnableFullDuplex()
 			data := make([]byte, 3)
@@ -173,7 +182,7 @@ func TestRemotePutStatOpenDelete(t *testing.T) {
 	// The helper is reached over its socket only, never through a proxy.
 	t.Setenv("HTTP_PROXY", "http://127.0.0.1:1")
 	helper, rs := newFakeHelper(t)
-	helper.strict = true
+	helper.with(func() { helper.strict = true })
 	ctx := context.Background()
 	data := []byte("tar bytes")
 	want := Object{Size: int64(len(data)), SHA256: digest(data)}
@@ -182,8 +191,10 @@ func TestRemotePutStatOpenDelete(t *testing.T) {
 	if err != nil || obj != want {
 		t.Fatalf("Put = %+v, %v; want %+v", obj, err, want)
 	}
-	if got := helper.objects["tenants/"+testTenant+"/deps.tar"]; !bytes.Equal(got, data) {
-		t.Fatalf("helper stored %q under the object name, have %v", got, helper.objects)
+	var stored []byte
+	helper.with(func() { stored = helper.objects["tenants/"+testTenant+"/deps.tar"] })
+	if !bytes.Equal(stored, data) {
+		t.Fatalf("helper stored %q under the object name", stored)
 	}
 	if _, err := rs.Put(ctx, tenantKey, bytes.NewReader(data), PutOptions{MaxBytes: 100}); !errors.Is(err, ErrExists) {
 		t.Fatalf("second Put = %v, want ErrExists", err)
@@ -227,6 +238,7 @@ func TestRemotePutCutsOffBeforeTheHelperCommits(t *testing.T) {
 		{"too large", PutOptions{MaxBytes: 9}, bytes.NewReader(data), ErrTooLarge},
 		{"digest mismatch", PutOptions{MaxBytes: 10, ExpectedSHA256: digest([]byte("other"))}, bytes.NewReader(data), ErrDigestMismatch},
 		{"reader error", PutOptions{MaxBytes: 100}, io.MultiReader(bytes.NewReader(data), iotestErrReader{}), errRead},
+		{"too large with an error in the same read", PutOptions{MaxBytes: 9}, readerFunc(func(buf []byte) (int, error) { return copy(buf, data), errRead }), ErrTooLarge},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -265,14 +277,14 @@ func TestRemoteMapsHelperStatuses(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		helper, rs := newFakeHelper(t)
-		helper.status = testCase.status
+		helper.with(func() { helper.status = testCase.status })
 		if err := testCase.call(rs); !errors.Is(err, testCase.want) {
 			t.Errorf("status %d: %v, want %v", testCase.status, err, testCase.want)
 		}
 	}
 
 	helper, rs := newFakeHelper(t)
-	helper.status = http.StatusServiceUnavailable
+	helper.with(func() { helper.status = http.StatusServiceUnavailable })
 	for name, call := range map[string]func(*Remote) error{
 		"Put":    put,
 		"Stat":   stat,
@@ -292,30 +304,39 @@ func TestRemoteMapsHelperStatuses(t *testing.T) {
 
 func TestRemoteRefusesAnAnswerThatDoesNotMatchTheUpload(t *testing.T) {
 	helper, rs := newFakeHelper(t)
-	helper.lieDigest = true
+	helper.with(func() { helper.lieDigest = true })
 	if _, err := rs.Put(context.Background(), sharedKey, strings.NewReader("data"), PutOptions{MaxBytes: 10}); err == nil {
 		t.Fatal("Put accepted a digest other than the one sent")
 	}
-	if len(helper.objects) != 0 {
-		t.Fatalf("mismatched object left behind: %v", helper.objects)
+	var left int
+	helper.with(func() { left = len(helper.objects) })
+	if left != 0 {
+		t.Fatalf("%d mismatched objects left behind", left)
 	}
 }
 
 func TestRemoteReadURL(t *testing.T) {
 	helper, rs := newFakeHelper(t)
 	ctx := context.Background()
+	var wantURL string
+	helper.with(func() { wantURL = helper.readURL })
 	got, err := rs.ReadURL(ctx, tenantKey, 24*time.Hour)
-	if err != nil || got != helper.readURL {
-		t.Fatalf("ReadURL = %q, %v; want %q", got, err, helper.readURL)
+	if err != nil || got != wantURL {
+		t.Fatalf("ReadURL = %q, %v; want %q", got, err, wantURL)
 	}
 	if _, err := rs.ReadURL(ctx, tenantKey, 1500*time.Millisecond); err != nil {
 		t.Fatal(err)
 	}
 	want := []map[string]any{
 		{"name": "tenants/" + testTenant + "/deps.tar", "ttl_seconds": float64(3600)},
-		{"name": "tenants/" + testTenant + "/deps.tar", "ttl_seconds": float64(1)},
+		{"name": "tenants/" + testTenant + "/deps.tar", "ttl_seconds": float64(2)},
 	}
-	for index, req := range helper.readReqs {
+	var readReqs []map[string]any
+	helper.with(func() { readReqs = slices.Clone(helper.readReqs) })
+	if len(readReqs) != len(want) {
+		t.Fatalf("helper got %d read URL requests, want %d", len(readReqs), len(want))
+	}
+	for index, req := range readReqs {
 		for name, value := range want[index] {
 			if req[name] != value {
 				t.Errorf("request %d: %s = %v, want %v", index, name, req[name], value)
@@ -327,7 +348,7 @@ func TestRemoteReadURL(t *testing.T) {
 	}
 	for _, bad := range []string{"", "file:///etc/passwd", "/relative", "https://", "https://:443/x", "javascript:alert(1)",
 		"http://storage.test/x", "https://user:pw@storage.test/x", "https://storage.test/x#y"} {
-		helper.readURL = bad
+		helper.with(func() { helper.readURL = bad })
 		if _, err := rs.ReadURL(ctx, tenantKey, time.Minute); err == nil {
 			t.Errorf("helper URL %q accepted", bad)
 		}
@@ -353,8 +374,10 @@ func TestRemoteRejectsInvalidKeysWithoutCallingTheHelper(t *testing.T) {
 	if _, err := rs.ReadURL(ctx, bad, time.Minute); !errors.Is(err, ErrInvalidKey) {
 		t.Errorf("ReadURL = %v", err)
 	}
-	if helper.requests != 0 {
-		t.Fatalf("helper got %d requests", helper.requests)
+	var requests int
+	helper.with(func() { requests = helper.requests })
+	if requests != 0 {
+		t.Fatalf("helper got %d requests", requests)
 	}
 }
 
@@ -369,7 +392,7 @@ func TestRemoteWithoutHelper(t *testing.T) {
 // size and digest match what was read so far, only the missing end shows.
 func TestRemotePutDiscardsAnObjectStoredBeforeTheUploadEnded(t *testing.T) {
 	helper, rs := newFakeHelper(t)
-	helper.earlyCreated = true
+	helper.with(func() { helper.earlyCreated = true })
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
 	reader := io.MultiReader(strings.NewReader("abc"), gateReader{release})
@@ -387,7 +410,7 @@ func TestRemotePutDiscardsAnObjectStoredBeforeTheUploadEnded(t *testing.T) {
 // the object decides.
 func TestRemotePutSettlesAnOpenOutcome(t *testing.T) {
 	helper, rs := newFakeHelper(t)
-	helper.failAfterCommit = true
+	helper.with(func() { helper.failAfterCommit = true })
 	data := []byte("data")
 	obj, err := rs.Put(context.Background(), sharedKey, bytes.NewReader(data), PutOptions{MaxBytes: 10})
 	if want := (Object{Size: 4, SHA256: digest(data)}); err != nil || obj != want {
@@ -395,7 +418,7 @@ func TestRemotePutSettlesAnOpenOutcome(t *testing.T) {
 	}
 
 	helper, rs = newFakeHelper(t)
-	helper.status = http.StatusInternalServerError
+	helper.with(func() { helper.status = http.StatusInternalServerError })
 	if _, err := rs.Put(context.Background(), sharedKey, bytes.NewReader(data), PutOptions{MaxBytes: 10}); err == nil {
 		t.Fatal("Put succeeded although nothing was stored")
 	}
@@ -406,8 +429,9 @@ func TestRemoteGivesUpOnAStuckHelper(t *testing.T) {
 	remoteIdleTimeout = remoteIdleTimeoutForTest
 	helper, rs := newFakeHelper(t)
 	remoteIdleTimeout = previous
-	helper.hang = make(chan struct{})
-	t.Cleanup(func() { close(helper.hang) })
+	hang := make(chan struct{})
+	helper.with(func() { helper.hang = hang })
+	t.Cleanup(func() { close(hang) })
 
 	start := time.Now()
 	if _, err := rs.Stat(context.Background(), sharedKey); err == nil {

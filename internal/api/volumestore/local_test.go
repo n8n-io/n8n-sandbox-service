@@ -152,6 +152,7 @@ func TestLocalPutErrorsLeaveNothingVisible(t *testing.T) {
 		{"too large", PutOptions{MaxBytes: 9}, bytes.NewReader(data), ErrTooLarge},
 		{"digest mismatch", PutOptions{MaxBytes: 10, ExpectedSHA256: digest([]byte("other"))}, bytes.NewReader(data), ErrDigestMismatch},
 		{"reader error", PutOptions{MaxBytes: 100}, io.MultiReader(bytes.NewReader(data), iotestErrReader{}), errRead},
+		{"too large with an error in the same read", PutOptions{MaxBytes: 9}, readerFunc(func(buf []byte) (int, error) { return copy(buf, data), errRead }), ErrTooLarge},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -324,6 +325,16 @@ func TestLocalReadURLCapsTTL(t *testing.T) {
 	}
 	if _, err := local.ReadURL(context.Background(), tenantKey, 0); err == nil {
 		t.Error("ReadURL with a zero ttl succeeded")
+	}
+
+	// Expiry is in whole seconds: a short ttl must not round down into the past.
+	now = time.Unix(1_800_000_000, 500_000_000)
+	short, err := local.ReadURL(context.Background(), tenantKey, 10*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := local.VerifyRequest(requestFor(t, http.MethodGet, short)); err != nil {
+		t.Errorf("a fresh URL with a short ttl: %v", err)
 	}
 }
 
