@@ -108,7 +108,9 @@ type Store interface {
 	// ErrTooLarge past MaxBytes, ErrDigestMismatch when ExpectedSHA256 is set
 	// and differs, and ErrExists when the object already exists. Nothing is
 	// visible after an error, unless a remote store's answer got lost after
-	// the whole upload went out.
+	// the whole upload went out. Cancelling ctx stops Put at its next read of
+	// content, so a reader that can block must end when ctx does, as a
+	// request body does.
 	Put(ctx context.Context, key Key, content io.Reader, opts PutOptions) (Object, error)
 	// Stat returns ErrNotFound when the object does not exist.
 	Stat(ctx context.Context, key Key) (Object, error)

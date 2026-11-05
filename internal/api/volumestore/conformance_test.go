@@ -206,6 +206,8 @@ func runConformance(t *testing.T, client storepb.VolumeStoreClient) {
 			"traversal scope":  {Scope: "../shared", Id: valid.GetId(), Kind: valid.GetKind()},
 			"empty id":         {Scope: volume.SharedScope, Id: "", Kind: valid.GetKind()},
 			"slash in id":      {Scope: volume.SharedScope, Id: "a/b", Kind: valid.GetKind()},
+			"underscore in id": {Scope: volume.SharedScope, Id: "a_b", Kind: valid.GetKind()},
+			"dot in id":        {Scope: volume.SharedScope, Id: "a.b", Kind: valid.GetKind()},
 			"dots id":          {Scope: volume.SharedScope, Id: "..", Kind: valid.GetKind()},
 			"uppercase id":     {Scope: volume.SharedScope, Id: "A", Kind: valid.GetKind()},
 			"65 character id":  {Scope: volume.SharedScope, Id: strings.Repeat("a", 65), Kind: valid.GetKind()},

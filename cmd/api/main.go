@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -83,6 +84,9 @@ func main() {
 	if err != nil {
 		slog.Error("open volume store", "error", err)
 		os.Exit(1)
+	}
+	if closer, ok := volumes.(io.Closer); ok {
+		defer closer.Close()
 	}
 
 	mrec := metrics.NewAPIRecorder(cfg.MetricsEnabled)
