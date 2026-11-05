@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/n8n-io/sandbox-service/internal/volume"
 )
 
 // testBootParams mirrors what create-golden-snapshot.sh writes for a default
@@ -128,7 +130,7 @@ func TestLoadBootParamsRejectsUnusableSidecars(t *testing.T) {
 		{"no tap device", func(p *bootParams) { p.HostTapDeviceName = "" }, "host_tap_device_name"},
 		{"bad daemon port", func(p *bootParams) { p.DaemonPort = 70000 }, "daemon_port"},
 		{"volume drives in a schema 1 sidecar", func(p *bootParams) { p.SchemaVersion = bootParamsSchemaNoVolumeDrives }, "volume_drives"},
-		{"too many volume drives", func(p *bootParams) { p.VolumeDrives = testVolumeDrives(maxVolumeDrives + 1) }, "volume_drives"},
+		{"too many volume drives", func(p *bootParams) { p.VolumeDrives = testVolumeDrives(volume.MaxDrives + 1) }, "volume_drives"},
 		{"volume drive id out of order", func(p *bootParams) { p.VolumeDrives[1].DriveID = "vol7" }, "volume_drives[1] drive_id"},
 		{"volume drive id with a path", func(p *bootParams) { p.VolumeDrives[0].DriveID = "../machine-config" }, "volume_drives[0] drive_id"},
 		{"relative volume drive path", func(p *bootParams) { p.VolumeDrives[0].Path = "vol0.img" }, "volume_drives[0] path"},

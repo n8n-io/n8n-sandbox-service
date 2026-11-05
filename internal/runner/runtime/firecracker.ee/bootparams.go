@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/n8n-io/sandbox-service/internal/volume"
 )
 
 const (
@@ -19,10 +21,6 @@ const (
 	// guessed at.
 	bootParamsSchemaVersion        = 2
 	bootParamsSchemaNoVolumeDrives = 1
-
-	// maxVolumeDrives is Firecracker's x86_64 MMIO limit of 17 devices, less the
-	// rootfs and the NIC.
-	maxVolumeDrives = 15
 )
 
 // volumeDrive is a read-only drive the golden snapshot reserves for a volume.
@@ -123,8 +121,8 @@ func (p *bootParams) validateVolumeDrives() error {
 	if p.SchemaVersion == bootParamsSchemaNoVolumeDrives {
 		return fmt.Errorf("volume_drives needs schema_version %d, got %d", bootParamsSchemaVersion, p.SchemaVersion)
 	}
-	if len(p.VolumeDrives) > maxVolumeDrives {
-		return fmt.Errorf("volume_drives has %d drives, Firecracker takes at most %d next to the rootfs and the NIC", len(p.VolumeDrives), maxVolumeDrives)
+	if len(p.VolumeDrives) > volume.MaxDrives {
+		return fmt.Errorf("volume_drives has %d drives, Firecracker takes at most %d next to the rootfs and the NIC", len(p.VolumeDrives), volume.MaxDrives)
 	}
 	for i, drive := range p.VolumeDrives {
 		if want := fmt.Sprintf("vol%d", i); drive.DriveID != want {

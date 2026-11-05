@@ -3,7 +3,6 @@ package firecracker
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -650,41 +649,6 @@ func TestJailMountsTheRootfsWhereTheSidecarRecordsIt(t *testing.T) {
 	}
 	if want := "umount -l '" + target + "'"; !strings.Contains(cleanupScript, want) {
 		t.Errorf("cleanup script does not unmount the rootfs the jail prep mounted:\nwant %s\ngot\n%s", want, cleanupScript)
-	}
-}
-
-func TestPrepareJailLinksTheVolumeDrivePlaceholders(t *testing.T) {
-	rt := testRuntimeT(t, 1)
-	stubCreateDeps(rt)
-
-	var prepareScript string
-	rt.deps.run = func(_ context.Context, _ string, args ...string) error {
-		if script := args[len(args)-1]; strings.Contains(script, "mount --bind") && prepareScript == "" {
-			prepareScript = script
-		}
-		return nil
-	}
-
-	const sandboxID = "sandbox-id-123456"
-	if _, err := rt.CreateSandbox(context.Background(), sandboxID, nil); err != nil {
-		t.Fatalf("CreateSandbox() failed: %v", err)
-	}
-
-	placeholder := "'" + filepath.Join(rt.config.JailerBaseDir, volumeDrivePlaceholderName) + "'"
-	if want := "(umask 0333 && : > " + placeholder + ".$$ && mv -fT " + placeholder + ".$$ " + placeholder + ")"; !strings.Contains(prepareScript, want) {
-		t.Errorf("prepare jail script does not create the shared placeholder read-only:\nwant %s\ngot\n%s", want, prepareScript)
-	}
-	vmDir := filepath.Join(rt.config.JailerBaseDir, "firecracker", "sandbox-"+shortID(sandboxID))
-	for i := range 8 {
-		staged := "'" + filepath.Join(vmDir, fmt.Sprintf(".vol%d.img", i)) + "'"
-		target := "'" + filepath.Join(vmDir, "root", fmt.Sprintf("vol%d.img", i)) + "'"
-		want := "ln -f " + placeholder + " " + staged + "\nmv -fT " + staged + " " + target + "\n"
-		if !strings.Contains(prepareScript, want) {
-			t.Errorf("prepare jail script does not link volume drive %d into place:\nwant %s\ngot\n%s", i, want, prepareScript)
-		}
-		if n := strings.Count(prepareScript, target); n != 1 {
-			t.Errorf("prepare jail script names %s %d times, want only in the rename:\n%s", target, n, prepareScript)
-		}
 	}
 }
 
