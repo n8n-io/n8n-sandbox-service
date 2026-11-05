@@ -12,29 +12,23 @@ import (
 	"strings"
 	"time"
 
+	"github.com/n8n-io/sandbox-service/internal/daemon/volumedrives"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
+	"github.com/n8n-io/sandbox-service/internal/volume"
 )
 
-// volumeDrive is a read-only drive the guest mounts; the guest sees drive N as
-// /dev/vd followed by the letter b+N.
-type volumeDrive struct {
-	Drive   int    `json:"drive"`
-	Sectors uint64 `json:"sectors"`
-	Path    string `json:"path"`
-}
-
-// The guest waits up to 2s per drive for its new size, for at most eight.
-const mountVolumeDrivesTimeout = 30 * time.Second
+// The guest waits up to 2s per drive for its new size.
+const mountVolumeDrivesTimeout = volume.MaxDrives*2*time.Second + 15*time.Second
 
 // mountVolumeDrives sends the guest daemon's one volume mount request, after
 // which the daemon drops root. Never retried: later requests get 409. Without
 // drives, 404 (older daemon) and 501 (daemon not root) count as success too.
-func mountVolumeDrives(ctx context.Context, baseURL string, drives []volumeDrive) error {
+func mountVolumeDrives(ctx context.Context, baseURL string, drives []volumedrives.Volume) error {
 	if drives == nil {
-		drives = []volumeDrive{}
+		drives = []volumedrives.Volume{}
 	}
 	body, err := json.Marshal(struct {
-		Volumes []volumeDrive `json:"volumes"`
+		Volumes []volumedrives.Volume `json:"volumes"`
 	}{drives})
 	if err != nil {
 		return err
@@ -86,7 +80,7 @@ func (e *volumeMountError) Error() string {
 
 // volumeMountReasons are the daemon's reasons for a failed mount. Only these
 // become metric labels, never other text from the guest.
-var volumeMountReasons = []string{"drive", "mount_point", "mount"}
+var volumeMountReasons = []string{volumedrives.ReasonDrive, volumedrives.ReasonMountPoint, volumedrives.ReasonMount}
 
 // volumeMountResult is the result label of a mountVolumeDrives call.
 func volumeMountResult(err error) string {

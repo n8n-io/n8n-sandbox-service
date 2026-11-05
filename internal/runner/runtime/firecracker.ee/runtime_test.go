@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/n8n-io/sandbox-service/internal/daemon/volumedrives"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 )
@@ -132,7 +133,7 @@ func newTestRuntime(capacity int32) *Runtime {
 	// happen to run on.
 	rt.deps.volumeSpace = func(string) (volumeSpace, error) { return testVolumeSpace, nil }
 	// And no guest behind the daemon URL to send the volume mount request to.
-	rt.deps.mountVolumeDrives = func(context.Context, string, []volumeDrive) error { return nil }
+	rt.deps.mountVolumeDrives = func(context.Context, string, []volumedrives.Volume) error { return nil }
 	return rt
 }
 

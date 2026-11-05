@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/n8n-io/sandbox-service/internal/daemon/volumedrives"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
@@ -307,7 +308,7 @@ type dependencies struct {
 	statTemplateKernel  func(path string) (kernelPin, error)
 	newProxy            func(ctx context.Context, sandboxID string, listenAddr string, netnsName string, guestAddr string) (daemonProxy, error)
 	probeDaemon         func(ctx context.Context, baseURL string) error
-	mountVolumeDrives   func(ctx context.Context, baseURL string, drives []volumeDrive) error
+	mountVolumeDrives   func(ctx context.Context, baseURL string, drives []volumedrives.Volume) error
 	volumeSpace         func(path string) (volumeSpace, error)
 }
 

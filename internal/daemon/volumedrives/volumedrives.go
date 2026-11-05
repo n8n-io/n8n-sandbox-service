@@ -12,27 +12,31 @@ import (
 	"io/fs"
 	"math"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 	"time"
-	"unicode"
+
+	"github.com/n8n-io/sandbox-service/internal/volume"
 )
 
 const (
-	// MaxRequestBytes bounds a mount request body.
-	MaxRequestBytes = 4 << 10
+	// MaxRequestBytes bounds a mount request body. It fits volume.MaxDrives
+	// volumes with the longest paths, even with every path byte JSON-escaped.
+	MaxRequestBytes = 32 << 10
 
-	maxVolumes   = 8
-	maxPathBytes = 255
-	sectorBytes  = 512
+	sectorBytes = 512
 
 	// The guest picks up a patched drive size asynchronously.
 	sizeTimeout  = 2 * time.Second
 	pollInterval = 10 * time.Millisecond
 )
 
-var mountRoots = []string{"/mnt/", "/home/user/"}
+// Why MountAll failed, as Reason reports it.
+const (
+	ReasonDrive      = "drive"
+	ReasonMountPoint = "mount_point"
+	ReasonMount      = "mount"
+)
 
 // Volume is one drive and where to mount it.
 type Volume struct {
@@ -66,53 +70,31 @@ func ParseRequest(body []byte) ([]Volume, error) {
 }
 
 func validate(volumes []Volume) error {
-	if len(volumes) > maxVolumes {
-		return fmt.Errorf("at most %d volumes, got %d", maxVolumes, len(volumes))
+	if len(volumes) > volume.MaxDrives {
+		return fmt.Errorf("at most %d volumes, got %d", volume.MaxDrives, len(volumes))
 	}
-	var seen [maxVolumes]bool
-	for i, v := range volumes {
-		if v.Drive < 0 || v.Drive >= maxVolumes {
-			return fmt.Errorf("volume %d: drive must be 0 to %d, got %d", i, maxVolumes-1, v.Drive)
+	var seen [volume.MaxDrives]bool
+	for index, vol := range volumes {
+		if vol.Drive < 0 || vol.Drive >= volume.MaxDrives {
+			return fmt.Errorf("volume %d: drive must be 0 to %d, got %d", index, volume.MaxDrives-1, vol.Drive)
 		}
-		if seen[v.Drive] {
-			return fmt.Errorf("volume %d: drive %d is listed twice", i, v.Drive)
+		if seen[vol.Drive] {
+			return fmt.Errorf("volume %d: drive %d is listed twice", index, vol.Drive)
 		}
-		seen[v.Drive] = true
-		if v.Sectors == 0 || v.Sectors > math.MaxUint64/sectorBytes {
-			return fmt.Errorf("volume %d: sectors out of range: %d", i, v.Sectors)
+		seen[vol.Drive] = true
+		if vol.Sectors == 0 || vol.Sectors > math.MaxUint64/sectorBytes {
+			return fmt.Errorf("volume %d: sectors out of range: %d", index, vol.Sectors)
 		}
-		if err := validatePath(v.Path); err != nil {
-			return fmt.Errorf("volume %d: %w", i, err)
+		if err := volume.ValidateMountPath(vol.Path); err != nil {
+			return fmt.Errorf("volume %d: %w", index, err)
 		}
-		for _, prev := range volumes[:i] {
-			if pathsOverlap(prev.Path, v.Path) {
-				return fmt.Errorf("volume %d: path %q overlaps %q", i, v.Path, prev.Path)
+		for _, prev := range volumes[:index] {
+			if volume.MountPathsOverlap(prev.Path, vol.Path) {
+				return fmt.Errorf("volume %d: path %q overlaps %q", index, vol.Path, prev.Path)
 			}
 		}
 	}
 	return nil
-}
-
-func validatePath(p string) error {
-	if len(p) > maxPathBytes {
-		return fmt.Errorf("path is longer than %d bytes", maxPathBytes)
-	}
-	if !strings.HasPrefix(p, "/") || path.Clean(p) != p {
-		return fmt.Errorf("path %q is not absolute and clean", p)
-	}
-	if strings.ContainsFunc(p, unicode.IsControl) {
-		return fmt.Errorf("path %q contains a control character", p)
-	}
-	for _, root := range mountRoots {
-		if strings.HasPrefix(p, root) {
-			return nil
-		}
-	}
-	return fmt.Errorf("path %q is not below %s", p, strings.Join(mountRoots, " or "))
-}
-
-func pathsOverlap(a, b string) bool {
-	return a == b || strings.HasPrefix(b, a+"/") || strings.HasPrefix(a, b+"/")
 }
 
 // Sys is the system calls a Mounter makes; tests fake it.
@@ -157,16 +139,16 @@ func (m *Mounter) MountAll(volumes []Volume) error {
 func (m *Mounter) mountOne(v Volume) error {
 	device := devicePath(v.Drive)
 	if err := m.waitForSize(device, v.Sectors*sectorBytes); err != nil {
-		return &mountError{"drive", err}
+		return &mountError{ReasonDrive, err}
 	}
 	if err := m.sys.FlushBuffers(device); err != nil {
-		return &mountError{"drive", fmt.Errorf("flush buffers of %s: %w", device, err)}
+		return &mountError{ReasonDrive, fmt.Errorf("flush buffers of %s: %w", device, err)}
 	}
 	if err := m.sys.MakeMountPoint(v.Path); err != nil {
-		return &mountError{"mount_point", fmt.Errorf("create mount point: %w", err)}
+		return &mountError{ReasonMountPoint, fmt.Errorf("create mount point: %w", err)}
 	}
 	if err := m.sys.Mount(device, v.Path); err != nil {
-		return &mountError{"mount", fmt.Errorf("mount %s: %w", device, err)}
+		return &mountError{ReasonMount, fmt.Errorf("mount %s: %w", device, err)}
 	}
 	return nil
 }
@@ -198,8 +180,8 @@ type mountError struct {
 func (e *mountError) Error() string { return e.err.Error() }
 func (e *mountError) Unwrap() error { return e.err }
 
-// Reason returns why a MountAll error failed, "drive", "mount_point" or
-// "mount", or "" for another error.
+// Reason returns why a MountAll error failed, ReasonDrive, ReasonMountPoint or
+// ReasonMount, or "" for another error.
 func Reason(err error) string {
 	var failed *mountError
 	if errors.As(err, &failed) {

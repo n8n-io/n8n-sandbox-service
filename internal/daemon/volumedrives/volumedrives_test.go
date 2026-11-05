@@ -3,6 +3,8 @@ package volumedrives
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -10,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/n8n-io/sandbox-service/internal/volume"
 )
 
 func volumesBody(t *testing.T, volumes ...Volume) string {
@@ -22,12 +26,11 @@ func volumesBody(t *testing.T, volumes ...Volume) string {
 }
 
 func TestParseRequest(t *testing.T) {
-	longest := "/mnt/" + strings.Repeat("a", maxPathBytes-len("/mnt/"))
-	nine := make([]Volume, 9)
-	for i := range nine {
-		nine[i] = Volume{Drive: i, Sectors: 1, Path: "/mnt/v" + string(rune('0'+i))}
+	tooMany := make([]Volume, volume.MaxDrives+1)
+	for index := range tooMany {
+		tooMany[index] = Volume{Drive: index, Sectors: 1, Path: fmt.Sprintf("/mnt/v%d", index)}
 	}
-	eight := nine[:8]
+	most := tooMany[:volume.MaxDrives]
 	vol := func(drive int, sectors uint64, path string) Volume {
 		return Volume{Drive: drive, Sectors: sectors, Path: path}
 	}
@@ -40,33 +43,20 @@ func TestParseRequest(t *testing.T) {
 		{"empty list", `{"volumes":[]}`, ""},
 		{"no volumes field", `{}`, ""},
 		{"one volume", `{"volumes":[{"drive":0,"sectors":265416,"path":"/mnt/knowledge"}]}`, ""},
-		{"eight volumes", volumesBody(t, eight...), ""},
-		{"below home", volumesBody(t, vol(7, 1, "/home/user/data/set")), ""},
+		{"fifteen volumes", volumesBody(t, most...), ""},
+		{"last drive", volumesBody(t, vol(14, 1, "/home/user/data/set")), ""},
 		{"sibling with a common prefix", volumesBody(t, vol(0, 1, "/mnt/a"), vol(1, 1, "/mnt/ab")), ""},
-		{"longest path", volumesBody(t, vol(0, 1, longest)), ""},
 
-		{"nine volumes", volumesBody(t, nine...), "at most 8 volumes"},
-		{"negative drive", volumesBody(t, vol(-1, 1, "/mnt/a")), "drive must be 0 to 7"},
-		{"drive past the last", volumesBody(t, vol(8, 1, "/mnt/a")), "drive must be 0 to 7"},
+		{"sixteen volumes", volumesBody(t, tooMany...), "at most 15 volumes"},
+		{"negative drive", volumesBody(t, vol(-1, 1, "/mnt/a")), "drive must be 0 to 14"},
+		{"drive past the last", volumesBody(t, vol(15, 1, "/mnt/a")), "drive must be 0 to 14"},
 		{"drive listed twice", volumesBody(t, vol(3, 1, "/mnt/a"), vol(3, 1, "/mnt/b")), "drive 3 is listed twice"},
 		{"no sectors", volumesBody(t, vol(0, 0, "/mnt/a")), "sectors out of range"},
 		{"sectors overflow bytes", volumesBody(t, vol(0, 1<<55, "/mnt/a")), "sectors out of range"},
 		{"negative sectors", `{"volumes":[{"drive":0,"sectors":-1,"path":"/mnt/a"}]}`, "cannot unmarshal"},
 		{"drive as string", `{"volumes":[{"drive":"0","sectors":1,"path":"/mnt/a"}]}`, "cannot unmarshal"},
-		{"relative path", volumesBody(t, vol(0, 1, "mnt/a")), "not absolute and clean"},
-		{"empty path", volumesBody(t, vol(0, 1, "")), "not absolute and clean"},
-		{"dot-dot", volumesBody(t, vol(0, 1, "/mnt/a/../b")), "not absolute and clean"},
-		{"escape through dot-dot", volumesBody(t, vol(0, 1, "/mnt/../etc")), "not absolute and clean"},
-		{"double slash", volumesBody(t, vol(0, 1, "/mnt//a")), "not absolute and clean"},
-		{"trailing slash", volumesBody(t, vol(0, 1, "/mnt/a/")), "not absolute and clean"},
-		{"mnt itself", volumesBody(t, vol(0, 1, "/mnt")), "not below"},
-		{"home itself", volumesBody(t, vol(0, 1, "/home/user")), "not below"},
-		{"another home", volumesBody(t, vol(0, 1, "/home/username/a")), "not below"},
-		{"mnt as a prefix", volumesBody(t, vol(0, 1, "/mntx/a")), "not below"},
-		{"system path", volumesBody(t, vol(0, 1, "/etc/cron.d")), "not below"},
-		{"path too long", volumesBody(t, vol(0, 1, longest+"a")), "longer than 255 bytes"},
-		{"NUL in path", volumesBody(t, vol(0, 1, "/mnt/a\x00b")), "control character"},
-		{"newline in path", volumesBody(t, vol(0, 1, "/mnt/a\nb")), "control character"},
+		{"invalid path", volumesBody(t, vol(0, 1, "/etc/cron.d")), "volume 0: path \"/etc/cron.d\" is not below"},
+		{"invalid later path", volumesBody(t, vol(0, 1, "/mnt/a"), vol(1, 1, "/mnt/../etc")), "volume 1: path \"/mnt/../etc\" is not absolute and clean"},
 		{"same path twice", volumesBody(t, vol(0, 1, "/mnt/a"), vol(1, 1, "/mnt/a")), "overlaps"},
 		{"path inside an earlier one", volumesBody(t, vol(0, 1, "/mnt/a"), vol(1, 1, "/mnt/a/b")), "overlaps"},
 		{"path around an earlier one", volumesBody(t, vol(0, 1, "/mnt/a/b"), vol(1, 1, "/mnt/a")), "overlaps"},
@@ -92,8 +82,27 @@ func TestParseRequest(t *testing.T) {
 	}
 }
 
+// The runner encodes the request with encoding/json, which escapes '<' as
+// \u003c: six bytes for each path byte.
+func TestMaxRequestBytesFitsTheLargestRequest(t *testing.T) {
+	volumes := make([]Volume, volume.MaxDrives)
+	for index := range volumes {
+		mountPath := fmt.Sprintf("/mnt/%c", 'a'+index)
+		mountPath += strings.Repeat("<", 255-len(mountPath))
+		volumes[index] = Volume{Drive: index, Sectors: math.MaxUint64 / sectorBytes, Path: mountPath}
+	}
+	body := volumesBody(t, volumes...)
+
+	if len(body) > MaxRequestBytes {
+		t.Fatalf("request with %d volumes has %d bytes, more than MaxRequestBytes (%d)", len(volumes), len(body), MaxRequestBytes)
+	}
+	if _, err := ParseRequest([]byte(body)); err != nil {
+		t.Fatalf("ParseRequest() error = %v, want none", err)
+	}
+}
+
 func TestDevicePath(t *testing.T) {
-	for drive, want := range map[int]string{0: "/dev/vdb", 1: "/dev/vdc", 7: "/dev/vdi"} {
+	for drive, want := range map[int]string{0: "/dev/vdb", 1: "/dev/vdc", 14: "/dev/vdp"} {
 		if got := devicePath(drive); got != want {
 			t.Errorf("devicePath(%d) = %s, want %s", drive, got, want)
 		}

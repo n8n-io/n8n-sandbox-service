@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/n8n-io/sandbox-service/internal/daemon/volumedrives"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 )
@@ -30,7 +31,7 @@ func (c *volumeMountCalls) install(rt *Runtime) {
 		c.calls = append(c.calls, "probe")
 		return nil
 	}
-	rt.deps.mountVolumeDrives = func(_ context.Context, baseURL string, drives []volumeDrive) error {
+	rt.deps.mountVolumeDrives = func(_ context.Context, baseURL string, drives []volumedrives.Volume) error {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		if len(drives) != 0 {
@@ -182,10 +183,10 @@ func TestColdBootFailsWhenTheVolumeMountRequestFails(t *testing.T) {
 }
 
 func TestMountVolumeDrives(t *testing.T) {
-	drives := []volumeDrive{{Drive: 0, Sectors: 8, Path: "/mnt/a"}}
+	drives := []volumedrives.Volume{{Drive: 0, Sectors: 8, Path: "/mnt/a"}}
 	tests := []struct {
 		name    string
-		drives  []volumeDrive
+		drives  []volumedrives.Volume
 		status  int
 		answer  string
 		wantErr string
