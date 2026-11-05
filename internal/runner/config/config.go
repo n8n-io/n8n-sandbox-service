@@ -224,8 +224,13 @@ func Load() (*Config, error) {
 		cfg.DataDir = v
 	}
 
-	// The volume cache checks the dir itself before wiping it.
-	cfg.VolumeCacheDir = filepath.Join(cfg.DataDir, "volume-cache")
+	// The volume cache checks the dir itself before wiping it, and refuses a
+	// relative one, so a relative data dir is resolved here.
+	cacheDir, err := filepath.Abs(filepath.Join(cfg.DataDir, "volume-cache"))
+	if err != nil {
+		return nil, fmt.Errorf("SANDBOX_RUNNER_DATA_DIR: %w", err)
+	}
+	cfg.VolumeCacheDir = cacheDir
 	if raw := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_VOLUME_CACHE_DIR")); raw != "" {
 		cfg.VolumeCacheDir = raw
 	}

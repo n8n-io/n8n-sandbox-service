@@ -74,8 +74,9 @@ const (
 	VolumeFetchDigest = "digest"
 	// VolumeFetchTimeout is a download that ran out of time.
 	VolumeFetchTimeout = "timeout"
-	// VolumeFetchFull is a fetch refused for want of room, or because the
-	// object is larger than the whole cache.
+	// VolumeFetchFull is a fetch refused for want of room, including a disk
+	// that filled during the download, or because the object is larger than
+	// the whole cache.
 	VolumeFetchFull = "full"
 	// VolumeFetchIO is a download that failed writing to the local disk.
 	VolumeFetchIO = "io"

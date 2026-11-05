@@ -231,11 +231,16 @@ func TestLoadRejectsInvalidRequestLimit(t *testing.T) {
 
 // An empty want marks a value Load must refuse.
 func TestLoadVolumeCache(t *testing.T) {
+	workDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
 		env  map[string]string
 		want string
 	}{
 		{map[string]string{"SANDBOX_RUNNER_DATA_DIR": "/data/sandboxes"}, "/data/sandboxes/volume-cache 21474836480 10m0s"},
+		{map[string]string{"SANDBOX_RUNNER_DATA_DIR": "sandboxes"}, workDir + "/sandboxes/volume-cache 21474836480 10m0s"},
 		{map[string]string{
 			"SANDBOX_RUNNER_VOLUME_CACHE_DIR":       "/var/cache/volumes",
 			"SANDBOX_RUNNER_VOLUME_CACHE_MAX_BYTES": "1073741824",
@@ -250,6 +255,9 @@ func TestLoadVolumeCache(t *testing.T) {
 	} {
 		t.Run(fmt.Sprint(tc.env), func(t *testing.T) {
 			setRequiredEnv(t)
+			for _, name := range []string{"SANDBOX_RUNNER_VOLUME_CACHE_DIR", "SANDBOX_RUNNER_VOLUME_CACHE_MAX_BYTES", "SANDBOX_RUNNER_VOLUME_FETCH_TIMEOUT"} {
+				t.Setenv(name, "")
+			}
 			for name, value := range tc.env {
 				t.Setenv(name, value)
 			}

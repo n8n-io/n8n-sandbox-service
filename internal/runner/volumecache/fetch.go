@@ -114,7 +114,12 @@ func failed(result string, format string, args ...any) error {
 	return &fetchError{result: result, err: fmt.Errorf(format, args...)}
 }
 
+// diskFailure reports a disk that filled up during a download as a full cache:
+// the check before it passed, and nothing has been created for the sandbox.
 func diskFailure(op string, err error) error {
+	if errors.Is(err, syscall.ENOSPC) {
+		return &fetchError{result: metrics.VolumeFetchFull, err: fmt.Errorf("%s: no space left on device: %w", op, ErrCacheFull)}
+	}
 	return &fetchError{result: metrics.VolumeFetchIO, err: fmt.Errorf("%s: %w", op, withoutPath(err))}
 }
 

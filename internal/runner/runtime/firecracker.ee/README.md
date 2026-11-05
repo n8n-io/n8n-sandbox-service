@@ -70,7 +70,7 @@ Each sandbox keeps its rootfs and memory snapshot under `SANDBOX_RUNNER_DATA_DIR
 - **Stop:** needs room for the memory snapshot, or it fails before pausing the guest; the sandbox keeps running and the idle sweeper retries. If the snapshot fails after the pause, the guest is resumed, or shut down like a crashed guest if that fails too.
 - **Wake:** not checked; the sandbox already holds its space.
 
-The runner never deletes a sandbox to make room. Sandboxes already on the volume can still fill the last 5% and the cache's unused budget; their writes then fail. The cache starts a download only if it fits above the last 5%, evicting unused objects first if it has to.
+The runner never deletes a sandbox to make room. Sandboxes already on the volume can still fill the last 5%, and the cache's unused budget when the cache is on this volume; their writes then fail. The cache starts a download only if it fits above the last 5%, evicting unused objects first if it has to.
 
 Setup:
 

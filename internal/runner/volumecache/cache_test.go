@@ -431,6 +431,24 @@ func TestAcquireRefusesSourceAndKey(t *testing.T) {
 	wantFetches(t, rec, metrics.VolumeFetchHTTP, 0)
 }
 
+// A disk that fills during a download is a full runner; other disk errors are
+// not. Neither names the path.
+func TestDiskFailure(t *testing.T) {
+	full := diskFailure("write file", &fs.PathError{Op: "write", Path: "/cache/.download-1", Err: syscall.ENOSPC})
+	if !errors.Is(full, runnerruntime.ErrCapacityExhausted) || resultOf(full) != metrics.VolumeFetchFull {
+		t.Errorf("ENOSPC = %v (%s), want a capacity refusal counted as full", full, resultOf(full))
+	}
+	other := diskFailure("write file", &fs.PathError{Op: "write", Path: "/cache/.download-1", Err: syscall.EIO})
+	if errors.Is(other, runnerruntime.ErrCapacityExhausted) || resultOf(other) != metrics.VolumeFetchIO {
+		t.Errorf("EIO = %v (%s), want an io failure", other, resultOf(other))
+	}
+	for _, err := range []error{full, other} {
+		if strings.Contains(err.Error(), "/cache") {
+			t.Errorf("error names the path: %v", err)
+		}
+	}
+}
+
 func TestDownloadTimesOut(t *testing.T) {
 	root := t.TempDir()
 	cfg := testConfig(filepath.Join(root, "cache"), filepath.Join(root, "data"))

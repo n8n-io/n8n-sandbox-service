@@ -147,8 +147,8 @@ sudo env \
 
 Defaults for Firecracker paths (`/opt/firecracker/bin`, `/srv/firecracker/...`) match
 `install-runner-host.sh`. Override via [configuration.md](configuration.md).
-Creates leave the volume cache's budget (20 GiB) free on the data disk; on a
-smaller disk, lower `SANDBOX_RUNNER_VOLUME_CACHE_MAX_BYTES`.
+Creates leave the volume cache's unused budget (20 GiB less what it holds) free
+on the data disk; on a smaller disk, lower `SANDBOX_RUNNER_VOLUME_CACHE_MAX_BYTES`.
 
 ## 5. Verify
 
