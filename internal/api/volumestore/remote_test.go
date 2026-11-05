@@ -3,43 +3,47 @@ package volumestore
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	"github.com/n8n-io/sandbox-service/internal/api/volumestore/storepb"
 	"github.com/n8n-io/sandbox-service/internal/volume"
 )
 
-// fakeHelper serves the helper protocol from memory. Unless strict, it
-// ignores max_bytes and sha256 and commits any complete body, so tests can
-// show what the API enforces on its own.
+// fakeHelper serves VolumeStore from memory. It follows the proto, so it
+// passes the conformance suite, unless a test switches on a misbehaviour.
 type fakeHelper struct {
-	t      *testing.T
-	strict bool
+	storepb.UnimplementedVolumeStoreServer
+	socket string
 
-	mu        sync.Mutex
-	objects   map[string][]byte
-	commits   int
-	requests  int
-	received  int  // most body bytes seen by one PUT
-	lieDigest bool // reports a digest other than the one stored
-	status    int  // answers every request with this status when set
-	readURL   string
-	readReqs  []map[string]any
+	mu       sync.Mutex
+	objects  map[string][]byte
+	requests int
+	commits  int
+	received int // most data bytes one Put received
+	readReqs []*storepb.ReadURLRequest
+	readURL  string
 
-	earlyCreated    bool          // stores the first 3 bytes and answers 201 before the body ends
-	failAfterCommit bool          // stores the object, then answers 500
-	hang            chan struct{} // holds every request until closed
+	lax             bool          // ignores max_bytes and sha256, to show what the API enforces itself
+	lieDigest       bool          // answers with a digest other than the stored one
+	failAfterCommit bool          // stores the object, then fails the call
+	earlyOK         int           // stores what arrived and answers OK after this many bytes
+	earlyAnswered   chan struct{} // closed once that early answer went out
+	shortGet        bool          // announces more bytes than it sends
+	status          codes.Code    // fails every call with this code when set
+	hang            chan struct{} // holds every call until closed
 }
 
 func newFakeHelper(t *testing.T) (*fakeHelper, *Remote) {
@@ -50,166 +54,244 @@ func newFakeHelper(t *testing.T) (*fakeHelper, *Remote) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
-	socket := filepath.Join(dir, "s")
-	ln, err := net.Listen("unix", socket)
+	helper := &fakeHelper{
+		socket:        filepath.Join(dir, "s"),
+		objects:       map[string][]byte{},
+		readURL:       "https://storage.test/object?sig=x",
+		earlyAnswered: make(chan struct{}),
+	}
+	listener, err := net.Listen("unix", helper.socket)
 	if err != nil {
 		t.Fatal(err)
 	}
-	helper := &fakeHelper{t: t, objects: map[string][]byte{}, readURL: "https://storage.test/object?sig=x"}
-	srv := &http.Server{Handler: helper}
-	go srv.Serve(ln)
-	t.Cleanup(func() { srv.Close() })
-	return helper, NewRemote(socket)
+	server := grpc.NewServer(grpc.MaxRecvMsgSize(remoteMaxMessageSize), grpc.MaxSendMsgSize(remoteMaxMessageSize))
+	storepb.RegisterVolumeStoreServer(server, helper)
+	go server.Serve(listener)
+	t.Cleanup(server.Stop)
+	rs, err := NewRemote(helper.socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { rs.Close() })
+	return helper, rs
 }
 
-// with runs inspect under the helper's lock, which ServeHTTP holds while it
-// reads or changes the same fields.
+// with runs inspect under the helper's lock, which its handlers hold while
+// they read or change the same fields.
 func (f *fakeHelper) with(inspect func()) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	inspect()
 }
 
-func (f *fakeHelper) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+// begin counts a call and applies the misbehaviours that hit every call.
+func (f *fakeHelper) begin(ctx context.Context) error {
 	f.mu.Lock()
 	f.requests++
-	status, hang, earlyCreated := f.status, f.hang, f.earlyCreated
+	code, hang := f.status, f.hang
 	f.mu.Unlock()
 	if hang != nil {
-		<-hang
-		return
-	}
-	if !strings.HasPrefix(request.RequestURI, "/v1/") {
-		f.t.Errorf("request URI %q, want origin form under /v1/", request.RequestURI)
-	}
-	if status != 0 {
-		writer.WriteHeader(status)
-		_, _ = writer.Write([]byte(`{"error":"helper says no"}`))
-		return
-	}
-	if request.Method == http.MethodPost && request.URL.Path == "/v1/read-urls" {
-		var req map[string]any
-		if err := json.NewDecoder(request.Body).Decode(&req); err != nil {
-			http.Error(writer, err.Error(), http.StatusBadRequest)
-			return
+		select {
+		case <-hang:
+		case <-ctx.Done():
 		}
-		f.mu.Lock()
-		f.readReqs = append(f.readReqs, req)
-		readURL := f.readURL
-		f.mu.Unlock()
-		_ = json.NewEncoder(writer).Encode(map[string]string{"url": readURL})
-		return
+		return status.Error(codes.Unavailable, "hung")
 	}
-	name, ok := strings.CutPrefix(request.URL.Path, "/v1/objects/")
-	if _, err := parseObjectName(name); !ok || err != nil {
-		http.Error(writer, "bad name", http.StatusBadRequest)
-		return
+	if code != codes.OK {
+		return status.Error(code, "helper says no")
 	}
-	switch request.Method {
-	case http.MethodPut:
-		if earlyCreated {
-			// Otherwise the server reads the rest of the body before answering.
-			_ = http.NewResponseController(writer).EnableFullDuplex()
-			data := make([]byte, 3)
-			if _, err := io.ReadFull(request.Body, data); err != nil {
-				return
-			}
-			f.mu.Lock()
-			f.objects[name] = data
-			f.mu.Unlock()
-			writer.WriteHeader(http.StatusCreated)
-			_ = json.NewEncoder(writer).Encode(map[string]any{"size": len(data), "sha256": digest(data)})
-			writer.(http.Flusher).Flush()
-			return
+	return nil
+}
+
+func keyName(key *storepb.ObjectKey) (string, error) {
+	kinds := map[storepb.Kind]volume.Kind{storepb.Kind_KIND_EXT4: volume.KindExt4, storepb.Kind_KIND_TAR: volume.KindTar}
+	parsed := Key{Scope: key.GetScope(), ID: key.GetId(), Kind: kinds[key.GetKind()]}
+	if err := parsed.Validate(); err != nil {
+		return "", status.Error(codes.InvalidArgument, "invalid key")
+	}
+	return parsed.objectName(), nil
+}
+
+func (f *fakeHelper) Put(stream storepb.VolumeStore_PutServer) error {
+	if err := f.begin(stream.Context()); err != nil {
+		return err
+	}
+	first, err := stream.Recv()
+	if err != nil {
+		return err
+	}
+	header := first.GetHeader()
+	if header == nil {
+		return status.Error(codes.InvalidArgument, "the first message must carry the header")
+	}
+	name, err := keyName(header.GetKey())
+	if err != nil {
+		return err
+	}
+	var lax bool
+	var earlyOK int
+	f.with(func() { lax, earlyOK = f.lax, f.earlyOK })
+	if !lax && (header.GetMaxBytes() <= 0 || (header.GetSha256() != "" && !volume.ValidDigest(header.GetSha256()))) {
+		return status.Error(codes.InvalidArgument, "invalid header")
+	}
+	var data []byte
+	for {
+		message, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
 		}
-		data, err := io.ReadAll(request.Body)
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		f.received = max(f.received, len(data))
 		if err != nil {
-			return // incomplete: nothing is committed
+			return err // ended without a half-close: nothing is stored
 		}
-		if _, ok := f.objects[name]; ok {
-			writer.WriteHeader(http.StatusConflict)
-			return
-		}
-		if f.strict {
-			if limit, _ := strconv.Atoi(request.URL.Query().Get("max_bytes")); len(data) > limit {
-				writer.WriteHeader(http.StatusRequestEntityTooLarge)
-				return
-			}
-			if want := request.URL.Query().Get("sha256"); want != "" && want != digest(data) {
-				writer.WriteHeader(http.StatusUnprocessableEntity)
-				return
-			}
-		}
-		f.objects[name] = data
-		f.commits++
-		if f.failAfterCommit {
-			writer.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		sum := digest(data)
-		if f.lieDigest {
-			sum = digest([]byte("something else"))
-		}
-		writer.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(writer).Encode(map[string]any{"size": len(data), "sha256": sum})
-	case http.MethodHead, http.MethodGet:
-		f.mu.Lock()
-		data, ok := f.objects[name]
-		f.mu.Unlock()
+		piece, ok := message.GetPart().(*storepb.PutRequest_Data)
 		if !ok {
-			writer.WriteHeader(http.StatusNotFound)
-			return
+			return status.Error(codes.InvalidArgument, "only the first message may carry the header")
 		}
-		writer.Header().Set("Content-Length", strconv.Itoa(len(data)))
-		writer.Header().Set("Object-SHA256", digest(data))
-		if request.Method == http.MethodGet {
-			_, _ = writer.Write(data)
+		data = append(data, piece.Data...)
+		f.with(func() { f.received = max(f.received, len(data)) })
+		if !lax && int64(len(data)) > header.GetMaxBytes() {
+			return status.Error(codes.OutOfRange, "more than max_bytes")
 		}
-	case http.MethodDelete:
-		f.mu.Lock()
-		delete(f.objects, name)
-		f.mu.Unlock()
-		writer.WriteHeader(http.StatusNoContent)
-	default:
-		writer.WriteHeader(http.StatusMethodNotAllowed)
+		if earlyOK > 0 && len(data) >= earlyOK {
+			f.with(func() { f.objects[name] = data })
+			err := stream.SendAndClose(&storepb.Object{Size: int64(len(data)), Sha256: digest(data)})
+			close(f.earlyAnswered)
+			return err
+		}
 	}
+	if !lax && header.GetSha256() != "" && header.GetSha256() != digest(data) {
+		return status.Error(codes.DataLoss, "not the given sha256")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.objects[name]; ok {
+		return status.Error(codes.AlreadyExists, "the object exists")
+	}
+	f.objects[name] = data
+	f.commits++
+	if f.failAfterCommit {
+		return status.Error(codes.Unavailable, "lost the answer")
+	}
+	sum := digest(data)
+	if f.lieDigest {
+		sum = digest([]byte("something else"))
+	}
+	return stream.SendAndClose(&storepb.Object{Size: int64(len(data)), Sha256: sum})
+}
+
+func (f *fakeHelper) Stat(ctx context.Context, request *storepb.StatRequest) (*storepb.Object, error) {
+	if err := f.begin(ctx); err != nil {
+		return nil, err
+	}
+	name, err := keyName(request.GetKey())
+	if err != nil {
+		return nil, err
+	}
+	var data []byte
+	var ok bool
+	f.with(func() { data, ok = f.objects[name] })
+	if !ok {
+		return nil, status.Error(codes.NotFound, "no such object")
+	}
+	return &storepb.Object{Size: int64(len(data)), Sha256: digest(data)}, nil
+}
+
+func (f *fakeHelper) Get(request *storepb.GetRequest, stream storepb.VolumeStore_GetServer) error {
+	if err := f.begin(stream.Context()); err != nil {
+		return err
+	}
+	name, err := keyName(request.GetKey())
+	if err != nil {
+		return err
+	}
+	var data []byte
+	var ok, short bool
+	f.with(func() {
+		data, ok = f.objects[name]
+		short = f.shortGet
+	})
+	if !ok {
+		return status.Error(codes.NotFound, "no such object")
+	}
+	header := &storepb.Object{Size: int64(len(data)), Sha256: digest(data)}
+	if short {
+		data = data[:len(data)/2]
+	}
+	if err := stream.Send(&storepb.GetResponse{Part: &storepb.GetResponse_Object{Object: header}}); err != nil {
+		return err
+	}
+	for len(data) > 0 {
+		piece := data[:min(len(data), putPieceSize)]
+		data = data[len(piece):]
+		if err := stream.Send(&storepb.GetResponse{Part: &storepb.GetResponse_Data{Data: piece}}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (f *fakeHelper) Delete(ctx context.Context, request *storepb.DeleteRequest) (*storepb.DeleteResponse, error) {
+	if err := f.begin(ctx); err != nil {
+		return nil, err
+	}
+	name, err := keyName(request.GetKey())
+	if err != nil {
+		return nil, err
+	}
+	f.with(func() { delete(f.objects, name) })
+	return &storepb.DeleteResponse{}, nil
+}
+
+func (f *fakeHelper) ReadURL(ctx context.Context, request *storepb.ReadURLRequest) (*storepb.ReadURLResponse, error) {
+	if err := f.begin(ctx); err != nil {
+		return nil, err
+	}
+	if _, err := keyName(request.GetKey()); err != nil {
+		return nil, err
+	}
+	if request.GetTtlSeconds() < 1 || request.GetTtlSeconds() > 3600 {
+		return nil, status.Error(codes.InvalidArgument, "ttl_seconds must be 1 to 3600")
+	}
+	var readURL string
+	f.with(func() {
+		f.readReqs = append(f.readReqs, request)
+		readURL = f.readURL
+	})
+	return &storepb.ReadURLResponse{Url: readURL}, nil
 }
 
 func TestRemotePutStatOpenDelete(t *testing.T) {
 	// The helper is reached over its socket only, never through a proxy.
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:1")
 	t.Setenv("HTTP_PROXY", "http://127.0.0.1:1")
 	helper, rs := newFakeHelper(t)
-	helper.with(func() { helper.strict = true })
 	ctx := context.Background()
-	data := []byte("tar bytes")
+	data := bytes.Repeat([]byte("volume!\n"), putPieceSize/8*2+5) // three pieces
 	want := Object{Size: int64(len(data)), SHA256: digest(data)}
 
-	obj, err := rs.Put(ctx, tenantKey, bytes.NewReader(data), PutOptions{MaxBytes: 100, ExpectedSHA256: want.SHA256})
+	obj, err := rs.Put(ctx, tenantKey, bytes.NewReader(data), PutOptions{MaxBytes: int64(len(data)), ExpectedSHA256: want.SHA256})
 	if err != nil || obj != want {
 		t.Fatalf("Put = %+v, %v; want %+v", obj, err, want)
 	}
 	var stored []byte
 	helper.with(func() { stored = helper.objects["tenants/"+testTenant+"/deps.tar"] })
 	if !bytes.Equal(stored, data) {
-		t.Fatalf("helper stored %q under the object name", stored)
+		t.Fatalf("helper stored %d bytes under the object name, want %d", len(stored), len(data))
 	}
-	if _, err := rs.Put(ctx, tenantKey, bytes.NewReader(data), PutOptions{MaxBytes: 100}); !errors.Is(err, ErrExists) {
+	if _, err := rs.Put(ctx, tenantKey, bytes.NewReader(data), PutOptions{MaxBytes: int64(len(data))}); !errors.Is(err, ErrExists) {
 		t.Fatalf("second Put = %v, want ErrExists", err)
 	}
 	if got, err := rs.Stat(ctx, tenantKey); err != nil || got != want {
 		t.Fatalf("Stat = %+v, %v; want %+v", got, err, want)
 	}
-	rc, got, err := rs.Open(ctx, tenantKey)
+	reader, got, err := rs.Open(ctx, tenantKey)
 	if err != nil || got != want {
 		t.Fatalf("Open = %+v, %v; want %+v", got, err, want)
 	}
-	content, _ := io.ReadAll(rc)
-	rc.Close()
-	if !bytes.Equal(content, data) {
-		t.Fatalf("Open content = %q", content)
+	content, err := io.ReadAll(reader)
+	reader.Close()
+	if err != nil || !bytes.Equal(content, data) {
+		t.Fatalf("Open content: %d bytes, %v", len(content), err)
 	}
 	if err := rs.Delete(ctx, tenantKey); err != nil {
 		t.Fatalf("Delete: %v", err)
@@ -225,8 +307,8 @@ func TestRemotePutStatOpenDelete(t *testing.T) {
 	}
 }
 
-// The fake commits any complete body, so nothing may be committed unless the
-// API itself cut the upload off before its end.
+// The helper is lax and stores any stream that ends with a half-close, so
+// nothing may be stored unless the API itself cut the upload off.
 func TestRemotePutCutsOffBeforeTheHelperCommits(t *testing.T) {
 	data := []byte("0123456789")
 	cases := []struct {
@@ -243,17 +325,20 @@ func TestRemotePutCutsOffBeforeTheHelperCommits(t *testing.T) {
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			helper, rs := newFakeHelper(t)
+			helper.with(func() { helper.lax = true })
 			if _, err := rs.Put(context.Background(), sharedKey, testCase.reader, testCase.opts); !errors.Is(err, testCase.want) {
 				t.Fatalf("Put = %v, want %v", err, testCase.want)
 			}
-			helper.mu.Lock()
-			defer helper.mu.Unlock()
-			if helper.commits != 0 {
-				t.Fatalf("helper committed %d objects", helper.commits)
-			}
-			if int64(helper.received) > testCase.opts.MaxBytes {
-				t.Fatalf("helper received %d bytes, past MaxBytes %d", helper.received, testCase.opts.MaxBytes)
-			}
+			// The helper may still be reading the cancelled stream.
+			time.Sleep(50 * time.Millisecond)
+			helper.with(func() {
+				if helper.commits != 0 {
+					t.Errorf("helper committed %d objects", helper.commits)
+				}
+				if int64(helper.received) > testCase.opts.MaxBytes {
+					t.Errorf("helper received %d bytes, past MaxBytes %d", helper.received, testCase.opts.MaxBytes)
+				}
+			})
 		})
 	}
 }
@@ -266,37 +351,42 @@ func TestRemoteMapsHelperStatuses(t *testing.T) {
 	}
 	stat := func(rs *Remote) error { _, err := rs.Stat(ctx, sharedKey); return err }
 	cases := []struct {
-		status int
-		call   func(*Remote) error
-		want   error
+		code codes.Code
+		call func(*Remote) error
+		want error
 	}{
-		{http.StatusConflict, put, ErrExists},
-		{http.StatusRequestEntityTooLarge, put, ErrTooLarge},
-		{http.StatusUnprocessableEntity, put, ErrDigestMismatch},
-		{http.StatusNotFound, stat, ErrNotFound},
+		{codes.AlreadyExists, put, ErrExists},
+		{codes.OutOfRange, put, ErrTooLarge},
+		{codes.DataLoss, put, ErrDigestMismatch},
+		{codes.InvalidArgument, put, ErrInvalidKey},
+		{codes.NotFound, stat, ErrNotFound},
+		{codes.InvalidArgument, stat, ErrInvalidKey},
 	}
 	for _, testCase := range cases {
 		helper, rs := newFakeHelper(t)
-		helper.with(func() { helper.status = testCase.status })
+		helper.with(func() { helper.status = testCase.code })
 		if err := testCase.call(rs); !errors.Is(err, testCase.want) {
-			t.Errorf("status %d: %v, want %v", testCase.status, err, testCase.want)
+			t.Errorf("%s: %v, want %v", testCase.code, err, testCase.want)
 		}
 	}
 
 	helper, rs := newFakeHelper(t)
-	helper.with(func() { helper.status = http.StatusServiceUnavailable })
+	helper.with(func() { helper.status = codes.Unavailable })
 	for name, call := range map[string]func(*Remote) error{
 		"Put":    put,
 		"Stat":   stat,
 		"Delete": func(rs *Remote) error { return rs.Delete(ctx, sharedKey) },
+		"Open": func(rs *Remote) error {
+			_, _, err := rs.Open(ctx, sharedKey)
+			return err
+		},
 		"ReadURL": func(rs *Remote) error {
 			_, err := rs.ReadURL(ctx, sharedKey, time.Minute)
 			return err
 		},
 	} {
 		err := call(rs)
-		// A HEAD answer has no body to carry the message.
-		if err == nil || !strings.Contains(err.Error(), "503") || (name != "Stat" && !strings.Contains(err.Error(), "helper says no")) {
+		if err == nil || !strings.Contains(err.Error(), "Unavailable") || !strings.Contains(err.Error(), "helper says no") {
 			t.Errorf("%s with a failing helper = %v", name, err)
 		}
 	}
@@ -315,6 +405,65 @@ func TestRemoteRefusesAnAnswerThatDoesNotMatchTheUpload(t *testing.T) {
 	}
 }
 
+// The helper stores what has arrived and answers OK while the upload is
+// still open.
+func TestRemotePutDiscardsAnObjectStoredBeforeTheUploadEnded(t *testing.T) {
+	helper, rs := newFakeHelper(t)
+	helper.with(func() { helper.earlyOK = 3 })
+	resumed := false
+	rest := readerFunc(func(buf []byte) (int, error) {
+		if resumed {
+			return 0, io.EOF
+		}
+		<-helper.earlyAnswered
+		resumed = true
+		return copy(buf, "def"), nil
+	})
+	reader := io.MultiReader(strings.NewReader("abc"), rest)
+	if _, err := rs.Put(context.Background(), sharedKey, reader, PutOptions{MaxBytes: 10}); err == nil {
+		t.Fatal("Put accepted an object stored before the upload ended")
+	}
+	var left int
+	helper.with(func() { left = len(helper.objects) })
+	if left != 0 {
+		t.Fatalf("%d early objects left behind", left)
+	}
+}
+
+// After the whole upload went out, a failed answer leaves the outcome open:
+// the object decides.
+func TestRemotePutSettlesAnOpenOutcome(t *testing.T) {
+	helper, rs := newFakeHelper(t)
+	helper.with(func() { helper.failAfterCommit = true })
+	data := []byte("data")
+	obj, err := rs.Put(context.Background(), sharedKey, bytes.NewReader(data), PutOptions{MaxBytes: 10})
+	if want := (Object{Size: 4, SHA256: digest(data)}); err != nil || obj != want {
+		t.Fatalf("Put = %+v, %v; want the stored object %+v", obj, err, want)
+	}
+
+	helper, rs = newFakeHelper(t)
+	helper.with(func() { helper.status = codes.Internal })
+	if _, err := rs.Put(context.Background(), sharedKey, bytes.NewReader(data), PutOptions{MaxBytes: 10}); err == nil {
+		t.Fatal("Put succeeded although nothing was stored")
+	}
+}
+
+func TestRemoteOpenHoldsTheHelperToTheAnnouncedSize(t *testing.T) {
+	helper, rs := newFakeHelper(t)
+	if _, err := rs.Put(context.Background(), sharedKey, strings.NewReader("0123456789"), PutOptions{MaxBytes: 10}); err != nil {
+		t.Fatal(err)
+	}
+	helper.with(func() { helper.shortGet = true })
+	reader, _, err := rs.Open(context.Background(), sharedKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	if _, err := io.ReadAll(reader); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("reading a short object = %v, want io.ErrUnexpectedEOF", err)
+	}
+}
+
 func TestRemoteReadURL(t *testing.T) {
 	helper, rs := newFakeHelper(t)
 	ctx := context.Background()
@@ -327,20 +476,14 @@ func TestRemoteReadURL(t *testing.T) {
 	if _, err := rs.ReadURL(ctx, tenantKey, 1500*time.Millisecond); err != nil {
 		t.Fatal(err)
 	}
-	want := []map[string]any{
-		{"name": "tenants/" + testTenant + "/deps.tar", "ttl_seconds": float64(3600)},
-		{"name": "tenants/" + testTenant + "/deps.tar", "ttl_seconds": float64(2)},
-	}
-	var readReqs []map[string]any
+	var readReqs []*storepb.ReadURLRequest
 	helper.with(func() { readReqs = slices.Clone(helper.readReqs) })
-	if len(readReqs) != len(want) {
-		t.Fatalf("helper got %d read URL requests, want %d", len(readReqs), len(want))
+	if len(readReqs) != 2 {
+		t.Fatalf("helper got %d read URL requests, want 2", len(readReqs))
 	}
-	for index, req := range readReqs {
-		for name, value := range want[index] {
-			if req[name] != value {
-				t.Errorf("request %d: %s = %v, want %v", index, name, req[name], value)
-			}
+	for index, wantTTL := range []int64{3600, 2} {
+		if readReqs[index].GetTtlSeconds() != wantTTL || readReqs[index].GetKey().GetScope() != testTenant || readReqs[index].GetKey().GetId() != "deps" {
+			t.Errorf("request %d = %v, want ttl %d for the tenant's deps", index, readReqs[index], wantTTL)
 		}
 	}
 	if _, err := rs.ReadURL(ctx, tenantKey, 0); err == nil {
@@ -382,45 +525,22 @@ func TestRemoteRejectsInvalidKeysWithoutCallingTheHelper(t *testing.T) {
 }
 
 func TestRemoteWithoutHelper(t *testing.T) {
-	rs := NewRemote(filepath.Join(t.TempDir(), "missing"))
+	rs, err := NewRemote(filepath.Join(t.TempDir(), "missing"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rs.Close()
 	if _, err := rs.Stat(context.Background(), sharedKey); err == nil || errors.Is(err, ErrNotFound) {
 		t.Fatalf("Stat without a helper = %v, want a connection error", err)
 	}
 }
 
-// The helper stores what has arrived and answers while the upload stalls:
-// size and digest match what was read so far, only the missing end shows.
-func TestRemotePutDiscardsAnObjectStoredBeforeTheUploadEnded(t *testing.T) {
-	helper, rs := newFakeHelper(t)
-	helper.with(func() { helper.earlyCreated = true })
-	release := make(chan struct{})
-	t.Cleanup(func() { close(release) })
-	reader := io.MultiReader(strings.NewReader("abc"), gateReader{release})
-	if _, err := rs.Put(context.Background(), sharedKey, reader, PutOptions{MaxBytes: 10}); err == nil {
-		t.Fatal("Put accepted an object stored before the upload ended")
-	}
-	helper.mu.Lock()
-	defer helper.mu.Unlock()
-	if len(helper.objects) != 0 {
-		t.Fatalf("early object left behind: %v", helper.objects)
-	}
-}
-
-// After the whole upload went out, a failed answer leaves the outcome open:
-// the object decides.
-func TestRemotePutSettlesAnOpenOutcome(t *testing.T) {
-	helper, rs := newFakeHelper(t)
-	helper.with(func() { helper.failAfterCommit = true })
-	data := []byte("data")
-	obj, err := rs.Put(context.Background(), sharedKey, bytes.NewReader(data), PutOptions{MaxBytes: 10})
-	if want := (Object{Size: 4, SHA256: digest(data)}); err != nil || obj != want {
-		t.Fatalf("Put = %+v, %v; want the stored object %+v", obj, err, want)
-	}
-
-	helper, rs = newFakeHelper(t)
-	helper.with(func() { helper.status = http.StatusInternalServerError })
-	if _, err := rs.Put(context.Background(), sharedKey, bytes.NewReader(data), PutOptions{MaxBytes: 10}); err == nil {
-		t.Fatal("Put succeeded although nothing was stored")
+func TestRemoteReportsTheCallersCancellation(t *testing.T) {
+	_, rs := newFakeHelper(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := rs.Stat(ctx, sharedKey); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Stat with a cancelled context = %v, want context.Canceled", err)
 	}
 }
 
@@ -433,26 +553,35 @@ func TestRemoteGivesUpOnAStuckHelper(t *testing.T) {
 	helper.with(func() { helper.hang = hang })
 	t.Cleanup(func() { close(hang) })
 
-	start := time.Now()
-	if _, err := rs.Stat(context.Background(), sharedKey); err == nil {
-		t.Fatal("Stat on a stuck helper succeeded")
-	}
-	if elapsed := time.Since(start); elapsed > 5*time.Second {
-		t.Fatalf("Stat took %s on a stuck helper", elapsed)
+	for name, call := range map[string]func() error{
+		"Stat": func() error { _, err := rs.Stat(context.Background(), sharedKey); return err },
+		"Put": func() error {
+			_, err := rs.Put(context.Background(), sharedKey, strings.NewReader("data"), PutOptions{MaxBytes: 10})
+			return err
+		},
+	} {
+		start := time.Now()
+		if err := call(); err == nil {
+			t.Errorf("%s on a stuck helper succeeded", name)
+		}
+		if elapsed := time.Since(start); elapsed > 5*time.Second {
+			t.Errorf("%s took %s on a stuck helper", name, elapsed)
+		}
 	}
 }
 
-// The idle timeout ends stalls only: an upload and a download that keep
-// moving, and a consumer that pauses between reads, outlive it.
+// The watchdog ends stalls only: an upload that keeps moving, and a reader
+// that pauses between reads, outlive it.
 func TestRemoteIdleTimeoutSparesSlowTransfers(t *testing.T) {
+	const idle = 500 * time.Millisecond
 	previous := remoteIdleTimeout
-	remoteIdleTimeout = remoteIdleTimeoutForTest
-	_, rs := newFakeHelper(t)
+	remoteIdleTimeout = idle
+	helper, rs := newFakeHelper(t)
 	remoteIdleTimeout = previous
 	ctx := context.Background()
 
 	slow := readerFunc(func(buf []byte) (int, error) {
-		time.Sleep(80 * time.Millisecond)
+		time.Sleep(idle / 4)
 		buf[0] = 'x'
 		return 1, nil
 	})
@@ -460,21 +589,21 @@ func TestRemoteIdleTimeoutSparesSlowTransfers(t *testing.T) {
 		t.Fatalf("slow upload: %v", err)
 	}
 
-	big := bytes.Repeat([]byte("volume"), 1<<20)
-	if _, err := rs.Put(ctx, tenantKey, bytes.NewReader(big), PutOptions{MaxBytes: int64(len(big))}); err != nil {
-		t.Fatal(err)
-	}
-	rc, _, err := rs.Open(ctx, tenantKey)
+	// Larger than both flow-control windows, so the stream is still open
+	// during the pause.
+	big := bytes.Repeat([]byte("volume"), 3<<20)
+	helper.with(func() { helper.objects["tenants/"+testTenant+"/deps.tar"] = big })
+	reader, _, err := rs.Open(ctx, tenantKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rc.Close()
+	defer reader.Close()
 	head := make([]byte, 1024)
-	if _, err := io.ReadFull(rc, head); err != nil {
+	if _, err := io.ReadFull(reader, head); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(3 * remoteIdleTimeoutForTest)
-	rest, err := io.ReadAll(rc)
+	time.Sleep(3 * idle)
+	rest, err := io.ReadAll(reader)
 	if err != nil || len(head)+len(rest) != len(big) {
 		t.Fatalf("download after a pause: %d bytes, %v", len(head)+len(rest), err)
 	}

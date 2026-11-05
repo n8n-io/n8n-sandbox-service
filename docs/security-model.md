@@ -74,8 +74,8 @@ answers a missing, altered or expired signature with `403`. It proxies nothing,
 the access log redacts the signature, and over plain `http` a URL seen on the
 network works until it expires. With `remote`, the
 [store helper](volume-store-helper.md) holds the storage credentials and issues
-the read URLs; it authenticates nobody on its socket, so only the API may reach
-it.
+the read URLs; it serves gRPC on its socket without TLS and authenticates
+nobody, so only the API may reach it.
 
 Authorization runs on every sandbox request through `canAccessSandbox` in
 [internal/api/middleware_auth.go](../internal/api/middleware_auth.go):

@@ -227,8 +227,12 @@ func newVolumeStore(cfg *config.APIConfig) (volumestore.Store, error) {
 		slog.Info("using local volume store", "dir", filepath.Join(cfg.DataDir, "volumes"), "url", cfg.VolumeLocalURL)
 		return vs, nil
 	case config.VolumeStoreRemote:
+		vs, err := volumestore.NewRemote(cfg.VolumeRemoteSocket)
+		if err != nil {
+			return nil, err
+		}
 		slog.Info("using remote volume store", "socket", cfg.VolumeRemoteSocket)
-		return volumestore.NewRemote(cfg.VolumeRemoteSocket), nil
+		return vs, nil
 	}
 	return nil, nil
 }

@@ -9,7 +9,7 @@ GOFMT = $(shell go env GOROOT)/bin/gofmt
 
 SHELL_FILES := $(shell git ls-files '*.sh')
 
-.PHONY: all daemon runner runner-docker runner-firecracker api test test-integration clean docker docker-local docker-arm64 docker-amd64 docker-api-arm64 docker-api-amd64 docker-runner-arm64 docker-runner-amd64 docker-firecracker-runner-amd64 docker-sandbox-arm64 docker-sandbox-amd64 fmt fmt-check vet shell-fmt shell-fmt-check shell-lint check-shell-files playground up down smoke sdk sdk-install sdk-build sdk-typecheck sdk-test sdk-fmt sdk-fmt-check sdk-lint
+.PHONY: all daemon runner runner-docker runner-firecracker api test test-integration proto-volumestore clean docker docker-local docker-arm64 docker-amd64 docker-api-arm64 docker-api-amd64 docker-runner-arm64 docker-runner-amd64 docker-firecracker-runner-amd64 docker-sandbox-arm64 docker-sandbox-amd64 fmt fmt-check vet shell-fmt shell-fmt-check shell-lint check-shell-files playground up down smoke sdk sdk-install sdk-build sdk-typecheck sdk-test sdk-fmt sdk-fmt-check sdk-lint
 
 all: daemon runner api
 
@@ -87,6 +87,10 @@ test-integration:
 		exit 1; \
 	fi
 	go test -race -count=1 -tags integration -p 1 ./internal/api/store/ ./internal/api/registry/
+
+## proto-volumestore: Regenerate the volume store helper's gRPC code (needs protoc, protoc-gen-go and protoc-gen-go-grpc on PATH).
+proto-volumestore:
+	protoc -I proto --go_out=. --go_opt=module=$(MODULE) --go-grpc_out=. --go-grpc_opt=module=$(MODULE) volumestore/v1/volumestore.proto
 
 ## clean: Remove compiled binaries.
 clean:

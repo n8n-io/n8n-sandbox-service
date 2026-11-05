@@ -134,7 +134,12 @@ func TestVolumeObjectRouteOnlyExistsForLocalStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name, volumes := range map[string]volumestore.Store{"no store": nil, "remote": volumestore.NewRemote("/nonexistent.sock")} {
+	remote, err := volumestore.NewRemote("/nonexistent.sock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = remote.Close() })
+	for name, volumes := range map[string]volumestore.Store{"no store": nil, "remote": remote} {
 		router := newVolumeTestGateway(t, volumes)
 		if rr := get(t, router, signed, ""); rr.Code != http.StatusUnauthorized {
 			t.Errorf("%s: signed GET without a key: %d, want 401", name, rr.Code)
