@@ -453,7 +453,7 @@ api:
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `api.initContainers` | `[]` | Init containers for the API pods. One with `restartPolicy: Always` is a native sidecar: it starts before the API and stops after it. |
+| `api.initContainers` | `[]` | Init containers for the API pods. One with `restartPolicy: Always` is a native sidecar: it starts before the API and stops after it. Native sidecars need Kubernetes 1.29 or later; older clusters drop `restartPolicy`, so the sidecar never finishes and the API never starts. |
 | `api.terminationGracePeriodSeconds` | `""` | How long the API pods get to stop, in whole seconds. Empty keeps the Kubernetes default of 30. |
 
 A volume store helper for `SANDBOX_API_VOLUME_STORE=remote` (see `docs/volume-store-helper.md` in the service repository) runs as a native sidecar. Its socket directory is an `emptyDir` that the API mounts read-only and reaches through the pod's `fsGroup`. Raise the grace period so uploads in flight can finish:

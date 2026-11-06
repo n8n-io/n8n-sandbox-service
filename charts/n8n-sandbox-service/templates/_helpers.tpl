@@ -54,7 +54,7 @@ strings, since Kubernetes rejects other label types.
 {{- $labels := dict -}}
 {{- range $key, $value := .Values.api.podLabels -}}
 {{- if not (hasKey $selector $key) -}}
-{{- $_ := set $labels $key (toString $value) -}}
+{{- $_ := set $labels $key (include "n8n-sandbox-service.scalarString" $value) -}}
 {{- end -}}
 {{- end -}}
 {{- with $labels -}}
@@ -68,7 +68,19 @@ api.terminationGracePeriodSeconds as a string, or "" when unset. A 0 stays "0".
 {{- define "n8n-sandbox-service.apiTerminationGracePeriodSeconds" -}}
 {{- $seconds := .Values.api.terminationGracePeriodSeconds -}}
 {{- if not (kindIs "invalid" $seconds) -}}
-{{- toString $seconds | trim -}}
+{{- include "n8n-sandbox-service.scalarString" $seconds | trim -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+A value as a string. Numbers from values files are float64, which toString
+writes in exponent form from 1e6 on, so whole ones are written as integers.
+*/}}
+{{- define "n8n-sandbox-service.scalarString" -}}
+{{- if and (kindIs "float64" .) (eq . (floor .)) -}}
+{{- printf "%.0f" . -}}
+{{- else -}}
+{{- toString . -}}
 {{- end -}}
 {{- end }}
 
