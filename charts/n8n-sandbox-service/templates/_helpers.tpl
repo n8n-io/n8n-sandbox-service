@@ -33,6 +33,46 @@ Chart name and version label.
 {{- end }}
 
 {{/*
+The API pods' ServiceAccount, or "" to leave serviceAccountName unset.
+*/}}
+{{- define "n8n-sandbox-service.apiServiceAccountName" -}}
+{{- $name := .Values.api.serviceAccount.name | default "" | toString | trim -}}
+{{- if .Values.api.serviceAccount.create -}}
+{{- $name | default (include "n8n-sandbox-service.apiName" .) -}}
+{{- else -}}
+{{- $name -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+api.podLabels without the selector label keys, so they cannot move API pods
+out of the Deployment's selector or into another component's. Values become
+strings, since Kubernetes rejects other label types.
+*/}}
+{{- define "n8n-sandbox-service.apiPodLabels" -}}
+{{- $selector := include "n8n-sandbox-service.selectorLabels" (dict "Release" .Release "Chart" .Chart "Values" .Values "component" "api") | fromYaml -}}
+{{- $labels := dict -}}
+{{- range $key, $value := .Values.api.podLabels -}}
+{{- if not (hasKey $selector $key) -}}
+{{- $_ := set $labels $key (toString $value) -}}
+{{- end -}}
+{{- end -}}
+{{- with $labels -}}
+{{- toYaml . -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+api.terminationGracePeriodSeconds as a string, or "" when unset. A 0 stays "0".
+*/}}
+{{- define "n8n-sandbox-service.apiTerminationGracePeriodSeconds" -}}
+{{- $seconds := .Values.api.terminationGracePeriodSeconds -}}
+{{- if not (kindIs "invalid" $seconds) -}}
+{{- toString $seconds | trim -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Component label and resource name for the in-cluster runner. Both follow
 runner.isolation on purpose: StatefulSet selectors are immutable, so a shared
 name would break existing sysbox releases on upgrade. Switching isolation

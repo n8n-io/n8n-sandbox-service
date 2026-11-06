@@ -421,3 +421,65 @@ api:
 The CPU target is a percentage of `api.resources.requests.cpu`, which the render requires to be above zero while that target is set. The memory target is off by default. It is an average per pod rather than a share of the memory request, so it can sit just under the memory limit. Size Postgres `max_connections` for `maxReplicas` plus the rollout surge: each API pod opens up to 25 store connections plus `SANDBOX_API_IDLE_SWEEP_CONCURRENCY + 5` lock connections. Tenant request limits are counted per pod, so a tenant's total limit grows with the replica count too.
 
 Enabling autoscaling on a running release removes `spec.replicas`, which can drop the Deployment to one pod until the HPA scales it back up. The Kubernetes docs on [migrating to horizontal autoscaling](https://kubernetes.io/docs/concepts/workloads/autoscaling/horizontal-pod-autoscale/#migrating-deployments-and-statefulsets-to-horizontal-autoscaling) show how to avoid that. Turning autoscaling off again sets the Deployment back to `api.replicaCount`, so raise that first.
+
+## API ServiceAccount
+
+By default the API pods run as the namespace's `default` ServiceAccount. Give them one of their own when a container in them needs a cloud identity, such as a [volume store helper](#api-sidecars) that reaches object storage through workload identity. The identity then belongs to the API pods only, not to the runner pods, which also use `default`.
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `api.serviceAccount.create` | `false` | Create a ServiceAccount for the API pods. |
+| `api.serviceAccount.name` | `""` | With `create`, the name of the created ServiceAccount; empty means `<fullname>-api`. Without `create`, the name of an existing ServiceAccount; empty keeps `default`. |
+| `api.serviceAccount.annotations` | `{}` | Annotations on the created ServiceAccount. |
+| `api.podLabels` | `{}` | Extra labels for the API pods. Keys of the selector labels are ignored. |
+
+The API does not call the Kubernetes API. Whenever a ServiceAccount is set, the API pods set `automountServiceAccountToken: false`, and so does a created ServiceAccount.
+
+For Azure Workload Identity, give the managed identity a federated credential for `system:serviceaccount:<namespace>:<name>`. The webhook gives the identity's token to every container not listed in `skip-containers`, so this keeps it out of the API container and in a sidecar, as in [API Sidecars](#api-sidecars). `podAnnotations` also reaches the runner pods, where it does nothing without the label:
+
+```yaml
+podAnnotations:
+  azure.workload.identity/skip-containers: api
+api:
+  serviceAccount:
+    create: true
+    annotations:
+      azure.workload.identity/client-id: <managed-identity-client-id>
+  podLabels:
+    azure.workload.identity/use: "true"
+```
+
+## API Sidecars
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `api.initContainers` | `[]` | Init containers for the API pods. One with `restartPolicy: Always` is a native sidecar: it starts before the API and stops after it. |
+| `api.terminationGracePeriodSeconds` | `""` | How long the API pods get to stop, in whole seconds. Empty keeps the Kubernetes default of 30. |
+
+A volume store helper for `SANDBOX_API_VOLUME_STORE=remote` (see `docs/volume-store-helper.md` in the service repository) runs as a native sidecar. Its socket directory is an `emptyDir` that the API mounts read-only and reaches through the pod's `fsGroup`. Raise the grace period so uploads in flight can finish:
+
+```yaml
+api:
+  terminationGracePeriodSeconds: 300
+  extraEnv:
+    - name: SANDBOX_API_VOLUME_STORE
+      value: remote
+    - name: SANDBOX_API_VOLUME_REMOTE_SOCKET
+      value: /run/volume-store/store.sock
+  extraVolumes:
+    - name: volume-store
+      emptyDir: {}
+  extraVolumeMounts:
+    - name: volume-store
+      mountPath: /run/volume-store
+      readOnly: true
+  initContainers:
+    - name: volume-store
+      image: <helper-image>
+      restartPolicy: Always
+      # The helper's own settings, including the same socket path.
+      env: []
+      volumeMounts:
+        - name: volume-store
+          mountPath: /run/volume-store
+```

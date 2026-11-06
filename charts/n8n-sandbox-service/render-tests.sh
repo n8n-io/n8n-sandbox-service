@@ -48,6 +48,26 @@ render --set dataPlane.mode=external --set networkPolicy.enabled=true >/dev/null
 render "${privileged[@]}" >/dev/null
 render "${privileged[@]}" --set networkPolicy.enabled=true >/dev/null
 
+echo "==> default values render the golden manifests"
+# Existing installs must not change: the default render is pinned byte for
+# byte, with the chart and app versions masked so version bumps leave it alone.
+# After an intended change to the default render, regenerate it with:
+#   UPDATE_GOLDEN=1 charts/n8n-sandbox-service/render-tests.sh
+golden="$CHART_DIR/testdata/default-render.yaml"
+chart_info=$(helm show chart "$CHART_DIR")
+chart_version=$(awk '/^version:/{print $2}' <<<"$chart_info")
+app_version=$(awk '/^appVersion:/{print $2}' <<<"$chart_info")
+default_render=$(render)
+default_render=${default_render//"n8n-sandbox-service-$chart_version"/n8n-sandbox-service-CHART_VERSION}
+default_render=${default_render//"$app_version"/APP_VERSION}
+if test -n "${UPDATE_GOLDEN:-}"; then
+	printf '%s\n' "$default_render" >"$golden"
+fi
+if ! diff -u "$golden" <(printf '%s\n' "$default_render"); then
+	echo "the default render changed; see $golden" >&2
+	exit 1
+fi
+
 echo "==> quota pool image lands on the bounded volume"
 # Privileged isolation: the pool lands on the bounded emptyDir.
 manifests=$(render "${privileged[@]}" \
@@ -468,5 +488,92 @@ done
 must_fail "targetMemoryAverageValue, or both" \
 	"${postgres_api[@]}" --set api.autoscaling.enabled=true \
 	--set api.autoscaling.targetCPUUtilizationPercentage=null
+
+echo "==> the API keeps the namespace's default ServiceAccount by default"
+# The golden covers this too; these checks survive a careless regeneration.
+if grep -q 'kind: ServiceAccount' <<<"$default_manifests"; then
+	echo "api.serviceAccount.create must be off by default" >&2
+	exit 1
+fi
+for field in serviceAccountName automountServiceAccountToken initContainers terminationGracePeriodSeconds; do
+	if grep -q "$field" <<<"$default_api"; then
+		echo "the default API Deployment must not set $field" >&2
+		exit 1
+	fi
+done
+
+echo "==> a created API ServiceAccount carries its annotations and a derived name"
+created=(
+	--set api.serviceAccount.create=true
+	--set-string 'api.serviceAccount.annotations.azure\.workload\.identity/client-id=00000000-0000-0000-0000-000000000001'
+)
+service_account=$(render "${created[@]}" --show-only templates/api-serviceaccount.yaml)
+grep -q '^  name: "n8n-sandbox-service-api"$' <<<"$service_account"
+grep -Fq 'azure.workload.identity/client-id: 00000000-0000-0000-0000-000000000001' <<<"$service_account"
+grep -q '^automountServiceAccountToken: false$' <<<"$service_account"
+created_api=$(render "${created[@]}" --show-only templates/api-deployment.yaml)
+grep -q 'serviceAccountName: "n8n-sandbox-service-api"' <<<"$created_api"
+grep -q '^      automountServiceAccountToken: false$' <<<"$created_api"
+# A name set alongside create names the created ServiceAccount.
+render "${created[@]}" --set api.serviceAccount.name=sandbox-api \
+	--show-only templates/api-serviceaccount.yaml | grep -q '^  name: "sandbox-api"$'
+
+echo "==> an existing API ServiceAccount is used, not created, and mounts no token"
+existing=$(render --set api.serviceAccount.name=sandbox-api-existing)
+grep -q 'serviceAccountName: "sandbox-api-existing"' <<<"$existing"
+grep -q '^      automountServiceAccountToken: false$' <<<"$existing"
+if grep -q 'kind: ServiceAccount' <<<"$existing"; then
+	echo "api.serviceAccount.create=false must not render a ServiceAccount" >&2
+	exit 1
+fi
+
+echo "==> api.podLabels join the pod labels but never replace the selector labels"
+# --set, not --set-string, for the workload identity label: a boolean must
+# still render as the string Kubernetes requires.
+labelled=$(render \
+	--set 'api.podLabels.azure\.workload\.identity/use=true' \
+	--set-string 'api.podLabels.app\.kubernetes\.io/component=sysbox-runner' \
+	--set-string 'api.podLabels.app\.kubernetes\.io/instance=other' \
+	--show-only templates/api-deployment.yaml)
+selector_labels='app.kubernetes.io/name: n8n-sandbox-service
+app.kubernetes.io/instance: n8n-sandbox-service
+app.kubernetes.io/component: api'
+# The lines nested under a header line, without their indent.
+nested_lines() {
+	awk -v header="$1" '
+		$0 == header {inside=1; match($0, /^ */); depth=RLENGTH; next}
+		inside {match($0, /^ */); if (RLENGTH <= depth) exit; sub(/^ +/, ""); print}'
+}
+test "$(nested_lines '    matchLabels:' <<<"$labelled")" = "$selector_labels"
+test "$(nested_lines '      labels:' <<<"$labelled")" = "$selector_labels
+azure.workload.identity/use: \"true\""
+
+echo "==> api.initContainers render as given, so a native sidecar keeps its restartPolicy"
+sidecar=$(render \
+	--set 'api.initContainers[0].name=volume-store' \
+	--set 'api.initContainers[0].image=example.com/volume-store:1' \
+	--set 'api.initContainers[0].restartPolicy=Always' \
+	--show-only templates/api-deployment.yaml)
+test "$(nested_lines '      initContainers:' <<<"$sidecar")" = "- image: example.com/volume-store:1
+name: volume-store
+restartPolicy: Always"
+
+echo "==> api.terminationGracePeriodSeconds renders when set, including 0"
+for seconds in 300 0; do
+	render --set "api.terminationGracePeriodSeconds=$seconds" \
+		--show-only templates/api-deployment.yaml |
+		grep -q "^      terminationGracePeriodSeconds: $seconds\$"
+done
+if render --set api.terminationGracePeriodSeconds=null \
+	--show-only templates/api-deployment.yaml | grep -q terminationGracePeriodSeconds; then
+	echo "a null api.terminationGracePeriodSeconds must keep the Kubernetes default" >&2
+	exit 1
+fi
+for seconds in -1 2.5 30s 010; do
+	must_fail "api.terminationGracePeriodSeconds must be a whole number of seconds" \
+		--set-string "api.terminationGracePeriodSeconds=$seconds"
+done
+must_fail "api.terminationGracePeriodSeconds must be a whole number of seconds" \
+	--set api.terminationGracePeriodSeconds=-1
 
 echo "render tests passed"

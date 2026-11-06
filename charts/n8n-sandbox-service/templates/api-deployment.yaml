@@ -18,17 +18,31 @@ spec:
     metadata:
       labels:
         {{- include "n8n-sandbox-service.selectorLabels" (dict "Release" .Release "Chart" .Chart "Values" .Values "component" "api") | nindent 8 }}
+        {{- with include "n8n-sandbox-service.apiPodLabels" . }}
+        {{- . | nindent 8 }}
+        {{- end }}
       {{- with .Values.podAnnotations }}
       annotations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
     spec:
+      {{- with include "n8n-sandbox-service.apiServiceAccountName" . }}
+      serviceAccountName: {{ . | quote }}
+      automountServiceAccountToken: false
+      {{- end }}
+      {{- with include "n8n-sandbox-service.apiTerminationGracePeriodSeconds" . }}
+      terminationGracePeriodSeconds: {{ . }}
+      {{- end }}
       {{- with .Values.api.podSecurityContext }}
       securityContext:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.api.initContainers }}
+      initContainers:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       containers:
