@@ -47,13 +47,20 @@ type Runtime struct {
 	hostNATMu   sync.Mutex
 	hostNATOK   bool
 
+	// diskReserved reports data volume space that creates must leave free; nil
+	// means none. Set once at startup.
+	diskReserved func() int64
+
 	// wireCh wakes the slot wirer (network_wirer.go). Buffered by one and written with a
 	// non-blocking send, so a release never waits on it and a burst of releases
 	// collapses into one pass over the slots.
 	wireCh chan struct{}
 }
 
-var _ runnerruntime.Runtime = (*Runtime)(nil)
+var (
+	_ runnerruntime.Runtime      = (*Runtime)(nil)
+	_ runnerruntime.DiskReserver = (*Runtime)(nil)
+)
 
 // SetMetricsRecorder attaches the runner metrics recorder for operations that
 // complete inside the runtime (for example crash recoveries).

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 	"strings"
@@ -223,6 +224,53 @@ func TestLoadRejectsInvalidRequestLimit(t *testing.T) {
 			t.Setenv("SANDBOX_RUNNER_MAX_INFLIGHT_PER_SANDBOX", value)
 			if _, err := Load(); err == nil {
 				t.Fatalf("expected Load() to reject SANDBOX_RUNNER_MAX_INFLIGHT_PER_SANDBOX=%s", value)
+			}
+		})
+	}
+}
+
+// An empty want marks a value Load must refuse.
+func TestLoadVolumeCache(t *testing.T) {
+	workDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		env  map[string]string
+		want string
+	}{
+		{map[string]string{"SANDBOX_RUNNER_DATA_DIR": "/data/sandboxes"}, "/data/sandboxes/volume-cache 21474836480 10m0s"},
+		{map[string]string{"SANDBOX_RUNNER_DATA_DIR": "sandboxes"}, workDir + "/sandboxes/volume-cache 21474836480 10m0s"},
+		{map[string]string{
+			"SANDBOX_RUNNER_VOLUME_CACHE_DIR":       "/var/cache/volumes",
+			"SANDBOX_RUNNER_VOLUME_CACHE_MAX_BYTES": "1073741824",
+			"SANDBOX_RUNNER_VOLUME_FETCH_TIMEOUT":   "90s",
+		}, "/var/cache/volumes 1073741824 1m30s"},
+		{map[string]string{"SANDBOX_RUNNER_VOLUME_CACHE_MAX_BYTES": "0"}, ""},
+		{map[string]string{"SANDBOX_RUNNER_VOLUME_CACHE_MAX_BYTES": "-1"}, ""},
+		{map[string]string{"SANDBOX_RUNNER_VOLUME_CACHE_MAX_BYTES": "20GiB"}, ""},
+		{map[string]string{"SANDBOX_RUNNER_VOLUME_FETCH_TIMEOUT": "0"}, ""},
+		{map[string]string{"SANDBOX_RUNNER_VOLUME_FETCH_TIMEOUT": "-1m"}, ""},
+		{map[string]string{"SANDBOX_RUNNER_VOLUME_FETCH_TIMEOUT": "ten minutes"}, ""},
+	} {
+		t.Run(fmt.Sprint(tc.env), func(t *testing.T) {
+			setRequiredEnv(t)
+			for _, name := range []string{"SANDBOX_RUNNER_VOLUME_CACHE_DIR", "SANDBOX_RUNNER_VOLUME_CACHE_MAX_BYTES", "SANDBOX_RUNNER_VOLUME_FETCH_TIMEOUT"} {
+				t.Setenv(name, "")
+			}
+			for name, value := range tc.env {
+				t.Setenv(name, value)
+			}
+			cfg, err := Load()
+			switch {
+			case tc.want == "" && err == nil:
+				t.Fatal("Load() accepted it")
+			case tc.want != "" && err != nil:
+				t.Fatalf("Load() failed: %v", err)
+			case err == nil:
+				if got := fmt.Sprint(cfg.VolumeCacheDir, " ", cfg.VolumeCacheMaxBytes, " ", cfg.VolumeFetchTimeout); got != tc.want {
+					t.Errorf("volume cache config = %q, want %q", got, tc.want)
+				}
 			}
 		})
 	}

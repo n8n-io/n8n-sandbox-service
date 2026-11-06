@@ -24,6 +24,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/runner/cordon"
 	"github.com/n8n-io/sandbox-service/internal/runner/register"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
+	"github.com/n8n-io/sandbox-service/internal/runner/volumecache"
 )
 
 type RuntimeFactory func(*config.Config) (runnerruntime.Runtime, error)
@@ -88,6 +89,25 @@ func Run(cfg *config.Config, rt runnerruntime.Runtime) {
 		})
 		mrec.SetTLSCertificateExpiry(grpctls.CertificateExpiryByCertPath)
 		slog.Info("metrics endpoint enabled", "path", "/metrics")
+	}
+
+	// After the runtime is built: Firecracker's startup reconcile removes every
+	// directory in the data dir, the default cache dir included. Nothing
+	// acquires from the cache yet; building it wipes the dir, registers its
+	// metrics and sets its budget aside from creates.
+	cache, err := volumecache.New(volumecache.Config{
+		Dir:          cfg.VolumeCacheDir,
+		DataDir:      cfg.DataDir,
+		MaxBytes:     cfg.VolumeCacheMaxBytes,
+		FetchTimeout: cfg.VolumeFetchTimeout,
+		Metrics:      mrec,
+	})
+	if err != nil {
+		slog.Error("volume cache", "error", err)
+		os.Exit(1)
+	}
+	if reserver, ok := rt.(runnerruntime.DiskReserver); ok {
+		reserver.SetDiskReservation(cache.DataDirReservation)
 	}
 
 	handler := runner.NewRouter(rt, cfg, mrec)

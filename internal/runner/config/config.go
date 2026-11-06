@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -28,6 +29,9 @@ const (
 
 	defaultMaxInflightPerSandbox = 256
 	defaultMaxExecTimeout        = 15 * time.Minute
+
+	defaultVolumeCacheMaxBytes = 20 << 30 // 20 GiB
+	defaultVolumeFetchTimeout  = 10 * time.Minute
 )
 
 // Config holds shared runner configuration parsed from environment variables.
@@ -98,6 +102,18 @@ type Config struct {
 	// MaxExecTimeout is the largest timeout_ms an exec request may ask for
 	// (0 = no limit). Parsed from SANDBOX_RUNNER_MAX_EXEC_TIMEOUT.
 	MaxExecTimeout time.Duration
+
+	// VolumeCacheDir holds downloaded volume objects and is wiped at startup.
+	// Parsed from SANDBOX_RUNNER_VOLUME_CACHE_DIR (default <DataDir>/volume-cache).
+	VolumeCacheDir string
+
+	// VolumeCacheMaxBytes is the volume cache budget. Parsed from
+	// SANDBOX_RUNNER_VOLUME_CACHE_MAX_BYTES (default 20 GiB).
+	VolumeCacheMaxBytes int64
+
+	// VolumeFetchTimeout bounds one volume object download. Parsed from
+	// SANDBOX_RUNNER_VOLUME_FETCH_TIMEOUT (default 10m).
+	VolumeFetchTimeout time.Duration
 }
 
 func validateHostPort(v string) error {
@@ -161,6 +177,8 @@ func Load() (*Config, error) {
 		LogLevel:              defaultLogLevel,
 		MaxInflightPerSandbox: defaultMaxInflightPerSandbox,
 		MaxExecTimeout:        defaultMaxExecTimeout,
+		VolumeCacheMaxBytes:   defaultVolumeCacheMaxBytes,
+		VolumeFetchTimeout:    defaultVolumeFetchTimeout,
 	}
 
 	if h, err := os.Hostname(); err == nil && h != "" {
@@ -204,6 +222,31 @@ func Load() (*Config, error) {
 	// SANDBOX_RUNNER_DATA_DIR (optional)
 	if v := os.Getenv("SANDBOX_RUNNER_DATA_DIR"); v != "" {
 		cfg.DataDir = v
+	}
+
+	// The volume cache checks the dir itself before wiping it, and refuses a
+	// relative one, so a relative data dir is resolved here.
+	cacheDir, err := filepath.Abs(filepath.Join(cfg.DataDir, "volume-cache"))
+	if err != nil {
+		return nil, fmt.Errorf("SANDBOX_RUNNER_DATA_DIR: %w", err)
+	}
+	cfg.VolumeCacheDir = cacheDir
+	if raw := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_VOLUME_CACHE_DIR")); raw != "" {
+		cfg.VolumeCacheDir = raw
+	}
+	if raw := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_VOLUME_CACHE_MAX_BYTES")); raw != "" {
+		maxBytes, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || maxBytes <= 0 {
+			return nil, fmt.Errorf("SANDBOX_RUNNER_VOLUME_CACHE_MAX_BYTES must be a positive integer, got %q", raw)
+		}
+		cfg.VolumeCacheMaxBytes = maxBytes
+	}
+	if raw := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_VOLUME_FETCH_TIMEOUT")); raw != "" {
+		timeout, err := time.ParseDuration(raw)
+		if err != nil || timeout <= 0 {
+			return nil, fmt.Errorf("SANDBOX_RUNNER_VOLUME_FETCH_TIMEOUT must be a positive duration, got %q", raw)
+		}
+		cfg.VolumeFetchTimeout = timeout
 	}
 
 	// SANDBOX_RUNNER_LISTEN_ADDR (optional)
