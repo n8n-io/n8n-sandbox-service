@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/n8n-io/sandbox-service/internal/volume"
 )
 
 const (
@@ -14,10 +16,18 @@ const (
 	// --out directory as snapshot_mem and snapshot_state.
 	bootParamsFileName = "boot.json"
 
-	// bootParamsSchemaVersion is the only sidecar layout this runner accepts.
-	// A snapshot written by a newer script is rejected rather than guessed at.
-	bootParamsSchemaVersion = 1
+	// bootParamsSchemaVersion is the current sidecar layout. Version 1 predates
+	// volume drives and is still read. A newer one is rejected rather than
+	// guessed at.
+	bootParamsSchemaVersion        = 2
+	bootParamsSchemaNoVolumeDrives = 1
 )
+
+// volumeDrive is a read-only drive the golden snapshot reserves for a volume.
+type volumeDrive struct {
+	DriveID string `json:"drive_id"`
+	Path    string `json:"path"`
+}
 
 // bootParams records the machine configuration a golden snapshot was actually
 // built with. Memory, vCPUs and the kernel command line are chosen by
@@ -26,16 +36,18 @@ const (
 // them. Recovery replays these values verbatim, which also keeps a sandbox
 // pinned to the snapshot lineage it was created from once there are several.
 type bootParams struct {
-	SchemaVersion     int    `json:"schema_version"`
-	VCPUCount         int    `json:"vcpu_count"`
-	MemSizeMiB        int    `json:"mem_size_mib"`
-	KernelImagePath   string `json:"kernel_image_path"`
-	BootArgs          string `json:"boot_args"`
-	RootfsDrivePath   string `json:"rootfs_drive_path"`
-	GuestMAC          string `json:"guest_mac"`
-	GuestIP           string `json:"guest_ip"`
-	HostTapDeviceName string `json:"host_tap_device_name"`
-	DaemonPort        int    `json:"daemon_port"`
+	SchemaVersion   int    `json:"schema_version"`
+	VCPUCount       int    `json:"vcpu_count"`
+	MemSizeMiB      int    `json:"mem_size_mib"`
+	KernelImagePath string `json:"kernel_image_path"`
+	BootArgs        string `json:"boot_args"`
+	RootfsDrivePath string `json:"rootfs_drive_path"`
+	// In attach order: the first is /dev/vdb.
+	VolumeDrives      []volumeDrive `json:"volume_drives,omitempty"`
+	GuestMAC          string        `json:"guest_mac"`
+	GuestIP           string        `json:"guest_ip"`
+	HostTapDeviceName string        `json:"host_tap_device_name"`
+	DaemonPort        int           `json:"daemon_port"`
 }
 
 // bootParamsPath resolves the sidecar from the golden snapshot's directory,
@@ -60,7 +72,7 @@ func loadBootParams(path string) (*bootParams, error) {
 }
 
 func (p *bootParams) validate() error {
-	if p.SchemaVersion != bootParamsSchemaVersion {
+	if p.SchemaVersion != bootParamsSchemaVersion && p.SchemaVersion != bootParamsSchemaNoVolumeDrives {
 		return fmt.Errorf("unsupported schema_version %d, want %d; rebuild the golden snapshot with this release's create-golden-snapshot.sh", p.SchemaVersion, bootParamsSchemaVersion)
 	}
 	if p.VCPUCount <= 0 {
@@ -73,6 +85,9 @@ func (p *bootParams) validate() error {
 		return err
 	}
 	if err := validateJailPath("rootfs_drive_path", p.RootfsDrivePath); err != nil {
+		return err
+	}
+	if err := p.validateVolumeDrives(); err != nil {
 		return err
 	}
 	if strings.TrimSpace(p.BootArgs) == "" {
@@ -92,6 +107,33 @@ func (p *bootParams) validate() error {
 	}
 	if p.DaemonPort <= 0 || p.DaemonPort > 65535 {
 		return fmt.Errorf("daemon_port must be between 1 and 65535, got %d", p.DaemonPort)
+	}
+	return nil
+}
+
+// validateVolumeDrives accepts only what the create script writes, vol<i> at
+// /vol<i>.img in order: the ids end up in Firecracker API paths and the paths
+// in the jail root.
+func (p *bootParams) validateVolumeDrives() error {
+	if len(p.VolumeDrives) == 0 {
+		return nil
+	}
+	if p.SchemaVersion == bootParamsSchemaNoVolumeDrives {
+		return fmt.Errorf("volume_drives needs schema_version %d, got %d", bootParamsSchemaVersion, p.SchemaVersion)
+	}
+	if len(p.VolumeDrives) > volume.MaxDrives {
+		return fmt.Errorf("volume_drives has %d drives, Firecracker takes at most %d next to the rootfs and the NIC", len(p.VolumeDrives), volume.MaxDrives)
+	}
+	for i, drive := range p.VolumeDrives {
+		if want := fmt.Sprintf("vol%d", i); drive.DriveID != want {
+			return fmt.Errorf("volume_drives[%d] drive_id must be %q, got %q", i, want, drive.DriveID)
+		}
+		if want := fmt.Sprintf("/vol%d.img", i); drive.Path != want {
+			return fmt.Errorf("volume_drives[%d] path must be %q, got %q", i, want, drive.Path)
+		}
+		if drive.Path == p.RootfsDrivePath || drive.Path == p.KernelImagePath {
+			return fmt.Errorf("volume_drives[%d] path %q is also the rootfs or kernel path", i, drive.Path)
+		}
 	}
 	return nil
 }
