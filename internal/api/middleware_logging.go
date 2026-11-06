@@ -3,8 +3,11 @@ package api
 import (
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
+	"github.com/n8n-io/sandbox-service/internal/api/volumestore"
 	"github.com/n8n-io/sandbox-service/internal/obs"
 )
 
@@ -32,12 +35,25 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 			"trace_id", obs.TraceIDOf(traceparent),
 			"method", r.Method,
 			"path", r.URL.Path,
-			"query", r.URL.RawQuery,
+			"query", redactSignature(r.URL.RawQuery),
 			"status", sw.status,
 			"duration_ms", time.Since(start).Milliseconds(),
 		}
 		slog.Info("request", append(attrs, fields.Attrs()...)...)
 	})
+}
+
+// redactSignature replaces a query that carries a signed URL's signature, on
+// any path, with a constant: another parameter's name or value could repeat
+// the signature, and the request may never have reached its route.
+func redactSignature(rawQuery string) string {
+	for _, param := range strings.Split(rawQuery, "&") {
+		name, _, _ := strings.Cut(param, "=")
+		if decoded, err := url.QueryUnescape(name); err == nil && decoded == volumestore.SignatureParam {
+			return "REDACTED"
+		}
+	}
+	return rawQuery
 }
 
 // statusWriter wraps http.ResponseWriter to capture the status code for logging.

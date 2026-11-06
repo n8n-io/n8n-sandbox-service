@@ -49,7 +49,7 @@ func TestSandboxProxyReapsStoreOnRunnerSandboxGone(t *testing.T) {
 		APIKeys:      map[string]struct{}{"public-key": {}},
 		RunnerAPIKey: "runner-key",
 		MaxFileBytes: 1024,
-	}), registry.New(45*time.Second), metrics.NewAPIRecorder(false))
+	}), registry.New(45*time.Second), metrics.NewAPIRecorder(false), nil)
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestSandboxProxyDoesNotMarkActiveWhenReapDeleteFails(t *testing.T) {
 		APIKeys:      map[string]struct{}{"public-key": {}},
 		RunnerAPIKey: "runner-key",
 		MaxFileBytes: 1024,
-	}), registry.New(45*time.Second), metrics.NewAPIRecorder(false))
+	}), registry.New(45*time.Second), metrics.NewAPIRecorder(false), nil)
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestSandboxProxyKeepsStoreOnRunnerExecutionNotFound(t *testing.T) {
 		APIKeys:      map[string]struct{}{"public-key": {}},
 		RunnerAPIKey: "runner-key",
 		MaxFileBytes: 1024,
-	}), registry.New(45*time.Second), metrics.NewAPIRecorder(false))
+	}), registry.New(45*time.Second), metrics.NewAPIRecorder(false), nil)
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}
