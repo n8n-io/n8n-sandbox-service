@@ -49,15 +49,16 @@ render "${privileged[@]}" >/dev/null
 render "${privileged[@]}" --set networkPolicy.enabled=true >/dev/null
 
 echo "==> default values render the golden manifests"
-# Existing installs must not change: the default render is pinned byte for
-# byte, with the chart and app versions masked so version bumps leave it alone.
+# Existing installs must not change: the default render is pinned line for
+# line, with the chart and app versions masked so version bumps leave it alone.
+# Blank lines are dropped: Helm 4 adds one before each document separator.
 # After an intended change to the default render, regenerate it with:
 #   UPDATE_GOLDEN=1 charts/n8n-sandbox-service/render-tests.sh
 golden="$CHART_DIR/testdata/default-render.yaml"
 chart_info=$(helm show chart "$CHART_DIR")
 chart_version=$(awk '/^version:/{print $2}' <<<"$chart_info")
 app_version=$(awk '/^appVersion:/{print $2}' <<<"$chart_info")
-default_render=$(render)
+default_render=$(render | sed '/^$/d')
 default_render=${default_render//"n8n-sandbox-service-$chart_version"/n8n-sandbox-service-CHART_VERSION}
 default_render=${default_render//"$app_version"/APP_VERSION}
 if test -n "${UPDATE_GOLDEN:-}"; then
