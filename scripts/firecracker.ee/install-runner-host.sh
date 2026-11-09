@@ -19,6 +19,7 @@ FIRECRACKER_RELEASE_BIN="${FIRECRACKER_RELEASE_BIN:-${SCRIPT_DIR}/firecracker-re
 
 SKIP_PACKAGES=0
 SKIP_FIRECRACKER=0
+PERSIST_NESTED_KVM_CONF_ONLY=0
 
 usage() {
 	cat >&2 <<EOF
@@ -31,6 +32,7 @@ Options:
   --skip-packages           Skip apt package install
   --skip-firecracker        Skip Firecracker/jailer install
   --download-ci-assets      Download the Firecracker CI vmlinux pinned in firecracker-ci-assets.sh into FIRECRACKER_CI_ASSETS_DIR
+  --persist-nested-kvm-conf Only write the nested=0 modprobe conf and update the initramfs, then exit
   -h, --help                Show this help
 
 Environment:
@@ -92,6 +94,48 @@ EOF
 	sysctl --system >/dev/null
 }
 
+KVM_MODPROBE_CONF=/etc/modprobe.d/n8n-sandbox-kvm.conf
+# Exit 3: conf written but loaded module still has nested on — reboot, then re-run.
+EXIT_REBOOT_REQUIRED=3
+
+configure_nested_kvm_disabled() {
+	echo "==> Disabling nested KVM..."
+	if ! command -v update-initramfs >/dev/null 2>&1; then
+		echo "ERROR: update-initramfs not found; needed so nested=0 survives a reboot when kvm loads from the initramfs." >&2
+		exit 1
+	fi
+	cat >"$KVM_MODPROBE_CONF" <<'EOF'
+options kvm_intel nested=0
+options kvm_amd nested=0
+EOF
+	update-initramfs -u
+}
+
+# Require nested=N|0; exit 3 for Y|1 (reboot), else 1 if missing/unexpected.
+check_nested_kvm_disabled() {
+	local vendor value found=0
+	for vendor in kvm_intel kvm_amd; do
+		if [[ ! -r "/sys/module/${vendor}/parameters/nested" ]]; then
+			continue
+		fi
+		found=1
+		value="$(cat "/sys/module/${vendor}/parameters/nested")"
+		if [[ "$value" =~ ^(N|0)$ ]]; then
+			continue
+		fi
+		echo "ERROR: nested virtualization is not off on ${vendor} (nested=${value}); it must be N or 0 so sandboxes cannot run a hypervisor." >&2
+		if [[ "$value" =~ ^(Y|1)$ ]]; then
+			echo "${KVM_MODPROBE_CONF} is written; reboot required, then re-run this script." >&2
+			exit "$EXIT_REBOOT_REQUIRED"
+		fi
+		exit 1
+	done
+	if [[ "$found" -eq 0 ]]; then
+		echo "ERROR: neither kvm_intel nor kvm_amd is loaded; cannot verify nested virtualization is off." >&2
+		exit 1
+	fi
+}
+
 configure_host_nat() {
 	if [[ ! -x "$CONFIGURE_HOST_NAT_SCRIPT" ]]; then
 		echo "ERROR: missing configure-host-nat script: ${CONFIGURE_HOST_NAT_SCRIPT}" >&2
@@ -135,6 +179,10 @@ while [[ $# -gt 0 ]]; do
 		DOWNLOAD_FIRECRACKER_CI_ASSETS=1
 		shift
 		;;
+	--persist-nested-kvm-conf)
+		PERSIST_NESTED_KVM_CONF_ONLY=1
+		shift
+		;;
 	-h | --help)
 		usage
 		exit 0
@@ -152,6 +200,11 @@ require_root
 if [[ "$(uname -m)" != "x86_64" ]]; then
 	echo "ERROR: Firecracker runner host setup supports amd64/x86_64 only; got $(uname -m)" >&2
 	exit 1
+fi
+
+if [[ "$PERSIST_NESTED_KVM_CONF_ONLY" -eq 1 ]]; then
+	configure_nested_kvm_disabled
+	exit 0
 fi
 
 if [[ "$SKIP_PACKAGES" -eq 0 ]]; then
@@ -172,6 +225,8 @@ fi
 
 prepare_firecracker_dirs
 configure_persistent_ip_forward
+configure_nested_kvm_disabled
+check_nested_kvm_disabled
 configure_host_nat
 prepare_runtime_dirs
 

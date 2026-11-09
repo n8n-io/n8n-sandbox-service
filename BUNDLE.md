@@ -76,7 +76,7 @@ to identify what that candidate actually contains.
 
 | Key | Script | Purpose |
 | --- | --- | --- |
-| `install_runner_host` | `scripts/install-runner-host.sh` | apt packages, Firecracker/jailer, dirs, sysctl, NAT |
+| `install_runner_host` | `scripts/install-runner-host.sh` | apt packages, Firecracker/jailer, dirs, sysctl, nested KVM off, NAT |
 | `firecracker_ci_assets` | `scripts/firecracker-ci-assets.sh` | Download the pinned CI `vmlinux` and verify its SHA-256 |
 | `build_rootfs_template` | `scripts/build-rootfs-template.sh` | Build `rootfs.ext4` from sandbox image + install `vmlinux` |
 | `create_snapshot` | `scripts/create-golden-snapshot.sh` | Host-local golden snapshot |
@@ -88,9 +88,13 @@ All scripts in the tarball are packaged with mode `0755`.
 
 Runs as root. Installs host packages, Firecracker/jailer (version and checksum
 from `firecracker-release.sh`), runtime directories, persistent
-`net.ipv4.ip_forward`, and delegates to `configure-host-nat.sh`.
+`net.ipv4.ip_forward`, nested KVM off (`/etc/modprobe.d/n8n-sandbox-kvm.conf`,
+`update-initramfs -u`), and delegates to `configure-host-nat.sh`. It exits 3,
+before NAT setup, while the loaded `kvm_intel`/`kvm_amd` still reports
+`nested` on: reboot, then re-run.
 
-Options: `--skip-packages`, `--skip-firecracker`, `--download-ci-assets`.
+Options: `--skip-packages`, `--skip-firecracker`, `--download-ci-assets`,
+`--persist-nested-kvm-conf` (write the conf and update the initramfs only).
 
 Out of scope: registry pulls, systemd units, secrets, installing the bundle
 itself, the `runner-firecracker` binary.
