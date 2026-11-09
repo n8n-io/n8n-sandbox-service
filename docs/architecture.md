@@ -90,6 +90,7 @@ The API gateway is the single public-facing service. It exposes a REST API for s
 | Store | `internal/api/store/` | Sandbox metadata (`sqlite` default, `postgres` for multi-pod) |
 | Sweeper lock | `internal/api/store/postgres.go` | Postgres advisory lock for idle sweeper leadership |
 | Idle sweeper | `internal/api/ttl.go` | Periodic scan to stop/delete idle sandboxes (ephemeral ones are deleted, never stopped), bounded concurrency with per-call runner deadlines |
+| Activity recorder | `internal/api/activity.go` | Writes `last_active_at` in the background ([Sandbox activity](#sandbox-activity)) |
 | Key cache | `internal/api/apikey_cache.go` | Per-replica cache of tenant key lookups ([Tenant key cache](#tenant-key-cache)) |
 | Config | `internal/api/config/` | Environment variable parsing and validation |
 
@@ -193,6 +194,16 @@ A sandbox can lose its guest (daemon exit, kernel panic, OOM) without losing its
 **Docker.** Containers run with `--restart unless-stopped`, so Docker restarts the container itself. The runner learns of the death from a `docker events` stream filtered to `die`; deliberate stops and removes are recorded before the call and matched against events, and exit codes are ignored (an exit `0` still lost everything running). The sandbox is reported not running until the wake path reapplies network policy to the possibly new container IP, waits for the daemon, and reports the restart. If the event stream drops, the watcher reconnects; a death missed meanwhile is served without its `409`.
 
 The report is spent by the first request that wakes the sandbox, so `DELETE /sandboxes/{id}/executions/{exec_id}` — which the SDK sends in the background after every command — returns `204` without waking a stopped sandbox, leaving the `409` for the next request a client reads.
+
+### Sandbox activity
+
+The idle sweeper stops and deletes sandboxes by `last_active_at`. Writing it on every request would put a database write on every response, and a burst to one sandbox would queue on its row. So each API replica collects the sandboxes it serves in memory and writes them in the background (`internal/api/activity.go`), all in one statement.
+
+**What counts:** an exec or file response from the sandbox, from when it starts until it ends. `GET /sandboxes/{id}`, `5xx` responses, runner redirects and runner "sandbox gone" answers do not.
+
+**When `last_active_at` is written**, with `T` = `SANDBOX_API_ACTIVITY_WRITE_INTERVAL` (5 s): every `T`, one statement per replica writes each sandbox it served since the last write. The time written is when its latest response started or ended or, while a response is still open, the time of the write; a response counts as open for at most `SANDBOX_API_MAX_RESPONSE_ACTIVITY` (30 min). A burst to one sandbox therefore costs one row per replica. The statement never moves `last_active_at` back, and it sets `status` to `running`. A request that wakes a stopped sandbox, or comes after a quiet spell, asks for the write at once instead of at the next `T`, so `GET` shows the sandbox running about one database round trip later. A failed write is retried at the next `T`. Writes never delay a response, and each gets up to `T`.
+
+**Why the idle windows grow by `2T` (10 s):** a request waits up to `T` for the next write, which takes up to `T`. So `last_active_at` trails the last use by at most `2T`, and the stop sweep and the `404` fence wait that much longer. Deletes wait `2T` twice, so that a request let through just before the fence is written before the sweeper looks. Two limits remain: the sweeper does not see a request until its write lands, which for a request after a quiet spell is usually one database round trip later; and while writes fail, nothing is written.
 
 ### Tenant key cache
 
