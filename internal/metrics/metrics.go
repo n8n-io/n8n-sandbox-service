@@ -34,6 +34,9 @@ const (
 	// ensure_running because it does different work — a cold boot instead of a
 	// snapshot restore — and mixing the two would hide both in one percentile.
 	OpRecover = "recover"
+	// OpCordonDelete is the API deleting a stopped sandbox on a cordoned runner,
+	// on the request that would have woken it.
+	OpCordonDelete = "cordon_delete"
 )
 
 // Placement label values used with ObservePlacement: how a create found a runner.
@@ -241,6 +244,15 @@ func (r *APIRecorder) ObserveSandboxOp(operation string, success bool) {
 		return
 	}
 	r.sandboxOps.WithLabelValues(operation, resultLabel(success)).Inc()
+}
+
+// SandboxOpCount returns the counter value for a sandbox operation with the
+// given result. Intended for tests in other packages.
+func (r *APIRecorder) SandboxOpCount(operation string, success bool) float64 {
+	if r.reg == nil {
+		return 0
+	}
+	return testutil.ToFloat64(r.sandboxOps.WithLabelValues(operation, resultLabel(success)))
 }
 
 // ObservePlacement records how a create found a runner (PlacementFirstChoice,

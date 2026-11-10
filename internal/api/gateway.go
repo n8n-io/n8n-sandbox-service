@@ -21,7 +21,7 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	if err != nil {
 		return nil, err
 	}
-	sandboxProxy := sandboxProxyHandler(s, cfg, runnerTransport)
+	sandboxProxy := sandboxProxyHandler(s, reg, cfg, runnerTransport, rec)
 	keyCache := newAPIKeyCache(cfg.APIKeyCacheTTL)
 
 	mux := http.NewServeMux()
@@ -65,19 +65,23 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	mux.HandleFunc("PUT /admin/runners/{id}/cordon", handleSetRunnerCordon(reg, cfg, true))
 	mux.HandleFunc("DELETE /admin/runners/{id}/cordon", handleSetRunnerCordon(reg, cfg, false))
 
-	mux.HandleFunc("POST /sandboxes/{id}/executions", limitTenant(sandboxProxy(false)))
-	mux.HandleFunc("GET /sandboxes/{id}/executions/{exec_id}", limitTenant(sandboxProxy(false)))
-	mux.HandleFunc("DELETE /sandboxes/{id}/executions/{exec_id}", limitTenantDeletes(sandboxProxy(false)))
-	mux.HandleFunc("POST /sandboxes/{id}/files/copy", limitTenant(sandboxProxy(false)))
-	mux.HandleFunc("POST /sandboxes/{id}/files/move", limitTenant(sandboxProxy(false)))
-	mux.HandleFunc("GET /sandboxes/{id}/files", limitTenant(sandboxProxy(false)))
-	mux.HandleFunc("GET /sandboxes/{id}/files/content", limitTenant(sandboxProxy(false)))
-	mux.HandleFunc("PUT /sandboxes/{id}/files", limitTenant(sandboxProxy(true)))
-	mux.HandleFunc("POST /sandboxes/{id}/files", limitTenant(sandboxProxy(true)))
-	mux.HandleFunc("POST /sandboxes/{id}/files/archive", limitTenant(sandboxProxy(true)))
-	mux.HandleFunc("DELETE /sandboxes/{id}/files", limitTenant(sandboxProxy(false)))
-	mux.HandleFunc("POST /sandboxes/{id}/mkdir", limitTenant(sandboxProxy(false)))
-	mux.HandleFunc("GET /sandboxes/{id}/stat", limitTenant(sandboxProxy(false)))
+	proxy := limitTenant(sandboxProxy(proxyRoute{}))
+	uploadProxy := limitTenant(sandboxProxy(proxyRoute{limitBody: true}))
+	deleteExecutionProxy := limitTenantDeletes(sandboxProxy(proxyRoute{neverWakes: true}))
+
+	mux.HandleFunc("POST /sandboxes/{id}/executions", proxy)
+	mux.HandleFunc("GET /sandboxes/{id}/executions/{exec_id}", proxy)
+	mux.HandleFunc("DELETE /sandboxes/{id}/executions/{exec_id}", deleteExecutionProxy)
+	mux.HandleFunc("POST /sandboxes/{id}/files/copy", proxy)
+	mux.HandleFunc("POST /sandboxes/{id}/files/move", proxy)
+	mux.HandleFunc("GET /sandboxes/{id}/files", proxy)
+	mux.HandleFunc("GET /sandboxes/{id}/files/content", proxy)
+	mux.HandleFunc("PUT /sandboxes/{id}/files", uploadProxy)
+	mux.HandleFunc("POST /sandboxes/{id}/files", uploadProxy)
+	mux.HandleFunc("POST /sandboxes/{id}/files/archive", uploadProxy)
+	mux.HandleFunc("DELETE /sandboxes/{id}/files", proxy)
+	mux.HandleFunc("POST /sandboxes/{id}/mkdir", proxy)
+	mux.HandleFunc("GET /sandboxes/{id}/stat", proxy)
 
 	var handler http.Handler = mux
 	if rec.Enabled() {
