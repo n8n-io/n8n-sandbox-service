@@ -125,7 +125,7 @@ Metric families include:
 
 - `sandbox_http_requests_total{role,route,method,status}` — request counter; `route` is the matched route pattern (e.g. `/sandboxes/{id}`), not the raw path.
 - `sandbox_http_request_duration_seconds{role,route,method}` — request latency histogram.
-- `sandbox_sandbox_operations_total{role="api",operation,result}` — sandbox lifecycle ops (`create`, `delete`).
+- `sandbox_sandbox_operations_total{role="api",operation,result}` — sandbox lifecycle ops (`create`, `delete`, `cordon_delete`).
 - `sandbox_create_placements_total{role="api",result}` — how each create found a runner that did not refuse it for capacity: `first_choice`, or `retried` after a refusal; or found none: `exhausted` (every runner tried refused) or `no_runner` (none eligible). Whether the create then succeeded is in `sandbox_sandbox_operations_total`.
 - `sandbox_sandboxes_active{role="api"}` — current sandbox count from the store.
 - `sandbox_runners_registered{role="api"}` — runners registered with the API.
