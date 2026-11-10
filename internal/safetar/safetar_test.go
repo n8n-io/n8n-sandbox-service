@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"testing/iotest"
+
+	"golang.org/x/sys/unix"
 )
 
 type tarEntry struct {
@@ -675,6 +677,48 @@ func TestExecBit(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestXattrsNotApplied(t *testing.T) {
+	// Revision 2 file capability: effective, CAP_NET_RAW permitted.
+	capability := "\x01\x00\x00\x02\x00\x20\x00\x00" + strings.Repeat("\x00", 12)
+	records := map[string]string{
+		"SCHILY.xattr.security.capability": capability,
+		"SCHILY.xattr.user.n8n-test":       "x",
+	}
+	dir := tarDir("bin/")
+	dir.hdr.PAXRecords = records
+	file := tarFile("bin/ping", "x")
+	file.hdr.Mode = 0o755
+	file.hdr.PAXRecords = records
+	body := buildTar(t, dir, file)
+
+	_, target := newTarget(t)
+	if _, err := unpackBoth(t, target, body, Policy{AllowSymlinks: true, MaxEntries: 10, KeepExecBit: true}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// The OS may add attributes of its own, such as macOS's com.apple.provenance.
+	for _, name := range []string{"bin", "bin/ping"} {
+		for _, attr := range xattrNames(t, filepath.Join(target, name)) {
+			if attr == "security.capability" || attr == "user.n8n-test" {
+				t.Fatalf("%s: extended attribute %s from the archive was applied", name, attr)
+			}
+		}
+	}
+}
+
+func xattrNames(t *testing.T, path string) []string {
+	t.Helper()
+	size, err := unix.Listxattr(path, nil)
+	if err != nil {
+		t.Fatalf("list xattrs of %s: %v", path, err)
+	}
+	buf := make([]byte, size)
+	size, err = unix.Listxattr(path, buf)
+	if err != nil {
+		t.Fatalf("list xattrs of %s: %v", path, err)
+	}
+	return strings.FieldsFunc(string(buf[:size]), func(char rune) bool { return char == 0 })
 }
 
 func TestMaxEntries(t *testing.T) {

@@ -2,7 +2,8 @@
 // checks them under the same rules without unpacking.
 //
 // Entry paths must be relative and free of .. components. Hard links, devices,
-// FIFOs and sparse files are always refused. No entry may go through or
+// FIFOs and sparse files are always refused. Owners, groups and extended
+// attributes in the archive are never applied. No entry may go through or
 // replace a symbolic link that an earlier entry created; names are compared
 // byte for byte, so this holds on case-sensitive file systems only.
 package safetar
