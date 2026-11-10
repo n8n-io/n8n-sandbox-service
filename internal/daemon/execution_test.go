@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"math"
+	"slices"
 	"sync"
 	"testing"
 )
@@ -296,27 +297,36 @@ func FuzzEventsAfter(fuzz *testing.F) {
 	fuzz.Add(uint64(1<<63), uint64(1), uint8(3))
 	fuzz.Add(uint64(1<<64-2), uint64(0), uint8(3))
 	fuzz.Add(uint64(math.MaxUint64), uint64(5), uint8(0))
+	fuzz.Add(uint64(3), uint64(5), uint8(3))
+	fuzz.Add(uint64(4), uint64(5), uint8(3))
 
 	fuzz.Fuzz(func(t *testing.T, after uint64, minSeq uint64, count uint8) {
+		if minSeq > math.MaxUint64-uint64(count) {
+			t.Skip("seqs would wrap")
+		}
 		events := make([]storedEvent, count)
+		var wantEvents [][]byte
 		for index := range events {
 			events[index] = storedEvent{seq: minSeq + uint64(index), data: []byte{byte(index)}}
+			if events[index].seq > after {
+				wantEvents = append(wantEvents, events[index].data)
+			}
 		}
 		ex := newTestExecution(events...)
 		ex.minSeq = minSeq
 
 		ex.mu.Lock()
-		got := ex.eventsAfter(&after)
+		gotEvents := ex.eventsAfter(&after)
+		gotHistory := ex.hasHistoryAfter(&after)
 		ex.mu.Unlock()
 
-		if len(got) > len(events) {
-			t.Fatalf("got %d events, only %d stored", len(got), len(events))
+		if !slices.EqualFunc(gotEvents, wantEvents, bytes.Equal) {
+			t.Fatalf("eventsAfter: expected %v, got %v", wantEvents, gotEvents)
 		}
-		suffix := events[len(events)-len(got):]
-		for index, data := range got {
-			if !bytes.Equal(data, suffix[index].data) {
-				t.Fatalf("event[%d]: expected data %v, got %v", index, suffix[index].data, data)
-			}
+		// The last trimmed seq is minSeq-1; history is complete unless it is after `after`.
+		wantHistory := minSeq == 0 || minSeq-1 <= after
+		if gotHistory != wantHistory {
+			t.Fatalf("hasHistoryAfter: expected %v, got %v", wantHistory, gotHistory)
 		}
 	})
 }
