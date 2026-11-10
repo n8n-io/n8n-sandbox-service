@@ -639,8 +639,7 @@ func newRunnerReverseProxy(runnerURL *url.URL, runnerAPIKey string, transport ht
 				writeError(w, http.StatusBadGateway, err.Error())
 				return
 			}
-			var maxBytesErr *http.MaxBytesError
-			if errors.As(err, &maxBytesErr) {
+			if maxBytesErr, ok := errors.AsType[*http.MaxBytesError](err); ok {
 				writeError(w, http.StatusBadRequest, "failed to read request body: "+maxBytesErr.Error())
 				return
 			}
