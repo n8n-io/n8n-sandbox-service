@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -44,7 +45,7 @@ func TestParseRequest(t *testing.T) {
 		{"no volumes field", `{}`, ""},
 		{"one volume", `{"volumes":[{"drive":0,"sectors":265416,"path":"/mnt/knowledge"}]}`, ""},
 		{"fifteen volumes", volumesBody(t, most...), ""},
-		{"last drive", volumesBody(t, vol(14, 1, "/home/user/data/set")), ""},
+		{"last drive", volumesBody(t, vol(14, 1, "/mnt/data/set")), ""},
 		{"sibling with a common prefix", volumesBody(t, vol(0, 1, "/mnt/a"), vol(1, 1, "/mnt/ab")), ""},
 
 		{"sixteen volumes", volumesBody(t, tooMany...), "at most 15 volumes"},
@@ -56,6 +57,7 @@ func TestParseRequest(t *testing.T) {
 		{"negative sectors", `{"volumes":[{"drive":0,"sectors":-1,"path":"/mnt/a"}]}`, "cannot unmarshal"},
 		{"drive as string", `{"volumes":[{"drive":"0","sectors":1,"path":"/mnt/a"}]}`, "cannot unmarshal"},
 		{"invalid path", volumesBody(t, vol(0, 1, "/etc/cron.d")), "volume 0: path \"/etc/cron.d\" is not below"},
+		{"path in the home directory", volumesBody(t, vol(0, 1, "/home/user/data")), "volume 0: path \"/home/user/data\" is not below /mnt/"},
 		{"invalid later path", volumesBody(t, vol(0, 1, "/mnt/a"), vol(1, 1, "/mnt/../etc")), "volume 1: path \"/mnt/../etc\" is not absolute and clean"},
 		{"same path twice", volumesBody(t, vol(0, 1, "/mnt/a"), vol(1, 1, "/mnt/a")), "overlaps"},
 		{"path inside an earlier one", volumesBody(t, vol(0, 1, "/mnt/a"), vol(1, 1, "/mnt/a/b")), "overlaps"},
@@ -178,14 +180,14 @@ func TestMountAllMountsEachVolumeInOrder(t *testing.T) {
 
 	err := testMounter(sys).MountAll([]Volume{
 		{Drive: 0, Sectors: 8, Path: "/mnt/a"},
-		{Drive: 1, Sectors: 16, Path: "/home/user/b"},
+		{Drive: 1, Sectors: 16, Path: "/mnt/b"},
 	})
 	if err != nil {
 		t.Fatalf("MountAll() error = %v", err)
 	}
 	requireCalls(t, sys,
 		"flush /dev/vdb", "mkdir /mnt/a", "mount /dev/vdb /mnt/a",
-		"flush /dev/vdc", "mkdir /home/user/b", "mount /dev/vdc /home/user/b",
+		"flush /dev/vdc", "mkdir /mnt/b", "mount /dev/vdc /mnt/b",
 	)
 }
 
@@ -312,34 +314,122 @@ func tempRoot(t *testing.T) string {
 	return dir
 }
 
-func TestMkdirNoFollowCreatesMissingDirectories(t *testing.T) {
-	dir := filepath.Join(tempRoot(t), "mnt", "a", "b")
+func currentUID() uint32 {
+	return uint32(os.Getuid())
+}
+
+// The second call finds the directories the first one created. The umask would
+// leave them 0700.
+func TestMakeMountPointCreatesMissingDirectories(t *testing.T) {
+	previousUmask := syscall.Umask(0o077)
+	t.Cleanup(func() { syscall.Umask(previousUmask) })
+	root := tempRoot(t)
 	for range 2 {
-		if err := mkdirNoFollow(dir); err != nil {
-			t.Fatalf("mkdirNoFollow() error = %v", err)
+		if err := makeMountPoint(root, filepath.Join(root, "mnt", "a", "b"), currentUID()); err != nil {
+			t.Fatalf("makeMountPoint() error = %v", err)
 		}
 	}
-	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
-		t.Fatalf("mount point not created: %v", err)
+	for _, dir := range []string{"mnt", "mnt/a", "mnt/a/b"} {
+		info, err := os.Lstat(filepath.Join(root, dir))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !info.IsDir() || info.Mode().Perm() != 0o755 {
+			t.Fatalf("%s has mode %v, want a directory with mode 0755", dir, info.Mode())
+		}
 	}
 }
 
-func TestMkdirNoFollowRefusesSymlinksAndFiles(t *testing.T) {
+func TestMakeMountPointRefusesSymlinksAndFiles(t *testing.T) {
 	root := tempRoot(t)
 	outside := tempRoot(t)
-	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
+	if err := os.Mkdir(filepath.Join(root, "mnt"), 0o755); err != nil {
 		t.Fatal(err)
+	}
+	for _, link := range []string{"link", "mnt/link"} {
+		if err := os.Symlink(outside, filepath.Join(root, link)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := os.WriteFile(filepath.Join(root, "file"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	for _, dir := range []string{"link", "link/b", "file", "file/b"} {
-		if err := mkdirNoFollow(filepath.Join(root, dir)); err == nil {
-			t.Fatalf("mkdirNoFollow(%s) succeeded, want it refused", dir)
+	for _, dir := range []string{"link", "link/b", "mnt/link", "mnt/link/b", "file", "file/b"} {
+		err := makeMountPoint(root, filepath.Join(root, dir), currentUID())
+		if err == nil || !strings.Contains(err.Error(), "is a symlink or not a directory") {
+			t.Fatalf("makeMountPoint(%s) error = %v, want it refused", dir, err)
 		}
 	}
 	if entries, _ := os.ReadDir(outside); len(entries) != 0 {
 		t.Fatalf("created %v through the symlink", entries)
+	}
+}
+
+func TestMakeMountPointRefusesADirectoryAnotherUserControls(t *testing.T) {
+	tests := []struct {
+		name    string
+		dir     string
+		mode    os.FileMode
+		owner   uint32 // the owner makeMountPoint requires
+		wantErr string
+	}{
+		{"group-writable", "mnt", 0o775, currentUID(), "is writable by group or others"},
+		{"world-writable", "mnt", 0o777, currentUID(), "is writable by group or others"},
+		{"sticky world-writable", "mnt", 0o777 | os.ModeSticky, currentUID(), "is writable by group or others"},
+		{"world-writable below a safe directory", "mnt/data", 0o777, currentUID(), "is writable by group or others"},
+		{"owned by another uid", "mnt", 0o755, currentUID() + 1, fmt.Sprintf("is not owned by uid %d", currentUID()+1)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := tempRoot(t)
+			dir := filepath.Join(root, tt.dir)
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(dir, tt.mode); err != nil {
+				t.Fatal(err)
+			}
+
+			err := makeMountPoint(root, filepath.Join(dir, "a", "b"), tt.owner)
+			if err == nil || !strings.Contains(err.Error(), dir+" "+tt.wantErr) {
+				t.Fatalf("makeMountPoint() error = %v, want one containing %q", err, tt.wantErr)
+			}
+			if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+				t.Fatalf("created %v below the refused directory", entries)
+			}
+		})
+	}
+}
+
+func TestMakeMountPointRefusesAPathOutsideItsBase(t *testing.T) {
+	root := tempRoot(t)
+	outside := tempRoot(t)
+	for _, path := range []string{filepath.Join(outside, "a"), root, "mnt/a"} {
+		err := makeMountPoint(root, path, currentUID())
+		if err == nil || !strings.Contains(err.Error(), "is not below "+root) {
+			t.Fatalf("makeMountPoint(%s) error = %v, want it refused", path, err)
+		}
+	}
+	if entries, _ := os.ReadDir(outside); len(entries) != 0 {
+		t.Fatalf("created %v outside the base", entries)
+	}
+}
+
+// The mount would resolve link before "..", so checking the cleaned path is not
+// enough.
+func TestMakeMountPointRefusesAnUncleanPath(t *testing.T) {
+	root := tempRoot(t)
+	if err := os.Symlink(tempRoot(t), filepath.Join(root, "link")); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{root + "/link/../a", root + "/a/", root + "//a"} {
+		err := makeMountPoint(root, path, currentUID())
+		if err == nil || !strings.Contains(err.Error(), "is not a clean path") {
+			t.Fatalf("makeMountPoint(%s) error = %v, want it refused", path, err)
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(root, "a")); err == nil {
+		t.Fatal("created a directory for an unclean path")
 	}
 }

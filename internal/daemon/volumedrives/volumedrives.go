@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/n8n-io/sandbox-service/internal/volume"
@@ -101,7 +102,8 @@ func validate(volumes []Volume) error {
 type Sys interface {
 	DeviceSize(device string) (uint64, error)
 	FlushBuffers(device string) error
-	// MakeMountPoint creates path and missing parents, refusing a symlink on it.
+	// MakeMountPoint creates path and missing parents, refusing a symlink, or a
+	// directory another user owns or can write, on the path.
 	MakeMountPoint(path string) error
 	Mount(device, path string) error
 	Unmount(path string) error
@@ -190,16 +192,28 @@ func Reason(err error) string {
 	return ""
 }
 
-// mkdirNoFollow creates dir and missing parents, mode 0755 before the umask,
-// and fails on a symlink anywhere on it, such as one a tenant left in
-// /home/user before a cold boot.
-func mkdirNoFollow(dir string) error {
-	cur := "/"
-	for _, name := range strings.Split(strings.TrimPrefix(dir, "/"), "/") {
-		cur = filepath.Join(cur, name)
-		info, err := os.Lstat(cur)
+// makeMountPoint creates path and its missing parents below base, mode 0755.
+// It refuses a path not clean or not below base, and an existing entry below
+// base that is not a directory owned by owner and writable by no one else: no
+// other user can then have put a symlink on the path, such as one left before a
+// cold boot.
+func makeMountPoint(base, path string, owner uint32) error {
+	if path != filepath.Clean(path) {
+		return fmt.Errorf("%s is not a clean path", path)
+	}
+	rel, err := filepath.Rel(base, path)
+	if err != nil || rel == "." || !filepath.IsLocal(rel) {
+		return fmt.Errorf("%s is not below %s", path, base)
+	}
+	current := base
+	for _, name := range strings.Split(rel, string(filepath.Separator)) {
+		current = filepath.Join(current, name)
+		info, err := os.Lstat(current)
 		if errors.Is(err, fs.ErrNotExist) {
-			if err := os.Mkdir(cur, 0o755); err != nil {
+			if err := os.Mkdir(current, 0o755); err != nil {
+				return err
+			}
+			if err := os.Chmod(current, 0o755); err != nil {
 				return err
 			}
 			continue
@@ -207,9 +221,26 @@ func mkdirNoFollow(dir string) error {
 		if err != nil {
 			return err
 		}
-		if !info.IsDir() {
-			return fmt.Errorf("%s is a symlink or not a directory", cur)
+		if err := checkDirectoryOnPath(current, info, owner); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+func checkDirectoryOnPath(dir string, info fs.FileInfo, owner uint32) error {
+	if !info.IsDir() {
+		return fmt.Errorf("%s is a symlink or not a directory", dir)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fmt.Errorf("%s has no owner to check", dir)
+	}
+	if stat.Uid != owner {
+		return fmt.Errorf("%s is not owned by uid %d", dir, owner)
+	}
+	if info.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf("%s is writable by group or others", dir)
 	}
 	return nil
 }

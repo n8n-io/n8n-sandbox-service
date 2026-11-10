@@ -271,8 +271,9 @@ own); Firecracker guests boot with `sysctl.user.max_user_namespaces=0`.
 A Firecracker guest has root only until the sandbox is handed out. Its daemon
 starts as root and serves nothing but `/healthz` and `POST /volumes/mount`.
 The first `POST /volumes/mount` can only mount the volume drives `/dev/vdb` to
-`/dev/vdp` read-only, `nodev` and `nosuid`, below `/mnt/` or `/home/user/`,
-refusing a symlink on the path. It mounts by path, which is safe only because
+`/dev/vdp` read-only, `nodev` and `nosuid`, below `/mnt/`, refusing a symlink,
+or a directory that root doesn't own or that group or others can write, on the
+path. It mounts by path, which is safe only because
 no other process runs in the guest while the daemon holds root. After it,
 whatever the outcome, the daemon drops to uid 1000, or exits if it cannot, and
 only then serves its other routes; later requests to the route get `409`. The

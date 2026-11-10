@@ -13,7 +13,6 @@ func TestValidateMountPath(t *testing.T) {
 		wantErr   string
 	}{
 		{"below mnt", "/mnt/knowledge", ""},
-		{"below home", "/home/user/data/set", ""},
 		{"longest path", longest, ""},
 
 		{"relative path", "mnt/a", "not absolute and clean"},
@@ -23,8 +22,7 @@ func TestValidateMountPath(t *testing.T) {
 		{"double slash", "/mnt//a", "not absolute and clean"},
 		{"trailing slash", "/mnt/a/", "not absolute and clean"},
 		{"mnt itself", "/mnt", "not below"},
-		{"home itself", "/home/user", "not below"},
-		{"another home", "/home/username/a", "not below"},
+		{"below home", "/home/user/data/set", "not below"},
 		{"mnt as a prefix", "/mntx/a", "not below"},
 		{"system path", "/etc/cron.d", "not below"},
 		{"path too long", longest + "a", "longer than 255 bytes"},
@@ -58,7 +56,7 @@ func TestMountPathsOverlap(t *testing.T) {
 		{"second around the first", "/mnt/a/b", "/mnt/a", true},
 		{"siblings with a common prefix", "/mnt/a", "/mnt/ab", false},
 		{"siblings with a common prefix, reversed", "/mnt/ab", "/mnt/a", false},
-		{"different roots", "/mnt/a", "/home/user/a", false},
+		{"same name in different directories", "/mnt/a/b", "/mnt/c/b", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

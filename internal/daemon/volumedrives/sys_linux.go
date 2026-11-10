@@ -36,11 +36,12 @@ func (linuxSys) FlushBuffers(device string) error {
 }
 
 func (linuxSys) MakeMountPoint(path string) error {
-	return mkdirNoFollow(path)
+	return makeMountPoint("/", path, 0)
 }
 
-// Mount goes by path: mkdirNoFollow found no symlink on it, and nothing else
-// runs in the guest while the daemon holds root.
+// Mount goes by path: makeMountPoint found no symlink on it, only directories
+// root owns and no one else can write, and nothing else runs in the guest while
+// the daemon holds root.
 func (linuxSys) Mount(device, path string) error {
 	return unix.Mount(device, path, "ext4", unix.MS_RDONLY|unix.MS_NODEV|unix.MS_NOSUID, "noload")
 }
