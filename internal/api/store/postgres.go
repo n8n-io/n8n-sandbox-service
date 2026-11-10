@@ -212,11 +212,35 @@ func (s *PostgresStore) UpdateStatus(id, status string) error {
 	return nil
 }
 
-func (s *PostgresStore) UpdateLastActive(id string) error {
-	const q = `UPDATE sandboxes SET last_active_at = $1 WHERE id = $2`
-	now := time.Now().Unix()
-	if _, err := s.db.Exec(q, now, id); err != nil {
-		return fmt.Errorf("store: update last_active_at for %s: %w", id, err)
+func (s *PostgresStore) RecordActivity(ctx context.Context, lastActiveAt map[string]int64) error {
+	if len(lastActiveAt) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(lastActiveAt))
+	ats := make([]int64, 0, len(lastActiveAt))
+	for id, at := range lastActiveAt {
+		ids = append(ids, id)
+		ats = append(ats, at)
+	}
+	// Rows that another API pod already moved past the given time are left
+	// alone. Each API pod writes a batch like this, so the rows are locked in id
+	// order: two batches that share sandboxes then cannot deadlock.
+	const q = `
+		WITH batch AS (
+			SELECT * FROM unnest($1::text[], $2::bigint[]) AS b(id, at)
+		), locked AS (
+			SELECT s.id, b.at
+			  FROM sandboxes s JOIN batch b ON b.id = s.id
+			 WHERE s.last_active_at < b.at OR s.status <> 'running'
+			 ORDER BY s.id
+			   FOR UPDATE OF s
+		)
+		UPDATE sandboxes s
+		   SET last_active_at = GREATEST(s.last_active_at, locked.at), status = 'running'
+		  FROM locked
+		 WHERE s.id = locked.id`
+	if _, err := s.db.ExecContext(ctx, q, ids, ats); err != nil {
+		return fmt.Errorf("store: record activity for %d sandboxes: %w", len(ids), err)
 	}
 	return nil
 }
