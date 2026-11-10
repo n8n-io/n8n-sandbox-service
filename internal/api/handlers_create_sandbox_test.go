@@ -226,7 +226,7 @@ func newIdleTestGatewayPods(t *testing.T, adminKey string, fake *fakeSandboxCont
 
 	routers := make([]http.Handler, pods)
 	for i := range routers {
-		routers[i], err = NewGatewayRouter(s, cfg, reg, metrics.NewAPIRecorder(false))
+		routers[i], err = NewGatewayRouter(s, cfg, reg, metrics.NewAPIRecorder(false), NewActivityRecorder(s, nil))
 		if err != nil {
 			t.Fatalf("create gateway router: %v", err)
 		}
@@ -828,7 +828,7 @@ func TestGetSandboxFencesEphemeralAtStopWindow(t *testing.T) {
 	}
 
 	// Past IdleStopAfter but well inside IdleDeleteAfter.
-	stale := now.Add(-cfg.IdleStopAfter - time.Second).Unix()
+	stale := now.Add(-cfg.IdleStopAfter - activityLag(cfg) - time.Second).Unix()
 	staleEphemeral := "88888888-8888-4888-8888-888888888888"
 	staleRegular := "99999999-9999-4999-8999-999999999999"
 	seedRunningSandbox(t, s, staleEphemeral, "", stale, true)

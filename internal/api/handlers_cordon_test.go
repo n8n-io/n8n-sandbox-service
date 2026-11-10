@@ -61,7 +61,7 @@ func newCordonTestEnv(t *testing.T, sandboxStatus string, cordoned bool) *cordon
 		APIKeys:      map[string]struct{}{"admin-key": {}},
 		RunnerAPIKey: "runner-key",
 		MaxFileBytes: 1024,
-	}), reg, env.rec)
+	}), reg, env.rec, NewActivityRecorder(env.store, nil))
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}

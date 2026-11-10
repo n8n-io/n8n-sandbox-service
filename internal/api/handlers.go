@@ -69,7 +69,7 @@ type proxyRoute struct {
 }
 
 // sandboxProxyHandler proxies sandbox routes to the sandbox's runner.
-func sandboxProxyHandler(s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, transport http.RoundTripper, mrec *metrics.APIRecorder) func(proxyRoute) http.HandlerFunc {
+func sandboxProxyHandler(s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, transport http.RoundTripper, activity *ActivityRecorder, mrec *metrics.APIRecorder) func(proxyRoute) http.HandlerFunc {
 	return func(route proxyRoute) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			id := r.PathValue("id")
@@ -127,7 +127,7 @@ func sandboxProxyHandler(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 				if reapSandboxIfRunnerGone(s, id, resp) {
 					return
 				}
-				markSandboxActive(s, id, resp.StatusCode)
+				trackSandboxActivity(activity, rec, resp)
 			})
 			if route.limitBody {
 				r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxFileBytes)
@@ -276,7 +276,7 @@ func isPastIdleDeleteWindow(rec *store.SandboxRecord, cfg *config.APIConfig, now
 	if rec.Ephemeral {
 		window = ephemeralIdleWindow(cfg)
 	}
-	return window > 0 && now > rec.LastActiveAt+idleSeconds(window)
+	return window > 0 && now > rec.LastActiveAt+idleSeconds(window)+idleSeconds(activityLag(cfg))
 }
 
 func runnerControlTLS(cfg *config.APIConfig) *runnerctl.TLS {
@@ -676,7 +676,7 @@ func newRunnerReverseProxy(runnerURL *url.URL, runnerAPIKey string, transport ht
 //
 // It returns the runner's verdict, not the outcome of the delete: true means
 // "the runner says this sandbox is gone", so a failed delete still returns
-// true. Callers use that to skip markSandboxActive, because a gone response is
+// true. Callers use that to skip trackSandboxActivity, because a gone response is
 // never evidence of a working sandbox — counting it as activity would let a
 // retrying client refresh last_active_at and keep the idle sweeper from ever
 // reclaiming the row left behind.
@@ -692,18 +692,23 @@ func reapSandboxIfRunnerGone(s store.SandboxStore, sandboxID string, resp *http.
 	return true
 }
 
-// markSandboxActive records that a proxied request reached a working sandbox.
-// Server errors deliberately do not count. The idle sweeper only stops a
-// sandbox once last_active_at has gone stale, and only deletes one it has
+// trackSandboxActivity counts a response as sandbox activity until its body is
+// closed. Server errors deliberately do not count. The idle sweeper only stops
+// a sandbox once last_active_at has gone stale, and only deletes one it has
 // already stopped, so a client retrying a broken sandbox must not be able to
 // refresh last_active_at or flip the status back to running — either would
 // keep the sweeper from ever reclaiming it.
-func markSandboxActive(s store.SandboxStore, sandboxID string, statusCode int) {
-	if statusCode >= http.StatusInternalServerError {
+func trackSandboxActivity(activity *ActivityRecorder, rec *store.SandboxRecord, resp *http.Response) {
+	if resp.StatusCode >= http.StatusInternalServerError {
 		return
 	}
-	_ = s.UpdateLastActive(sandboxID)
-	_ = s.UpdateStatus(sandboxID, "running")
+	end := activity.trackResponse(rec)
+	// The upgrade path needs the body unwrapped. No runner route upgrades.
+	if resp.StatusCode == http.StatusSwitchingProtocols {
+		end()
+		return
+	}
+	resp.Body = activityBody{ReadCloser: resp.Body, end: end}
 }
 
 // runnerCordoned reports whether the registry has the runner cordoned.

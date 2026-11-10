@@ -25,7 +25,7 @@ func newTestGatewayWithScalerURL(t *testing.T, adminKey, scalerURL string) http.
 		RunnerAPIKey: "runner-key",
 		MaxFileBytes: 1024,
 		ScalerURL:    scalerURL,
-	}), registry.New(45*time.Second), metrics.NewAPIRecorder(false))
+	}), registry.New(45*time.Second), metrics.NewAPIRecorder(false), NewActivityRecorder(s, nil))
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}
