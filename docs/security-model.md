@@ -196,6 +196,11 @@ fails the create and asks the runner, best effort, to remove the sandbox, so a
 runner from before egress modes cannot hand out a public sandbox recorded as
 `none`.
 
+Firecracker runner hosts run with nested KVM off (`nested=0` on `kvm_intel` and
+`kvm_amd`), so sandboxes cannot run a hypervisor. `install-runner-host.sh` fails
+while the module reports otherwise; guests then lack VMX/SVM in CPUID (e2e
+nested-KVM check).
+
 The Firecracker runtime gives every slot its own network namespace with a
 dedicated TAP device and veth uplink. The guest subnet is identical in every
 namespace, and there is no bridge between them, so guests have no layer-2 path
