@@ -237,7 +237,7 @@ func TestRunnerTransportVerifiesEachRunnerHostname(t *testing.T) {
 	}
 }
 
-func TestRunnerTransportPingsSilentConnections(t *testing.T) {
+func TestRunnerTransportSetsPingTimeouts(t *testing.T) {
 	rt, err := newRunnerTransport(withRunnerTLS(&config.APIConfig{}))
 	if err != nil {
 		t.Fatalf("build transport: %v", err)
