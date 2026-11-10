@@ -1,6 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Enrolled: the pins in the sandbox image (sandbox-workspace/package.json, the global typescript in Dockerfile.sandbox and the venv's pip in sandbox-venv/requirements.txt, whose hashes Renovate refreshes with hashin) and the runtime base images of Dockerfile.runner-dind and Dockerfile.api. Lock file maintenance refreshes the transitive deps in sandbox-workspace/package-lock.json weekly; Renovate cannot raise vulnerability-driven PRs for transitive npm deps.",
+  "description": "Enrolled: the pins in the sandbox image (sandbox-workspace/package.json, the global npm and typescript in Dockerfile.sandbox and the venv's pip and setuptools in sandbox-venv/requirements.txt, whose hashes Renovate refreshes with hashin) and the runtime base images of Dockerfile.runner-dind and Dockerfile.api. Lock file maintenance refreshes the transitive deps in sandbox-workspace/package-lock.json weekly; Renovate cannot raise vulnerability-driven PRs for transitive npm deps.",
   "extends": ["config:recommended", ":maintainLockFilesWeekly"],
   "enabledManagers": ["npm", "pip_requirements", "dockerfile", "custom.regex"],
   "includePaths": ["sandbox-workspace/**", "sandbox-venv/**", "Dockerfile.sandbox", "Dockerfile.runner-dind", "Dockerfile.api"],
@@ -39,7 +39,13 @@
       "overrideDatasource": "custom.n8n-stable-types-node"
     },
     {
-      "description": "Dockerfile.sandbox is in includePaths only for the typescript pin, read by the custom regex manager. The Dockerfile manager's default file patterns match it too.",
+      "description": "Keep the npm in Dockerfile.sandbox on the major its Node.js line bundles (npm 11 for Node 24), so it only takes npm's fixes.",
+      "matchFileNames": ["Dockerfile.sandbox"],
+      "matchPackageNames": ["npm"],
+      "allowedVersions": "<12"
+    },
+    {
+      "description": "Dockerfile.sandbox is in includePaths only for the npm and typescript pins, read by the custom regex manager. The Dockerfile manager's default file patterns match it too.",
       "matchManagers": ["dockerfile"],
       "matchFileNames": ["Dockerfile.sandbox"],
       "enabled": false
@@ -79,8 +85,7 @@
     {
       "customType": "regex",
       "managerFilePatterns": ["/^Dockerfile\\.sandbox$/"],
-      "matchStrings": ["npm install -g typescript@(?<currentValue>[0-9.]+)"],
-      "depNameTemplate": "typescript",
+      "matchStrings": ["npm install -g (?<depName>npm|typescript)@(?<currentValue>[0-9.]+)"],
       "datasourceTemplate": "npm"
     }
   ]

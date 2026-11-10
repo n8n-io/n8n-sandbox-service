@@ -56,6 +56,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && echo "${node_sha}  /tmp/node.tar.xz" | sha256sum -c - \
     && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 \
     && rm /tmp/node.tar.xz \
+    && npm install -g npm@11.21.2 \
     && node -v && npm -v \
     && npm install -g typescript@7.0.2 \
     && apt-get autoremove -y \
@@ -77,8 +78,9 @@ WORKDIR /home/user
 # externally-managed marker. Both sit under /home/user, the only directory uid
 # 1000 owns on either runtime. internal/daemon/exec.go puts them on PATH.
 #
-# ensurepip seeds pip 23.0.1, which builds an sdist the legacy setup.py way, so
-# the venv gets the pip pinned and hashed in sandbox-venv/requirements.txt.
+# ensurepip seeds pip 23.0.1, which builds an sdist the legacy setup.py way,
+# and an outdated setuptools 66.1.1. The venv gets both at the versions pinned
+# and hashed in sandbox-venv/requirements.txt instead.
 # --only-binary refuses the sdist, which would run code to build.
 COPY --chown=1000:1000 sandbox-venv/requirements.txt /tmp/pip-requirements.txt
 RUN python3 -m venv venv \
