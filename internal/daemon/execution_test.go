@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"bytes"
+	"context"
 	"math"
 	"sync"
 	"testing"
@@ -239,6 +241,84 @@ func TestSnapshotMaxUint64(t *testing.T) {
 	if len(events) != 0 {
 		t.Fatalf("expected 0 events, got %d", len(events))
 	}
+}
+
+func TestAfterNearOverflow(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		after uint64
+	}{
+		{name: "2^63-1", after: 1<<63 - 1},
+		{name: "2^63", after: 1 << 63},
+		{name: "2^64-2", after: 1<<64 - 2},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			ex := newTestExecution(
+				storedEvent{seq: 0, data: []byte("a")},
+				storedEvent{seq: 1, data: []byte("b")},
+			)
+
+			if !ex.HasHistory(&test.after) {
+				t.Fatal("expected HasHistory=true")
+			}
+
+			events, ok := ex.Snapshot(&test.after)
+			if !ok {
+				t.Fatal("expected ok=true from Snapshot")
+			}
+			if len(events) != 0 {
+				t.Fatalf("expected 0 events from Snapshot, got %d", len(events))
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			followed := 0
+			if !ex.Follow(ctx, &test.after, func([]byte) { followed++ }) {
+				t.Fatal("expected Follow to return true")
+			}
+			if followed != 0 {
+				t.Fatalf("expected 0 events from Follow, got %d", followed)
+			}
+		})
+	}
+}
+
+func FuzzEventsAfter(fuzz *testing.F) {
+	fuzz.Add(uint64(0), uint64(0), uint8(3))
+	fuzz.Add(uint64(4), uint64(3), uint8(3))
+	fuzz.Add(uint64(1<<63-1), uint64(0), uint8(3))
+	fuzz.Add(uint64(1<<63), uint64(1), uint8(3))
+	fuzz.Add(uint64(1<<64-2), uint64(0), uint8(3))
+	fuzz.Add(uint64(math.MaxUint64), uint64(5), uint8(0))
+
+	fuzz.Fuzz(func(t *testing.T, after uint64, minSeq uint64, count uint8) {
+		events := make([]storedEvent, count)
+		for index := range events {
+			events[index] = storedEvent{seq: minSeq + uint64(index), data: []byte{byte(index)}}
+		}
+		ex := newTestExecution(events...)
+		ex.minSeq = minSeq
+
+		ex.mu.Lock()
+		got := ex.eventsAfter(&after)
+		ex.mu.Unlock()
+
+		if len(got) > len(events) {
+			t.Fatalf("got %d events, only %d stored", len(got), len(events))
+		}
+		suffix := events[len(events)-len(got):]
+		for index, data := range got {
+			if !bytes.Equal(data, suffix[index].data) {
+				t.Fatalf("event[%d]: expected data %v, got %v", index, suffix[index].data, data)
+			}
+		}
+	})
 }
 
 func TestAppendAndEventsAfterIntegration(t *testing.T) {
