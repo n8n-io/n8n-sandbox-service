@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -119,6 +120,7 @@ func TestFirecrackerAPIClientLeavesNoConnectionOpen(t *testing.T) {
 	}
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(func() { _ = server.Close() })
+	goroutinesBefore := runtime.NumGoroutine()
 
 	for range 20 {
 		if err := newFirecrackerAPIClient(socketPath).patchJSON(context.Background(), "/vm", []byte(`{}`)); err != nil {
@@ -128,9 +130,10 @@ func TestFirecrackerAPIClientLeavesNoConnectionOpen(t *testing.T) {
 
 	// A close is not ordered against patchJSON returning.
 	deadline := time.Now().Add(5 * time.Second)
-	for openConns.Load() != 0 {
+	for openConns.Load() != 0 || runtime.NumGoroutine() > goroutinesBefore {
 		if time.Now().After(deadline) {
-			t.Fatalf("connections still open on the API socket = %d, want 0", openConns.Load())
+			t.Fatalf("connections still open on the API socket = %d, want 0; goroutines = %d, want at most %d",
+				openConns.Load(), runtime.NumGoroutine(), goroutinesBefore)
 		}
 		time.Sleep(time.Millisecond)
 	}
