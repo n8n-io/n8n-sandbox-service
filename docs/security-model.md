@@ -98,9 +98,9 @@ admin key. A scaler key may only call `GET /admin/runners`, which returns
 runner ids, health and capacity but no addresses, and cordon or uncordon a
 runner, which the API does with its own runner credentials. A leaked scaler
 key can therefore cordon every runner and stop new creates fleet-wide, and
-have every stopped sandbox deleted on its next request, since the API deletes
-a stopped sandbox on a cordoned runner instead of waking it. Startup fails if
-a scaler key is also an admin or provisioner key.
+have every stopped sandbox deleted by the next request that would wake it,
+since the API deletes a stopped sandbox on a cordoned runner instead of waking
+it. Startup fails if a scaler key is also an admin or provisioner key.
 
 ### Concurrency limits
 

@@ -158,7 +158,7 @@ Exec and file operation requests are proxied through two hops:
 Client → API (HTTP) → Runner (HTTP reverse proxy) → Daemon (HTTP on :8081)
 ```
 
-Each hop uses `httputil.ReverseProxy` with URL rewriting. The runner can wake a stopped container before proxying. If the API's row says stopped and the registry says the runner is cordoned, the API doesn't proxy: it deletes the sandbox and answers `404`, so the client creates it again on another runner.
+Each hop uses `httputil.ReverseProxy` with URL rewriting. The runner can wake a stopped container before proxying. On a route that can wake the sandbox (every one but execution `DELETE`), if the API's row says stopped and the registry says the runner is cordoned, the API doesn't proxy: it deletes the sandbox and answers `404`, so the client creates it again on another runner.
 
 ## Key Data Flows
 

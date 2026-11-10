@@ -23,10 +23,22 @@ const cordonSandboxID = "66666666-6666-4666-8666-666666666666"
 
 type cordonTestEnv struct {
 	router     http.Handler
-	store      store.SandboxStore
+	store      *lockCountingStore
 	control    *fakeSandboxControl
 	runnerHits *atomic.Int32
 	rec        *metrics.APIRecorder
+}
+
+// lockCountingStore counts LockSandbox calls, which is how a test sees
+// requests queue on a sandbox's lock.
+type lockCountingStore struct {
+	store.SandboxStore
+	locks atomic.Int32
+}
+
+func (s *lockCountingStore) LockSandbox(ctx context.Context, id string) (func(), error) {
+	s.locks.Add(1)
+	return s.SandboxStore.LockSandbox(ctx, id)
 }
 
 // newCordonTestEnv serves one sandbox with the given status on runner-1, which
@@ -40,7 +52,7 @@ func newCordonTestEnv(t *testing.T, sandboxStatus string, cordoned bool) *cordon
 	}))
 	controlAddr := startFakeRunnerControl(t, env.control)
 
-	env.store = newSweepStore(t)
+	env.store = &lockCountingStore{SandboxStore: newSweepStore(t)}
 	now := time.Now().Unix()
 	if err := env.store.Create(&store.SandboxRecord{
 		ID:                    cordonSandboxID,
@@ -162,11 +174,36 @@ func TestSandboxProxyKeepsTheRowWhenTheCordonDeleteFails(t *testing.T) {
 	}
 }
 
+// The delete goes over control gRPC, so a row without the runner's HTTP base is
+// still deleted rather than answered with 502.
+func TestSandboxProxyDeletesWithoutTheRunnerHTTPBase(t *testing.T) {
+	env := newCordonTestEnv(t, "stopped", true)
+	rec := mustGet(t, env.store, cordonSandboxID)
+	if err := env.store.Delete(cordonSandboxID); err != nil {
+		t.Fatalf("Delete() failed: %v", err)
+	}
+	rec.RunnerHTTPBase = ""
+	if err := env.store.Create(rec); err != nil {
+		t.Fatalf("Create() failed: %v", err)
+	}
+
+	if rr := env.serve(http.MethodPost, "/executions"); rr.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404: %s", rr.Code, rr.Body.String())
+	}
+	if _, deleted := env.control.calls(); len(deleted) != 1 {
+		t.Errorf("runner deletes = %v, want exactly one", deleted)
+	}
+}
+
 // n8n sends several requests at once. They queue on the sandbox lock behind the
 // first one's delete and get the same 404, without a second delete.
 func TestSandboxProxyDeletesOnceForConcurrentRequests(t *testing.T) {
 	env := newCordonTestEnv(t, "stopped", true)
 	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseDelete := func() { releaseOnce.Do(func() { close(release) }) }
+	// Also on failure, so no request stays blocked in the fake runner.
+	t.Cleanup(releaseDelete)
 	env.control.deleteHook = func(context.Context) { <-release }
 
 	const requests = 4
@@ -179,8 +216,10 @@ func TestSandboxProxyDeletesOnceForConcurrentRequests(t *testing.T) {
 			statuses[request] = env.serve(http.MethodPost, "/executions").Code
 		}()
 	}
-	time.Sleep(100 * time.Millisecond)
-	close(release)
+	// Each request has read the stopped row and holds the lock in the delete or
+	// waits for it, so a delete without the lock would show up as a second one.
+	waitFor(t, "every request to reach the sandbox lock", func() bool { return env.store.locks.Load() == requests })
+	releaseDelete()
 	wg.Wait()
 
 	for request, code := range statuses {

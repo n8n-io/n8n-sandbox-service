@@ -95,17 +95,19 @@ func sandboxProxyHandler(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 				return
 			}
 
-			if rec.RunnerHTTPBase == "" {
-				writeError(w, http.StatusBadGateway, "sandbox has no runner routing information")
-				return
-			}
-
 			fields := obs.FieldsFrom(r.Context())
 			fields.Add("sandbox_id", id, "runner_id", rec.RunnerID)
 
-			// Status first: the registry read is a query on Postgres.
+			// Before the routing checks: the delete goes over control gRPC, not
+			// the runner's HTTP base. Status first: the registry read is a query
+			// on Postgres.
 			if !route.neverWakes && rec.Status == "stopped" && runnerCordoned(reg, rec.RunnerID) {
 				deleteStoppedOnCordonedRunner(w, r, s, reg, cfg, mrec, id)
+				return
+			}
+
+			if rec.RunnerHTTPBase == "" {
+				writeError(w, http.StatusBadGateway, "sandbox has no runner routing information")
 				return
 			}
 
