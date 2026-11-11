@@ -136,11 +136,15 @@ func LoadRuntime(file, name string) (RuntimeSpec, error) {
 	return spec, nil
 }
 
-// workerCommand replaces the {taskMemoryMb} placeholder in the command.
-func (s RuntimeSpec) workerCommand(taskMemoryMB int) []string {
+// workerCommand replaces the placeholders in the command. {taskMemoryMb} is
+// the memory of the worker process (all slots in reuse mode).
+// {memoryPerTaskMb} is the memory of one task, for a runtime that runs each
+// task in a process of its own also in reuse mode.
+func (s RuntimeSpec) workerCommand(processMemoryMB, perTaskMemoryMB int) []string {
 	out := make([]string, len(s.Command))
 	for i, a := range s.Command {
-		out[i] = strings.ReplaceAll(a, "{taskMemoryMb}", strconv.Itoa(taskMemoryMB))
+		a = strings.ReplaceAll(a, "{taskMemoryMb}", strconv.Itoa(processMemoryMB))
+		out[i] = strings.ReplaceAll(a, "{memoryPerTaskMb}", strconv.Itoa(perTaskMemoryMB))
 	}
 	return out
 }

@@ -35,6 +35,14 @@ type workerMsg struct {
 	// the worker sends task output on the control socket instead.
 	Stream string `json:"stream,omitempty"`
 	Text   string `json:"text,omitempty"`
+	// Clean in "cancelled": the worker stopped all code of the task (for
+	// example, it killed the child process of the task). The worker stays
+	// usable and is not retired.
+	Clean bool `json:"clean,omitempty"`
+	// Outcome in "failed": the task ended without a result because its own
+	// process died ("oom" or "crashed"). Text holds the message. Reuse mode
+	// only; the worker stays usable.
+	Outcome string `json:"outcome,omitempty"`
 }
 
 type outChunk struct {

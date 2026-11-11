@@ -158,6 +158,37 @@ func (r *Runtime) pinSnapshotAssets() error {
 		"boot_args", params.BootArgs,
 		"guest_ip", params.GuestIP,
 	)
+	return r.pinCodeSnapshot()
+}
+
+// pinCodeSnapshot checks the golden code snapshot when code sandboxes are on,
+// so a missing or mismatched one fails admission instead of every code create.
+func (r *Runtime) pinCodeSnapshot() error {
+	if r.config.CodeSnapshotDir == "" {
+		return nil
+	}
+	baked, err := loadCodeOptions(filepath.Join(r.config.CodeSnapshotDir, codeOptionsFileName))
+	if err != nil {
+		return err
+	}
+	opts := &runnerruntime.CreateOptions{
+		Kind:         runnerruntime.KindCode,
+		Runtime:      baked.Runtime,
+		Slots:        baked.Slots,
+		TaskMemoryMB: baked.TaskMemoryMB,
+		SpareWorkers: baked.SpareWorkers,
+		ReuseWorkers: baked.ReuseWorkers,
+	}
+	snap, err := r.loadCodeSnapshot(opts)
+	if err != nil {
+		return err
+	}
+	slog.Info("firecracker golden code snapshot",
+		"options", fmt.Sprintf("%+v", baked),
+		"vcpu_count", snap.params.VCPUCount,
+		"mem_size_mib", snap.params.MemSizeMiB,
+		"boot_args", snap.params.BootArgs,
+	)
 	return nil
 }
 

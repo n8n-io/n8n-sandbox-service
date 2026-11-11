@@ -8,6 +8,14 @@ KERNEL=""
 ROOTFS=""
 DAEMON_BIN=""
 OUT_DIR=""
+# Code snapshot (Task API): code-init as PID 1 starts the code daemon of the
+# rootfs (the code sandbox image) with the settings of --code-env.
+CODE_INIT=""
+CODE_ENV=""
+CODE_OPTIONS=""
+# Wait after the daemon is healthy, so the spare worker is idle when the
+# snapshot is taken.
+SETTLE_SECONDS="${SETTLE_SECONDS:-2}"
 MEM_MIB="${MEM_MIB:-512}"
 VCPUS="${VCPUS:-1}"
 FIRECRACKER_BIN="${FIRECRACKER_BIN:-/opt/firecracker/bin/firecracker}"
@@ -36,6 +44,7 @@ ROOTFS_MOUNT=""
 usage() {
 	cat >&2 <<EOF
 Usage: $0 --kernel PATH --ext4 PATH --daemon-bin PATH --out DIR
+       $0 --kernel PATH --ext4 PATH --code-init PATH --code-env FILE --code-options FILE --out DIR
 EOF
 }
 
@@ -57,6 +66,18 @@ while [[ $# -gt 0 ]]; do
 		OUT_DIR="$2"
 		shift 2
 		;;
+	--code-init)
+		CODE_INIT="$2"
+		shift 2
+		;;
+	--code-env)
+		CODE_ENV="$2"
+		shift 2
+		;;
+	--code-options)
+		CODE_OPTIONS="$2"
+		shift 2
+		;;
 	-h | --help)
 		usage
 		exit 0
@@ -69,7 +90,21 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
-if [[ -z "$KERNEL" || -z "$ROOTFS" || -z "$DAEMON_BIN" || -z "$OUT_DIR" ]]; then
+if [[ -n "$CODE_INIT" ]]; then
+	if [[ -z "$CODE_ENV" || -z "$CODE_OPTIONS" ]]; then
+		usage
+		exit 1
+	fi
+	CODE_INIT="$(realpath "$CODE_INIT")"
+	CODE_ENV="$(realpath "$CODE_ENV")"
+	CODE_OPTIONS="$(realpath "$CODE_OPTIONS")"
+elif [[ -z "$DAEMON_BIN" ]]; then
+	usage
+	exit 1
+else
+	DAEMON_BIN="$(realpath "$DAEMON_BIN")"
+fi
+if [[ -z "$KERNEL" || -z "$ROOTFS" || -z "$OUT_DIR" ]]; then
 	usage
 	exit 1
 fi
@@ -80,12 +115,12 @@ fi
 
 KERNEL="$(realpath "$KERNEL")"
 ROOTFS="$(realpath "$ROOTFS")"
-DAEMON_BIN="$(realpath "$DAEMON_BIN")"
 OUT_DIR="$(realpath "$OUT_DIR")"
 SNAPSHOT_MEM="${OUT_DIR}/snapshot_mem"
 SNAPSHOT_STATE="${OUT_DIR}/snapshot_state"
 BOOT_PARAMS="${OUT_DIR}/boot.json"
 BOOT_PARAMS_TMP="${BOOT_PARAMS}.tmp"
+CODE_OPTIONS_OUT="${OUT_DIR}/code.json"
 
 # Sends a PUT request to the Firecracker API socket in the jail. Firecracker uses
 # REST over a Unix socket for machine configuration and lifecycle actions.
@@ -135,10 +170,17 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "==> Installing sandbox daemon into Firecracker rootfs..."
+echo "==> Installing guest init into Firecracker rootfs..."
 ROOTFS_MOUNT="$(mktemp -d)"
 mount -o loop "$ROOTFS" "$ROOTFS_MOUNT"
-install -m 0755 "$DAEMON_BIN" "${ROOTFS_MOUNT}/sandbox-daemon"
+if [[ -n "$CODE_INIT" ]]; then
+	install -m 0755 "$CODE_INIT" "${ROOTFS_MOUNT}/code-init"
+	install -m 0644 "$CODE_ENV" "${ROOTFS_MOUNT}/etc/code-daemon.env"
+	GUEST_INIT="/code-init"
+else
+	install -m 0755 "$DAEMON_BIN" "${ROOTFS_MOUNT}/sandbox-daemon"
+	GUEST_INIT="/sandbox-daemon"
+fi
 sync
 umount "$ROOTFS_MOUNT"
 rmdir "$ROOTFS_MOUNT"
@@ -157,7 +199,7 @@ echo "==> Preparing Firecracker jail..."
 # without its read-only flag.
 JAIL_ROOT="${JAILER_BASE_DIR}/firecracker/${VM_ID}/root"
 mkdir -p "$OUT_DIR" "$JAIL_ROOT"
-rm -f "$SNAPSHOT_MEM" "$SNAPSHOT_STATE" "$BOOT_PARAMS" "$BOOT_PARAMS_TMP"
+rm -f "$SNAPSHOT_MEM" "$SNAPSHOT_STATE" "$BOOT_PARAMS" "$BOOT_PARAMS_TMP" "$CODE_OPTIONS_OUT"
 touch "$SNAPSHOT_MEM" "$SNAPSHOT_STATE"
 # Jailer runs Firecracker as uid/gid 1000; virtio block needs RW on rootfs. The
 # kernel is only read, and the runner binds the same file into every jail, so it
@@ -204,7 +246,7 @@ fi
 # clocksource=kvm-clock: the runner's clock_realtime restore only advances
 # kvm-clock. Where the guest sees an invariant TSC, the kernel would otherwise
 # switch to tsc, which resumes at snapshot time.
-boot_args="console=ttyS0 reboot=k panic=1 pci=off ipv6.disable=1 sysctl.user.max_user_namespaces=0 clocksource=kvm-clock init=/sandbox-daemon ip=${GUEST_IP}::${HOST_TAP_IP}:255.255.255.0::eth0:off"
+boot_args="console=ttyS0 reboot=k panic=1 pci=off ipv6.disable=1 sysctl.user.max_user_namespaces=0 clocksource=kvm-clock init=${GUEST_INIT} ip=${GUEST_IP}::${HOST_TAP_IP}:255.255.255.0::eth0:off"
 
 echo "==> Configuring and booting Firecracker snapshot VM..."
 api_put "/machine-config" "{\"vcpu_count\":${VCPUS},\"mem_size_mib\":${MEM_MIB},\"smt\":false}"
@@ -227,6 +269,10 @@ done
 if ! ip netns exec "$NETNS" curl -fsS --max-time 2 "http://${GUEST_IP}:${DAEMON_PORT}/healthz" >/dev/null; then
 	echo "ERROR: sandbox daemon did not become healthy before snapshot" >&2
 	exit 1
+fi
+
+if [[ -n "$CODE_INIT" ]]; then
+	sleep "$SETTLE_SECONDS"
 fi
 
 echo "==> Pausing VM and writing Firecracker snapshot..."
@@ -266,6 +312,9 @@ chmod 0644 "$BOOT_PARAMS_TMP"
 # publishes them, and the rename itself has to reach disk after it: a rename left
 # in the page cache is lost by an unclean host shutdown, which would leave mem
 # and state without the boot.json the runner needs to cold boot.
+if [[ -n "$CODE_INIT" ]]; then
+	install -m 0644 "$CODE_OPTIONS" "$CODE_OPTIONS_OUT"
+fi
 sync
 mv "$BOOT_PARAMS_TMP" "$BOOT_PARAMS"
 sync

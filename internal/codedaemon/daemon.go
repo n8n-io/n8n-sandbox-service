@@ -82,7 +82,7 @@ func New(cfg Config, rt RuntimeSpec) (*Daemon, error) {
 	d := &Daemon{
 		cfg:        cfg,
 		runtime:    rt,
-		command:    rt.workerCommand(heapMB),
+		command:    rt.workerCommand(heapMB, cfg.TaskMemoryMB),
 		slotsDir:   filepath.Join(cfg.WorkDir, "slots"),
 		outputsDir: filepath.Join(cfg.WorkDir, "outputs"),
 		trashDir:   filepath.Join(cfg.WorkDir, "trash"),

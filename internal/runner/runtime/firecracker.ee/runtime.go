@@ -192,6 +192,14 @@ type sandboxState struct {
 	snapshotMemPath   string
 	snapshotStatePath string
 
+	// templateRootfs is the rootfs the sandbox's rootfs is cloned from.
+	templateRootfs string
+
+	// code marks a code sandbox (Task API). It restores the golden code snapshot
+	// read-only and shared, so it is never stopped, woken or cold booted: a code
+	// sandbox whose guest dies is gone, and the client creates another.
+	code bool
+
 	// blockEgress is the sandbox's egress "none" mode, fixed at creation. Every
 	// activation applies it to whatever slot the sandbox lands on.
 	blockEgress bool
@@ -311,6 +319,7 @@ type dependencies struct {
 	probeDaemon         func(ctx context.Context, baseURL string) error
 	mountVolumeDrives   func(ctx context.Context, baseURL string, drives []volumedrives.Volume) error
 	volumeSpace         func(path string) (volumeSpace, error)
+	probeCodeDaemon     func(ctx context.Context, baseURL string) error
 }
 
 func defaultDependencies(fc Config) dependencies {
@@ -332,7 +341,10 @@ func defaultDependencies(fc Config) dependencies {
 			return startDaemonProxy(ctx, sandboxID, listenAddr, netnsName, guestAddr)
 		},
 		probeDaemon: func(ctx context.Context, baseURL string) error {
-			return probeDaemon(ctx, baseURL, fc.DaemonWaitTimeout)
+			return probeDaemon(ctx, baseURL, fc.DaemonWaitTimeout, daemonProbeInterval)
+		},
+		probeCodeDaemon: func(ctx context.Context, baseURL string) error {
+			return probeDaemon(ctx, baseURL, fc.DaemonWaitTimeout, codeDaemonProbeInterval)
 		},
 		mountVolumeDrives: mountVolumeDrives,
 		volumeSpace:       statVolume,
@@ -407,17 +419,21 @@ func (r *Runtime) Capacity(context.Context) (runnerruntime.Capacity, error) {
 // CreateSandbox restores one microVM snapshot into a per-slot jail and netns,
 // then exposes the guest daemon through a host-local TCP proxy.
 func (r *Runtime) CreateSandbox(ctx context.Context, sandboxID string, opts *runnerruntime.CreateOptions) (*runnerruntime.SandboxInfo, error) {
-	if opts.IsCode() {
-		return nil, fmt.Errorf("code sandboxes are not supported on the firecracker runtime")
-	}
 	if len(sandboxID) < 12 {
 		return nil, fmt.Errorf("sandbox ID must be at least 12 characters, got %d", len(sandboxID))
+	}
+	var code *codeSnapshot
+	if opts.IsCode() {
+		var err error
+		if code, err = r.loadCodeSnapshot(opts); err != nil {
+			return nil, err
+		}
 	}
 
 	ctx, cancel := withLifecycleBudget(ctx, createBudget)
 	defer cancel()
 
-	state, err := r.reserveSandbox(sandboxID, opts.BlockEgress())
+	state, err := r.reserveSandbox(sandboxID, opts.BlockEgress(), code)
 	if err != nil {
 		return nil, err
 	}
@@ -456,20 +472,23 @@ func (r *Runtime) CreateSandbox(ctx context.Context, sandboxID string, opts *run
 	}
 
 	timer := newStepTimer(metrics.OpCreate, r.metrics)
-	templateRootfs := filepath.Join(r.config.TemplateDir, "rootfs.ext4")
-	slog.Debug("firecracker cloning rootfs", "sandbox_id", sandboxID, "template", templateRootfs, "dest", state.rootfsPath)
+	slog.Debug("firecracker cloning rootfs", "sandbox_id", sandboxID, "template", state.templateRootfs, "dest", state.rootfsPath)
 	if err := timer.step(stepCloneRootfs, func() error {
-		return r.deps.cloneRootfs(ctx, templateRootfs, state.rootfsPath)
+		return r.deps.cloneRootfs(ctx, state.templateRootfs, state.rootfsPath)
 	}); err != nil {
 		cleanupOnError()
 		return nil, fmt.Errorf("clone sandbox rootfs: %w", err)
 	}
-	slog.Debug("firecracker cloning golden snapshot", "sandbox_id", sandboxID, "data_dir", state.dataDir)
-	if err := timer.step(stepCloneSnapshot, func() error {
-		return r.deps.cloneGoldenSnapshot(ctx, r.config.SnapshotMemPath, r.config.SnapshotStatePath, state.dataDir)
-	}); err != nil {
-		cleanupOnError()
-		return nil, fmt.Errorf("clone sandbox snapshot assets: %w", err)
+	// A code sandbox maps the golden code snapshot itself (read-only, see
+	// prepareJail): it is never stopped, so nothing writes a snapshot over it.
+	if !state.code {
+		slog.Debug("firecracker cloning golden snapshot", "sandbox_id", sandboxID, "data_dir", state.dataDir)
+		if err := timer.step(stepCloneSnapshot, func() error {
+			return r.deps.cloneGoldenSnapshot(ctx, r.config.SnapshotMemPath, r.config.SnapshotStatePath, state.dataDir)
+		}); err != nil {
+			cleanupOnError()
+			return nil, fmt.Errorf("clone sandbox snapshot assets: %w", err)
+		}
 	}
 
 	if err := r.activateSandboxVM(ctx, state, timer); err != nil {
@@ -573,7 +592,7 @@ func (r *Runtime) Shutdown(ctx context.Context) {
 // deterministic per-slot host resources used for the VM. The new sandbox starts
 // out claimed for creation so a delete arriving mid-create waits for the microVM
 // to be published instead of tearing down around it.
-func (r *Runtime) reserveSandbox(sandboxID string, blockEgress bool) (*sandboxState, error) {
+func (r *Runtime) reserveSandbox(sandboxID string, blockEgress bool, code *codeSnapshot) (*sandboxState, error) {
 	// Resolved here, at the one moment a sandbox is tied to a golden snapshot, and
 	// carried on the state from then on. Admission has already read and validated
 	// this file, so a failure here means it changed under a running runner — worth
@@ -586,6 +605,9 @@ func (r *Runtime) reserveSandbox(sandboxID string, blockEgress bool) (*sandboxSt
 	params, err := r.deps.loadBootParams(bootParamsPath(r.config))
 	if err != nil {
 		return nil, err
+	}
+	if code != nil {
+		params = code.params
 	}
 
 	// Read here for the same reason and at the same moment, because the sidecar only
@@ -635,6 +657,7 @@ func (r *Runtime) reserveSandbox(sandboxID string, blockEgress bool) (*sandboxSt
 		rootfsPath:        sandboxRootfsPath(r.runnerConfig.DataDir, sandboxID),
 		snapshotMemPath:   sandboxSnapshotMemPath(dataDir),
 		snapshotStatePath: sandboxSnapshotStatePath(dataDir),
+		templateRootfs:    filepath.Join(r.config.TemplateDir, "rootfs.ext4"),
 		blockEgress:       blockEgress,
 		bootParams:        params,
 		kernel:            kernel,
@@ -644,6 +667,12 @@ func (r *Runtime) reserveSandbox(sandboxID string, blockEgress bool) (*sandboxSt
 			Name: vmID,
 			IP:   r.config.GuestIP,
 		},
+	}
+	if code != nil {
+		state.code = true
+		state.templateRootfs = code.rootfsPath
+		state.snapshotMemPath = code.memPath
+		state.snapshotStatePath = code.statePath
 	}
 	r.sandboxes[sandboxID] = state
 	return state, nil
@@ -790,6 +819,22 @@ func (r *Runtime) prepareJail(ctx context.Context, state *sandboxState) error {
 	jailRoot := filepath.Join(r.config.JailerBaseDir, "firecracker", state.vmID, "root")
 	rootfsTarget := filepath.Join(jailRoot, strings.TrimPrefix(state.bootParams.RootfsDrivePath, "/"))
 	kernelTarget := filepath.Join(jailRoot, strings.TrimPrefix(state.bootParams.KernelImagePath, "/"))
+	// The snapshot assets of a code sandbox are the golden code snapshot itself,
+	// shared by all code sandboxes: mounted read-only, never chowned. Firecracker
+	// maps the memory file MAP_PRIVATE, so guest writes stay private and every
+	// guest shares the page cache of the file.
+	snapshotOwnership := `
+chown 1000:1000 %[1]s/snapshot_mem %[1]s/snapshot_state %[6]s
+chmod 0664 %[1]s/snapshot_mem %[1]s/snapshot_state %[6]s
+`
+	if state.code {
+		snapshotOwnership = `
+mount -o remount,bind,ro %[1]s/snapshot_mem
+mount -o remount,bind,ro %[1]s/snapshot_state
+chown 1000:1000 %[6]s
+chmod 0664 %[6]s
+`
+	}
 	script := fmt.Sprintf(`
 set -eu
 mkdir -p %[1]s
@@ -801,9 +846,7 @@ mount --bind %[2]s %[1]s/snapshot_mem
 mount --bind %[3]s %[1]s/snapshot_state
 mount --bind %[4]s %[6]s
 mount --bind -o ro %[7]s %[9]s
-chown 1000:1000 %[1]s/snapshot_mem %[1]s/snapshot_state %[6]s
-chmod 0664 %[1]s/snapshot_mem %[1]s/snapshot_state %[6]s
-`, shellquote.Quote(jailRoot), shellquote.Quote(state.snapshotMemPath), shellquote.Quote(state.snapshotStatePath),
+`+snapshotOwnership, shellquote.Quote(jailRoot), shellquote.Quote(state.snapshotMemPath), shellquote.Quote(state.snapshotStatePath),
 		shellquote.Quote(state.rootfsPath), shellquote.Quote(filepath.Dir(rootfsTarget)), shellquote.Quote(rootfsTarget),
 		shellquote.Quote(templateKernelPath(r.config)), shellquote.Quote(filepath.Dir(kernelTarget)), shellquote.Quote(kernelTarget))
 	script += volumeDrivePlaceholders(r.config.JailerBaseDir, jailRoot, state.bootParams.VolumeDrives)
@@ -945,7 +988,7 @@ func joinErrors(errs []error) error {
 
 // probeDaemon waits until the runner's host-local daemon proxy can reach the
 // guest daemon after snapshot restore.
-func probeDaemon(ctx context.Context, baseURL string, timeout time.Duration) error {
+func probeDaemon(ctx context.Context, baseURL string, timeout, interval time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	client := http.Client{Transport: runnerruntime.NoProxyTransport, Timeout: 2 * time.Second, CheckRedirect: runnerruntime.RefuseRedirect}
 	for {
@@ -969,7 +1012,7 @@ func probeDaemon(ctx context.Context, baseURL string, timeout time.Duration) err
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(200 * time.Millisecond):
+		case <-time.After(interval):
 		}
 	}
 }

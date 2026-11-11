@@ -367,6 +367,13 @@ func (d *Daemon) runShared(ctx context.Context, ew *eventWriter, rt *runningTask
 			res.userError = m.Error
 			tm.Worker = m.Timings
 			return true
+		case "failed":
+			res.outcome = "crashed"
+			if m.Outcome == "oom" {
+				res.outcome = "oom"
+			}
+			res.message = m.Text
+			return true
 		}
 		return false
 	}
@@ -421,13 +428,16 @@ func (d *Daemon) stopSharedTask(sw *sharedWorker, t *sharedTask, taskID string) 
 			case m := <-t.msgs:
 				switch m.Type {
 				case "cancelled":
+					if m.Clean {
+						return
+					}
 					// The code of the task can still run. Retire the
 					// process when no task runs in it.
 					sw.mu.Lock()
 					sw.tainted = true
 					sw.mu.Unlock()
 					return
-				case "done", "error":
+				case "done", "error", "failed":
 					return
 				}
 				continue

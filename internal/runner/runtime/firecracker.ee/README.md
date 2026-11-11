@@ -63,6 +63,14 @@ The guest runs no NTP. A restored guest would resume with the wall clock it had 
 
 A volume drive is a read-only drive the golden snapshot reserves for a volume, a read-only filesystem for the sandbox. Firecracker can't add drives to a restored VM, so the snapshot attaches `VOLUME_DRIVES` of them up front (default 8: `vol0`–`vol7`, right after the rootfs, seen by the guest as `/dev/vdb`–`/dev/vdi`). Each is empty: every jail hard-links them to one root-owned read-only file, `volume-drive-placeholder` in the jailer base dir. A cold boot attaches them again.
 
+## Code sandboxes (Task API)
+
+`scripts/firecracker.ee/build-code-snapshot.sh` builds a rootfs from the code sandbox image and a golden code snapshot. In it, `code-init` (`cmd/code-init.ee`) is PID 1: it mounts the kernel file systems, starts the code daemon as uid 1000 in the cgroup `/sys/fs/cgroup/code` and reaps orphans. The snapshot is taken when the daemon is healthy, so a restored sandbox already has its spare worker. A create must use the options in `code.json`.
+
+A code sandbox clones only the rootfs. It bind-mounts the golden `snapshot_mem` and `snapshot_state` read-only: Firecracker maps the memory `MAP_PRIVATE`, so all code sandboxes share its page cache. Code sandboxes cannot be stopped, and one whose guest died is not woken or cold booted: its daemon URL reports not running until it is deleted.
+
+Limits: the code rootfs and the code snapshot must be rebuilt together (the runner does not check that they match). All code sandboxes resume the same worker process, so they start with the same in-process random state (`Math.random`, OpenSSL) and with the wall clock of the snapshot.
+
 ## Resource limits
 
 CPU, memory and disk are fixed when the golden snapshot and `rootfs.ext4` are built, not by runner env vars: `VCPUS`/`MEM_MIB` in `create-golden-snapshot.sh`, `FIRECRACKER_ROOTFS_SIZE_MB` (default 2048) in `build-rootfs-template.sh`. Each sandbox gets a sparse copy of the rootfs; filling it yields ENOSPC in the guest. Rebuild on the host to change limits.

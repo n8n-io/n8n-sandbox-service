@@ -854,7 +854,11 @@ The Task API runs one-off code tasks in code sandboxes. A code sandbox runs the
 code daemon (`cmd/code-daemon`) instead of the sandbox daemon. It has task slots.
 Each task runs in a new worker process with an empty working folder. Code
 sandboxes have egress `none`. They have no stop or wake: they are running or
-deleted. Only the Docker runner supports them (`SANDBOX_RUNNER_DOCKER_CODE_IMAGE`).
+deleted. The Docker runner supports them with `SANDBOX_RUNNER_DOCKER_CODE_IMAGE`.
+The Firecracker runner restores them from one golden code snapshot
+(`SANDBOX_RUNNER_FIRECRACKER_CODE_SNAPSHOT_DIR`) and only accepts the
+`runtime`, `slots`, `taskMemoryMb`, `spareWorkers` and `reuseWorkers` that the
+snapshot was built with.
 
 `GET /sandboxes`, `GET /sandboxes/{id}` and `DELETE /sandboxes/{id}` show and
 delete code sandboxes too (`"kind": "code"`). The exec, file, `mkdir` and `stat`
@@ -877,7 +881,7 @@ Creates a code sandbox. The response comes when the code daemon is ready. When
 
 | Field | Default | Rules |
 |---|---|---|
-| `runtime` | `n8n-js` | An entry of `/etc/code-runtime/runtimes.json` in the image |
+| `runtime` | `n8n-js` | An entry of `/etc/code-runtime/runtimes.json` in the image. The n8n image has `n8n-js` and `n8n-py` |
 | `slots` | `1` | 1 to 32 |
 | `taskMemoryMb` | `512` | 64 to 16384, and `slots × taskMemoryMb` at most 16384. The container memory limit is `slots × taskMemoryMb` plus `SANDBOX_RUNNER_CODE_DAEMON_OVERHEAD_MB` |
 | `spareWorkers` | `true` | Each free slot keeps a started worker |
@@ -987,7 +991,9 @@ outputs of a finished task. `204`.
 ### Worker protocol
 
 The code daemon starts each worker with the command of the runtime entry, in its
-slot folder, in a new process group. `{taskMemoryMb}` in the command is replaced.
+slot folder, in a new process group. In the command, `{taskMemoryMb}` is replaced
+with the memory of the worker process (slots × task memory in reuse mode), and
+`{memoryPerTaskMb}` with the memory of one task.
 fd 0 is `/dev/null`, fd 1 and 2 are the task output, fd 3 is a control socket
 with JSON lines:
 
@@ -1001,7 +1007,8 @@ with JSON lines:
 | worker → daemon | `error` | `taskId`, `error`, `timings` |
 | worker → daemon | `output` | `taskId`, `stream` (`stdout` or `stderr`), `text`. Reuse mode only |
 | daemon → worker | `cancel` | `taskId`. Reuse mode only |
-| worker → daemon | `cancelled` | `taskId`. Reuse mode only |
+| worker → daemon | `cancelled` | `taskId`, `clean` (optional: the worker stopped all code of the task). Reuse mode only |
+| worker → daemon | `failed` | `taskId`, `outcome` (`oom` or `crashed`), `text`. The process of the task died, the worker did not. Reuse mode only |
 
 Without reuse, each task gets its own worker, which runs in the slot folder.
 After the task, the daemon kills the process group and moves `out/` to the
@@ -1013,9 +1020,10 @@ at the same time up to the slot count. The daemon routes its messages by
 `taskId`. Console output of a task comes as `output` messages, because the
 pipes are shared. A timeout or a cancel sends `cancel`. If the worker does not
 answer `cancelled` within 1 s, the daemon kills it, the other running tasks fail
-with `crashed`, and the next task starts a new worker. If it answers, the code of
-the dropped task can still run, so the daemon kills the worker when no task runs
-in it any more. With spare workers on, the daemon starts the shared worker at
+with `crashed`, and the next task starts a new worker. If it answers without
+`clean`, the code of the dropped task can still run, so the daemon kills the
+worker when no task runs in it any more. A worker that runs each task in a child
+process (`n8n-py`) kills the child and answers with `clean: true`, so it stays. With spare workers on, the daemon starts the shared worker at
 start and again after it exits. The folder of the shared worker is emptied when
 a new worker starts.
 

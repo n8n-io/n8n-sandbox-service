@@ -154,6 +154,8 @@ Slots give the host-side Firecracker resources stable names without exposing tho
 | `SANDBOX_RUNNER_FIRECRACKER_EXPECTED_GIT_SHA` | _(empty)_ | When set, must match `git_sha` in the manifest (requires `MANIFEST_PATH`) |
 | `SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT` | _(empty)_ | Absolute path to `create-golden-snapshot.sh`. When set and any of `snapshot_mem`, `snapshot_state` or `boot.json` is missing, Prepare runs it (mem/state paths must share a directory). Production Firecracker hosts set this so the runner owns host-local snapshot creation. Empty = do not auto-create |
 | `SANDBOX_RUNNER_FIRECRACKER_DAEMON_BIN` | `/srv/firecracker/bin/sandbox-daemon` | Host path to `sandbox-daemon` used for golden snapshot create and optional manifest checksum |
+| `SANDBOX_RUNNER_FIRECRACKER_CODE_TEMPLATE_DIR` | — | Holds the `rootfs.ext4` of code sandboxes (Task API), built by `scripts/firecracker.ee/build-code-snapshot.sh`. Set with the next variable. Unset: no code sandboxes |
+| `SANDBOX_RUNNER_FIRECRACKER_CODE_SNAPSHOT_DIR` | — | Golden code snapshot: `snapshot_mem`, `snapshot_state`, `boot.json` and `code.json` (the code daemon options it was built with). Code sandboxes map it read-only and shared, and cannot be stopped |
 
 The runner reports healthy only after `Prepare` has verified these assets, created the snapshot if needed, and passed an admission canary — see [the runtime README](../internal/runner/runtime/firecracker.ee/README.md#admission-prepare--ready).
 

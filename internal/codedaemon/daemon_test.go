@@ -612,9 +612,14 @@ done
 
 func startSharedDaemon(t *testing.T, slots int) *testDaemon {
 	t.Helper()
+	return startSharedDaemonWith(t, slots, sharedWorkerScript)
+}
+
+func startSharedDaemonWith(t *testing.T, slots int, workerScript string) *testDaemon {
+	t.Helper()
 	dir := t.TempDir()
 	script := filepath.Join(dir, "worker.sh")
-	if err := os.WriteFile(script, []byte(sharedWorkerScript), 0o755); err != nil {
+	if err := os.WriteFile(script, []byte(workerScript), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	d, err := New(Config{
@@ -806,12 +811,70 @@ func TestSharedWorkerRPC(t *testing.T) {
 
 func TestSharedWorkerHeapLimit(t *testing.T) {
 	d, err := New(Config{WorkDir: t.TempDir(), Slots: 4, TaskMemoryMB: 128, ReuseWorkers: true},
-		RuntimeSpec{Command: []string{"node", "--max-old-space-size={taskMemoryMb}"}})
+		RuntimeSpec{Command: []string{"node", "--max-old-space-size={taskMemoryMb}", "--task-memory-mb={memoryPerTaskMb}"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := d.command[1]; got != "--max-old-space-size=512" {
 		t.Fatalf("command %q", got)
+	}
+	if got := d.command[2]; got != "--task-memory-mb=128" {
+		t.Fatalf("command %q", got)
+	}
+}
+
+// processPerTaskWorkerScript is a shared worker that runs each task in a
+// process of its own (like the n8n-py runtime): it confirms a cancel with
+// "clean", and reports a task whose process died with "failed".
+const processPerTaskWorkerScript = `#!/bin/sh
+echo '{"type":"ready"}' >&3
+while read -r line <&3; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"taskId":"\([^"]*\)".*/\1/p')
+  case "$line" in
+    *'"type":"cancel"'*)
+      printf '{"type":"cancelled","taskId":"%s","clean":true}\n' "$id" >&3
+      continue ;;
+    *'"type":"start"'*) ;;
+    *) continue ;;
+  esac
+  dir=$(printf '%s' "$line" | sed -n 's/.*"dir":"\([^"]*\)".*/\1/p')
+  if grep -q hang "$dir/in/task.json"; then continue; fi
+  if grep -q oom "$dir/in/task.json"; then
+    printf '{"type":"failed","taskId":"%s","outcome":"oom","text":"task process was killed"}\n' "$id" >&3
+    continue
+  fi
+  printf '{"n":0,"pid":%s}' "$$" > "$dir/out/result.json"
+  printf '{"type":"done","taskId":"%s"}\n' "$id" >&3
+done
+`
+
+func TestSharedWorkerCleanCancelAndFailedTask(t *testing.T) {
+	td := startSharedDaemonWith(t, 2, processPerTaskWorkerScript)
+
+	_, events := td.runTask(t, map[string]any{"taskId": "a1"}, inputFile{"task.json", `{}`})
+	pid := sharedDone(t, events).Pid
+
+	// A clean cancel does not retire the worker.
+	_, events = td.runTask(t, map[string]any{"taskId": "h1", "timeoutMs": 200}, inputFile{"task.json", `{"hang":1}`})
+	if ev := terminal(t, events); ev.Code != "timeout" {
+		t.Fatalf("timeout: %+v", ev)
+	}
+	_, events = td.runTask(t, map[string]any{"taskId": "a2"}, inputFile{"task.json", `{}`})
+	if got := sharedDone(t, events).Pid; got != pid {
+		t.Fatalf("worker was replaced after a clean cancel: pid %d, want %d", got, pid)
+	}
+
+	// A task whose process died fails with its outcome. The worker stays.
+	_, events = td.runTask(t, map[string]any{"taskId": "o1"}, inputFile{"task.json", `{"oom":1}`})
+	if ev := terminal(t, events); ev.Type != "error" || ev.Code != "oom" || ev.Message != "task process was killed" {
+		t.Fatalf("failed task: %+v", ev)
+	}
+	_, events = td.runTask(t, map[string]any{"taskId": "a3"}, inputFile{"task.json", `{}`})
+	if got := sharedDone(t, events).Pid; got != pid {
+		t.Fatalf("worker was replaced after a failed task: pid %d, want %d", got, pid)
+	}
+	if got := td.workersStarted(t); got != 1 {
+		t.Fatalf("workersStarted %d, want 1", got)
 	}
 }
 

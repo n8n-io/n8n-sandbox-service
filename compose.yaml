@@ -54,6 +54,7 @@ services:
       # Warm pools of code sandboxes (JSON list). Empty: no pool.
       SANDBOX_CODE_POOLS: ${SANDBOX_CODE_POOLS:-}
       SANDBOX_CODE_POOL_REFILL_DELAY: ${SANDBOX_CODE_POOL_REFILL_DELAY:-0s}
+      SANDBOX_CODE_POOL_REFILL_CONCURRENCY: ${SANDBOX_CODE_POOL_REFILL_CONCURRENCY:-2}
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/healthz"]
       interval: 2s

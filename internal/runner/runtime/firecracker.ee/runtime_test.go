@@ -725,7 +725,7 @@ func TestProbeDaemonRejectsUnhealthyStatus(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	if err := probeDaemon(ctx, server.URL, time.Second); err == nil {
+	if err := probeDaemon(ctx, server.URL, time.Second, daemonProbeInterval); err == nil {
 		t.Fatal("expected unhealthy status to fail readiness probe")
 	}
 }
@@ -768,7 +768,7 @@ func (d *redirectingDaemon) assertRefused(t *testing.T) {
 func TestProbeDaemonRefusesRedirects(t *testing.T) {
 	d := newRedirectingDaemon(t)
 
-	err := probeDaemon(context.Background(), d.url, time.Nanosecond)
+	err := probeDaemon(context.Background(), d.url, time.Nanosecond, daemonProbeInterval)
 	if err == nil || !strings.Contains(err.Error(), "did not become healthy") {
 		t.Fatalf("probeDaemon() error = %v, want the daemon's 307 read as unhealthy", err)
 	}
