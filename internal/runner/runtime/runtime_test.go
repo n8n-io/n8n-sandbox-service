@@ -35,11 +35,15 @@ func TestBlockEgressPanicsOnUnvalidatedValue(t *testing.T) {
 func FuzzParseCreateOptions(fuzz *testing.F) {
 	fuzz.Add("")
 	fuzz.Add(`{"egress":"none"}`)
+	fuzz.Add(`{"egress":"allow-all"}`)
 	fuzz.Add(`{"egress":`)
 	fuzz.Fuzz(func(t *testing.T, input string) {
 		opts, err := ParseCreateOptions(input)
 		if err != nil {
 			return
+		}
+		if opts.Egress != EgressPublic && opts.Egress != EgressNone {
+			t.Fatalf("ParseCreateOptions(%q) accepted egress %q", input, opts.Egress)
 		}
 		encoded, err := json.Marshal(opts)
 		if err != nil {
