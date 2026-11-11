@@ -24,7 +24,7 @@ func captureLogs(t *testing.T) func() []map[string]any {
 
 	return func() []map[string]any {
 		var events []map[string]any
-		for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
+		for line := range bytes.SplitSeq(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
 			if len(line) == 0 {
 				continue
 			}

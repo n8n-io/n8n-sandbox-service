@@ -178,11 +178,11 @@ func TestSandboxControlGRPCCordon(t *testing.T) {
 		want bool
 	}{
 		{nil, false},
-		{ptr(true), true},
-		{ptr(true), true},
+		{new(true), true},
+		{new(true), true},
 		{nil, true},
-		{ptr(false), false},
-		{ptr(false), false},
+		{new(false), false},
+		{new(false), false},
 		{nil, false},
 	} {
 		var got bool
@@ -257,8 +257,6 @@ func TestSandboxControlGRPCCordonRequiresAPIKey(t *testing.T) {
 		t.Fatal("an unauthenticated call cordoned the runner")
 	}
 }
-
-func ptr[T any](v T) *T { return &v }
 
 func TestSandboxControlGRPCStopSandboxRecordsMetric(t *testing.T) {
 	rec := metrics.NewRunnerRecorder(true)
