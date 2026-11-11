@@ -228,7 +228,10 @@ func NewHandler() *Handler {
 
 		w.Header().Set("Content-Type", "application/octet-stream")
 		if r.Method == http.MethodHead {
-			return
+			// A HEAD reads no file. A directory goes on: its first read fails, as for a GET.
+			if info, err := file.Stat(); err != nil || !info.IsDir() {
+				return
+			}
 		}
 		written, err := io.Copy(w, file)
 		if err == nil {

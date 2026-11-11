@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -192,10 +193,53 @@ func TestFileContentEndpoint(t *testing.T) {
 	}
 
 	// A recorder keeps what a real server drops on HEAD, so it shows whether the file was read.
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodHead, "/files/content?path="+file, nil))
-	if rr.Code != http.StatusOK || rr.Body.Len() != 0 {
+	head := func(path string) *httptest.ResponseRecorder {
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, httptest.NewRequest(http.MethodHead, "/files/content?path="+path, nil))
+		return rr
+	}
+	if rr := head(file); rr.Code != http.StatusOK || rr.Body.Len() != 0 {
 		t.Fatalf("HEAD: expected 200 and no bytes read, got %d and %d bytes", rr.Code, rr.Body.Len())
+	}
+	if rr := head(dir); rr.Code != http.StatusInternalServerError {
+		t.Fatalf("HEAD of a directory: expected 500 as for GET, got %d", rr.Code)
+	}
+}
+
+// failingWriter refuses every write once limit bytes have passed.
+type failingWriter struct {
+	http.ResponseWriter
+	limit int
+}
+
+func (fw *failingWriter) Write(data []byte) (int, error) {
+	if len(data) > fw.limit {
+		return 0, errors.New("write failed")
+	}
+	fw.limit -= len(data)
+	return fw.ResponseWriter.Write(data)
+}
+
+func TestFileContentEndpointCutsAFailedDownload(t *testing.T) {
+	handler := NewHandler()
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		handler.ServeHTTP(&failingWriter{ResponseWriter: writer, limit: 1 << 16}, request)
+	}))
+	t.Cleanup(server.Close)
+
+	file := filepath.Join(tempBaseDir(t), "data.bin")
+	if err := os.WriteFile(file, make([]byte, 1<<20), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	resp, err := http.Get(server.URL + "/files/content?path=" + file)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	// The response has no Content-Length: the missing end of the chunked body tells the client.
+	if body, err := io.ReadAll(resp.Body); err == nil {
+		t.Fatalf("expected the read to fail, got a complete response of %d bytes", len(body))
 	}
 }
 
