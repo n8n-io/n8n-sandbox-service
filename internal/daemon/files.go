@@ -80,41 +80,6 @@ func HandleFileList(path string, recursive bool, extension string) ([]FileInfo, 
 	return infos, nil
 }
 
-// HandleFileRead reads up to maxBytes from the file at path.
-// If maxBytes is <= 0, no size limit is enforced.
-func HandleFileRead(path string, maxBytes int64) ([]byte, error) {
-	resolved := resolvePath(path)
-
-	f, err := os.Open(resolved)
-	if err != nil {
-		return nil, fmt.Errorf("file_read open %s: %w", resolved, err)
-	}
-	defer f.Close()
-
-	if maxBytes > 0 {
-		// Check size before reading.
-		fi, err := f.Stat()
-		if err != nil {
-			return nil, fmt.Errorf("file_read stat %s: %w", resolved, err)
-		}
-		if fi.Size() > maxBytes {
-			return nil, fmt.Errorf("file_read: file size %d exceeds limit %d", fi.Size(), maxBytes)
-		}
-		data := make([]byte, fi.Size())
-		_, err = io.ReadFull(f, data)
-		if err != nil {
-			return nil, fmt.Errorf("file_read read %s: %w", resolved, err)
-		}
-		return data, nil
-	}
-
-	data, err := io.ReadAll(f)
-	if err != nil {
-		return nil, fmt.Errorf("file_read read %s: %w", resolved, err)
-	}
-	return data, nil
-}
-
 // HandleFileWrite writes data to path, creating intermediate
 // directories as needed. If maxBytes is > 0, the write is rejected when
 // len(data) exceeds maxBytes. If overwrite is false and the file already exists,

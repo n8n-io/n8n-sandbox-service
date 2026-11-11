@@ -217,15 +217,29 @@ func NewHandler() *Handler {
 			return
 		}
 
-		data, err := HandleFileRead(path, 0)
+		resolved := resolvePath(path)
+		file, err := os.Open(resolved)
 		if err != nil {
+			err = fmt.Errorf("file_read open %s: %w", resolved, err)
 			writeError(w, fileOpStatusCode(err), err.Error())
 			return
 		}
+		defer file.Close()
 
 		w.Header().Set("Content-Type", "application/octet-stream")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(data)
+		if r.Method == http.MethodHead {
+			return
+		}
+		written, err := io.Copy(w, file)
+		if err == nil {
+			return
+		}
+		if written > 0 {
+			// The 200 is already sent: cut the connection so the client sees a short response.
+			panic(http.ErrAbortHandler)
+		}
+		err = fmt.Errorf("file_read read %s: %w", resolved, err)
+		writeError(w, fileOpStatusCode(err), err.Error())
 	})
 
 	mux.HandleFunc("PUT /files", func(w http.ResponseWriter, r *http.Request) {
