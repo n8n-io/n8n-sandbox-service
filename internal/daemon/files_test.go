@@ -68,35 +68,35 @@ func tarFile(name, body string) tarEntry {
 	return tarEntry{hdr: tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: 0o644}, body: body}
 }
 
-func buildTar(t *testing.T, entries ...tarEntry) []byte {
-	t.Helper()
+func buildTar(tb testing.TB, entries ...tarEntry) []byte {
+	tb.Helper()
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
 	for _, e := range entries {
 		hdr := e.hdr
 		hdr.Size = int64(len(e.body))
 		if err := tw.WriteHeader(&hdr); err != nil {
-			t.Fatalf("write tar header %q: %v", hdr.Name, err)
+			tb.Fatalf("write tar header %q: %v", hdr.Name, err)
 		}
 		if _, err := tw.Write([]byte(e.body)); err != nil {
-			t.Fatalf("write tar body %q: %v", hdr.Name, err)
+			tb.Fatalf("write tar body %q: %v", hdr.Name, err)
 		}
 	}
 	if err := tw.Close(); err != nil {
-		t.Fatalf("close tar: %v", err)
+		tb.Fatalf("close tar: %v", err)
 	}
 	return buf.Bytes()
 }
 
-func gzipped(t *testing.T, data []byte) []byte {
-	t.Helper()
+func gzipped(tb testing.TB, data []byte) []byte {
+	tb.Helper()
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
 	if _, err := zw.Write(data); err != nil {
-		t.Fatalf("gzip: %v", err)
+		tb.Fatalf("gzip: %v", err)
 	}
 	if err := zw.Close(); err != nil {
-		t.Fatalf("gzip close: %v", err)
+		tb.Fatalf("gzip close: %v", err)
 	}
 	return buf.Bytes()
 }
@@ -357,6 +357,24 @@ func TestHandleFileArchiveRefusesSparseFiles(t *testing.T) {
 	if _, statErr := os.Lstat(filepath.Join(target, "sparse.bin")); !os.IsNotExist(statErr) {
 		t.Fatalf("sparse file was written, stat err: %v", statErr)
 	}
+}
+
+func FuzzHandleFileArchive(fuzz *testing.F) {
+	fuzz.Add(buildTar(fuzz, tarFile("./x.txt", "new"), tarFile("deep/nested/y.txt", "yy")))
+	fuzz.Add(gzipped(fuzz, buildTar(fuzz, tarFile("a.txt", "a"))))
+	fuzz.Add(buildTar(fuzz, tarFile("../outside.txt", "x")))
+	fuzz.Fuzz(func(t *testing.T, body []byte) {
+		base := tempBaseDir(t)
+		_, _ = HandleFileArchive(filepath.Join(base, "target"), bytes.NewReader(body))
+
+		entries, err := os.ReadDir(base)
+		if err != nil {
+			t.Fatalf("read %s: %v", base, err)
+		}
+		if len(entries) != 1 || entries[0].Name() != "target" {
+			t.Fatalf("the archive left %v next to the target directory", entries)
+		}
+	})
 }
 
 // sparseTar builds a pax sparse file (format 1.0) of realSize bytes, all hole,

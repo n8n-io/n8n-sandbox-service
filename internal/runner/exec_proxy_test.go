@@ -176,6 +176,25 @@ func TestStreamNDJSONReturnsPrefixError(t *testing.T) {
 	}
 }
 
+func FuzzStreamNDJSON(fuzz *testing.F) {
+	fuzz.Add([]byte(startedEvent("exec-fuzz") + "\n" + stdoutEvent(1, "hello\n") + "\n" + exitEvent(2) + "\n"))
+	fuzz.Add([]byte(`{"seq":nope,"type":"stdout"}` + "\n"))
+	fuzz.Add([]byte(`{"seq":1,"type":"stdout`))
+	fuzz.Fuzz(func(t *testing.T, input []byte) {
+		_, _, _ = execEventPrefix(input)
+
+		var lastSeq *uint64
+		var dst bytes.Buffer
+		_, _ = streamNDJSON(bytes.NewReader(input), &dst, func() {}, &lastSeq)
+
+		// Whole lines from the start of the input: each line written is the line read.
+		written := dst.Bytes()
+		if !bytes.HasPrefix(input, written) || (len(written) > 0 && written[len(written)-1] != '\n') {
+			t.Fatalf("wrote %q from input %q", written, input)
+		}
+	})
+}
+
 func TestExecProxyHappyPath(t *testing.T) {
 	t.Parallel()
 	const execID = "test-exec-happy"
