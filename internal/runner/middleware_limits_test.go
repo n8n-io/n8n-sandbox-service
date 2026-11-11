@@ -97,12 +97,10 @@ func (lr *limitTestRunner) hold(t *testing.T, n int, method, path, body string) 
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	before := lr.daemon.hits.Load()
-	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range n {
+		wg.Go(func() {
 			lr.router.ServeHTTP(httptest.NewRecorder(), authedRequest(ctx, method, path, body))
-		}()
+		})
 	}
 	lr.daemon.waitForHits(t, before+int64(n))
 	stop := func() {

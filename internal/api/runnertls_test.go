@@ -237,6 +237,20 @@ func TestRunnerTransportVerifiesEachRunnerHostname(t *testing.T) {
 	}
 }
 
+func TestRunnerTransportSetsPingTimeouts(t *testing.T) {
+	rt, err := newRunnerTransport(withRunnerTLS(&config.APIConfig{}))
+	if err != nil {
+		t.Fatalf("build transport: %v", err)
+	}
+	http2 := rt.(*http.Transport).HTTP2
+	if http2 == nil {
+		t.Fatal("transport has no HTTP/2 config, want ping timeouts")
+	}
+	if http2.SendPingTimeout != 15*time.Second || http2.PingTimeout != 30*time.Second {
+		t.Fatalf("SendPingTimeout %s, PingTimeout %s, want 15s and 30s", http2.SendPingTimeout, http2.PingTimeout)
+	}
+}
+
 // newTestRunnerServer starts a stand-in runner over TLS, the way a real runner
 // now serves its HTTP listener.
 //
