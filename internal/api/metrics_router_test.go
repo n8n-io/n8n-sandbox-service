@@ -87,7 +87,7 @@ func TestMetricsRouterDoesNotRecordScrapes(t *testing.T) {
 
 	// A scrape is not API traffic, so nothing on this listener observes it.
 	var body string
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		rr := httptest.NewRecorder()
 		router.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 		body = rr.Body.String()

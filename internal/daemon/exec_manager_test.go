@@ -20,8 +20,6 @@ func parseEvents(raw [][]byte) []Response {
 	return out
 }
 
-func afterSeq(n uint64) *uint64 { return &n }
-
 func TestExecutionFirstEventIsStarted(t *testing.T) {
 	handler := NewHandler()
 	t.Cleanup(handler.Close)
@@ -214,7 +212,7 @@ func TestExecutionResumePartial(t *testing.T) {
 		t.Fatalf("expected at least 3 events, got %d", len(allRaw))
 	}
 
-	partialRaw, ok := ex.Snapshot(afterSeq(1))
+	partialRaw, ok := ex.Snapshot(new(uint64(1)))
 	if !ok {
 		t.Fatal("partial snapshot failed")
 	}

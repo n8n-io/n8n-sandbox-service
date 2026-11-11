@@ -250,9 +250,7 @@ func TestTryRunExcludesConcurrentHolder(t *testing.T) {
 	hold := make(chan struct{})
 	release := make(chan struct{})
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		ran, err := TryRun(ctx, s.DB(), func() error {
 			close(hold)
 			<-release
@@ -264,7 +262,7 @@ func TestTryRunExcludesConcurrentHolder(t *testing.T) {
 		if !ran {
 			t.Error("holder should have acquired lock")
 		}
-	}()
+	})
 
 	<-hold
 	ran, err := TryRun(ctx, s.DB(), func() error { return nil })

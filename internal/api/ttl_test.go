@@ -532,7 +532,7 @@ func TestIdleStopSweepBoundsConcurrency(t *testing.T) {
 	}}
 	// Several runners, so the per-runner probes can fill the pool.
 	var addrs []string
-	for i := 0; i < runners; i++ {
+	for range runners {
 		addrs = append(addrs, startFakeRunnerControl(t, fake))
 	}
 	s := newSweepStore(t)
@@ -541,7 +541,7 @@ func TestIdleStopSweepBoundsConcurrency(t *testing.T) {
 
 	now := time.Now()
 	stale := now.Add(-cfg.IdleStopAfter - activityLag(cfg) - time.Second).Unix()
-	for i := 0; i < candidates; i++ {
+	for i := range candidates {
 		seedRunningSandbox(t, s, staleID(i), addrs[i%runners], stale, false)
 	}
 
@@ -564,7 +564,7 @@ func TestIdleStopSweepBoundsConcurrency(t *testing.T) {
 	if got := peak.Load(); got != limit {
 		t.Fatalf("peak in-flight stops after drain = %d, want %d", got, limit)
 	}
-	for i := 0; i < candidates; i++ {
+	for i := range candidates {
 		if rec := mustGet(t, s, staleID(i)); rec == nil || rec.Status != "stopped" {
 			t.Fatalf("row %d = %+v, want stopped", i, rec)
 		}

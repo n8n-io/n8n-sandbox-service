@@ -40,8 +40,6 @@ func seqs(results [][]byte, ex *Execution) []uint64 {
 	return out
 }
 
-func uint64p(v uint64) *uint64 { return &v }
-
 func TestEventsAfter(t *testing.T) {
 	t.Parallel()
 
@@ -65,46 +63,46 @@ func TestEventsAfter(t *testing.T) {
 		{
 			name:     "after first event",
 			events:   []storedEvent{ev(0), ev(1), ev(2)},
-			after:    uint64p(0),
+			after:    new(uint64(0)),
 			wantSeqs: []uint64{1, 2},
 		},
 		{
 			name:     "after last event returns nil",
 			events:   []storedEvent{ev(0), ev(1), ev(2)},
-			after:    uint64p(2),
+			after:    new(uint64(2)),
 			wantSeqs: nil,
 		},
 		{
 			name:     "after beyond last event returns nil",
 			events:   []storedEvent{ev(0), ev(1), ev(2)},
-			after:    uint64p(5),
+			after:    new(uint64(5)),
 			wantSeqs: nil,
 		},
 		{
 			name:     "MaxUint64 returns nil",
 			events:   []storedEvent{ev(0), ev(1), ev(2)},
-			after:    uint64p(math.MaxUint64),
+			after:    new(uint64(math.MaxUint64)),
 			wantSeqs: nil,
 		},
 		{
 			name:     "trimmed events with offset minSeq",
 			minSeq:   3,
 			events:   []storedEvent{ev(3), ev(4), ev(5)},
-			after:    uint64p(3),
+			after:    new(uint64(3)),
 			wantSeqs: []uint64{4, 5},
 		},
 		{
 			name:     "after before minSeq returns all retained",
 			minSeq:   3,
 			events:   []storedEvent{ev(3), ev(4), ev(5)},
-			after:    uint64p(1),
+			after:    new(uint64(1)),
 			wantSeqs: []uint64{3, 4, 5},
 		},
 		{
 			name:     "MaxUint64 with trimmed events returns nil",
 			minSeq:   5,
 			events:   []storedEvent{ev(5), ev(6), ev(7)},
-			after:    uint64p(math.MaxUint64),
+			after:    new(uint64(math.MaxUint64)),
 			wantSeqs: nil,
 		},
 	}
@@ -172,34 +170,34 @@ func TestHasHistoryAfter(t *testing.T) {
 			name:   "after within retained range",
 			minSeq: 2,
 			events: []storedEvent{ev(2), ev(3)},
-			after:  uint64p(2),
+			after:  new(uint64(2)),
 			want:   true,
 		},
 		{
 			name:   "after just before minSeq",
 			minSeq: 2,
 			events: []storedEvent{ev(2), ev(3)},
-			after:  uint64p(1),
+			after:  new(uint64(1)),
 			want:   true,
 		},
 		{
 			name:   "after too far before minSeq",
 			minSeq: 5,
 			events: []storedEvent{ev(5), ev(6)},
-			after:  uint64p(3),
+			after:  new(uint64(3)),
 			want:   false,
 		},
 		{
 			name:   "MaxUint64 always has history",
 			minSeq: 5,
 			events: []storedEvent{ev(5), ev(6)},
-			after:  uint64p(math.MaxUint64),
+			after:  new(uint64(math.MaxUint64)),
 			want:   true,
 		},
 		{
 			name:   "MaxUint64 with minSeq 0",
 			events: []storedEvent{ev(0), ev(1)},
-			after:  uint64p(math.MaxUint64),
+			after:  new(uint64(math.MaxUint64)),
 			want:   true,
 		},
 	}
