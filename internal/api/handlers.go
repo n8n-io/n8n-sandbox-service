@@ -54,6 +54,13 @@ func newRunnerTransport(cfg *config.APIConfig) (http.RoundTripper, error) {
 	}
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.TLSClientConfig = tlsConf
+	// A connection silent for runnerPingAfter is pinged and closed when no
+	// answer comes within runnerPingTimeout.
+	const (
+		runnerPingAfter   = 15 * time.Second
+		runnerPingTimeout = 30 * time.Second
+	)
+	tr.HTTP2 = &http.HTTP2Config{SendPingTimeout: runnerPingAfter, PingTimeout: runnerPingTimeout}
 	return tr, nil
 }
 
