@@ -314,7 +314,8 @@ export async function execWithTransientRetry(
  * daemon drops to uid 1000 at startup and runs execs as that same user.
  *
  * On Firecracker the VMM process exits, which is what the runner detects. On
- * Docker the container exits and its restart policy brings it back.
+ * Docker PID 1 is Docker's init, which passes the signal on to the daemon; the
+ * container exits with it and its restart policy brings it back.
  *
  * Sent as a bare request rather than through `exec`, because the SDK reacts to
  * the dropped stream the way any client would: it resumes the execution over

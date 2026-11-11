@@ -18,6 +18,7 @@ import {
   expectParallelCreatesStopAtQuota,
 } from './helpers';
 import { SandboxServiceError } from '@n8n/sandbox-client';
+import { DOCKER_ONLY } from './tags';
 
 test.describe('Auth', () => {
   test('rejects missing API key', async ({ request }) => {
@@ -184,6 +185,24 @@ test.describe('Exec', () => {
     const after = await exec(sandboxId, 'echo still-here');
     expect(after).toHaveSucceeded();
     expect(after.stdout).toBe('still-here\n');
+  });
+
+  // Docker's init (--init) reaps orphans. In a Firecracker guest the daemon is
+  // PID 1 and does not, and there is no /proc to check.
+  test('orphaned background process leaves no zombie', DOCKER_ONLY, async () => {
+    const started = await exec(sandboxId, '(sleep 1 &); echo started');
+    expect(started.stdout).toBe('started\n');
+
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+
+    // The third field of /proc/<pid>/stat is the process state; Z is a zombie.
+    const states = await exec(
+      sandboxId,
+      `cat /proc/[0-9]*/stat 2>/dev/null | cut -d' ' -f3 | tr -d '\\n'`,
+    );
+    expect(states).toHaveSucceeded();
+    expect(states.stdout.trim()).not.toBe('');
+    expect(states.stdout).not.toContain('Z');
   });
 
   test('environment variables as map', async () => {
