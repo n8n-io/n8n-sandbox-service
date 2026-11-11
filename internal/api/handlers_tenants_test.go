@@ -98,6 +98,22 @@ func TestCreateTenantRejectsTrailingJSON(t *testing.T) {
 	}
 }
 
+func TestCreateTenantRejectsUnknownField(t *testing.T) {
+	router, tenantStore := newTestGateway(t, "admin-key")
+
+	rr := doJSON(t, router, http.MethodPost, "/admin/tenants", "admin-key", `{"name":"acme","max_sandbox":1}`)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected %d, got %d body=%s", http.StatusBadRequest, rr.Code, rr.Body.String())
+	}
+	tenants, err := tenantStore.ListTenants()
+	if err != nil {
+		t.Fatalf("list tenants: %v", err)
+	}
+	if len(tenants) != 0 {
+		t.Fatalf("expected no tenant provisioned, got %d", len(tenants))
+	}
+}
+
 func TestTenantCannotAccessOtherTenantSandbox(t *testing.T) {
 	router, s := newTestGateway(t, "admin-key")
 
