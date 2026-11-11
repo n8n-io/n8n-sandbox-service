@@ -25,6 +25,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/obs"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/keepalive"
 )
 
 func main() {
@@ -152,7 +153,13 @@ func main() {
 		os.Exit(1)
 	}
 	slog.Info("runner registry grpc mTLS enabled")
-	grpcSrv := grpc.NewServer(grpc.Creds(creds))
+	// Runners ping a silent stream every 20 s. The default policy closes a
+	// connection that pings more often than every 5 minutes.
+	const runnerKeepaliveMinTime = 10 * time.Second
+	grpcSrv := grpc.NewServer(
+		grpc.Creds(creds),
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{MinTime: runnerKeepaliveMinTime}),
+	)
 	pb.RegisterRunnerRegistryServer(grpcSrv, &grpcapi.RunnerRegistryServer{
 		Token: cfg.RegistrationToken,
 		Reg:   runnerReg,

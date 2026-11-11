@@ -56,6 +56,13 @@ func newRunnerTransport(cfg *config.APIConfig) (http.RoundTripper, error) {
 	// http.DefaultTransport takes a proxy from the environment.
 	tr.Proxy = nil
 	tr.TLSClientConfig = tlsConf
+	// A connection silent for runnerPingAfter is pinged and closed when no
+	// answer comes within runnerPingTimeout.
+	const (
+		runnerPingAfter   = 15 * time.Second
+		runnerPingTimeout = 30 * time.Second
+	)
+	tr.HTTP2 = &http.HTTP2Config{SendPingTimeout: runnerPingAfter, PingTimeout: runnerPingTimeout}
 	return tr, nil
 }
 
@@ -641,8 +648,7 @@ func newRunnerReverseProxy(runnerURL *url.URL, runnerAPIKey string, transport ht
 				writeError(w, http.StatusBadGateway, err.Error())
 				return
 			}
-			var maxBytesErr *http.MaxBytesError
-			if errors.As(err, &maxBytesErr) {
+			if maxBytesErr, ok := errors.AsType[*http.MaxBytesError](err); ok {
 				writeError(w, http.StatusBadRequest, "failed to read request body: "+maxBytesErr.Error())
 				return
 			}
