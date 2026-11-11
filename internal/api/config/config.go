@@ -598,7 +598,7 @@ func parseLimit(name string, dst *int) error {
 // parseKeySet splits a comma-separated list of API keys, dropping blanks.
 func parseKeySet(raw string) map[string]struct{} {
 	keys := make(map[string]struct{})
-	for _, k := range strings.Split(raw, ",") {
+	for k := range strings.SplitSeq(raw, ",") {
 		if k = strings.TrimSpace(k); k != "" {
 			keys[k] = struct{}{}
 		}

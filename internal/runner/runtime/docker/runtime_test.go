@@ -285,7 +285,6 @@ func TestDockerDiskQuotaArgs(t *testing.T) {
 		{name: "nil", limits: nil, want: nil},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			got := dockerDiskQuotaArgs(tc.limits)
 			if len(got) != len(tc.want) {
@@ -313,7 +312,6 @@ func TestDefaultLimitsAppliesDiskQuotaOnlyWhenActive(t *testing.T) {
 		{name: "inactive", active: false, want: 0},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			m := &Runtime{
 				runnerConfig: &config.Config{},
@@ -369,7 +367,6 @@ func TestContainerStatePredicates(t *testing.T) {
 		},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			if got := isContainerReady(tc.state); got != tc.wantReady {
 				t.Fatalf("isContainerReady() = %v, want %v", got, tc.wantReady)
@@ -410,7 +407,6 @@ func TestEnsureSandboxRunningCleansUpStartedContainerOnWakeFailures(t *testing.T
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			events := []string{}
 			const containerID = "container-1"
@@ -669,7 +665,6 @@ func TestIsDockerNotFound(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			if got := isDockerNotFound(tc.err); got != tc.want {
 				t.Fatalf("isDockerNotFound() = %v, want %v", got, tc.want)
