@@ -189,20 +189,29 @@ test.describe('Exec', () => {
 
   // Docker's init (--init) reaps orphans. In a Firecracker guest the daemon is
   // PID 1 and does not, and there is no /proc to check.
-  test('orphaned background process leaves no zombie', DOCKER_ONLY, async () => {
+  test('orphaned processes leave no zombie', DOCKER_ONLY, async () => {
+    // The third field of /proc/<pid>/stat is the process state; Z is a zombie.
+    const expectNoZombie = async () => {
+      const states = await exec(
+        sandboxId,
+        `cat /proc/[0-9]*/stat 2>/dev/null | cut -d' ' -f3 | tr -d '\\n'`,
+      );
+      expect(states).toHaveSucceeded();
+      expect(states.stdout.trim()).not.toBe('');
+      expect(states.stdout).not.toContain('Z');
+    };
+
+    // A background child that outlives its command.
     const started = await exec(sandboxId, '(sleep 1 &); echo started');
     expect(started.stdout).toBe('started\n');
-
     await new Promise((resolve) => setTimeout(resolve, 2_000));
+    await expectNoZombie();
 
-    // The third field of /proc/<pid>/stat is the process state; Z is a zombie.
-    const states = await exec(
-      sandboxId,
-      `cat /proc/[0-9]*/stat 2>/dev/null | cut -d' ' -f3 | tr -d '\\n'`,
-    );
-    expect(states).toHaveSucceeded();
-    expect(states.stdout.trim()).not.toBe('');
-    expect(states.stdout).not.toContain('Z');
+    // The children of a command that is killed at its timeout.
+    const timedOut = await exec(sandboxId, 'sleep 60 & sleep 60 & wait', { timeoutMs: 1_000 });
+    expect(timedOut.timedOut).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    await expectNoZombie();
   });
 
   test('environment variables as map', async () => {
