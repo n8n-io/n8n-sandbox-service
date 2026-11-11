@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 
 	"github.com/n8n-io/sandbox-service/internal/api/grpc/pb"
@@ -78,7 +79,17 @@ func connectOnce(ctx context.Context, cfg *config.Config, rt runnerruntime.Runti
 	if err != nil {
 		return err
 	}
-	dialOpts := []grpc.DialOption{grpc.WithTransportCredentials(creds)}
+	// A stream silent for keepaliveTime is pinged and dropped when no answer
+	// comes within keepaliveTimeout. The API's enforcement policy has to allow
+	// pings this often.
+	const (
+		keepaliveTime    = 20 * time.Second
+		keepaliveTimeout = 10 * time.Second
+	)
+	dialOpts := []grpc.DialOption{
+		grpc.WithTransportCredentials(creds),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{Time: keepaliveTime, Timeout: keepaliveTimeout}),
+	}
 
 	conn, err := grpc.NewClient(cfg.APIGRPCAddr, dialOpts...)
 	if err != nil {
