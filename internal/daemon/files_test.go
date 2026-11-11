@@ -5,11 +5,13 @@ import (
 	"bytes"
 	"compress/gzip"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -424,6 +426,62 @@ func sparseTar(t *testing.T, name string, realSize int64) []byte {
 	}
 	copy(header[148:156], fmt.Sprintf("%06o\x00 ", sum))
 	return data
+}
+
+func TestFileOpStatusCode(t *testing.T) {
+	base := tempBaseDir(t)
+	dir := filepath.Join(base, "dir")
+	file := filepath.Join(dir, "file.txt")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if err := os.Symlink(base, filepath.Join(dir, "link")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	_, invalidArchive := HandleFileArchive(base, strings.NewReader("not a tar"))
+	_, pathEscapes := HandleFileArchive(dir, bytes.NewReader(buildTar(t, tarFile("link/a.txt", "x"))))
+	_, notFound := HandleFileStat(filepath.Join(base, "missing"))
+	_, invalidArgument := HandleFileStat("a\x00b")
+	_, notFoundUnderAlreadyExists := HandleFileStat(filepath.Join(base, "already exists", "missing"))
+	// Built by hand: a real permission error needs a user other than root.
+	denied := filepath.Join(base, "not found")
+	permission := fmt.Errorf("file_list readdir %s: %w", denied,
+		&fs.PathError{Op: "open", Path: denied, Err: syscall.EACCES})
+
+	tests := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"invalid archive", invalidArchive, http.StatusBadRequest},
+		{"path escapes from parent", pathEscapes, http.StatusBadRequest},
+		{"write: file already exists", HandleFileWrite(file, nil, 0, false), http.StatusConflict},
+		{"copy: destination already exists", HandleFileCopy(file, file, false, false), http.StatusConflict},
+		{"move: destination already exists", HandleFileMove(file, file, false), http.StatusConflict},
+		{"not found", notFound, http.StatusNotFound},
+		{"copy: source is a directory", HandleFileCopy(dir, filepath.Join(base, "copy"), false, false), http.StatusBadRequest},
+		{"copy: destination inside source", HandleFileCopy(dir, filepath.Join(dir, "child"), true, false), http.StatusBadRequest},
+		{"move: destination inside source", HandleFileMove(dir, filepath.Join(dir, "child"), false), http.StatusBadRequest},
+		{"invalid argument", invalidArgument, http.StatusBadRequest},
+		{"directory not empty", HandleFileDelete(dir, false, false), http.StatusBadRequest},
+		{"mkdir of an existing directory", HandleFileMkdir(dir, false), http.StatusInternalServerError},
+		{"permission error under a path containing not found", permission, http.StatusInternalServerError},
+		{"not found under a path containing already exists", notFoundUnderAlreadyExists, http.StatusNotFound},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.err == nil {
+				t.Fatal("expected an error")
+			}
+			if code := fileOpStatusCode(tc.err); code != tc.want {
+				t.Fatalf("expected %d, got %d: %v", tc.want, code, tc.err)
+			}
+		})
+	}
 }
 
 func tempBaseDir(t *testing.T) string {

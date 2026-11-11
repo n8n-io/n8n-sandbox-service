@@ -38,7 +38,7 @@ func TestUplinkSubnetCoversEverySlot(t *testing.T) {
 		}
 	}
 	seen := make(map[netip.Prefix]int, MaxSlots)
-	for slot := 0; slot < MaxSlots; slot++ {
+	for slot := range MaxSlots {
 		host, netns, prefix := uplinkSubnet(slot)
 		link, err := netip.ParsePrefix(host + "/" + prefix)
 		if err != nil {
@@ -87,7 +87,7 @@ func TestSetupScriptClearsSlotBeforeCreatingIt(t *testing.T) {
 // Without -w the loser fails immediately instead of waiting; without a bound on
 // it, a lock held by something stuck would stall the build for its whole budget.
 func TestSetupScriptWaitsForTheXtablesLock(t *testing.T) {
-	for _, line := range strings.Split(SetupScript(0, "fc-tap-0", "172.16.0.1/24"), "\n") {
+	for line := range strings.SplitSeq(SetupScript(0, "fc-tap-0", "172.16.0.1/24"), "\n") {
 		if strings.Contains(line, "iptables") && !strings.Contains(line, "iptables -w 5 ") {
 			t.Errorf("iptables call does not wait (bounded) for the xtables lock: %s", line)
 		}

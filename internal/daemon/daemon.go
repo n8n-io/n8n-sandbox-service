@@ -4,17 +4,16 @@
 package daemon
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 )
@@ -89,9 +88,7 @@ func Run(listenAddr string) error {
 	go func() {
 		sig := <-sigCh
 		slog.Info("received signal, shutting down", "signal", sig)
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := srv.Shutdown(ctx); err != nil {
+		if err := srv.Close(); err != nil {
 			slog.Warn("daemon shutdown", "err", err)
 		}
 	}()
@@ -405,18 +402,22 @@ func fileOpStatusCode(err error) int {
 	if errors.Is(err, errInvalidArchive) {
 		return http.StatusBadRequest
 	}
-	msg := strings.ToLower(err.Error())
-	switch {
-	case strings.Contains(msg, "path escapes from parent"):
+	// The os package does not export the error an os.Root returns for a path
+	// that leaves it, and can nest it in more than one PathError.
+	var pathErr *fs.PathError
+	for inner := err; errors.As(inner, &pathErr); {
+		inner = pathErr.Err
+	}
+	if pathErr != nil && pathErr.Err.Error() == "path escapes from parent" {
 		return http.StatusBadRequest
-	case strings.Contains(msg, "already exists"):
-		return http.StatusConflict
-	case strings.Contains(msg, "not found"), strings.Contains(msg, "no such file or directory"):
+	}
+	var opErr *fileOpError
+	switch {
+	case errors.As(err, &opErr):
+		return opErr.status
+	case errors.Is(err, fs.ErrNotExist):
 		return http.StatusNotFound
-	case strings.Contains(msg, "source is a directory"),
-		strings.Contains(msg, "destination must not be inside source directory"),
-		strings.Contains(msg, "invalid argument"),
-		strings.Contains(msg, "directory not empty"):
+	case errors.Is(err, syscall.EINVAL), errors.Is(err, syscall.ENOTEMPTY):
 		return http.StatusBadRequest
 	default:
 		return http.StatusInternalServerError

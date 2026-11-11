@@ -18,7 +18,8 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 )
 
-func seq(n uint64) *uint64 { return &n }
+//go:fix inline
+func seq(n uint64) *uint64 { return new(n) }
 
 func startedEvent(execID string) string {
 	return fmt.Sprintf(`{"seq":0,"type":"started","exec_id":%s}`, strconv.Quote(execID))
@@ -98,7 +99,6 @@ func TestExecEventPrefixErrors(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
