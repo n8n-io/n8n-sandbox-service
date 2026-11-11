@@ -379,3 +379,45 @@ func TestProxyHandlersForwardOnlyContentTypeToDaemon(t *testing.T) {
 		})
 	}
 }
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (roundTrip roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return roundTrip(req)
+}
+
+// http.DefaultTransport takes a proxy from the environment, so a handler that
+// fell back to it could send daemon traffic there. Go never proxies loopback,
+// where the test daemons listen, so the default transport is swapped for one
+// that counts its requests.
+func TestProxyHandlersDoNotUseTheDefaultTransport(t *testing.T) {
+	for name, newHandler := range wakingHandlers {
+		t.Run(name, func(t *testing.T) {
+			var defaultTransportRequests atomic.Int32
+			original := http.DefaultTransport
+			http.DefaultTransport = roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				defaultTransportRequests.Add(1)
+				return original.RoundTrip(req)
+			})
+			t.Cleanup(func() { http.DefaultTransport = original })
+
+			var daemonHits atomic.Int32
+			daemon := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+				daemonHits.Add(1)
+				response.Header().Set("Content-Type", "application/x-ndjson")
+				_, _ = response.Write([]byte(exitEvent(1) + "\n"))
+			}))
+			defer daemon.Close()
+
+			rec := httptest.NewRecorder()
+			newHandler(&fakeRuntime{daemonURL: daemon.URL}, proxyTestConfig(), metrics.NewRunnerRecorder(false)).ServeHTTP(rec, proxyTestRequest())
+
+			if got := daemonHits.Load(); got != 1 {
+				t.Fatalf("daemon hits = %d, want 1", got)
+			}
+			if got := defaultTransportRequests.Load(); got != 0 {
+				t.Errorf("requests on http.DefaultTransport = %d, want 0", got)
+			}
+		})
+	}
+}
