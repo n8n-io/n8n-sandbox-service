@@ -96,6 +96,11 @@ func (r *Runtime) admitOnce(ctx context.Context) error {
 	if err := r.ensureGoldenSnapshot(ctx); err != nil {
 		return err
 	}
+	// Again after the snapshot build, which runs as root with the kernel in hand: a
+	// create script from an older bundle chowns it to the uid Firecracker runs as.
+	if err := r.deps.checkTemplateKernel(templateKernelPath(r.config)); err != nil {
+		return err
+	}
 	if err := r.pinSnapshotAssets(); err != nil {
 		return err
 	}
@@ -121,6 +126,9 @@ func (r *Runtime) pinBaseAssets() error {
 		if !r.deps.pathExists(path) {
 			return fmt.Errorf("firecracker %s path does not exist: %s", label, path)
 		}
+	}
+	if err := r.deps.checkTemplateKernel(templateKernelPath(r.config)); err != nil {
+		return err
 	}
 	return r.verifyManifestPin()
 }

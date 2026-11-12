@@ -64,6 +64,11 @@ restore a snapshot taken by another release. When upgrading a host in place to a
 bundle with a different `firecracker_version`, remove the old set from
 `/srv/firecracker/snapshots` first.
 
+The runner refuses a template whose `vmlinux` is not owned by root or that
+another user can write. A template built by a bundle that left it owned by uid
+1000 has to be rebuilt, together with the snapshot set that was booted from it.
+Changing the owner is not enough: the kernel may already have been changed.
+
 ## 2. Runner
 
 ### Option A: Docker Hub image (recommended)

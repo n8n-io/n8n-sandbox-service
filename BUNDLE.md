@@ -116,6 +116,10 @@ service bundle's `bin/sandbox-daemon` as `/sandbox-daemon` (PID 1). After the
 staged tree is normalized to `root:root`, `/home/user` is restored to `1000:1000`
 so the daemon (which drops privileges) can write the workspace.
 
+`vmlinux` is installed `root:root` with mode `0444` and must stay that way: the
+runner binds it read-only into every jail and fails admission when a user other
+than root can write it. `rootfs.ext4` is owned by `1000:1000`, the jailer uid.
+
 ### `configure-host-nat.sh`
 
 Idempotent shell equivalent of `EnsureHostNAT` in

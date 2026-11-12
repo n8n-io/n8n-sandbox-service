@@ -25,6 +25,60 @@ func TestPinBaseAssetsRequiresVmlinux(t *testing.T) {
 	}
 }
 
+// Admission is where a kernel Firecracker's uid could write is caught, whichever
+// script left it that way.
+func TestPinBaseAssetsFailsOnAKernelOthersCanWrite(t *testing.T) {
+	rt := testRuntime(1)
+	rt.deps.pathExists = func(string) bool { return true }
+	var checked string
+	rt.deps.checkTemplateKernel = func(path string) error {
+		checked = path
+		return checkKernelAccess(path, 1000, 0o644)
+	}
+
+	err := rt.pinBaseAssets()
+	if err == nil || !strings.Contains(err.Error(), "owned by uid 1000") {
+		t.Fatalf("pinBaseAssets() error = %v, want the kernel's owner refused", err)
+	}
+	if want := filepath.Join(rt.config.TemplateDir, "vmlinux"); checked != want {
+		t.Errorf("checked kernel path = %q, want %q", checked, want)
+	}
+}
+
+// The snapshot build runs between the kernel check and the canary, as root and
+// with the kernel in hand. A create script from an older bundle chowns it to the
+// uid Firecracker runs as, so a check before the build alone would admit that.
+func TestAdmitOnceChecksTheKernelAgainAfterTheSnapshotBuild(t *testing.T) {
+	rt := testRuntimeT(t, 1)
+	stubCreateDeps(rt)
+	useTestGoldenSnapshotDir(t, rt)
+
+	checks := 0
+	rt.deps.checkTemplateKernel = func(path string) error {
+		checks++
+		if checks == 1 {
+			return nil
+		}
+		return checkKernelAccess(path, 1000, 0o644)
+	}
+	started := 0
+	rt.deps.start = func(context.Context, func(error), string, ...string) (process, error) {
+		started++
+		return &fakeProcess{}, nil
+	}
+
+	err := rt.admitOnce(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "owned by uid 1000") {
+		t.Fatalf("admitOnce() error = %v, want the kernel refused after the snapshot build", err)
+	}
+	if checks != 2 {
+		t.Errorf("kernel checks = %d, want one before and one after the snapshot build", checks)
+	}
+	if started != 0 {
+		t.Errorf("microVMs started = %d, want none: the canary must not run on a refused kernel", started)
+	}
+}
+
 func TestVerifyManifestPinGitSHA(t *testing.T) {
 	dir := t.TempDir()
 	manifestPath := filepath.Join(dir, "MANIFEST.json")

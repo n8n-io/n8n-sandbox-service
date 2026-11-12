@@ -129,6 +129,7 @@ func newTestRuntime(capacity int32) *Runtime {
 	// Environment for the same reason: every sandbox is also reserved against the
 	// template kernel it would cold boot from, and no test has one on disk.
 	rt.deps.statTemplateKernel = func(string) (kernelPin, error) { return testKernelPin, nil }
+	rt.deps.checkTemplateKernel = func(string) error { return nil }
 	// And a data volume with room to spare, rather than whatever disk the tests
 	// happen to run on.
 	rt.deps.volumeSpace = func(string) (volumeSpace, error) { return testVolumeSpace, nil }
@@ -561,7 +562,7 @@ func TestRuntimeCreateSandboxReleasesSlotWhenCleanupFails(t *testing.T) {
 // and never read it: which path an activation takes is not known when the jail is
 // built, and a sandbox created from its snapshot can be cold booted later on the
 // same jail. It comes from the template, at the jail path the sandbox's own sidecar
-// records, and is left with the template's ownership because a bind mount shares
+// records, read-only and with the template's ownership, because a bind mount shares
 // the inode with an asset every sandbox on the host uses.
 //
 // The teardown has to unmount it too. rm cannot delete a live mountpoint, so a
@@ -589,9 +590,9 @@ func TestPrepareJailBindsTheKernelForALaterColdBoot(t *testing.T) {
 	}
 
 	jailRoot := filepath.Join(rt.config.JailerBaseDir, "firecracker", "sandbox-"+shortID(sandboxID), "root")
-	wantMount := "mount --bind '" + filepath.Join(rt.config.TemplateDir, "vmlinux") + "' '" + filepath.Join(jailRoot, "vmlinux") + "'"
+	wantMount := "mount --bind -o ro '" + filepath.Join(rt.config.TemplateDir, "vmlinux") + "' '" + filepath.Join(jailRoot, "vmlinux") + "'"
 	if !strings.Contains(prepareScript, wantMount) {
-		t.Errorf("prepare jail script does not bind the kernel:\nwant %s\ngot\n%s", wantMount, prepareScript)
+		t.Errorf("prepare jail script does not bind the kernel read-only:\nwant %s\ngot\n%s", wantMount, prepareScript)
 	}
 	if strings.Contains(prepareScript, "chown 1000:1000 "+filepath.Join(jailRoot, "vmlinux")) {
 		t.Error("prepare jail chowns the shared template kernel through its bind mount")

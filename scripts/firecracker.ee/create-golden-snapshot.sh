@@ -144,6 +144,24 @@ ip netns exec "$NETNS" ip tuntap add name "$HOST_TAP_DEVICE_NAME" mode tap
 ip netns exec "$NETNS" ip addr add "$HOST_TAP_IP_CIDR" dev "$HOST_TAP_DEVICE_NAME"
 ip netns exec "$NETNS" ip link set "$HOST_TAP_DEVICE_NAME" up
 
+echo "==> Preparing Firecracker jail..."
+# Mounted before jailer starts, as the runner does: jailer copies the mounts it
+# finds into its own mount namespace, and one made afterwards arrives there
+# without its read-only flag.
+JAIL_ROOT="${JAILER_BASE_DIR}/firecracker/${VM_ID}/root"
+mkdir -p "$OUT_DIR" "$JAIL_ROOT"
+rm -f "$SNAPSHOT_MEM" "$SNAPSHOT_STATE" "$BOOT_PARAMS" "$BOOT_PARAMS_TMP"
+touch "$SNAPSHOT_MEM" "$SNAPSHOT_STATE"
+# Jailer runs Firecracker as uid/gid 1000; virtio block needs RW on rootfs. The
+# kernel is only read, and the runner binds the same file into every jail, so it
+# keeps its owner and is bound read-only.
+chown 1000:1000 "$ROOTFS" "$SNAPSHOT_MEM" "$SNAPSHOT_STATE"
+touch "${JAIL_ROOT}/vmlinux" "${JAIL_ROOT}/rootfs.ext4" "${JAIL_ROOT}/snapshot_mem" "${JAIL_ROOT}/snapshot_state"
+mount --bind -o ro "$KERNEL" "${JAIL_ROOT}/vmlinux"
+mount --bind "$ROOTFS" "${JAIL_ROOT}/rootfs.ext4"
+mount --bind "$SNAPSHOT_MEM" "${JAIL_ROOT}/snapshot_mem"
+mount --bind "$SNAPSHOT_STATE" "${JAIL_ROOT}/snapshot_state"
+
 echo "==> Starting Firecracker for snapshot creation..."
 "$JAILER_BIN" \
 	--id "$VM_ID" \
@@ -156,7 +174,6 @@ echo "==> Starting Firecracker for snapshot creation..."
 	--api-sock /firecracker.socket &
 FC_PID=$!
 
-JAIL_ROOT="${JAILER_BASE_DIR}/firecracker/${VM_ID}/root"
 for _ in $(seq 1 200); do
 	if [[ -S "${JAIL_ROOT}/firecracker.socket" ]]; then
 		break
@@ -167,17 +184,6 @@ if [[ ! -S "${JAIL_ROOT}/firecracker.socket" ]]; then
 	echo "ERROR: timed out waiting for Firecracker API socket" >&2
 	exit 1
 fi
-
-mkdir -p "$OUT_DIR"
-rm -f "$SNAPSHOT_MEM" "$SNAPSHOT_STATE" "$BOOT_PARAMS" "$BOOT_PARAMS_TMP"
-touch "$SNAPSHOT_MEM" "$SNAPSHOT_STATE"
-# Jailer runs Firecracker as uid/gid 1000; virtio block needs RW on rootfs.
-chown 1000:1000 "$KERNEL" "$ROOTFS" "$SNAPSHOT_MEM" "$SNAPSHOT_STATE"
-touch "${JAIL_ROOT}/vmlinux" "${JAIL_ROOT}/rootfs.ext4" "${JAIL_ROOT}/snapshot_mem" "${JAIL_ROOT}/snapshot_state"
-mount --bind "$KERNEL" "${JAIL_ROOT}/vmlinux"
-mount --bind "$ROOTFS" "${JAIL_ROOT}/rootfs.ext4"
-mount --bind "$SNAPSHOT_MEM" "${JAIL_ROOT}/snapshot_mem"
-mount --bind "$SNAPSHOT_STATE" "${JAIL_ROOT}/snapshot_state"
 
 # pci=off is deliberate (virtio on MMIO); see docs/security-model.md before enabling PCI.
 # sysctl.user.max_user_namespaces=0 refuses user namespaces, as Docker's default
