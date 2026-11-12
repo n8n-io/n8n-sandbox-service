@@ -493,22 +493,18 @@ func TestConcurrentRequestsAfterACrashShareOneRecoveryAndAllLearnOfIt(t *testing
 	// One caller drives the recovery and parks inside the cold boot. Starting it alone
 	// and waiting for it is what makes the rest joiners rather than a race for the
 	// role: the flight is open before any of them calls.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		results[0], errs[0] = rt.EnsureSandboxRunning(context.Background(), sandboxID)
-	}()
+	})
 	waitForColdBoot(t, &coldBoots)
 
 	var joining sync.WaitGroup
 	joining.Add(callers - 1)
 	for i := 1; i < callers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			joining.Done()
 			results[i], errs[i] = rt.EnsureSandboxRunning(context.Background(), sandboxID)
-		}()
+		})
 	}
 	joining.Wait()
 
@@ -603,7 +599,7 @@ func TestRepeatedCrashesEachRecoverAndEachReportThemselves(t *testing.T) {
 	if _, err := rt.CreateSandbox(context.Background(), sandboxID, nil); err != nil {
 		t.Fatalf("CreateSandbox() failed: %v", err)
 	}
-	for generation := 0; generation < 3; generation++ {
+	for generation := range 3 {
 		exits.fire(t, generation)
 		recoversByColdBoot(t, rt, sandboxID)
 		if got := capacityOf(t, rt); got.Used != 1 {

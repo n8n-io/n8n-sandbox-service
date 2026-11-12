@@ -103,12 +103,9 @@ func TestPostgresStoreCRUD(t *testing.T) {
 	if err := s.UpdateStatus(rec.ID, "stopped"); err != nil {
 		t.Fatalf("update status: %v", err)
 	}
-	if err := s.UpdateLastActive(rec.ID); err != nil {
-		t.Fatalf("update last active: %v", err)
-	}
 	got, err = s.Get(rec.ID)
-	if err != nil || got == nil || got.Status != "stopped" || got.LastActiveAt <= rec.LastActiveAt {
-		t.Fatalf("after stop: %+v err=%v, want stopped with a newer last_active_at", got, err)
+	if err != nil || got == nil || got.Status != "stopped" {
+		t.Fatalf("after stop: %+v err=%v, want stopped", got, err)
 	}
 
 	// Stopped: no longer a stop candidate, now a delete candidate.
@@ -138,6 +135,54 @@ func sandboxIDs(rows []*SandboxRecord) []string {
 
 func containsSandbox(rows []*SandboxRecord, id string) bool {
 	return slices.Contains(sandboxIDs(rows), id)
+}
+
+func TestPostgresRecordActivity(t *testing.T) {
+	testRecordActivity(t, openTestPostgresStore(t), "pg-activity-"+uuid.New().String())
+}
+
+// Every API pod writes its own batch, so batches that share sandboxes run at
+// the same time and must neither deadlock nor move a row back.
+func TestPostgresRecordActivityConcurrentBatches(t *testing.T) {
+	s := openTestPostgresStore(t)
+	prefix := "pg-batch-" + uuid.New().String()
+	ids := make([]string, 50)
+	for i := range ids {
+		ids[i] = prefix + "-" + strconv.Itoa(i)
+		if err := s.Create(&SandboxRecord{ID: ids[i], Status: "running", CreatedAt: 1, LastActiveAt: 1}); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		t.Cleanup(func() { _ = s.Delete(ids[i]) })
+	}
+
+	const pods, rounds = 4, 25
+	errs := make(chan error, pods)
+	var wg sync.WaitGroup
+	for pod := range pods {
+		wg.Go(func() {
+			for round := range rounds {
+				batch := make(map[string]int64, len(ids))
+				for _, id := range ids {
+					batch[id] = int64(1000 + round*pods + pod)
+				}
+				if err := s.RecordActivity(context.Background(), batch); err != nil {
+					errs <- err
+					return
+				}
+			}
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("record activity: %v", err)
+	}
+	const newest = 1000 + (rounds-1)*pods + pods - 1
+	for _, id := range ids {
+		if got, err := s.Get(id); err != nil || got == nil || got.LastActiveAt != newest {
+			t.Fatalf("%s: %+v err=%v, want last_active_at %d", id, got, err, newest)
+		}
+	}
 }
 
 func TestPostgresUpdateTenantLimits(t *testing.T) {
@@ -205,9 +250,7 @@ func TestTryRunExcludesConcurrentHolder(t *testing.T) {
 	hold := make(chan struct{})
 	release := make(chan struct{})
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		ran, err := TryRun(ctx, s.DB(), func() error {
 			close(hold)
 			<-release
@@ -219,7 +262,7 @@ func TestTryRunExcludesConcurrentHolder(t *testing.T) {
 		if !ran {
 			t.Error("holder should have acquired lock")
 		}
-	}()
+	})
 
 	<-hold
 	ran, err := TryRun(ctx, s.DB(), func() error { return nil })

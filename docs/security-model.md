@@ -97,8 +97,10 @@ The class exists for the capacity autoscaler, which would otherwise need an
 admin key. A scaler key may only call `GET /admin/runners`, which returns
 runner ids, health and capacity but no addresses, and cordon or uncordon a
 runner, which the API does with its own runner credentials. A leaked scaler
-key can therefore cordon every runner and stop new creates fleet-wide. Startup
-fails if a scaler key is also an admin or provisioner key.
+key can therefore cordon every runner and stop new creates fleet-wide, and
+through that get stopped sandboxes deleted: the API deletes a stopped sandbox
+on a cordoned runner instead of waking it. Startup fails if a scaler key is
+also an admin or provisioner key.
 
 ### Concurrency limits
 
@@ -195,6 +197,11 @@ mode is refused. The runner echoes the mode it applied; on a mismatch the API
 fails the create and asks the runner, best effort, to remove the sandbox, so a
 runner from before egress modes cannot hand out a public sandbox recorded as
 `none`.
+
+Firecracker runner hosts run with nested KVM off (`nested=0` on `kvm_intel` and
+`kvm_amd`), so sandboxes cannot run a hypervisor. `install-runner-host.sh` fails
+while the module reports otherwise; guests then lack VMX/SVM in CPUID (e2e
+nested-KVM check).
 
 The Firecracker runtime gives every slot its own network namespace with a
 dedicated TAP device and veth uplink. The guest subnet is identical in every
@@ -337,8 +344,8 @@ every sandbox built from it. What is verified today:
   workflow opens a PR when a newer kernel of the pinned line appears.
 - The Node.js tarball in the sandbox image is checked against the SHA-256
   values recorded in [Dockerfile.sandbox](../Dockerfile.sandbox).
-- The pip in the sandbox's virtual environment is installed as a wheel in
-  hash-checking mode, from the version and SHA-256 values in
+- pip and setuptools in the sandbox's virtual environment are installed as
+  wheels in hash-checking mode, from the versions and SHA-256 values in
   [sandbox-venv/requirements.txt](../sandbox-venv/requirements.txt).
 - Service images are published by version. The release workflow mirrors each
   version into the deployment registry by digest and refuses to replace a
