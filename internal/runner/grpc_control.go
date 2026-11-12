@@ -78,7 +78,7 @@ func (s *SandboxControlGRPC) checkAPIKey(ctx context.Context) error {
 	if key == "" {
 		return status.Error(codes.Unauthenticated, "missing x-api-key")
 	}
-	if _, ok := s.Cfg.APIKeys[key]; !ok {
+	if !constantTimeContains(s.Cfg.APIKeys, key) {
 		return status.Error(codes.Unauthenticated, "invalid api key")
 	}
 	grpctls.NotePeer(grpctls.PeerCertificate(ctx))

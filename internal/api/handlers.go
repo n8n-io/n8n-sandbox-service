@@ -53,6 +53,8 @@ func newRunnerTransport(cfg *config.APIConfig) (http.RoundTripper, error) {
 		return nil, err
 	}
 	tr := http.DefaultTransport.(*http.Transport).Clone()
+	// http.DefaultTransport takes a proxy from the environment.
+	tr.Proxy = nil
 	tr.TLSClientConfig = tlsConf
 	// A connection silent for runnerPingAfter is pinged and closed when no
 	// answer comes within runnerPingTimeout.
