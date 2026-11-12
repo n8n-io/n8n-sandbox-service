@@ -268,8 +268,12 @@ func (m *Runtime) GetSandboxInfo(ctx context.Context, sandboxID string) (*runner
 	return m.GetContainerInfo(ctx, containerID)
 }
 
-// DeleteSandbox removes a sandbox by its sandbox ID.
+// DeleteSandbox removes a sandbox by its sandbox ID, within TransitionBudget
+// and without the caller's cancellation, so a caller that hangs up cannot leave
+// it half done.
 func (m *Runtime) DeleteSandbox(ctx context.Context, sandboxID string) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), runnerruntime.TransitionBudget)
+	defer cancel()
 	containerID, err := m.FindContainerIDByLabel(ctx, sandboxID)
 	if err != nil {
 		return err

@@ -148,7 +148,7 @@ Runners register with the API by opening a long-lived gRPC stream (`RunnerRegist
 
 ### API → Runner Control (gRPC Unary + mTLS)
 
-When a client creates or deletes a sandbox, the API calls the runner's `SandboxControl` gRPC service (`CreateSandbox`, `StopSandbox`, `DeleteSandbox`). This channel also uses mTLS with API key authentication in gRPC metadata.
+When a client creates or deletes a sandbox, the API calls the runner's `SandboxControl` gRPC service (`CreateSandbox`, `StopSandbox`, `DeleteSandbox`). A delete the runner has received runs to its end on the runtime's own budget, even if the API stops waiting. This channel also uses mTLS with API key authentication in gRPC metadata.
 
 The runner's HTTP listener uses the same certificate and the same client CA, so both channels to a runner share one identity. It negotiates with `VerifyClientCertIfGiven` so that health probes, which cannot present a certificate, still reach `/livez` and `/readyz`; the auth middleware requires a verified certificate on every other route.
 
@@ -160,7 +160,7 @@ Exec and file operation requests are proxied through two hops:
 Client → API (HTTP) → Runner (HTTP reverse proxy) → Daemon (HTTP on :8081)
 ```
 
-Each hop uses `httputil.ReverseProxy` with URL rewriting. The runner can wake a stopped container before proxying.
+Each hop uses `httputil.ReverseProxy` with URL rewriting. The runner can wake a stopped container before proxying. On a route that can wake the sandbox (every one but execution `DELETE`), if the API's row says stopped and the registry says the runner is cordoned, the API doesn't proxy: it deletes the sandbox and answers `404`, so the client creates it again on another runner. For a runner that can't be reached, it deletes only the row. A delete the runner fails answers `503` and keeps the row.
 
 ## Key Data Flows
 

@@ -91,7 +91,7 @@ What the client loses:
 
 An ordinary wake from an idle stop stays transparent: no `409`, no header. On the Sysbox runtime that wake costs the same three things, because a stopped container is started again rather than resumed; on Firecracker an idle stop snapshots the paused guest, so memory does survive it. The `409` is not what tells them apart — `status` is. An idle stop sets `status` to `stopped`, so a client can see it in `GET /sandboxes/{id}` and know what it lost, whereas a crash leaves `status` at `running`. The `409` exists for the case that has no other signal. An ephemeral sandbox never reaches `stopped`; it is deleted instead (see `ephemeral` under `POST /sandboxes`).
 
-**404** `sandbox not found` — Unknown id, the sandbox is past its idle delete-after wake window (`SANDBOX_API_IDLE_DELETE_AFTER`, default `24h`; the idle-stop window for an ephemeral sandbox, see `POST /sandboxes`), or the runner no longer tracks the sandbox (delete or runner restart). On exec/file proxy routes, when the runner signals sandbox gone (`X-Sandbox-Gone: 1`), the API removes the store row so subsequent `GET /sandboxes/{id}` also returns 404. Other runner **404** responses (for example `execution not found` or missing file paths) do **not** delete the sandbox. Exec and file routes may return **503** or **502** from the runner after the API successfully reaches the runner; the API may return **503** `runner unavailable` before the runner is contacted.
+**404** `sandbox not found` — Unknown id, the sandbox is past its idle delete-after wake window (`SANDBOX_API_IDLE_DELETE_AFTER`, default `24h`; the idle-stop window for an ephemeral sandbox, see `POST /sandboxes`), the sandbox was stopped on a [cordoned](#put-adminrunnersidcordon--delete-adminrunnersidcordon) runner and the request would have woken it, or the runner no longer tracks the sandbox (delete or runner restart). On exec/file proxy routes, when the runner signals sandbox gone (`X-Sandbox-Gone: 1`), the API removes the store row so subsequent `GET /sandboxes/{id}` also returns 404. Other runner **404** responses (for example `execution not found` or missing file paths) do **not** delete the sandbox. Exec and file routes may return **503** or **502** from the runner after the API successfully reaches the runner; the API may return **503** `runner unavailable` before the runner is contacted.
 
 ---
 
@@ -125,7 +125,7 @@ Metric families include:
 
 - `sandbox_http_requests_total{role,route,method,status}` — request counter; `route` is the matched route pattern (e.g. `/sandboxes/{id}`), not the raw path.
 - `sandbox_http_request_duration_seconds{role,route,method}` — request latency histogram.
-- `sandbox_sandbox_operations_total{role="api",operation,result}` — sandbox lifecycle ops (`create`, `delete`).
+- `sandbox_sandbox_operations_total{role="api",operation,result}` — sandbox lifecycle ops (`create`, `delete`, `cordon_delete`).
 - `sandbox_create_placements_total{role="api",result}` — how each create found a runner that did not refuse it for capacity: `first_choice`, or `retried` after a refusal; or found none: `exhausted` (every runner tried refused) or `no_runner` (none eligible). Whether the create then succeeded is in `sandbox_sandbox_operations_total`.
 - `sandbox_sandboxes_active{role="api"}` — current sandbox count from the store.
 - `sandbox_runners_registered{role="api"}` — runners registered with the API.
@@ -1031,7 +1031,7 @@ curl http://localhost:8080/admin/runners -H "X-Api-Key: SCALER_KEY"
 
 ### PUT /admin/runners/{id}/cordon · DELETE /admin/runners/{id}/cordon
 
-Admin or scaler. `PUT` cordons the runner: it keeps its sandboxes but gets no new ones. `DELETE` uncordons it. Both are idempotent. A runner restart clears the cordon.
+Admin or scaler. `PUT` cordons the runner: it gets no new sandboxes and keeps serving its running ones. A request that would wake one of its sandboxes whose `status` is `stopped` deletes the sandbox and gets `404 sandbox not found` instead, so the client creates it again on another runner. If the runner can't be reached, the API removes only its own record and still answers `404`; a runner that is in fact still up keeps the sandbox until it restarts. A runner that has sent no heartbeat within `SANDBOX_API_RUNNER_HEARTBEAT_GRACE` gets 5 s to answer. The in-memory registry forgets a runner's cordon when the runner disconnects. If the runner answers but the delete fails, the request gets `503` and the sandbox stays, so a retry tries again. A stopped sandbox that gets no such request stays until the idle sweeper deletes it or the runner is reimaged or removed. `DELETE` uncordons the runner, which restores wakes. Both are idempotent. A runner restart clears the cordon.
 
 **Response:** `200 OK`
 
