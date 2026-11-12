@@ -1,6 +1,6 @@
 # Configuration
 
-All services are configured via environment variables.
+All services are configured via environment variables. [limits.md](limits.md) lists the limits clients and operators run into.
 
 ## Contents
 
@@ -32,14 +32,17 @@ All services are configured via environment variables.
 | `SANDBOX_API_POSTGRES_PASSWORD` | *(required with postgres)* | Postgres password |
 | `SANDBOX_API_POSTGRES_DB` | *(required with postgres)* | Postgres database name |
 | `SANDBOX_API_POSTGRES_SSLMODE` | `require` | Postgres TLS mode (`disable`, `require`, `verify-full`, etc.) |
-| `SANDBOX_API_MAX_FILE_BYTES` | `10485760` | Maximum file upload size (10 MB) |
+| `SANDBOX_API_MAX_FILE_BYTES` | `10485760` | Maximum file upload size (10 MB), also the compressed size of an archive upload |
 | `SANDBOX_API_DEFAULT_MAX_SANDBOXES` | `50` | Default per-tenant sandbox quota when `POST /admin/tenants` omits `max_sandboxes` (`0` = unlimited), and the highest `max_sandboxes` a provisioner key may set on create or `PATCH`. Must fit Postgres/SQLite `INTEGER` (`0`…`2147483647`). |
 | `SANDBOX_API_MAX_INFLIGHT_PER_TENANT` | `512` | Requests a tenant may have in progress at once on this replica, all its keys together; more get `429` ([what counts](API.md#http-429--too-many-requests-in-progress)). A first estimate: 32 sandboxes with 16 requests in progress each. It also bounds what a tenant holds here while requests wait on a slow runner, which the per-sandbox limit cannot see. `0` = no limit, for execution `DELETE`s too |
+| `SANDBOX_API_KEY_CACHE_TTL` | `15s` | How long each replica remembers a tenant key lookup (`0`–`1m`, `0` = no cache; [how](architecture.md#tenant-key-cache)). A revoked key, or the key of a deleted tenant, still works on other replicas for up to this long |
 | `SANDBOX_API_ENABLE_CORS` | `false` | Enable CORS headers (allow all origins); needed for the browser playground |
 | `SANDBOX_API_METRICS_ENABLED` | `false` | When true, expose Prometheus `/metrics` (no `X-Api-Key`; firewall the port it lands on). `SANDBOX_API_METRICS_LISTEN_ADDR` chooses the listener. See [Metrics](#metrics). |
 | `SANDBOX_API_RUNNER_HEARTBEAT_GRACE` | `45s` | How long after the last gRPC heartbeat a runner remains eligible for placement (Go [`time.ParseDuration`](https://pkg.go.dev/time#ParseDuration) syntax, e.g. `45s`, `2m`) |
-| `SANDBOX_API_IDLE_STOP_AFTER` | `1h` | Idle time after which the sweeper stops a sandbox (deletes it if `ephemeral`). `0` disables |
-| `SANDBOX_API_IDLE_DELETE_AFTER` | `24h` | Idle time after which the sweeper deletes a sandbox; wakes are refused past this window. `0` disables |
+| `SANDBOX_API_IDLE_STOP_AFTER` | `1h` | Idle time after which the sweeper stops a sandbox (deletes it if `ephemeral`). `0` disables. Extended by twice `SANDBOX_API_ACTIVITY_WRITE_INTERVAL`, and by four times that before an ephemeral sandbox is deleted ([why](architecture.md#sandbox-activity)) |
+| `SANDBOX_API_IDLE_DELETE_AFTER` | `24h` | Idle time after which the sweeper deletes a sandbox; wakes are refused past this window. `0` disables. Wakes are refused twice `SANDBOX_API_ACTIVITY_WRITE_INTERVAL` later, deletes come four times that later ([why](architecture.md#sandbox-activity)) |
+| `SANDBOX_API_ACTIVITY_WRITE_INTERVAL` | `5s` | How often each replica writes the `last_active_at` of the sandboxes it served, in one statement (`1s`–`1m`; [how](architecture.md#sandbox-activity)). Longer means fewer database writes, and idle stops that act up to twice that later, archives and deletes four times |
+| `SANDBOX_API_MAX_RESPONSE_ACTIVITY` | `30m` | How long a response that is still open, such as an exec stream, keeps its sandbox from going idle (at least `1m`). Keep it at least `SANDBOX_RUNNER_MAX_EXEC_TIMEOUT` |
 | `SANDBOX_API_TEMPLATES` | `default` | Comma-separated template catalog creates may name; `default` is always in it. Runners list what they serve in their heartbeats, and a sandbox is placed only on one serving its template |
 | `SANDBOX_API_MAX_IDLE_WINDOW` | `24h` | Largest `idle_stop_after` / `idle_delete_after` a create or `PATCH /sandboxes/{id}` may set (at least `1m`); a tenant's `max_idle_window` can narrow it. `0` refuses both |
 | `SANDBOX_API_EGRESS_ALLOW_PUBLIC` | `false` | Lets an `egress_proxy` spec set `allow_public`: any public host on 443 or 80, uninspected. Off, such a create or `PUT …/egress-proxy` is `400` `allow_public_disabled`; turning it off leaves existing sandboxes as they are |
@@ -88,9 +91,9 @@ Set one store to enable [archive and restore](API.md#archive-and-restore), with 
 | `SANDBOX_RUNNER_ID` | hostname | Stable runner id sent to the API |
 | `SANDBOX_RUNNER_CAPACITY_TOTAL` | `1000` | Reported capacity for placement (`0` = unlimited) |
 | `SANDBOX_RUNNER_DATA_DIR` | `/var/sandboxes` | Per-sandbox data directory (Firecracker: see [Data volume](../internal/runner/runtime/firecracker.ee/README.md#data-volume)) |
-| `SANDBOX_RUNNER_MAX_FILE_BYTES` | `10485760` | Maximum body the runner accepts on file write/append (10 MB); the API applies `SANDBOX_API_MAX_FILE_BYTES` first |
+| `SANDBOX_RUNNER_MAX_FILE_BYTES` | `10485760` | Maximum body the runner accepts on file write/append and archive upload (10 MB); the API applies `SANDBOX_API_MAX_FILE_BYTES` first |
 | `SANDBOX_RUNNER_MAX_INFLIGHT_PER_SANDBOX` | `256` | Requests one sandbox may have in progress at once; more get `429` ([what counts](API.md#http-429--too-many-requests-in-progress)). Room for clients that write many files in parallel, while still bounding what one sandbox holds on its runner. `0` = no limit, for execution `DELETE`s too |
-| `SANDBOX_RUNNER_MAX_EXEC_TIMEOUT` | `15m` | Largest `timeout_ms` an exec may ask for; a larger one gets `400`. A first estimate: long enough for builds and test suites, and what ends a forgotten command, which keeps running after its stream closes. `0` (no limit) or at least `5m`, the timeout a command gets when it sets none; there is no upper bound, so a pool for multi-hour runs sets e.g. `8h` |
+| `SANDBOX_RUNNER_MAX_EXEC_TIMEOUT` | `15m` | Largest `timeout_ms` an exec may ask for; a larger one gets `400`. A first estimate: long enough for builds and test suites, and what ends a forgotten command, which keeps running after its stream closes. `0` (no limit) or at least `5m`, the timeout a command gets when it sets none; there is no upper bound, so a pool for multi-hour runs sets e.g. `8h`. Running executions keep their sandbox active through runner heartbeats, so `SANDBOX_API_MAX_RESPONSE_ACTIVITY` need not cover them |
 | `SANDBOX_RUNNER_METRICS_ENABLED` | `false` | When true, expose Prometheus `/metrics` on the runner's HTTP listener (no `X-Api-Key` and no client certificate; firewall the port). See [Metrics](#metrics). |
 | `SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE` | *(required)* | CA (PEM) that signed the API registration gRPC server cert |
 | `SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE` | *(required)* | Runner client cert (PEM) for registration mTLS |

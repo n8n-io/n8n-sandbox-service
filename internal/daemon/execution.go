@@ -80,7 +80,11 @@ func (ex *Execution) eventsAfter(after *uint64) [][]byte {
 			return nil
 		}
 		if *after >= ex.minSeq {
-			start = int(*after - ex.minSeq + 1)
+			offset := *after - ex.minSeq + 1
+			if offset >= uint64(len(ex.events)) {
+				return nil
+			}
+			start = int(offset)
 		}
 	}
 	if start >= len(ex.events) {
@@ -120,23 +124,32 @@ func (ex *Execution) HasHistory(after *uint64) bool {
 // is cancelled. Returns false if requested history has been trimmed (410).
 func (ex *Execution) Follow(ctx context.Context, after *uint64, callback func([]byte)) bool {
 	for {
-		ex.mu.Lock()
+		var (
+			batch     [][]byte
+			completed bool
+			notify    chan struct{}
+		)
+		hasHistory := func() bool {
+			ex.mu.Lock()
+			defer ex.mu.Unlock()
 
-		if !ex.hasHistoryAfter(after) {
-			ex.mu.Unlock()
+			if !ex.hasHistoryAfter(after) {
+				return false
+			}
+
+			batch = ex.eventsAfter(after)
+			completed = ex.completed
+			notify = ex.notify
+
+			if len(batch) > 0 {
+				lastSeq := ex.events[len(ex.events)-1].seq
+				after = &lastSeq
+			}
+			return true
+		}()
+		if !hasHistory {
 			return false
 		}
-
-		batch := ex.eventsAfter(after)
-		completed := ex.completed
-		notify := ex.notify
-
-		if len(batch) > 0 {
-			lastSeq := ex.events[len(ex.events)-1].seq
-			after = &lastSeq
-		}
-
-		ex.mu.Unlock()
 
 		for _, data := range batch {
 			callback(data)

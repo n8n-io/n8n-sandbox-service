@@ -35,7 +35,7 @@ func newProvisionerGateway(t *testing.T) (http.Handler, store.SandboxStore) {
 		RunnerAPIKey:        "runner-key",
 		MaxFileBytes:        1024,
 		DefaultMaxSandboxes: provMaxDflt,
-	}), registry.New(45*time.Second), metrics.NewAPIRecorder(false))
+	}), registry.New(45*time.Second), metrics.NewAPIRecorder(false), NewActivityRecorder(s, nil))
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}
@@ -272,6 +272,7 @@ func TestProvisionerDeniedRoutes(t *testing.T) {
 		{http.MethodGet, "/sandboxes/" + sandboxID + "/files/content?path=/tmp/x", ""},
 		{http.MethodPut, "/sandboxes/" + sandboxID + "/files?path=/tmp/x", "data"},
 		{http.MethodPost, "/sandboxes/" + sandboxID + "/files?path=/tmp/x", "data"},
+		{http.MethodPost, "/sandboxes/" + sandboxID + "/files/archive?path=/tmp/x", "data"},
 		{http.MethodDelete, "/sandboxes/" + sandboxID + "/files?path=/tmp/x", ""},
 		{http.MethodPost, "/sandboxes/" + sandboxID + "/files/copy", `{"src":"/a","dest":"/b"}`},
 		{http.MethodPost, "/sandboxes/" + sandboxID + "/files/move", `{"src":"/a","dest":"/b"}`},

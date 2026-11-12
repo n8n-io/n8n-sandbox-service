@@ -1,3 +1,4 @@
+import { gunzipSync } from "node:zlib";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { SandboxClient } from "../src/client.js";
 import {
@@ -430,6 +431,56 @@ describe("SandboxClient", () => {
         headers: { "Content-Type": "application/octet-stream" },
       }),
     );
+  });
+
+  it("writeFiles sends one gzipped archive to POST /sandboxes/{id}/files/archive", async () => {
+    const mock = getMockHttp(client);
+    mock.requestVoid.mockResolvedValue(undefined);
+
+    await client.writeFiles("abc", [
+      { path: "/home/user/a.txt", content: "a" },
+      { path: "/home/user/b.txt", content: Buffer.from("b") },
+    ]);
+
+    expect(mock.requestVoid).toHaveBeenCalledTimes(1);
+    const [method, path, options] = mock.requestVoid.mock.calls[0];
+    expect(method).toBe("POST");
+    expect(path).toBe("/sandboxes/abc/files/archive");
+    expect(options).toMatchObject({
+      params: { path: "/" },
+      headers: { "Content-Type": "application/gzip" },
+      isSafeToRetry: true,
+    });
+    // Each one-byte file takes a 512-byte header and one 512-byte data block.
+    const tar = gunzipSync(options.data);
+    const name = (offset: number) =>
+      tar
+        .subarray(offset, offset + 100)
+        .toString()
+        .split("\0")[0];
+    expect(name(0)).toBe("home/user/a.txt");
+    expect(tar.subarray(512, 513).toString()).toBe("a");
+    expect(name(1024)).toBe("home/user/b.txt");
+    expect(tar.subarray(1536, 1537).toString()).toBe("b");
+  });
+
+  it.each([
+    { kind: "multibyte string", content: "héllo ✓", bytes: Buffer.from("héllo ✓", "utf-8") },
+    {
+      kind: "Uint8Array",
+      content: new Uint8Array([0, 1, 2, 255]),
+      bytes: Buffer.from([0, 1, 2, 255]),
+    },
+  ])("writeFiles archives $kind content as its bytes", async ({ content, bytes }) => {
+    const mock = getMockHttp(client);
+    mock.requestVoid.mockResolvedValue(undefined);
+
+    await client.writeFiles("abc", [{ path: "/f", content }]);
+
+    const tar = gunzipSync(mock.requestVoid.mock.calls[0][2].data);
+    const size = parseInt(tar.subarray(124, 136).toString().split("\0")[0], 8);
+    expect(size).toBe(bytes.length);
+    expect(tar.subarray(512, 512 + size).equals(bytes)).toBe(true);
   });
 
   it("listFiles sends GET /sandboxes/{id}/files with params", async () => {

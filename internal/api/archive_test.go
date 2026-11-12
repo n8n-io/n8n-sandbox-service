@@ -45,7 +45,9 @@ func newArchiveHarness(t *testing.T) *archiveHarness {
 	cfg.ArchiveKey, _ = hex.DecodeString("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
 	reg := registry.New(time.Minute)
 	reg.UpsertRunner(registry.Runner{ID: "runner-1", HTTPBaseURL: "https://127.0.0.1:9", ControlGRPCAddr: startFakeRunnerControl(t, ctl), Healthy: true, CapacityTotal: 10})
-	router, err := NewGatewayRouter(s, cfg, reg, metrics.NewAPIRecorder(false))
+	activity := NewActivityRecorder(s, cfg)
+	go activity.Run(t.Context())
+	router, err := NewGatewayRouter(s, cfg, reg, metrics.NewAPIRecorder(false), activity)
 	if err != nil {
 		t.Fatal(err)
 	}

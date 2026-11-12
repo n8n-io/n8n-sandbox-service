@@ -490,6 +490,114 @@ func TestLoadAPIRejectsOutOfRangeIdleSweepConcurrency(t *testing.T) {
 	}
 }
 
+func TestLoadAPIActivityWriteIntervalAndMaxResponseActivity(t *testing.T) {
+	setBase := func(t *testing.T) {
+		t.Helper()
+		t.Setenv("SANDBOX_API_KEYS", "test-key")
+		t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+		setRequiredGRPCMTLS(t)
+	}
+
+	t.Run("defaults", func(t *testing.T) {
+		setBase(t)
+		cfg, err := LoadAPI()
+		if err != nil {
+			t.Fatalf("LoadAPI() failed: %v", err)
+		}
+		if cfg.ActivityWriteInterval != 5*time.Second {
+			t.Errorf("ActivityWriteInterval = %s, want 5s", cfg.ActivityWriteInterval)
+		}
+		if cfg.MaxResponseActivity != 30*time.Minute {
+			t.Errorf("MaxResponseActivity = %s, want 30m", cfg.MaxResponseActivity)
+		}
+	})
+
+	t.Run("set", func(t *testing.T) {
+		setBase(t)
+		t.Setenv("SANDBOX_API_ACTIVITY_WRITE_INTERVAL", "1m")
+		t.Setenv("SANDBOX_API_MAX_RESPONSE_ACTIVITY", "8h")
+		cfg, err := LoadAPI()
+		if err != nil {
+			t.Fatalf("LoadAPI() failed: %v", err)
+		}
+		if cfg.ActivityWriteInterval != time.Minute {
+			t.Errorf("ActivityWriteInterval = %s, want 1m", cfg.ActivityWriteInterval)
+		}
+		if cfg.MaxResponseActivity != 8*time.Hour {
+			t.Errorf("MaxResponseActivity = %s, want 8h", cfg.MaxResponseActivity)
+		}
+	})
+
+	t.Run("accepts the lowest interval", func(t *testing.T) {
+		setBase(t)
+		t.Setenv("SANDBOX_API_ACTIVITY_WRITE_INTERVAL", "1s")
+		if cfg, err := LoadAPI(); err != nil || cfg.ActivityWriteInterval != time.Second {
+			t.Fatalf("LoadAPI() = %v, %v; want a 1s interval", cfg, err)
+		}
+	})
+
+	for _, v := range []string{"0", "999ms", "61s", "-1s", "soon"} {
+		t.Run("rejects interval "+v, func(t *testing.T) {
+			setBase(t)
+			t.Setenv("SANDBOX_API_ACTIVITY_WRITE_INTERVAL", v)
+			if _, err := LoadAPI(); err == nil {
+				t.Fatalf("expected LoadAPI to reject SANDBOX_API_ACTIVITY_WRITE_INTERVAL=%q", v)
+			}
+		})
+	}
+	for _, v := range []string{"0", "30s", "-1h", "soon"} {
+		t.Run("rejects max response activity "+v, func(t *testing.T) {
+			setBase(t)
+			t.Setenv("SANDBOX_API_MAX_RESPONSE_ACTIVITY", v)
+			if _, err := LoadAPI(); err == nil {
+				t.Fatalf("expected LoadAPI to reject SANDBOX_API_MAX_RESPONSE_ACTIVITY=%q", v)
+			}
+		})
+	}
+}
+
+func TestLoadAPIKeyCacheTTL(t *testing.T) {
+	setBase := func(t *testing.T) {
+		t.Helper()
+		t.Setenv("SANDBOX_API_KEYS", "test-key")
+		t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+		setRequiredGRPCMTLS(t)
+	}
+
+	t.Run("default", func(t *testing.T) {
+		setBase(t)
+		cfg, err := LoadAPI()
+		if err != nil {
+			t.Fatalf("LoadAPI() failed: %v", err)
+		}
+		if cfg.APIKeyCacheTTL != 15*time.Second {
+			t.Errorf("APIKeyCacheTTL = %s, want 15s", cfg.APIKeyCacheTTL)
+		}
+	})
+
+	t.Run("off", func(t *testing.T) {
+		setBase(t)
+		t.Setenv("SANDBOX_API_KEY_CACHE_TTL", "0")
+		cfg, err := LoadAPI()
+		if err != nil {
+			t.Fatalf("LoadAPI() failed: %v", err)
+		}
+		if cfg.APIKeyCacheTTL != 0 {
+			t.Errorf("APIKeyCacheTTL = %s, want 0", cfg.APIKeyCacheTTL)
+		}
+	})
+
+	for _, v := range []string{"-1s", "61s", "soon"} {
+		t.Run("rejects "+v, func(t *testing.T) {
+			setBase(t)
+			t.Setenv("SANDBOX_API_KEY_CACHE_TTL", v)
+			if _, err := LoadAPI(); err == nil {
+				t.Fatalf("expected LoadAPI to reject SANDBOX_API_KEY_CACHE_TTL=%q", v)
+			}
+		})
+	}
+}
+
 func TestLoadAPIDefaultStoreIsSQLite(t *testing.T) {
 	t.Setenv("SANDBOX_API_KEYS", "test-key")
 	t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")

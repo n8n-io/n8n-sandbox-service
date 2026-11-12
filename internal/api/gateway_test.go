@@ -2,10 +2,12 @@ package api
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,7 +28,7 @@ func TestGatewayHandlesSandboxList(t *testing.T) {
 		APIKeys:      map[string]struct{}{"public-key": {}},
 		RunnerAPIKey: "runner-key",
 		MaxFileBytes: 1024,
-	}, registry.New(45*time.Second), metrics.NewAPIRecorder(false))
+	}, registry.New(45*time.Second), metrics.NewAPIRecorder(false), NewActivityRecorder(s, nil))
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}
@@ -47,6 +49,37 @@ func TestGatewayHandlesSandboxList(t *testing.T) {
 	}
 }
 
+// The archive route has no size limit of its own, only the body cap.
+func TestGatewayCapsArchiveBody(t *testing.T) {
+	var received atomic.Int64
+	runner := newTestRunnerServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n, _ := io.Copy(io.Discard, r.Body)
+		received.Add(n)
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	router, s := newTestGateway(t, "admin-key")
+	sid := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	if err := s.Create(&store.SandboxRecord{
+		ID: sid, Status: "running", CreatedAt: 1, LastActiveAt: 1,
+		TenantID: store.AdminTenantID, RunnerHTTPBase: runner.URL,
+	}); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/sandboxes/"+sid+"/files/archive?path=/tmp", strings.NewReader(strings.Repeat("x", 2048)))
+	req.Header.Set("X-Api-Key", "admin-key")
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected %d, got %d body=%s", http.StatusBadRequest, rr.Code, rr.Body.String())
+	}
+	if n := received.Load(); n > 1024 {
+		t.Fatalf("runner received %d bytes, past the 1024-byte cap", n)
+	}
+}
+
 func TestGatewayRejectsMissingPublicAPIKey(t *testing.T) {
 	s, err := store.New(":memory:")
 	if err != nil {
@@ -58,7 +91,7 @@ func TestGatewayRejectsMissingPublicAPIKey(t *testing.T) {
 		APIKeys:      map[string]struct{}{"public-key": {}},
 		RunnerAPIKey: "runner-key",
 		MaxFileBytes: 1024,
-	}, registry.New(45*time.Second), metrics.NewAPIRecorder(false))
+	}, registry.New(45*time.Second), metrics.NewAPIRecorder(false), NewActivityRecorder(s, nil))
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}
@@ -82,7 +115,7 @@ func TestGatewayMetricsEndpointEnabledBypassesAuth(t *testing.T) {
 	router, err := NewGatewayRouter(s, &config.APIConfig{
 		APIKeys:      map[string]struct{}{"public-key": {}},
 		MaxFileBytes: 1024,
-	}, registry.New(45*time.Second), metrics.NewAPIRecorder(true))
+	}, registry.New(45*time.Second), metrics.NewAPIRecorder(true), NewActivityRecorder(s, nil))
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}
@@ -125,7 +158,7 @@ func TestGatewayRejectsOtherMethodsOnPublicPaths(t *testing.T) {
 	router, err := NewGatewayRouter(s, &config.APIConfig{
 		APIKeys:      map[string]struct{}{"public-key": {}},
 		MaxFileBytes: 1024,
-	}, registry.New(45*time.Second), metrics.NewAPIRecorder(true))
+	}, registry.New(45*time.Second), metrics.NewAPIRecorder(true), NewActivityRecorder(s, nil))
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}
@@ -181,7 +214,7 @@ func TestGatewayMetricsEndpointDisabledReturns404(t *testing.T) {
 	router, err := NewGatewayRouter(s, &config.APIConfig{
 		APIKeys:      map[string]struct{}{"public-key": {}},
 		MaxFileBytes: 1024,
-	}, registry.New(45*time.Second), metrics.NewAPIRecorder(false))
+	}, registry.New(45*time.Second), metrics.NewAPIRecorder(false), NewActivityRecorder(s, nil))
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}
@@ -208,7 +241,7 @@ func TestGatewayOmitsMetricsWhenOnDedicatedListener(t *testing.T) {
 		MaxFileBytes:      1024,
 		ListenAddr:        ":8080",
 		MetricsListenAddr: ":9100",
-	}, registry.New(45*time.Second), metrics.NewAPIRecorder(true))
+	}, registry.New(45*time.Second), metrics.NewAPIRecorder(true), NewActivityRecorder(s, nil))
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}

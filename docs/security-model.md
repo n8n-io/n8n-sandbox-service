@@ -33,7 +33,7 @@ Requests carry an `X-Api-Key` header. There are four key classes:
 - Tenant keys, minted by an admin or returned on tenant create, stored only as
   a SHA-256 hash alongside an 8-character lookup prefix, so a database read
   does not yield usable credentials. Revocation sets `revoked_at`, which the
-  lookup query filters on.
+  lookup query filters on, after a short cache (see the non-guarantees).
 
 ### Provisioner keys
 
@@ -282,6 +282,11 @@ and an export writes sparse files out in full, an archive is capped at the
 template's image size plus its disk quota (plus 10% and 64 MiB for tar
 headers), on export and again on import; with no quota there is no cap.
 
+Firecracker runner hosts run with nested KVM off (`nested=0` on `kvm_intel` and
+`kvm_amd`), so sandboxes cannot run a hypervisor. `install-runner-host.sh` fails
+while the module reports otherwise; guests then lack VMX/SVM in CPUID (e2e
+nested-KVM check).
+
 The Firecracker runtime gives every slot its own network namespace with a
 dedicated TAP device and veth uplink. The guest subnet is identical in every
 namespace, and there is no bridge between them, so guests have no layer-2 path
@@ -423,8 +428,8 @@ every sandbox built from it. What is verified today:
   workflow opens a PR when a newer kernel of the pinned line appears.
 - The Node.js tarball in the sandbox image is checked against the SHA-256
   values recorded in [Dockerfile.sandbox](../Dockerfile.sandbox).
-- The pip in the sandbox's virtual environment is installed as a wheel in
-  hash-checking mode, from the version and SHA-256 values in
+- pip and setuptools in the sandbox's virtual environment are installed as
+  wheels in hash-checking mode, from the versions and SHA-256 values in
   [sandbox-venv/requirements.txt](../sandbox-venv/requirements.txt).
 - Service images are published by version. The release workflow mirrors each
   version into the deployment registry by digest and refuses to replace a
@@ -470,6 +475,12 @@ that already belongs to another tenant returns `409` rather than `404`, so a
 caller can learn that an ID is taken. This is deliberate, so that a client can
 reconnect to its own deterministic IDs. Since IDs are UUIDs, it confirms an ID
 the caller already holds and does not help discover new ones.
+
+**A revoked tenant key, or the key of a deleted tenant, keeps working on other
+API replicas for up to `SANDBOX_API_KEY_CACHE_TTL`** (default `15s`), and open
+exec streams survive the revoke. To contain a leaked key, revoke it and retry
+until that returns `204` (after an error the key may still be valid on every
+replica), wait out that TTL, then delete the tenant's sandboxes.
 
 **A burst of creates spread over API pods briefly exceeds a tenant's quota on
 runners.** Before the runner call, each API pod counts a tenant's creates in

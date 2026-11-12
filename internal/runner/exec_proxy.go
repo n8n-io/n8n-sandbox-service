@@ -220,8 +220,7 @@ func ExecProxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics
 func readAndParseRequestBody(w http.ResponseWriter, r *http.Request) (execRequestBody, bool) {
 	rawBody, err := io.ReadAll(http.MaxBytesReader(w, r.Body, execMaxJSONBodyBytes))
 	if err != nil {
-		var maxBytesErr *http.MaxBytesError
-		if errors.As(err, &maxBytesErr) {
+		if maxBytesErr, ok := errors.AsType[*http.MaxBytesError](err); ok {
 			writeError(w, http.StatusBadRequest, "failed to read request body: "+maxBytesErr.Error())
 		} else {
 			writeError(w, http.StatusBadRequest, "failed to read request body")

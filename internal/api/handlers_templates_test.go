@@ -32,7 +32,7 @@ func TestCreateSandboxPlacesByTemplate(t *testing.T) {
 		Templates: []registry.Template{{Name: "default"}, {Name: "python", VCPUs: 4, MemoryMB: 8192, DiskMB: 20480}}})
 	reg.UpsertRunner(registry.Runner{ID: "drained", HTTPBaseURL: "https://127.0.0.1:9", ControlGRPCAddr: "127.0.0.1:1", Healthy: true, CapacityTotal: 10, Cordoned: true,
 		Templates: []registry.Template{{Name: "python"}}})
-	router, err := NewGatewayRouter(s, cfg, reg, metrics.NewAPIRecorder(false))
+	router, err := NewGatewayRouter(s, cfg, reg, metrics.NewAPIRecorder(false), NewActivityRecorder(s, cfg))
 	if err != nil {
 		t.Fatal(err)
 	}

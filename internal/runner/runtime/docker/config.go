@@ -271,7 +271,7 @@ func (c Config) unenforcedDiskQuota() string {
 // sandbox without DNS.
 func parseDNSServers(v string) ([]string, error) {
 	var servers []string
-	for _, s := range strings.Split(v, ",") {
+	for s := range strings.SplitSeq(v, ",") {
 		s = strings.TrimSpace(s)
 		ip := net.ParseIP(s)
 		if ip == nil || ip.To4() == nil || ip.IsUnspecified() {

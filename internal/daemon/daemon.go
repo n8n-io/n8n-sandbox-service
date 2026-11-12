@@ -4,7 +4,6 @@
 package daemon
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,7 +14,6 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 )
@@ -92,9 +90,7 @@ func Run(listenAddr string) error {
 	go func() {
 		sig := <-sigCh
 		slog.Info("received signal, shutting down", "signal", sig)
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := srv.Shutdown(ctx); err != nil {
+		if err := srv.Close(); err != nil {
 			slog.Warn("daemon shutdown", "err", err)
 		}
 	}()
@@ -279,6 +275,21 @@ func NewHandler() *Handler {
 		w.WriteHeader(http.StatusOK)
 	})
 
+	mux.HandleFunc("POST /files/archive", func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Query().Get("path")
+		if path == "" {
+			writeError(w, http.StatusBadRequest, "missing directory path")
+			return
+		}
+
+		res, err := HandleFileArchive(path, r.Body)
+		if err != nil {
+			writeError(w, fileOpStatusCode(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
+	})
+
 	mux.HandleFunc("DELETE /files", func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Query().Get("path")
 		if path == "" {
@@ -397,18 +408,27 @@ func decodeJSONBody(body io.Reader, dst any) error {
 }
 
 func fileOpStatusCode(err error) int {
-	msg := strings.ToLower(err.Error())
+	if errors.Is(err, errInvalidArchive) {
+		return http.StatusBadRequest
+	}
+	// The os package does not export the error an os.Root returns for a path
+	// that leaves it, and can nest it in more than one PathError.
+	var pathErr *fs.PathError
+	for inner := err; errors.As(inner, &pathErr); {
+		inner = pathErr.Err
+	}
+	if pathErr != nil && pathErr.Err.Error() == "path escapes from parent" {
+		return http.StatusBadRequest
+	}
+	var opErr *fileOpError
 	switch {
+	case errors.As(err, &opErr):
+		return opErr.status
 	case errors.Is(err, fs.ErrPermission):
 		return http.StatusForbidden
-	case strings.Contains(msg, "already exists"):
-		return http.StatusConflict
-	case strings.Contains(msg, "not found"), strings.Contains(msg, "no such file or directory"):
+	case errors.Is(err, fs.ErrNotExist):
 		return http.StatusNotFound
-	case strings.Contains(msg, "source is a directory"),
-		strings.Contains(msg, "destination must not be inside source directory"),
-		strings.Contains(msg, "invalid argument"),
-		strings.Contains(msg, "directory not empty"):
+	case errors.Is(err, syscall.EINVAL), errors.Is(err, syscall.ENOTEMPTY):
 		return http.StatusBadRequest
 	default:
 		return http.StatusInternalServerError

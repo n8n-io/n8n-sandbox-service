@@ -701,7 +701,7 @@ func (m *Runtime) EnsureSandboxRunning(ctx context.Context, sandboxID string) (r
 	if err := ctx.Err(); err != nil {
 		return runnerruntime.WakeResult{}, err
 	}
-	recovered, err, _ := m.wakeGroup.Do(sandboxID, func() (interface{}, error) {
+	recovered, err, _ := m.wakeGroup.Do(sandboxID, func() (any, error) {
 		// singleflight runs this once for all waiters; do not use the caller's ctx
 		// here or one canceled/short-lived request fails everyone else waiting on
 		// the same key.

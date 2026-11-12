@@ -35,6 +35,8 @@ func LogIdleSweepConfig(cfg *config.APIConfig) {
 		"idle_stop_after", formatIdleDur(cfg.IdleStopAfter),
 		"idle_delete_after", formatIdleDur(cfg.IdleDeleteAfter),
 		"idle_delete_safety_buffer", cfg.IdleDeleteSafetyBuffer.String(),
+		"activity_lag", activityLag(cfg).String(),
+		"max_response_activity", maxResponseActivity(cfg).String(),
 		"orphan_reap_buffer", orphanReapBuffer(cfg).String(),
 		"sweep_interval", cfg.IdleSweepInterval.String(),
 		"sweep_concurrency", sweepConcurrency(cfg))
@@ -465,15 +467,24 @@ func idleSeconds(d time.Duration) int64 {
 	return secs
 }
 
+// deleteActivityLag is what the delete and archive sweeps add to their
+// window: the request path fences a sandbox one activity lag after the window,
+// and a request let through just before the fence can take another lag to be
+// written.
+func deleteActivityLag(cfg *config.APIConfig) time.Duration {
+	return 2 * activityLag(cfg)
+}
+
 func sweepIdleDeleteSandboxes(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time, arch *archiver) sweepStats {
-	records, err := listIdle(s, store.IdleDelete, cfg, now, cfg.IdleDeleteSafetyBuffer)
+	buffer := deleteActivityLag(cfg) + cfg.IdleDeleteSafetyBuffer
+	records, err := listIdle(s, store.IdleDelete, cfg, now, buffer)
 	if err != nil {
 		slog.Error("idle sweep list delete candidates failed", "err", err)
 		return sweepStats{}
 	}
 
 	return sweepConcurrently(ctx, s, cfg, "delete", records, func(ctx context.Context, rec *store.SandboxRecord) (bool, error) {
-		if (rec.Status != "stopped" && rec.Status != statusArchived) || !idleDue(rec, store.IdleDelete, cfg, now, cfg.IdleDeleteSafetyBuffer) {
+		if (rec.Status != "stopped" && rec.Status != statusArchived) || !idleDue(rec, store.IdleDelete, cfg, now, buffer) {
 			return false, nil
 		}
 		if rec.Status == statusArchived {
@@ -491,17 +502,19 @@ func sweepIdleDeleteSandboxes(ctx context.Context, s store.SandboxStore, reg reg
 }
 
 // sweepEphemeralSandboxes deletes running ephemeral sandboxes idle past their
-// window plus the safety buffer. The request path already refuses them past the
-// window, so the fence is up before the irreversible delete.
+// window, twice the activity lag and the safety buffer. The request path
+// already refuses them past the window and one lag, so the fence is up before
+// the irreversible delete.
 func sweepEphemeralSandboxes(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) sweepStats {
-	records, err := listIdle(s, store.IdleEphemeral, cfg, now, cfg.IdleDeleteSafetyBuffer)
+	buffer := deleteActivityLag(cfg) + cfg.IdleDeleteSafetyBuffer
+	records, err := listIdle(s, store.IdleEphemeral, cfg, now, buffer)
 	if err != nil {
 		slog.Error("idle sweep list ephemeral candidates failed", "err", err)
 		return sweepStats{}
 	}
 
 	return sweepConcurrently(ctx, s, cfg, "ephemeral", records, func(ctx context.Context, rec *store.SandboxRecord) (bool, error) {
-		if rec.Status != "running" || !idleDue(rec, store.IdleEphemeral, cfg, now, cfg.IdleDeleteSafetyBuffer) {
+		if rec.Status != "running" || !idleDue(rec, store.IdleEphemeral, cfg, now, buffer) {
 			return false, nil
 		}
 		return deleteIdleSandbox(ctx, s, reg, cfg, tlsCfg, rec, now, "ephemeral")
@@ -509,14 +522,15 @@ func sweepEphemeralSandboxes(ctx context.Context, s store.SandboxStore, reg regi
 }
 
 func sweepIdleStopSandboxes(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) sweepStats {
-	records, err := listIdle(s, store.IdleStop, cfg, now, 0)
+	buffer := activityLag(cfg)
+	records, err := listIdle(s, store.IdleStop, cfg, now, buffer)
 	if err != nil {
 		slog.Error("idle sweep list stop candidates failed", "err", err)
 		return sweepStats{}
 	}
 
 	return sweepConcurrently(ctx, s, cfg, "stop", records, func(ctx context.Context, rec *store.SandboxRecord) (bool, error) {
-		if rec.Status != "running" || !idleDue(rec, store.IdleStop, cfg, now, 0) {
+		if rec.Status != "running" || !idleDue(rec, store.IdleStop, cfg, now, buffer) {
 			return false, nil
 		}
 		if orphanReapDue(reg, rec.RunnerID, cfg, now) {
@@ -551,13 +565,14 @@ func sweepIdleStopSandboxes(ctx context.Context, s store.SandboxStore, reg regis
 // sweepIdleArchiveSandboxes archives stopped sandboxes idle past their
 // archive window.
 func sweepIdleArchiveSandboxes(ctx context.Context, s store.SandboxStore, cfg *config.APIConfig, now time.Time, a *archiver) sweepStats {
-	records, err := listIdle(s, store.IdleArchive, cfg, now, 0)
+	buffer := deleteActivityLag(cfg)
+	records, err := listIdle(s, store.IdleArchive, cfg, now, buffer)
 	if err != nil {
 		slog.Error("idle sweep list archive candidates failed", "err", err)
 		return sweepStats{}
 	}
 	return sweepConcurrently(ctx, s, cfg, "archive", records, func(ctx context.Context, rec *store.SandboxRecord) (bool, error) {
-		if rec.Status != "stopped" || rec.Ephemeral || !idleDue(rec, store.IdleArchive, cfg, now, 0) {
+		if rec.Status != "stopped" || rec.Ephemeral || !idleDue(rec, store.IdleArchive, cfg, now, buffer) {
 			return false, nil
 		}
 		if err := a.archive(ctx, rec); err != nil {

@@ -149,7 +149,7 @@ func (r *Runtime) EnsureSandboxRunning(ctx context.Context, sandboxID string) (r
 	if err := ctx.Err(); err != nil {
 		return runnerruntime.WakeResult{}, err
 	}
-	recovered, err, _ := r.wakeGroup.Do(sandboxID, func() (interface{}, error) {
+	recovered, err, _ := r.wakeGroup.Do(sandboxID, func() (any, error) {
 		// beginTransition detaches the wake from the request that triggered it, so
 		// the wake outlives that request. Concurrent callers share one wake, so the
 		// wake event carries the trace id of whichever caller started it.

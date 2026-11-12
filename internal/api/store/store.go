@@ -143,7 +143,6 @@ type SandboxStore interface {
 	Create(record *SandboxRecord) error
 	Get(id string) (*SandboxRecord, error)
 	UpdateStatus(id, status string) error
-	UpdateLastActive(id string) error
 	// UpdateIdleWindows sets a sandbox's own idle windows (seconds, 0 = the
 	// API's global window).
 	UpdateIdleWindows(id string, stopAfter, archiveAfter, deleteAfter int64) error
@@ -176,6 +175,11 @@ type SandboxStore interface {
 	// TouchRunnerActive marks running sandboxes active now, but only those
 	// stored as placed on runnerID: a runner vouches for its own sandboxes alone.
 	TouchRunnerActive(runnerID string, ids []string) error
+	// RecordActivity sets each sandbox in lastActiveAt (id to unix seconds)
+	// running and moves its last_active_at forward to that time, never back,
+	// in one statement. Ids without a row, and archived or restoring rows, are
+	// skipped.
+	RecordActivity(ctx context.Context, lastActiveAt map[string]int64) error
 	Delete(id string) error
 	LockSandbox(ctx context.Context, id string) (unlock func(), err error)
 	// ListIdle returns phase's sweep candidates at now (Unix seconds): rows

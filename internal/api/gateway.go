@@ -3,6 +3,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/n8n-io/sandbox-service/internal/api/archivestore"
@@ -16,8 +17,12 @@ import (
 // NewGatewayRouter creates the public API gateway that manages state and
 // coordinates with registered runner services. If rec is enabled, HTTPMiddleware
 // wraps the request chain, and its /metrics handler is mounted here unless
-// cfg gives metrics a listener of their own.
-func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.RunnerRegistry, rec *metrics.APIRecorder) (http.Handler, error) {
+// cfg gives metrics a listener of their own. Proxied requests report sandbox
+// activity to activity, which the caller runs.
+func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.RunnerRegistry, rec *metrics.APIRecorder, activity *ActivityRecorder) (http.Handler, error) {
+	if activity == nil {
+		return nil, errors.New("api: an activity recorder is required")
+	}
 	runnerTransport, err := newRunnerTransport(cfg)
 	if err != nil {
 		return nil, err
@@ -26,7 +31,8 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	if err != nil {
 		return nil, err
 	}
-	sandboxProxy := sandboxProxyHandler(s, cfg, runnerTransport, arch)
+	sandboxProxy := sandboxProxyHandler(s, cfg, runnerTransport, arch, activity)
+	keyCache := newAPIKeyCache(cfg.APIKeyCacheTTL)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -71,10 +77,10 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	mux.HandleFunc("POST /admin/tenants", handleCreateTenant(s, cfg))
 	mux.HandleFunc("GET /admin/tenants/{id}", handleGetTenant(s))
 	mux.HandleFunc("PATCH /admin/tenants/{id}", handleUpdateTenant(s, cfg))
-	mux.HandleFunc("DELETE /admin/tenants/{id}", handleDeleteTenant(s))
+	mux.HandleFunc("DELETE /admin/tenants/{id}", handleDeleteTenant(s, keyCache))
 	mux.HandleFunc("GET /admin/tenants/{id}/keys", handleListTenantKeys(s))
 	mux.HandleFunc("POST /admin/tenants/{id}/keys", handleCreateTenantKey(s))
-	mux.HandleFunc("DELETE /admin/tenants/{id}/keys/{keyId}", handleRevokeTenantKey(s))
+	mux.HandleFunc("DELETE /admin/tenants/{id}/keys/{keyId}", handleRevokeTenantKey(s, keyCache))
 	mux.HandleFunc("GET /admin/scaler", handleGetScaler(cfg))
 	mux.HandleFunc("GET /templates", handleListTemplates(reg, cfg))
 	mux.HandleFunc("GET /admin/runners", handleListRunners(reg))
@@ -93,6 +99,7 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	mux.HandleFunc("GET /sandboxes/{id}/files/content", limitTenant(sandboxProxy(false)))
 	mux.HandleFunc("PUT /sandboxes/{id}/files", limitTenant(sandboxProxy(true)))
 	mux.HandleFunc("POST /sandboxes/{id}/files", limitTenant(sandboxProxy(true)))
+	mux.HandleFunc("POST /sandboxes/{id}/files/archive", limitTenant(sandboxProxy(true)))
 	mux.HandleFunc("DELETE /sandboxes/{id}/files", limitTenant(sandboxProxy(false)))
 	mux.HandleFunc("POST /sandboxes/{id}/mkdir", limitTenant(sandboxProxy(false)))
 	mux.HandleFunc("GET /sandboxes/{id}/stat", limitTenant(sandboxProxy(false)))
@@ -101,7 +108,7 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	if rec.Enabled() {
 		handler = metrics.HTTPMiddleware(rec)(handler)
 	}
-	handler = AuthMiddleware(cfg.APIKeys, cfg.ProvisionerKeys, cfg.ScalerKeys, s)(handler)
+	handler = AuthMiddleware(cfg.APIKeys, cfg.ProvisionerKeys, cfg.ScalerKeys, s, keyCache)(handler)
 	handler = publicPaths.RejectOtherMethods(handler)
 	handler = RetryAfterMiddleware(handler)
 	handler = LoggingMiddleware(handler)

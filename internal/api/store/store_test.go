@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -454,6 +455,77 @@ func TestTenantAndAPIKeyCRUD(t *testing.T) {
 	if err != nil || len(active) != 0 {
 		t.Fatalf("after revoke: len=%d err=%v", len(active), err)
 	}
+}
+
+func TestRecordActivity(t *testing.T) {
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	defer s.Close()
+	testRecordActivity(t, s, "activity-1")
+}
+
+// testRecordActivity runs against both backends; no id starting with prefix
+// may exist yet.
+func testRecordActivity(t *testing.T, s SandboxStore, prefix string) {
+	t.Helper()
+	ctx := context.Background()
+	a, b := prefix+"-a", prefix+"-b"
+	for _, id := range []string{a, b} {
+		if err := s.Create(&SandboxRecord{ID: id, Status: "running", CreatedAt: 100, LastActiveAt: 100}); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		t.Cleanup(func() { _ = s.Delete(id) })
+	}
+
+	type row struct {
+		lastActiveAt int64
+		status       string
+	}
+	check := func(step string, batch map[string]int64, want map[string]row) {
+		t.Helper()
+		if err := s.RecordActivity(ctx, batch); err != nil {
+			t.Fatalf("%s: record activity: %v", step, err)
+		}
+		for id, w := range want {
+			got, err := s.Get(id)
+			if err != nil || got == nil {
+				t.Fatalf("%s: get %s: %+v err=%v", step, id, got, err)
+			}
+			if got.LastActiveAt != w.lastActiveAt || got.Status != w.status {
+				t.Fatalf("%s: %s last_active_at=%d status=%q, want %d %q", step, id, got.LastActiveAt, got.Status, w.lastActiveAt, w.status)
+			}
+		}
+	}
+
+	check("newer times, and a sandbox without a row",
+		map[string]int64{a: 200, b: 300, prefix + "-missing": 400},
+		map[string]row{a: {200, "running"}, b: {300, "running"}})
+	// Another API pod may write an older time after a newer one.
+	check("same and older times",
+		map[string]int64{a: 200, b: 250},
+		map[string]row{a: {200, "running"}, b: {300, "running"}})
+
+	if err := s.UpdateStatus(a, "stopped"); err != nil {
+		t.Fatalf("update status: %v", err)
+	}
+	// A wake: running again, without moving the time back.
+	check("older time on a stopped row",
+		map[string]int64{a: 150},
+		map[string]row{a: {200, "running"}, b: {300, "running"}})
+
+	for _, status := range []string{"archived", "restoring"} {
+		if err := s.UpdateStatus(b, status); err != nil {
+			t.Fatalf("update status: %v", err)
+		}
+		// A late write must not revive a sandbox whose runner copy may be gone.
+		check("newer time on a "+status+" row",
+			map[string]int64{b: 500},
+			map[string]row{b: {300, status}})
+	}
+
+	check("nothing", map[string]int64{}, map[string]row{a: {200, "running"}})
 }
 
 func TestUpdateTenantLimits(t *testing.T) {

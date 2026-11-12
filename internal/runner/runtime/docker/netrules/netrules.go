@@ -325,7 +325,7 @@ func removeJumpReferences(parent, chain string) error {
 	}
 
 	prefix := "-A " + parent + " "
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
 		if !strings.Contains(line, "-j "+chain) {
 			continue
 		}

@@ -72,6 +72,7 @@ func NewRouter(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.Runner
 	mux.HandleFunc("GET /sandboxes/{id}/files/content", proxy)
 	mux.HandleFunc("PUT /sandboxes/{id}/files", uploadProxy)
 	mux.HandleFunc("POST /sandboxes/{id}/files", uploadProxy)
+	mux.HandleFunc("POST /sandboxes/{id}/files/archive", uploadProxy)
 	mux.HandleFunc("DELETE /sandboxes/{id}/files", proxy)
 	mux.HandleFunc("POST /sandboxes/{id}/mkdir", proxy)
 	mux.HandleFunc("GET /sandboxes/{id}/stat", proxy)
@@ -101,7 +102,7 @@ func countFollowStream(tr *activity.Tracker, next http.HandlerFunc) http.Handler
 	}
 }
 
-func writeJSON(w http.ResponseWriter, status int, data interface{}) {
+func writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(data)
