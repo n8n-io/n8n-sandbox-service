@@ -115,6 +115,7 @@ func handleCreateTenant(s store.SandboxStore, cfg *config.APIConfig) http.Handle
 		var req createTenantRequest
 		if r.Body != nil && r.ContentLength != 0 {
 			dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+			dec.DisallowUnknownFields()
 			if err := dec.Decode(&req); err != nil {
 				writeError(w, http.StatusBadRequest, "invalid JSON body")
 				return

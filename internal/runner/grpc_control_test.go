@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/n8n-io/sandbox-service/internal/api/grpc/pb"
 	"github.com/n8n-io/sandbox-service/internal/api/runnerctl"
@@ -28,6 +29,42 @@ func (s *stopWakeRuntime) StopSandbox(_ context.Context, sandboxID string) error
 		return runnerruntime.ErrSandboxNotFound
 	}
 	return nil
+}
+
+type deleteContextRuntime struct {
+	fakeRuntime
+	deleteCtx context.Context
+}
+
+func (d *deleteContextRuntime) DeleteSandbox(ctx context.Context, _ string) error {
+	d.deleteCtx = ctx
+	return nil
+}
+
+// The API gives a silent runner only seconds before it drops its record of the
+// sandbox, so a delete the runner has received must run to its end on the
+// runtime's own budget, not stop with the caller.
+func TestSandboxControlGRPCDeleteOutlivesTheCaller(t *testing.T) {
+	rt := &deleteContextRuntime{}
+	srv := &SandboxControlGRPC{
+		Runtime: rt,
+		Cfg:     &config.Config{APIKeys: map[string]struct{}{"runner-key": {}}},
+		Rec:     metrics.NewRunnerRecorder(false),
+		Cordon:  cordon.New(),
+	}
+	incoming := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-api-key", "runner-key"))
+	ctx, cancel := context.WithTimeout(incoming, time.Hour)
+	cancel()
+
+	if _, err := srv.DeleteSandbox(ctx, &pb.DeleteSandboxRequest{SandboxId: "11111111-1111-4111-8111-111111111111"}); err != nil {
+		t.Fatalf("DeleteSandbox() failed: %v", err)
+	}
+	if _, ok := rt.deleteCtx.Deadline(); ok {
+		t.Error("the runtime got the caller's deadline")
+	}
+	if err := rt.deleteCtx.Err(); err != nil {
+		t.Errorf("the runtime got the caller's cancellation: %v", err)
+	}
 }
 
 type createOptsRuntime struct {
@@ -178,11 +215,11 @@ func TestSandboxControlGRPCCordon(t *testing.T) {
 		want bool
 	}{
 		{nil, false},
-		{ptr(true), true},
-		{ptr(true), true},
+		{new(true), true},
+		{new(true), true},
 		{nil, true},
-		{ptr(false), false},
-		{ptr(false), false},
+		{new(false), false},
+		{new(false), false},
 		{nil, false},
 	} {
 		var got bool
@@ -257,8 +294,6 @@ func TestSandboxControlGRPCCordonRequiresAPIKey(t *testing.T) {
 		t.Fatal("an unauthenticated call cordoned the runner")
 	}
 }
-
-func ptr[T any](v T) *T { return &v }
 
 func TestSandboxControlGRPCStopSandboxRecordsMetric(t *testing.T) {
 	rec := metrics.NewRunnerRecorder(true)

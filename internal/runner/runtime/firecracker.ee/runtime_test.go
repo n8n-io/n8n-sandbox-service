@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -841,12 +842,7 @@ func TestTCPDaemonProxyStopCancelsActiveGuestDial(t *testing.T) {
 }
 
 func containsArg(args []string, want string) bool {
-	for _, arg := range args {
-		if arg == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(args, want)
 }
 
 func TestRuntimeStopSandboxKeepsSandboxStopped(t *testing.T) {

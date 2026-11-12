@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -17,6 +18,14 @@ import (
 // errInvalidArchive marks an archive the archive route refuses: one it cannot
 // read, or an entry it does not accept.
 var errInvalidArchive = errors.New("invalid archive")
+
+// fileOpError is an error of the daemon's own that carries its HTTP status.
+type fileOpError struct {
+	status int
+	msg    string
+}
+
+func (e *fileOpError) Error() string { return e.msg }
 
 // resolvePath resolves path from the sandbox filesystem root.
 func resolvePath(path string) string {
@@ -80,41 +89,6 @@ func HandleFileList(path string, recursive bool, extension string) ([]FileInfo, 
 	return infos, nil
 }
 
-// HandleFileRead reads up to maxBytes from the file at path.
-// If maxBytes is <= 0, no size limit is enforced.
-func HandleFileRead(path string, maxBytes int64) ([]byte, error) {
-	resolved := resolvePath(path)
-
-	f, err := os.Open(resolved)
-	if err != nil {
-		return nil, fmt.Errorf("file_read open %s: %w", resolved, err)
-	}
-	defer f.Close()
-
-	if maxBytes > 0 {
-		// Check size before reading.
-		fi, err := f.Stat()
-		if err != nil {
-			return nil, fmt.Errorf("file_read stat %s: %w", resolved, err)
-		}
-		if fi.Size() > maxBytes {
-			return nil, fmt.Errorf("file_read: file size %d exceeds limit %d", fi.Size(), maxBytes)
-		}
-		data := make([]byte, fi.Size())
-		_, err = io.ReadFull(f, data)
-		if err != nil {
-			return nil, fmt.Errorf("file_read read %s: %w", resolved, err)
-		}
-		return data, nil
-	}
-
-	data, err := io.ReadAll(f)
-	if err != nil {
-		return nil, fmt.Errorf("file_read read %s: %w", resolved, err)
-	}
-	return data, nil
-}
-
 // HandleFileWrite writes data to path, creating intermediate
 // directories as needed. If maxBytes is > 0, the write is rejected when
 // len(data) exceeds maxBytes. If overwrite is false and the file already exists,
@@ -143,7 +117,7 @@ func HandleFileWrite(path string, data []byte, maxBytes int64, overwrite bool) e
 	f, err := os.OpenFile(resolved, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
-			return fmt.Errorf("file_write: file already exists: %s", path)
+			return &fileOpError{http.StatusConflict, fmt.Sprintf("file_write: file already exists: %s", path)}
 		}
 		return fmt.Errorf("file_write open %s: %w", resolved, err)
 	}
@@ -215,16 +189,16 @@ func HandleFileCopy(srcPath, destPath string, recursive, overwrite bool) error {
 
 	if !overwrite {
 		if _, err := os.Stat(resolvedDest); err == nil {
-			return fmt.Errorf("file_copy: destination already exists: %s", destPath)
+			return &fileOpError{http.StatusConflict, fmt.Sprintf("file_copy: destination already exists: %s", destPath)}
 		}
 	}
 
 	if srcInfo.IsDir() {
 		if !recursive {
-			return fmt.Errorf("file_copy: source is a directory, use recursive option")
+			return &fileOpError{http.StatusBadRequest, "file_copy: source is a directory, use recursive option"}
 		}
 		if isSameOrSubpath(resolvedSrc, resolvedDest) {
-			return fmt.Errorf("file_copy: destination must not be inside source directory")
+			return &fileOpError{http.StatusBadRequest, "file_copy: destination must not be inside source directory"}
 		}
 		return copyDir(resolvedSrc, resolvedDest)
 	}
@@ -240,7 +214,7 @@ func HandleFileMove(srcPath, destPath string, overwrite bool) error {
 
 	if !overwrite {
 		if _, err := os.Stat(resolvedDest); err == nil {
-			return fmt.Errorf("file_move: destination already exists: %s", destPath)
+			return &fileOpError{http.StatusConflict, fmt.Sprintf("file_move: destination already exists: %s", destPath)}
 		}
 	}
 
@@ -249,7 +223,7 @@ func HandleFileMove(srcPath, destPath string, overwrite bool) error {
 		return fmt.Errorf("file_move stat src %s: %w", resolvedSrc, err)
 	}
 	if srcInfo.IsDir() && isSameOrSubpath(resolvedSrc, resolvedDest) {
-		return fmt.Errorf("file_move: destination must not be inside source directory")
+		return &fileOpError{http.StatusBadRequest, "file_move: destination must not be inside source directory"}
 	}
 
 	// Ensure parent directory of destination exists.

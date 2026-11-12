@@ -25,6 +25,8 @@ func newFirecrackerAPIClient(socketPath string) *firecrackerAPIClient {
 			var dialer net.Dialer
 			return dialer.DialContext(ctx, "unix", socketPath)
 		},
+		// Callers build a client per use and never close it; the VMM accepts few connections.
+		DisableKeepAlives: true,
 	}
 	return &firecrackerAPIClient{client: &http.Client{Transport: transport, CheckRedirect: runnerruntime.RefuseRedirect}}
 }

@@ -24,7 +24,7 @@ func captureLifecycleEvents(t *testing.T) func(msg string) []map[string]any {
 
 	return func(msg string) []map[string]any {
 		var events []map[string]any
-		for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
+		for line := range bytes.SplitSeq(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
 			if len(line) == 0 {
 				continue
 			}

@@ -1,9 +1,9 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Enrolled: the pins in the sandbox image (sandbox-workspace/package.json, the global typescript in Dockerfile.sandbox and the venv's pip in sandbox-venv/requirements.txt, whose hashes Renovate refreshes with hashin) and the runtime base images of Dockerfile.runner-dind and Dockerfile.api. Lock file maintenance refreshes the transitive deps in sandbox-workspace/package-lock.json weekly; Renovate cannot raise vulnerability-driven PRs for transitive npm deps.",
+  "description": "Enrolled: the pins in the sandbox image (sandbox-workspace/package.json, the global npm and typescript in Dockerfile.sandbox and the venv's pip and setuptools in sandbox-venv/requirements.txt, whose hashes Renovate refreshes with hashin), the runtime base images of Dockerfile.runner-dind and Dockerfile.api, and the direct Go module requirements in go.mod. Lock file maintenance refreshes the transitive deps in sandbox-workspace/package-lock.json weekly; Renovate cannot raise vulnerability-driven PRs for transitive npm deps.",
   "extends": ["config:recommended", ":maintainLockFilesWeekly"],
-  "enabledManagers": ["npm", "pip_requirements", "dockerfile", "custom.regex"],
-  "includePaths": ["sandbox-workspace/**", "sandbox-venv/**", "Dockerfile.sandbox", "Dockerfile.runner-dind", "Dockerfile.api"],
+  "enabledManagers": ["npm", "pip_requirements", "dockerfile", "gomod", "custom.regex"],
+  "includePaths": ["sandbox-workspace/**", "sandbox-venv/**", "Dockerfile.sandbox", "Dockerfile.runner-dind", "Dockerfile.api", "go.mod"],
   "npm": {
     "managerFilePatterns": ["/^sandbox-workspace/package\\.json$/"]
   },
@@ -13,7 +13,7 @@
   "packageRules": [
     {
       "description": "Match the minimumReleaseAge in sdk/pnpm-workspace.yaml. typescript and @types/node are excluded: this rule matches them before the rules below switch them to the custom datasources, which publish no release timestamps, so minimumReleaseAge would hold them back indefinitely. Lock file maintenance ignores minimumReleaseAge; sandbox-workspace/.npmrc enforces the same age in npm instead.",
-      "matchDatasources": ["npm", "pypi"],
+      "matchDatasources": ["npm", "pypi", "go"],
       "matchPackageNames": ["!typescript", "!@types/node"],
       "minimumReleaseAge": "2 days"
     },
@@ -39,7 +39,13 @@
       "overrideDatasource": "custom.n8n-stable-types-node"
     },
     {
-      "description": "Dockerfile.sandbox is in includePaths only for the typescript pin, read by the custom regex manager. The Dockerfile manager's default file patterns match it too.",
+      "description": "Keep the npm in Dockerfile.sandbox on the major its Node.js line bundles (npm 11 for Node 24), so it only takes npm's fixes.",
+      "matchFileNames": ["Dockerfile.sandbox"],
+      "matchPackageNames": ["npm"],
+      "allowedVersions": "<12"
+    },
+    {
+      "description": "Dockerfile.sandbox is in includePaths only for the npm and typescript pins, read by the custom regex manager. The Dockerfile manager's default file patterns match it too.",
       "matchManagers": ["dockerfile"],
       "matchFileNames": ["Dockerfile.sandbox"],
       "enabled": false
@@ -57,6 +63,19 @@
       "versioning": "regex:^(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)-(?<compatibility>dind)-alpine(?<build>\\d+)\\.(?<revision>\\d+)$",
       "allowedVersions": "/^29\\./",
       "pinDigests": true
+    },
+    {
+      "description": "Go module updates arrive as one PR, once a week. go mod tidy keeps go.sum and the indirect requirements in step.",
+      "matchManagers": ["gomod"],
+      "groupName": "Go modules",
+      "schedule": ["* 0-6 * * 1"],
+      "postUpdateOptions": ["gomodTidy"]
+    },
+    {
+      "description": "The go and toolchain directives are not enrolled. CI installs the Go version on the go line and the golang builder stages in the Dockerfiles use the same minor, so a bump has to change both.",
+      "matchManagers": ["gomod"],
+      "matchDepTypes": ["golang", "toolchain"],
+      "enabled": false
     }
   ],
   "customDatasources": {
@@ -79,8 +98,7 @@
     {
       "customType": "regex",
       "managerFilePatterns": ["/^Dockerfile\\.sandbox$/"],
-      "matchStrings": ["npm install -g typescript@(?<currentValue>[0-9.]+)"],
-      "depNameTemplate": "typescript",
+      "matchStrings": ["npm install -g (?<depName>npm|typescript)@(?<currentValue>[0-9.]+)"],
       "datasourceTemplate": "npm"
     }
   ]

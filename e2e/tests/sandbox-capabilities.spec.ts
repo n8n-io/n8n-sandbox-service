@@ -19,15 +19,18 @@ test.describe('Docker sandbox capability policy', DOCKER_ONLY, () => {
   test('daemon and user processes have no capabilities at all', async () => {
     const id = await createSandbox();
     try {
+      // PID 1 is Docker's init, $PPID the daemon.
       const result = await execWithTransientRetry(
         id,
-        `for pid in 1 self; do ` +
+        `for pid in 1 $PPID self; do ` +
           `awk '$1 == "CapEff:" { print $2 }' /proc/$pid/status; ` +
           `awk '$1 == "CapBnd:" { print $2 }' /proc/$pid/status; ` +
           `done`,
       );
       expect(result).toHaveSucceeded();
       expect(result.stdout.trim().split(/\s+/)).toEqual([
+        NO_CAPABILITIES,
+        NO_CAPABILITIES,
         NO_CAPABILITIES,
         NO_CAPABILITIES,
         NO_CAPABILITIES,

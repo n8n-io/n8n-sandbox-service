@@ -3,6 +3,7 @@ package api
 import (
 	"log/slog"
 	"net/http"
+	"runtime/debug"
 )
 
 // RecoveryMiddleware catches panics from downstream handlers and returns a 500 error.
@@ -18,7 +19,7 @@ func RecoveryMiddleware(next http.Handler) http.Handler {
 				if err == http.ErrAbortHandler {
 					panic(err)
 				}
-				slog.Error("panic recovered", "err", err, "path", r.URL.Path)
+				slog.Error("panic recovered", "err", err, "path", r.URL.Path, "stack", string(debug.Stack()))
 				if rw.wroteHeader {
 					panic(http.ErrAbortHandler)
 				}

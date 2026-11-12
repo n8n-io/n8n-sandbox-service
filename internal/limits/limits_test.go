@@ -14,10 +14,8 @@ func TestKeyedLimiterNeverAdmitsMoreThanCapConcurrently(t *testing.T) {
 	k := NewKeyedLimiter(max)
 	var holders, peak atomic.Int64
 	var wg sync.WaitGroup
-	for i := 0; i < 200; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 200 {
+		wg.Go(func() {
 			if !k.TryAcquire("a") {
 				return
 			}
@@ -31,7 +29,7 @@ func TestKeyedLimiterNeverAdmitsMoreThanCapConcurrently(t *testing.T) {
 			time.Sleep(time.Millisecond)
 			holders.Add(-1)
 			k.Release("a")
-		}()
+		})
 	}
 	wg.Wait()
 	if p := peak.Load(); p > max {
@@ -82,7 +80,7 @@ func TestKeyedLimiterForgetsKeysWithNothingInProgress(t *testing.T) {
 
 func TestKeyedLimiterWithoutCapTracksNothing(t *testing.T) {
 	k := NewKeyedLimiter(0)
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		if !k.TryAcquire("a") {
 			t.Fatal("turned away with no cap")
 		}

@@ -118,7 +118,7 @@ func validateJailPath(field, path string) error {
 // The guest applied it while booting, so it is part of the snapshotted routing
 // table and cannot be re-pointed at restore.
 func (p *bootParams) guestGateway() (net.IP, error) {
-	for _, arg := range strings.Fields(p.BootArgs) {
+	for arg := range strings.FieldsSeq(p.BootArgs) {
 		spec, found := strings.CutPrefix(arg, "ip=")
 		if !found {
 			continue

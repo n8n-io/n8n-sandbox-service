@@ -10,12 +10,19 @@ COPY . .
 
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/runner ./cmd/runner-docker
 
-FROM docker:29.9.2-dind-alpine3.24@sha256:9e79b879b177fbd72c34376a3dd3d91747da5db49e1f560f76aea59561471977 AS runner
+FROM docker:29.9.3-dind-alpine3.24@sha256:08a98015fce594af7c382883bea080ea206de74402a95da9dc52b6428c8cd121 AS runner
 
 # The base image no longer ships xfsprogs; start-runner.sh needs mkfs.xfs for
 # the disk-quota storage pool.
+#
+# The runner needs only dockerd, the docker CLI and docker-init, which
+# sandboxes run under (--init). ctr and the buildx and compose plugins go
+# unused, but each carries its own outdated Go dependencies.
 RUN apk upgrade --no-cache \
-    && apk add --no-cache tini xfsprogs
+    && apk add --no-cache tini xfsprogs \
+    && rm /usr/local/bin/ctr \
+        /usr/local/libexec/docker/cli-plugins/docker-buildx \
+        /usr/local/libexec/docker/cli-plugins/docker-compose
 
 COPY --from=builder /out/runner /usr/local/bin/sandbox-runner
 COPY scripts/start-runner.sh /usr/local/bin/start-runner.sh
