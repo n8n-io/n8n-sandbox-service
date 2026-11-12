@@ -37,6 +37,24 @@ func TestRecoveryMiddlewareWritesErrorBeforeResponseStarts(t *testing.T) {
 	}
 }
 
+func TestRecoveryMiddlewareLogsStack(t *testing.T) {
+	logs := captureLogs(t)
+
+	handler := RecoveryMiddleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic("boom")
+	}))
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/executions", nil))
+
+	events := logs()
+	if len(events) != 1 {
+		t.Fatalf("got %d log events, want one", len(events))
+	}
+	stack, _ := events[0]["stack"].(string)
+	if !strings.Contains(stack, "TestRecoveryMiddlewareLogsStack") {
+		t.Fatalf("expected the panicking handler in the stack field, got %q", stack)
+	}
+}
+
 func TestRecoveryMiddlewareAbortsAfterResponseStarts(t *testing.T) {
 	handler := RecoveryMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/x-ndjson")

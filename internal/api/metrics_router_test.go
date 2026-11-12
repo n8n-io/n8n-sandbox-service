@@ -31,7 +31,7 @@ func dedicatedMetricsSetup(t *testing.T) http.Handler {
 		MaxFileBytes:      1024,
 		ListenAddr:        ":8080",
 		MetricsListenAddr: ":9100",
-	}, registry.New(45*time.Second), rec, nil)
+	}, registry.New(45*time.Second), rec, NewActivityRecorder(s, nil), nil)
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestMetricsRouterDoesNotRecordScrapes(t *testing.T) {
 
 	// A scrape is not API traffic, so nothing on this listener observes it.
 	var body string
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		rr := httptest.NewRecorder()
 		router.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 		body = rr.Body.String()

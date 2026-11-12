@@ -292,7 +292,7 @@ func newCachingTestGateways(t *testing.T, pods int) ([]http.Handler, *keyLookupC
 	})
 	routers := make([]http.Handler, pods)
 	for i := range routers {
-		routers[i], err = NewGatewayRouter(cs, cfg, registry.New(45*time.Second), metrics.NewAPIRecorder(false), nil)
+		routers[i], err = NewGatewayRouter(cs, cfg, registry.New(45*time.Second), metrics.NewAPIRecorder(false), NewActivityRecorder(cs, nil), nil)
 		if err != nil {
 			t.Fatalf("create gateway router: %v", err)
 		}
@@ -404,12 +404,13 @@ func (s revokeErrStore) RevokeAPIKey(id string) error {
 func TestRevokeClearsTheCacheEvenWhenTheStoreReportsAnError(t *testing.T) {
 	routers, cs := newCachingTestGateways(t, 1)
 	created := mintTenantKey(t, routers[0], `{"name":"acme"}`)
-	router, err := NewGatewayRouter(revokeErrStore{cs}, withRunnerTLS(&config.APIConfig{
+	s := revokeErrStore{cs}
+	router, err := NewGatewayRouter(s, withRunnerTLS(&config.APIConfig{
 		APIKeys:        map[string]struct{}{"admin-key": {}},
 		RunnerAPIKey:   "runner-key",
 		MaxFileBytes:   1024,
 		APIKeyCacheTTL: time.Minute,
-	}), registry.New(45*time.Second), metrics.NewAPIRecorder(false), nil)
+	}), registry.New(45*time.Second), metrics.NewAPIRecorder(false), NewActivityRecorder(s, nil), nil)
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}

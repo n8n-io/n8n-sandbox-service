@@ -31,7 +31,7 @@ func NewClientTLSConfig(serverCAFile, clientCertFile, clientKeyFile, serverName 
 		RootCAs:              pool,
 		ServerName:           serverName,
 		GetClientCertificate: reloader.GetClientCertificate,
-		MinVersion:           tls.VersionTLS12,
+		MinVersion:           tls.VersionTLS13,
 	}, nil
 }
 

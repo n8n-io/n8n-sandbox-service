@@ -37,7 +37,7 @@ func newVolumeTestGateway(t *testing.T, volumes volumestore.Store) http.Handler 
 		APIKeys:              map[string]struct{}{"admin-key": {}},
 		MaxFileBytes:         1024,
 		MaxInflightPerTenant: 4,
-	}, registry.New(45*time.Second), metrics.NewAPIRecorder(true), volumes)
+	}, registry.New(45*time.Second), metrics.NewAPIRecorder(true), NewActivityRecorder(sandboxStore, nil), volumes)
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestVolumeObjectStalledDownloadGivesBackItsSlot(t *testing.T) {
 	router, err := NewGatewayRouter(sandboxStore, &config.APIConfig{
 		APIKeys:              map[string]struct{}{"admin-key": {}},
 		MaxInflightPerTenant: 1,
-	}, registry.New(45*time.Second), metrics.NewAPIRecorder(true), vs)
+	}, registry.New(45*time.Second), metrics.NewAPIRecorder(true), NewActivityRecorder(sandboxStore, nil), vs)
 	if err != nil {
 		t.Fatal(err)
 	}

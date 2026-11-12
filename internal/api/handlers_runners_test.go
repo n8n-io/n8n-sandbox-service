@@ -37,7 +37,7 @@ func newRunnersGateway(t *testing.T) (http.Handler, *registry.MemoryRegistry) {
 		MaxFileBytes:        1024,
 		DefaultMaxSandboxes: provMaxDflt,
 		HeartbeatGrace:      45 * time.Second,
-	}), reg, metrics.NewAPIRecorder(false), nil)
+	}), reg, metrics.NewAPIRecorder(false), NewActivityRecorder(s, nil), nil)
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}

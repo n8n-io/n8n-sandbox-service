@@ -35,7 +35,7 @@ func newProvisionerGateway(t *testing.T) (http.Handler, store.SandboxStore) {
 		RunnerAPIKey:        "runner-key",
 		MaxFileBytes:        1024,
 		DefaultMaxSandboxes: provMaxDflt,
-	}), registry.New(45*time.Second), metrics.NewAPIRecorder(false), nil)
+	}), registry.New(45*time.Second), metrics.NewAPIRecorder(false), NewActivityRecorder(s, nil), nil)
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}

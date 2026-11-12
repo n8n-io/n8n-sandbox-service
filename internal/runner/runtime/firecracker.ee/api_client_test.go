@@ -4,9 +4,15 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -83,5 +89,52 @@ func TestFirecrackerAPIClientPutJSONLimitsErrorResponseBody(t *testing.T) {
 	}
 	if len(err.Error()) > int(maxFirecrackerAPIResponseBodyBytes)+256 {
 		t.Fatalf("error body was not bounded, got error length %d", len(err.Error()))
+	}
+}
+
+func TestFirecrackerAPIClientLeavesNoConnectionOpen(t *testing.T) {
+	// Not t.TempDir(): a socket path is capped near 104 bytes.
+	dir, err := os.MkdirTemp("/tmp", "fc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	socketPath := filepath.Join(dir, "fc.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var openConns atomic.Int32
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+			response.WriteHeader(http.StatusNoContent)
+		}),
+		ConnState: func(_ net.Conn, state http.ConnState) {
+			switch state {
+			case http.StateNew:
+				openConns.Add(1)
+			case http.StateClosed:
+				openConns.Add(-1)
+			}
+		},
+	}
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() { _ = server.Close() })
+	goroutinesBefore := runtime.NumGoroutine()
+
+	for range 20 {
+		if err := newFirecrackerAPIClient(socketPath).patchJSON(context.Background(), "/vm", []byte(`{}`)); err != nil {
+			t.Fatalf("patchJSON() error = %v", err)
+		}
+	}
+
+	// A close is not ordered against patchJSON returning.
+	deadline := time.Now().Add(5 * time.Second)
+	for openConns.Load() != 0 || runtime.NumGoroutine() > goroutinesBefore {
+		if time.Now().After(deadline) {
+			t.Fatalf("connections still open on the API socket = %d, want 0; goroutines = %d, want at most %d",
+				openConns.Load(), runtime.NumGoroutine(), goroutinesBefore)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }

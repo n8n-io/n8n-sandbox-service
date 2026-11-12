@@ -2,13 +2,14 @@ import { test, expect } from '@playwright/test';
 import './matchers';
 import {
   addAddress,
+  callVolumeMount,
   createSandbox,
   deleteSandbox,
   exec,
   execWithTransientRetry,
   siblingOf,
 } from './helpers';
-import { DOCKER_ONLY } from './tags';
+import { DOCKER_ONLY, FIRECRACKER_ONLY } from './tags';
 
 // Every sandbox process starts as uid 1000, so nothing is effective. The
 // bounding set is where a restored capability would show up.
@@ -18,15 +19,18 @@ test.describe('Docker sandbox capability policy', DOCKER_ONLY, () => {
   test('daemon and user processes have no capabilities at all', async () => {
     const id = await createSandbox();
     try {
+      // PID 1 is Docker's init, $PPID the daemon.
       const result = await execWithTransientRetry(
         id,
-        `for pid in 1 self; do ` +
+        `for pid in 1 $PPID self; do ` +
           `awk '$1 == "CapEff:" { print $2 }' /proc/$pid/status; ` +
           `awk '$1 == "CapBnd:" { print $2 }' /proc/$pid/status; ` +
           `done`,
       );
       expect(result).toHaveSucceeded();
       expect(result.stdout.trim().split(/\s+/)).toEqual([
+        NO_CAPABILITIES,
+        NO_CAPABILITIES,
         NO_CAPABILITIES,
         NO_CAPABILITIES,
         NO_CAPABILITIES,
@@ -91,6 +95,31 @@ test.describe('Docker sandbox capability policy', DOCKER_ONLY, () => {
       const addresses = await exec(id, 'hostname -I');
       expect(addresses).toHaveSucceeded();
       expect(addresses.stdout.split(/\s+/)).not.toContain(extraIP);
+    } finally {
+      await deleteSandbox(id);
+    }
+  });
+});
+
+// The guest daemon drops root at create, before anything runs in the sandbox.
+test.describe('volume mount request', () => {
+  test('was already made when a sandbox process can send it', FIRECRACKER_ONLY, async () => {
+    const id = await createSandbox();
+    try {
+      const call = await execWithTransientRetry(id, callVolumeMount);
+      expect(call).toHaveSucceeded();
+      expect(call.stdout.trim()).toBe('409');
+    } finally {
+      await deleteSandbox(id);
+    }
+  });
+
+  test('is not served on Docker', DOCKER_ONLY, async () => {
+    const id = await createSandbox();
+    try {
+      const call = await execWithTransientRetry(id, callVolumeMount);
+      expect(call).toHaveSucceeded();
+      expect(call.stdout.trim()).toBe('501');
     } finally {
       await deleteSandbox(id);
     }

@@ -10,3 +10,14 @@ import "net/http"
 func RefuseRedirect(*http.Request, []*http.Request) error {
 	return http.ErrUseLastResponse
 }
+
+// NoProxyTransport is the Transport of every runner client that talks to a
+// sandbox daemon over TCP: http.DefaultTransport without its proxy from the
+// environment, which would otherwise get the daemon traffic in clear.
+var NoProxyTransport = newNoProxyTransport()
+
+func newNoProxyTransport() *http.Transport {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	return transport
+}

@@ -91,7 +91,10 @@ type SandboxStore interface {
 	Create(record *SandboxRecord) error
 	Get(id string) (*SandboxRecord, error)
 	UpdateStatus(id, status string) error
-	UpdateLastActive(id string) error
+	// RecordActivity sets each sandbox in lastActiveAt (id to unix seconds)
+	// running and moves its last_active_at forward to that time, never back,
+	// in one statement. Ids without a row are skipped.
+	RecordActivity(ctx context.Context, lastActiveAt map[string]int64) error
 	Delete(id string) error
 	LockSandbox(ctx context.Context, id string) (unlock func(), err error)
 	ListForIdleReapDelete(cutoff int64) ([]*SandboxRecord, error)
