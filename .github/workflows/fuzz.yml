@@ -1,0 +1,79 @@
+name: Fuzz
+
+on:
+  schedule:
+    - cron: "37 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  targets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.list.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version-file: go.mod
+
+      - name: List the fuzz tests
+        id: list
+        shell: bash
+        run: |
+          matrix="$(go test -json -list '^Fuzz' ./... |
+            jq -sc 'map(select(.Action == "output" and (.Output | startswith("Fuzz"))) | {package: .Package, target: (.Output | rtrimstr("\n"))})')"
+          echo "matrix=${matrix}" >> "$GITHUB_OUTPUT"
+
+  fuzz:
+    needs: targets
+    name: ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.targets.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      # No shared build cache: it would take the fuzz corpus along to every
+      # other workflow that restores it.
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Find the fuzz cache
+        id: cache
+        run: echo "dir=$(go env GOCACHE)/fuzz" >> "$GITHUB_OUTPUT"
+
+      # The inputs earlier runs kept, so a run continues from the last one
+      # instead of starting at the seeds.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.cache.outputs.dir }}
+          key: fuzz-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-${{ matrix.target }}-
+
+      - name: Fuzz
+        env:
+          PACKAGE: ${{ matrix.package }}
+          TARGET: ${{ matrix.target }}
+        run: go test "$PACKAGE" -run '^$' -fuzz "^${TARGET}\$" -fuzztime 5m
+
+      - name: Upload the failing input
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ matrix.target }}
+          path: "**/testdata/fuzz/${{ matrix.target }}/*"
+          retention-days: 30
