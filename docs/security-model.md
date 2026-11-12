@@ -275,9 +275,24 @@ netfilter. Docker's default seccomp profile refuses `unshare` and namespace
 flags on `clone` without `CAP_SYS_ADMIN` (the runner sets no profile of its
 own); Firecracker guests boot with `sysctl.user.max_user_namespaces=0`.
 
-A sandbox therefore has no root and no `apt-get`. Packages install unprivileged,
-under `/home/user`: `pip` runs from a virtual environment at `/home/user/venv`,
-and `npm install -g` writes to `/home/user/.npm-global`.
+A Firecracker guest has root only until the sandbox is handed out. Its daemon
+starts as root and serves nothing but `/healthz` and `POST /volumes/mount`.
+The first `POST /volumes/mount` can only mount the volume drives `/dev/vdb` to
+`/dev/vdp` read-only, `nodev` and `nosuid`, below `/mnt/`, refusing a symlink,
+or a directory that root doesn't own or that group or others can write, on the
+path. It mounts by path, which is safe only because
+no other process runs in the guest while the daemon holds root. After it,
+whatever the outcome, the daemon drops to uid 1000, or exits if it cannot, and
+only then serves its other routes; later requests to the route get `409`. The
+runner sends that request, with no volumes, on every create and cold boot,
+before any client request reaches the sandbox, and rolls the activation back if
+it fails. Neither the API nor the runner proxies the route. On Docker the daemon
+starts as uid 1000 and answers it with `501`.
+
+A sandbox therefore has no root by the time it runs anything, and no
+`apt-get`. Packages install unprivileged, under `/home/user`: `pip` runs from a
+virtual environment at `/home/user/venv`, and `npm install -g` writes to
+`/home/user/.npm-global`.
 [internal/daemon/exec.go](../internal/daemon/exec.go) puts both first on the
 `PATH` every command gets. The image also carries a compiler and the Python
 headers, because a source build could not otherwise install.
@@ -287,12 +302,12 @@ DinD apply to the runner container, not the sandbox container. A sandbox
 container is never privileged, because Docker then ignores `--cap-drop` and the
 policy has no effect.
 
-Within a sandbox, the daemon runs as uid 1000. File operations resolve every
-path against the sandbox's root filesystem, so the containment is the sandbox
-itself and the daemon's uid, not a workspace directory: whatever uid 1000 can
-read or write in the guest is reachable through the file API. The daemon
-authenticates nobody, so reachability is the whole boundary in front of its
-exec and file APIs, on both runtimes.
+Within a sandbox, the daemon serves exec and file requests as uid 1000. File
+operations resolve every path against the sandbox's root filesystem, so the
+containment is the sandbox itself and the daemon's uid, not a workspace
+directory: whatever uid 1000 can read or write in the guest is reachable
+through the file API. The daemon authenticates nobody, so reachability is the
+whole boundary in front of its exec and file APIs, on both runtimes.
 
 The runner treats the daemon as part of the guest. Of a proxied request's
 headers it passes on only `Content-Type`, so the fleet `X-Api-Key` and every
@@ -465,6 +480,7 @@ The boundaries above are covered by tests rather than asserted on paper.
 | No caller-set header but `Content-Type` passed on to the daemon; daemon redirects refused; daemon signal headers stripped, sandbox-gone body ignored | [internal/runner/proxy_test.go](../internal/runner/proxy_test.go), [internal/api/handlers_reap_test.go](../internal/api/handlers_reap_test.go), [e2e/tests/runner-restart.spec.ts](../e2e/tests/runner-restart.spec.ts) |
 | Sandbox-to-sandbox (unicast and multicast), blocked-range egress and guest DNS; egress `none` across stop/wake and slot reuse | [e2e/tests/network-isolation.spec.ts](../e2e/tests/network-isolation.spec.ts) |
 | Docker capability policy, absence of a root path, and denied network administration; no user namespaces on either runtime | [e2e/tests/sandbox-capabilities.spec.ts](../e2e/tests/sandbox-capabilities.spec.ts) |
+| Firecracker daemon root: only the volume mount request is served while it holds root, dropped after that request, sent on every create and cold boot, never proxied | [internal/daemon/volume_mount_test.go](../internal/daemon/volume_mount_test.go), [internal/runner/runtime/firecracker.ee/volume_mount_test.go](../internal/runner/runtime/firecracker.ee/volume_mount_test.go), [internal/runner/server_test.go](../internal/runner/server_test.go), [internal/api/gateway_test.go](../internal/api/gateway_test.go), [e2e/tests/sandbox-capabilities.spec.ts](../e2e/tests/sandbox-capabilities.spec.ts), [e2e/tests/sandbox-crash-recovery.spec.ts](../e2e/tests/sandbox-crash-recovery.spec.ts) |
 | Unprivileged npm and PyPI installation, and the build toolchain | [e2e/tests/sandbox-packages.spec.ts](../e2e/tests/sandbox-packages.spec.ts) |
 | Blocked list and egress rule generation | [internal/runner/runtime/netpolicy/private_ranges_test.go](../internal/runner/runtime/netpolicy/private_ranges_test.go), [internal/runner/runtime/docker/netrules/netrules_test.go](../internal/runner/runtime/docker/netrules/netrules_test.go), [internal/runner/runtime/firecracker.ee/network/egress_test.go](../internal/runner/runtime/firecracker.ee/network/egress_test.go) |
 | Firecracker: creates refused below 5% free disk, no sandbox deleted to make room | [internal/runner/runtime/firecracker.ee/disk_test.go](../internal/runner/runtime/firecracker.ee/disk_test.go), [internal/runner/runtime/firecracker.ee/stop_wake_test.go](../internal/runner/runtime/firecracker.ee/stop_wake_test.go) |
@@ -475,6 +491,6 @@ runner, apart from the checks tagged for one of them. Its blocked-range tests
 probe one address per listed range except loopback, which the guest routes to
 itself so it never reaches the rules. They show the rules are applied, not that
 the list is complete. The capability suite is Docker-only apart from the user
-namespace check: the setuid clearing it depends on is a property
-of the image both runtimes share, but no Firecracker test asserts it, and
-`no-new-privileges` has no Firecracker counterpart to test.
+namespace and volume mount checks: the setuid clearing it depends on is
+a property of the image both runtimes share, but no Firecracker test asserts
+it, and `no-new-privileges` has no Firecracker counterpart to test.

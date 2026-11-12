@@ -14,9 +14,11 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	"github.com/n8n-io/sandbox-service/internal/daemon/volumedrives"
 	"github.com/n8n-io/sandbox-service/internal/safetar"
 )
 
@@ -52,18 +54,49 @@ type moveRequest struct {
 }
 
 type errorResponse struct {
-	Error string `json:"error"`
-	Code  int    `json:"code"`
+	Error  string `json:"error"`
+	Code   int    `json:"code"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // Handler wraps the daemon HTTP mux and owns the execution manager.
 type Handler struct {
-	mux *http.ServeMux
-	em  *ExecManager
+	mux  *http.ServeMux
+	em   *ExecManager
+	euid func() int
+
+	// volumes is set only in a daemon started as root, which keeps root for the
+	// runner's one volume mount request (see mountVolumes).
+	volumes        *volumedrives.Mounter
+	volumesClaimed atomic.Bool
+	dropRoot       func() error
+	exit           func(code int)
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if !h.readyToServe(r) {
+		writeError(w, http.StatusServiceUnavailable, "waiting for the runner's volume mount request")
+		return
+	}
 	h.mux.ServeHTTP(w, r)
+}
+
+// readyToServe reports whether the daemon may serve r. Once it no longer runs
+// as root it serves everything. Until then, which in a Firecracker guest lasts
+// until the runner's volume mount request, it serves only /healthz and that
+// request.
+func (h *Handler) readyToServe(r *http.Request) bool {
+	if !h.runsAsRoot() {
+		return true
+	}
+	// The escaped path, as the mux matches it: /volumes%2Fmount must not pass.
+	p := r.URL.EscapedPath()
+	return (r.Method == http.MethodGet && p == "/healthz") ||
+		(r.Method == http.MethodPost && p == "/volumes/mount")
+}
+
+func (h *Handler) runsAsRoot() bool {
+	return h.euid() == 0
 }
 
 // Close stops background goroutines owned by the handler.
@@ -107,10 +140,21 @@ func Run(listenAddr string) error {
 func NewHandler() *Handler {
 	em := NewExecManager()
 	mux := http.NewServeMux()
+	h := &Handler{mux: mux, em: em, euid: os.Geteuid, dropRoot: PrepareSandboxUser, exit: os.Exit}
+
+	// A daemon started as root (Firecracker) keeps root to mount volume drives
+	// on the runner's request, then drops it. One started as uid 1000 (Docker)
+	// mounts nothing.
+	if h.runsAsRoot() {
+		h.volumes = volumedrives.NewMounter(volumedrives.System())
+	}
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
+
+	// Called by the runner itself; never proxied.
+	mux.HandleFunc("POST /volumes/mount", h.mountVolumes)
 
 	mux.HandleFunc("POST /executions", func(w http.ResponseWriter, r *http.Request) {
 		var req execRequest
@@ -379,7 +423,7 @@ func NewHandler() *Handler {
 		writeJSON(w, http.StatusOK, stat)
 	})
 
-	return &Handler{mux: mux, em: em}
+	return h
 }
 
 func writeError(w http.ResponseWriter, code int, msg string) {
