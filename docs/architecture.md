@@ -146,7 +146,7 @@ Runners register with the API by opening a long-lived gRPC stream (`RunnerRegist
 
 ### API → Runner Control (gRPC Unary + mTLS)
 
-When a client creates or deletes a sandbox, the API calls the runner's `SandboxControl` gRPC service (`CreateSandbox`, `StopSandbox`, `DeleteSandbox`). This channel also uses mTLS with API key authentication in gRPC metadata.
+When a client creates or deletes a sandbox, the API calls the runner's `SandboxControl` gRPC service (`CreateSandbox`, `StopSandbox`, `DeleteSandbox`). A delete the runner has received runs to its end on the runtime's own budget, even if the API stops waiting. This channel also uses mTLS with API key authentication in gRPC metadata.
 
 The runner's HTTP listener uses the same certificate and the same client CA, so both channels to a runner share one identity. It negotiates with `VerifyClientCertIfGiven` so that health probes, which cannot present a certificate, still reach `/livez` and `/readyz`; the auth middleware requires a verified certificate on every other route.
 

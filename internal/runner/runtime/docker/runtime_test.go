@@ -380,6 +380,24 @@ func TestContainerStatePredicates(t *testing.T) {
 	}
 }
 
+// A caller that stops waiting, such as an API whose deadline passed, must not
+// cut the delete short: the API may already have dropped its record, and the
+// container would be left behind.
+func TestDeleteSandboxCompletesAfterCallerContextCanceled(t *testing.T) {
+	events := []string{}
+	m := newRuntime(&config.Config{}, Config{}, &fakeDockerBackend{events: &events, containerID: "container-1"})
+	m.teardownRules = func(string) error { return nil }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := m.DeleteSandbox(ctx, "sandbox-id"); err != nil {
+		t.Fatalf("DeleteSandbox() with a canceled caller context failed: %v", err)
+	}
+	if want := []string{"find", "remove"}; !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %v, want %v", events, want)
+	}
+}
+
 func TestEnsureSandboxRunningCleansUpStartedContainerOnWakeFailures(t *testing.T) {
 	tests := []struct {
 		name        string
