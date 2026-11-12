@@ -84,6 +84,14 @@ Run Go unit tests:
 make test
 ```
 
+`make test` runs each `Fuzz...` test on its seed inputs only. To fuzz one:
+
+```bash
+go test ./internal/daemon -run '^$' -fuzz '^FuzzStreamLines$' -fuzztime 20s
+```
+
+The [Fuzz](../.github/workflows/fuzz.yml) workflow fuzzes every one for five minutes each night and uploads a failing input as an artifact. Put that file into the package's `testdata/fuzz/<test name>/` together with the fix, and `make test` checks it from then on.
+
 The Postgres store and registry tests are behind the `integration` build tag and need a database. `make test-integration` runs them and fails when `SANDBOX_TEST_POSTGRES_HOST` is unset (`SANDBOX_TEST_POSTGRES_{PORT,USER,PASSWORD,DB,SSLMODE}` are optional). Use a throwaway database: the tests run the migrations and write runners and sandboxes that a running API would act on. CI runs them against `postgres:16-alpine`:
 
 ```bash

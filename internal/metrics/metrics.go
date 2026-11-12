@@ -34,6 +34,9 @@ const (
 	// ensure_running because it does different work — a cold boot instead of a
 	// snapshot restore — and mixing the two would hide both in one percentile.
 	OpRecover = "recover"
+	// OpCordonDelete is the API deleting a stopped sandbox on a cordoned runner,
+	// on the request that would have woken it.
+	OpCordonDelete = "cordon_delete"
 )
 
 // Placement label values used with ObservePlacement: how a create found a runner.
@@ -268,6 +271,15 @@ func (r *APIRecorder) ObserveSandboxOp(operation string, success bool) {
 	r.sandboxOps.WithLabelValues(operation, resultLabel(success)).Inc()
 }
 
+// SandboxOpCount returns the counter value for a sandbox operation with the
+// given result. Intended for tests in other packages.
+func (r *APIRecorder) SandboxOpCount(operation string, success bool) float64 {
+	if r.reg == nil {
+		return 0
+	}
+	return testutil.ToFloat64(r.sandboxOps.WithLabelValues(operation, resultLabel(success)))
+}
+
 // ObservePlacement records how a create found a runner (PlacementFirstChoice,
 // PlacementRetried, PlacementExhausted, PlacementNoRunner).
 func (r *APIRecorder) ObservePlacement(result string) {
@@ -375,6 +387,7 @@ type RunnerRecorder struct {
 	lifecycleSteps       *prometheus.HistogramVec
 	guestDeaths          prometheus.Counter
 	recoveries           *prometheus.CounterVec
+	volumeMounts         *prometheus.CounterVec
 	volumeCacheFetches   *prometheus.CounterVec
 	volumeCacheDownloads prometheus.Histogram
 	volumeCacheEvictions prometheus.Counter
@@ -434,6 +447,15 @@ func NewRunnerRecorder(enabled bool) *RunnerRecorder {
 		},
 		[]string{"result"},
 	)
+	volumeMounts := prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   Namespace,
+			Name:        "volume_mount_requests_total",
+			Help:        "Volume mount requests sent to a guest daemon after a create or cold boot, labeled by result.",
+			ConstLabels: prometheus.Labels{"role": RoleRunner},
+		},
+		[]string{"result"},
+	)
 	volumeCacheFetches := prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace:   Namespace,
@@ -460,7 +482,7 @@ func NewRunnerRecorder(enabled bool) *RunnerRecorder {
 			ConstLabels: prometheus.Labels{"role": RoleRunner},
 		},
 	)
-	reg.MustRegister(containerOps, containerOpDuration, lifecycleSteps, guestDeaths, recoveries,
+	reg.MustRegister(containerOps, containerOpDuration, lifecycleSteps, guestDeaths, recoveries, volumeMounts,
 		volumeCacheFetches, volumeCacheDownloads, volumeCacheEvictions)
 	return &RunnerRecorder{
 		reg:                  reg,
@@ -473,6 +495,7 @@ func NewRunnerRecorder(enabled bool) *RunnerRecorder {
 		lifecycleSteps:       lifecycleSteps,
 		guestDeaths:          guestDeaths,
 		recoveries:           recoveries,
+		volumeMounts:         volumeMounts,
 		volumeCacheFetches:   volumeCacheFetches,
 		volumeCacheDownloads: volumeCacheDownloads,
 		volumeCacheEvictions: volumeCacheEvictions,
@@ -559,6 +582,15 @@ func (r *RunnerRecorder) ObserveRecovery(success bool) {
 		return
 	}
 	r.recoveries.WithLabelValues(resultLabel(success)).Inc()
+}
+
+// ObserveVolumeMount records the result of a volume mount request: "success"
+// or a failure reason.
+func (r *RunnerRecorder) ObserveVolumeMount(result string) {
+	if r == nil || r.reg == nil {
+		return
+	}
+	r.volumeMounts.WithLabelValues(result).Inc()
 }
 
 // ObserveVolumeCacheFetch records the result of a volume cache fetch (one of
@@ -715,6 +747,15 @@ func (r *RunnerRecorder) RecoveryCount(success bool) float64 {
 		return 0
 	}
 	return testutil.ToFloat64(r.recoveries.WithLabelValues(resultLabel(success)))
+}
+
+// VolumeMountCount returns the counter value for volume mount requests with the
+// given result. Intended for tests in other packages.
+func (r *RunnerRecorder) VolumeMountCount(result string) float64 {
+	if r == nil || r.reg == nil {
+		return 0
+	}
+	return testutil.ToFloat64(r.volumeMounts.WithLabelValues(result))
 }
 
 // VolumeCacheFetchCount returns the counter value for volume cache fetches with

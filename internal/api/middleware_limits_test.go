@@ -93,7 +93,7 @@ func newLimitTestGateway(t *testing.T, runner *blockingRunner, tune func(*config
 	}
 	tune(cfg)
 	rec := metrics.NewAPIRecorder(true)
-	router, err := NewGatewayRouter(s, withRunnerTLS(cfg), registry.New(45*time.Second), rec)
+	router, err := NewGatewayRouter(s, withRunnerTLS(cfg), registry.New(45*time.Second), rec, NewActivityRecorder(s, nil))
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}
@@ -126,12 +126,10 @@ func (g *limitTestGateway) hold(t *testing.T, runner *blockingRunner, n int, met
 	ctx, cancelCtx := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	before := runner.hits.Load()
-	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range n {
+		wg.Go(func() {
 			g.call(ctx, method, path, key)
-		}()
+		})
 	}
 	runner.waitForHits(t, before+int64(n))
 	stop := func() {

@@ -35,6 +35,8 @@ func LogIdleSweepConfig(cfg *config.APIConfig) {
 		"idle_stop_after", formatIdleDur(cfg.IdleStopAfter),
 		"idle_delete_after", formatIdleDur(cfg.IdleDeleteAfter),
 		"idle_delete_safety_buffer", cfg.IdleDeleteSafetyBuffer.String(),
+		"activity_lag", activityLag(cfg).String(),
+		"max_response_activity", maxResponseActivity(cfg).String(),
 		"orphan_reap_buffer", orphanReapBuffer(cfg).String(),
 		"sweep_interval", cfg.IdleSweepInterval.String(),
 		"sweep_concurrency", sweepConcurrency(cfg))
@@ -412,8 +414,15 @@ func idleSeconds(d time.Duration) int64 {
 	return secs
 }
 
+// deleteActivityLag is what the delete sweeps add to their window: the request
+// path fences a sandbox one activity lag after the window, and a request let
+// through just before the fence can take another lag to be written.
+func deleteActivityLag(cfg *config.APIConfig) int64 {
+	return 2 * idleSeconds(activityLag(cfg))
+}
+
 func sweepIdleDeleteSandboxes(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) sweepStats {
-	deleteCutoff := now.Unix() - idleSeconds(cfg.IdleDeleteAfter) - idleSeconds(cfg.IdleDeleteSafetyBuffer)
+	deleteCutoff := now.Unix() - idleSeconds(cfg.IdleDeleteAfter) - deleteActivityLag(cfg) - idleSeconds(cfg.IdleDeleteSafetyBuffer)
 
 	records, err := s.ListForIdleReapDelete(deleteCutoff)
 	if err != nil {
@@ -430,10 +439,11 @@ func sweepIdleDeleteSandboxes(ctx context.Context, s store.SandboxStore, reg reg
 }
 
 // sweepEphemeralSandboxes deletes running ephemeral sandboxes idle past their
-// window plus the safety buffer. The request path already refuses them past the
-// window, so the fence is up before the irreversible delete.
+// window, twice the activity lag and the safety buffer. The request path
+// already refuses them past the window and one lag, so the fence is up before
+// the irreversible delete.
 func sweepEphemeralSandboxes(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) sweepStats {
-	cutoff := now.Unix() - idleSeconds(ephemeralIdleWindow(cfg)) - idleSeconds(cfg.IdleDeleteSafetyBuffer)
+	cutoff := now.Unix() - idleSeconds(ephemeralIdleWindow(cfg)) - deleteActivityLag(cfg) - idleSeconds(cfg.IdleDeleteSafetyBuffer)
 
 	records, err := s.ListForIdleReapStop(cutoff, true)
 	if err != nil {
@@ -450,7 +460,7 @@ func sweepEphemeralSandboxes(ctx context.Context, s store.SandboxStore, reg regi
 }
 
 func sweepIdleStopSandboxes(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) sweepStats {
-	stopCutoff := now.Unix() - idleSeconds(cfg.IdleStopAfter)
+	stopCutoff := now.Unix() - idleSeconds(cfg.IdleStopAfter) - idleSeconds(activityLag(cfg))
 
 	records, err := s.ListForIdleReapStop(stopCutoff, false)
 	if err != nil {

@@ -1,12 +1,14 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestHandleExecReturnsPromptlyForBackgroundCommand(t *testing.T) {
@@ -134,6 +136,35 @@ func TestHandleExecStreamsStderrLineLongerThan64KiB(t *testing.T) {
 	if stderr != line+"\n" {
 		t.Fatalf("expected %d bytes of stderr, got %d", len(line)+1, len(stderr))
 	}
+}
+
+func FuzzStreamLines(fuzz *testing.F) {
+	fuzz.Add([]byte("hello\n"))
+	fuzz.Add([]byte("hello\r\nworld\r\n"))
+	fuzz.Add([]byte(strings.Repeat("x", 64*1024)))
+	fuzz.Add([]byte("a" + strings.Repeat("é", 100_000) + "\n"))
+	fuzz.Fuzz(func(t *testing.T, input []byte) {
+		var joined []byte
+		validChunks := true
+		err := streamLines(bytes.NewReader(input), func(chunk string) {
+			joined = append(joined, chunk...)
+			validChunks = validChunks && utf8.ValidString(chunk)
+		})
+		if err != nil {
+			t.Fatalf("streamLines() error = %v", err)
+		}
+		// ReadLine strips the carriage return of a CRLF line ending.
+		want := bytes.ReplaceAll(input, []byte("\r\n"), []byte("\n"))
+		if len(want) > 0 && want[len(want)-1] != '\n' {
+			want = append(want, '\n')
+		}
+		if !bytes.Equal(joined, want) {
+			t.Fatalf("chunks join to %d bytes that differ from the %d expected", len(joined), len(want))
+		}
+		if utf8.Valid(input) && !validChunks {
+			t.Fatal("valid UTF-8 input came out with an invalid UTF-8 chunk")
+		}
+	})
 }
 
 func TestHandleExecEndsUnterminatedLineOnChunkBoundaryWithNewline(t *testing.T) {

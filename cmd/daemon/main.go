@@ -29,13 +29,10 @@ func main() {
 		logLevel.Set(lvl)
 	}
 
-	if err := daemon.PrepareSandboxUser(); err != nil {
-		slog.Error("prepare sandbox user", "error", err)
-		os.Exit(1)
-	}
-
 	slog.Info("daemon starting", "listen_addr", *listenAddr)
 
+	// A daemon started as root keeps it until the runner's volume mount
+	// request; see daemon.NewHandler.
 	if err := daemon.Run(*listenAddr); err != nil {
 		slog.Error("daemon exited with error", "error", err)
 		os.Exit(1)

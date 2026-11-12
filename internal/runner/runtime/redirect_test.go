@@ -34,3 +34,9 @@ func TestRefuseRedirectReturnsTheRedirectUnfollowed(t *testing.T) {
 		t.Fatalf("redirect target hits = %d, want 0", got)
 	}
 }
+
+func TestNoProxyTransportHasNoProxy(t *testing.T) {
+	if NoProxyTransport.Proxy != nil {
+		t.Fatal("NoProxyTransport has a Proxy, want nil so HTTP_PROXY is ignored")
+	}
+}

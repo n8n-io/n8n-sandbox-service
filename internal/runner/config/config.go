@@ -200,7 +200,7 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("SANDBOX_RUNNER_API_KEYS must be set")
 	}
 	cfg.APIKeys = make(map[string]struct{})
-	for _, k := range strings.Split(rawKeys, ",") {
+	for k := range strings.SplitSeq(rawKeys, ",") {
 		k = strings.TrimSpace(k)
 		if k != "" {
 			cfg.APIKeys[k] = struct{}{}

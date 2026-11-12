@@ -357,7 +357,7 @@ func TestConnectLogsTheRunnerClientCertificate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
+	for line := range bytes.SplitSeq(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
 		var ev map[string]any
 		if err := json.Unmarshal(line, &ev); err != nil {
 			t.Fatal(err)

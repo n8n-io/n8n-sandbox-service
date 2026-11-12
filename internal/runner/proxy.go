@@ -60,6 +60,7 @@ func DeleteExecutionHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *m
 // DeleteExecutionHandler passes false; see there for why.
 func proxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder, limitBody bool, wake bool) http.HandlerFunc {
 	proxy := &httputil.ReverseProxy{
+		Transport: runnerruntime.NoProxyTransport,
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			// The daemon runs in the guest and reads no request headers, so of the
 			// incoming ones it gets Content-Type alone: never the fleet X-Api-Key
@@ -96,8 +97,7 @@ func proxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.Run
 				writeError(w, http.StatusBadGateway, err.Error())
 				return
 			}
-			var maxBytesErr *http.MaxBytesError
-			if errors.As(err, &maxBytesErr) {
+			if maxBytesErr, ok := errors.AsType[*http.MaxBytesError](err); ok {
 				writeError(w, http.StatusBadRequest, "failed to read request body: "+maxBytesErr.Error())
 				return
 			}

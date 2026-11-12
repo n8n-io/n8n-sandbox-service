@@ -25,6 +25,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/obs"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/keepalive"
 )
 
 func main() {
@@ -105,7 +106,18 @@ func main() {
 	defer sweepCancel()
 	api.StartIdleSweeper(sweepCtx, sandboxStore, runnerReg, cfg, sweepLockDB)
 
-	handler, err := api.NewGatewayRouter(sandboxStore, cfg, runnerReg, mrec)
+	// Stopped after the HTTP server has drained, so open streams count until
+	// then; on stop it writes the activity it has collected once more.
+	activity := api.NewActivityRecorder(sandboxStore, cfg)
+	activityCtx, activityCancel := context.WithCancel(context.Background())
+	defer activityCancel()
+	activityDone := make(chan struct{})
+	go func() {
+		defer close(activityDone)
+		activity.Run(activityCtx)
+	}()
+
+	handler, err := api.NewGatewayRouter(sandboxStore, cfg, runnerReg, mrec, activity)
 	if err != nil {
 		slog.Error("failed to create api router", "error", err)
 		os.Exit(1)
@@ -141,7 +153,13 @@ func main() {
 		os.Exit(1)
 	}
 	slog.Info("runner registry grpc mTLS enabled")
-	grpcSrv := grpc.NewServer(grpc.Creds(creds))
+	// Runners ping a silent stream every 20 s. The default policy closes a
+	// connection that pings more often than every 5 minutes.
+	const runnerKeepaliveMinTime = 10 * time.Second
+	grpcSrv := grpc.NewServer(
+		grpc.Creds(creds),
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{MinTime: runnerKeepaliveMinTime}),
+	)
 	pb.RegisterRunnerRegistryServer(grpcSrv, &grpcapi.RunnerRegistryServer{
 		Token: cfg.RegistrationToken,
 		Reg:   runnerReg,
@@ -195,6 +213,12 @@ func main() {
 	grpcSrv.Stop()
 	if err := srv.Shutdown(ctx); err != nil {
 		slog.Error("graceful shutdown failed", "error", err)
+	}
+	activityCancel()
+	// Within the same deadline: a write cut off here is lost with the pod.
+	select {
+	case <-activityDone:
+	case <-ctx.Done():
 	}
 	// Metrics last, so a scrape in flight during a normal drain still completes.
 	// The deadline above is deliberately shared: once it is spent the kubelet is

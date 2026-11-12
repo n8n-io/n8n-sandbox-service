@@ -24,7 +24,7 @@ func captureLifecycleEvents(t *testing.T) func(msg string) []map[string]any {
 
 	return func(msg string) []map[string]any {
 		var events []map[string]any
-		for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
+		for line := range bytes.SplitSeq(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
 			if len(line) == 0 {
 				continue
 			}
@@ -75,7 +75,8 @@ func TestCreateSandboxEmitsStepTimings(t *testing.T) {
 	}
 	requireStepFields(t, created[0],
 		stepCloneRootfs, stepCloneSnapshot, stepPrepareJail, stepSetupNetwork,
-		stepStartJailer, stepWaitSocket, stepLoadSnapshot, stepStartProxy, stepProbeDaemon)
+		stepStartJailer, stepWaitSocket, stepLoadSnapshot, stepStartProxy, stepProbeDaemon,
+		stepMountVolumes)
 }
 
 func TestEnsureSandboxRunningEmitsStepTimings(t *testing.T) {
@@ -113,6 +114,9 @@ func TestEnsureSandboxRunningEmitsStepTimings(t *testing.T) {
 	if _, ok := woke[0][stepCloneRootfs+"_ms"]; ok {
 		t.Fatalf("wake event records a rootfs clone: %v", woke[0])
 	}
+	if _, ok := woke[0][stepMountVolumes+"_ms"]; ok {
+		t.Fatalf("wake event records a volume mount: %v", woke[0])
+	}
 }
 
 // Recovery is timed under its own operation, so a cold boot's latency is not mixed
@@ -148,7 +152,7 @@ func TestRecoveryEmitsStepTimingsUnderItsOwnOperation(t *testing.T) {
 	}
 	requireStepFields(t, woke[0],
 		stepPrepareJail, stepSetupNetwork, stepStartJailer,
-		stepWaitSocket, stepColdBoot, stepStartProxy, stepProbeDaemon)
+		stepWaitSocket, stepColdBoot, stepStartProxy, stepProbeDaemon, stepMountVolumes)
 	if _, ok := woke[0][stepLoadSnapshot+"_ms"]; ok {
 		t.Fatalf("recovery event records a snapshot restore: %v", woke[0])
 	}

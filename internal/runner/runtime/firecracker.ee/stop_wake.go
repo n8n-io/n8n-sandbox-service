@@ -140,7 +140,7 @@ func (r *Runtime) EnsureSandboxRunning(ctx context.Context, sandboxID string) (r
 	if err := ctx.Err(); err != nil {
 		return runnerruntime.WakeResult{}, err
 	}
-	recovered, err, _ := r.wakeGroup.Do(sandboxID, func() (interface{}, error) {
+	recovered, err, _ := r.wakeGroup.Do(sandboxID, func() (any, error) {
 		// beginTransition detaches the wake from the request that triggered it, so
 		// the wake outlives that request. Concurrent callers share one wake, so the
 		// wake event carries the trace id of whichever caller started it.
@@ -270,6 +270,8 @@ func (r *Runtime) activateSandboxVM(ctx context.Context, state *sandboxState, t 
 	}
 	r.mu.Lock()
 	generation := state.generation
+	// Read up front: Shutdown can overwrite the claim while the guest starts.
+	creating := state.transition == transitionCreating
 	r.mu.Unlock()
 	var process process
 	err := t.step(stepStartJailer, func() error {
@@ -295,7 +297,8 @@ func (r *Runtime) activateSandboxVM(ctx context.Context, state *sandboxState, t 
 	if err := t.step(stepWaitSocket, func() error { return r.waitForSocket(ctx, state.socketPath) }); err != nil {
 		return fmt.Errorf("wait for firecracker socket: %w", err)
 	}
-	if err := r.startGuest(ctx, state, t); err != nil {
+	coldBooted, err := r.startGuest(ctx, state, t)
+	if err != nil {
 		return err
 	}
 	guestAddr := net.JoinHostPort(r.config.GuestIP, fmt.Sprintf("%d", r.config.DaemonPort))
@@ -318,10 +321,20 @@ func (r *Runtime) activateSandboxVM(ctx context.Context, state *sandboxState, t 
 	if err := t.step(stepProbeDaemon, func() error { return r.deps.probeDaemon(ctx, state.daemonURL) }); err != nil {
 		return fmt.Errorf("connect to firecracker daemon: %w", err)
 	}
+	// The guest daemon of the golden snapshot and of a cold boot holds root and
+	// serves nothing else until this request. A stop snapshot is taken after it.
+	if creating || coldBooted {
+		mountErr := t.step(stepMountVolumes, func() error { return r.deps.mountVolumeDrives(ctx, state.daemonURL, nil) })
+		r.metrics.ObserveVolumeMount(volumeMountResult(mountErr))
+		if mountErr != nil {
+			return fmt.Errorf("mount guest volume drives: %w", mountErr)
+		}
+	}
 	return nil
 }
 
-// startGuest gets the guest running, from its snapshot or from its own rootfs.
+// startGuest gets the guest running, from its snapshot or from its own rootfs,
+// and reports whether it cold booted.
 //
 // The pin decides which, and both outcomes leave it set: a restored guest resumes
 // against a rootfs its snapshot stops describing the moment it runs, and a cold
@@ -340,7 +353,7 @@ func (r *Runtime) activateSandboxVM(ctx context.Context, state *sandboxState, t 
 // it did not need. Pinning here rather than earlier keeps that cost small: every step
 // before this one fails with no guest having run, so those failures leave the sandbox
 // restorable.
-func (r *Runtime) startGuest(ctx context.Context, state *sandboxState, t *stepTimer) error {
+func (r *Runtime) startGuest(ctx context.Context, state *sandboxState, t *stepTimer) (bool, error) {
 	r.mu.Lock()
 	coldBoot, params, kernel := state.mustColdBoot, state.bootParams, state.kernel
 	state.mustColdBoot = true
@@ -351,21 +364,21 @@ func (r *Runtime) startGuest(ctx context.Context, state *sandboxState, t *stepTi
 		// image and never opens the file, so a wake that has a snapshot to return to
 		// has no reason to care what the template holds now.
 		if err := r.verifyKernelPin(kernel); err != nil {
-			return err
+			return true, err
 		}
 		if err := t.step(stepColdBoot, func() error {
 			return r.deps.coldBoot(ctx, state.socketPath, params)
 		}); err != nil {
-			return fmt.Errorf("cold boot firecracker vm: %w", err)
+			return true, fmt.Errorf("cold boot firecracker vm: %w", err)
 		}
-		return nil
+		return true, nil
 	}
 	if err := t.step(stepLoadSnapshot, func() error {
 		return r.deps.loadSnapshot(ctx, state.socketPath, r.config)
 	}); err != nil {
-		return fmt.Errorf("load firecracker snapshot: %w", err)
+		return false, fmt.Errorf("load firecracker snapshot: %w", err)
 	}
-	return nil
+	return false, nil
 }
 
 // teardownRunningVM stops proxy, jailer, and jail state without deleting sandbox data.

@@ -67,8 +67,7 @@ func TestWirerBuildsFreeSlotsAndActivationSkipsTheBuild(t *testing.T) {
 	// leave it alone: its owner has built it or is about to.
 	rt.slots[1].sandboxID = "sandbox-id-occupied"
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go rt.wireSlots(ctx)
 
 	waitSlotWired(t, rt, 0, true)
@@ -154,8 +153,7 @@ func TestWirerRebuildsASlotAfterItsSandboxIsReleased(t *testing.T) {
 	log := &scriptLog{}
 	rt.deps.run = log.run
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go rt.wireSlots(ctx)
 	waitSlotWired(t, rt, 0, true)
 

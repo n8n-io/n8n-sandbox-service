@@ -4,19 +4,22 @@
 package daemon
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/n8n-io/sandbox-service/internal/daemon/volumedrives"
+	"github.com/n8n-io/sandbox-service/internal/safetar"
 )
 
 const (
@@ -51,18 +54,49 @@ type moveRequest struct {
 }
 
 type errorResponse struct {
-	Error string `json:"error"`
-	Code  int    `json:"code"`
+	Error  string `json:"error"`
+	Code   int    `json:"code"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // Handler wraps the daemon HTTP mux and owns the execution manager.
 type Handler struct {
-	mux *http.ServeMux
-	em  *ExecManager
+	mux  *http.ServeMux
+	em   *ExecManager
+	euid func() int
+
+	// volumes is set only in a daemon started as root, which keeps root for the
+	// runner's one volume mount request (see mountVolumes).
+	volumes        *volumedrives.Mounter
+	volumesClaimed atomic.Bool
+	dropRoot       func() error
+	exit           func(code int)
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if !h.readyToServe(r) {
+		writeError(w, http.StatusServiceUnavailable, "waiting for the runner's volume mount request")
+		return
+	}
 	h.mux.ServeHTTP(w, r)
+}
+
+// readyToServe reports whether the daemon may serve r. Once it no longer runs
+// as root it serves everything. Until then, which in a Firecracker guest lasts
+// until the runner's volume mount request, it serves only /healthz and that
+// request.
+func (h *Handler) readyToServe(r *http.Request) bool {
+	if !h.runsAsRoot() {
+		return true
+	}
+	// The escaped path, as the mux matches it: /volumes%2Fmount must not pass.
+	p := r.URL.EscapedPath()
+	return (r.Method == http.MethodGet && p == "/healthz") ||
+		(r.Method == http.MethodPost && p == "/volumes/mount")
+}
+
+func (h *Handler) runsAsRoot() bool {
+	return h.euid() == 0
 }
 
 // Close stops background goroutines owned by the handler.
@@ -89,9 +123,7 @@ func Run(listenAddr string) error {
 	go func() {
 		sig := <-sigCh
 		slog.Info("received signal, shutting down", "signal", sig)
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := srv.Shutdown(ctx); err != nil {
+		if err := srv.Close(); err != nil {
 			slog.Warn("daemon shutdown", "err", err)
 		}
 	}()
@@ -108,10 +140,21 @@ func Run(listenAddr string) error {
 func NewHandler() *Handler {
 	em := NewExecManager()
 	mux := http.NewServeMux()
+	h := &Handler{mux: mux, em: em, euid: os.Geteuid, dropRoot: PrepareSandboxUser, exit: os.Exit}
+
+	// A daemon started as root (Firecracker) keeps root to mount volume drives
+	// on the runner's request, then drops it. One started as uid 1000 (Docker)
+	// mounts nothing.
+	if h.runsAsRoot() {
+		h.volumes = volumedrives.NewMounter(volumedrives.System())
+	}
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
+
+	// Called by the runner itself; never proxied.
+	mux.HandleFunc("POST /volumes/mount", h.mountVolumes)
 
 	mux.HandleFunc("POST /executions", func(w http.ResponseWriter, r *http.Request) {
 		var req execRequest
@@ -217,15 +260,32 @@ func NewHandler() *Handler {
 			return
 		}
 
-		data, err := HandleFileRead(path, 0)
+		resolved := resolvePath(path)
+		file, err := os.Open(resolved)
 		if err != nil {
+			err = fmt.Errorf("file_read open %s: %w", resolved, err)
 			writeError(w, fileOpStatusCode(err), err.Error())
 			return
 		}
+		defer file.Close()
 
 		w.Header().Set("Content-Type", "application/octet-stream")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(data)
+		if r.Method == http.MethodHead {
+			// A HEAD reads no file. A directory goes on: its first read fails, as for a GET.
+			if info, err := file.Stat(); err != nil || !info.IsDir() {
+				return
+			}
+		}
+		written, err := io.Copy(w, file)
+		if err == nil {
+			return
+		}
+		if written > 0 {
+			// The 200 is already sent: cut the connection so the client sees a short response.
+			panic(http.ErrAbortHandler)
+		}
+		err = fmt.Errorf("file_read read %s: %w", resolved, err)
+		writeError(w, fileOpStatusCode(err), err.Error())
 	})
 
 	mux.HandleFunc("PUT /files", func(w http.ResponseWriter, r *http.Request) {
@@ -363,7 +423,7 @@ func NewHandler() *Handler {
 		writeJSON(w, http.StatusOK, stat)
 	})
 
-	return &Handler{mux: mux, em: em}
+	return h
 }
 
 func writeError(w http.ResponseWriter, code int, msg string) {
@@ -402,21 +462,25 @@ func decodeJSONBody(body io.Reader, dst any) error {
 }
 
 func fileOpStatusCode(err error) int {
-	if errors.Is(err, errInvalidArchive) {
+	if errors.Is(err, safetar.ErrInvalid) {
 		return http.StatusBadRequest
 	}
-	msg := strings.ToLower(err.Error())
-	switch {
-	case strings.Contains(msg, "path escapes from parent"):
+	// The os package does not export the error an os.Root returns for a path
+	// that leaves it, and can nest it in more than one PathError.
+	var pathErr *fs.PathError
+	for inner := err; errors.As(inner, &pathErr); {
+		inner = pathErr.Err
+	}
+	if pathErr != nil && pathErr.Err.Error() == "path escapes from parent" {
 		return http.StatusBadRequest
-	case strings.Contains(msg, "already exists"):
-		return http.StatusConflict
-	case strings.Contains(msg, "not found"), strings.Contains(msg, "no such file or directory"):
+	}
+	var opErr *fileOpError
+	switch {
+	case errors.As(err, &opErr):
+		return opErr.status
+	case errors.Is(err, fs.ErrNotExist):
 		return http.StatusNotFound
-	case strings.Contains(msg, "source is a directory"),
-		strings.Contains(msg, "destination must not be inside source directory"),
-		strings.Contains(msg, "invalid argument"),
-		strings.Contains(msg, "directory not empty"):
+	case errors.Is(err, syscall.EINVAL), errors.Is(err, syscall.ENOTEMPTY):
 		return http.StatusBadRequest
 	default:
 		return http.StatusInternalServerError

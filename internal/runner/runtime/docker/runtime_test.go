@@ -133,6 +133,7 @@ func TestDockerContainerCreateArgs(t *testing.T) {
 		"--name", "sandbox-name",
 		"--hostname", "sandbox",
 		"--restart", "unless-stopped",
+		"--init",
 		"--network", runnerNoEgressNetwork,
 		"--label", containerLabelManaged + "=" + containerLabelManagedVal,
 		"--label", containerLabelSandboxID + "=sandbox-id",
@@ -284,7 +285,6 @@ func TestDockerDiskQuotaArgs(t *testing.T) {
 		{name: "nil", limits: nil, want: nil},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			got := dockerDiskQuotaArgs(tc.limits)
 			if len(got) != len(tc.want) {
@@ -312,7 +312,6 @@ func TestDefaultLimitsAppliesDiskQuotaOnlyWhenActive(t *testing.T) {
 		{name: "inactive", active: false, want: 0},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			m := &Runtime{
 				runnerConfig: &config.Config{},
@@ -368,7 +367,6 @@ func TestContainerStatePredicates(t *testing.T) {
 		},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			if got := isContainerReady(tc.state); got != tc.wantReady {
 				t.Fatalf("isContainerReady() = %v, want %v", got, tc.wantReady)
@@ -377,6 +375,24 @@ func TestContainerStatePredicates(t *testing.T) {
 				t.Fatalf("canStartContainer() = %v, want %v", got, tc.wantStart)
 			}
 		})
+	}
+}
+
+// A caller that stops waiting, such as an API whose deadline passed, must not
+// cut the delete short: the API may already have dropped its record, and the
+// container would be left behind.
+func TestDeleteSandboxCompletesAfterCallerContextCanceled(t *testing.T) {
+	events := []string{}
+	m := newRuntime(&config.Config{}, Config{}, &fakeDockerBackend{events: &events, containerID: "container-1"})
+	m.teardownRules = func(string) error { return nil }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := m.DeleteSandbox(ctx, "sandbox-id"); err != nil {
+		t.Fatalf("DeleteSandbox() with a canceled caller context failed: %v", err)
+	}
+	if want := []string{"find", "remove"}; !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %v, want %v", events, want)
 	}
 }
 
@@ -409,7 +425,6 @@ func TestEnsureSandboxRunningCleansUpStartedContainerOnWakeFailures(t *testing.T
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			events := []string{}
 			const containerID = "container-1"
@@ -668,7 +683,6 @@ func TestIsDockerNotFound(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			if got := isDockerNotFound(tc.err); got != tc.want {
 				t.Fatalf("isDockerNotFound() = %v, want %v", got, tc.want)
