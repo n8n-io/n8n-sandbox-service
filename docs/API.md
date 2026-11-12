@@ -1029,7 +1029,7 @@ curl http://localhost:8080/admin/runners -H "X-Api-Key: SCALER_KEY"
 
 ### PUT /admin/runners/{id}/cordon · DELETE /admin/runners/{id}/cordon
 
-Admin or scaler. `PUT` cordons the runner: it gets no new sandboxes and keeps serving its running ones. A request that would wake one of its sandboxes whose `status` is `stopped` deletes the sandbox and gets `404 sandbox not found` instead, so the client creates it again on another runner. If the delete fails, the request gets `503` and the sandbox stays, so a retry tries again. A stopped sandbox that gets no such request stays until the idle sweeper deletes it or the runner is reimaged or removed. `DELETE` uncordons the runner, which restores wakes. Both are idempotent. A runner restart clears the cordon.
+Admin or scaler. `PUT` cordons the runner: it gets no new sandboxes and keeps serving its running ones. A request that would wake one of its sandboxes whose `status` is `stopped` deletes the sandbox and gets `404 sandbox not found` instead, so the client creates it again on another runner. If the runner can't be reached, the API removes only its own record and still answers `404`; a runner that is in fact still up keeps the sandbox until it restarts. A runner that has sent no heartbeat within `SANDBOX_API_RUNNER_HEARTBEAT_GRACE` gets 5 s to answer. The in-memory registry forgets a runner's cordon when the runner disconnects. If the runner answers but the delete fails, the request gets `503` and the sandbox stays, so a retry tries again. A stopped sandbox that gets no such request stays until the idle sweeper deletes it or the runner is reimaged or removed. `DELETE` uncordons the runner, which restores wakes. Both are idempotent. A runner restart clears the cordon.
 
 **Response:** `200 OK`
 

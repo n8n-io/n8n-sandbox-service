@@ -713,6 +713,11 @@ func trackSandboxActivity(activity *ActivityRecorder, rec *store.SandboxRecord, 
 	resp.Body = activityBody{ReadCloser: resp.Body, end: end}
 }
 
+// silentRunnerDeleteBudget bounds the delete on a cordoned runner the registry
+// no longer hears from. Such a runner is usually gone, and a live one finishes
+// a delete it has received regardless. Var so tests can shrink it.
+var silentRunnerDeleteBudget = 5 * time.Second
+
 // runnerCordoned reports whether the registry has the runner cordoned.
 func runnerCordoned(reg registry.RunnerRegistry, runnerID string) bool {
 	run, ok := reg.Get(runnerID)
@@ -726,11 +731,16 @@ func runnerCordoned(reg registry.RunnerRegistry, runnerID string) bool {
 // counted empty. So the sandbox is deleted and the request gets 404: the client
 // creates it again, and placement skips cordoned runners.
 //
+// A cordoned runner that can't be reached is taken to be in its reimage or
+// already removed, so only the row is deleted: waiting for the runner would
+// answer 503 until the idle delete. If the runner is still up, it keeps its
+// copy of the sandbox until it restarts.
+//
 // It decides again under the sandbox lock, on a fresh read. Requests queued
 // behind the delete find the row gone and get the same 404. One that finds the
 // sandbox no longer stopped on a cordoned runner gets a 503, and its retry is
-// proxied as usual. A failed delete keeps the row and answers 503 too, so the
-// retry tries again.
+// proxied as usual. A delete that the runner fails keeps the row and answers
+// 503 too, so the retry tries again.
 func deleteStoppedOnCordonedRunner(writer http.ResponseWriter, req *http.Request, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, mrec *metrics.APIRecorder, id string) {
 	unlock, err := s.LockSandbox(req.Context(), id)
 	if err != nil {
@@ -748,16 +758,29 @@ func deleteStoppedOnCordonedRunner(writer http.ResponseWriter, req *http.Request
 		writeError(writer, http.StatusNotFound, "sandbox not found")
 		return
 	}
-	if rec.Status != "stopped" || !runnerCordoned(reg, rec.RunnerID) {
+	run, known := reg.Get(rec.RunnerID)
+	if rec.Status != "stopped" || !known || !run.Cordoned {
 		writeError(writer, http.StatusServiceUnavailable, "sandbox temporarily unavailable")
 		return
 	}
 
 	slog.InfoContext(req.Context(), "refused wake on cordoned runner", "sandbox_id", id, "runner_id", rec.RunnerID)
+	// The Postgres registry keeps the row, and the cordon, of a runner that is
+	// long gone, so a silent runner gets only a short time to answer.
+	silent := time.Since(run.LastSeen) > cfg.HeartbeatGrace
+	budget := runnerLifecycleBudget
+	if silent {
+		budget = silentRunnerDeleteBudget
+	}
 	// Detached so a client that hangs up cannot cut the delete short.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(req.Context()), runnerLifecycleBudget)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(req.Context()), budget)
 	defer cancel()
+	reason := "cordoned_runner"
 	err = runnerctl.DeleteSandbox(ctx, resolveControlAddr(rec, reg), cfg.RunnerAPIKey, runnerControlTLS(cfg), id)
+	if runnerUnreachable(&runnerCallError{err: err}) || (silent && err != nil && ctx.Err() != nil) {
+		slog.WarnContext(req.Context(), "cordoned runner unreachable, deleting the sandbox row only", "sandbox_id", id, "runner_id", rec.RunnerID, "silent", silent, "err", err)
+		reason, err = "cordoned_runner_unreachable", nil
+	}
 	if err == nil {
 		err = s.Delete(id)
 	}
@@ -767,6 +790,6 @@ func deleteStoppedOnCordonedRunner(writer http.ResponseWriter, req *http.Request
 		writeError(writer, http.StatusServiceUnavailable, "sandbox temporarily unavailable")
 		return
 	}
-	logSandboxDeleted(id, rec.RunnerID, "cordoned_runner")
+	logSandboxDeleted(id, rec.RunnerID, reason)
 	writeError(writer, http.StatusNotFound, "sandbox not found")
 }
