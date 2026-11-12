@@ -228,6 +228,8 @@ When no runner is eligible, it is the same except for `error`: `no sandbox runne
 
 - `egress` (string, default `"public"`) — outbound network policy. `"public"`: the internet, minus the [blocked destinations](security-model.md#guest-to-host-and-network). `"none"`: nothing leaves the sandbox, DNS included; the API still reaches it. Fixed at creation: a reconnect to an existing `id` that names a different mode is refused with `409`, so a caller asking for `"none"` never gets an open sandbox back.
 
+Unknown fields return `400`.
+
 With a tenant key, the sandbox is owned by that tenant and counts toward the tenant's `max_sandboxes` quota (`403` when exceeded). With an admin key, the sandbox is stored with `tenant_id` `__admin__` (admin-owned; not visible to tenant keys; admins see all sandboxes in list).
 
 The quota holds under concurrent creates. Before the runner call, each API pod counts the tenant's saved sandboxes plus its own creates still in progress, so on one pod no create past the quota reaches a runner while the quota stays the same. The quota is checked again when the sandbox is saved, where a tenant's creates are counted one at a time. That check catches a burst spread over several API pods and a quota lowered during a create. A create refused there was already made on a runner; the API deletes it there before the `403`, and if that delete fails, the sandbox stays on the runner untracked. Either way the tenant can briefly hold more sandboxes on runners than its quota.
@@ -890,7 +892,7 @@ Admin or provisioner. Create a tenant. By default also mints one API key (`creat
 | `max_sandboxes`| int    | no       | `SANDBOX_API_DEFAULT_MAX_SANDBOXES` (`50`) |
 | `create_key`   | bool   | no       | `true` |
 
-`name` is an optional human-readable label. `external_ref` is an optional opaque id from the caller (for example an n8n instance id); the API does not enforce uniqueness.
+`name` is an optional human-readable label. `external_ref` is an optional opaque id from the caller (for example an n8n instance id); the API does not enforce uniqueness. Unknown fields return `400`.
 
 `max_sandboxes` is the per-tenant sandbox quota (`0` = unlimited). Must be between `0` and `2147483647`. When omitted, the service default applies. With a provisioner key an explicit value must be between `1` and `SANDBOX_API_DEFAULT_MAX_SANDBOXES`; `0` and larger values return `400`.
 
