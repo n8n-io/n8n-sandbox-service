@@ -372,6 +372,11 @@ export const addAddress = (ip: string) =>
 /** An unused address in the same /24 as ip. */
 export const siblingOf = (ip: string) => ip.split('.').slice(0, 3).concat('250').join('.');
 
+/** Sends the runner's volume mount request from inside the sandbox; prints the status. */
+export const callVolumeMount =
+  `curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X POST ` +
+  `-H 'Content-Type: application/json' -d '{"volumes":[]}' http://127.0.0.1:8081/volumes/mount`;
+
 export async function uploadFile(
   id: string,
   path: string,
