@@ -51,6 +51,43 @@ func TestRenewedLeavesTakeEffectOnNextHandshake(t *testing.T) {
 	}
 }
 
+func TestServerRefusesClientLimitedToTLS12(t *testing.T) {
+	dir := t.TempDir()
+	ca := newTestCA(t)
+	caPath := filepath.Join(dir, "ca.crt")
+	writeFile(t, caPath, ca.certPEM)
+	srvCert, srvKey := filepath.Join(dir, "server.crt"), filepath.Join(dir, "server.key")
+	cliCert, cliKey := filepath.Join(dir, "client.crt"), filepath.Join(dir, "client.key")
+	ca.issue(t, "server-1", x509.ExtKeyUsageServerAuth, srvCert, srvKey)
+	ca.issue(t, "client-1", x509.ExtKeyUsageClientAuth, cliCert, cliKey)
+
+	serverConf, err := NewServerTLSConfig(srvCert, srvKey, caPath, tls.RequireAndVerifyClientCert)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientConf, err := NewClientTLSConfig(caPath, cliCert, cliKey, "server")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The same client completes a handshake until it is held to TLS 1.2.
+	handshake(t, serverConf, clientConf)
+	clientConf = clientConf.Clone()
+	clientConf.MinVersion = tls.VersionTLS12
+	clientConf.MaxVersion = tls.VersionTLS12
+
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	serverErr := make(chan error, 1)
+	go func() { serverErr <- tls.Server(serverConn, serverConf).Handshake() }()
+	if err := tls.Client(clientConn, clientConf).Handshake(); err == nil {
+		t.Fatal("client handshake limited to TLS 1.2 succeeded")
+	}
+	if err := <-serverErr; err == nil {
+		t.Fatal("server handshake with a client limited to TLS 1.2 succeeded")
+	}
+}
+
 // handshake runs one TLS handshake over a pipe and returns the common names
 // each side saw the other present.
 func handshake(t *testing.T, serverConf, clientConf *tls.Config) (serverCN, clientCN string) {

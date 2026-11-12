@@ -104,6 +104,32 @@ func TestRunnerCapsArchiveBody(t *testing.T) {
 	}
 }
 
+// Only the runtime itself may call the daemon's volume mount endpoint.
+func TestRunnerDoesNotProxyVolumeMount(t *testing.T) {
+	var received atomic.Int32
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer daemon.Close()
+
+	cfg := &config.Config{APIKeys: map[string]struct{}{"k": {}}, MaxFileBytes: 1024}
+	router := NewRouter(&fakeRuntime{daemonURL: daemon.URL}, cfg, metrics.NewRunnerRecorder(false))
+
+	for _, path := range []string{"/volumes/mount", "/files/../volumes/mount"} {
+		req := authedRequest(context.Background(), http.MethodPost,
+			"/sandboxes/550e8400-e29b-41d4-a716-446655440000"+path, `{"volumes":[]}`)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code < 300 {
+			t.Errorf("POST %s: status %d, want it refused", path, rr.Code)
+		}
+	}
+	if n := received.Load(); n != 0 {
+		t.Fatalf("daemon received %d requests, want none", n)
+	}
+}
+
 func TestRunnerLivenessEndpointsDoNotCheckRuntime(t *testing.T) {
 	router := NewRouter(&fakeRuntime{readyErr: errors.New("runtime down")}, &config.Config{}, metrics.NewRunnerRecorder(false))
 

@@ -53,7 +53,7 @@ func HandleExec(ctx context.Context, command string, env []string, workdir strin
 	}
 
 	// Put the child in its own process group so we can kill the whole tree.
-	// The daemon normally drops to the sandbox user during startup; the
+	// The daemon drops to the sandbox user before it serves executions; the
 	// credential fallback keeps direct root-started guests safe too.
 	cmd.SysProcAttr = commandSysProcAttr()
 

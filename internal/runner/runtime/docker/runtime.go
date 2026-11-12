@@ -268,8 +268,12 @@ func (m *Runtime) GetSandboxInfo(ctx context.Context, sandboxID string) (*runner
 	return m.GetContainerInfo(ctx, containerID)
 }
 
-// DeleteSandbox removes a sandbox by its sandbox ID.
+// DeleteSandbox removes a sandbox by its sandbox ID, within TransitionBudget
+// and without the caller's cancellation, so a caller that hangs up cannot leave
+// it half done.
 func (m *Runtime) DeleteSandbox(ctx context.Context, sandboxID string) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), runnerruntime.TransitionBudget)
+	defer cancel()
 	containerID, err := m.FindContainerIDByLabel(ctx, sandboxID)
 	if err != nil {
 		return err
@@ -385,7 +389,7 @@ func (m *Runtime) EnsureSandboxRunning(ctx context.Context, sandboxID string) (r
 	if err := ctx.Err(); err != nil {
 		return runnerruntime.WakeResult{}, err
 	}
-	recovered, err, _ := m.wakeGroup.Do(sandboxID, func() (interface{}, error) {
+	recovered, err, _ := m.wakeGroup.Do(sandboxID, func() (any, error) {
 		// singleflight runs this once for all waiters; do not use the caller's ctx
 		// here or one canceled/short-lived request fails everyone else waiting on
 		// the same key.
@@ -665,7 +669,7 @@ func canStartContainer(state containerState) bool {
 }
 
 func waitForDaemon(ctx context.Context, baseURL string) error {
-	httpClient := &http.Client{Timeout: 3 * time.Second, CheckRedirect: runnerruntime.RefuseRedirect}
+	httpClient := &http.Client{Transport: runnerruntime.NoProxyTransport, Timeout: 3 * time.Second, CheckRedirect: runnerruntime.RefuseRedirect}
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
 	deadline := time.After(60 * time.Second)

@@ -84,6 +84,18 @@ func TestEnsureTraceparentReplacesUnusableHeader(t *testing.T) {
 	}
 }
 
+func FuzzEnsureTraceparent(fuzz *testing.F) {
+	fuzz.Add(validTraceparent)
+	fuzz.Add("01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-extra-more")
+	fuzz.Add("ff-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+	fuzz.Fuzz(func(t *testing.T, header string) {
+		got := EnsureTraceparent(header)
+		if _, _, _, ok := parseTraceparent(got); !ok {
+			t.Fatalf("EnsureTraceparent(%q) = %q, which does not parse", header, got)
+		}
+	})
+}
+
 func TestNewTraceparentIsUnique(t *testing.T) {
 	first, second := NewTraceparent(), NewTraceparent()
 	if first == second {

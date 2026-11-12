@@ -54,7 +54,7 @@ func isTerminalEvent(typ string) bool {
 // GET /executions/{exec_id}?follow=true&after=<seq> endpoint. We have seen
 // connection drops in load tests, and this retrying here mitigates it.
 func ExecProxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder) http.HandlerFunc {
-	client := &http.Client{CheckRedirect: runnerruntime.RefuseRedirect}
+	client := &http.Client{Transport: runnerruntime.NoProxyTransport, CheckRedirect: runnerruntime.RefuseRedirect}
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		// The body is checked before the sandbox is resolved, so a request that
@@ -184,8 +184,7 @@ func ExecProxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics
 func readAndParseRequestBody(w http.ResponseWriter, r *http.Request) (execRequestBody, bool) {
 	rawBody, err := io.ReadAll(http.MaxBytesReader(w, r.Body, execMaxJSONBodyBytes))
 	if err != nil {
-		var maxBytesErr *http.MaxBytesError
-		if errors.As(err, &maxBytesErr) {
+		if maxBytesErr, ok := errors.AsType[*http.MaxBytesError](err); ok {
 			writeError(w, http.StatusBadRequest, "failed to read request body: "+maxBytesErr.Error())
 		} else {
 			writeError(w, http.StatusBadRequest, "failed to read request body")

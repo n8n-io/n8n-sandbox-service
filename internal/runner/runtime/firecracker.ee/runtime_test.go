@@ -8,12 +8,14 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/n8n-io/sandbox-service/internal/daemon/volumedrives"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 )
@@ -131,6 +133,8 @@ func newTestRuntime(capacity int32) *Runtime {
 	// And a data volume with room to spare, rather than whatever disk the tests
 	// happen to run on.
 	rt.deps.volumeSpace = func(string) (volumeSpace, error) { return testVolumeSpace, nil }
+	// And no guest behind the daemon URL to send the volume mount request to.
+	rt.deps.mountVolumeDrives = func(context.Context, string, []volumedrives.Volume) error { return nil }
 	return rt
 }
 
@@ -838,12 +842,7 @@ func TestTCPDaemonProxyStopCancelsActiveGuestDial(t *testing.T) {
 }
 
 func containsArg(args []string, want string) bool {
-	for _, arg := range args {
-		if arg == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(args, want)
 }
 
 func TestRuntimeStopSandboxKeepsSandboxStopped(t *testing.T) {
