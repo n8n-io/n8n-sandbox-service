@@ -22,6 +22,7 @@ const (
 	stepColdBoot      = "cold_boot"
 	stepStartProxy    = "start_proxy"
 	stepProbeDaemon   = "probe_daemon"
+	stepMountVolumes  = "mount_volumes"
 )
 
 // stepTimer measures each phase of one create or wake. The durations go to the

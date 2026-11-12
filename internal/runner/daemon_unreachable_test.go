@@ -47,7 +47,7 @@ func TestProxyHandlersLogWhyTheDaemonWasUnreachable(t *testing.T) {
 			}
 
 			var line map[string]any
-			for _, raw := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
+			for raw := range bytes.SplitSeq(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
 				var event map[string]any
 				if json.Unmarshal(raw, &event) != nil {
 					continue

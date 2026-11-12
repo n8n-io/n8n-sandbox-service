@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/n8n-io/sandbox-service/internal/daemon/volumedrives"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
@@ -307,6 +308,7 @@ type dependencies struct {
 	statTemplateKernel  func(path string) (kernelPin, error)
 	newProxy            func(ctx context.Context, sandboxID string, listenAddr string, netnsName string, guestAddr string) (daemonProxy, error)
 	probeDaemon         func(ctx context.Context, baseURL string) error
+	mountVolumeDrives   func(ctx context.Context, baseURL string, drives []volumedrives.Volume) error
 	volumeSpace         func(path string) (volumeSpace, error)
 }
 
@@ -330,7 +332,8 @@ func defaultDependencies(fc Config) dependencies {
 		probeDaemon: func(ctx context.Context, baseURL string) error {
 			return probeDaemon(ctx, baseURL, fc.DaemonWaitTimeout)
 		},
-		volumeSpace: statVolume,
+		mountVolumeDrives: mountVolumeDrives,
+		volumeSpace:       statVolume,
 	}
 }
 
@@ -936,7 +939,7 @@ func joinErrors(errs []error) error {
 // guest daemon after snapshot restore.
 func probeDaemon(ctx context.Context, baseURL string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
-	client := http.Client{Timeout: 2 * time.Second, CheckRedirect: runnerruntime.RefuseRedirect}
+	client := http.Client{Transport: runnerruntime.NoProxyTransport, Timeout: 2 * time.Second, CheckRedirect: runnerruntime.RefuseRedirect}
 	for {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/healthz", nil)
 		if err != nil {

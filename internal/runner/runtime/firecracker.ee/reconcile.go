@@ -72,7 +72,7 @@ func (r *Runtime) reconcileNetworkNamespaces(ctx context.Context) error {
 func startupNetworkCleanupScript(capacity int) string {
 	var b strings.Builder
 	b.WriteString("set -eu\n")
-	for slot := 0; slot < capacity; slot++ {
+	for slot := range capacity {
 		b.WriteString(strings.TrimSpace(fcnetwork.CleanupScript(slot)))
 		b.WriteByte('\n')
 	}

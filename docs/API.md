@@ -91,7 +91,7 @@ What the client loses:
 
 An ordinary wake from an idle stop stays transparent: no `409`, no header. On the Sysbox runtime that wake costs the same three things, because a stopped container is started again rather than resumed; on Firecracker an idle stop snapshots the paused guest, so memory does survive it. The `409` is not what tells them apart — `status` is. An idle stop sets `status` to `stopped`, so a client can see it in `GET /sandboxes/{id}` and know what it lost, whereas a crash leaves `status` at `running`. The `409` exists for the case that has no other signal. An ephemeral sandbox never reaches `stopped`; it is deleted instead (see `ephemeral` under `POST /sandboxes`).
 
-**404** `sandbox not found` — Unknown id, the sandbox is past its idle delete-after wake window (`SANDBOX_API_IDLE_DELETE_AFTER`, default `24h`; the idle-stop window for an ephemeral sandbox, see `POST /sandboxes`), or the runner no longer tracks the sandbox (delete or runner restart). On exec/file proxy routes, when the runner signals sandbox gone (`X-Sandbox-Gone: 1`), the API removes the store row so subsequent `GET /sandboxes/{id}` also returns 404. Other runner **404** responses (for example `execution not found` or missing file paths) do **not** delete the sandbox. Exec and file routes may return **503** or **502** from the runner after the API successfully reaches the runner; the API may return **503** `runner unavailable` before the runner is contacted.
+**404** `sandbox not found` — Unknown id, the sandbox is past its idle delete-after wake window (`SANDBOX_API_IDLE_DELETE_AFTER`, default `24h`; the idle-stop window for an ephemeral sandbox, see `POST /sandboxes`), the sandbox was stopped on a [cordoned](#put-adminrunnersidcordon--delete-adminrunnersidcordon) runner and the request would have woken it, or the runner no longer tracks the sandbox (delete or runner restart). On exec/file proxy routes, when the runner signals sandbox gone (`X-Sandbox-Gone: 1`), the API removes the store row so subsequent `GET /sandboxes/{id}` also returns 404. Other runner **404** responses (for example `execution not found` or missing file paths) do **not** delete the sandbox. Exec and file routes may return **503** or **502** from the runner after the API successfully reaches the runner; the API may return **503** `runner unavailable` before the runner is contacted.
 
 ---
 
@@ -125,7 +125,7 @@ Metric families include:
 
 - `sandbox_http_requests_total{role,route,method,status}` — request counter; `route` is the matched route pattern (e.g. `/sandboxes/{id}`), not the raw path.
 - `sandbox_http_request_duration_seconds{role,route,method}` — request latency histogram.
-- `sandbox_sandbox_operations_total{role="api",operation,result}` — sandbox lifecycle ops (`create`, `delete`).
+- `sandbox_sandbox_operations_total{role="api",operation,result}` — sandbox lifecycle ops (`create`, `delete`, `cordon_delete`).
 - `sandbox_create_placements_total{role="api",result}` — how each create found a runner that did not refuse it for capacity: `first_choice`, or `retried` after a refusal; or found none: `exhausted` (every runner tried refused) or `no_runner` (none eligible). Whether the create then succeeded is in `sandbox_sandbox_operations_total`.
 - `sandbox_sandboxes_active{role="api"}` — current sandbox count from the store.
 - `sandbox_runners_registered{role="api"}` — runners registered with the API.
@@ -228,6 +228,8 @@ When no runner is eligible, it is the same except for `error`: `no sandbox runne
 
 - `egress` (string, default `"public"`) — outbound network policy. `"public"`: the internet, minus the [blocked destinations](security-model.md#guest-to-host-and-network). `"none"`: nothing leaves the sandbox, DNS included; the API still reaches it. Fixed at creation: a reconnect to an existing `id` that names a different mode is refused with `409`, so a caller asking for `"none"` never gets an open sandbox back.
 
+Unknown fields return `400`.
+
 With a tenant key, the sandbox is owned by that tenant and counts toward the tenant's `max_sandboxes` quota (`403` when exceeded). With an admin key, the sandbox is stored with `tenant_id` `__admin__` (admin-owned; not visible to tenant keys; admins see all sandboxes in list).
 
 The quota holds under concurrent creates. Before the runner call, each API pod counts the tenant's saved sandboxes plus its own creates still in progress, so on one pod no create past the quota reaches a runner while the quota stays the same. The quota is checked again when the sandbox is saved, where a tenant's creates are counted one at a time. That check catches a burst spread over several API pods and a quota lowered during a create. A create refused there was already made on a runner; the API deletes it there before the `403`, and if that delete fails, the sandbox stays on the runner untracked. Either way the tenant can briefly hold more sandboxes on runners than its quota.
@@ -282,7 +284,9 @@ curl -X POST http://localhost:8080/sandboxes \
 
 Get sandbox details.
 
-This is a read-only status check: it does not update `last_active_at` or extend idle timers. Only proxied traffic (exec, files, etc.) counts as activity, and only when the sandbox actually serves it — a request that fails with **502** or **503** leaves `last_active_at` and `status` untouched, so retrying against a broken sandbox cannot hold it open past its idle timers. A **4xx** still counts, since the sandbox was reachable and rejected the request — except a runner sandbox-gone **404**, which never counts as activity even if removing the store row fails. Activity is recorded when the response starts, not while it streams, so a command that runs longer than the idle stop timer can be stopped by the sweeper mid-run.
+This is a read-only status check: it does not update `last_active_at` or extend idle timers. Only proxied traffic (exec, files, etc.) counts as activity, and only when the sandbox actually serves it — a request that fails with **502** or **503** leaves `last_active_at` and `status` untouched, so retrying against a broken sandbox cannot hold it open past its idle timers. A **4xx** still counts, since the sandbox was reachable and rejected the request — except a runner sandbox-gone **404**, which never counts as activity even if removing the store row fails. A response counts until it ends, for at most `SANDBOX_API_MAX_RESPONSE_ACTIVITY` (default `30m`), so, while the API can write to its database, a sandbox is not stopped under an exec stream that is open for less than that, once the stream's first write has landed.
+
+Each API replica writes `last_active_at` every `SANDBOX_API_ACTIVITY_WRITE_INTERVAL` (default `5s`), so it can trail the last request by up to twice that; the idle stop window and the `404` fence are extended by that much, deletes by twice that ([how](architecture.md#sandbox-activity)). A wake asks for a write at once rather than at the next interval, so `status` reads `running` as soon as that write lands.
 
 **Path Parameters:**
 - `id` — Sandbox UUID
@@ -888,7 +892,7 @@ Admin or provisioner. Create a tenant. By default also mints one API key (`creat
 | `max_sandboxes`| int    | no       | `SANDBOX_API_DEFAULT_MAX_SANDBOXES` (`50`) |
 | `create_key`   | bool   | no       | `true` |
 
-`name` is an optional human-readable label. `external_ref` is an optional opaque id from the caller (for example an n8n instance id); the API does not enforce uniqueness.
+`name` is an optional human-readable label. `external_ref` is an optional opaque id from the caller (for example an n8n instance id); the API does not enforce uniqueness. Unknown fields return `400`.
 
 `max_sandboxes` is the per-tenant sandbox quota (`0` = unlimited). Must be between `0` and `2147483647`. When omitted, the service default applies. With a provisioner key an explicit value must be between `1` and `SANDBOX_API_DEFAULT_MAX_SANDBOXES`; `0` and larger values return `400`.
 
@@ -1027,7 +1031,7 @@ curl http://localhost:8080/admin/runners -H "X-Api-Key: SCALER_KEY"
 
 ### PUT /admin/runners/{id}/cordon · DELETE /admin/runners/{id}/cordon
 
-Admin or scaler. `PUT` cordons the runner: it keeps its sandboxes but gets no new ones. `DELETE` uncordons it. Both are idempotent. A runner restart clears the cordon.
+Admin or scaler. `PUT` cordons the runner: it gets no new sandboxes and keeps serving its running ones. A request that would wake one of its sandboxes whose `status` is `stopped` deletes the sandbox and gets `404 sandbox not found` instead, so the client creates it again on another runner. If the runner can't be reached, the API removes only its own record and still answers `404`; a runner that is in fact still up keeps the sandbox until it restarts. A runner that has sent no heartbeat within `SANDBOX_API_RUNNER_HEARTBEAT_GRACE` gets 5 s to answer. The in-memory registry forgets a runner's cordon when the runner disconnects. If the runner answers but the delete fails, the request gets `503` and the sandbox stays, so a retry tries again. A stopped sandbox that gets no such request stays until the idle sweeper deletes it or the runner is reimaged or removed. `DELETE` uncordons the runner, which restores wakes. Both are idempotent. A runner restart clears the cordon.
 
 **Response:** `200 OK`
 

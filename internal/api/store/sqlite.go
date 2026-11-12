@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -258,11 +259,22 @@ func (s *SQLiteStore) UpdateStatus(id, status string) error {
 	return nil
 }
 
-func (s *SQLiteStore) UpdateLastActive(id string) error {
-	const q = `UPDATE sandboxes SET last_active_at = ? WHERE id = ?`
-	now := time.Now().Unix()
-	if _, err := s.db.Exec(q, now, id); err != nil {
-		return fmt.Errorf("store: update last_active_at for %s: %w", id, err)
+func (s *SQLiteStore) RecordActivity(ctx context.Context, lastActiveAt map[string]int64) error {
+	if len(lastActiveAt) == 0 {
+		return nil
+	}
+	batch, err := json.Marshal(lastActiveAt)
+	if err != nil {
+		return fmt.Errorf("store: record activity: %w", err)
+	}
+	const q = `
+		UPDATE sandboxes
+		   SET last_active_at = MAX(sandboxes.last_active_at, b.at), status = 'running'
+		  FROM (SELECT key AS id, value AS at FROM json_each(?)) AS b
+		 WHERE sandboxes.id = b.id
+		   AND (sandboxes.last_active_at < b.at OR sandboxes.status <> 'running')`
+	if _, err := s.db.ExecContext(ctx, q, string(batch)); err != nil {
+		return fmt.Errorf("store: record activity for %d sandboxes: %w", len(lastActiveAt), err)
 	}
 	return nil
 }
