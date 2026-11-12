@@ -33,6 +33,7 @@ const (
 	ReasonPathNotAllowed        = "path_not_allowed"
 	ReasonRepoNotAllowed        = "repo_not_allowed"
 	ReasonRefNotAllowed         = "ref_not_allowed"
+	ReasonProtocolNotAllowed    = "protocol_not_allowed"
 	ReasonModelBlocked          = "model_blocked"
 	ReasonCredentialUnavailable = "credential_unavailable"
 )
@@ -83,6 +84,73 @@ type sandbox struct {
 
 	mu      sync.Mutex
 	tunnels map[net.Conn]target // open tunnels and where they go
+	// listed holds the object ids of the visible refs the proxy listed to
+	// this sandbox: the only ids a fetch may want while refs are hidden.
+	listed   map[string]struct{}
+	listedAt time.Time // the proxy's own last listing for this sandbox
+
+	// gitSlots bounds the filtered Git requests a sandbox has in flight, each
+	// holding its request body or a ref listing in memory.
+	gitSlots chan struct{}
+}
+
+// Per-sandbox bounds on the proxy's Git filtering work.
+const (
+	maxGitInFlight  = 8
+	minListInterval = time.Second
+)
+
+// acquireGit takes a Git slot, waiting until one frees or ctx ends.
+func (sb *sandbox) acquireGit(ctx context.Context) (func(), bool) {
+	select {
+	case sb.gitSlots <- struct{}{}:
+		return func() { <-sb.gitSlots }, true
+	case <-ctx.Done():
+		return nil, false
+	}
+}
+
+// mayList reports whether the proxy may list a repository's refs for sb now,
+// at most once a minListInterval, so wants of made-up ids cannot turn every
+// request into a full listing upstream.
+func (sb *sandbox) mayList(now time.Time) bool {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+	if now.Sub(sb.listedAt) < minListInterval {
+		return false
+	}
+	sb.listedAt = now
+	return true
+}
+
+// maxListed bounds a sandbox's listed ids; past it the set starts again from
+// the next listing.
+const maxListed = 1 << 16
+
+// addListed records ids listed under p, unless p was replaced meanwhile.
+func (sb *sandbox) addListed(p *policy, ids []string) {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+	if sb.policy.Load() != p {
+		return
+	}
+	if sb.listed == nil || len(sb.listed)+len(ids) > maxListed {
+		sb.listed = make(map[string]struct{}, len(ids))
+	}
+	for _, id := range ids {
+		sb.listed[id] = struct{}{}
+	}
+}
+
+func (sb *sandbox) allListed(ids []string) bool {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+	for _, id := range ids {
+		if _, ok := sb.listed[id]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // New returns a Server with no sandboxes.
@@ -119,12 +187,14 @@ func (s *Server) Set(sandboxID, tenant string, spec *runnerruntime.EgressProxySp
 	s.mu.Lock()
 	sb, ok := s.sandboxes[sandboxID]
 	if !ok {
-		sb = &sandbox{id: sandboxID, tenant: tenant, tunnels: map[net.Conn]target{}}
+		sb = &sandbox{id: sandboxID, tenant: tenant, tunnels: map[net.Conn]target{}, gitSlots: make(chan struct{}, maxGitInFlight)}
 		s.sandboxes[sandboxID] = sb
 	}
 	s.mu.Unlock()
 	sb.policy.Store(p)
 	sb.mu.Lock()
+	// Ids listed under the old policy may be hidden under the new one.
+	sb.listed, sb.listedAt = nil, time.Time{}
 	for conn, t := range sb.tunnels {
 		// A host that became inspected must not keep a tunnel nothing sees into.
 		if !p.permits(t) || p.inspected[t.key] {

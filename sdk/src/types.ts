@@ -35,6 +35,13 @@ export interface EgressProxySpec {
   /** Refs a push may update; an entry ending in `/` is a prefix under `refs/heads/`. */
   push_refs?: string[];
   /**
+   * Refs fetches from `repos` must not see; an entry ending in `/` or `.` is a
+   * prefix. Fetches then need Git protocol v2.
+   */
+  hide_refs?: string[];
+  /** Exceptions to `hide_refs`, in the same form. */
+  show_refs?: string[];
+  /**
    * Per allowed host, a reference to the secret the proxy injects: as
    * `Authorization: Bearer` (default), `basic` with `username`, or as the value
    * of `header`.

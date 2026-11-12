@@ -18,6 +18,7 @@ const (
 	maxEgressProxyHostsPerEntry = 16
 	maxEgressProxyRepos         = 64
 	maxEgressProxyPushRefs      = 16
+	maxEgressProxyRefPatterns   = 16
 	maxEgressProxyCredentials   = 32
 	maxEgressProxyModelHosts    = 8
 	maxEgressProxyLabels        = 16
@@ -51,6 +52,14 @@ type EgressProxySpec struct {
 	// PushRefs are the refs a push to a RepoWrite repository may update. An
 	// entry ending in "/" is a prefix; any other entry is one exact ref.
 	PushRefs []string `json:"push_refs,omitempty"`
+	// HideRefs are refs a fetch from Repos must not see: they are left out of
+	// every ref listing, cannot be fetched by name, and only listed tips may be
+	// fetched by object id. An entry ending in "/" or "." is a prefix; any
+	// other entry is one exact ref. Setting it requires Git protocol v2 for
+	// fetches.
+	HideRefs []string `json:"hide_refs,omitempty"`
+	// ShowRefs are exceptions to HideRefs, in the same form.
+	ShowRefs []string `json:"show_refs,omitempty"`
 	// Credentials are injected by the proxy per destination host. Only the
 	// reference is held here; the secret never reaches the runner's guest.
 	Credentials []EgressCredential `json:"credentials,omitempty"`
@@ -291,6 +300,23 @@ func (s *EgressProxySpec) Validate() error {
 		}
 	}
 
+	for _, l := range []struct {
+		field string
+		refs  []string
+	}{{"hide_refs", s.HideRefs}, {"show_refs", s.ShowRefs}} {
+		if len(l.refs) > maxEgressProxyRefPatterns {
+			return fmt.Errorf("egress_proxy.%s: at most %d entries", l.field, maxEgressProxyRefPatterns)
+		}
+		for i, ref := range l.refs {
+			if err := validateRefPattern(ref); err != nil {
+				return fmt.Errorf("egress_proxy.%s[%d]: %w", l.field, i, err)
+			}
+		}
+	}
+	if len(s.ShowRefs) > 0 && len(s.HideRefs) == 0 {
+		return errors.New("egress_proxy.show_refs: needs hide_refs")
+	}
+
 	if len(s.Credentials) > maxEgressProxyCredentials {
 		return fmt.Errorf("egress_proxy.credentials: at most %d entries", maxEgressProxyCredentials)
 	}
@@ -438,6 +464,33 @@ func validateRepoPath(p string) error {
 	for _, seg := range strings.Split(p, "/") {
 		if seg == "." || seg == ".." || !repoSegRe.MatchString(seg) {
 			return fmt.Errorf("%q: '/'-separated segments of lowercase letters, digits, '.', '_' and '-'", p)
+		}
+	}
+	return nil
+}
+
+// validateRefPattern applies git check-ref-format's rules to a ref under
+// refs/, with a trailing "/" or "." allowed to mark a prefix.
+func validateRefPattern(ref string) error {
+	if len(ref) > maxRefLen || !strings.HasPrefix(ref, "refs/") {
+		return fmt.Errorf("%q: must start with refs/, at most %d characters", ref, maxRefLen)
+	}
+	name := ref
+	if strings.HasSuffix(ref, "/") || strings.HasSuffix(ref, ".") {
+		name = ref[:len(ref)-1]
+	}
+	if strings.Count(name, "/") < 1 || strings.HasSuffix(name, "/") || strings.HasSuffix(name, ".") ||
+		strings.Contains(name, "..") || strings.Contains(name, "//") || strings.Contains(name, "@{") {
+		return fmt.Errorf("%q: invalid ref", ref)
+	}
+	for _, c := range name {
+		if c < 0x20 || c == 0x7f || strings.ContainsRune(" ~^:?*[\\", c) {
+			return fmt.Errorf("%q: invalid ref", ref)
+		}
+	}
+	for _, seg := range strings.Split(name, "/") {
+		if seg == "" || strings.HasPrefix(seg, ".") || strings.HasSuffix(seg, ".lock") {
+			return fmt.Errorf("%q: invalid ref", ref)
 		}
 	}
 	return nil
