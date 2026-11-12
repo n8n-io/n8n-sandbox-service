@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/n8n-io/sandbox-service/internal/daemon/volumedrives"
+	"github.com/n8n-io/sandbox-service/internal/safetar"
 )
 
 const (
@@ -461,7 +462,7 @@ func decodeJSONBody(body io.Reader, dst any) error {
 }
 
 func fileOpStatusCode(err error) int {
-	if errors.Is(err, errInvalidArchive) {
+	if errors.Is(err, safetar.ErrInvalid) {
 		return http.StatusBadRequest
 	}
 	// The os package does not export the error an os.Root returns for a path
