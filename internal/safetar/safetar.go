@@ -56,10 +56,10 @@ type Policy struct {
 	MaxEntries int
 	// MaxBytes counts regular-file content.
 	MaxBytes int64
-	// MaxTarBytes counts the whole tar stream after decompression: headers,
-	// padding and anything after the end of the archive included. It does
-	// not bound the compressed input.
-	MaxTarBytes int64
+	// MaxDecompressedBytes counts the whole tar stream after decompression:
+	// headers, padding and anything after the end of the archive included.
+	// It does not bound the compressed input.
+	MaxDecompressedBytes int64
 }
 
 // Stats counts regular files only.
@@ -93,7 +93,7 @@ type sink interface {
 
 func unpack(r io.Reader, p Policy, s sink) (Stats, error) {
 	var stats Stats
-	if p.MaxEntries < 0 || p.MaxBytes < 0 || p.MaxTarBytes < 0 {
+	if p.MaxEntries < 0 || p.MaxBytes < 0 || p.MaxDecompressedBytes < 0 {
 		return stats, fmt.Errorf("%w: negative cap", ErrTooLarge)
 	}
 	if p.AllowSymlinks && p.MaxEntries == 0 {
@@ -103,8 +103,8 @@ func unpack(r io.Reader, p Policy, s sink) (Stats, error) {
 	if err != nil {
 		return stats, invalid(err)
 	}
-	if p.MaxTarBytes > 0 {
-		src = &cappedReader{r: src, max: p.MaxTarBytes}
+	if p.MaxDecompressedBytes > 0 {
+		src = &cappedReader{r: src, max: p.MaxDecompressedBytes}
 	}
 	tr := tar.NewReader(src)
 	links := symlinks{}
@@ -273,8 +273,8 @@ func (e entryReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// invalid marks a read error as an invalid archive, unless MaxTarBytes caused
-// it.
+// invalid marks a read error as an invalid archive, unless
+// MaxDecompressedBytes caused it.
 func invalid(err error) error {
 	if errors.Is(err, ErrTooLarge) {
 		return err
@@ -301,7 +301,7 @@ func (c *cappedReader) Read(p []byte) (int, error) {
 	n, err := c.r.Read(p)
 	if left := c.max - c.read; int64(n) > left {
 		c.read = c.max
-		c.err = fmt.Errorf("%w: tar exceeds %d bytes", ErrTooLarge, c.max)
+		c.err = fmt.Errorf("%w: more than %d bytes decompressed", ErrTooLarge, c.max)
 		return int(left), c.err
 	}
 	c.read += int64(n)

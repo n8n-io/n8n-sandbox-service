@@ -744,7 +744,7 @@ func TestMaxBytes(t *testing.T) {
 	}
 }
 
-func TestMaxTarBytes(t *testing.T) {
+func TestMaxDecompressedBytes(t *testing.T) {
 	plain := buildTar(t, tarFile("a.txt", "abc"), tarDir("d/"))
 	size := int64(len(plain))
 	for _, compress := range []bool{false, true} {
@@ -752,11 +752,11 @@ func TestMaxTarBytes(t *testing.T) {
 		if compress {
 			body = gzipped(t, plain)
 		}
-		for maxTarBytes, want := range map[int64]error{size - 1: ErrTooLarge, size: nil, math.MaxInt64: nil} {
+		for maxDecompressed, want := range map[int64]error{size - 1: ErrTooLarge, size: nil, math.MaxInt64: nil} {
 			_, target := newTarget(t)
-			_, err := unpackBoth(t, target, body, Policy{MaxTarBytes: maxTarBytes})
+			_, err := unpackBoth(t, target, body, Policy{MaxDecompressedBytes: maxDecompressed})
 			if !errors.Is(err, want) || want != nil && errors.Is(err, ErrInvalid) {
-				t.Fatalf("gzip=%v MaxTarBytes %d: expected %v, got %v", compress, maxTarBytes, want, err)
+				t.Fatalf("gzip=%v MaxDecompressedBytes %d: expected %v, got %v", compress, maxDecompressed, want, err)
 			}
 		}
 	}
@@ -768,7 +768,7 @@ func TestMaxTarBytes(t *testing.T) {
 		"file content":       gzipped(t, buildTar(t, tarFile("a.txt", big))),
 	} {
 		_, target := newTarget(t)
-		_, err := unpackBoth(t, target, body, Policy{MaxEntries: 1, MaxTarBytes: 64 << 10})
+		_, err := unpackBoth(t, target, body, Policy{MaxEntries: 1, MaxDecompressedBytes: 64 << 10})
 		if !errors.Is(err, ErrTooLarge) || errors.Is(err, ErrInvalid) {
 			t.Fatalf("%s: expected %v, got %v", name, ErrTooLarge, err)
 		}
@@ -791,9 +791,9 @@ func TestCappedReader(t *testing.T) {
 func TestPolicyChecks(t *testing.T) {
 	body := buildTar(t, tarFile("a.txt", "abc"))
 	for name, p := range map[string]Policy{
-		"MaxEntries":  {MaxEntries: -1},
-		"MaxBytes":    {MaxBytes: -1},
-		"MaxTarBytes": {MaxTarBytes: -1},
+		"MaxEntries":           {MaxEntries: -1},
+		"MaxBytes":             {MaxBytes: -1},
+		"MaxDecompressedBytes": {MaxDecompressedBytes: -1},
 	} {
 		_, target := newTarget(t)
 		if _, err := unpackBoth(t, target, body, p); !errors.Is(err, ErrTooLarge) {
