@@ -191,6 +191,9 @@ func dockerContainerCreateArgs(sandboxID, containerName, image, network string, 
 		"--name", containerName,
 		"--hostname", "sandbox",
 		"--restart", "unless-stopped",
+		// Docker's init runs as PID 1 and reaps orphaned processes. The daemon
+		// does not, so as zombies they would use up the pids limit.
+		"--init",
 		"--network", network,
 		"--label", containerLabelManaged + "=" + containerLabelManagedVal,
 		"--label", containerLabelSandboxID + "=" + sandboxID,

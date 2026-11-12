@@ -122,6 +122,8 @@ Each runner hosts sandboxes through the shared `runtime.Runtime` contract. The D
 
 A lightweight HTTP server embedded in every sandbox container. It is the only process that runs commands and touches files inside the sandbox.
 
+Docker containers are created with `--init`, so Docker's init (`docker-init`, which the Docker daemon's host must have) is PID 1 and reaps orphaned processes. In a Firecracker guest the daemon itself is PID 1 and does not reap them.
+
 | Subcomponent | Location | Responsibility |
 | --- | --- | --- |
 | HTTP server | `internal/daemon/daemon.go` | Route registration, request handling |

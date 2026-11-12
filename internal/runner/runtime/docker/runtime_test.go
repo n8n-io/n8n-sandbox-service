@@ -133,6 +133,7 @@ func TestDockerContainerCreateArgs(t *testing.T) {
 		"--name", "sandbox-name",
 		"--hostname", "sandbox",
 		"--restart", "unless-stopped",
+		"--init",
 		"--network", runnerNoEgressNetwork,
 		"--label", containerLabelManaged + "=" + containerLabelManagedVal,
 		"--label", containerLabelSandboxID + "=sandbox-id",
