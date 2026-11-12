@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"crypto/subtle"
 	"net/http"
 
 	"github.com/n8n-io/sandbox-service/internal/grpctls"
@@ -37,7 +38,7 @@ func AuthMiddleware(apiKeys map[string]struct{}) func(http.Handler) http.Handler
 				writeError(w, http.StatusUnauthorized, "missing API key")
 				return
 			}
-			if _, ok := apiKeys[apiKey]; !ok {
+			if !constantTimeContains(apiKeys, apiKey) {
 				writeError(w, http.StatusUnauthorized, "invalid API key")
 				return
 			}
@@ -45,4 +46,14 @@ func AuthMiddleware(apiKeys map[string]struct{}) func(http.Handler) http.Handler
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// constantTimeContains checks if key exists in the allowed set using constant-time comparison.
+func constantTimeContains(allowed map[string]struct{}, key string) bool {
+	for allowedKey := range allowed {
+		if subtle.ConstantTimeCompare([]byte(allowedKey), []byte(key)) == 1 {
+			return true
+		}
+	}
+	return false
 }

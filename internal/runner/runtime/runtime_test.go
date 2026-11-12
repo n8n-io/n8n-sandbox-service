@@ -1,6 +1,9 @@
 package runtime
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestBlockEgress(t *testing.T) {
 	for _, tc := range []struct {
@@ -27,4 +30,28 @@ func TestBlockEgressPanicsOnUnvalidatedValue(t *testing.T) {
 		}
 	}()
 	(&CreateOptions{Egress: "allow-all"}).BlockEgress()
+}
+
+func FuzzParseCreateOptions(fuzz *testing.F) {
+	fuzz.Add("")
+	fuzz.Add(`{"egress":"none"}`)
+	fuzz.Add(`{"egress":"allow-all"}`)
+	fuzz.Add(`{"egress":`)
+	fuzz.Fuzz(func(t *testing.T, input string) {
+		opts, err := ParseCreateOptions(input)
+		if err != nil {
+			return
+		}
+		if opts.Egress != EgressPublic && opts.Egress != EgressNone {
+			t.Fatalf("ParseCreateOptions(%q) accepted egress %q", input, opts.Egress)
+		}
+		encoded, err := json.Marshal(opts)
+		if err != nil {
+			t.Fatalf("marshal %+v: %v", opts, err)
+		}
+		again, err := ParseCreateOptions(string(encoded))
+		if err != nil || *again != *opts {
+			t.Fatalf("ParseCreateOptions(%q) = %+v, %v; want %+v", encoded, again, err, opts)
+		}
+	})
 }

@@ -314,7 +314,8 @@ export async function execWithTransientRetry(
  * daemon drops to uid 1000 at startup and runs execs as that same user.
  *
  * On Firecracker the VMM process exits, which is what the runner detects. On
- * Docker the container exits and its restart policy brings it back.
+ * Docker PID 1 is Docker's init, which passes the signal on to the daemon; the
+ * container exits with it and its restart policy brings it back.
  *
  * Sent as a bare request rather than through `exec`, because the SDK reacts to
  * the dropped stream the way any client would: it resumes the execution over
@@ -370,6 +371,11 @@ export const addAddress = (ip: string) =>
 
 /** An unused address in the same /24 as ip. */
 export const siblingOf = (ip: string) => ip.split('.').slice(0, 3).concat('250').join('.');
+
+/** Sends the runner's volume mount request from inside the sandbox; prints the status. */
+export const callVolumeMount =
+  `curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X POST ` +
+  `-H 'Content-Type: application/json' -d '{"volumes":[]}' http://127.0.0.1:8081/volumes/mount`;
 
 export async function uploadFile(
   id: string,

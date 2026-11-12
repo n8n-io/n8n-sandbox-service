@@ -142,6 +142,8 @@ type Runtime interface {
 
 	CreateSandbox(ctx context.Context, sandboxID string, opts *CreateOptions) (*SandboxInfo, error)
 	GetSandboxInfo(ctx context.Context, sandboxID string) (*SandboxInfo, error)
+	// DeleteSandbox bounds itself by TransitionBudget, so callers may pass a
+	// context without a deadline.
 	DeleteSandbox(ctx context.Context, sandboxID string) error
 	StopSandbox(ctx context.Context, sandboxID string) error
 	EnsureSandboxRunning(ctx context.Context, sandboxID string) (WakeResult, error)

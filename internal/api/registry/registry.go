@@ -16,8 +16,8 @@ type Runner struct {
 	HTTPBaseURL     string // Endpoints proxied to the sandbox
 	ControlGRPCAddr string // Sandbox lifecycle methods
 	Healthy         bool
-	// Cordoned is set by an operator on the runner: it keeps its sandboxes but
-	// takes no new ones.
+	// Cordoned is set by an operator on the runner: it takes no new sandboxes,
+	// and the API deletes its stopped ones instead of waking them.
 	Cordoned        bool
 	CapacityTotal   int32
 	CapacityUsed    int32

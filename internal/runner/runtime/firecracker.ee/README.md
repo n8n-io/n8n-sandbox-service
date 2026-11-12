@@ -49,6 +49,7 @@ Invariants (rationale in the code comments of `stop_wake.go`, `crash.go`, `netwo
 - Teardown marks its slot unwired, and slot setup deletes leftover netns/veth before creating them, so a slot handed back with leftovers comes up clean.
 - A teardown never touches a slot another sandbox holds: `clearSlotNetwork` runs under the slot's network lock and re-reads the owner there, per incarnation, because `Shutdown` can release a slot from under a concurrent teardown while the next sandbox takes it. A stopped sandbox has no slot by the time it is deleted, so only its jail is cleaned.
 - Every microVM incarnation has a `generation`; an exit callback carrying an old generation is ignored, which is how runner-initiated kills are told apart from guest deaths.
+- The guest daemon holds root, and serves only `/healthz` and `POST /volumes/mount`, until the first `POST /volumes/mount` ([security-model.md](../../../../docs/security-model.md#guest-to-host-and-network)). Create and cold boot send it after `probe_daemon`, with no volumes, and fail on any answer but `204`, `404` or `501`. A wake from a stop snapshot doesn't: its daemon dropped root before the snapshot.
 
 ## Guest death and cold boot
 

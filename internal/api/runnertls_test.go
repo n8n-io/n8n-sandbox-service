@@ -219,10 +219,6 @@ func TestRunnerTransportVerifiesEachRunnerHostname(t *testing.T) {
 	tr.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, network, srv.Listener.Addr().String())
 	}
-	// The transport is cloned from http.DefaultTransport, which honours
-	// HTTP_PROXY; without this the request becomes a CONNECT to whatever proxy
-	// the developer's environment happens to set.
-	tr.Proxy = nil
 	client := &http.Client{Transport: tr}
 
 	resp, err := client.Get("https://runner-a.test:8080/")
@@ -234,6 +230,16 @@ func TestRunnerTransportVerifiesEachRunnerHostname(t *testing.T) {
 	if resp, err := client.Get("https://runner-b.test:8080/"); err == nil {
 		_ = resp.Body.Close()
 		t.Fatal("runner-b.test is absent from the certificate, want a verification failure")
+	}
+}
+
+func TestRunnerTransportHasNoProxy(t *testing.T) {
+	rt, err := newRunnerTransport(withRunnerTLS(&config.APIConfig{}))
+	if err != nil {
+		t.Fatalf("build transport: %v", err)
+	}
+	if rt.(*http.Transport).Proxy != nil {
+		t.Fatal("runner transport has a Proxy, want nil so HTTP_PROXY is ignored")
 	}
 }
 

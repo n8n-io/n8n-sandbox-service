@@ -55,6 +55,8 @@ containers direct access to the host Docker daemon.
   for the daemon before proxying.
 - Uses singleflight so concurrent wake requests for the same sandbox only run
   one wake operation.
+- Runs a delete within `TransitionBudget`, without the caller's cancellation or
+  deadline.
 - Best-effort reconciles and removes stale managed containers on startup and
   shutdown.
 - Detects guests that died on their own and reports the restart to the client.

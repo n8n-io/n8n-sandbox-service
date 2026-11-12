@@ -80,6 +80,37 @@ func TestGatewayCapsArchiveBody(t *testing.T) {
 	}
 }
 
+// Only the runner may call the daemon's volume mount endpoint.
+func TestGatewayDoesNotProxyVolumeMount(t *testing.T) {
+	var received atomic.Int32
+	runner := newTestRunnerServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	router, s := newTestGateway(t, "admin-key")
+	sid := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	if err := s.Create(&store.SandboxRecord{
+		ID: sid, Status: "running", CreatedAt: 1, LastActiveAt: 1,
+		TenantID: store.AdminTenantID, RunnerHTTPBase: runner.URL,
+	}); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+
+	for _, path := range []string{"/volumes/mount", "/files/../volumes/mount"} {
+		req := httptest.NewRequest(http.MethodPost, "/sandboxes/"+sid+path, strings.NewReader(`{"volumes":[]}`))
+		req.Header.Set("X-Api-Key", "admin-key")
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code < 300 {
+			t.Errorf("POST %s: status %d, want it refused", path, rr.Code)
+		}
+	}
+	if n := received.Load(); n != 0 {
+		t.Fatalf("runner received %d requests, want none", n)
+	}
+}
+
 func TestGatewayRejectsMissingPublicAPIKey(t *testing.T) {
 	s, err := store.New(":memory:")
 	if err != nil {

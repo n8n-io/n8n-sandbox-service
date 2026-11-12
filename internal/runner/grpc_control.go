@@ -78,7 +78,7 @@ func (s *SandboxControlGRPC) checkAPIKey(ctx context.Context) error {
 	if key == "" {
 		return status.Error(codes.Unauthenticated, "missing x-api-key")
 	}
-	if _, ok := s.Cfg.APIKeys[key]; !ok {
+	if !constantTimeContains(s.Cfg.APIKeys, key) {
 		return status.Error(codes.Unauthenticated, "invalid api key")
 	}
 	grpctls.NotePeer(grpctls.PeerCertificate(ctx))
@@ -160,7 +160,10 @@ func (s *SandboxControlGRPC) DeleteSandbox(ctx context.Context, req *pb.DeleteSa
 	}
 	ctx = withTrace(ctx)
 	start := time.Now()
-	err := s.Runtime.DeleteSandbox(ctx, sandboxID)
+	// Without the caller's deadline or cancellation, each runtime under its own
+	// budget: an API that stops waiting may already have dropped its record,
+	// and a delete cut short would leave the sandbox behind.
+	err := s.Runtime.DeleteSandbox(context.WithoutCancel(ctx), sandboxID)
 	s.Rec.ObserveContainerOp(metrics.OpDelete, err == nil, time.Since(start))
 	if err != nil {
 		if errors.Is(err, runnerruntime.ErrSandboxNotFound) {

@@ -54,7 +54,7 @@ func isTerminalEvent(typ string) bool {
 // GET /executions/{exec_id}?follow=true&after=<seq> endpoint. We have seen
 // connection drops in load tests, and this retrying here mitigates it.
 func ExecProxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder) http.HandlerFunc {
-	client := &http.Client{CheckRedirect: runnerruntime.RefuseRedirect}
+	client := &http.Client{Transport: runnerruntime.NoProxyTransport, CheckRedirect: runnerruntime.RefuseRedirect}
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		// The body is checked before the sandbox is resolved, so a request that

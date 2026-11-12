@@ -15,8 +15,9 @@ FROM docker:29.9.3-dind-alpine3.24@sha256:08a98015fce594af7c382883bea080ea206de7
 # The base image no longer ships xfsprogs; start-runner.sh needs mkfs.xfs for
 # the disk-quota storage pool.
 #
-# The runner needs only dockerd and the docker CLI. ctr and the buildx and
-# compose plugins go unused, but each carries its own outdated Go dependencies.
+# The runner needs only dockerd, the docker CLI and docker-init, which
+# sandboxes run under (--init). ctr and the buildx and compose plugins go
+# unused, but each carries its own outdated Go dependencies.
 RUN apk upgrade --no-cache \
     && apk add --no-cache tini xfsprogs \
     && rm /usr/local/bin/ctr \

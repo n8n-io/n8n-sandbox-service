@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import './matchers';
 import {
   apiRequest,
+  callVolumeMount,
   crashGuest,
   createSandboxWithRetry,
   deleteSandbox,
@@ -229,6 +230,11 @@ test.describe('Guest crash detection', FIRECRACKER_ONLY, () => {
       const marker = await exec(id, 'cat /tmp/crash-marker');
       expect(marker).toHaveSucceeded();
       expect(marker.stdout.trim()).toBe('survives-a-crash');
+
+      // The recovery made the cold booted daemon drop root.
+      const call = await exec(id, callVolumeMount);
+      expect(call).toHaveSucceeded();
+      expect(call.stdout.trim()).toBe('409');
 
       // Nothing restarts a process that was only in memory. Its files are still
       // there, so a client that gets the 409 can start it again.

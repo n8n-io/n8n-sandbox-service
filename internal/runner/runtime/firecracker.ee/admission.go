@@ -434,7 +434,7 @@ func (r *Runtime) cleanupLeftoverAdmissionCanaries(ctx context.Context) error {
 }
 
 func probeAdmissionDaemon(ctx context.Context, baseURL string) error {
-	client := &http.Client{Timeout: 5 * time.Second, CheckRedirect: runnerruntime.RefuseRedirect}
+	client := &http.Client{Transport: runnerruntime.NoProxyTransport, Timeout: 5 * time.Second, CheckRedirect: runnerruntime.RefuseRedirect}
 
 	healthReq, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/healthz", nil)
 	if err != nil {

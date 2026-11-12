@@ -712,6 +712,21 @@ func TestCreateSandboxEgress(t *testing.T) {
 	}
 }
 
+// A misspelled field is refused, not dropped: dropping "egres" would create the
+// sandbox with public egress.
+func TestCreateSandboxRejectsUnknownField(t *testing.T) {
+	ctl := &fakeSandboxControl{}
+	router, sandboxStore, _ := newIdleTestGateway(t, "admin-key", ctl)
+
+	rr := postCreateSandbox(t, router, "admin-key", `{"egres":"none"}`)
+	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "invalid request body") {
+		t.Fatalf("unknown field: got %d body=%s, want %d invalid request body", rr.Code, rr.Body.String(), http.StatusBadRequest)
+	}
+	if stored, _ := sandboxStore.Count(); stored != 0 || ctl.creates() != 0 {
+		t.Fatalf("unknown field created a sandbox: stored %d, runner creates %d", stored, ctl.creates())
+	}
+}
+
 // Egress is fixed at creation, so a reconnect that names a different mode is
 // refused rather than answered with a sandbox in the other mode; one that names
 // no mode gets whatever the sandbox has, and an empty mode is the default,

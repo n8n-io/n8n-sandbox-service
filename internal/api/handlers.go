@@ -53,6 +53,8 @@ func newRunnerTransport(cfg *config.APIConfig) (http.RoundTripper, error) {
 		return nil, err
 	}
 	tr := http.DefaultTransport.(*http.Transport).Clone()
+	// http.DefaultTransport takes a proxy from the environment.
+	tr.Proxy = nil
 	tr.TLSClientConfig = tlsConf
 	// A connection silent for runnerPingAfter is pinged and closed when no
 	// answer comes within runnerPingTimeout.
@@ -64,8 +66,20 @@ func newRunnerTransport(cfg *config.APIConfig) (http.RoundTripper, error) {
 	return tr, nil
 }
 
-func sandboxProxyHandler(s store.SandboxStore, cfg *config.APIConfig, transport http.RoundTripper, activity *ActivityRecorder) func(bool) http.HandlerFunc {
-	return func(limitBody bool) http.HandlerFunc {
+// proxyRoute says how sandboxProxyHandler treats a route. The zero value fits
+// most routes.
+type proxyRoute struct {
+	// limitBody caps the request body at cfg.MaxFileBytes, for file uploads.
+	limitBody bool
+	// neverWakes marks a route the runner answers without starting a stopped
+	// sandbox (execution DELETE), so a stopped sandbox on a cordoned runner is
+	// proxied to rather than deleted.
+	neverWakes bool
+}
+
+// sandboxProxyHandler proxies sandbox routes to the sandbox's runner.
+func sandboxProxyHandler(s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, transport http.RoundTripper, activity *ActivityRecorder, mrec *metrics.APIRecorder) func(proxyRoute) http.HandlerFunc {
+	return func(route proxyRoute) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			id := r.PathValue("id")
 			if !isValidUUID(id) {
@@ -90,13 +104,21 @@ func sandboxProxyHandler(s store.SandboxStore, cfg *config.APIConfig, transport 
 				return
 			}
 
+			fields := obs.FieldsFrom(r.Context())
+			fields.Add("sandbox_id", id, "runner_id", rec.RunnerID)
+
+			// Before the routing checks: the delete goes over control gRPC, not
+			// the runner's HTTP base. Status first: the registry read is a query
+			// on Postgres.
+			if !route.neverWakes && rec.Status == "stopped" && runnerCordoned(reg, rec.RunnerID) {
+				deleteStoppedOnCordonedRunner(w, r, s, reg, cfg, mrec, id)
+				return
+			}
+
 			if rec.RunnerHTTPBase == "" {
 				writeError(w, http.StatusBadGateway, "sandbox has no runner routing information")
 				return
 			}
-
-			fields := obs.FieldsFrom(r.Context())
-			fields.Add("sandbox_id", id, "runner_id", rec.RunnerID)
 
 			// Re-check the scheme even though registration rejects non-https:
 			// this record may predate that rule, and proxying to an http base
@@ -118,7 +140,7 @@ func sandboxProxyHandler(s store.SandboxStore, cfg *config.APIConfig, transport 
 				}
 				trackSandboxActivity(activity, rec, resp)
 			})
-			if limitBody {
+			if route.limitBody {
 				r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxFileBytes)
 			}
 			proxy.ServeHTTP(w, r)
@@ -306,6 +328,7 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 
 		var req createSandboxRequest
 		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
+		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
@@ -697,4 +720,85 @@ func trackSandboxActivity(activity *ActivityRecorder, rec *store.SandboxRecord, 
 		return
 	}
 	resp.Body = activityBody{ReadCloser: resp.Body, end: end}
+}
+
+// silentRunnerDeleteBudget bounds the delete on a cordoned runner the registry
+// no longer hears from. Such a runner is usually gone, and a live one finishes
+// a delete it has received regardless. Var so tests can shrink it.
+var silentRunnerDeleteBudget = 5 * time.Second
+
+// runnerCordoned reports whether the registry has the runner cordoned.
+func runnerCordoned(reg registry.RunnerRegistry, runnerID string) bool {
+	run, ok := reg.Get(runnerID)
+	return ok && run.Cordoned
+}
+
+// deleteStoppedOnCordonedRunner answers a request for a stopped sandbox on a
+// cordoned runner instead of letting the runner wake it. A cordoned runner is
+// usually about to be reimaged or removed, which takes the sandbox anyway, and a
+// wake would put a running sandbox back on a runner a drain may already have
+// counted empty. So the sandbox is deleted and the request gets 404: the client
+// creates it again, and placement skips cordoned runners.
+//
+// A cordoned runner that can't be reached is taken to be in its reimage or
+// already removed, so only the row is deleted: waiting for the runner would
+// answer 503 until the idle delete. If the runner is still up, it keeps its
+// copy of the sandbox until it restarts.
+//
+// It decides again under the sandbox lock, on a fresh read. Requests queued
+// behind the delete find the row gone and get the same 404. One that finds the
+// sandbox no longer stopped on a cordoned runner gets a 503, and its retry is
+// proxied as usual. A delete that the runner fails keeps the row and answers
+// 503 too, so the retry tries again.
+func deleteStoppedOnCordonedRunner(writer http.ResponseWriter, req *http.Request, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, mrec *metrics.APIRecorder, id string) {
+	unlock, err := s.LockSandbox(req.Context(), id)
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer unlock()
+
+	rec, err := s.Get(id)
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if rec == nil || !canAccessSandbox(req, rec) {
+		writeError(writer, http.StatusNotFound, "sandbox not found")
+		return
+	}
+	run, known := reg.Get(rec.RunnerID)
+	if rec.Status != "stopped" || !known || !run.Cordoned {
+		writeError(writer, http.StatusServiceUnavailable, "sandbox temporarily unavailable")
+		return
+	}
+
+	slog.InfoContext(req.Context(), "refused wake on cordoned runner", "sandbox_id", id, "runner_id", rec.RunnerID)
+	// The Postgres registry keeps the row, and the cordon, of a runner that is
+	// long gone, so a silent runner gets only a short time to answer.
+	silent := time.Since(run.LastSeen) > cfg.HeartbeatGrace
+	budget := runnerLifecycleBudget
+	if silent {
+		budget = silentRunnerDeleteBudget
+	}
+	// Detached so a client that hangs up cannot cut the delete short.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(req.Context()), budget)
+	defer cancel()
+	reason := "cordoned_runner"
+	err = runnerctl.DeleteSandbox(ctx, resolveControlAddr(rec, reg), cfg.RunnerAPIKey, runnerControlTLS(cfg), id)
+	if runnerUnreachable(&runnerCallError{err: err}) || (silent && err != nil && ctx.Err() != nil) {
+		slog.WarnContext(req.Context(), "cordoned runner unreachable, deleting the sandbox row only", "sandbox_id", id, "runner_id", rec.RunnerID, "silent", silent, "err", err)
+		reason, err = "cordoned_runner_unreachable", nil
+	}
+	if err == nil {
+		err = s.Delete(id)
+	}
+	mrec.ObserveSandboxOp(metrics.OpCordonDelete, err == nil)
+	if err != nil {
+		slog.WarnContext(req.Context(), "delete stopped sandbox on cordoned runner failed", "sandbox_id", id, "runner_id", rec.RunnerID, "err", err)
+		writeError(writer, http.StatusServiceUnavailable, "sandbox temporarily unavailable")
+		return
+	}
+	logSandboxDeleted(id, rec.RunnerID, reason)
+	writeError(writer, http.StatusNotFound, "sandbox not found")
 }

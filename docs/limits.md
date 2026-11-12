@@ -58,7 +58,7 @@ Output arrives in pieces of at most 64 KiB; there is no limit on total output.
 | Limit | Default | Set by | When reached |
 | --- | --- | --- | --- |
 | File upload, per request | 10 MiB | `SANDBOX_API_MAX_FILE_BYTES` and `SANDBOX_RUNNER_MAX_FILE_BYTES`; the lower wins | `400` `request body too large`. Appending can grow a file past it |
-| File download | no limit | | the daemon reads the whole file into the sandbox's memory |
+| File download | no limit | | |
 | File listing, copy, move | no limit | | |
 | `GET /sandboxes` | no paging | | |
 | Body of a create | 1 KiB | fixed | `400` |

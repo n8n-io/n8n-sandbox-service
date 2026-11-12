@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -147,6 +149,97 @@ func TestFileArchiveEndpoint(t *testing.T) {
 	rr = post("?path="+target, buildTar(t, tarFile("../a.txt", "x")))
 	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), `\"../a.txt\"`) {
 		t.Fatalf("refused entry: expected 400 naming the entry, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestFileContentEndpoint(t *testing.T) {
+	// A real server: the directory case relies on net/http not sending the 200
+	// before the first byte is read.
+	handler := NewHandler()
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	dir := tempBaseDir(t)
+
+	get := func(path string) (int, []byte) {
+		t.Helper()
+		resp, err := http.Get(server.URL + "/files/content?path=" + path)
+		if err != nil {
+			t.Fatalf("get %s: %v", path, err)
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("read body of %s: %v", path, err)
+		}
+		return resp.StatusCode, body
+	}
+
+	content := bytes.Repeat([]byte("\x00\xffa\n"), 1<<16)
+	file := filepath.Join(dir, "data.bin")
+	if err := os.WriteFile(file, content, 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	if code, body := get(file); code != http.StatusOK || !bytes.Equal(body, content) {
+		t.Fatalf("file: expected 200 with %d unchanged bytes, got %d with %d bytes", len(content), code, len(body))
+	}
+
+	missing := filepath.Join(dir, "missing")
+	if code, body := get(missing); code != http.StatusNotFound || !strings.Contains(string(body), "file_read open "+missing) {
+		t.Fatalf("missing file: expected 404, got %d: %s", code, body)
+	}
+
+	if code, body := get(dir); code != http.StatusInternalServerError || !strings.Contains(string(body), "file_read read "+dir) {
+		t.Fatalf("directory: expected 500, got %d: %s", code, body)
+	}
+
+	// A recorder keeps what a real server drops on HEAD, so it shows whether the file was read.
+	head := func(path string) *httptest.ResponseRecorder {
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, httptest.NewRequest(http.MethodHead, "/files/content?path="+path, nil))
+		return rr
+	}
+	if rr := head(file); rr.Code != http.StatusOK || rr.Body.Len() != 0 {
+		t.Fatalf("HEAD: expected 200 and no bytes read, got %d and %d bytes", rr.Code, rr.Body.Len())
+	}
+	if rr := head(dir); rr.Code != http.StatusInternalServerError {
+		t.Fatalf("HEAD of a directory: expected 500 as for GET, got %d", rr.Code)
+	}
+}
+
+// failingWriter refuses every write once limit bytes have passed.
+type failingWriter struct {
+	http.ResponseWriter
+	limit int
+}
+
+func (fw *failingWriter) Write(data []byte) (int, error) {
+	if len(data) > fw.limit {
+		return 0, errors.New("write failed")
+	}
+	fw.limit -= len(data)
+	return fw.ResponseWriter.Write(data)
+}
+
+func TestFileContentEndpointCutsAFailedDownload(t *testing.T) {
+	handler := NewHandler()
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		handler.ServeHTTP(&failingWriter{ResponseWriter: writer, limit: 1 << 16}, request)
+	}))
+	t.Cleanup(server.Close)
+
+	file := filepath.Join(tempBaseDir(t), "data.bin")
+	if err := os.WriteFile(file, make([]byte, 1<<20), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	resp, err := http.Get(server.URL + "/files/content?path=" + file)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	// The response has no Content-Length: the missing end of the chunked body tells the client.
+	if body, err := io.ReadAll(resp.Body); err == nil {
+		t.Fatalf("expected the read to fail, got a complete response of %d bytes", len(body))
 	}
 }
 
