@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -51,15 +52,48 @@ func TestPinBaseAssetsFailsOnAKernelOthersCanWrite(t *testing.T) {
 func TestAdmitOnceChecksTheKernelAgainAfterTheSnapshotBuild(t *testing.T) {
 	rt := testRuntimeT(t, 1)
 	stubCreateDeps(rt)
-	useTestGoldenSnapshotDir(t, rt)
 
-	checks := 0
-	rt.deps.checkTemplateKernel = func(path string) error {
-		checks++
-		if checks == 1 {
+	dir := t.TempDir()
+	outDir := filepath.Join(dir, "snapshots")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rt.config.CreateSnapshotScript = filepath.Join(dir, "create-golden-snapshot.sh")
+	rt.config.DaemonBin = filepath.Join(dir, "sandbox-daemon")
+	rt.config.SnapshotMemPath = filepath.Join(outDir, "mem")
+	rt.config.SnapshotStatePath = filepath.Join(outDir, "state")
+
+	// Only the snapshot set is looked up on disk, so it is missing until the
+	// create script has run.
+	rt.deps.pathExists = func(path string) bool {
+		if !strings.HasPrefix(path, outDir) {
+			return true
+		}
+		_, err := os.Stat(path)
+		return err == nil
+	}
+	built := false
+	rt.deps.run = func(_ context.Context, _ string, args ...string) error {
+		if !strings.Contains(strings.Join(args, " "), rt.config.CreateSnapshotScript) {
 			return nil
 		}
-		return checkKernelAccess(path, 1000, 0o644)
+		for _, name := range []string{"snapshot_mem", "snapshot_state"} {
+			if err := os.WriteFile(filepath.Join(outDir, name), []byte{1}, 0o644); err != nil {
+				return err
+			}
+		}
+		writeBootParams(t, bootParamsPath(rt.config), testBootParams(rt.config))
+		built = true
+		return nil
+	}
+	// The kernel is fine until the create script has had it.
+	var checkedAfterBuild []bool
+	rt.deps.checkTemplateKernel = func(path string) error {
+		checkedAfterBuild = append(checkedAfterBuild, built)
+		if built {
+			return checkKernelAccess(path, 1000, 0o644)
+		}
+		return nil
 	}
 	started := 0
 	rt.deps.start = func(context.Context, func(error), string, ...string) (process, error) {
@@ -71,8 +105,8 @@ func TestAdmitOnceChecksTheKernelAgainAfterTheSnapshotBuild(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "owned by uid 1000") {
 		t.Fatalf("admitOnce() error = %v, want the kernel refused after the snapshot build", err)
 	}
-	if checks != 2 {
-		t.Errorf("kernel checks = %d, want one before and one after the snapshot build", checks)
+	if want := []bool{false, true}; !slices.Equal(checkedAfterBuild, want) {
+		t.Errorf("kernel checks ran after the snapshot build: %v, want %v (one before, one after)", checkedAfterBuild, want)
 	}
 	if started != 0 {
 		t.Errorf("microVMs started = %d, want none: the canary must not run on a refused kernel", started)

@@ -225,8 +225,8 @@ Firecracker runs as uid 1000 in a jail that holds its sandbox's own rootfs and
 memory snapshot, and one file every sandbox on the host shares: the guest
 kernel. That file is root-owned with mode `0444` and bind-mounted read-only, so
 a Firecracker process cannot change the kernel later sandboxes boot. Admission
-fails while a user other than root can write that file, and so does a cold
-boot.
+and every cold boot fail unless that file is owned by root, readable by all and
+writable by no other user.
 
 The Sysbox runtime puts sandboxes on one of two Docker bridges: `runner-bridge`
 for `public`, and `runner-no-egress` (a Docker internal network; bridge device
