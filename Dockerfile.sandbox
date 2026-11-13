@@ -28,6 +28,9 @@ ARG NODE_ARM64_SHA256=dbabf7a1cbf947e6059ffad2c27b80041db97dea1e553b62afdee7f13f
 #
 # xz-utils only untars the Node tarball below, but it stays in the image:
 # build-essential needs it through dpkg-dev.
+#
+# e2fsprogs is in the base image already. It is listed because the daemon's
+# volume build mode runs /sbin/mke2fs and /sbin/e2fsck.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-venv \
@@ -35,6 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     ca-certificates \
     curl \
+    e2fsprogs \
     ripgrep \
     wget \
     xz-utils \

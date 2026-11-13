@@ -37,9 +37,12 @@ RUN set -eux; \
 # =============================================================================
 FROM debian:bookworm-slim AS runner
 
+# e2fsprogs is in the base image already. It is listed because a volume build
+# runs e2fsck on its clone of the template rootfs.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
+        e2fsprogs \
         iproute2 \
         iptables \
         sudo \

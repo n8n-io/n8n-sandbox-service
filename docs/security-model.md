@@ -236,9 +236,9 @@ and the jailer arguments in
 Firecracker runs as uid 1000 in a jail that holds its sandbox's own rootfs and
 memory snapshot, and one file every sandbox on the host shares: the guest
 kernel. That file is root-owned with mode `0444` and bind-mounted read-only, so
-a Firecracker process cannot change the kernel later sandboxes boot. Admission
-and every cold boot fail unless that file is owned by root, readable by all and
-writable by no other user.
+a Firecracker process cannot change the kernel later sandboxes boot. Admission,
+every cold boot and every volume build fail unless that file is owned by root,
+readable by all and writable by no other user.
 
 The Sysbox runtime puts sandboxes on one of two Docker bridges: `runner-bridge`
 for `public`, and `runner-no-egress` (a Docker internal network; bridge device
@@ -332,6 +332,45 @@ other header a caller set stay out of the guest. It never follows a daemon
 redirect, and its proxies answer one with `502`. They also strip
 `X-Sandbox-Gone` and `X-Sandbox-Restarted` from daemon responses, and the API
 drops a sandbox's row on that header alone, never on a response body.
+
+### Volume builder
+
+A Firecracker runner turns a tar into an ext4 volume image inside a builder
+microVM, so the host never unpacks tenant files and never mounts or parses an
+image. The API reaches it through the runner's `SandboxControl.BuildVolume`,
+with the credentials of every other call; no public route asks for a build.
+
+The builder is a cold boot of the template rootfs with no network interface
+and an empty network namespace. Its init is the sandbox daemon in build mode,
+which serves nothing and runs no tenant code: only its own tar reader touches
+the tar. That reader ([internal/safetar](../internal/safetar/safetar.go))
+takes directories, regular files and symbolic links, refuses hard links,
+devices and paths that leave the tree, applies no owner, mode bit beyond
+exec, or extended attribute from the tar, and writes through an `os.Root` at
+the image's mount point, so a link in the tar is never followed. It stops at
+the entry count, content bytes and decompressed length the caller counted, so
+a small gzip tar cannot make it inflate more than that, and refuses a path or
+link target longer than 4095 bytes. The image is mounted `nodev`, `nosuid`
+and `noexec` while it is filled. The daemon enters build mode only as PID 1
+and root with build parameters in its environment, which only a kernel
+command line gives it: a sandbox user who starts the binary that way gets an
+error.
+
+The builder is root in its guest, and the runner trusts two things from it:
+
+- A status record of 4 KiB, parsed strictly: a known version, `ok` or one of
+  seven fixed failure reasons, and counts, byte for byte as the builder
+  writes them. Nothing else in it is read, and no text from the tar is in it.
+  Only the reason becomes a metric label or reaches the API.
+- The image, as opaque bytes of the size the runner created the drive with.
+
+Firecracker cannot write the tar or the builder's rootfs: both are root-owned,
+mode `0444`, and bound read-only into the jail before jailer starts. The rootfs
+is this build's own clone of the template; the template kernel is bound
+read-only. The runner ends a builder at
+`SANDBOX_RUNNER_FIRECRACKER_VOLUME_BUILD_TIMEOUT` or when the caller goes away,
+runs one at a time, and removes the jail, its binds and the build's files on
+every way out and at startup.
 
 ### Sandbox DNS
 
@@ -499,6 +538,7 @@ The boundaries above are covered by tests rather than asserted on paper.
 | Sandbox-to-sandbox (unicast and multicast), blocked-range egress and guest DNS; egress `none` across stop/wake and slot reuse | [e2e/tests/network-isolation.spec.ts](../e2e/tests/network-isolation.spec.ts) |
 | Docker capability policy, absence of a root path, and denied network administration; no user namespaces on either runtime | [e2e/tests/sandbox-capabilities.spec.ts](../e2e/tests/sandbox-capabilities.spec.ts) |
 | Firecracker daemon root: only the volume mount request is served while it holds root, dropped after that request, sent on every create and cold boot, never proxied | [internal/daemon/volume_mount_test.go](../internal/daemon/volume_mount_test.go), [internal/runner/runtime/firecracker.ee/volume_mount_test.go](../internal/runner/runtime/firecracker.ee/volume_mount_test.go), [internal/runner/server_test.go](../internal/runner/server_test.go), [internal/api/gateway_test.go](../internal/api/gateway_test.go), [e2e/tests/sandbox-capabilities.spec.ts](../e2e/tests/sandbox-capabilities.spec.ts), [e2e/tests/sandbox-crash-recovery.spec.ts](../e2e/tests/sandbox-crash-recovery.spec.ts) |
+| Volume builder: build mode only as PID 1 and root, the tar policy, the status record against hostile input, read-only tar and rootfs, cleanup on every way out | [internal/daemon/volumebuild/build_test.go](../internal/daemon/volumebuild/build_test.go), [internal/daemon/volumebuild/build_linux_test.go](../internal/daemon/volumebuild/build_linux_test.go), [internal/daemon/volumebuild/contract_test.go](../internal/daemon/volumebuild/contract_test.go), [cmd/daemon/main_test.go](../cmd/daemon/main_test.go), [internal/runner/runtime/firecracker.ee/volume_build_test.go](../internal/runner/runtime/firecracker.ee/volume_build_test.go), [internal/runner/grpc_volume_build_test.go](../internal/runner/grpc_volume_build_test.go), [e2e/tests/volume-build.spec.ts](../e2e/tests/volume-build.spec.ts) |
 | Unprivileged npm and PyPI installation, and the build toolchain | [e2e/tests/sandbox-packages.spec.ts](../e2e/tests/sandbox-packages.spec.ts) |
 | Blocked list and egress rule generation | [internal/runner/runtime/netpolicy/private_ranges_test.go](../internal/runner/runtime/netpolicy/private_ranges_test.go), [internal/runner/runtime/docker/netrules/netrules_test.go](../internal/runner/runtime/docker/netrules/netrules_test.go), [internal/runner/runtime/firecracker.ee/network/egress_test.go](../internal/runner/runtime/firecracker.ee/network/egress_test.go) |
 | Firecracker: creates refused below 5% free disk, no sandbox deleted to make room | [internal/runner/runtime/firecracker.ee/disk_test.go](../internal/runner/runtime/firecracker.ee/disk_test.go), [internal/runner/runtime/firecracker.ee/stop_wake_test.go](../internal/runner/runtime/firecracker.ee/stop_wake_test.go) |

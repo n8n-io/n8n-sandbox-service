@@ -34,9 +34,9 @@ func statVolume(path string) (volumeSpace, error) {
 	}, nil
 }
 
-// SetDiskReservation tells creates how much of the data volume is set aside
-// and not written yet: the volume cache's unused budget. Call it before
-// Prepare.
+// SetDiskReservation tells creates and volume builds how much of the data
+// volume is set aside and not written yet: the volume cache's unused budget.
+// Call it before Prepare.
 func (r *Runtime) SetDiskReservation(reserved func() int64) {
 	r.diskReserved = reserved
 }

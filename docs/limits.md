@@ -23,7 +23,7 @@ There is no rate limit, and failed authentication is not throttled. Each request
 | --- | --- | --- | --- |
 | Sandboxes per tenant | 50 | the tenant's `max_sandboxes`: `SANDBOX_API_DEFAULT_MAX_SANDBOXES` when created; admin keys may set any value, `0` = unlimited; provisioner keys 1 to the default | `403` `tenant sandbox quota exceeded`. Lowering it keeps existing sandboxes |
 | Sandboxes per runner | 1000 | `SANDBOX_RUNNER_CAPACITY_TOTAL` | the API tries up to 3 runners within 5 s, then `503` `no_capacity`, `Retry-After: 1` |
-| Free space on a Firecracker runner's data volume | 5%, plus the volume cache's unused budget when the cache is on that volume | fixed; `SANDBOX_RUNNER_VOLUME_CACHE_MAX_BYTES` | creates are refused like a full runner |
+| Free space on a Firecracker runner's data volume | 5%, plus the volume cache's unused budget when the cache is on that volume | fixed; `SANDBOX_RUNNER_VOLUME_CACHE_MAX_BYTES` | creates and volume builds are refused like a full runner |
 
 Sandboxes created with an admin key count against no quota. The API knows a runner's usage from its last heartbeat (every 10 s), so a burst of creates can overshoot a Docker runner, which counts stopped sandboxes too and never refuses. A Firecracker runner refuses past its slots, and the API tries another. On Firecracker a stopped sandbox gives up its slot, so waking it needs a free one, otherwise `503` with no `Retry-After`; a stop with no room for its memory snapshot fails and the sandbox keeps running ([data volume](../internal/runner/runtime/firecracker.ee/README.md#data-volume)).
 

@@ -28,6 +28,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 	"github.com/n8n-io/sandbox-service/internal/runner/cordon"
+	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 )
 
 // testPKI is a throwaway CA plus the leaf certificates the runner and the API
@@ -261,6 +262,11 @@ func TestRunnerHTTPListenerRejectsUntrustedClientCertificate(t *testing.T) {
 // uses, and returns its address.
 func serveControlGRPC(t *testing.T, pki testPKI, cd *cordon.State) string {
 	t.Helper()
+	return serveControlGRPCWith(t, pki, cd, &fakeRuntime{})
+}
+
+func serveControlGRPCWith(t *testing.T, pki testPKI, cd *cordon.State, rt runnerruntime.Runtime) string {
+	t.Helper()
 	creds, err := grpctls.NewServerTransportCredentials(pki.serverCertFile, pki.serverKeyFile, pki.caFile)
 	if err != nil {
 		t.Fatal(err)
@@ -271,7 +277,7 @@ func serveControlGRPC(t *testing.T, pki testPKI, cd *cordon.State) string {
 	}
 	srv := grpc.NewServer(grpc.Creds(creds))
 	pb.RegisterSandboxControlServer(srv, &SandboxControlGRPC{
-		Runtime: &fakeRuntime{},
+		Runtime: rt,
 		Cfg:     &config.Config{RunnerID: "runner-a", APIKeys: map[string]struct{}{"secret": {}}},
 		Rec:     metrics.NewRunnerRecorder(false),
 		Cordon:  cd,

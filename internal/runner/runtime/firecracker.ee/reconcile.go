@@ -20,6 +20,10 @@ func (r *Runtime) reconcileOnStartup(ctx context.Context) {
 	if err := r.reconcileSandboxDataDirs(ctx); err != nil {
 		slog.Warn("firecracker startup reconcile: sandbox data dirs", "err", err)
 	}
+	// Before the jailer state: that cannot remove a jail with binds in it.
+	if err := r.reconcileVolumeBuild(ctx); err != nil {
+		slog.Warn("firecracker startup reconcile: volume build", "err", err)
+	}
 	if err := r.reconcileJailerState(ctx); err != nil {
 		slog.Warn("firecracker startup reconcile: jailer state", "err", err)
 	}

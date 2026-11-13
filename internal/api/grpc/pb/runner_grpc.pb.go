@@ -120,6 +120,7 @@ const (
 	SandboxControl_DeleteSandbox_FullMethodName = "/runner.v1.SandboxControl/DeleteSandbox"
 	SandboxControl_GetCordon_FullMethodName     = "/runner.v1.SandboxControl/GetCordon"
 	SandboxControl_SetCordon_FullMethodName     = "/runner.v1.SandboxControl/SetCordon"
+	SandboxControl_BuildVolume_FullMethodName   = "/runner.v1.SandboxControl/BuildVolume"
 )
 
 // SandboxControlClient is the client API for SandboxControl service.
@@ -134,6 +135,9 @@ type SandboxControlClient interface {
 	DeleteSandbox(ctx context.Context, in *DeleteSandboxRequest, opts ...grpc.CallOption) (*DeleteSandboxResponse, error)
 	GetCordon(ctx context.Context, in *GetCordonRequest, opts ...grpc.CallOption) (*GetCordonResponse, error)
 	SetCordon(ctx context.Context, in *SetCordonRequest, opts ...grpc.CallOption) (*SetCordonResponse, error)
+	// BuildVolume turns a tar into an ext4 volume image in a builder microVM.
+	// Firecracker runners only: others answer Unimplemented.
+	BuildVolume(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[BuildVolumeRequest, BuildVolumeResponse], error)
 }
 
 type sandboxControlClient struct {
@@ -194,6 +198,19 @@ func (c *sandboxControlClient) SetCordon(ctx context.Context, in *SetCordonReque
 	return out, nil
 }
 
+func (c *sandboxControlClient) BuildVolume(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[BuildVolumeRequest, BuildVolumeResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &SandboxControl_ServiceDesc.Streams[0], SandboxControl_BuildVolume_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[BuildVolumeRequest, BuildVolumeResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type SandboxControl_BuildVolumeClient = grpc.BidiStreamingClient[BuildVolumeRequest, BuildVolumeResponse]
+
 // SandboxControlServer is the server API for SandboxControl service.
 // All implementations must embed UnimplementedSandboxControlServer
 // for forward compatibility.
@@ -206,6 +223,9 @@ type SandboxControlServer interface {
 	DeleteSandbox(context.Context, *DeleteSandboxRequest) (*DeleteSandboxResponse, error)
 	GetCordon(context.Context, *GetCordonRequest) (*GetCordonResponse, error)
 	SetCordon(context.Context, *SetCordonRequest) (*SetCordonResponse, error)
+	// BuildVolume turns a tar into an ext4 volume image in a builder microVM.
+	// Firecracker runners only: others answer Unimplemented.
+	BuildVolume(grpc.BidiStreamingServer[BuildVolumeRequest, BuildVolumeResponse]) error
 	mustEmbedUnimplementedSandboxControlServer()
 }
 
@@ -230,6 +250,9 @@ func (UnimplementedSandboxControlServer) GetCordon(context.Context, *GetCordonRe
 }
 func (UnimplementedSandboxControlServer) SetCordon(context.Context, *SetCordonRequest) (*SetCordonResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetCordon not implemented")
+}
+func (UnimplementedSandboxControlServer) BuildVolume(grpc.BidiStreamingServer[BuildVolumeRequest, BuildVolumeResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method BuildVolume not implemented")
 }
 func (UnimplementedSandboxControlServer) mustEmbedUnimplementedSandboxControlServer() {}
 func (UnimplementedSandboxControlServer) testEmbeddedByValue()                        {}
@@ -342,6 +365,13 @@ func _SandboxControl_SetCordon_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SandboxControl_BuildVolume_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(SandboxControlServer).BuildVolume(&grpc.GenericServerStream[BuildVolumeRequest, BuildVolumeResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type SandboxControl_BuildVolumeServer = grpc.BidiStreamingServer[BuildVolumeRequest, BuildVolumeResponse]
+
 // SandboxControl_ServiceDesc is the grpc.ServiceDesc for SandboxControl service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -370,6 +400,13 @@ var SandboxControl_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _SandboxControl_SetCordon_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "BuildVolume",
+			Handler:       _SandboxControl_BuildVolume_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+	},
 	Metadata: "runner/v1/runner.proto",
 }
