@@ -31,6 +31,24 @@ const sqliteAddEphemeralCol = `ALTER TABLE sandboxes ADD COLUMN ephemeral INTEGE
 
 const sqliteAddEgressCol = `ALTER TABLE sandboxes ADD COLUMN egress TEXT NOT NULL DEFAULT 'public'`
 
+// SQLite ignores VARCHAR lengths, so CHECKs hold the same limits as Postgres.
+const sqliteAddKindCol = `ALTER TABLE sandboxes ADD COLUMN kind TEXT NOT NULL DEFAULT 'default' CHECK (kind IN ('default', 'code'))`
+
+const sqliteAddNameCol = `ALTER TABLE sandboxes ADD COLUMN name TEXT NOT NULL DEFAULT '' CHECK (length(name) <= 128)`
+
+const sqliteAddOptionsHashCol = `ALTER TABLE sandboxes ADD COLUMN options_hash TEXT NOT NULL DEFAULT '' CHECK (length(options_hash) <= 512)`
+
+const sqliteAddIdleTimeoutMsCol = `ALTER TABLE sandboxes ADD COLUMN idle_timeout_ms INTEGER NOT NULL DEFAULT 0`
+
+const sqliteAddMaxAgeMsCol = `ALTER TABLE sandboxes ADD COLUMN max_age_ms INTEGER NOT NULL DEFAULT 0`
+
+const sqliteAddDrainingSinceCol = `ALTER TABLE sandboxes ADD COLUMN draining_since INTEGER NOT NULL DEFAULT 0`
+
+// A name points to at most one code sandbox per tenant that is not draining.
+// Runs after the column migrations: an existing table gains the columns there.
+const sqliteSandboxCodeNameIndex = `CREATE UNIQUE INDEX IF NOT EXISTS ` + codeNameIndex + `
+	ON sandboxes (tenant_id, name) WHERE kind = 'code' AND draining_since = 0`
+
 // Backfill legacy empty tenant_id to the admin sentinel.
 const sqliteBackfillAdminTenantID = `UPDATE sandboxes SET tenant_id = '__admin__' WHERE tenant_id = ''`
 
