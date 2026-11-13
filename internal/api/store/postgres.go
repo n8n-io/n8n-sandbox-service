@@ -60,11 +60,9 @@ func NewPostgres(cfg config.PostgresConfig) (*PostgresStore, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: add egress column: %w", err)
 	}
-	for _, stmt := range postgresAddCodeSandboxCols {
-		if _, err := db.Exec(stmt); err != nil {
-			_ = db.Close()
-			return nil, fmt.Errorf("store: add code sandbox columns: %w", err)
-		}
+	if _, err := db.Exec(postgresAddCodeSandboxCols); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: add code sandbox columns: %w", err)
 	}
 	if _, err := db.Exec(postgresCommentCodeSandboxCols); err != nil {
 		_ = db.Close()

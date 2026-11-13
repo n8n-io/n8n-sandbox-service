@@ -4,10 +4,12 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -61,6 +63,57 @@ func openTestPostgresStore(t *testing.T) *PostgresStore {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	return s
+}
+
+// Rows from before the code sandbox columns existed read back as default-kind
+// sandboxes without a name or lifetime settings. Runs in its own database,
+// since it changes the schema.
+func TestPostgresCodeSandboxColumnsMigrationBackfillsDefaults(t *testing.T) {
+	cfg := testPostgresConfig(t)
+	admin, err := sql.Open("pgx", cfg.DSN())
+	if err != nil {
+		t.Fatalf("open admin conn: %v", err)
+	}
+	t.Cleanup(func() { _ = admin.Close() })
+	cfg.Database = "migration_" + strings.ReplaceAll(uuid.New().String(), "-", "")
+	if _, err := admin.Exec(`CREATE DATABASE ` + cfg.Database); err != nil {
+		t.Fatalf("create database: %v", err)
+	}
+	t.Cleanup(func() { _, _ = admin.Exec(`DROP DATABASE IF EXISTS ` + cfg.Database + ` WITH (FORCE)`) })
+
+	s, err := NewPostgres(cfg)
+	if err != nil {
+		t.Fatalf("NewPostgres: %v", err)
+	}
+	// Roll the schema back to before the columns and plant a row there.
+	if _, err := s.db.Exec(`DROP INDEX ` + codeNameIndex + `;
+		ALTER TABLE sandboxes DROP COLUMN kind, DROP COLUMN name, DROP COLUMN options_hash,
+			DROP COLUMN idle_timeout_ms, DROP COLUMN max_age_ms, DROP COLUMN draining_since`); err != nil {
+		t.Fatalf("roll back schema: %v", err)
+	}
+	if _, err := s.db.Exec(`INSERT INTO sandboxes (id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip)
+		VALUES ('legacy', 'running', 1, 2, '', '', '')`); err != nil {
+		t.Fatalf("insert legacy row: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	s, err = NewPostgres(cfg)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	got, err := s.Get("legacy")
+	if err != nil || got == nil {
+		t.Fatalf("get legacy row: got=%v err=%v", got, err)
+	}
+	if got.Kind != KindDefault || got.Name != "" || got.OptionsHash != "" ||
+		got.IdleTimeoutMs != 0 || got.MaxAgeMs != 0 || got.DrainingSince != 0 {
+		t.Fatalf("legacy row: %+v, want default kind and zero code sandbox fields", got)
+	}
+	// The migration also brings back the name index and the kind check.
+	testCodeSandboxNames(t, s, uuid.New().String(), uuid.New().String())
 }
 
 func TestPostgresStoreCRUD(t *testing.T) {

@@ -106,7 +106,7 @@ func TestCodeSandboxColumnsMigrationBackfillsDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
-	defer s.Close()
+	t.Cleanup(func() { _ = s.Close() })
 	got, err := s.Get("legacy")
 	if err != nil || got == nil {
 		t.Fatalf("get legacy row: got=%v err=%v", got, err)
@@ -115,6 +115,8 @@ func TestCodeSandboxColumnsMigrationBackfillsDefaults(t *testing.T) {
 		got.IdleTimeoutMs != 0 || got.MaxAgeMs != 0 || got.DrainingSince != 0 {
 		t.Fatalf("legacy row: %+v, want default kind and zero code sandbox fields", got)
 	}
+	// The migration also brings back the name index and the column checks.
+	testCodeSandboxNames(t, s, "16161616-1616-1616-1616-161616161616", "17171717-1717-1717-1717-171717171717")
 }
 
 func TestCodeSandboxNames(t *testing.T) {
@@ -222,6 +224,27 @@ func testCodeSandboxNames(t *testing.T, s SandboxStore, tenantA, tenantB string)
 	dup.ID, dup.Status, dup.CreatedAt, dup.LastActiveAt = first.ID, "running", now, now
 	if err := s.Create(&dup); err == nil || errors.Is(err, ErrSandboxNameTaken) {
 		t.Fatalf("duplicate id: got %v, want a non-name error", err)
+	}
+
+	// Both backends hold the same limits on kind and on lengths.
+	for _, tc := range []struct {
+		name string
+		rec  SandboxRecord
+		ok   bool
+	}{
+		{name: "unknown kind", rec: SandboxRecord{TenantID: tenantA, Kind: "Code", Name: "k1"}},
+		{name: "name at limit", rec: code(tenantA, strings.Repeat("n", 128)), ok: true},
+		{name: "name too long", rec: code(tenantA, strings.Repeat("m", 129))},
+		{name: "options hash at limit", rec: SandboxRecord{TenantID: tenantA, Kind: KindCode, Name: "h1", OptionsHash: strings.Repeat("h", 512)}, ok: true},
+		{name: "options hash too long", rec: SandboxRecord{TenantID: tenantA, Kind: KindCode, Name: "h2", OptionsHash: strings.Repeat("h", 513)}},
+	} {
+		_, err := create(tc.rec)
+		if tc.ok && err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if !tc.ok && (err == nil || errors.Is(err, ErrSandboxNameTaken)) {
+			t.Fatalf("%s: got %v, want a constraint error", tc.name, err)
+		}
 	}
 
 	// Deleting the sandbox frees its name.
