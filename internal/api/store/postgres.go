@@ -8,11 +8,15 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib" // register the "pgx" driver
 	"github.com/n8n-io/sandbox-service/internal/api/config"
 )
 
 const defaultLockPoolSize = 5
+
+// pgUniqueViolation is the SQLSTATE of a unique constraint violation.
+const pgUniqueViolation = "23505"
 
 // PostgresStore wraps a *sql.DB backed by Postgres.
 type PostgresStore struct {
@@ -55,6 +59,20 @@ func NewPostgres(cfg config.PostgresConfig) (*PostgresStore, error) {
 	if _, err := db.Exec(postgresAddEgressCol); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: add egress column: %w", err)
+	}
+	for _, stmt := range postgresAddCodeSandboxCols {
+		if _, err := db.Exec(stmt); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("store: add code sandbox columns: %w", err)
+		}
+	}
+	if _, err := db.Exec(postgresCommentCodeSandboxCols); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: comment code sandbox columns: %w", err)
+	}
+	if _, err := db.Exec(postgresSandboxCodeNameIndex); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: sandboxes code name index: %w", err)
 	}
 	if _, err := db.Exec(postgresSandboxTenantIndex); err != nil {
 		_ = db.Close()
@@ -102,7 +120,7 @@ func (s *PostgresStore) Backend() Backend { return BackendPostgres }
 
 func (s *PostgresStore) Close() error { return errors.Join(s.db.Close(), s.lockDB.Close()) }
 
-const pgSandboxCols = `id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral, egress`
+const pgSandboxCols = `id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral, egress, kind, name, options_hash, idle_timeout_ms, max_age_ms, draining_since`
 
 type pgExecer interface {
 	Exec(query string, args ...any) (sql.Result, error)
@@ -111,9 +129,9 @@ type pgExecer interface {
 func (s *PostgresStore) insertSandbox(e pgExecer, record *SandboxRecord) error {
 	const q = `
 		INSERT INTO sandboxes
-			(id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral, egress)
+			(` + pgSandboxCols + `)
 		VALUES
-			($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`
+			($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`
 
 	_, err := e.Exec(q,
 		record.ID,
@@ -130,7 +148,17 @@ func (s *PostgresStore) insertSandbox(e pgExecer, record *SandboxRecord) error {
 		record.TenantID,
 		record.Ephemeral,
 		record.Egress,
+		recordKind(record),
+		record.Name,
+		record.OptionsHash,
+		record.IdleTimeoutMs,
+		record.MaxAgeMs,
+		record.DrainingSince,
 	)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation && pgErr.ConstraintName == codeNameIndex {
+		return ErrSandboxNameTaken
+	}
 	if err != nil {
 		return fmt.Errorf("store: create sandbox %s: %w", record.ID, err)
 	}
@@ -200,6 +228,19 @@ func (s *PostgresStore) Get(id string) (*SandboxRecord, error) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("store: get sandbox %s: %w", id, err)
+	}
+	return rec, nil
+}
+
+func (s *PostgresStore) GetCodeSandboxByName(tenantID, name string) (*SandboxRecord, error) {
+	q := `SELECT ` + pgSandboxCols + ` FROM sandboxes
+		WHERE tenant_id = $1 AND name = $2 AND kind = 'code' AND draining_since = 0`
+	rec, err := scanRecord(s.db.QueryRow(q, tenantID, name))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("store: get code sandbox by name: %w", err)
 	}
 	return rec, nil
 }

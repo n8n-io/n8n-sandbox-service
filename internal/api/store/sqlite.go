@@ -11,7 +11,8 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite" // register the "sqlite" driver
+	"modernc.org/sqlite" // also registers the "sqlite" driver
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 // SQLiteStore wraps a *sql.DB and exposes CRUD operations for SandboxRecord rows.
@@ -73,6 +74,12 @@ func NewSQLite(dbPath string, useWal bool) (*SQLiteStore, error) {
 		{sql: sqliteAddTenantIDCol, name: "tenant_id"},
 		{sql: sqliteAddEphemeralCol, name: "ephemeral"},
 		{sql: sqliteAddEgressCol, name: "egress"},
+		{sql: sqliteAddKindCol, name: "kind"},
+		{sql: sqliteAddNameCol, name: "name"},
+		{sql: sqliteAddOptionsHashCol, name: "options_hash"},
+		{sql: sqliteAddIdleTimeoutMsCol, name: "idle_timeout_ms"},
+		{sql: sqliteAddMaxAgeMsCol, name: "max_age_ms"},
+		{sql: sqliteAddDrainingSinceCol, name: "draining_since"},
 	} {
 		if _, err := db.Exec(stmt.sql); err != nil {
 			if strings.Contains(err.Error(), "duplicate column") ||
@@ -82,6 +89,11 @@ func NewSQLite(dbPath string, useWal bool) (*SQLiteStore, error) {
 			_ = db.Close()
 			return nil, fmt.Errorf("store: migration %s: %w", stmt.name, err)
 		}
+	}
+
+	if _, err := db.Exec(sqliteSandboxCodeNameIndex); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: sandboxes code name index: %w", err)
 	}
 
 	if _, err := db.Exec(sqliteBackfillAdminTenantID); err != nil {
@@ -130,7 +142,7 @@ func (s *SQLiteStore) Backend() Backend { return BackendSQLite }
 
 func (s *SQLiteStore) Close() error { return s.db.Close() }
 
-const sqliteSandboxCols = `id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral, egress`
+const sqliteSandboxCols = `id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral, egress, kind, name, options_hash, idle_timeout_ms, max_age_ms, draining_since`
 
 type sqliteExecer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
@@ -139,9 +151,9 @@ type sqliteExecer interface {
 func (s *SQLiteStore) insertSandbox(e sqliteExecer, record *SandboxRecord) error {
 	const q = `
 		INSERT INTO sandboxes
-			(id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral, egress)
+			(` + sqliteSandboxCols + `)
 		VALUES
-			(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	_, err := e.ExecContext(context.Background(), q,
 		record.ID,
@@ -158,11 +170,29 @@ func (s *SQLiteStore) insertSandbox(e sqliteExecer, record *SandboxRecord) error
 		record.TenantID,
 		record.Ephemeral,
 		record.Egress,
+		recordKind(record),
+		record.Name,
+		record.OptionsHash,
+		record.IdleTimeoutMs,
+		record.MaxAgeMs,
+		record.DrainingSince,
 	)
+	if isSQLiteCodeNameConflict(err) {
+		return ErrSandboxNameTaken
+	}
 	if err != nil {
 		return fmt.Errorf("store: create sandbox %s: %w", record.ID, err)
 	}
 	return nil
+}
+
+// isSQLiteCodeNameConflict reports whether err is a violation of the code
+// name index. SQLite names the columns, not the index, of a partial index.
+func isSQLiteCodeNameConflict(err error) bool {
+	var serr *sqlite.Error
+	return errors.As(err, &serr) &&
+		serr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE &&
+		strings.Contains(serr.Error(), "sandboxes.tenant_id, sandboxes.name")
 }
 
 // beginImmediate starts a transaction with a RESERVED write lock (BEGIN IMMEDIATE).
@@ -247,6 +277,19 @@ func (s *SQLiteStore) Get(id string) (*SandboxRecord, error) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("store: get sandbox %s: %w", id, err)
+	}
+	return rec, nil
+}
+
+func (s *SQLiteStore) GetCodeSandboxByName(tenantID, name string) (*SandboxRecord, error) {
+	q := `SELECT ` + sqliteSandboxCols + ` FROM sandboxes
+		WHERE tenant_id = ? AND name = ? AND kind = 'code' AND draining_since = 0`
+	rec, err := scanRecord(s.db.QueryRow(q, tenantID, name))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("store: get code sandbox by name: %w", err)
 	}
 	return rec, nil
 }

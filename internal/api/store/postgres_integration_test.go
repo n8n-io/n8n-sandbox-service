@@ -185,6 +185,10 @@ func TestPostgresRecordActivityConcurrentBatches(t *testing.T) {
 	}
 }
 
+func TestPostgresCodeSandboxNames(t *testing.T) {
+	testCodeSandboxNames(t, openTestPostgresStore(t), uuid.New().String(), uuid.New().String())
+}
+
 func TestPostgresUpdateTenantLimits(t *testing.T) {
 	testUpdateTenantLimits(t, openTestPostgresStore(t), uuid.New().String())
 }
