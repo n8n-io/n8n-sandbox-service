@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -128,6 +129,10 @@ func buildVolume(args []string) {
 		exitOn("rewind tar", err)
 	}
 
+	// Creating the image truncates it.
+	if existing, err := os.Stat(imagePath); err == nil && os.SameFile(info, existing) {
+		exitOn("create image", errors.New("the image path names the tar"))
+	}
 	image, err := os.OpenFile(imagePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	exitOn("create image", err)
 	defer image.Close()
@@ -170,9 +175,13 @@ func (h *heldReader) Read(buf []byte) (int, error) {
 	return h.reader.Read(buf)
 }
 
+// exitOn ends build-volume as a call that failed ends: the error on stderr,
+// the outcome "error" on stdout.
 func exitOn(action string, err error) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%s: %v\n", action, err)
+		line, _ := json.Marshal(buildOutcome{Result: "error"})
+		fmt.Println(string(line))
 		os.Exit(1)
 	}
 }

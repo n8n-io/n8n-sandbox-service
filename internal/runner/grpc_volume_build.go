@@ -51,13 +51,12 @@ func (s *SandboxControlGRPC) BuildVolume(stream volumeBuildStream) error {
 		return status.Error(codes.Unimplemented, "this runner cannot build volumes")
 	}
 
-	start := time.Now()
 	tar := &tarStream{stream: stream}
 	err := s.buildVolume(stream, builder, tar)
 	result, answer := volumeBuildOutcome(ctx, err)
 	s.Rec.ObserveVolumeBuild(result)
-	if tar.started {
-		s.Rec.ObserveVolumeBuildDuration(time.Since(start))
+	if !tar.firstByte.IsZero() {
+		s.Rec.ObserveVolumeBuildDuration(time.Since(tar.firstByte))
 	}
 	switch result {
 	case volumeBuildSuccess:
@@ -114,13 +113,13 @@ type tarStream struct {
 	want     int64
 	received int64
 	chunk    []byte
-	// started is set once the runtime reads: it accepted the build.
-	started bool
-	done    bool
+	// firstByte is when the tar's first byte arrived. Only a build the runtime
+	// accepted reads the tar.
+	firstByte time.Time
+	done      bool
 }
 
 func (t *tarStream) Read(buf []byte) (int, error) {
-	t.started = true
 	for len(t.chunk) == 0 {
 		if t.done {
 			return 0, io.EOF
@@ -143,6 +142,9 @@ func (t *tarStream) Read(buf []byte) (int, error) {
 		t.received += int64(len(part.TarChunk))
 		if t.received > t.want {
 			return 0, status.Errorf(codes.InvalidArgument, "the tar is longer than the %d bytes its header says", t.want)
+		}
+		if t.firstByte.IsZero() && len(part.TarChunk) > 0 {
+			t.firstByte = time.Now()
 		}
 		t.chunk = part.TarChunk
 	}
@@ -215,6 +217,8 @@ func volumeBuildOutcome(ctx context.Context, err error) (result string, answer e
 		invalid, _ := status.FromError(err)
 		return volumeBuildInvalidRequest, status.Error(codes.InvalidArgument, invalid.Message())
 	default:
-		return volumebuild.ReasonInternal, runnerctl.BuildFailure(codes.Internal, volumebuild.ReasonInternal, err.Error())
+		// The runner logs err. It names host paths and command output, and
+		// the API may pass the message on.
+		return volumebuild.ReasonInternal, runnerctl.BuildFailure(codes.Internal, volumebuild.ReasonInternal, "volume build failed: "+volumebuild.ReasonInternal)
 	}
 }

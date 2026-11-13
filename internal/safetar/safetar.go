@@ -14,6 +14,7 @@ import (
 	"compress/gzip"
 	"errors"
 	"fmt"
+	"hash/maphash"
 	"io"
 	"os"
 	"path/filepath"
@@ -52,7 +53,7 @@ type Policy struct {
 	// it executable.
 	KeepExecBit bool
 	// MaxEntries counts every entry, directories and pax global headers
-	// included.
+	// included, and the directories CountParentDirectories counts.
 	MaxEntries int
 	// MaxBytes counts regular-file content.
 	MaxBytes int64
@@ -60,9 +61,14 @@ type Policy struct {
 	// headers, padding and anything after the end of the archive included.
 	// It does not bound the compressed input.
 	MaxDecompressedBytes int64
-	// MaxPathBytes bounds each entry's name and each link's target. A pax
-	// header can carry a name of a megabyte.
+	// MaxPathBytes bounds each entry's name and each symbolic link's target.
+	// A pax header can carry a name of a megabyte.
 	MaxPathBytes int
+	// CountParentDirectories counts each parent directory an archive leaves
+	// out, which unpacking creates, as an entry: Stats.Entries is then at
+	// least the number of directories, files and links the archive makes. It
+	// needs MaxEntries, which bounds the memory spent tracking directories.
+	CountParentDirectories bool
 }
 
 // Stats is what an archive held, up to the first failure.
@@ -107,6 +113,9 @@ func unpack(r io.Reader, p Policy, s sink) (Stats, error) {
 	if p.AllowSymlinks && p.MaxEntries == 0 {
 		return stats, errors.New("AllowSymlinks needs MaxEntries")
 	}
+	if p.CountParentDirectories && p.MaxEntries == 0 {
+		return stats, errors.New("CountParentDirectories needs MaxEntries")
+	}
 	src, err := gunzipIfCompressed(r)
 	if err != nil {
 		return stats, invalid(err)
@@ -114,6 +123,7 @@ func unpack(r io.Reader, p Policy, s sink) (Stats, error) {
 	src = &cappedReader{r: src, max: p.MaxDecompressedBytes, read: &stats.DecompressedBytes}
 	tr := tar.NewReader(src)
 	links := symlinks{}
+	dirs := newDirectories()
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
@@ -140,6 +150,15 @@ func unpack(r io.Reader, p Policy, s sink) (Stats, error) {
 		name := hdr.Name
 		if err := check(hdr, p, links); err != nil {
 			return stats, &EntryError{Name: name, Err: err}
+		}
+		if p.CountParentDirectories {
+			cleaned := filepath.Clean(name)
+			missing := dirs.missingParents(cleaned)
+			if stats.Entries+missing >= p.MaxEntries {
+				return stats, fmt.Errorf("%w: more than %d entries", ErrTooLarge, p.MaxEntries)
+			}
+			dirs.add(cleaned, hdr.Typeflag == tar.TypeDir)
+			stats.Entries += missing
 		}
 		switch hdr.Typeflag {
 		case tar.TypeDir:
@@ -172,7 +191,7 @@ func check(hdr *tar.Header, p Policy, links symlinks) error {
 	if !filepath.IsLocal(name) || hasDotDot(name) {
 		return fmt.Errorf("%w: path must be relative and must not contain ..", ErrInvalid)
 	}
-	if p.MaxPathBytes > 0 && (len(name) > p.MaxPathBytes || len(hdr.Linkname) > p.MaxPathBytes) {
+	if p.MaxPathBytes > 0 && (len(name) > p.MaxPathBytes || hdr.Typeflag == tar.TypeSymlink && len(hdr.Linkname) > p.MaxPathBytes) {
 		return fmt.Errorf("%w: path and link target must not be longer than %d bytes", ErrInvalid, p.MaxPathBytes)
 	}
 	// The reader hands pax sparse files over as regular ones and fills their
@@ -258,6 +277,56 @@ func (s symlinks) add(name string) {
 		h = (h ^ uint64(name[i])) * fnvPrime
 	}
 	s[h] = struct{}{}
+}
+
+// directories holds hashes of the cleaned paths of the directories an archive
+// makes, listed or left out. A collision undercounts, so the hash is seeded
+// per archive: unlike FNV, collisions cannot be computed in advance.
+type directories struct {
+	seed   maphash.Seed
+	hashes map[uint64]struct{}
+}
+
+func newDirectories() directories {
+	return directories{seed: maphash.MakeSeed(), hashes: map[uint64]struct{}{}}
+}
+
+// walk calls parent with the hash of each parent directory of the cleaned
+// path name, shallowest first, and returns the hash of name.
+func (d directories) walk(name string, parent func(hash uint64)) uint64 {
+	var hash maphash.Hash
+	hash.SetSeed(d.seed)
+	written := 0
+	for index := range len(name) {
+		if name[index] == filepath.Separator {
+			hash.WriteString(name[written:index])
+			written = index
+			parent(hash.Sum64())
+		}
+	}
+	hash.WriteString(name[written:])
+	return hash.Sum64()
+}
+
+// missingParents counts the parent directories of the cleaned path name that
+// are not in d.
+func (d directories) missingParents(name string) int {
+	missing := 0
+	d.walk(name, func(hash uint64) {
+		if _, ok := d.hashes[hash]; !ok {
+			missing++
+		}
+	})
+	return missing
+}
+
+// add records the parent directories of the cleaned path name, and name
+// itself if it is a directory.
+func (d directories) add(name string, isDir bool) {
+	own := d.walk(name, func(hash uint64) { d.hashes[hash] = struct{}{} })
+	if isDir {
+		d.hashes[own] = struct{}{}
+	}
 }
 
 // gunzipIfCompressed returns a reader that decompresses r when it starts with

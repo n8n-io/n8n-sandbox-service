@@ -568,7 +568,8 @@ func (r *RunnerRecorder) ObserveVolumeBuild(result string) {
 }
 
 // ObserveVolumeBuildDuration records how long a volume build the runner
-// accepted took, whatever its result.
+// accepted took, whatever its result, from the tar's first byte to the end of
+// the call.
 func (r *RunnerRecorder) ObserveVolumeBuildDuration(dur time.Duration) {
 	if r == nil || r.reg == nil {
 		return

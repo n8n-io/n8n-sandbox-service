@@ -341,6 +341,13 @@ func TestRealBuildFitsTheSizedDrive(t *testing.T) {
 				add(tarFile(fmt.Sprintf("%04d/file", index), "x"))
 			}
 		},
+		// 600 directories the tar leaves out, more than its entries and the
+		// spare: a tar written file by file, without directory entries.
+		"a few files below long paths": func(add func(tarEntry), _ func(string, int64)) {
+			for index := range 20 {
+				add(tarFile(strings.Repeat(fmt.Sprintf("dir-%02d/", index), 30)+"file", "x"))
+			}
+		},
 		"one large file": func(_ func(tarEntry), large func(string, int64)) {
 			large("large.bin", 300*mib)
 		},

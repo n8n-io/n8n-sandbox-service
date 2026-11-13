@@ -9,9 +9,9 @@ const (
 
 	// Inodes ext4 keeps for itself, lost+found included.
 	reservedInodes = 11
-	// Directories a small tar may leave out beyond one per entry, such as a
-	// deep path to a single file.
-	spareDirectories = 256
+	// Inodes and blocks to spare, so a small image also has room for a
+	// directory the count missed: safetar tracks directories by hash.
+	spareEntries = 256
 	// Root and lost+found.
 	rootBlocks = 5
 	// The most ext4 withholds from writers.
@@ -25,11 +25,10 @@ const (
 // or blocks reserved for root. Inodes and ImageBytes size it for a tar of
 // entries entries and contentBytes of file content:
 //
-//   - Every entry gets two inodes and two blocks: one each for the entry (a
-//     file's partly used last block, a directory's first block, a long link
-//     target) and one each for a parent directory the tar leaves out. A tar
-//     that leaves out more directories than it has entries, plus
-//     spareDirectories, ends with no_space.
+//   - Entries includes the directories the tar leaves out, which the volume
+//     tar policy counts as entries. Every entry gets two inodes and two
+//     blocks: one each for the entry itself (a file's partly used last block,
+//     a directory's first block, a long link target) and one each to spare.
 //   - Names in directories get an eighth of a block per entry: two 255-byte
 //     names, or sixteen of 24 bytes in half-full hashed directory blocks.
 //   - Content gets its blocks plus 1/64 for the extent blocks of fragmented
@@ -45,7 +44,7 @@ const (
 
 // Inodes is how many inodes the guest formats the output drive with.
 func Inodes(entries int64) int64 {
-	return 2*entries + spareDirectories + reservedInodes
+	return 2*entries + spareEntries + reservedInodes
 }
 
 // ImageBytes is the size of the output drive. The params must be valid.
@@ -53,7 +52,7 @@ func ImageBytes(params Params) int64 {
 	content := divCeil(params.ContentBytes, blockBytes)
 	inodeTable := divCeil(Inodes(params.Entries), inodesPerBlock)
 	payload := content + content/64 + 1 +
-		2*params.Entries + spareDirectories +
+		2*params.Entries + spareEntries +
 		divCeil(params.Entries, 8) + rootBlocks + inodeTable
 
 	// The group tables depend on the size they are part of, so grow the

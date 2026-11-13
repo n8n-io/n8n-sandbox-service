@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
@@ -827,6 +828,8 @@ func TestMaxPathBytes(t *testing.T) {
 		"a link target past the limit": {buildTar(t, tarSymlink("link", "/"+atLimit)), ErrInvalid},
 		// A pax header carries it; unpacking would open every directory.
 		"a name of 100,000 directories": {buildTar(t, tarDir(strings.Repeat("d/", 100_000))), ErrInvalid},
+		// Only a link's target is used; a file's is ignored.
+		"a long link target on a file": {buildTar(t, tarEntry{hdr: tar.Header{Name: "file", Typeflag: tar.TypeReg, Mode: 0o644, Linkname: "/" + atLimit}}), nil},
 	} {
 		_, target := newTarget(t)
 		_, err := unpackBoth(t, target, tt.body, policy)
@@ -841,6 +844,66 @@ func TestMaxPathBytes(t *testing.T) {
 	_, target := newTarget(t)
 	if _, err := unpackBoth(t, target, buildTar(t, tarFile(atLimit+"c", "x")), Policy{}); err != nil {
 		t.Fatalf("without the cap: %v", err)
+	}
+}
+
+func TestCountParentDirectories(t *testing.T) {
+	body := buildTar(t,
+		tarFile("a/b/c.txt", "c"), // a and a/b are left out
+		tarFile("./a/b/d.txt", "d"),
+		tarFile("a/e.txt", "e"),
+		tarDir("x/"),
+		tarSymlink("x/y/link", "../../a/e.txt"), // x/y is left out
+		tarDir("./"),
+	)
+	policy := Policy{AllowSymlinks: true, MaxEntries: 9, CountParentDirectories: true}
+
+	_, target := newTarget(t)
+	stats, err := unpackBoth(t, target, body, policy)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stats.Entries != 9 {
+		t.Errorf("counted %d entries, want 6 and the 3 directories left out", stats.Entries)
+	}
+	// The count is what unpacking made: the root's own entry, and one per path.
+	made := 0
+	if err := filepath.WalkDir(target, func(string, fs.DirEntry, error) error {
+		made++
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if made != stats.Entries {
+		t.Errorf("unpacking made %d paths and the root, counted %d", made-1, stats.Entries)
+	}
+
+	// Six made before the link, which needs two more.
+	policy.MaxEntries = 7
+	_, target = newTarget(t)
+	if _, err := unpackBoth(t, target, body, policy); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("the link and its directory over the cap: expected %v, got %v", ErrTooLarge, err)
+	}
+	if _, err := os.Lstat(filepath.Join(target, "x", "y")); !os.IsNotExist(err) {
+		t.Errorf("the entry over the cap made its directory: %v", err)
+	}
+
+	_, target = newTarget(t)
+	if stats, err := unpackBoth(t, target, body, Policy{AllowSymlinks: true, MaxEntries: 6}); err != nil || stats.Entries != 6 {
+		t.Errorf("without counting: %d entries, %v; want the archive's 6", stats.Entries, err)
+	}
+
+	// Their FNV-1a hashes collide, and so do those of every path below them.
+	_, target = newTarget(t)
+	colliding := buildTar(t, tarFile("0253ce1e19557990/d/f", "f"), tarFile("64362355f854fe03/d/f", "f"))
+	if stats, err := unpackBoth(t, target, colliding, Policy{MaxEntries: 10, CountParentDirectories: true}); err != nil || stats.Entries != 6 {
+		t.Errorf("two names whose FNV-1a hashes collide: %d entries, %v; want 6", stats.Entries, err)
+	}
+
+	_, target = newTarget(t)
+	deep := buildTar(t, tarFile(strings.Repeat("d/", 300)+"f", "f"))
+	if stats, err := unpackBoth(t, target, deep, Policy{MaxEntries: 1000, CountParentDirectories: true}); err != nil || stats.Entries != 301 {
+		t.Errorf("one file 300 directories deep: %d entries, %v; want 301", stats.Entries, err)
 	}
 }
 
@@ -861,10 +924,15 @@ func TestPolicyChecks(t *testing.T) {
 		}
 	}
 
-	_, target := newTarget(t)
-	_, err := unpackBoth(t, target, body, Policy{AllowSymlinks: true})
-	if err == nil || errors.Is(err, ErrInvalid) || errors.Is(err, ErrTooLarge) {
-		t.Fatalf("expected AllowSymlinks without MaxEntries to be refused, got %v", err)
+	for name, policy := range map[string]Policy{
+		"AllowSymlinks":          {AllowSymlinks: true},
+		"CountParentDirectories": {CountParentDirectories: true},
+	} {
+		_, target := newTarget(t)
+		_, err := unpackBoth(t, target, body, policy)
+		if err == nil || errors.Is(err, ErrInvalid) || errors.Is(err, ErrTooLarge) {
+			t.Fatalf("expected %s without MaxEntries to be refused, got %v", name, err)
+		}
 	}
 }
 

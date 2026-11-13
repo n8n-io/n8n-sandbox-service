@@ -62,7 +62,8 @@ const (
 type Params struct {
 	// TarBytes is the tar's length on the tar drive.
 	TarBytes int64
-	// Entries is the tar's total entry count.
+	// Entries is the tar's entry count, with each directory it leaves out
+	// counted as an entry.
 	Entries int64
 	// ContentBytes is the sum of its regular file sizes.
 	ContentBytes int64
@@ -83,6 +84,10 @@ func (p Params) Validate() error {
 	}
 	if p.DecompressedBytes < 1 || p.DecompressedBytes > maxDecompressedBytes {
 		return fmt.Errorf("decompressed bytes must be 1 to %d, got %d", int64(maxDecompressedBytes), p.DecompressedBytes)
+	}
+	// The files' content is part of the decompressed tar.
+	if p.ContentBytes > p.DecompressedBytes {
+		return fmt.Errorf("content bytes %d exceed the decompressed bytes %d", p.ContentBytes, p.DecompressedBytes)
 	}
 	return nil
 }

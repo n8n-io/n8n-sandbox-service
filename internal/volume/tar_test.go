@@ -49,11 +49,12 @@ func TestTarPolicyKeepsLinksAndExecBits(t *testing.T) {
 	}
 	defer root.Close()
 
-	stats, err := safetar.Extract(bytes.NewReader(body), root, TarPolicy(4, 18, int64(len(body))))
+	// Four entries and the two directories the tar leaves out.
+	stats, err := safetar.Extract(bytes.NewReader(body), root, TarPolicy(6, 18, int64(len(body))))
 	if err != nil {
 		t.Fatalf("Extract() failed: %v", err)
 	}
-	if stats != (safetar.Stats{Entries: 4, Files: 2, Bytes: 18, DecompressedBytes: int64(len(body))}) {
+	if stats != (safetar.Stats{Entries: 6, Files: 2, Bytes: 18, DecompressedBytes: int64(len(body))}) {
 		t.Fatalf("stats = %+v", stats)
 	}
 	for name, want := range map[string]os.FileMode{"pkg/cli.js": 0o755, "pkg/data": 0o644} {
@@ -103,7 +104,7 @@ func TestTarPolicyRefusesPathsNoSystemCallTakes(t *testing.T) {
 		"a link target of 4096 bytes": {tar.Header{Name: "link", Typeflag: tar.TypeSymlink, Linkname: deep(4096)}, safetar.ErrInvalid},
 	} {
 		body := testTar(t, tt.header)
-		if _, err := safetar.Validate(bytes.NewReader(body), TarPolicy(10, 0, 0)); !errors.Is(err, tt.want) {
+		if _, err := safetar.Validate(bytes.NewReader(body), TarPolicy(4096, 0, 0)); !errors.Is(err, tt.want) {
 			t.Errorf("%s: got %v, want %v", name, err, tt.want)
 		}
 	}

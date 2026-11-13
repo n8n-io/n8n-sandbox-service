@@ -565,6 +565,37 @@ func TestBuildVolumeEndsABuilderAtItsTimeLimit(t *testing.T) {
 	harness.requireCleanedUp(t)
 }
 
+// The time limit runs from the jailer's start: a Firecracker API that never
+// answers a boot call must not hold the runner's one build.
+func TestBuildVolumeTimeLimitCoversTheBoot(t *testing.T) {
+	harness := newBuilderHarness(t)
+	harness.rt.config.VolumeBuildTimeout = 50 * time.Millisecond
+	harness.rt.deps.bootVolumeBuilder = func(ctx context.Context, _ string, _ volumeBuilderBoot) error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Second):
+			return errors.New("the boot calls were not given the time limit")
+		}
+	}
+
+	start := time.Now()
+	err := harness.rt.BuildVolume(context.Background(), testBuildParams, bytes.NewReader(testTar()), discardImage)
+
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("BuildVolume() took %s: the boot calls did not end at the time limit", elapsed)
+	}
+	var failure *runnerruntime.VolumeBuildError
+	if !errors.As(err, &failure) || failure.Reason != runnerruntime.VolumeBuildTimeout {
+		t.Fatalf("BuildVolume() = %v, want reason %q", err, runnerruntime.VolumeBuildTimeout)
+	}
+	// The log says which step the time ran out in.
+	if !strings.Contains(err.Error(), "start volume builder") {
+		t.Errorf("BuildVolume() = %v, want the step that hung", err)
+	}
+	harness.requireCleanedUp(t)
+}
+
 func TestBuildVolumeEndsABuilderWhenTheCallerGoesAway(t *testing.T) {
 	harness := newBuilderHarness(t)
 	ctx, cancel := context.WithCancel(context.Background())

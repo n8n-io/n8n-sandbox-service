@@ -28,6 +28,9 @@ func TestBuildParametersGetOnlyAnErrorOutsideABuilder(t *testing.T) {
 	)
 	var output bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &output, &output
+	// Wait returns this long after the process ends, even if a child of it
+	// still holds the output open.
+	cmd.WaitDelay = 5 * time.Second
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -42,6 +45,8 @@ func TestBuildParametersGetOnlyAnErrorOutsideABuilder(t *testing.T) {
 		}
 	case <-time.After(30 * time.Second):
 		_ = cmd.Process.Kill()
+		// The output is the copying goroutines' until Wait returns.
+		<-exited
 		t.Fatalf("the daemon kept running\n%s", output.String())
 	}
 	if !strings.Contains(output.String(), "volume build refused") {

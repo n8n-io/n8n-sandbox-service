@@ -177,7 +177,8 @@ func TestRunBuildsRecordsAndReboots(t *testing.T) {
 
 	wantCalls := []string{
 		"tar /dev/vdb",
-		fmt.Sprintf("format /dev/vdc %d", Inodes(4)),
+		// Four entries and bin/, which the tar leaves out.
+		fmt.Sprintf("format /dev/vdc %d", Inodes(5)),
 		"mount /dev/vdc",
 		"used",
 		"flush",

@@ -94,7 +94,8 @@ message BuildVolumeRequest {
 message BuildVolumeHeader {
   // Length of the tar as sent, plain or gzip-compressed.
   int64 tar_bytes = 1;
-  // Every entry, directories included.
+  // Every entry, directories included, and every directory the tar leaves
+  // out.
   int64 entries = 2;
   // Sum of the regular file sizes.
   int64 content_bytes = 3;

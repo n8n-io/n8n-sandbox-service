@@ -208,25 +208,32 @@ func (r *Runtime) BuildVolume(ctx context.Context, params volumebuild.Params, ta
 		return fmt.Errorf("prepare volume build: %w", err)
 	}
 
+	// One time limit from the jailer's start to the builder's exit: the
+	// Firecracker API calls have none of their own.
+	builderCtx, cancelBuilder := context.WithTimeout(ctx, r.config.VolumeBuildTimeout)
+	defer cancelBuilder()
 	exited := make(chan struct{})
 	err = timer.step(stepStartBuilder, func() error {
 		jail := &sandboxState{vmID: volumeBuildID, netnsName: volumeBuildNetns}
 		var startErr error
-		if builder, startErr = r.startJailer(ctx, jail, func(error) { close(exited) }); startErr != nil {
+		if builder, startErr = r.startJailer(builderCtx, jail, func(error) { close(exited) }); startErr != nil {
 			return fmt.Errorf("start firecracker jailer: %w", startErr)
 		}
-		if err := r.waitForSocket(ctx, files.socket); err != nil {
+		if err := r.waitForSocket(builderCtx, files.socket); err != nil {
 			return fmt.Errorf("wait for firecracker socket: %w", err)
 		}
-		return r.deps.bootVolumeBuilder(ctx, files.socket, boot)
+		return r.deps.bootVolumeBuilder(builderCtx, files.socket, boot)
 	})
 	if err != nil {
+		if r.volumeBuilderTimedOut(ctx, builderCtx) {
+			return r.volumeBuildTimeout(fmt.Errorf("start volume builder: %w", err))
+		}
 		return fmt.Errorf("start volume builder: %w", err)
 	}
 
 	// The guest reboots when it is done, which ends Firecracker. Its exit
 	// status says nothing: the status record does.
-	if err := timer.step(stepBuild, func() error { return r.waitForVolumeBuilder(ctx, exited) }); err != nil {
+	if err := timer.step(stepBuild, func() error { return r.waitForVolumeBuilder(ctx, builderCtx, exited) }); err != nil {
 		return err
 	}
 	if status, err = readVolumeBuildStatus(files.drives[volumebuild.DriveStatus]); err != nil {
@@ -440,21 +447,34 @@ func volumeBuildCleanupScript(files volumeBuildFiles) string {
 	return script.String()
 }
 
-// waitForVolumeBuilder waits for the builder microVM to end by itself.
-func (r *Runtime) waitForVolumeBuilder(ctx context.Context, exited <-chan struct{}) error {
-	limit := time.NewTimer(r.config.VolumeBuildTimeout)
-	defer limit.Stop()
+// waitForVolumeBuilder waits for the builder microVM to end by itself, or
+// for builderCtx, the build's time limit within ctx, to end.
+func (r *Runtime) waitForVolumeBuilder(ctx, builderCtx context.Context, exited <-chan struct{}) error {
 	select {
 	case <-exited:
 		return nil
-	case <-limit.C:
-		return &runnerruntime.VolumeBuildError{
-			Reason: runnerruntime.VolumeBuildTimeout,
-			Err:    fmt.Errorf("the builder did not finish within %s", r.config.VolumeBuildTimeout),
+	case <-builderCtx.Done():
+		if r.volumeBuilderTimedOut(ctx, builderCtx) {
+			return r.volumeBuildTimeout(nil)
 		}
-	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// volumeBuilderTimedOut reports whether builderCtx ended at the build's time
+// limit rather than with the caller's ctx.
+func (r *Runtime) volumeBuilderTimedOut(ctx, builderCtx context.Context) bool {
+	return ctx.Err() == nil && errors.Is(builderCtx.Err(), context.DeadlineExceeded)
+}
+
+// volumeBuildTimeout is the build's time limit ending, during the step that
+// failed if there is one.
+func (r *Runtime) volumeBuildTimeout(during error) error {
+	err := fmt.Errorf("the builder did not finish within %s of its start", r.config.VolumeBuildTimeout)
+	if during != nil {
+		err = fmt.Errorf("%w: %w", err, during)
+	}
+	return &runnerruntime.VolumeBuildError{Reason: runnerruntime.VolumeBuildTimeout, Err: err}
 }
 
 // readVolumeBuildStatus reads the record the guest left: a bounded read and a

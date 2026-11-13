@@ -2,6 +2,7 @@ package volumebuild
 
 import (
 	"bytes"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -81,6 +82,7 @@ func TestParamsFromEnvRefusesIncompleteOrInvalidParameters(t *testing.T) {
 		"too many entries":           with(envEntries, "268435457"),
 		"too many content":           with(envContentBytes, "1099511627777"),
 		"too many decompressed":      with(envDecompressedBytes, "4398046511105"),
+		"more content than the tar":  with(envContentBytes, "2049"),
 	} {
 		params, requested, err := ParamsFromEnv(envLookup(env))
 		if !requested || err == nil || params != (Params{}) {
@@ -199,16 +201,19 @@ func TestParseStatusRefusesHostileRecords(t *testing.T) {
 		if status != (Status{}) {
 			t.Errorf("%s: refused, but returned %+v", name, status)
 		}
-		// Errors end up in runner logs: none may quote the record.
-		for _, quoted := range []string{"hello", "forged", "success", "message"} {
-			if strings.Contains(err.Error(), quoted) {
-				t.Errorf("%s: the error quotes the record: %v", name, err)
-			}
+		// Errors end up in runner logs: fixed text and numbers only, nothing
+		// quoted from the record.
+		if !parseStatusError.MatchString(err.Error()) {
+			t.Errorf("%s: the error is not one ParseStatus writes: %v", name, err)
 		}
 	}
 }
 
-func TestInodesCoverEntriesAndMissingDirectories(t *testing.T) {
+var parseStatusError = regexp.MustCompile(`^status record (has \d+ bytes, want \d+|is empty|has data after its end|` +
+	`is not the expected JSON object|holds more than one JSON value|has version -?\d+, want \d+|` +
+	`has an unknown result or reason|has a negative count|is not written as the builder writes it)$`)
+
+func TestInodesCoverEachEntryTwice(t *testing.T) {
 	for _, entries := range []int64{1, 2, 1000, maxEntries} {
 		if got, need := Inodes(entries), 2*entries+reservedInodes; got < need {
 			t.Errorf("Inodes(%d) = %d, fewer than %d", entries, got, need)
@@ -226,7 +231,7 @@ func TestImageBytes(t *testing.T) {
 		params   Params
 		min, max int64
 	}{
-		// 267 inodes and 256 spare directory blocks dominate.
+		// 267 inodes and 256 spare blocks dominate.
 		{"one empty file", Params{TarBytes: 1024, Entries: 1}, 1 * mib, 2 * mib},
 		// Two blocks, two inodes and an eighth of a block each: about 9 KiB.
 		{"many tiny files", Params{TarBytes: 1, Entries: 20000, ContentBytes: 20000}, 170 * mib, 200 * mib},

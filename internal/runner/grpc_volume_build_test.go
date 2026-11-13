@@ -73,6 +73,8 @@ type buildStream struct {
 	requests []*pb.BuildVolumeRequest
 	// recvErr ends the requests instead of a half-close.
 	recvErr error
+	// headerDelay is how long the caller takes to send its header.
+	headerDelay time.Duration
 
 	received  int
 	responses []*pb.BuildVolumeResponse
@@ -86,6 +88,9 @@ func (s *buildStream) Recv() (*pb.BuildVolumeRequest, error) {
 			return nil, s.recvErr
 		}
 		return nil, io.EOF
+	}
+	if s.received == 0 {
+		time.Sleep(s.headerDelay)
 	}
 	s.received++
 	return s.requests[s.received-1], nil
@@ -183,6 +188,22 @@ func TestBuildVolumeStreamsTheTarInAndTheImageOut(t *testing.T) {
 	}
 	if !buildDurations(t, srv) {
 		t.Error("the build's duration was not recorded")
+	}
+}
+
+// The duration starts at the tar's first byte, as its help says: a slow
+// header is not part of the build.
+func TestBuildVolumeDurationStartsAtTheTarsFirstByte(t *testing.T) {
+	srv := newBuildServer(&buildRuntime{image: []byte("image")})
+	stream := &buildStream{ctx: authorized(), headerDelay: 1100 * time.Millisecond, requests: []*pb.BuildVolumeRequest{
+		buildHeader(5, 1, 5), tarChunk("hello"),
+	}}
+
+	if err := srv.BuildVolume(stream); err != nil {
+		t.Fatalf("BuildVolume() failed: %v", err)
+	}
+	if body := scrapeRegistry(t, srv.Rec); !strings.Contains(body, `sandbox_volume_build_duration_seconds_bucket{role="runner",le="1"} 1`) {
+		t.Errorf("the build took a second or more, so its duration counted the header:\n%s", body)
 	}
 }
 
@@ -329,8 +350,9 @@ func TestBuildVolumeWaitsForTheHalfClose(t *testing.T) {
 }
 
 func TestBuildVolumeTellsABadTarFromARunnerFault(t *testing.T) {
+	const runtimeText = "/srv/firecracker/data/volume-build/tenant-file"
 	failed := func(reason string) error {
-		return &runnerruntime.VolumeBuildError{Reason: reason, Err: errors.New("entry \"tenant-file\": refused")}
+		return &runnerruntime.VolumeBuildError{Reason: reason, Err: errors.New("entry \"" + runtimeText + "\": refused")}
 	}
 	tests := map[string]struct {
 		failure    error
@@ -347,7 +369,7 @@ func TestBuildVolumeTellsABadTarFromARunnerFault(t *testing.T) {
 		"timeout":   {failed(runnerruntime.VolumeBuildTimeout), codes.DeadlineExceeded, runnerruntime.VolumeBuildTimeout},
 		// Only the fixed reasons leave the runner, as label or to the API.
 		"a reason not on the list": {failed("tar\",result=\"success"), codes.Internal, volumebuild.ReasonInternal},
-		"a runner fault":           {errors.New("prepare volume build: mount failed"), codes.Internal, volumebuild.ReasonInternal},
+		"a runner fault":           {errors.New("prepare volume build: mount " + runtimeText + " failed"), codes.Internal, volumebuild.ReasonInternal},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -366,8 +388,8 @@ func TestBuildVolumeTellsABadTarFromARunnerFault(t *testing.T) {
 			if runnerctl.IsCapacityRefusal(err) {
 				t.Error("a failed build must not look like a refusal: the API would retry it elsewhere")
 			}
-			if strings.Contains(err.Error(), "tenant-file") {
-				t.Errorf("the error carries text from the build: %v", err)
+			if strings.Contains(err.Error(), runtimeText) {
+				t.Errorf("the error carries the runtime's text: %v", err)
 			}
 			if got := srv.Rec.VolumeBuildCount(tt.wantReason); got != 1 {
 				t.Errorf("volume_builds_total{result=%s} = %v, want 1", tt.wantReason, got)

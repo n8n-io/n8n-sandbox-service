@@ -709,7 +709,8 @@ type BuildVolumeHeader struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Length of the tar as sent, plain or gzip-compressed.
 	TarBytes int64 `protobuf:"varint,1,opt,name=tar_bytes,json=tarBytes,proto3" json:"tar_bytes,omitempty"`
-	// Every entry, directories included.
+	// Every entry, directories included, and every directory the tar leaves
+	// out.
 	Entries int64 `protobuf:"varint,2,opt,name=entries,proto3" json:"entries,omitempty"`
 	// Sum of the regular file sizes.
 	ContentBytes int64 `protobuf:"varint,3,opt,name=content_bytes,json=contentBytes,proto3" json:"content_bytes,omitempty"`
