@@ -75,10 +75,13 @@ type Runtime struct {
 	applyPolicy     func(bridgeIface, containerID, sourceIP, gatewayIP string, daemonPort int, blockEgress bool) error
 	teardownRules   func(containerID string) error
 	waitForDaemon   func(ctx context.Context, baseURL string) error
-	imageReady      atomic.Bool
-	imageReadyCh    chan struct{}
-	metrics         *metrics.RunnerRecorder
-	watchBackoff    time.Duration
+	// waitForCodeDaemon waits for the code daemon of a code sandbox.
+	waitForCodeDaemon func(ctx context.Context, baseURL string) error
+	codeImageReady    atomic.Bool
+	imageReady        atomic.Bool
+	imageReadyCh      chan struct{}
+	metrics           *metrics.RunnerRecorder
+	watchBackoff      time.Duration
 
 	// mu guards what the event watcher and request-serving goroutines share: which
 	// containers the runner is stopping on purpose, and which sandboxes Docker
@@ -87,6 +90,10 @@ type Runtime struct {
 	expectedStops map[string]expectedStop
 	stopToken     uint64
 	restarted     map[string]struct{}
+
+	// daemonURLs saves the docker ps and docker inspect of DaemonURL. See
+	// daemonURLCache for when an entry is trusted.
+	daemonURLs *daemonURLCache
 }
 
 var _ runnerruntime.Runtime = (*Runtime)(nil)
@@ -143,18 +150,20 @@ func (m *Runtime) applyNetworkPolicy(n *runnerNetwork, containerID, containerIP 
 // network policy, or daemon readiness behavior without nil defaults.
 func newRuntime(runnerConfig *config.Config, cfg Config, docker dockerBackend) *Runtime {
 	return &Runtime{
-		runnerConfig:    runnerConfig,
-		config:          cfg,
-		publicNetwork:   runnerNetwork{networkName: runnerBridgeNetwork, bridgeName: runnerBridgeNetwork},
-		noEgressNetwork: runnerNetwork{networkName: runnerNoEgressNetwork, bridgeName: runnerNoEgressBridge, blockEgress: true},
-		docker:          docker,
-		applyPolicy:     netrules.ApplyPolicy,
-		teardownRules:   netrules.Teardown,
-		waitForDaemon:   waitForDaemon,
-		imageReadyCh:    make(chan struct{}),
-		watchBackoff:    2 * time.Second,
-		expectedStops:   make(map[string]expectedStop),
-		restarted:       make(map[string]struct{}),
+		runnerConfig:      runnerConfig,
+		config:            cfg,
+		publicNetwork:     runnerNetwork{networkName: runnerBridgeNetwork, bridgeName: runnerBridgeNetwork},
+		noEgressNetwork:   runnerNetwork{networkName: runnerNoEgressNetwork, bridgeName: runnerNoEgressBridge, blockEgress: true},
+		docker:            docker,
+		applyPolicy:       netrules.ApplyPolicy,
+		teardownRules:     netrules.Teardown,
+		waitForDaemon:     waitForDaemon,
+		waitForCodeDaemon: waitForCodeDaemon,
+		imageReadyCh:      make(chan struct{}),
+		watchBackoff:      2 * time.Second,
+		expectedStops:     make(map[string]expectedStop),
+		restarted:         make(map[string]struct{}),
+		daemonURLs:        newDaemonURLCache(),
 	}
 }
 
@@ -210,6 +219,9 @@ func (m *Runtime) ImageReadyCh() <-chan struct{} {
 // sandbox while not watching would restart it silently.
 func (m *Runtime) Prepare(ctx context.Context) {
 	go m.watchGuestDeaths(ctx)
+	if m.config.CodeImage != "" {
+		go m.ensureCodeImage(ctx)
+	}
 	m.EnsureSandboxImage(ctx)
 }
 
@@ -255,6 +267,7 @@ func (m *Runtime) GetSandboxInfo(ctx context.Context, sandboxID string) (*runner
 
 // DeleteSandbox removes a sandbox by its sandbox ID.
 func (m *Runtime) DeleteSandbox(ctx context.Context, sandboxID string) error {
+	m.daemonURLs.forget(sandboxID)
 	containerID, err := m.FindContainerIDByLabel(ctx, sandboxID)
 	if err != nil {
 		return err
@@ -286,11 +299,24 @@ func (m *Runtime) CreateContainer(ctx context.Context, sandboxID string, opts *C
 		return nil, fmt.Errorf("sandbox ID must be at least 12 characters, got %d", len(sandboxID))
 	}
 
+	urlToken := m.daemonURLs.token(sandboxID)
 	containerName := "sandbox-" + sandboxID[:12]
 	limits := m.defaultLimits()
 	n := m.networkFor(opts.BlockEgress())
+	image := m.config.SandboxImage
+	var extraEnv []string
+	waitReady := m.waitForDaemon
+	if opts.IsCode() {
+		var err error
+		if image, err = m.codeImage(); err != nil {
+			return nil, err
+		}
+		limits.MemoryMB = codeMemoryLimitMB(opts, m.config.CodeDaemonOverheadMB)
+		extraEnv = codeDaemonEnv(opts)
+		waitReady = m.waitForCodeDaemon
+	}
 
-	containerID, err := m.docker.createContainer(ctx, sandboxID, containerName, m.config.SandboxImage, n.networkName, limits, m.config.EnableCgroups)
+	containerID, err := m.docker.createContainer(ctx, sandboxID, containerName, image, n.networkName, limits, m.config.EnableCgroups, extraEnv)
 	if err != nil {
 		return nil, fmt.Errorf("create container: %w", err)
 	}
@@ -318,11 +344,12 @@ func (m *Runtime) CreateContainer(ctx context.Context, sandboxID string, opts *C
 	}
 
 	baseURL := fmt.Sprintf("http://%s:%d", containerIP, daemonPort)
-	if err := m.waitForDaemon(ctx, baseURL); err != nil {
+	if err := waitReady(ctx, baseURL); err != nil {
 		cleanupOnError()
 		return nil, fmt.Errorf("connect to daemon: %w", err)
 	}
 
+	m.daemonURLs.store(sandboxID, containerID, baseURL, urlToken)
 	containerInfo := &ContainerInfo{
 		ID:   containerID,
 		Name: containerName,
@@ -413,6 +440,11 @@ func (m *Runtime) ensureSandboxRunningOnce(ctx context.Context, sandboxID string
 	if !recovering && isContainerReady(inspect.State) {
 		return false, nil
 	}
+	// A lookup that runs while this wake starts the container must not store
+	// a URL that a failed wake then leaves behind. The token for this wake's
+	// own store is taken after the forget.
+	m.daemonURLs.forget(sandboxID)
+	urlToken := m.daemonURLs.token(sandboxID)
 	if recovering {
 		// The container is usually already running, and never startable while Docker
 		// is between restarts, so a wake that lands in that window waits for it. This
@@ -459,6 +491,7 @@ func (m *Runtime) ensureSandboxRunningOnce(ctx context.Context, sandboxID string
 		m.clearRestarted(sandboxID)
 		slog.Info("docker sandbox recovered", "sandbox_id", sandboxID, "container_id", containerID, "ip", containerIP)
 	}
+	m.daemonURLs.store(sandboxID, containerID, baseURL, urlToken)
 	return recovering, nil
 }
 
@@ -493,6 +526,7 @@ func (m *Runtime) awaitContainerRestart(ctx context.Context, containerID string)
 }
 
 func (m *Runtime) cleanupWakeFailure(containerID string) {
+	m.daemonURLs.forgetContainer(containerID)
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	token := m.expectStop(containerID)
@@ -510,6 +544,10 @@ func (m *Runtime) cleanupWakeFailure(containerID string) {
 
 // StopSandboxContainer stops a running sandbox container without removing it.
 func (m *Runtime) StopSandboxContainer(ctx context.Context, sandboxID string) error {
+	// Before the stop, so a request during the stop does not get the URL from
+	// the cache. A lookup during the stop can still store it; the die event of
+	// the stop removes it again.
+	m.daemonURLs.forget(sandboxID)
 	containerID, err := m.FindContainerIDByLabel(ctx, sandboxID)
 	if err != nil {
 		return err
@@ -551,7 +589,11 @@ func (m *Runtime) DaemonURL(ctx context.Context, sandboxID string) (string, erro
 	if m.wasRestarted(sandboxID) {
 		return "", ErrSandboxNotRunning
 	}
+	if url, ok := m.daemonURLs.get(sandboxID); ok {
+		return url, nil
+	}
 
+	urlToken := m.daemonURLs.token(sandboxID)
 	containerID, err := m.FindContainerIDByLabel(ctx, sandboxID)
 	if err != nil {
 		return "", err
@@ -574,7 +616,13 @@ func (m *Runtime) DaemonURL(ctx context.Context, sandboxID string) (string, erro
 	}
 
 	baseURL := fmt.Sprintf("http://%s:%d", ip, daemonPort)
+	m.daemonURLs.store(sandboxID, containerID, baseURL, urlToken)
 	return baseURL, nil
+}
+
+// ForgetDaemonURL drops the cached daemon URL of a sandbox.
+func (m *Runtime) ForgetDaemonURL(sandboxID string) {
+	m.daemonURLs.forget(sandboxID)
 }
 
 // DeleteContainer stops and removes a container.
@@ -595,6 +643,7 @@ func (m *Runtime) removeContainerAndTeardownRules(ctx context.Context, container
 	if containerID == "" {
 		return nil
 	}
+	m.daemonURLs.forgetContainer(containerID)
 	// Removing a running container kills it, and that death is the runner's doing.
 	token := m.expectStop(containerID)
 	if err := m.docker.removeContainer(ctx, containerID); err != nil {

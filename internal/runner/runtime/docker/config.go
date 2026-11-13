@@ -13,6 +13,8 @@ const (
 	defaultPidsMax           = 256
 	defaultEnableCgroups     = true
 	defaultDiskQuotaInactive = false
+
+	defaultCodeDaemonOverheadMB = 256
 )
 
 // Config holds configuration for the Docker/sysbox runtime backend.
@@ -51,6 +53,15 @@ type Config struct {
 	// EnableCgroups controls whether cgroup setup is enforced for sandbox creation.
 	// Parsed from SANDBOX_RUNNER_ENABLE_CGROUPS (default true).
 	EnableCgroups bool
+
+	// CodeImage is the image used to start code sandboxes. Empty means code
+	// sandboxes cannot be created. Parsed from SANDBOX_RUNNER_DOCKER_CODE_IMAGE.
+	CodeImage string
+
+	// CodeDaemonOverheadMB is added to slots x taskMemoryMb for the container
+	// memory limit of a code sandbox. It covers the code daemon and the spare
+	// workers. Parsed from SANDBOX_RUNNER_CODE_DAEMON_OVERHEAD_MB (default 256).
+	CodeDaemonOverheadMB int64
 }
 
 func defaultConfig() Config {
@@ -61,6 +72,8 @@ func defaultConfig() Config {
 		DefaultPidsMax:    defaultPidsMax,
 		DiskQuotaActive:   defaultDiskQuotaInactive,
 		EnableCgroups:     defaultEnableCgroups,
+
+		CodeDaemonOverheadMB: defaultCodeDaemonOverheadMB,
 	}
 }
 
@@ -123,6 +136,15 @@ func LoadConfig() (Config, error) {
 			return Config{}, fmt.Errorf("SANDBOX_RUNNER_ENABLE_CGROUPS must be a boolean, got %q", v)
 		}
 		cfg.EnableCgroups = enabled
+	}
+
+	cfg.CodeImage = os.Getenv("SANDBOX_RUNNER_DOCKER_CODE_IMAGE")
+	if v := os.Getenv("SANDBOX_RUNNER_CODE_DAEMON_OVERHEAD_MB"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || n < 0 {
+			return Config{}, fmt.Errorf("SANDBOX_RUNNER_CODE_DAEMON_OVERHEAD_MB must be a non-negative integer, got %q", v)
+		}
+		cfg.CodeDaemonOverheadMB = n
 	}
 
 	return cfg, nil

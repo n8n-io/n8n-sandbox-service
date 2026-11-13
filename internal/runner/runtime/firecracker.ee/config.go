@@ -110,6 +110,16 @@ type Config struct {
 	// DaemonBin is the host path to sandbox-daemon used when creating a golden snapshot.
 	// Parsed from SANDBOX_RUNNER_FIRECRACKER_DAEMON_BIN.
 	DaemonBin string
+
+	// CodeTemplateDir holds the rootfs.ext4 of code sandboxes (Task API). The
+	// kernel is the one in TemplateDir. Empty: no code sandboxes.
+	// Parsed from SANDBOX_RUNNER_FIRECRACKER_CODE_TEMPLATE_DIR.
+	CodeTemplateDir string
+
+	// CodeSnapshotDir holds the golden code snapshot: snapshot_mem,
+	// snapshot_state, boot.json and code.json. Set with CodeTemplateDir.
+	// Parsed from SANDBOX_RUNNER_FIRECRACKER_CODE_SNAPSHOT_DIR.
+	CodeSnapshotDir string
 }
 
 func defaultConfig() Config {
@@ -204,6 +214,8 @@ func LoadConfig(capacityTotal int32) (Config, error) {
 	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_DAEMON_BIN")); v != "" {
 		cfg.DaemonBin = v
 	}
+	cfg.CodeTemplateDir = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_CODE_TEMPLATE_DIR"))
+	cfg.CodeSnapshotDir = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_CODE_SNAPSHOT_DIR"))
 
 	if err := validateConfig(cfg, capacityTotal); err != nil {
 		return Config{}, err
@@ -297,6 +309,17 @@ func validateConfig(cfg Config, capacityTotal int32) error {
 	}
 	if cfg.DaemonBin != "" && !strings.HasPrefix(cfg.DaemonBin, "/") {
 		return fmt.Errorf("SANDBOX_RUNNER_FIRECRACKER_DAEMON_BIN must be an absolute path, got %q", cfg.DaemonBin)
+	}
+	if (cfg.CodeTemplateDir == "") != (cfg.CodeSnapshotDir == "") {
+		return fmt.Errorf("SANDBOX_RUNNER_FIRECRACKER_CODE_TEMPLATE_DIR and SANDBOX_RUNNER_FIRECRACKER_CODE_SNAPSHOT_DIR must be set together")
+	}
+	for name, value := range map[string]string{
+		"SANDBOX_RUNNER_FIRECRACKER_CODE_TEMPLATE_DIR": cfg.CodeTemplateDir,
+		"SANDBOX_RUNNER_FIRECRACKER_CODE_SNAPSHOT_DIR": cfg.CodeSnapshotDir,
+	} {
+		if value != "" && !strings.HasPrefix(value, "/") {
+			return fmt.Errorf("%s must be an absolute path, got %q", name, value)
+		}
 	}
 	return nil
 }

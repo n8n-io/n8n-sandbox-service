@@ -29,6 +29,7 @@ type crashBackend struct {
 	removeErr error
 	watch     func(ctx context.Context, onDie func(containerID, sandboxID string)) error
 	inspects  int
+	since     time.Time
 }
 
 func runningState() containerState {
@@ -67,7 +68,10 @@ func (f *crashBackend) stopContainer(context.Context, string) error {
 	return f.stopErr
 }
 
-func (f *crashBackend) watchContainerDeaths(ctx context.Context, onDie func(string, string)) error {
+func (f *crashBackend) watchContainerDeaths(ctx context.Context, since time.Time, onDie func(string, string)) error {
+	f.mu.Lock()
+	f.since = since
+	f.mu.Unlock()
 	if f.watch == nil {
 		return errors.New("unexpected watchContainerDeaths")
 	}
@@ -81,7 +85,7 @@ func (f *crashBackend) removeContainer(context.Context, string) error {
 	defer f.mu.Unlock()
 	return f.removeErr
 }
-func (f *crashBackend) createContainer(context.Context, string, string, string, string, *ResourceLimits, bool) (string, error) {
+func (f *crashBackend) createContainer(context.Context, string, string, string, string, *ResourceLimits, bool, []string) (string, error) {
 	return "", errors.New("unexpected createContainer")
 }
 func (f *crashBackend) inspectNetwork(context.Context, string) (*networkInspect, error) {

@@ -23,7 +23,7 @@ All services are configured via environment variables.
 | `SANDBOX_API_GRPC_LISTEN_ADDR` | `:9090` | Private gRPC listen address for runner registration streams |
 | `SANDBOX_API_METRICS_LISTEN_ADDR` | *(empty)* | Dedicated `host:port` for Prometheus `/metrics`. Empty, or the same port as `SANDBOX_API_LISTEN_ADDR`, serves `/metrics` on the public listener; any other port starts a second server that serves only `/metrics`. Must not use the `SANDBOX_API_GRPC_LISTEN_ADDR` port. Ignored, with a warning, when `SANDBOX_API_METRICS_ENABLED=false`. See [Metrics](#metrics). |
 | `SANDBOX_API_STORE` | `sqlite` | Store backend: `sqlite` (default, single API pod) or `postgres` (multi-pod) |
-| `SANDBOX_API_DATA_DIR` | `/var/lib/n8n-sandbox-api` | SQLite store directory when `SANDBOX_API_STORE=sqlite`; must exist and be writable. Mount a persistent volume here to retain sandbox state across API pod restarts. |
+| `SANDBOX_API_DATA_DIR` | `/var/lib/n8n-sandbox-api` | SQLite store directory when `SANDBOX_API_STORE=sqlite`; must exist and be writable. Mount a persistent volume here to retain sandbox state across API pod restarts. Use a local or block volume, not a network file system: SQLite runs in WAL mode. |
 | `SANDBOX_API_POSTGRES_HOST` | *(required with postgres)* | Postgres host |
 | `SANDBOX_API_POSTGRES_PORT` | `5432` | Postgres port |
 | `SANDBOX_API_POSTGRES_USER` | *(required with postgres)* | Postgres user |
@@ -37,6 +37,12 @@ All services are configured via environment variables.
 | `SANDBOX_API_RUNNER_HEARTBEAT_GRACE` | `45s` | How long after the last gRPC heartbeat a runner remains eligible for placement (Go [`time.ParseDuration`](https://pkg.go.dev/time#ParseDuration) syntax, e.g. `45s`, `2m`) |
 | `SANDBOX_API_IDLE_STOP_AFTER` | `1h` | Idle time after which the sweeper stops a sandbox (deletes it if `ephemeral`). `0` disables |
 | `SANDBOX_API_IDLE_DELETE_AFTER` | `24h` | Idle time after which the sweeper deletes a sandbox; wakes are refused past this window. `0` disables |
+| `SANDBOX_CODE_IDLE_DELETE_AFTER` | `2m` | Time without a Task API request after which the API deletes a code sandbox. A running request counts as activity. `0` disables |
+| `SANDBOX_CODE_POOLS` | — | Warm pools of code sandboxes, as a JSON list. Each item has the fields of `POST /v1/code/sandboxes` (`runtime`, `slots`, `taskMemoryMb`, `spareWorkers`, `reuseWorkers`) and `size`, the number of sandboxes to keep ready. Example: `[{"slots":2,"reuseWorkers":true,"size":8}]`. Empty disables the pool |
+| `SANDBOX_CODE_POOL_REFILL_CONCURRENCY` | `2` | Pool creates that run at the same time, for all pools |
+| `SANDBOX_CODE_POOL_MAX_AGE` | `30m` | The pool manager replaces a pooled sandbox that is older |
+| `SANDBOX_CODE_POOL_REFILL_DELAY` | `0` | Wait after a claim before the refill create starts, so that the create does not compete with the first task of the claimed sandbox |
+| `SANDBOX_CODE_POOL_CHECK_INTERVAL` | `10s` | Tick of the pool manager: cleanup and refill. A claim also starts a refill at once |
 | `SANDBOX_API_IDLE_DELETE_SAFETY_BUFFER` | `1m` | Added to a sandbox's idle window before deletion as a race guard (applied when either window above is > 0) |
 | `SANDBOX_API_IDLE_SWEEP_INTERVAL` | `1m` | How often the idle sweeper runs |
 | `SANDBOX_API_IDLE_SWEEP_CONCURRENCY` | `8` | Runner stop/delete calls one sweep keeps in flight (1–16), spread across runners. With Postgres the sandbox-lock pool is this plus 5 |
@@ -89,6 +95,8 @@ These variables are parsed by the Docker/sysbox runner entrypoint.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE` | *(required)* | Docker image used for sandbox containers |
+| `SANDBOX_RUNNER_DOCKER_CODE_IMAGE` | — | Docker image for code sandboxes (Task API). Unset: the runner cannot create code sandboxes |
+| `SANDBOX_RUNNER_CODE_DAEMON_OVERHEAD_MB` | `256` | Added to `slots × taskMemoryMb` for the memory limit of a code sandbox |
 | `SANDBOX_RUNNER_DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker daemon endpoint used by the runner |
 | `SANDBOX_RUNNER_ENABLE_CGROUPS` | `true` | Whether Docker resource limits are applied |
 | `SANDBOX_RUNNER_DEFAULT_MEMORY_MB` | `512` | Default Docker memory limit per sandbox in megabytes |
@@ -135,6 +143,8 @@ Slots give the host-side Firecracker resources stable names without exposing tho
 | `SANDBOX_RUNNER_FIRECRACKER_EXPECTED_GIT_SHA` | _(empty)_ | When set, must match `git_sha` in the manifest (requires `MANIFEST_PATH`) |
 | `SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT` | _(empty)_ | Absolute path to `create-golden-snapshot.sh`. When set and any of `snapshot_mem`, `snapshot_state` or `boot.json` is missing, Prepare runs it (mem/state paths must share a directory). Production Firecracker hosts set this so the runner owns host-local snapshot creation. Empty = do not auto-create |
 | `SANDBOX_RUNNER_FIRECRACKER_DAEMON_BIN` | `/srv/firecracker/bin/sandbox-daemon` | Host path to `sandbox-daemon` used for golden snapshot create and optional manifest checksum |
+| `SANDBOX_RUNNER_FIRECRACKER_CODE_TEMPLATE_DIR` | — | Holds the `rootfs.ext4` of code sandboxes (Task API), built by `scripts/firecracker.ee/build-code-snapshot.sh`. Set with the next variable. Unset: no code sandboxes |
+| `SANDBOX_RUNNER_FIRECRACKER_CODE_SNAPSHOT_DIR` | — | Golden code snapshot: `snapshot_mem`, `snapshot_state`, `boot.json` and `code.json` (the code daemon options it was built with). Code sandboxes map it read-only and shared, and cannot be stopped |
 
 The runner reports healthy only after `Prepare` has verified these assets, created the snapshot if needed, and passed an admission canary — see [the runtime README](../internal/runner/runtime/firecracker.ee/README.md#admission-prepare--ready).
 

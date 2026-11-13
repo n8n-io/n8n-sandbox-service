@@ -63,6 +63,8 @@ func NewRouter(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.Runner
 	mux.HandleFunc("POST /sandboxes/{id}/mkdir", proxy)
 	mux.HandleFunc("GET /sandboxes/{id}/stat", proxy)
 
+	registerCodeRoutes(mux, rt)
+
 	// Apply middleware (outermost first)
 	var handler http.Handler = mux
 	if rec.Enabled() {

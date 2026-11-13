@@ -701,7 +701,7 @@ func TestProbeDaemonRejectsUnhealthyStatus(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	if err := probeDaemon(ctx, server.URL, time.Second); err == nil {
+	if err := probeDaemon(ctx, server.URL, time.Second, daemonProbeInterval); err == nil {
 		t.Fatal("expected unhealthy status to fail readiness probe")
 	}
 }

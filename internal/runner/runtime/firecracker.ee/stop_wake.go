@@ -40,8 +40,12 @@ func (r *Runtime) StopSandbox(ctx context.Context, sandboxID string) error {
 	defer r.endTransition(state)
 
 	r.mu.Lock()
-	stopped, running := state.stopped, state.running
+	stopped, running, code := state.stopped, state.running, state.code
 	r.mu.Unlock()
+	if code {
+		// A stop would write its snapshot over the shared golden code snapshot.
+		return errCodeSandboxNoStop
+	}
 	if stopped {
 		return nil
 	}
@@ -142,12 +146,14 @@ func (r *Runtime) ensureSandboxRunningOnce(ctx context.Context, sandboxID string
 	defer r.endTransition(state)
 
 	r.mu.Lock()
-	running, stopped, recovering := state.running, state.stopped, state.mustColdBoot
+	running, stopped, recovering, code := state.running, state.stopped, state.mustColdBoot, state.code
 	r.mu.Unlock()
 	if running {
 		return false, nil
 	}
-	if !stopped {
+	if !stopped || code {
+		// A code sandbox whose guest died is gone: a cold boot would bring back a
+		// daemon without its tasks, as a Docker code sandbox does not restart.
 		return false, runnerruntime.ErrSandboxNotRunning
 	}
 
@@ -284,7 +290,11 @@ func (r *Runtime) activateSandboxVM(ctx context.Context, state *sandboxState, t 
 	if abandoned {
 		return errActivationAbandoned
 	}
-	if err := t.step(stepProbeDaemon, func() error { return r.deps.probeDaemon(ctx, state.daemonURL) }); err != nil {
+	probe := r.deps.probeDaemon
+	if state.code {
+		probe = r.deps.probeCodeDaemon
+	}
+	if err := t.step(stepProbeDaemon, func() error { return probe(ctx, state.daemonURL) }); err != nil {
 		return fmt.Errorf("connect to firecracker daemon: %w", err)
 	}
 	return nil

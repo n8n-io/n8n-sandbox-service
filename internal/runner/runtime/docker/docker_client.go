@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -93,7 +94,7 @@ func sandboxAttachment(inspect *containerInspect) (network, ip string) {
 
 type dockerBackend interface {
 	ping(ctx context.Context) error
-	createContainer(ctx context.Context, sandboxID, containerName, image, network string, limits *ResourceLimits, enableCgroups bool) (string, error)
+	createContainer(ctx context.Context, sandboxID, containerName, image, network string, limits *ResourceLimits, enableCgroups bool, extraEnv []string) (string, error)
 	startContainer(ctx context.Context, containerID string) error
 	stopContainer(ctx context.Context, containerID string) error
 	removeContainer(ctx context.Context, containerID string) error
@@ -102,7 +103,7 @@ type dockerBackend interface {
 	inspectNetwork(ctx context.Context, name string) (*networkInspect, error)
 	findContainerByLabels(ctx context.Context, filterArgs ...string) ([]string, error)
 	pullImage(ctx context.Context, image string) error
-	watchContainerDeaths(ctx context.Context, onDie func(containerID, sandboxID string)) error
+	watchContainerDeaths(ctx context.Context, since time.Time, onDie func(containerID, sandboxID string)) error
 	run(ctx context.Context, args ...string) (string, error)
 }
 
@@ -142,8 +143,8 @@ func (dc *dockerClient) ping(ctx context.Context) error {
 	return err
 }
 
-func (dc *dockerClient) createContainer(ctx context.Context, sandboxID, containerName, image, network string, limits *ResourceLimits, enableCgroups bool) (string, error) {
-	args := dockerContainerCreateArgs(sandboxID, containerName, image, network, limits, enableCgroups)
+func (dc *dockerClient) createContainer(ctx context.Context, sandboxID, containerName, image, network string, limits *ResourceLimits, enableCgroups bool, extraEnv []string) (string, error) {
+	args := dockerContainerCreateArgs(sandboxID, containerName, image, network, limits, enableCgroups, extraEnv...)
 
 	out, err := dc.run(ctx, args...)
 	if err != nil {
@@ -152,12 +153,18 @@ func (dc *dockerClient) createContainer(ctx context.Context, sandboxID, containe
 	return strings.TrimSpace(out), nil
 }
 
-func dockerContainerCreateArgs(sandboxID, containerName, image, network string, limits *ResourceLimits, enableCgroups bool) []string {
+func dockerContainerCreateArgs(sandboxID, containerName, image, network string, limits *ResourceLimits, enableCgroups bool, extraEnv ...string) []string {
+	restart := "unless-stopped"
+	if isCodeSandboxEnv(extraEnv) {
+		// A code sandbox that dies is gone: the client deletes it and creates
+		// another. A restart would bring back a daemon without its tasks.
+		restart = "no"
+	}
 	args := []string{
 		"container", "create",
 		"--name", containerName,
 		"--hostname", "sandbox",
-		"--restart", "unless-stopped",
+		"--restart", restart,
 		"--network", network,
 		"--label", containerLabelManaged + "=" + containerLabelManagedVal,
 		"--label", containerLabelSandboxID + "=" + sandboxID,
@@ -166,6 +173,10 @@ func dockerContainerCreateArgs(sandboxID, containerName, image, network string, 
 		// user commands see.
 		"--env", "HOME=/home/user",
 		"--env", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+	}
+	// Later --env flags win, so extraEnv can override the defaults above.
+	for _, e := range extraEnv {
+		args = append(args, "--env", e)
 	}
 	args = append(args, dockerSandboxSecurityArgs()...)
 	args = append(args,
@@ -303,15 +314,12 @@ func (dc *dockerClient) pullImage(ctx context.Context, image string) error {
 //
 // The filters are the daemon's, not ours: asking it for die events on managed
 // containers means the runner is not woken for every image pull and exec on the
-// host. Callers get the events from the moment this connects — a death during a
-// reconnect is not replayed, which is why the wake path still repairs a container
-// it finds restarted rather than trusting the event alone.
-func (dc *dockerClient) watchContainerDeaths(ctx context.Context, onDie func(containerID, sandboxID string)) error {
-	cmd := exec.CommandContext(ctx, "docker", "events",
-		"--filter", "type=container",
-		"--filter", "event=die",
-		"--filter", managedLabelFilter,
-		"--format", "{{json .}}")
+// host. Callers get the events from since, which the daemon replays, so the time
+// the CLI takes to connect leaves no gap. A death before since is not replayed,
+// which is why the wake path still repairs a container it finds restarted rather
+// than trusting the event alone.
+func (dc *dockerClient) watchContainerDeaths(ctx context.Context, since time.Time, onDie func(containerID, sandboxID string)) error {
+	cmd := exec.CommandContext(ctx, "docker", dockerEventsArgs(since)...)
 	cmd.Env = append(os.Environ(), "DOCKER_HOST="+dc.host)
 
 	stdout, err := cmd.StdoutPipe()
@@ -343,6 +351,17 @@ func (dc *dockerClient) watchContainerDeaths(ctx context.Context, onDie func(con
 		return fmt.Errorf("read docker events: %w", scanErr)
 	}
 	return fmt.Errorf("docker events exited: %s: %w", strings.TrimSpace(stderr.String()), waitErr)
+}
+
+// dockerEventsArgs returns the docker events arguments for the death watcher.
+// since is in seconds with nanoseconds, the most precise form Docker accepts.
+func dockerEventsArgs(since time.Time) []string {
+	return []string{"events",
+		"--since", fmt.Sprintf("%d.%09d", since.Unix(), since.Nanosecond()),
+		"--filter", "type=container",
+		"--filter", "event=die",
+		"--filter", managedLabelFilter,
+		"--format", "{{json .}}"}
 }
 
 func firstGateway(inspect *networkInspect) string {
@@ -403,4 +422,15 @@ func isDockerNotFound(err error) bool {
 		strings.Contains(msg, "no such network") ||
 		strings.Contains(msg, "no such image") ||
 		strings.Contains(msg, "not found")
+}
+
+// isCodeSandboxEnv reports whether the extra environment configures a code
+// daemon (see codeDaemonEnv).
+func isCodeSandboxEnv(env []string) bool {
+	for _, e := range env {
+		if strings.HasPrefix(e, "CODE_DAEMON_") {
+			return true
+		}
+	}
+	return false
 }

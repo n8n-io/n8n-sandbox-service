@@ -54,6 +54,14 @@ Invariants (rationale in the code comments of `stop_wake.go`, `crash.go`, `netwo
 
 The guest daemon is PID 1 with `panic=1 reboot=k`, and jailer execs Firecracker in place, so a guest dying ends the process the runner is waiting on. The runner tears the sandbox down and releases its slot, leaving it stopped with files intact. It is never restored from its now-stale snapshot (a memory image whose cached filesystem metadata predates later disk writes corrupts the rootfs silently); instead the next request cold boots the existing rootfs with the boot parameters recorded in `boot.json`, and is answered with `409 sandbox_restarted` ([API.md](../../../../docs/API.md#http-409-sandbox_restarted--the-sandbox-came-back-without-its-memory)). `boot.go` replays the same five Firecracker API calls `create-golden-snapshot.sh` uses. Behavior and metrics: [architecture.md](../../../../docs/architecture.md#recovering-a-crashed-guest), [observability.md](../../../../docs/observability.md#runner-guest-deaths).
 
+## Code sandboxes (Task API)
+
+`scripts/firecracker.ee/build-code-snapshot.sh` builds a rootfs from the code sandbox image and a golden code snapshot. In it, `code-init` (`cmd/code-init.ee`) is PID 1: it mounts the kernel file systems, starts the code daemon as uid 1000 in the cgroup `/sys/fs/cgroup/code` and reaps orphans. The snapshot is taken when the daemon is healthy, so a restored sandbox already has its spare worker. A create must use the options in `code.json`.
+
+A code sandbox clones only the rootfs. It bind-mounts the golden `snapshot_mem` and `snapshot_state` read-only: Firecracker maps the memory `MAP_PRIVATE`, so all code sandboxes share its page cache. Code sandboxes cannot be stopped, and one whose guest died is not woken or cold booted: its daemon URL reports not running until it is deleted.
+
+Limits: the code rootfs and the code snapshot must be rebuilt together (the runner does not check that they match). All code sandboxes resume the same worker process, so they start with the same in-process random state (`Math.random`, OpenSSL) and with the wall clock of the snapshot.
+
 ## Resource limits
 
 CPU, memory and disk are fixed when the golden snapshot and `rootfs.ext4` are built, not by runner env vars: `VCPUS`/`MEM_MIB` in `create-golden-snapshot.sh`, `FIRECRACKER_ROOTFS_SIZE_MB` (default 2048) in `build-rootfs-template.sh`. Each sandbox gets a sparse copy of the rootfs; filling it yields ENOSPC in the guest. Rebuild on the host to change limits.

@@ -17,3 +17,26 @@ export type {
   MoveFileRequest,
   DeleteFileOptions,
 } from "./types";
+export {
+  CodeSandboxClient,
+  CodeTaskTransportError,
+  readNdjson,
+  NDJSON_MAX_LINE_CHARS,
+  RPC_RESULT_MAX_BYTES,
+} from "./code";
+export type {
+  CodeSandboxClientOptions,
+  CreateCodeSandboxOptions,
+  CodeSandbox,
+  CodeSandboxTimings,
+  CodeTaskSpec,
+  CodeTaskInput,
+  CodeTaskOutput,
+  CodeTaskEvent,
+  CodeTaskRpcEvent,
+  CodeTaskDoneEvent,
+  CodeTaskErrorEvent,
+  CodeTaskErrorCode,
+  RunCodeTaskOptions,
+  RpcReply,
+} from "./code";
