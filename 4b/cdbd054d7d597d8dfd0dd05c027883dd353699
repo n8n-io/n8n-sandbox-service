@@ -1,0 +1,22 @@
+internal/api/store/migrations_postgres.go
+  h_8fb27e0cdf6d1e 19,74-81
+internal/api/store/migrations_sqlite.go
+  h_8fb27e0cdf6d1e 34-35,37,39
+internal/api/store/postgres.go
+  h_8fb27e0cdf6d1e 63-65
+internal/api/store/postgres_integration_test.go
+  h_8fb27e0cdf6d1e 7,12,68-118
+internal/api/store/store_test.go
+  h_8fb27e0cdf6d1e 109,118-119,229-249
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4bcdbd054d7d597d8dfd0dd05c027883dd353699",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
