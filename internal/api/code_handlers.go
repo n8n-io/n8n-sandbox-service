@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/store"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/obs"
+	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 )
 
 // codeTaskMaxBodyBytes bounds a task request at the API: 1 GiB of input
@@ -35,13 +37,26 @@ const (
 	defaultCodeTaskMemoryMB = 512
 )
 
+// codeDrainGraceSeconds is how long a draining sandbox must have no request
+// before the sweeper deletes it. It lets the client read the outputs of a task
+// that just ended.
+const codeDrainGraceSeconds = 2
+
+// minCodeLifetimeMs is the smallest idleTimeoutMs and maxAgeMs.
+const minCodeLifetimeMs = 1000
+
+var codeNameRegex = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,128}$`)
+
 type createCodeSandboxRequest struct {
-	Runtime      string            `json:"runtime"`
-	Slots        int               `json:"slots"`
-	TaskMemoryMB int               `json:"taskMemoryMb"`
-	SpareWorkers *bool             `json:"spareWorkers"`
-	ReuseWorkers bool              `json:"reuseWorkers"`
-	Labels       map[string]string `json:"labels"`
+	Name          string            `json:"name"`
+	Runtime       string            `json:"runtime"`
+	Slots         int               `json:"slots"`
+	TaskMemoryMB  int               `json:"taskMemoryMb"`
+	SpareWorkers  *bool             `json:"spareWorkers"`
+	ReuseWorkers  bool              `json:"reuseWorkers"`
+	IdleTimeoutMs int64             `json:"idleTimeoutMs"`
+	MaxAgeMs      int64             `json:"maxAgeMs"`
+	Labels        map[string]string `json:"labels"`
 }
 
 type codeCreateTimings struct {
@@ -60,7 +75,10 @@ type codeCreateTimings struct {
 }
 
 type codeSandboxResponse struct {
-	ID             string `json:"id"`
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
+	// Created is false when the name already had a current sandbox (create only).
+	Created        *bool  `json:"created,omitempty"`
 	Runtime        string `json:"runtime"`
 	RuntimeVersion string `json:"runtimeVersion"`
 	Slots          int    `json:"slots"`
@@ -155,10 +173,11 @@ func (c *codeAPI) register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/code/sandboxes", c.handleCreate)
 	mux.HandleFunc("GET /v1/code/sandboxes/{id}", c.handleGet)
 	mux.HandleFunc("DELETE /v1/code/sandboxes/{id}", c.handleDelete)
-	mux.HandleFunc("POST /v1/code/sandboxes/{id}/tasks", c.proxy(codeTaskMaxBodyBytes))
-	mux.HandleFunc("GET /v1/code/sandboxes/{id}/tasks/{taskId}/outputs/{path...}", c.proxy(0))
-	mux.HandleFunc("DELETE /v1/code/sandboxes/{id}/tasks/{taskId}", c.proxy(0))
-	mux.HandleFunc("POST /v1/code/sandboxes/{id}/tasks/{taskId}/rpc/{callId}", c.proxy(codeRPCResultMaxBodyBytes))
+	mux.HandleFunc("DELETE /v1/code/sandboxes/names/{name}", c.handleDeleteByName)
+	mux.HandleFunc("POST /v1/code/sandboxes/{id}/tasks", c.proxy(codeTaskMaxBodyBytes, true))
+	mux.HandleFunc("GET /v1/code/sandboxes/{id}/tasks/{taskId}/outputs/{path...}", c.proxy(0, false))
+	mux.HandleFunc("DELETE /v1/code/sandboxes/{id}/tasks/{taskId}", c.proxy(0, false))
+	mux.HandleFunc("POST /v1/code/sandboxes/{id}/tasks/{taskId}/rpc/{callId}", c.proxy(codeRPCResultMaxBodyBytes, false))
 }
 
 // handleCreate creates a code sandbox. It answers when the code daemon is ready.
@@ -188,11 +207,17 @@ func (c *codeAPI) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	settings, err := c.codeSettings(&req, requested, time.Now())
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	tenantID := store.AdminTenantID
+	var tenant *store.Tenant
 	if authID.Role == roleTenant {
 		tenantID = authID.TenantID
-		tenant, err := c.s.GetTenant(tenantID)
+		tenant, err = c.s.GetTenant(tenantID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -201,6 +226,53 @@ func (c *codeAPI) handleCreate(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusUnauthorized, "invalid API key")
 			return
 		}
+	}
+
+	// One create per name at a time. Concurrent creates of the name wait here,
+	// then get the sandbox of the first one.
+	if req.Name != "" {
+		unlock, err := c.s.LockName(r.Context(), tenantID+"/"+req.Name)
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, "lock sandbox name: "+err.Error())
+			return
+		}
+		defer unlock()
+		cur, err := c.s.GetCurrentByName(tenantID, req.Name)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if cur != nil && codeMaxAgeReached(cur, time.Now()) {
+			// Max age passed before the sweeper saw it: the name moves now.
+			if err := c.s.MarkDraining(cur.ID, time.Now().Unix()); err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			slog.InfoContext(r.Context(), "code sandbox draining", "sandbox_id", cur.ID, "reason", "max_age")
+			cur = nil
+		}
+		if cur != nil {
+			if cur.OptionsKey != settings.OptionsKey {
+				writeError(w, http.StatusConflict, "sandbox name exists with other options")
+				return
+			}
+			created := false
+			obs.FieldsFrom(r.Context()).Add("sandbox_id", cur.ID, "runner_id", cur.RunnerID, "kind", store.KindCode)
+			writeJSON(w, http.StatusOK, codeSandboxResponse{
+				ID:      cur.ID,
+				Name:    cur.Name,
+				Created: &created,
+				Runtime: requested.Runtime,
+				Slots:   requested.Slots,
+				State:   "ready",
+				Timings: &codeCreateTimings{Create: time.Since(t0).Milliseconds()},
+			})
+			success = true
+			return
+		}
+	}
+
+	if tenant != nil {
 		if tenant.MaxSandboxes > 0 {
 			n, err := c.s.CountByTenant(tenantID)
 			if err != nil {
@@ -227,8 +299,16 @@ func (c *codeAPI) handleCreate(w http.ResponseWriter, r *http.Request) {
 		case err != nil:
 			slog.ErrorContext(r.Context(), "claim pooled code sandbox failed, creating instead", "error", err)
 		case rec != nil:
+			if err := c.s.SetCodeSettings(rec.ID, settings); err != nil {
+				// The claimed sandbox has no name now. The idle sweeper deletes it.
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			created := true
 			resp := codeSandboxResponse{
 				ID:             rec.ID,
+				Name:           settings.Name,
+				Created:        &created,
 				Runtime:        requested.Runtime,
 				RuntimeVersion: pool.takeVersion(rec.ID),
 				Slots:          requested.Slots,
@@ -238,7 +318,7 @@ func (c *codeAPI) handleCreate(w http.ResponseWriter, r *http.Request) {
 			}
 			obs.FieldsFrom(r.Context()).Add("sandbox_id", rec.ID, "runner_id", rec.RunnerID, "kind", store.KindCode)
 			slog.InfoContext(r.Context(), "claim pooled code sandbox succeeded",
-				"sandbox_id", rec.ID, "runner_id", rec.RunnerID, "pool", codePoolKey(requested), "labels", req.Labels,
+				"sandbox_id", rec.ID, "name", settings.Name, "runner_id", rec.RunnerID, "pool", codePoolKey(requested), "labels", req.Labels,
 				"claim_ms", claimMs)
 			writeJSON(w, http.StatusCreated, resp)
 			success = true
@@ -255,7 +335,7 @@ func (c *codeAPI) handleCreate(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	record, runnerCreateMs, err := createCodeSandboxOn(r.Context(), c.s, c.cfg, run, requested, tenantID, "")
+	record, runnerCreateMs, err := createCodeSandboxOn(r.Context(), c.s, c.cfg, run, requested, tenantID, "", settings)
 	if err != nil {
 		var ce *codeCreateError
 		if errors.As(err, &ce) {
@@ -268,8 +348,11 @@ func (c *codeAPI) handleCreate(w http.ResponseWriter, r *http.Request) {
 	sandboxID := record.ID
 	obs.FieldsFrom(r.Context()).Add("sandbox_id", sandboxID, "runner_id", run.ID, "kind", store.KindCode)
 
+	created := true
 	resp := codeSandboxResponse{
 		ID:      sandboxID,
+		Name:    settings.Name,
+		Created: &created,
 		Runtime: requested.Runtime,
 		Slots:   requested.Slots,
 		State:   "ready",
@@ -284,10 +367,101 @@ func (c *codeAPI) handleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	resp.Timings.Create = time.Since(t0).Milliseconds()
 	slog.InfoContext(r.Context(), "create code sandbox succeeded",
-		"sandbox_id", sandboxID, "runner_id", run.ID, "runtime", requested.Runtime, "slots", requested.Slots,
+		"sandbox_id", sandboxID, "name", settings.Name, "runner_id", run.ID, "runtime", requested.Runtime, "slots", requested.Slots,
 		"task_memory_mb", requested.TaskMemoryMB, "spare_workers", requested.SpareWorkers, "reuse_workers", requested.ReuseWorkers, "labels", req.Labels,
 		"create_ms", resp.Timings.Create, "runner_create_ms", runnerCreateMs)
 	writeJSON(w, http.StatusCreated, resp)
+	success = true
+}
+
+// codeSettings validates the name and the lifecycle fields of a create request.
+func (c *codeAPI) codeSettings(req *createCodeSandboxRequest, requested runnerruntime.CreateOptions, now time.Time) (store.CodeSettings, error) {
+	s := store.CodeSettings{Name: req.Name, OptionsKey: codePoolKey(requested)}
+	if req.Name != "" && !codeNameRegex.MatchString(req.Name) {
+		return s, errors.New("name must be 1 to 128 characters: letters, digits, '_', '.', ':' or '-'")
+	}
+	if req.IdleTimeoutMs < 0 || (req.IdleTimeoutMs > 0 && req.IdleTimeoutMs < minCodeLifetimeMs) {
+		return s, fmt.Errorf("idleTimeoutMs must be 0 or at least %d", minCodeLifetimeMs)
+	}
+	if req.MaxAgeMs < 0 || (req.MaxAgeMs > 0 && req.MaxAgeMs < minCodeLifetimeMs) {
+		return s, fmt.Errorf("maxAgeMs must be 0 or at least %d", minCodeLifetimeMs)
+	}
+	s.IdleTimeoutMs = req.IdleTimeoutMs
+	// The configured idle window is the upper bound.
+	if limit := c.cfg.CodeIdleDeleteAfter.Milliseconds(); limit > 0 && s.IdleTimeoutMs > limit {
+		s.IdleTimeoutMs = limit
+	}
+	if req.MaxAgeMs > 0 {
+		s.DrainAt = now.Unix() + idleSeconds(time.Duration(req.MaxAgeMs)*time.Millisecond)
+	}
+	if len(req.Labels) > 0 {
+		b, err := json.Marshal(req.Labels)
+		if err != nil {
+			return s, err
+		}
+		s.Labels = string(b)
+	}
+	return s, nil
+}
+
+// codeMaxAgeReached reports whether the max age of rec has passed.
+func codeMaxAgeReached(rec *store.SandboxRecord, now time.Time) bool {
+	return rec.DrainAt > 0 && now.Unix() >= rec.DrainAt
+}
+
+// codeDraining reports whether rec takes no new tasks.
+func codeDraining(rec *store.SandboxRecord, now time.Time) bool {
+	return rec.DrainingSince > 0 || codeMaxAgeReached(rec, now)
+}
+
+// handleDeleteByName deletes all sandboxes of a name, also the draining ones.
+// A later create of the name gets a new sandbox.
+func (c *codeAPI) handleDeleteByName(w http.ResponseWriter, r *http.Request) {
+	success := false
+	defer func() { c.rec.ObserveSandboxOp(metrics.OpDelete, success) }()
+	authID, ok := authFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "invalid API key")
+		return
+	}
+	if authID.Role != roleAdmin && authID.Role != roleTenant {
+		writeError(w, http.StatusForbidden, "sandbox access requires an admin or tenant API key")
+		return
+	}
+	name := r.PathValue("name")
+	if !codeNameRegex.MatchString(name) {
+		writeError(w, http.StatusBadRequest, "invalid sandbox name")
+		return
+	}
+	tenantID := store.AdminTenantID
+	if authID.Role == roleTenant {
+		tenantID = authID.TenantID
+	}
+	records, err := c.s.ListByName(tenantID, name)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	tlsCfg := runnerControlTLS(c.cfg)
+	var failed error
+	for _, rec := range records {
+		lockErr := withLockedSandbox(r.Context(), c.s, rec.ID, func(cur *store.SandboxRecord) {
+			if cur.Kind != store.KindCode || cur.Name != name || !canAccessSandbox(r, cur) {
+				return
+			}
+			if _, err := deleteIdleSandbox(r.Context(), c.s, c.reg, c.cfg, tlsCfg, cur, time.Now(), "code_delete_by_name"); err != nil {
+				failed = err
+			}
+		})
+		if lockErr != nil {
+			failed = lockErr
+		}
+	}
+	if failed != nil {
+		writeError(w, http.StatusBadGateway, "failed to delete sandbox: "+failed.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 	success = true
 }
 
@@ -365,12 +539,17 @@ func (c *codeAPI) handleGet(w http.ResponseWriter, r *http.Request) {
 	}
 	busy := st.BusySlots
 	started := st.WorkersStarted
+	state := st.Status
+	if codeDraining(rec, time.Now()) {
+		state = "draining"
+	}
 	writeJSON(w, http.StatusOK, codeSandboxResponse{
 		ID:                 rec.ID,
+		Name:               rec.Name,
 		Runtime:            st.Runtime,
 		RuntimeVersion:     st.RuntimeVersion,
 		Slots:              st.Slots,
-		State:              st.Status,
+		State:              state,
 		BusySlots:          &busy,
 		WorkersStarted:     &started,
 		CPUUsageUsec:       &st.CPUUsageUsec,
@@ -412,12 +591,18 @@ var (
 
 // proxy forwards a Task API request to the runner, which forwards it to the
 // code daemon. A route with a body limit may run for a long time: task
-// requests and large RPC results.
-func (c *codeAPI) proxy(maxBody int64) http.HandlerFunc {
+// requests and large RPC results. With newTask, a draining sandbox answers 410
+// before the body is read. Running tasks of a draining sandbox keep their
+// other routes.
+func (c *codeAPI) proxy(maxBody int64, newTask bool) http.HandlerFunc {
 	longLived := maxBody > 0
 	return func(w http.ResponseWriter, r *http.Request) {
 		rec := c.lookupCode(w, r)
 		if rec == nil {
+			return
+		}
+		if newTask && codeDraining(rec, time.Now()) {
+			writeError(w, http.StatusGone, "code sandbox is draining")
 			return
 		}
 		if taskID := r.PathValue("taskId"); taskID != "" && !codeTaskIDRegex.MatchString(taskID) {
@@ -475,21 +660,20 @@ func (c *codeAPI) proxy(maxBody int64) http.HandlerFunc {
 	}
 }
 
-// StartCodeIdleSweeper deletes code sandboxes that have had no Task API request
-// for cfg.CodeIdleDeleteAfter. It removes the sandboxes
-// that a crashed client left behind.
+// StartCodeIdleSweeper runs the lifecycle of code sandboxes:
+//   - It deletes a sandbox that has had no Task API request for its idle
+//     timeout (idleTimeoutMs, else cfg.CodeIdleDeleteAfter). This removes the
+//     sandboxes that a crashed client left behind.
+//   - It marks a sandbox as draining when its max age (maxAgeMs) has passed,
+//     and deletes a draining sandbox when no request uses it.
 func StartCodeIdleSweeper(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig) {
 	activity := codeActivityTracker
 	window := cfg.CodeIdleDeleteAfter
-	if window <= 0 {
-		slog.Info("code sandbox idle sweeper disabled")
-		return
+	interval := 5 * time.Second
+	if window > 0 && window/4 < interval {
+		interval = max(window/4, time.Second)
 	}
-	interval := min(window/4, 30*time.Second)
-	if interval < time.Second {
-		interval = time.Second
-	}
-	slog.Info("code sandbox idle sweeper enabled", "idle_delete_after", window.String(), "interval", interval.String())
+	slog.Info("code sandbox sweeper enabled", "idle_delete_after", window.String(), "interval", interval.String())
 	tlsCfg := runnerControlTLS(cfg)
 	go func() {
 		t := time.NewTicker(interval)
@@ -511,25 +695,56 @@ func sweepIdleCodeSandboxes(ctx context.Context, s store.SandboxStore, reg regis
 		slog.Error("code idle sweep: list sandboxes", "err", err)
 		return
 	}
-	cutoff := now.Unix() - idleSeconds(window)
 	// The pool manager owns pooled sandboxes, which get no activity. Without a
 	// manager (pools removed from the config), they are idle like any other.
 	poolActive := activeCodePool.Load() != nil
-	skip := func(r *store.SandboxRecord) bool {
-		return r.Kind != store.KindCode || (poolActive && r.TenantID == store.PoolTenantID) || r.LastActiveAt > cutoff || activity.busy(r.ID)
+	action := func(r *store.SandboxRecord) string {
+		if r.Kind != store.KindCode || (poolActive && r.TenantID == store.PoolTenantID) {
+			return ""
+		}
+		return codeSweepAction(r, activity, window, now)
 	}
 	for _, rec := range records {
 		if ctx.Err() != nil {
 			return
 		}
-		if skip(rec) {
+		if action(rec) == "" {
 			continue
 		}
 		_ = withLockedSandbox(ctx, s, rec.ID, func(cur *store.SandboxRecord) {
-			if skip(cur) {
-				return
+			switch a := action(cur); a {
+			case "drain":
+				if err := s.MarkDraining(cur.ID, now.Unix()); err != nil {
+					slog.Error("code sweep: mark draining", "sandbox_id", cur.ID, "err", err)
+					return
+				}
+				slog.Info("code sandbox draining", "sandbox_id", cur.ID, "name", cur.Name, "reason", "max_age")
+			case "code_idle", "code_drained":
+				_, _ = deleteIdleSandbox(ctx, s, reg, cfg, tlsCfg, cur, now, a)
 			}
-			_, _ = deleteIdleSandbox(ctx, s, reg, cfg, tlsCfg, cur, now, "code_idle")
 		})
 	}
+}
+
+// codeSweepAction returns what the sweeper does with a code sandbox: "drain"
+// (max age passed), "code_idle" (idle timeout passed), "code_drained" (draining
+// and unused), or "" (nothing).
+func codeSweepAction(r *store.SandboxRecord, activity *codeActivity, defaultIdle time.Duration, now time.Time) string {
+	if r.DrainingSince == 0 && codeMaxAgeReached(r, now) {
+		return "drain"
+	}
+	if activity.busy(r.ID) {
+		return ""
+	}
+	idle := defaultIdle
+	if r.IdleTimeoutMs > 0 {
+		idle = time.Duration(r.IdleTimeoutMs) * time.Millisecond
+	}
+	if idle > 0 && r.LastActiveAt <= now.Unix()-idleSeconds(idle) {
+		return "code_idle"
+	}
+	if r.DrainingSince > 0 && r.LastActiveAt <= now.Unix()-codeDrainGraceSeconds {
+		return "code_drained"
+	}
+	return ""
 }

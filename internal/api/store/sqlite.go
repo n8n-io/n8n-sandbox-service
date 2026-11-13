@@ -17,6 +17,7 @@ import (
 type SQLiteStore struct {
 	db           *sql.DB
 	sandboxLocks [64]chan struct{}
+	nameLocks    [64]chan struct{}
 }
 
 // NewSQLite opens (or creates) the SQLite database at dbPath, runs schema migrations,
@@ -55,6 +56,12 @@ func NewSQLite(dbPath string) (*SQLiteStore, error) {
 		{sql: sqliteAddEgressCol, name: "egress"},
 		{sql: sqliteAddKindCol, name: "kind"},
 		{sql: sqliteAddPoolKeyCol, name: "pool_key"},
+		{sql: sqliteAddNameCol, name: "name"},
+		{sql: sqliteAddOptionsKeyCol, name: "options_key"},
+		{sql: sqliteAddLabelsCol, name: "labels"},
+		{sql: sqliteAddIdleTimeoutMsCol, name: "idle_timeout_ms"},
+		{sql: sqliteAddDrainAtCol, name: "drain_at"},
+		{sql: sqliteAddDrainingSinceCol, name: "draining_since"},
 	} {
 		if _, err := db.Exec(stmt.sql); err != nil {
 			if strings.Contains(err.Error(), "duplicate column") ||
@@ -79,11 +86,18 @@ func NewSQLite(dbPath string) (*SQLiteStore, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: pool index: %w", err)
 	}
+	if _, err := db.Exec(sqliteNameIndex); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: name index: %w", err)
+	}
 
 	slog.Debug("store: opened sqlite database", "path", dbPath)
 	store := &SQLiteStore{db: db}
 	for i := range store.sandboxLocks {
 		store.sandboxLocks[i] = make(chan struct{}, 1)
+	}
+	for i := range store.nameLocks {
+		store.nameLocks[i] = make(chan struct{}, 1)
 	}
 	return store, nil
 }
@@ -117,7 +131,7 @@ func (s *SQLiteStore) Backend() Backend { return BackendSQLite }
 
 func (s *SQLiteStore) Close() error { return s.db.Close() }
 
-const sqliteSandboxCols = `id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral, egress, kind, pool_key`
+const sqliteSandboxCols = `id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral, egress, kind, pool_key, name, options_key, labels, idle_timeout_ms, drain_at, draining_since`
 
 type sqliteExecer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
@@ -126,9 +140,9 @@ type sqliteExecer interface {
 func (s *SQLiteStore) insertSandbox(e sqliteExecer, record *SandboxRecord) error {
 	const q = `
 		INSERT INTO sandboxes
-			(id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral, egress, kind, pool_key)
+			(` + sqliteSandboxCols + `)
 		VALUES
-			(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	_, err := e.ExecContext(context.Background(), q,
 		record.ID,
@@ -147,6 +161,12 @@ func (s *SQLiteStore) insertSandbox(e sqliteExecer, record *SandboxRecord) error
 		record.Egress,
 		record.Kind,
 		record.PoolKey,
+		record.Name,
+		record.OptionsKey,
+		record.Labels,
+		record.IdleTimeoutMs,
+		record.DrainAt,
+		record.DrainingSince,
 	)
 	if err != nil {
 		return fmt.Errorf("store: create sandbox %s: %w", record.ID, err)
@@ -395,6 +415,50 @@ func (s *SQLiteStore) UnpoolSandbox(id string) (bool, error) {
 func (s *SQLiteStore) ListPooled() ([]*SandboxRecord, error) {
 	q := `SELECT ` + sqliteSandboxCols + ` FROM sandboxes WHERE tenant_id = ? ORDER BY created_at, id`
 	return s.querySandboxRecords(q, PoolTenantID)
+}
+
+func (s *SQLiteStore) GetCurrentByName(tenantID, name string) (*SandboxRecord, error) {
+	q := `SELECT ` + sqliteSandboxCols + ` FROM sandboxes WHERE tenant_id = ? AND name = ? AND name <> '' AND draining_since = 0`
+	rec, err := scanRecord(s.db.QueryRow(q, tenantID, name))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("store: get sandbox by name: %w", err)
+	}
+	return rec, nil
+}
+
+func (s *SQLiteStore) ListByName(tenantID, name string) ([]*SandboxRecord, error) {
+	q := `SELECT ` + sqliteSandboxCols + ` FROM sandboxes WHERE tenant_id = ? AND name = ? AND name <> '' ORDER BY created_at, id`
+	return s.querySandboxRecords(q, tenantID, name)
+}
+
+func (s *SQLiteStore) SetCodeSettings(id string, n CodeSettings) error {
+	const q = `UPDATE sandboxes SET name = ?, options_key = ?, labels = ?, idle_timeout_ms = ?, drain_at = ?, draining_since = 0 WHERE id = ?`
+	if _, err := s.db.Exec(q, n.Name, n.OptionsKey, n.Labels, n.IdleTimeoutMs, n.DrainAt, id); err != nil {
+		return fmt.Errorf("store: set name of sandbox %s: %w", id, err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) MarkDraining(id string, now int64) error {
+	if _, err := s.db.Exec(`UPDATE sandboxes SET draining_since = ? WHERE id = ? AND draining_since = 0`, now, id); err != nil {
+		return fmt.Errorf("store: mark sandbox %s draining: %w", id, err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) LockName(ctx context.Context, key string) (func(), error) {
+	hash := fnv.New32a()
+	_, _ = hash.Write([]byte(key))
+	lock := s.nameLocks[hash.Sum32()%uint32(len(s.nameLocks))]
+	select {
+	case lock <- struct{}{}:
+		return func() { <-lock }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 func (s *SQLiteStore) CreateTenant(t *Tenant) error {

@@ -60,6 +60,23 @@ type SandboxRecord struct {
 	Egress                string // Outbound network policy: "public" or "none"; fixed at creation
 	Kind                  string // "" for a general sandbox, KindCode for a Task API code sandbox
 	PoolKey               string // option set of a pooled code sandbox; "" when not in the pool
+
+	// Code sandboxes with a client-chosen name (POST /v1/code/sandboxes {name}).
+	Name          string // "" when the sandbox has no name
+	OptionsKey    string // option set of the named sandbox (codePoolKey)
+	Labels        string // JSON object, opaque; for logs only
+	IdleTimeoutMs int64  // 0 = the configured default
+	DrainAt       int64  // unix seconds when max age starts the drain; 0 = no max age
+	DrainingSince int64  // unix seconds; 0 = not draining
+}
+
+// CodeSettings are the name and the lifecycle settings of a code sandbox.
+type CodeSettings struct {
+	Name          string
+	OptionsKey    string
+	Labels        string
+	IdleTimeoutMs int64
+	DrainAt       int64
 }
 
 // KindCode marks a sandbox created through the Task API (/v1/code/sandboxes).
@@ -113,6 +130,22 @@ type SandboxStore interface {
 	// can take it. It reports false when the sandbox is no longer in the pool.
 	UnpoolSandbox(id string) (bool, error)
 
+	// GetCurrentByName returns the code sandbox of tenantID with name that is
+	// not draining, or nil.
+	GetCurrentByName(tenantID, name string) (*SandboxRecord, error)
+	// ListByName returns all code sandboxes of tenantID with name, also the
+	// draining ones.
+	ListByName(tenantID, name string) ([]*SandboxRecord, error)
+	// SetCodeSettings sets the name and the lifecycle settings of a code
+	// sandbox, for example after a claim from the pool.
+	SetCodeSettings(id string, n CodeSettings) error
+	// MarkDraining marks the sandbox as draining. Its name is then free for a
+	// new sandbox.
+	MarkDraining(id string, now int64) error
+	// LockName serializes the creates of one name. The key space is separate
+	// from LockSandbox.
+	LockName(ctx context.Context, key string) (unlock func(), err error)
+
 	CreateTenant(t *Tenant) error
 	// CreateTenantWithAPIKey inserts the tenant and its first API key in one transaction.
 	// k.TenantID must equal t.ID.
@@ -153,6 +186,12 @@ func scanRecord(row scanner) (*SandboxRecord, error) {
 		&r.Egress,
 		&r.Kind,
 		&r.PoolKey,
+		&r.Name,
+		&r.OptionsKey,
+		&r.Labels,
+		&r.IdleTimeoutMs,
+		&r.DrainAt,
+		&r.DrainingSince,
 	)
 	if err != nil {
 		return nil, err

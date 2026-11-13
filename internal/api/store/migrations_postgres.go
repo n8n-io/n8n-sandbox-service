@@ -71,5 +71,17 @@ const postgresAddPoolKeyCol = `ALTER TABLE sandboxes ADD COLUMN IF NOT EXISTS po
 
 const postgresPoolKeyIndex = `CREATE INDEX IF NOT EXISTS sandboxes_pool_idx ON sandboxes (pool_key, created_at)`
 
+const postgresAddNameCols = `
+ALTER TABLE sandboxes ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT '';
+ALTER TABLE sandboxes ADD COLUMN IF NOT EXISTS options_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE sandboxes ADD COLUMN IF NOT EXISTS labels TEXT NOT NULL DEFAULT '';
+ALTER TABLE sandboxes ADD COLUMN IF NOT EXISTS idle_timeout_ms BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE sandboxes ADD COLUMN IF NOT EXISTS drain_at BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE sandboxes ADD COLUMN IF NOT EXISTS draining_since BIGINT NOT NULL DEFAULT 0;
+`
+
+// A name points to at most one sandbox that is not draining.
+const postgresNameIndex = `CREATE UNIQUE INDEX IF NOT EXISTS sandboxes_name_idx ON sandboxes (tenant_id, name) WHERE name <> '' AND draining_since = 0`
+
 // Backfill legacy empty tenant_id to the admin sentinel.
 const postgresBackfillAdminTenantID = `UPDATE sandboxes SET tenant_id = '__admin__' WHERE tenant_id = ''`

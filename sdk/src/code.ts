@@ -21,12 +21,21 @@ export interface CodeSandboxClientOptions {
 }
 
 export interface CreateCodeSandboxOptions {
+  /**
+   * Client-chosen name. A create with the name of a current sandbox returns
+   * that sandbox (`created: false`).
+   */
+  name?: string;
   runtime?: string;
   slots?: number;
   taskMemoryMb?: number;
   spareWorkers?: boolean;
   /** Run all tasks in one shared worker process. The slots limit how many run at the same time. */
   reuseWorkers?: boolean;
+  /** No task request for this time: the service deletes the sandbox. */
+  idleTimeoutMs?: number;
+  /** After this time the sandbox drains: new tasks get 410. */
+  maxAgeMs?: number;
   labels?: Record<string, string>;
   signal?: AbortSignal;
 }
@@ -40,6 +49,9 @@ export interface CodeSandboxTimings {
 
 export interface CodeSandbox {
   id: string;
+  name?: string;
+  /** Create only: false when the name already had a current sandbox. */
+  created?: boolean;
   runtime: string;
   runtimeVersion: string;
   slots: number;
@@ -174,6 +186,11 @@ export class CodeSandboxClient {
       if (e instanceof SandboxServiceError && e.status === 404) return;
       throw e;
     }
+  }
+
+  /** Deletes all sandboxes of the name, also draining ones. */
+  async deleteSandboxesByName(name: string): Promise<void> {
+    await this.json("DELETE", `v1/code/sandboxes/names/${encodeURIComponent(name)}`);
   }
 
   /**

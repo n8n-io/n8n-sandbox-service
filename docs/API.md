@@ -782,10 +782,16 @@ delete code sandboxes too (`"kind": "code"`). The exec, file, `mkdir` and `stat`
 routes answer `404` for a code sandbox. The
 Task API routes answer `404` for a general sandbox.
 
-The API deletes a code sandbox that has had no Task API request for
-`SANDBOX_CODE_IDLE_DELETE_AFTER` (default `2m`). A running request (for example
-a task stream) counts as activity. The count of running requests is in the
-memory of the API process.
+The API deletes a code sandbox that has had no Task API request for its
+`idleTimeoutMs`, else for `SANDBOX_CODE_IDLE_DELETE_AFTER` (default `2m`). A
+running request (for example a task stream) counts as activity. The count of
+running requests is in the memory of the API process.
+
+When the `maxAgeMs` of a sandbox has passed, the sandbox drains: new tasks get
+`410`, running tasks and their RPC, output and cancel routes keep working, and
+its name is free for a new sandbox. The API deletes a draining sandbox when no
+request has used it for 2 seconds. The sweeper runs every 5 seconds (or every
+quarter of `SANDBOX_CODE_IDLE_DELETE_AFTER`, if that is shorter).
 
 ### POST /v1/code/sandboxes
 
@@ -793,26 +799,39 @@ Creates a code sandbox. The response comes when the code daemon is ready. When
 `spareWorkers` is `true`, at least one worker has loaded the runtime.
 
 ```json
-{ "runtime": "n8n-js", "slots": 2, "taskMemoryMb": 512, "spareWorkers": true, "labels": { "scope": "execution" } }
+{ "name": "c1-5f0e…", "runtime": "n8n-js", "slots": 2, "taskMemoryMb": 512, "spareWorkers": true,
+  "idleTimeoutMs": 30000, "maxAgeMs": 60000, "labels": { "scopeType": "execution" } }
 ```
 
 | Field | Default | Rules |
 |---|---|---|
+| `name` | — | Optional. Chosen by the client. Matches `^[A-Za-z0-9_.:-]{1,128}$`. Points to at most one sandbox of the tenant that is not draining. See below |
+| `idleTimeoutMs` | `SANDBOX_CODE_IDLE_DELETE_AFTER` | `0`, or at least `1000`. Capped at `SANDBOX_CODE_IDLE_DELETE_AFTER` when that is set |
+| `maxAgeMs` | none | `0` (none), or at least `1000`. Counts from the create or the claim |
 | `runtime` | `n8n-js` | An entry of `/etc/code-runtime/runtimes.json` in the image. The n8n image has `n8n-js` and `n8n-py` |
 | `slots` | `1` | 1 to 32 |
 | `taskMemoryMb` | `512` | 64 to 16384, and `slots × taskMemoryMb` at most 16384. The container memory limit is `slots × taskMemoryMb` plus `SANDBOX_RUNNER_CODE_DAEMON_OVERHEAD_MB` |
 | `spareWorkers` | `true` | Each free slot keeps a started worker |
 | `reuseWorkers` | `false` | One shared worker process runs all tasks of the sandbox. The slots limit how many tasks run at the same time. The process, its module cache and global changes stay between tasks. Its heap limit is `slots × taskMemoryMb` |
-| `labels` | — | Logged only |
+| `labels` | — | Stored and logged only |
 
 Response `201`:
 
 ```json
 {
-  "id": "6f1c…", "runtime": "n8n-js", "runtimeVersion": "2.x.y", "slots": 2, "state": "ready",
+  "id": "6f1c…", "name": "c1-5f0e…", "created": true, "runtime": "n8n-js", "runtimeVersion": "2.x.y", "slots": 2, "state": "ready",
   "timings": { "create": 950, "runnerCreate": 930, "daemonReady": 12, "spareReady": 180 }
 }
 ```
+
+**Names.** If the name has a current sandbox, the API returns it with `200`,
+`"created": false`, no `runtimeVersion` and only `timings.create`. If that
+sandbox has other options (`runtime`, `slots`, `taskMemoryMb`, `spareWorkers`,
+`reuseWorkers`), the API answers `409`. Other fields (`labels`,
+`idleTimeoutMs`, `maxAgeMs`) do not need to match. Concurrent creates of one
+name wait for the first one and get its sandbox. After a delete, max age or idle
+deletion, the next create of the name gets a new sandbox. All other routes use
+the `id`, so a task in a draining sandbox finishes there.
 
 `timings` (ms): `create` is the full API time. `runnerCreate` is the runner create
 RPC. `daemonReady` and `spareReady` are measured by the code daemon from its own
@@ -839,7 +858,8 @@ all pods can claim.
 
 ### GET /v1/code/sandboxes/{id}
 
-Returns `id`, `runtime`, `runtimeVersion`, `slots`, `state`, `busySlots`,
+Returns `id`, `name`, `runtime`, `runtimeVersion`, `slots`, `state` (`draining`
+after max age), `busySlots`,
 `cpuUsageUsec`, `memoryPeakBytes` and `memoryCurrentBytes` (from the cgroup of
 the sandbox container, since its start; `0` if the daemon cannot read them),
 `uptimeMs` (since the code daemon started) and
@@ -849,6 +869,12 @@ started).
 ### DELETE /v1/code/sandboxes/{id}
 
 Deletes the sandbox and kills all its tasks. `204`.
+
+### DELETE /v1/code/sandboxes/names/{name}
+
+Deletes all sandboxes of the name of the caller's tenant, also the draining
+ones, and kills their tasks. `204`, also when the name has no sandbox. The next
+create of the name gets a new sandbox.
 
 ### POST /v1/code/sandboxes/{id}/tasks
 
@@ -860,7 +886,8 @@ Runs a task. Request: streamed `multipart/form-data`, at most 2200 MiB. Parts:
    example `task.json` or `bin/0`.
 
 The daemon writes each part to disk. It answers `429` before it reads the inputs
-if no slot is free, and `409` if the task id is in use.
+if no slot is free, and `409` if the task id is in use. The API answers `410`
+before it reads the inputs if the sandbox is draining.
 
 Response `200`, `application/x-ndjson`:
 

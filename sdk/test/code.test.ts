@@ -36,6 +36,18 @@ describe("CodeSandboxClient", () => {
     expect(JSON.parse(body)).toEqual({ slots: 2, spareWorkers: true });
   });
 
+  it("deletes the sandboxes of a name", async () => {
+    let seen = "";
+    server = await startTestServer((req, res) => {
+      seen = `${req.method} ${req.url}`;
+      res.writeHead(204);
+      res.end();
+    });
+    const client = new CodeSandboxClient({ baseUrl: server.baseUrl });
+    await client.deleteSandboxesByName("c1:abc");
+    expect(seen).toBe("DELETE /v1/code/sandboxes/names/c1%3Aabc");
+  });
+
   it("streams multipart inputs and reads the event stream", async () => {
     let received = "";
     server = await startTestServer((req, res) => {

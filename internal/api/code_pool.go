@@ -80,7 +80,7 @@ func (e *codeCreateError) Unwrap() error { return e.err }
 // createCodeSandboxOn creates a code sandbox on run and stores its row. The
 // request handler and the pool manager both use it. It returns the record and
 // the time of the runner create RPC in milliseconds.
-func createCodeSandboxOn(ctx context.Context, s store.SandboxStore, cfg *config.APIConfig, run *registry.Runner, requested runnerruntime.CreateOptions, tenantID, poolKey string) (*store.SandboxRecord, int64, error) {
+func createCodeSandboxOn(ctx context.Context, s store.SandboxStore, cfg *config.APIConfig, run *registry.Runner, requested runnerruntime.CreateOptions, tenantID, poolKey string, settings store.CodeSettings) (*store.SandboxRecord, int64, error) {
 	optsJSON, err := json.Marshal(requested)
 	if err != nil {
 		return nil, 0, &codeCreateError{status: http.StatusInternalServerError, msg: err.Error(), err: err}
@@ -127,6 +127,12 @@ func createCodeSandboxOn(ctx context.Context, s store.SandboxStore, cfg *config.
 		Egress:    string(runnerruntime.EgressNone),
 		Kind:      store.KindCode,
 		PoolKey:   poolKey,
+
+		Name:          settings.Name,
+		OptionsKey:    settings.OptionsKey,
+		Labels:        settings.Labels,
+		IdleTimeoutMs: settings.IdleTimeoutMs,
+		DrainAt:       settings.DrainAt,
 	}
 	if err := s.Create(record); err != nil {
 		rollback()
@@ -460,7 +466,7 @@ func (p *codePool) pickRunner() (*registry.Runner, error) {
 }
 
 func (p *codePool) createPooled(ctx context.Context, run *registry.Runner, spec *codePoolSpec) (*store.SandboxRecord, error) {
-	rec, _, err := createCodeSandboxOn(ctx, p.s, p.cfg, run, spec.opts, store.PoolTenantID, spec.key)
+	rec, _, err := createCodeSandboxOn(ctx, p.s, p.cfg, run, spec.opts, store.PoolTenantID, spec.key, store.CodeSettings{})
 	if err != nil {
 		return nil, err
 	}

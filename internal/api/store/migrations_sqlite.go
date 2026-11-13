@@ -37,6 +37,18 @@ const sqliteAddPoolKeyCol = `ALTER TABLE sandboxes ADD COLUMN pool_key TEXT NOT 
 
 const sqlitePoolKeyIndex = `CREATE INDEX IF NOT EXISTS sandboxes_pool_idx ON sandboxes (pool_key, created_at)`
 
+const (
+	sqliteAddNameCol          = `ALTER TABLE sandboxes ADD COLUMN name TEXT NOT NULL DEFAULT ''`
+	sqliteAddOptionsKeyCol    = `ALTER TABLE sandboxes ADD COLUMN options_key TEXT NOT NULL DEFAULT ''`
+	sqliteAddLabelsCol        = `ALTER TABLE sandboxes ADD COLUMN labels TEXT NOT NULL DEFAULT ''`
+	sqliteAddIdleTimeoutMsCol = `ALTER TABLE sandboxes ADD COLUMN idle_timeout_ms INTEGER NOT NULL DEFAULT 0`
+	sqliteAddDrainAtCol       = `ALTER TABLE sandboxes ADD COLUMN drain_at INTEGER NOT NULL DEFAULT 0`
+	sqliteAddDrainingSinceCol = `ALTER TABLE sandboxes ADD COLUMN draining_since INTEGER NOT NULL DEFAULT 0`
+)
+
+// A name points to at most one sandbox that is not draining.
+const sqliteNameIndex = `CREATE UNIQUE INDEX IF NOT EXISTS sandboxes_name_idx ON sandboxes (tenant_id, name) WHERE name <> '' AND draining_since = 0`
+
 // Backfill legacy empty tenant_id to the admin sentinel.
 const sqliteBackfillAdminTenantID = `UPDATE sandboxes SET tenant_id = '__admin__' WHERE tenant_id = ''`
 

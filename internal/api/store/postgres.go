@@ -68,6 +68,14 @@ func NewPostgres(cfg config.PostgresConfig) (*PostgresStore, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: pool index: %w", err)
 	}
+	if _, err := db.Exec(postgresAddNameCols); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: add name columns: %w", err)
+	}
+	if _, err := db.Exec(postgresNameIndex); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: name index: %w", err)
+	}
 	if _, err := db.Exec(postgresSandboxTenantIndex); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: sandboxes tenant index: %w", err)
@@ -110,7 +118,7 @@ func (s *PostgresStore) Backend() Backend { return BackendPostgres }
 
 func (s *PostgresStore) Close() error { return errors.Join(s.db.Close(), s.lockDB.Close()) }
 
-const pgSandboxCols = `id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral, egress, kind, pool_key`
+const pgSandboxCols = `id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral, egress, kind, pool_key, name, options_key, labels, idle_timeout_ms, drain_at, draining_since`
 
 type pgExecer interface {
 	Exec(query string, args ...any) (sql.Result, error)
@@ -119,9 +127,9 @@ type pgExecer interface {
 func (s *PostgresStore) insertSandbox(e pgExecer, record *SandboxRecord) error {
 	const q = `
 		INSERT INTO sandboxes
-			(id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral, egress, kind, pool_key)
+			(` + pgSandboxCols + `)
 		VALUES
-			($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`
+			($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)`
 
 	_, err := e.Exec(q,
 		record.ID,
@@ -140,6 +148,12 @@ func (s *PostgresStore) insertSandbox(e pgExecer, record *SandboxRecord) error {
 		record.Egress,
 		record.Kind,
 		record.PoolKey,
+		record.Name,
+		record.OptionsKey,
+		record.Labels,
+		record.IdleTimeoutMs,
+		record.DrainAt,
+		record.DrainingSince,
 	)
 	if err != nil {
 		return fmt.Errorf("store: create sandbox %s: %w", record.ID, err)
@@ -239,6 +253,42 @@ func (s *PostgresStore) UnpoolSandbox(id string) (bool, error) {
 func (s *PostgresStore) ListPooled() ([]*SandboxRecord, error) {
 	q := `SELECT ` + pgSandboxCols + ` FROM sandboxes WHERE tenant_id = $1 ORDER BY created_at, id`
 	return s.querySandboxRecords(q, PoolTenantID)
+}
+
+func (s *PostgresStore) GetCurrentByName(tenantID, name string) (*SandboxRecord, error) {
+	q := `SELECT ` + pgSandboxCols + ` FROM sandboxes WHERE tenant_id = $1 AND name = $2 AND name <> '' AND draining_since = 0`
+	rec, err := scanRecord(s.db.QueryRow(q, tenantID, name))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("store: get sandbox by name: %w", err)
+	}
+	return rec, nil
+}
+
+func (s *PostgresStore) ListByName(tenantID, name string) ([]*SandboxRecord, error) {
+	q := `SELECT ` + pgSandboxCols + ` FROM sandboxes WHERE tenant_id = $1 AND name = $2 AND name <> '' ORDER BY created_at, id`
+	return s.querySandboxRecords(q, tenantID, name)
+}
+
+func (s *PostgresStore) SetCodeSettings(id string, n CodeSettings) error {
+	const q = `UPDATE sandboxes SET name = $1, options_key = $2, labels = $3, idle_timeout_ms = $4, drain_at = $5, draining_since = 0 WHERE id = $6`
+	if _, err := s.db.Exec(q, n.Name, n.OptionsKey, n.Labels, n.IdleTimeoutMs, n.DrainAt, id); err != nil {
+		return fmt.Errorf("store: set name of sandbox %s: %w", id, err)
+	}
+	return nil
+}
+
+func (s *PostgresStore) MarkDraining(id string, now int64) error {
+	if _, err := s.db.Exec(`UPDATE sandboxes SET draining_since = $1 WHERE id = $2 AND draining_since = 0`, now, id); err != nil {
+		return fmt.Errorf("store: mark sandbox %s draining: %w", id, err)
+	}
+	return nil
+}
+
+func (s *PostgresStore) LockName(ctx context.Context, key string) (func(), error) {
+	return s.LockSandbox(ctx, "name:"+key)
 }
 
 func (s *PostgresStore) Get(id string) (*SandboxRecord, error) {
