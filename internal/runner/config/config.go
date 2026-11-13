@@ -31,7 +31,7 @@ const (
 	defaultMaxExecTimeout        = 15 * time.Minute
 
 	defaultVolumeCacheMaxBytes = 20 << 30 // 20 GiB
-	defaultVolumeFetchTimeout  = 10 * time.Minute
+	defaultVolumeFetchTimeout  = 5 * time.Minute
 )
 
 // Config holds shared runner configuration parsed from environment variables.
@@ -112,7 +112,7 @@ type Config struct {
 	VolumeCacheMaxBytes int64
 
 	// VolumeFetchTimeout bounds one volume object download. Parsed from
-	// SANDBOX_RUNNER_VOLUME_FETCH_TIMEOUT (default 10m).
+	// SANDBOX_RUNNER_VOLUME_FETCH_TIMEOUT (default 5m).
 	VolumeFetchTimeout time.Duration
 }
 

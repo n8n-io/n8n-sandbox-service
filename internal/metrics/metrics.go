@@ -371,8 +371,8 @@ var containerOpBuckets = []float64{0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60, 12
 // (snapshot load on a cold page cache), far below the container-op range.
 var lifecycleStepBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5}
 
-// volumeDownloadBuckets covers objects from megabytes to several gigabytes; the
-// top bucket is the default fetch timeout.
+// volumeDownloadBuckets covers objects from megabytes to several gigabytes. 300
+// is the default fetch timeout; 600 is for a raised one.
 var volumeDownloadBuckets = []float64{0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600}
 
 // RunnerRecorder owns the metric instruments emitted by the runner binary.

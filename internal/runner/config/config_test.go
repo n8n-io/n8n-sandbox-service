@@ -239,8 +239,8 @@ func TestLoadVolumeCache(t *testing.T) {
 		env  map[string]string
 		want string
 	}{
-		{map[string]string{"SANDBOX_RUNNER_DATA_DIR": "/data/sandboxes"}, "/data/sandboxes/volume-cache 21474836480 10m0s"},
-		{map[string]string{"SANDBOX_RUNNER_DATA_DIR": "sandboxes"}, workDir + "/sandboxes/volume-cache 21474836480 10m0s"},
+		{map[string]string{"SANDBOX_RUNNER_DATA_DIR": "/data/sandboxes"}, "/data/sandboxes/volume-cache 21474836480 5m0s"},
+		{map[string]string{"SANDBOX_RUNNER_DATA_DIR": "sandboxes"}, workDir + "/sandboxes/volume-cache 21474836480 5m0s"},
 		{map[string]string{
 			"SANDBOX_RUNNER_VOLUME_CACHE_DIR":       "/var/cache/volumes",
 			"SANDBOX_RUNNER_VOLUME_CACHE_MAX_BYTES": "1073741824",
