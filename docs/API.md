@@ -848,6 +848,64 @@ curl "http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/stat?
 
 ---
 
+## Code sandboxes
+
+Sandboxes for the code execution. Admin and tenant keys; any other key gets `403`. With an admin key the sandbox is owned by `__admin__`, a single tenant for all admin keys.
+
+### POST /code/sandboxes
+
+Return the current code sandbox of a name, or create one. The client picks the name and the service picks the `id`.
+
+```json
+{
+  "name": "550e8400-e29b-41d4-a716-446655440000",
+  "runtime": "n8n-js",
+  "runtimeVersion": "2.42.0",
+  "slots": 2,
+  "memoryMb": 1024,
+  "idleTimeoutMs": 30000,
+  "maxAgeMs": 60000
+}
+```
+
+**Request body fields:**
+
+- `name` (required) — 1 to 128 characters from `A-Z`, `a-z`, `0-9`, `.`, `_`, `:` and `-`. A name points to at most one current sandbox per tenant. Other tenants can use the same name.
+- `runtime` (required) — `n8n-js` or `n8n-python`.
+- `runtimeVersion` (required) — up to 64 characters from `A-Z`, `a-z`, `0-9`, `.`, `+` and `-`.
+- `slots`, `memoryMb` (required) — greater than `0`.
+- `idleTimeoutMs`, `maxAgeMs` (optional) — `0` or more; `0` or left out means not set.
+
+Unknown fields return `400`. The service stores these settings but does not apply them yet. Every code sandbox has egress `none` and is ephemeral (see `POST /sandboxes`).
+
+A create for a name that already has a current sandbox returns that sandbox with `200` if the settings are equal. If any setting differs, it returns `409` with reason `sandbox_settings_mismatch`. Concurrent creates of one name get the same sandbox. If two API replicas create it at the same time, the one saved second is deleted from its runner. A sandbox past its idle window is deleted, and the name gets a new sandbox.
+
+With a tenant key, the sandbox counts toward the tenant's `max_sandboxes` quota. Placement and the `503` `no_capacity` answer work as for `POST /sandboxes`.
+
+**Response:** `201 Created` for a new sandbox, `200 OK` for the current sandbox of the name
+
+```json
+{
+  "id": "uuid",
+  "name": "550e8400-e29b-41d4-a716-446655440000",
+  "created": true,
+  "state": "ready"
+}
+```
+
+**Errors:** `400` invalid request body, `403` key that is neither admin nor tenant, or tenant sandbox quota exceeded, `409` `sandbox_settings_mismatch` or tenant deleted, `429` [too many requests in progress](#http-429--too-many-requests-in-progress), `502` the runner did not confirm egress `none` or deleting a sandbox past its idle window failed, `503` `no_capacity`, or the name moved to another sandbox during the create (retry)
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/code/sandboxes \
+  -H "X-Api-Key: YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"scope-1","runtime":"n8n-js","runtimeVersion":"2.42.0","slots":2,"memoryMb":1024}'
+```
+
+---
+
 ## Admin: tenants and API keys
 
 All `/admin/*` routes require an admin API key (`SANDBOX_API_KEYS`) unless marked "Admin or provisioner" or "Admin or scaler". Any other key receives `403`.
