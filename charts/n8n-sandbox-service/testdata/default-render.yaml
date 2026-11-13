@@ -1,0 +1,385 @@
+---
+# Source: n8n-sandbox-service/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: n8n-sandbox-service-api-config
+  labels:
+    helm.sh/chart: n8n-sandbox-service-CHART_VERSION
+    app.kubernetes.io/name: n8n-sandbox-service
+    app.kubernetes.io/instance: n8n-sandbox-service
+    app.kubernetes.io/version: "APP_VERSION"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: api
+data:
+  SANDBOX_API_LISTEN_ADDR: ":8080"
+  SANDBOX_API_GRPC_LISTEN_ADDR: ":9090"
+  SANDBOX_API_METRICS_LISTEN_ADDR: ""
+  SANDBOX_API_STORE: "sqlite"
+  SANDBOX_API_DATA_DIR: "/tmp/sandbox-api"
+  SANDBOX_API_MAX_FILE_BYTES: "10485760"
+  SANDBOX_API_DEFAULT_MAX_SANDBOXES: "50"
+  SANDBOX_API_MAX_INFLIGHT_PER_TENANT: "512"
+  SANDBOX_API_ENABLE_CORS: "false"
+  SANDBOX_API_METRICS_ENABLED: "false"
+  SANDBOX_API_RUNNER_HEARTBEAT_GRACE: "45s"
+  SANDBOX_API_IDLE_STOP_AFTER: "1h"
+  SANDBOX_API_IDLE_DELETE_AFTER: "24h"
+  SANDBOX_API_IDLE_DELETE_SAFETY_BUFFER: "1m"
+  SANDBOX_API_IDLE_SWEEP_INTERVAL: "1m"
+---
+# Source: n8n-sandbox-service/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: n8n-sandbox-service-sysbox-runner-config
+  labels:
+    helm.sh/chart: n8n-sandbox-service-CHART_VERSION
+    app.kubernetes.io/name: n8n-sandbox-service
+    app.kubernetes.io/instance: n8n-sandbox-service
+    app.kubernetes.io/version: "APP_VERSION"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: sysbox-runner
+data:
+  SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE: "n8nio/n8n-sandbox-service-sandbox:APP_VERSION"
+  SANDBOX_RUNNER_DOCKER_HOST: "unix:///var/run/docker.sock"
+  SANDBOX_RUNNER_LISTEN_ADDR: ":8080"
+  SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR: ":9091"
+  SANDBOX_RUNNER_DATA_DIR: "/var/sandboxes"
+  SANDBOX_RUNNER_CAPACITY_TOTAL: "1000"
+  SANDBOX_RUNNER_MAX_FILE_BYTES: "10485760"
+  SANDBOX_RUNNER_MAX_INFLIGHT_PER_SANDBOX: "256"
+  SANDBOX_RUNNER_MAX_EXEC_TIMEOUT: "15m"
+  SANDBOX_RUNNER_METRICS_ENABLED: "false"
+  SANDBOX_RUNNER_DEFAULT_MEMORY_MB: "512"
+  SANDBOX_RUNNER_DEFAULT_CPU_PERCENT: "100"
+  SANDBOX_RUNNER_DEFAULT_PIDS_MAX: "256"
+  SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB: "0"
+  SANDBOX_RUNNER_ENABLE_CGROUPS: "true"
+---
+# Source: n8n-sandbox-service/templates/api-pvc.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: n8n-sandbox-service-api
+  labels:
+    helm.sh/chart: n8n-sandbox-service-CHART_VERSION
+    app.kubernetes.io/name: n8n-sandbox-service
+    app.kubernetes.io/instance: n8n-sandbox-service
+    app.kubernetes.io/version: "APP_VERSION"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: api
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: "1Gi"
+---
+# Source: n8n-sandbox-service/templates/api-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: n8n-sandbox-service-api
+  labels:
+    helm.sh/chart: n8n-sandbox-service-CHART_VERSION
+    app.kubernetes.io/name: n8n-sandbox-service
+    app.kubernetes.io/instance: n8n-sandbox-service
+    app.kubernetes.io/version: "APP_VERSION"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: api
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: n8n-sandbox-service
+    app.kubernetes.io/instance: n8n-sandbox-service
+    app.kubernetes.io/component: api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+    - name: grpc
+      port: 9090
+      targetPort: grpc
+---
+# Source: n8n-sandbox-service/templates/runner-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: n8n-sandbox-service-sysbox-runner
+  labels:
+    helm.sh/chart: n8n-sandbox-service-CHART_VERSION
+    app.kubernetes.io/name: n8n-sandbox-service
+    app.kubernetes.io/instance: n8n-sandbox-service
+    app.kubernetes.io/version: "APP_VERSION"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: sysbox-runner
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: n8n-sandbox-service
+    app.kubernetes.io/instance: n8n-sandbox-service
+    app.kubernetes.io/component: sysbox-runner
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+    - name: control-grpc
+      port: 9091
+      targetPort: control-grpc
+---
+# Source: n8n-sandbox-service/templates/api-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: n8n-sandbox-service-api
+  labels:
+    helm.sh/chart: n8n-sandbox-service-CHART_VERSION
+    app.kubernetes.io/name: n8n-sandbox-service
+    app.kubernetes.io/instance: n8n-sandbox-service
+    app.kubernetes.io/version: "APP_VERSION"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: n8n-sandbox-service
+      app.kubernetes.io/instance: n8n-sandbox-service
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: n8n-sandbox-service
+        app.kubernetes.io/instance: n8n-sandbox-service
+        app.kubernetes.io/component: api
+    spec:
+      securityContext:
+        fsGroup: 100
+        fsGroupChangePolicy: OnRootMismatch
+      containers:
+        - name: api
+          image: "n8nio/n8n-sandbox-service-api:APP_VERSION"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: grpc
+              containerPort: 9090
+          envFrom:
+            - configMapRef:
+                name: n8n-sandbox-service-api-config
+          env:
+            - name: SANDBOX_API_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: n8n-sandbox-auth
+                  key: api-keys
+            # optional: the Secret may predate provisioner keys; the API treats
+            # an unset variable as "no provisioner keys".
+            - name: SANDBOX_API_PROVISIONER_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: n8n-sandbox-auth
+                  key: provisioner-api-keys
+                  optional: true
+            - name: SANDBOX_API_SCALER_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: n8n-sandbox-auth
+                  key: scaler-api-keys
+                  optional: true
+            - name: SANDBOX_API_RUNNER_REGISTRATION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: n8n-sandbox-auth
+                  key: runner-registration-token
+            - name: SANDBOX_API_RUNNER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: n8n-sandbox-auth
+                  key: runner-api-key
+            - name: SANDBOX_API_GRPC_TLS_CERT_FILE
+              value: "/tls/api-registration/tls.crt"
+            - name: SANDBOX_API_GRPC_TLS_KEY_FILE
+              value: "/tls/api-registration/tls.key"
+            - name: SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE
+              value: "/tls/api-registration/ca.crt"
+            - name: SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE
+              value: "/tls/api-control-client/ca.crt"
+            - name: SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE
+              value: "/tls/api-control-client/tls.crt"
+            - name: SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE
+              value: "/tls/api-control-client/tls.key"
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          volumeMounts:
+            - name: api-registration-tls
+              mountPath: "/tls/api-registration"
+              readOnly: true
+            - name: api-control-client-tls
+              mountPath: "/tls/api-control-client"
+              readOnly: true
+            - name: api-data
+              mountPath: "/tmp/sandbox-api"
+      volumes:
+        - name: api-registration-tls
+          secret:
+            secretName: n8n-sandbox-api-registration-tls
+        - name: api-control-client-tls
+          secret:
+            secretName: n8n-sandbox-api-control-client-tls
+        - name: api-data
+          persistentVolumeClaim:
+            claimName: n8n-sandbox-service-api
+---
+# Source: n8n-sandbox-service/templates/runner-statefulset.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: n8n-sandbox-service-sysbox-runner
+  labels:
+    helm.sh/chart: n8n-sandbox-service-CHART_VERSION
+    app.kubernetes.io/name: n8n-sandbox-service
+    app.kubernetes.io/instance: n8n-sandbox-service
+    app.kubernetes.io/version: "APP_VERSION"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: sysbox-runner
+spec:
+  serviceName: n8n-sandbox-service-sysbox-runner
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: n8n-sandbox-service
+      app.kubernetes.io/instance: n8n-sandbox-service
+      app.kubernetes.io/component: sysbox-runner
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: n8n-sandbox-service
+        app.kubernetes.io/instance: n8n-sandbox-service
+        app.kubernetes.io/component: sysbox-runner
+    spec:
+      runtimeClassName: "sysbox-runc"
+      hostUsers: false
+      containers:
+        - name: runner
+          image: "n8nio/n8n-sandbox-service-runner-dind:APP_VERSION"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: control-grpc
+              containerPort: 9091
+          envFrom:
+            - configMapRef:
+                name: n8n-sandbox-service-sysbox-runner-config
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: SANDBOX_RUNNER_ID
+              value: "$(POD_NAME)"
+            - name: SANDBOX_RUNNER_API_GRPC_ADDR
+              value: "n8n-sandbox-service-api:9090"
+            - name: SANDBOX_RUNNER_HTTP_BASE_URL
+              value: "https://$(POD_NAME).n8n-sandbox-service-sysbox-runner.$(POD_NAMESPACE).svc.cluster.local:8080"
+            - name: SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR
+              value: "$(POD_NAME).n8n-sandbox-service-sysbox-runner.$(POD_NAMESPACE).svc.cluster.local:9091"
+            - name: SANDBOX_RUNNER_API_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: n8n-sandbox-auth
+                  key: runner-api-keys
+            - name: SANDBOX_RUNNER_REGISTRATION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: n8n-sandbox-auth
+                  key: runner-registration-token
+            - name: SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE
+              value: "/tls/runner-registration/ca.crt"
+            - name: SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE
+              value: "/tls/runner-registration/tls.crt"
+            - name: SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE
+              value: "/tls/runner-registration/tls.key"
+            - name: SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE
+              value: "/tls/runner-control/tls.crt"
+            - name: SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE
+              value: "/tls/runner-control/tls.key"
+            - name: SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE
+              value: "/tls/runner-control/ca.crt"
+          # scheme: HTTPS because the listener serves TLS. The kubelet cannot
+          # present a client certificate, which is why the runner negotiates
+          # with VerifyClientCertIfGiven and exempts these paths from auth.
+          startupProbe:
+            httpGet:
+              path: /livez
+              port: http
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 24
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+              scheme: HTTPS
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            - name: runner-registration-tls
+              mountPath: "/tls/runner-registration"
+              readOnly: true
+            - name: runner-control-tls
+              mountPath: "/tls/runner-control"
+              readOnly: true
+            - name: docker-data
+              mountPath: "/var/lib/docker"
+      volumes:
+        - name: runner-registration-tls
+          secret:
+            secretName: n8n-sandbox-runner-registration-tls
+        - name: runner-control-tls
+          secret:
+            secretName: n8n-sandbox-runner-control-tls
+        - name: docker-data
+          emptyDir:
+            sizeLimit: 64Gi
+      nodeSelector:
+        sysbox-install: "yes"
+      topologySpreadConstraints:
+        -
+          maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: n8n-sandbox-service
+              app.kubernetes.io/instance: n8n-sandbox-service
+              app.kubernetes.io/component: sysbox-runner
+      tolerations:
+        - effect: NoSchedule
+          key: sysbox-runtime
+          operator: Equal
+          value: not-running

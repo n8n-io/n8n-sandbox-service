@@ -798,6 +798,7 @@ chmod 0664 %[1]s/snapshot_mem %[1]s/snapshot_state %[6]s
 `, shellquote.Quote(jailRoot), shellquote.Quote(state.snapshotMemPath), shellquote.Quote(state.snapshotStatePath),
 		shellquote.Quote(state.rootfsPath), shellquote.Quote(filepath.Dir(rootfsTarget)), shellquote.Quote(rootfsTarget),
 		shellquote.Quote(filepath.Join(r.config.TemplateDir, "vmlinux")), shellquote.Quote(filepath.Dir(kernelTarget)), shellquote.Quote(kernelTarget))
+	script += volumeDrivePlaceholders(r.config.JailerBaseDir, jailRoot, state.bootParams.VolumeDrives)
 	return r.deps.run(ctx, "sudo", "/bin/sh", "-c", script)
 }
 

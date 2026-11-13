@@ -171,6 +171,10 @@ a loopback API fails its readiness probe long before metrics matter.
 {{- fail (printf "api.autoscaling.targetCPUUtilizationPercentage requires api.resources.requests.cpu above zero (got %q): the target is a percentage of the CPU request, and the HPA cannot scale on CPU without one" $cpuRequest) -}}
 {{- end -}}
 {{- end -}}
+{{- $gracePeriod := include "n8n-sandbox-service.apiTerminationGracePeriodSeconds" . -}}
+{{- if and $gracePeriod (not (regexMatch "^(0|[1-9][0-9]*)$" $gracePeriod)) -}}
+{{- fail (printf "api.terminationGracePeriodSeconds must be a whole number of seconds (got %q): leave it empty for the Kubernetes default of 30" $gracePeriod) -}}
+{{- end -}}
 {{- if not .Values.auth.existingSecret -}}
 {{- range $key := list "apiKeys" "runnerRegistrationToken" "runnerApiKey" "runnerApiKeys" -}}
 {{- $stringValue := default "" (index $.Values.auth.generated $key) | toString | trim -}}
