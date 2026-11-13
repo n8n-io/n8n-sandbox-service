@@ -26,7 +26,8 @@ const volumeTenant = "0b6f3a52-7c1e-4d2a-9f3b-5e8d1c2a4b6f"
 
 var volumeKey = volumestore.Key{Scope: volumeTenant, ID: "deps", Kind: volume.KindTar}
 
-func newVolumeTestGateway(t *testing.T, volumes volumestore.Store) http.Handler {
+// newVolumeTestGateway returns the public router.
+func newVolumeTestGateway(t *testing.T) http.Handler {
 	t.Helper()
 	sandboxStore, err := store.New(":memory:")
 	if err != nil {
@@ -37,7 +38,7 @@ func newVolumeTestGateway(t *testing.T, volumes volumestore.Store) http.Handler 
 		APIKeys:              map[string]struct{}{"admin-key": {}},
 		MaxFileBytes:         1024,
 		MaxInflightPerTenant: 4,
-	}, registry.New(45*time.Second), metrics.NewAPIRecorder(true), NewActivityRecorder(sandboxStore, nil), volumes)
+	}, registry.New(45*time.Second), metrics.NewAPIRecorder(true), NewActivityRecorder(sandboxStore, nil))
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}
@@ -46,11 +47,16 @@ func newVolumeTestGateway(t *testing.T, volumes volumestore.Store) http.Handler 
 
 func newVolumeTestLocal(t *testing.T) *volumestore.Local {
 	t.Helper()
-	vs, err := volumestore.NewLocal(t.TempDir(), "http://api.test")
+	vs, err := volumestore.NewLocal(t.TempDir(), "https://api.test:8443")
 	if err != nil {
 		t.Fatal(err)
 	}
 	return vs
+}
+
+// newVolumeObjectsTestRouter returns the volume-objects listener's router.
+func newVolumeObjectsTestRouter(vs *volumestore.Local, maxInflight int) http.Handler {
+	return NewVolumeObjectsRouter(vs, maxInflight, metrics.NewAPIRecorder(true))
 }
 
 // get sends a GET for rawURL, with an API key when key is set.
@@ -69,9 +75,9 @@ func get(t *testing.T, handler http.Handler, rawURL, key string) *httptest.Respo
 	return rr
 }
 
-func TestVolumeObjectRouteServesSignedURLsWithoutAPIKey(t *testing.T) {
+func TestVolumeObjectsRouterServesSignedURLsWithoutAPIKey(t *testing.T) {
 	vs := newVolumeTestLocal(t)
-	router := newVolumeTestGateway(t, vs)
+	router := newVolumeObjectsTestRouter(vs, 4)
 	ctx := context.Background()
 	if _, err := vs.Put(ctx, volumeKey, strings.NewReader("tar bytes"), volumestore.PutOptions{MaxBytes: 100}); err != nil {
 		t.Fatal(err)
@@ -117,10 +123,6 @@ func TestVolumeObjectRouteServesSignedURLsWithoutAPIKey(t *testing.T) {
 		t.Errorf("missing object: %d, want 404", rr.Code)
 	}
 
-	// The route does not open anything else to unauthenticated callers.
-	if rr := get(t, router, "/sandboxes", ""); rr.Code != http.StatusUnauthorized {
-		t.Errorf("GET /sandboxes without a key: %d, want 401", rr.Code)
-	}
 	req := httptest.NewRequest(http.MethodDelete, parsed.RequestURI(), nil)
 	rr = httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
@@ -129,24 +131,46 @@ func TestVolumeObjectRouteServesSignedURLsWithoutAPIKey(t *testing.T) {
 	}
 }
 
-func TestVolumeObjectRouteOnlyExistsForLocalStore(t *testing.T) {
-	signed, err := newVolumeTestLocal(t).ReadURL(context.Background(), volumeKey, time.Minute)
+// The listener's router has none of the public API's routes, with or without
+// an API key.
+func TestVolumeObjectsRouterServesNothingElse(t *testing.T) {
+	router := newVolumeObjectsTestRouter(newVolumeTestLocal(t), 4)
+	for _, target := range []string{"/", "/healthz", "/metrics", "/sandboxes", "/admin/tenants"} {
+		for _, key := range []string{"", "admin-key"} {
+			if rr := get(t, router, target, key); rr.Code != http.StatusNotFound {
+				t.Errorf("GET %s with key %q: %d, want 404", target, key, rr.Code)
+			}
+		}
+	}
+}
+
+// The public router answers a signed URL like any path it has no route for.
+func TestGatewayRouterHasNoVolumeObjectRoute(t *testing.T) {
+	vs := newVolumeTestLocal(t)
+	if _, err := vs.Put(context.Background(), volumeKey, strings.NewReader("tar bytes"), volumestore.PutOptions{MaxBytes: 100}); err != nil {
+		t.Fatal(err)
+	}
+	signed, err := vs.ReadURL(context.Background(), volumeKey, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
-	remote, err := volumestore.NewRemote("/nonexistent.sock")
-	if err != nil {
-		t.Fatal(err)
+	router := newVolumeTestGateway(t)
+	for _, key := range []string{"", "admin-key"} {
+		unknown := get(t, router, "/no-such-route", key)
+		got := get(t, router, signed, key)
+		if got.Code != unknown.Code || got.Body.String() != unknown.Body.String() {
+			t.Errorf("signed GET with key %q: %d %q, want it answered like an unknown path: %d %q",
+				key, got.Code, got.Body.String(), unknown.Code, unknown.Body.String())
+		}
+		if got.Code == http.StatusOK {
+			t.Errorf("signed GET with key %q was served", key)
+		}
 	}
-	t.Cleanup(func() { _ = remote.Close() })
-	for name, volumes := range map[string]volumestore.Store{"no store": nil, "remote": remote} {
-		router := newVolumeTestGateway(t, volumes)
-		if rr := get(t, router, signed, ""); rr.Code != http.StatusUnauthorized {
-			t.Errorf("%s: signed GET without a key: %d, want 401", name, rr.Code)
-		}
-		if rr := get(t, router, signed, "admin-key"); rr.Code != http.StatusNotFound {
-			t.Errorf("%s: signed GET with an admin key: %d, want 404", name, rr.Code)
-		}
+	if rr := get(t, router, signed, ""); rr.Code != http.StatusUnauthorized {
+		t.Errorf("signed GET without a key: %d, want 401", rr.Code)
+	}
+	if rr := get(t, router, signed, "admin-key"); rr.Code != http.StatusNotFound {
+		t.Errorf("signed GET with an admin key: %d, want 404", rr.Code)
 	}
 }
 
@@ -188,19 +212,7 @@ func TestVolumeObjectStalledDownloadGivesBackItsSlot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sandboxStore, err := store.New(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = sandboxStore.Close() })
-	router, err := NewGatewayRouter(sandboxStore, &config.APIConfig{
-		APIKeys:              map[string]struct{}{"admin-key": {}},
-		MaxInflightPerTenant: 1,
-	}, registry.New(45*time.Second), metrics.NewAPIRecorder(true), NewActivityRecorder(sandboxStore, nil), vs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv := httptest.NewServer(router)
+	srv := httptest.NewServer(newVolumeObjectsTestRouter(vs, 1))
 	defer srv.Close()
 
 	parsed, _ := url.Parse(signed)
@@ -250,26 +262,34 @@ func (zeroReader) Read(buf []byte) (int, error) {
 	return len(buf), nil
 }
 
+// A signed URL sent to the public listener by mistake must not end up in its
+// log either.
 func TestVolumeObjectSignatureStaysOutOfAccessLog(t *testing.T) {
-	logs := captureLogs(t)
 	vs := newVolumeTestLocal(t)
-	router := newVolumeTestGateway(t, vs)
 	signed, err := vs.ReadURL(context.Background(), volumeKey, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
-	get(t, router, signed, "")
-	get(t, router, strings.Replace(signed, "?", "?%73ig=x&", 1), "")
+	for name, router := range map[string]http.Handler{
+		"volume objects listener": newVolumeObjectsTestRouter(vs, 4),
+		"public listener":         newVolumeTestGateway(t),
+	} {
+		t.Run(name, func(t *testing.T) {
+			logs := captureLogs(t)
+			get(t, router, signed, "")
+			get(t, router, strings.Replace(signed, "?", "?%73ig=x&", 1), "")
 
-	events := logs()
-	if len(events) != 2 {
-		t.Fatalf("got %d log events, want 2", len(events))
-	}
-	for _, event := range events {
-		query, _ := event["query"].(string)
-		if query != "REDACTED" {
-			t.Errorf("logged query %q", query)
-		}
+			events := logs()
+			if len(events) != 2 {
+				t.Fatalf("got %d log events, want 2", len(events))
+			}
+			for _, event := range events {
+				query, _ := event["query"].(string)
+				if query != "REDACTED" {
+					t.Errorf("logged query %q", query)
+				}
+			}
+		})
 	}
 }
 
@@ -284,6 +304,10 @@ func TestRedactSignature(t *testing.T) {
 		"%73ig=abc&signature=x":      "REDACTED",
 		"sig":                        "REDACTED",
 		"design=1&sig=abc&x=%zz":     "REDACTED",
+		"expires=1;sig=abc":          "REDACTED",
+		"expires=1&+sig=abc":         "REDACTED",
+		"expires=1&%20sig%20=abc":    "REDACTED",
+		"a=1;b=2":                    "a=1;b=2",
 	} {
 		if got := redactSignature(raw); got != want {
 			t.Errorf("redactSignature(%q) = %q, want %q", raw, got, want)

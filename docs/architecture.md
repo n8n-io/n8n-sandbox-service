@@ -152,6 +152,10 @@ When a client creates or deletes a sandbox, the API calls the runner's `SandboxC
 
 The runner's HTTP listener uses the same certificate and the same client CA, so both channels to a runner share one identity. It negotiates with `VerifyClientCertIfGiven` so that health probes, which cannot present a certificate, still reach `/livez` and `/readyz`; the auth middleware requires a verified certificate on every other route.
 
+### Runner → API Volume Objects (HTTPS + mTLS)
+
+With `SANDBOX_API_VOLUME_STORE=local`, the API serves volume objects on a listener of its own (`SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR`, default `:8443`), at URLs it signs for one object each. The listener presents the registration listener's certificate and requires a client certificate from the same CA. The public listener has no such route.
+
 ### API/Runner → Daemon (HTTP Reverse Proxy)
 
 Exec and file operation requests are proxied through two hops:

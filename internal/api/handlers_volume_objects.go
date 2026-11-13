@@ -4,7 +4,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/n8n-io/sandbox-service/internal/api/volumestore"
@@ -12,25 +11,19 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 )
 
-// withVolumeObjects serves the local volume store's objects beside the
-// authenticated routes in next: a signed URL authorizes these requests in
-// place of an API key. Downloads count against a per-scope cap of the same
-// size as the per-tenant one, kept apart so they never compete with the
-// tenant's own requests.
-func withVolumeObjects(next http.Handler, vs *volumestore.Local, maxInflight int, rec *metrics.APIRecorder) http.Handler {
+// NewVolumeObjectsRouter returns the handler for the listener that serves the
+// local volume store's objects to runners, and nothing else. The caller puts
+// mutual TLS in front of it; no route takes an API key. A signed URL limits a
+// runner to the objects it was handed. Downloads count against a per-scope
+// cap of the same size as the per-tenant one on the public listener.
+func NewVolumeObjectsRouter(vs *volumestore.Local, maxInflight int, rec *metrics.APIRecorder) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+volumestore.LocalObjectPath+"{name...}", handleVolumeObject(vs, limits.NewKeyedLimiter(maxInflight), rec))
-	var objects http.Handler = mux
+	var handler http.Handler = mux
 	if rec.Enabled() {
-		objects = metrics.HTTPMiddleware(rec)(objects)
+		handler = metrics.HTTPMiddleware(rec)(handler)
 	}
-	return http.HandlerFunc(func(writer http.ResponseWriter, req *http.Request) {
-		if strings.HasPrefix(req.URL.Path, volumestore.LocalObjectPath) {
-			objects.ServeHTTP(writer, req)
-			return
-		}
-		next.ServeHTTP(writer, req)
-	})
+	return RecoveryMiddleware(LoggingMiddleware(handler))
 }
 
 // volumeObjectStallTimeout ends a download whose client has stopped reading,

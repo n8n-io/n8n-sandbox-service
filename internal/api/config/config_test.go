@@ -840,21 +840,36 @@ func TestLoadAPIRejectsInvalidRequestLimit(t *testing.T) {
 func setRequiredVolumeEnv(t *testing.T) {
 	t.Helper()
 	setRequiredAPIEnv(t)
-	for _, name := range []string{"SANDBOX_API_VOLUME_STORE", "SANDBOX_API_VOLUME_LOCAL_URL", "SANDBOX_API_VOLUME_REMOTE_SOCKET"} {
+	for _, name := range []string{
+		"SANDBOX_API_VOLUME_STORE",
+		"SANDBOX_API_VOLUME_LOCAL_URL",
+		"SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR",
+		"SANDBOX_API_VOLUME_REMOTE_SOCKET",
+	} {
 		t.Setenv(name, "")
 	}
 }
 
+// The local settings are read only with local: without it they start no
+// listener, so not even a value that local would refuse stops the API.
 func TestLoadAPIVolumeStoreDefaultsToNone(t *testing.T) {
-	setRequiredVolumeEnv(t)
-	t.Setenv("SANDBOX_API_VOLUME_LOCAL_URL", "http://ignored")
+	for name, store := range map[string]string{"no store": "", "remote": "remote"} {
+		t.Run(name, func(t *testing.T) {
+			setRequiredVolumeEnv(t)
+			t.Setenv("SANDBOX_API_VOLUME_STORE", store)
+			t.Setenv("SANDBOX_API_VOLUME_REMOTE_SOCKET", "/run/volume-store/helper.sock")
+			t.Setenv("SANDBOX_API_VOLUME_LOCAL_URL", "http://ignored")
+			t.Setenv("SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR", ":8080")
 
-	cfg, err := LoadAPI()
-	if err != nil {
-		t.Fatalf("LoadAPI() failed: %v", err)
-	}
-	if cfg.VolumeStore != VolumeStoreNone || cfg.VolumeLocalURL != "" {
-		t.Errorf("VolumeStore = %q, VolumeLocalURL = %q; want neither", cfg.VolumeStore, cfg.VolumeLocalURL)
+			cfg, err := LoadAPI()
+			if err != nil {
+				t.Fatalf("LoadAPI() failed: %v", err)
+			}
+			if cfg.VolumeStore != VolumeStoreBackend(store) || cfg.VolumeLocalURL != "" || cfg.VolumeLocalListenAddr != "" {
+				t.Errorf("VolumeStore = %q, VolumeLocalURL = %q, VolumeLocalListenAddr = %q; want %q and no local settings",
+					cfg.VolumeStore, cfg.VolumeLocalURL, cfg.VolumeLocalListenAddr, store)
+			}
+		})
 	}
 }
 
@@ -865,13 +880,101 @@ func TestLoadAPIVolumeStoreLocal(t *testing.T) {
 		t.Fatal("expected local to require SANDBOX_API_VOLUME_LOCAL_URL")
 	}
 
-	t.Setenv("SANDBOX_API_VOLUME_LOCAL_URL", " http://sandbox-api:8080/ ")
+	t.Setenv("SANDBOX_API_VOLUME_LOCAL_URL", " https://sandbox-api:8443/ ")
 	cfg, err := LoadAPI()
 	if err != nil {
 		t.Fatalf("LoadAPI() failed: %v", err)
 	}
-	if cfg.VolumeStore != VolumeStoreLocal || cfg.VolumeLocalURL != "http://sandbox-api:8080" {
+	if cfg.VolumeStore != VolumeStoreLocal || cfg.VolumeLocalURL != "https://sandbox-api:8443" {
 		t.Errorf("VolumeStore = %q, VolumeLocalURL = %q", cfg.VolumeStore, cfg.VolumeLocalURL)
+	}
+	if cfg.VolumeLocalListenAddr != ":8443" {
+		t.Errorf("VolumeLocalListenAddr = %q, want the default :8443", cfg.VolumeLocalListenAddr)
+	}
+
+	t.Setenv("SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR", " 127.0.0.1:9443 ")
+	cfg, err = LoadAPI()
+	if err != nil {
+		t.Fatalf("LoadAPI() failed: %v", err)
+	}
+	if cfg.VolumeLocalListenAddr != "127.0.0.1:9443" {
+		t.Errorf("VolumeLocalListenAddr = %q, want 127.0.0.1:9443", cfg.VolumeLocalListenAddr)
+	}
+}
+
+// Volume objects are served over mutual TLS only, so an http URL could never
+// work; the error has to say where they are served instead.
+func TestLoadAPIRejectsPlainHTTPVolumeLocalURL(t *testing.T) {
+	setRequiredVolumeEnv(t)
+	t.Setenv("SANDBOX_API_VOLUME_STORE", "local")
+	t.Setenv("SANDBOX_API_VOLUME_LOCAL_URL", "http://sandbox-api:8443")
+
+	_, err := LoadAPI()
+	if err == nil {
+		t.Fatal("expected LoadAPI() to refuse an http SANDBOX_API_VOLUME_LOCAL_URL")
+	}
+	for _, want := range []string{"https", "SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %s", err, want)
+		}
+	}
+}
+
+func TestLoadAPIRejectsInvalidVolumeLocalListenAddr(t *testing.T) {
+	for _, value := range []string{"8443", ":0", ":99999", "localhost", ":abc", ":https"} {
+		t.Run(value, func(t *testing.T) {
+			setRequiredVolumeEnv(t)
+			t.Setenv("SANDBOX_API_VOLUME_STORE", "local")
+			t.Setenv("SANDBOX_API_VOLUME_LOCAL_URL", "https://sandbox-api:8443")
+			t.Setenv("SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR", value)
+
+			if _, err := LoadAPI(); err == nil {
+				t.Fatalf("expected LoadAPI to reject SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR=%q", value)
+			}
+		})
+	}
+}
+
+func TestLoadAPIRejectsVolumeLocalListenAddrOnAnotherListenersPort(t *testing.T) {
+	cases := []struct {
+		name  string
+		env   map[string]string
+		clash string
+	}{
+		{"the default against the API port", map[string]string{"SANDBOX_API_LISTEN_ADDR": ":8443"}, "SANDBOX_API_LISTEN_ADDR"},
+		{"the API port", map[string]string{"SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR": ":8080"}, "SANDBOX_API_LISTEN_ADDR"},
+		{"the gRPC port", map[string]string{"SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR": ":9090"}, "SANDBOX_API_GRPC_LISTEN_ADDR"},
+		{"the metrics port", map[string]string{
+			"SANDBOX_API_METRICS_LISTEN_ADDR":      ":9100",
+			"SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR": ":9100",
+		}, "SANDBOX_API_METRICS_LISTEN_ADDR"},
+		// One port is one socket, whatever the host and however it is spelled.
+		{"another host on the API port", map[string]string{"SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR": "127.0.0.1:8080"}, "SANDBOX_API_LISTEN_ADDR"},
+		{"a padded port", map[string]string{"SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR": ":08080"}, "SANDBOX_API_LISTEN_ADDR"},
+		{"a named gRPC port", map[string]string{
+			"SANDBOX_API_GRPC_LISTEN_ADDR":         ":https",
+			"SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR": ":443",
+		}, "SANDBOX_API_GRPC_LISTEN_ADDR"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			setRequiredVolumeEnv(t)
+			t.Setenv("SANDBOX_API_VOLUME_STORE", "local")
+			t.Setenv("SANDBOX_API_VOLUME_LOCAL_URL", "https://sandbox-api:8443")
+			for name, value := range testCase.env {
+				t.Setenv(name, value)
+			}
+
+			_, err := LoadAPI()
+			if err == nil {
+				t.Fatal("expected LoadAPI() to refuse a port another listener uses")
+			}
+			for _, want := range []string{"SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR", testCase.clash} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not name %s", err, want)
+				}
+			}
+		})
 	}
 }
 
@@ -895,12 +998,14 @@ func TestLoadAPIVolumeStoreRemote(t *testing.T) {
 func TestLoadAPIRejectsInvalidVolumeStoreConfig(t *testing.T) {
 	cases := []map[string]string{
 		{"SANDBOX_API_VOLUME_STORE": "s3"},
-		{"SANDBOX_API_VOLUME_STORE": "local", "SANDBOX_API_VOLUME_LOCAL_URL": "sandbox-api:8080"},
+		{"SANDBOX_API_VOLUME_STORE": "local", "SANDBOX_API_VOLUME_LOCAL_URL": "sandbox-api:8443"},
 		{"SANDBOX_API_VOLUME_STORE": "local", "SANDBOX_API_VOLUME_LOCAL_URL": "ftp://sandbox-api"},
+		{"SANDBOX_API_VOLUME_STORE": "local", "SANDBOX_API_VOLUME_LOCAL_URL": "http://sandbox-api:8443"},
 		{"SANDBOX_API_VOLUME_STORE": "local", "SANDBOX_API_VOLUME_LOCAL_URL": "http://user:pass@sandbox-api"},
-		{"SANDBOX_API_VOLUME_STORE": "local", "SANDBOX_API_VOLUME_LOCAL_URL": "http://sandbox-api/?x=1"},
-		{"SANDBOX_API_VOLUME_STORE": "local", "SANDBOX_API_VOLUME_LOCAL_URL": "http://sandbox-api/#x"},
-		{"SANDBOX_API_VOLUME_STORE": "local", "SANDBOX_API_VOLUME_LOCAL_URL": "http://:8080"},
+		{"SANDBOX_API_VOLUME_STORE": "local", "SANDBOX_API_VOLUME_LOCAL_URL": "https://user:pass@sandbox-api"},
+		{"SANDBOX_API_VOLUME_STORE": "local", "SANDBOX_API_VOLUME_LOCAL_URL": "https://sandbox-api/?x=1"},
+		{"SANDBOX_API_VOLUME_STORE": "local", "SANDBOX_API_VOLUME_LOCAL_URL": "https://sandbox-api/#x"},
+		{"SANDBOX_API_VOLUME_STORE": "local", "SANDBOX_API_VOLUME_LOCAL_URL": "https://:8443"},
 		{"SANDBOX_API_VOLUME_STORE": "local", "SANDBOX_API_VOLUME_LOCAL_URL": "https://sandbox.example.com/api"},
 		{"SANDBOX_API_VOLUME_STORE": "azblob"},
 		{"SANDBOX_API_VOLUME_STORE": "remote", "SANDBOX_API_VOLUME_REMOTE_SOCKET": "helper.sock"},

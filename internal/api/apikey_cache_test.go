@@ -292,7 +292,7 @@ func newCachingTestGateways(t *testing.T, pods int) ([]http.Handler, *keyLookupC
 	})
 	routers := make([]http.Handler, pods)
 	for i := range routers {
-		routers[i], err = NewGatewayRouter(cs, cfg, registry.New(45*time.Second), metrics.NewAPIRecorder(false), NewActivityRecorder(cs, nil), nil)
+		routers[i], err = NewGatewayRouter(cs, cfg, registry.New(45*time.Second), metrics.NewAPIRecorder(false), NewActivityRecorder(cs, nil))
 		if err != nil {
 			t.Fatalf("create gateway router: %v", err)
 		}
@@ -410,7 +410,7 @@ func TestRevokeClearsTheCacheEvenWhenTheStoreReportsAnError(t *testing.T) {
 		RunnerAPIKey:   "runner-key",
 		MaxFileBytes:   1024,
 		APIKeyCacheTTL: time.Minute,
-	}), registry.New(45*time.Second), metrics.NewAPIRecorder(false), NewActivityRecorder(s, nil), nil)
+	}), registry.New(45*time.Second), metrics.NewAPIRecorder(false), NewActivityRecorder(s, nil))
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}

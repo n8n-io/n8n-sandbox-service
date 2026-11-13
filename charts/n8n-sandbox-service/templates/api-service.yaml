@@ -25,3 +25,8 @@ spec:
       port: {{ . }}
       targetPort: metrics
     {{- end }}
+    {{- if include "n8n-sandbox-service.apiVolumeObjectsPort" . }}
+    - name: volume-objects
+      port: {{ include "n8n-sandbox-service.scalarString" .Values.api.service.volumeObjectsPort }}
+      targetPort: volume-objects
+    {{- end }}

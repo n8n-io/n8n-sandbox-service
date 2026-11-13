@@ -45,11 +45,13 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 
 // redactSignature replaces a query that carries a signed URL's signature, on
 // any path, with a constant: another parameter's name or value could repeat
-// the signature, and the request may never have reached its route.
+// the signature, and the request may never have reached its route. It also
+// takes ";" as a separator and ignores spaces around a name, as a client might.
 func redactSignature(rawQuery string) string {
-	for _, param := range strings.Split(rawQuery, "&") {
+	params := strings.FieldsFunc(rawQuery, func(char rune) bool { return char == '&' || char == ';' })
+	for _, param := range params {
 		name, _, _ := strings.Cut(param, "=")
-		if decoded, err := url.QueryUnescape(name); err == nil && decoded == volumestore.SignatureParam {
+		if decoded, err := url.QueryUnescape(name); err == nil && strings.TrimSpace(decoded) == volumestore.SignatureParam {
 			return "REDACTED"
 		}
 	}

@@ -78,7 +78,7 @@ func newCordonTestEnv(t *testing.T, sandboxStatus string, cordoned bool) *cordon
 		MaxFileBytes:   1024,
 		HeartbeatGrace: 45 * time.Second,
 	})
-	router, err := NewGatewayRouter(env.store, env.cfg, env.registry, env.rec, NewActivityRecorder(env.store, nil), nil)
+	router, err := NewGatewayRouter(env.store, env.cfg, env.registry, env.rec, NewActivityRecorder(env.store, nil))
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}

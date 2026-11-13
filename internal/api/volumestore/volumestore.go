@@ -89,9 +89,11 @@ func parseObjectName(name string) (Key, error) {
 	return key, nil
 }
 
-// Object describes a stored object. SHA256 is lowercase hex.
+// Object describes a stored object.
 type Object struct {
-	Size   int64
+	// Size is the length of the content in bytes.
+	Size int64
+	// SHA256 is the digest of the content in lowercase hex.
 	SHA256 string
 }
 

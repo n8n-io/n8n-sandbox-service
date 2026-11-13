@@ -29,7 +29,7 @@ func newActivityTestGateway(t *testing.T, adminKey string) (http.Handler, store.
 		APIKeys:      map[string]struct{}{adminKey: {}},
 		RunnerAPIKey: "runner-key",
 		MaxFileBytes: 1024,
-	}), registry.New(45*time.Second), metrics.NewAPIRecorder(false), activity, nil)
+	}), registry.New(45*time.Second), metrics.NewAPIRecorder(false), activity)
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)
 	}

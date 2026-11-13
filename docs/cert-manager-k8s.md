@@ -6,6 +6,8 @@ The API and runners authenticate each other with mTLS on three channels:
 2. **Sandbox control** (gRPC) — the API calls each runner's `SandboxControl` service for create/stop/delete. The runner is the server; the API is the client.
 3. **Proxied traffic** (HTTPS) — exec and file requests the API forwards to the runner. The runner's HTTP listener reuses the SandboxControl certificate pair, and the API's control client certificate authenticates both channels.
 
+With `SANDBOX_API_VOLUME_STORE=local` there is a fourth: runners download volume objects from the API's volume-objects listener (HTTPS), which reuses the registration listener's certificate and client CA. It needs no certificate of its own, but the host in `SANDBOX_API_VOLUME_LOCAL_URL` must be a SAN of the API registration certificate.
+
 Use one private CA (for example a cert-manager `ClusterIssuer` of type CA) that signs distinct leaf roles:
 
 | Role | Typical cert-manager `usages` | Who mounts it |

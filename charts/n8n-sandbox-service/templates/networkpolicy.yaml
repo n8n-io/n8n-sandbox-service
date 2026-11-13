@@ -26,6 +26,10 @@ spec:
     - ports:
         - port: grpc
           protocol: TCP
+        {{- if include "n8n-sandbox-service.apiVolumeObjectsPort" . }}
+        - port: volume-objects
+          protocol: TCP
+        {{- end }}
       from:
         {{- if $runnerEnabled }}
         - podSelector:

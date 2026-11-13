@@ -226,7 +226,7 @@ func newIdleTestGatewayPods(t *testing.T, adminKey string, fake *fakeSandboxCont
 
 	routers := make([]http.Handler, pods)
 	for i := range routers {
-		routers[i], err = NewGatewayRouter(s, cfg, reg, metrics.NewAPIRecorder(false), NewActivityRecorder(s, nil), nil)
+		routers[i], err = NewGatewayRouter(s, cfg, reg, metrics.NewAPIRecorder(false), NewActivityRecorder(s, nil))
 		if err != nil {
 			t.Fatalf("create gateway router: %v", err)
 		}

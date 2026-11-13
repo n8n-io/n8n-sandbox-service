@@ -20,6 +20,7 @@ import (
 const (
 	defaultListenAddr       = ":8080"
 	defaultGRPCListenAddr   = ":9090"
+	defaultVolumeLocalAddr  = ":8443"
 	defaultMaxFileBytes     = 10 * 1024 * 1024 // 10 MB
 	defaultHeartbeatGrace   = 45 * time.Second
 	defaultOrphanReapBuffer = 5 * time.Minute
@@ -214,8 +215,13 @@ type APIConfig struct {
 	// VolumeStore selects where volume objects are stored; empty means no
 	// store. Parsed from SANDBOX_API_VOLUME_STORE.
 	VolumeStore VolumeStoreBackend
-	// VolumeLocalURL is the base URL runners use to reach this API, which
-	// signed object URLs point at (VolumeStoreLocal).
+	// VolumeLocalListenAddr is the TCP address of the mTLS listener that
+	// serves volume objects to runners (VolumeStoreLocal). Parsed from
+	// SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR (default :8443).
+	VolumeLocalListenAddr string
+	// VolumeLocalURL is the https base URL at which runners reach
+	// VolumeLocalListenAddr, which signed object URLs point at
+	// (VolumeStoreLocal).
 	VolumeLocalURL string
 	// VolumeRemoteSocket is the Unix socket of the store helper
 	// (VolumeStoreRemote).
@@ -547,6 +553,11 @@ func loadVolumeStore(cfg *APIConfig) error {
 			return err
 		}
 		cfg.VolumeLocalURL = localURL
+		listenAddr, err := parseVolumeLocalListenAddr(cfg)
+		if err != nil {
+			return err
+		}
+		cfg.VolumeLocalListenAddr = listenAddr
 	case VolumeStoreRemote:
 		cfg.VolumeStore = VolumeStoreRemote
 		socket := strings.TrimSpace(os.Getenv("SANDBOX_API_VOLUME_REMOTE_SOCKET"))
@@ -570,11 +581,38 @@ func parseLocalURL() (string, error) {
 		return "", fmt.Errorf("SANDBOX_API_VOLUME_LOCAL_URL must be set when SANDBOX_API_VOLUME_STORE=local")
 	}
 	parsed, err := url.Parse(raw)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" ||
+	if err == nil && parsed.Scheme == "http" {
+		return "", fmt.Errorf("SANDBOX_API_VOLUME_LOCAL_URL must be an https URL: volume objects are served only on the listener at SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR, which requires TLS with a client certificate")
+	}
+	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" ||
 		parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || strings.ContainsAny(raw, "?#") {
-		return "", fmt.Errorf("SANDBOX_API_VOLUME_LOCAL_URL must be an http or https URL with a host and port only: no credentials, path, query or fragment")
+		return "", fmt.Errorf("SANDBOX_API_VOLUME_LOCAL_URL must be an https URL with a host and port only: no credentials, path, query or fragment")
 	}
 	return strings.TrimRight(raw, "/"), nil
+}
+
+// parseVolumeLocalListenAddr reads SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR. One
+// port is one socket, so it refuses the port of any other listener here
+// rather than as an EADDRINUSE crash loop that names no variable.
+func parseVolumeLocalListenAddr(cfg *APIConfig) (string, error) {
+	const name = "SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR"
+	addr := defaultVolumeLocalAddr
+	if v := strings.TrimSpace(os.Getenv(name)); v != "" {
+		addr = v
+	}
+	if err := validateListenAddr(addr); err != nil {
+		return "", fmt.Errorf("%s must be host:port (e.g. %s), got %q: %w", name, defaultVolumeLocalAddr, addr, err)
+	}
+	for _, other := range []struct{ name, addr string }{
+		{"SANDBOX_API_LISTEN_ADDR", cfg.ListenAddr},
+		{"SANDBOX_API_GRPC_LISTEN_ADDR", cfg.GRPCListenAddr},
+		{"SANDBOX_API_METRICS_LISTEN_ADDR", cfg.MetricsListenAddr},
+	} {
+		if other.addr != "" && listenPort(addr) == listenPort(other.addr) {
+			return "", fmt.Errorf("%s (%q) must not use the same port as %s (%q)", name, addr, other.name, other.addr)
+		}
+	}
+	return addr, nil
 }
 
 // MetricsOnMainListener reports whether /metrics is served by the public API
@@ -612,8 +650,9 @@ func validateListenAddr(v string) error {
 // listenPort resolves a port the way net.Listen will, so addresses that name
 // one socket compare equal. That covers a padded number (":08080") and a
 // service name (":http"), either of which would otherwise look like a port of
-// its own and start a second server that cannot bind. Metrics addresses are
-// numeric by validateListenAddr, but ListenAddr and GRPCListenAddr are not.
+// its own and start a second server that cannot bind. Metrics and volume
+// addresses are numeric by validateListenAddr, but ListenAddr and
+// GRPCListenAddr are not.
 func listenPort(addr string) string {
 	_, port, err := net.SplitHostPort(strings.TrimSpace(addr))
 	if err != nil {

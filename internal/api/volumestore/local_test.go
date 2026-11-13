@@ -30,7 +30,7 @@ var (
 func newTestLocal(t *testing.T) (*Local, string) {
 	t.Helper()
 	dir := t.TempDir()
-	local, err := NewLocal(dir, "http://api.test:8080/")
+	local, err := NewLocal(dir, "https://api.test:8443/")
 	if err != nil {
 		t.Fatalf("NewLocal: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestNewLocalTightensRootAndRemovesTempFiles(t *testing.T) {
 	if err := os.WriteFile(stale, []byte("partial"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewLocal(dir, "http://api.test"); err != nil {
+	if _, err := NewLocal(dir, "https://api.test"); err != nil {
 		t.Fatalf("NewLocal: %v", err)
 	}
 	if info, _ := os.Stat(root); info.Mode().Perm() != 0o700 {
@@ -136,7 +136,7 @@ func TestNewLocalTightensRootAndRemovesTempFiles(t *testing.T) {
 }
 
 func TestNewLocalNeedsTheDataDir(t *testing.T) {
-	if _, err := NewLocal(filepath.Join(t.TempDir(), "missing"), "http://api.test"); err == nil {
+	if _, err := NewLocal(filepath.Join(t.TempDir(), "missing"), "https://api.test"); err == nil {
 		t.Fatal("NewLocal with a missing data dir succeeded")
 	}
 }
@@ -317,7 +317,7 @@ func TestLocalReadURLCapsTTL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "http://api.test:8080" + LocalObjectPath + "tenants/" + testTenant + "/deps.tar"; parsed.Scheme+"://"+parsed.Host+parsed.Path != want {
+	if want := "https://api.test:8443" + LocalObjectPath + "tenants/" + testTenant + "/deps.tar"; parsed.Scheme+"://"+parsed.Host+parsed.Path != want {
 		t.Errorf("URL %s, want it under %s", readURL, want)
 	}
 	if got, want := parsed.Query().Get("expires"), strconv.FormatInt(now.Add(MaxReadURLTTL).Unix(), 10); got != want {
@@ -365,7 +365,7 @@ func TestLocalVerifyRequest(t *testing.T) {
 		t.Fatalf("VerifyRequest = %+v, %v; want %+v", key, err, tenantKey)
 	}
 
-	other, err := NewLocal(t.TempDir(), "http://api.test:8080")
+	other, err := NewLocal(t.TempDir(), "https://api.test:8443")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -128,7 +128,7 @@ func main() {
 		activity.Run(activityCtx)
 	}()
 
-	handler, err := api.NewGatewayRouter(sandboxStore, cfg, runnerReg, mrec, activity, volumes)
+	handler, err := api.NewGatewayRouter(sandboxStore, cfg, runnerReg, mrec, activity)
 	if err != nil {
 		slog.Error("failed to create api router", "error", err)
 		os.Exit(1)
@@ -146,6 +146,12 @@ func main() {
 	metricsSrv, metricsLis, err := newMetricsServer(cfg, mrec)
 	if err != nil {
 		slog.Error("metrics listen", "addr", cfg.MetricsListenAddr, "error", err)
+		os.Exit(1)
+	}
+
+	volumeObjectsSrv, volumeObjectsLis, err := newVolumeObjectsServer(cfg, volumes, mrec)
+	if err != nil {
+		slog.Error("volume objects listener", "addr", cfg.VolumeLocalListenAddr, "error", err)
 		os.Exit(1)
 	}
 
@@ -177,7 +183,7 @@ func main() {
 	})
 
 	// One slot per listener, so a second failure never blocks its goroutine.
-	serverErr := make(chan error, 3)
+	serverErr := make(chan error, 4)
 	go func() {
 		slog.Info("api listening",
 			"addr", cfg.ListenAddr,
@@ -201,6 +207,16 @@ func main() {
 		go func() {
 			slog.Info("metrics listening", "addr", cfg.MetricsListenAddr, "path", "/metrics")
 			if err := metricsSrv.Serve(metricsLis); err != nil && err != http.ErrServerClosed {
+				serverErr <- err
+			}
+		}()
+	}
+
+	if volumeObjectsSrv != nil {
+		go func() {
+			slog.Info("volume objects listening", "addr", cfg.VolumeLocalListenAddr, "tls", true)
+			// Certificate and key come from volumeObjectsSrv.TLSConfig.
+			if err := volumeObjectsSrv.ServeTLS(volumeObjectsLis, "", ""); err != nil && err != http.ErrServerClosed {
 				serverErr <- err
 			}
 		}()
@@ -231,6 +247,14 @@ func main() {
 	case <-activityDone:
 	case <-ctx.Done():
 	}
+	// After the API server has drained, so read URLs it handed out while
+	// draining still work, and after the activity write, which a long download
+	// would otherwise cut off.
+	if volumeObjectsSrv != nil {
+		if err := volumeObjectsSrv.Shutdown(ctx); err != nil {
+			slog.Error("volume objects graceful shutdown failed", "error", err)
+		}
+	}
 	// Metrics last, so a scrape in flight during a normal drain still completes.
 	// The deadline above is deliberately shared: once it is spent the kubelet is
 	// at terminationGracePeriodSeconds and about to SIGKILL us, so that case is
@@ -252,7 +276,10 @@ func newVolumeStore(cfg *config.APIConfig) (volumestore.Store, error) {
 		if err != nil {
 			return nil, err
 		}
-		slog.Info("using local volume store", "dir", filepath.Join(cfg.DataDir, "volumes"), "url", cfg.VolumeLocalURL)
+		slog.Info("using local volume store",
+			"dir", filepath.Join(cfg.DataDir, "volumes"),
+			"url", cfg.VolumeLocalURL,
+			"listen_addr", cfg.VolumeLocalListenAddr)
 		return vs, nil
 	case config.VolumeStoreRemote:
 		vs, err := volumestore.NewRemote(cfg.VolumeRemoteSocket)

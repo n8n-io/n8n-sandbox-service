@@ -307,7 +307,7 @@ The Ingress exposes only the public HTTP API port. The private runner registrati
 When enabled, the chart renders Kubernetes `NetworkPolicy` resources for the API and the in-cluster runner:
 
 - API HTTP remains reachable from all sources by default so an existing ingress controller continues to work. Set `networkPolicy.api.httpIngressFrom` to restrict it to your ingress controller.
-- API registration gRPC is reachable from the in-chart runner by default. In external data-plane mode it is denied unless peers are added through `networkPolicy.api.grpcIngressFrom`.
+- API registration gRPC is reachable from the in-chart runner by default. In external data-plane mode it is denied unless peers are added through `networkPolicy.api.grpcIngressFrom`. The volume-objects port of a [local volume store](#volume-store) admits the same peers.
 - The API metrics port, when `api.config.metricsListenAddr` sets one, is reachable from all sources by default so an existing Prometheus keeps scraping. Set `networkPolicy.api.metricsIngressFrom` to restrict it to your monitoring namespace.
 - Runner HTTP/control ports are reachable from the in-chart API by default. Add peers through `networkPolicy.runner.ingressFrom` only if another component needs direct runner access.
 
@@ -483,3 +483,26 @@ api:
         - name: volume-store
           mountPath: /run/volume-store
 ```
+
+## Volume Store
+
+With `api.config.volumeStore: local`, the API keeps volume objects in `api.config.dataDir` and serves them to runners on a listener of its own. That listener requires TLS 1.3 and a client certificate, with the registration certificates the chart already mounts, so it needs no further setup:
+
+```yaml
+api:
+  config:
+    volumeStore: local
+```
+
+The chart then sets `SANDBOX_API_VOLUME_STORE`, `SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR` and `SANDBOX_API_VOLUME_LOCAL_URL` (see `docs/configuration.md` in the service repository), adds a `volume-objects` port to the API container and Service, and with `networkPolicy.enabled` admits the same peers to it as to the registration gRPC port.
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `api.config.volumeStore` | `""` | `local` turns the store on. For `remote`, set `SANDBOX_API_VOLUME_STORE` through `api.extraEnv`, as in [API Sidecars](#api-sidecars). |
+| `api.config.volumeLocalListenAddr` | `":8443"` | The listener's address. Its port must differ from the API's other ports. |
+| `api.service.volumeObjectsPort` | `8443` | The listener's Service port. |
+| `api.config.volumeLocalUrl` | `""` | Where runners reach the listener. Empty means `https://<API Service name>:<api.service.volumeObjectsPort>`, the host in-cluster runners register with. |
+
+The store keeps its objects on one API pod's volume and signs read URLs with a key of that pod's own, so it needs `api.persistence.enabled`, `api.replicaCount: 1` and no autoscaling; the render fails otherwise. Read URLs stop working when the pod restarts.
+
+With `dataPlane.mode: external`, runners cannot resolve the API Service name, so the render requires `api.config.volumeLocalUrl`. Its host must be on the API registration certificate (`tls.certificates.apiRegistrationServer.dnsNames` with cert-manager), and the runners must be listed in `networkPolicy.api.grpcIngressFrom` when `networkPolicy.enabled` is set.

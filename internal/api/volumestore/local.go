@@ -23,7 +23,8 @@ import (
 	"time"
 )
 
-// LocalObjectPath is the API route prefix of the URLs Local.ReadURL returns.
+// LocalObjectPath is the route prefix of the URLs Local.ReadURL returns, on
+// the API's volume-objects listener.
 const LocalObjectPath = "/volume-objects/"
 
 // SignatureParam is the query parameter that carries a Local URL's signature.
@@ -50,45 +51,47 @@ var (
 // process. It therefore needs a single API instance, and its URLs stop working
 // when the process restarts.
 type Local struct {
-	root    string
+	// dir is the store's directory, which holds every object.
+	dir     string
 	baseURL string
-	key     []byte
-	now     func() time.Time
+	// signingKey is the HMAC key that signs and verifies read URLs.
+	signingKey []byte
+	now        func() time.Time
 }
 
 // NewLocal stores objects under <dataDir>/volumes. baseURL is where runners
-// reach this API; ReadURL returns URLs under it.
+// reach the API's volume-objects listener; ReadURL returns URLs under it.
 func NewLocal(dataDir, baseURL string) (*Local, error) {
-	root := filepath.Join(dataDir, "volumes")
-	if err := os.Mkdir(root, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
-		return nil, fmt.Errorf("volumestore: create %s: %w", root, err)
+	dir := filepath.Join(dataDir, "volumes")
+	if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+		return nil, fmt.Errorf("volumestore: create %s: %w", dir, err)
 	}
-	if info, err := os.Stat(root); err != nil {
+	if info, err := os.Stat(dir); err != nil {
 		return nil, fmt.Errorf("volumestore: %w", err)
 	} else if !info.IsDir() {
-		return nil, fmt.Errorf("volumestore: %s is not a directory", root)
+		return nil, fmt.Errorf("volumestore: %s is not a directory", dir)
 	}
-	if err := os.Chmod(root, 0o700); err != nil {
+	if err := os.Chmod(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("volumestore: %w", err)
 	}
 	// No Put runs yet, so every temp file is left over from a crash.
-	if err := removeTemps(root); err != nil {
+	if err := removeTemps(dir); err != nil {
 		return nil, fmt.Errorf("volumestore: remove leftover temp files: %w", err)
 	}
-	key := make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
+	signingKey := make([]byte, 32)
+	if _, err := rand.Read(signingKey); err != nil {
 		return nil, err
 	}
 	return &Local{
-		root:    root,
-		baseURL: strings.TrimRight(baseURL, "/"),
-		key:     key,
-		now:     time.Now,
+		dir:        dir,
+		baseURL:    strings.TrimRight(baseURL, "/"),
+		signingKey: signingKey,
+		now:        time.Now,
 	}, nil
 }
 
-func removeTemps(root string) error {
-	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+func removeTemps(dir string) error {
+	return filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -100,7 +103,7 @@ func removeTemps(root string) error {
 }
 
 func (l *Local) path(key Key) string {
-	return filepath.Join(l.root, filepath.FromSlash(key.objectName()))
+	return filepath.Join(l.dir, filepath.FromSlash(key.objectName()))
 }
 
 func (l *Local) Put(ctx context.Context, key Key, content io.Reader, opts PutOptions) (Object, error) {
@@ -109,6 +112,8 @@ func (l *Local) Put(ctx context.Context, key Key, content io.Reader, opts PutOpt
 		return Object{}, err
 	}
 	dst := l.path(key)
+	// Only an early exit that spares the upload. Two Puts can both pass it;
+	// the link below lets only one of them commit.
 	if _, err := os.Lstat(dst); err == nil {
 		return Object{}, ErrExists
 	} else if !errors.Is(err, fs.ErrNotExist) {
@@ -313,7 +318,7 @@ func (l *Local) VerifyRequest(req *http.Request) (Key, error) {
 }
 
 func (l *Local) sign(method, path, expires string) []byte {
-	mac := hmac.New(sha256.New, l.key)
+	mac := hmac.New(sha256.New, l.signingKey)
 	mac.Write([]byte(method + "\n" + path + "\n" + expires))
 	return mac.Sum(nil)
 }

@@ -21,6 +21,11 @@ data:
   SANDBOX_API_IDLE_DELETE_AFTER: {{ .Values.api.config.idleDeleteAfter | quote }}
   SANDBOX_API_IDLE_DELETE_SAFETY_BUFFER: {{ .Values.api.config.idleDeleteSafetyBuffer | quote }}
   SANDBOX_API_IDLE_SWEEP_INTERVAL: {{ .Values.api.config.idleSweepInterval | quote }}
+  {{- if include "n8n-sandbox-service.apiVolumeObjectsPort" . }}
+  SANDBOX_API_VOLUME_STORE: "local"
+  SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR: {{ .Values.api.config.volumeLocalListenAddr | toString | trim | quote }}
+  SANDBOX_API_VOLUME_LOCAL_URL: {{ include "n8n-sandbox-service.apiVolumeLocalUrl" . | quote }}
+  {{- end }}
 {{- $runner := .Values.runner }}
 {{- if eq .Values.dataPlane.mode "in-cluster" }}
 ---
