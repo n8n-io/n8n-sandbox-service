@@ -165,7 +165,7 @@ func (c *Cache) download(ctx context.Context, sourceURL *url.URL, size int64, di
 		return 0, failed(metrics.VolumeFetchSize, "content length %d, want %d", resp.ContentLength, size)
 	}
 
-	tmp, err := os.CreateTemp(c.dir, ".download-*")
+	tmp, err := os.CreateTemp(c.config.Dir, ".download-*")
 	if err != nil {
 		return 0, diskFailure("create file", err)
 	}

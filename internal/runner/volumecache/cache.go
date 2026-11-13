@@ -81,24 +81,24 @@ type Config struct {
 
 // Cache is safe for concurrent use.
 type Cache struct {
-	dir          string
-	dataDir      string
-	maxBytes     int64
-	fetchTimeout time.Duration
-	transport    http.RoundTripper
-	metrics      *metrics.RunnerRecorder
-	diskSpace    func(path string) (diskSpace, error)
+	// config is what New was given, with Dir cleaned.
+	config    Config
+	transport http.RoundTripper
+	diskSpace func(path string) (diskSpace, error)
 
 	mu       sync.Mutex
 	dirReady bool
 	entries  map[Key]*entry
 	fetches  map[Key]*fetch
-	// The budget counts both: allocated bytes of entries, and the declared size
-	// of fetches.
-	allocated   int64
-	downloading int64
-	clock       uint64
-	seq         uint64
+	// The budget counts both: the bytes the entries take on disk, and the
+	// declared size of the downloads in progress.
+	allocatedBytes   int64
+	downloadingBytes int64
+	// lruClock is a logical clock that stamps an entry's lastUse; eviction
+	// takes the lowest first.
+	lruClock uint64
+	// downloadSeq gives every download its own file name.
+	downloadSeq uint64
 }
 
 // diskSpace is the free and total space, in bytes, of a filesystem. free is
@@ -117,21 +117,27 @@ func statDisk(path string) (diskSpace, error) {
 }
 
 type entry struct {
-	path    string
-	alloc   int64
+	path string
+	// allocatedBytes is what the file takes on disk, less than its size when
+	// it has holes.
+	allocatedBytes int64
+	// holders is the set of holder names that pin the entry, as given to
+	// Acquire.
 	holders map[string]struct{}
+	// lastUse is the lruClock value from when the entry was downloaded, last
+	// acquired, or released by its last holder.
 	lastUse uint64
 }
 
-// fetch is one download in progress. waiters counts the Acquires waiting per
-// holder; the holders still waiting when it succeeds are pinned with the new
-// entry, so it cannot be evicted before they see it.
+// fetch is one download in progress. waitersByHolder counts the Acquires
+// waiting per holder; the holders still waiting when it succeeds are pinned
+// with the new entry, so it cannot be evicted before they see it.
 type fetch struct {
-	done     chan struct{}
-	waiters  map[string]int
-	finished bool
-	path     string
-	err      error
+	done            chan struct{}
+	waitersByHolder map[string]int
+	finished        bool
+	path            string
+	err             error
 }
 
 // New checks cfg and empties the cache dir, creating it if needed: it only
@@ -147,16 +153,13 @@ func New(cfg Config) (*Cache, error) {
 	if cfg.FetchTimeout <= 0 {
 		return nil, fmt.Errorf("volume fetch timeout must be positive, got %s", cfg.FetchTimeout)
 	}
+	cfg.Dir = dir
 	cache := &Cache{
-		dir:          dir,
-		dataDir:      cfg.DataDir,
-		maxBytes:     cfg.MaxBytes,
-		fetchTimeout: cfg.FetchTimeout,
-		transport:    newTransport(),
-		metrics:      cfg.Metrics,
-		diskSpace:    statDisk,
-		entries:      make(map[Key]*entry),
-		fetches:      make(map[Key]*fetch),
+		config:    cfg,
+		transport: newTransport(),
+		diskSpace: statDisk,
+		entries:   make(map[Key]*entry),
+		fetches:   make(map[Key]*fetch),
 	}
 	if err := cache.prepareDirLocked(); err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
@@ -213,35 +216,35 @@ func within(path, parent string) bool {
 // a data volume that is not mounted yet, and creating it would put the cache on
 // the disk underneath. Errors leave out the path, like download errors.
 func (c *Cache) prepareDirLocked() error {
-	info, err := os.Lstat(c.dir)
+	info, err := os.Lstat(c.config.Dir)
 	if err == nil && !info.IsDir() {
-		if err := os.Remove(c.dir); err != nil {
+		if err := os.Remove(c.config.Dir); err != nil {
 			return fmt.Errorf("remove volume cache dir: %w", withoutPath(err))
 		}
 		err = fs.ErrNotExist
 	}
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		if err := os.Mkdir(c.dir, 0o700); err != nil {
+		if err := os.Mkdir(c.config.Dir, 0o700); err != nil {
 			return fmt.Errorf("create volume cache dir: %w", withoutPath(err))
 		}
 	case err != nil:
 		return fmt.Errorf("stat volume cache dir: %w", withoutPath(err))
 	default:
 		if st, ok := info.Sys().(*syscall.Stat_t); ok && int(st.Uid) != os.Geteuid() {
-			if err := os.Lchown(c.dir, os.Geteuid(), os.Getegid()); err != nil {
+			if err := os.Lchown(c.config.Dir, os.Geteuid(), os.Getegid()); err != nil {
 				return fmt.Errorf("own volume cache dir: %w", withoutPath(err))
 			}
 		}
-		if err := os.Chmod(c.dir, 0o700); err != nil {
+		if err := os.Chmod(c.config.Dir, 0o700); err != nil {
 			return fmt.Errorf("chmod volume cache dir: %w", withoutPath(err))
 		}
-		entries, err := os.ReadDir(c.dir)
+		entries, err := os.ReadDir(c.config.Dir)
 		if err != nil {
 			return fmt.Errorf("read volume cache dir: %w", withoutPath(err))
 		}
 		for _, dirEntry := range entries {
-			if err := os.RemoveAll(filepath.Join(c.dir, dirEntry.Name())); err != nil {
+			if err := os.RemoveAll(filepath.Join(c.config.Dir, dirEntry.Name())); err != nil {
 				return fmt.Errorf("wipe volume cache dir: %w", withoutPath(err))
 			}
 		}
@@ -275,7 +278,7 @@ func (c *Cache) Acquire(ctx context.Context, key Key, src Source, holder string)
 		cached.holders[holder] = struct{}{}
 		cached.lastUse = c.tickLocked()
 		c.mu.Unlock()
-		c.metrics.ObserveVolumeCacheFetch(metrics.VolumeFetchHit)
+		c.config.Metrics.ObserveVolumeCacheFetch(metrics.VolumeFetchHit)
 		return cached.path, nil
 	}
 	pending, started := c.fetches[key], false
@@ -288,12 +291,12 @@ func (c *Cache) Acquire(ctx context.Context, key Key, src Source, holder string)
 			if errors.Is(err, ErrCacheFull) || errors.Is(err, errTooLarge) {
 				result = metrics.VolumeFetchFull
 			}
-			c.metrics.ObserveVolumeCacheFetch(result)
+			c.config.Metrics.ObserveVolumeCacheFetch(result)
 			return "", err
 		}
 		started = true
 	}
-	pending.waiters[holder]++
+	pending.waitersByHolder[holder]++
 	c.mu.Unlock()
 
 	// Their entries are gone from the index, and every download gets a new
@@ -306,7 +309,7 @@ func (c *Cache) Acquire(ctx context.Context, key Key, src Source, holder string)
 
 	path, err := c.wait(ctx, pending, holder)
 	if err == nil && !started {
-		c.metrics.ObserveVolumeCacheFetch(metrics.VolumeFetchHit)
+		c.config.Metrics.ObserveVolumeCacheFetch(metrics.VolumeFetchHit)
 	}
 	return path, err
 }
@@ -314,13 +317,13 @@ func (c *Cache) Acquire(ctx context.Context, key Key, src Source, holder string)
 // startLocked makes room for src and starts its download. On error it has
 // evicted nothing and reserved nothing.
 func (c *Cache) startLocked(ctx context.Context, key Key, src Source, sourceURL *url.URL, holder string) (*fetch, []string, error) {
-	if src.Size > c.maxBytes {
-		return nil, nil, fmt.Errorf("%w: %d bytes, cache holds %d", errTooLarge, src.Size, c.maxBytes)
+	if src.Size > c.config.MaxBytes {
+		return nil, nil, fmt.Errorf("%w: %d bytes, cache holds %d", errTooLarge, src.Size, c.config.MaxBytes)
 	}
 	if !c.dirReady {
 		// Again: symlinks in a parent that did not exist at startup were not
 		// resolved then.
-		if _, err := checkDir(c.dir, c.dataDir); err != nil {
+		if _, err := checkDir(c.config.Dir, c.config.DataDir); err != nil {
 			return nil, nil, err
 		}
 		if err := c.prepareDirLocked(); err != nil {
@@ -331,10 +334,10 @@ func (c *Cache) startLocked(ctx context.Context, key Key, src Source, sourceURL 
 	if err != nil {
 		return nil, nil, err
 	}
-	c.downloading += src.Size
-	c.seq++
-	dest := filepath.Join(c.dir, fmt.Sprintf("%s.%s.%d", key.Scope, key.SHA256, c.seq))
-	pending := &fetch{done: make(chan struct{}), waiters: make(map[string]int)}
+	c.downloadingBytes += src.Size
+	c.downloadSeq++
+	dest := filepath.Join(c.config.Dir, fmt.Sprintf("%s.%s.%d", key.Scope, key.SHA256, c.downloadSeq))
+	pending := &fetch{done: make(chan struct{}), waitersByHolder: make(map[string]int)}
 	c.fetches[key] = pending
 	slog.InfoContext(ctx, "volume cache download started",
 		"scope", key.Scope, "sha256", key.SHA256, "size", src.Size, "source", redact(sourceURL), "holder", holder)
@@ -346,13 +349,13 @@ func (c *Cache) startLocked(ctx context.Context, key Key, src Source, sourceURL 
 // more bytes fit both the budget and the disk, which keeps its floor free for
 // the sandboxes on it. It evicts nothing if they cannot fit.
 func (c *Cache) makeRoomLocked(need int64) ([]string, error) {
-	space, err := c.diskSpace(c.dir)
+	space, err := c.diskSpace(c.config.Dir)
 	if err != nil {
 		return nil, err
 	}
-	budgetFree := c.maxBytes - c.allocated - c.downloading
+	budgetFree := c.config.MaxBytes - c.allocatedBytes - c.downloadingBytes
 	// Downloads in progress count as if they had written nothing yet.
-	diskFree := space.free - c.downloading - space.total*runnerruntime.DiskFloorPercent/100
+	diskFree := space.free - c.downloadingBytes - space.total*runnerruntime.DiskFloorPercent/100
 	fits := func(freed int64) bool { return need <= budgetFree+freed && need <= diskFree+freed }
 	if fits(0) {
 		return nil, nil
@@ -373,10 +376,10 @@ func (c *Cache) makeRoomLocked(need int64) ([]string, error) {
 	var freed int64
 	evictCount := 0
 	for ; evictCount < len(candidates) && !fits(freed); evictCount++ {
-		freed += candidates[evictCount].cached.alloc
+		freed += candidates[evictCount].cached.allocatedBytes
 	}
 	if need > budgetFree+freed {
-		return nil, fmt.Errorf("%w: objects in use fill its %d MiB budget", ErrCacheFull, c.maxBytes>>20)
+		return nil, fmt.Errorf("%w: objects in use fill its %d MiB budget", ErrCacheFull, c.config.MaxBytes>>20)
 	}
 	if need > diskFree+freed {
 		return nil, fmt.Errorf("%w: the disk has %d MiB free above its floor, %d MiB needed", ErrCacheFull, max(0, diskFree+freed)>>20, need>>20)
@@ -384,16 +387,16 @@ func (c *Cache) makeRoomLocked(need int64) ([]string, error) {
 	paths := make([]string, 0, evictCount)
 	for _, cand := range candidates[:evictCount] {
 		delete(c.entries, cand.key)
-		c.allocated -= cand.cached.alloc
+		c.allocatedBytes -= cand.cached.allocatedBytes
 		paths = append(paths, cand.cached.path)
-		c.metrics.ObserveVolumeCacheEviction()
-		slog.Info("volume cache evicted", "scope", cand.key.Scope, "sha256", cand.key.SHA256, "allocated_bytes", cand.cached.alloc)
+		c.config.Metrics.ObserveVolumeCacheEviction()
+		slog.Info("volume cache evicted", "scope", cand.key.Scope, "sha256", cand.key.SHA256, "allocated_bytes", cand.cached.allocatedBytes)
 	}
 	return paths, nil
 }
 
 func (c *Cache) run(ctx context.Context, key Key, src Source, sourceURL *url.URL, dest string, pending *fetch) {
-	ctx, cancel := context.WithTimeout(ctx, c.fetchTimeout)
+	ctx, cancel := context.WithTimeout(ctx, c.config.FetchTimeout)
 	defer cancel()
 	start := time.Now()
 	alloc, err := c.download(ctx, sourceURL, src.Size, key.SHA256, dest)
@@ -403,15 +406,15 @@ func (c *Cache) run(ctx context.Context, key Key, src Source, sourceURL *url.URL
 	// finds it counted and logged.
 	if err != nil {
 		result := resultOf(err)
-		c.metrics.ObserveVolumeCacheFetch(result)
+		c.config.Metrics.ObserveVolumeCacheFetch(result)
 		attrs := []any{"scope", key.Scope, "sha256", key.SHA256, "source", redact(sourceURL), "result", result, "duration_ms", dur.Milliseconds(), "err", err}
 		if cause := causeOf(err); cause != nil {
 			attrs = append(attrs, "cause", cause)
 		}
 		slog.WarnContext(ctx, "volume cache download failed", attrs...)
 	} else {
-		c.metrics.ObserveVolumeCacheFetch(metrics.VolumeFetchDownloaded)
-		c.metrics.ObserveVolumeCacheDownload(dur)
+		c.config.Metrics.ObserveVolumeCacheFetch(metrics.VolumeFetchDownloaded)
+		c.config.Metrics.ObserveVolumeCacheDownload(dur)
 		slog.InfoContext(ctx, "volume cache download finished",
 			"scope", key.Scope, "sha256", key.SHA256, "size", src.Size, "allocated_bytes", alloc, "duration_ms", dur.Milliseconds())
 	}
@@ -419,14 +422,14 @@ func (c *Cache) run(ctx context.Context, key Key, src Source, sourceURL *url.URL
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.fetches, key)
-	c.downloading -= src.Size
+	c.downloadingBytes -= src.Size
 	if err == nil {
-		holders := make(map[string]struct{}, len(pending.waiters))
-		for holder := range pending.waiters {
+		holders := make(map[string]struct{}, len(pending.waitersByHolder))
+		for holder := range pending.waitersByHolder {
 			holders[holder] = struct{}{}
 		}
-		c.entries[key] = &entry{path: dest, alloc: alloc, holders: holders, lastUse: c.tickLocked()}
-		c.allocated += alloc
+		c.entries[key] = &entry{path: dest, allocatedBytes: alloc, holders: holders, lastUse: c.tickLocked()}
+		c.allocatedBytes += alloc
 		pending.path = dest
 	}
 	pending.err = err
@@ -448,8 +451,8 @@ func (c *Cache) wait(ctx context.Context, pending *fetch, holder string) (string
 		// The download won the race and has pinned holder already.
 		return pending.path, pending.err
 	}
-	if pending.waiters[holder]--; pending.waiters[holder] == 0 {
-		delete(pending.waiters, holder)
+	if pending.waitersByHolder[holder]--; pending.waitersByHolder[holder] == 0 {
+		delete(pending.waitersByHolder, holder)
 	}
 	return "", ctx.Err()
 }
@@ -484,8 +487,8 @@ func (c *Cache) unpinLocked(cached *entry, holder string) {
 }
 
 func (c *Cache) tickLocked() uint64 {
-	c.clock++
-	return c.clock
+	c.lruClock++
+	return c.lruClock
 }
 
 func (c *Cache) stats() (bytes int64, entries, pinned int) {
@@ -496,19 +499,19 @@ func (c *Cache) stats() (bytes int64, entries, pinned int) {
 			pinned++
 		}
 	}
-	return c.allocated + c.downloading, len(c.entries), pinned
+	return c.allocatedBytes + c.downloadingBytes, len(c.entries), pinned
 }
 
 // DataDirReservation is the part of the budget not on disk yet, which sandbox
 // creates leave free, while the cache shares the data dir's filesystem; 0 when
 // it does not. Downloads in progress count as not on disk at all.
 func (c *Cache) DataDirReservation() int64 {
-	if !sameFilesystem(c.dir, c.dataDir) {
+	if !sameFilesystem(c.config.Dir, c.config.DataDir) {
 		return 0
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return max(0, c.maxBytes-c.allocated)
+	return max(0, c.config.MaxBytes-c.allocatedBytes)
 }
 
 // sameFilesystem reports whether a and b are on one filesystem, or a missing

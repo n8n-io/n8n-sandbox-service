@@ -174,7 +174,7 @@ func (c *Cache) waiting(key Key) int {
 	defer c.mu.Unlock()
 	total := 0
 	if pending := c.fetches[key]; pending != nil {
-		for _, count := range pending.waiters {
+		for _, count := range pending.waitersByHolder {
 			total += count
 		}
 	}
@@ -198,7 +198,7 @@ func (c *Cache) holders(key Key) []string {
 func (c *Cache) setMaxBytes(maxBytes int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.maxBytes = maxBytes
+	c.config.MaxBytes = maxBytes
 }
 
 func (c *Cache) usedBytes() int64 {
@@ -232,10 +232,10 @@ func TestAcquireDownloadsVerifiesAndPins(t *testing.T) {
 	if !bytes.Equal(got, srv.data) {
 		t.Fatal("cached content differs from the served object")
 	}
-	if filepath.Dir(path) != cache.dir {
-		t.Errorf("path %s is not in the cache dir %s", path, cache.dir)
+	if filepath.Dir(path) != cache.config.Dir {
+		t.Errorf("path %s is not in the cache dir %s", path, cache.config.Dir)
 	}
-	for name, want := range map[string]fs.FileMode{path: 0o444, cache.dir: 0o700} {
+	for name, want := range map[string]fs.FileMode{path: 0o444, cache.config.Dir: 0o700} {
 		if info, err := os.Stat(name); err != nil || info.Mode().Perm() != want {
 			t.Errorf("mode of %s = %v (%v), want %o", name, info, err, want)
 		}
@@ -252,7 +252,7 @@ func TestAcquireDownloadsVerifiesAndPins(t *testing.T) {
 	}
 	wantFetches(t, rec, metrics.VolumeFetchDownloaded, 1)
 	wantFetches(t, rec, metrics.VolumeFetchHit, 1)
-	if names := dirNames(t, cache.dir); len(names) != 1 {
+	if names := dirNames(t, cache.config.Dir); len(names) != 1 {
 		t.Errorf("cache dir holds %v, want only the object", names)
 	}
 }
@@ -282,7 +282,7 @@ func TestAcquireRejectsDigestMismatch(t *testing.T) {
 		t.Fatalf("Acquire() error = %v, want a digest mismatch", err)
 	}
 	wantFetches(t, rec, metrics.VolumeFetchDigest, 1)
-	if names := dirNames(t, cache.dir); len(names) != 0 {
+	if names := dirNames(t, cache.config.Dir); len(names) != 0 {
 		t.Errorf("cache dir holds %v after a failed download, want nothing", names)
 	}
 	if used := cache.usedBytes(); used != 0 {
@@ -329,7 +329,7 @@ func TestAcquireRejectsWrongSize(t *testing.T) {
 				t.Fatalf("Acquire() error = %v, want %q", err, tc.want)
 			}
 			wantFetches(t, rec, metrics.VolumeFetchSize, 1)
-			if names := dirNames(t, cache.dir); len(names) != 0 {
+			if names := dirNames(t, cache.config.Dir); len(names) != 0 {
 				t.Errorf("cache dir holds %v, want nothing", names)
 			}
 		})
@@ -425,7 +425,7 @@ func TestAcquireRefusesSourceAndKey(t *testing.T) {
 	if hits := srv.hits.Load(); hits != 0 {
 		t.Errorf("server hits = %d, want 0", hits)
 	}
-	if names := dirNames(t, cache.dir); len(names) != 0 {
+	if names := dirNames(t, cache.config.Dir); len(names) != 0 {
 		t.Errorf("cache dir holds %v, want nothing", names)
 	}
 	wantFetches(t, rec, metrics.VolumeFetchHTTP, 0)
@@ -636,7 +636,7 @@ func TestDownloadKeepsTheDiskFloor(t *testing.T) {
 	cache.mu.Lock()
 	var left int64
 	for _, cached := range cache.entries {
-		left += cached.alloc
+		left += cached.allocatedBytes
 	}
 	cache.mu.Unlock()
 	if used := cache.usedBytes(); used != left {
@@ -655,7 +655,7 @@ func TestDataDirReservation(t *testing.T) {
 	}
 	serve(t, randomBytes(t, 64<<10), false).acquire(t, cache, "sandbox-a")
 	cache.mu.Lock()
-	want := 1<<30 - cache.allocated
+	want := 1<<30 - cache.allocatedBytes
 	cache.mu.Unlock()
 	if got := cache.DataDirReservation(); got != want {
 		t.Errorf("reservation = %d, want the budget less what is on disk, %d", got, want)
@@ -675,10 +675,10 @@ func TestDataDirReservation(t *testing.T) {
 	}
 
 	// A cache on another filesystem takes nothing from the data volume.
-	if sameFilesystem(cache.dir, "/dev") {
+	if sameFilesystem(cache.config.Dir, "/dev") {
 		t.Skip("/dev is on the same filesystem as the test dir")
 	}
-	cache.dataDir = "/dev"
+	cache.config.DataDir = "/dev"
 	if got := cache.DataDirReservation(); got != 0 {
 		t.Errorf("reservation on another filesystem = %d, want 0", got)
 	}
@@ -731,7 +731,7 @@ func TestSparseWrite(t *testing.T) {
 	// final truncate creates.
 
 	cache, _ := newTestCache(t, 1<<30)
-	skipWithoutHoles(t, cache.dir)
+	skipWithoutHoles(t, cache.config.Dir)
 	path := serve(t, data, false).acquire(t, cache, "sandbox-a")
 	got, err := os.ReadFile(path)
 	if err != nil {
