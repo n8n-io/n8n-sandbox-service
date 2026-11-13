@@ -68,6 +68,21 @@ const info = await client.getSandbox(sandbox.id);
 await client.deleteSandbox(sandbox.id);
 ```
 
+### Code sandboxes
+
+`createCodeSandbox` returns the current code sandbox of a name, or creates one. It is idempotent on the name, so it is retried like any idempotent method. A name whose sandbox has other settings fails with a `SandboxServiceError` with `status` `409` and `reason` `sandbox_settings_mismatch`.
+
+```ts
+const code = await client.createCodeSandbox({
+  name: 'scope-1',
+  runtime: 'n8n-js',
+  runtimeVersion: '2.42.0',
+  slots: 2,
+  memoryMb: 1024,
+});
+console.log(code.id, code.created);
+```
+
 ### Execute commands
 
 ```ts
