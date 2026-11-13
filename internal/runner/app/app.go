@@ -24,6 +24,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/runner/cordon"
 	"github.com/n8n-io/sandbox-service/internal/runner/register"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
+	"github.com/n8n-io/sandbox-service/internal/runner/volumecache"
 )
 
 type RuntimeFactory func(*config.Config) (runnerruntime.Runtime, error)
@@ -88,6 +89,39 @@ func Run(cfg *config.Config, rt runnerruntime.Runtime) {
 		})
 		mrec.SetTLSCertificateExpiry(grpctls.CertificateExpiryByCertPath)
 		slog.Info("metrics endpoint enabled", "path", "/metrics")
+	}
+
+	// After the runtime is built: Firecracker's startup reconcile removes every
+	// directory in the data dir, the default cache dir included. Nothing
+	// acquires from the cache yet; building it wipes the dir, registers its
+	// metrics and sets its budget aside from creates.
+	cacheConfig := volumecache.Config{
+		Dir:          cfg.VolumeCacheDir,
+		DataDir:      cfg.DataDir,
+		MaxBytes:     cfg.VolumeCacheMaxBytes,
+		FetchTimeout: cfg.VolumeFetchTimeout,
+		Metrics:      mrec,
+	}
+	// Volume objects the API serves itself are fetched with the identity the
+	// runner registers with. An address gRPC can dial but that names no host
+	// leaves those downloads without it, and the API refuses them.
+	if apiHost, _, err := net.SplitHostPort(cfg.APIGRPCAddr); err != nil || apiHost == "" {
+		slog.Warn("volume cache: SANDBOX_RUNNER_API_GRPC_ADDR is not host:port, so downloads from the API present no client certificate", "addr", cfg.APIGRPCAddr, "error", err)
+	} else {
+		apiTLS, err := grpctls.NewClientTLSConfig(cfg.GRPCServerCAFile, cfg.GRPCClientCertFile, cfg.GRPCClientKeyFile, cfg.GRPCServerName)
+		if err != nil {
+			slog.Error("volume cache tls", "error", err)
+			os.Exit(1)
+		}
+		cacheConfig.APIHost, cacheConfig.APITLS = apiHost, apiTLS
+	}
+	cache, err := volumecache.New(cacheConfig)
+	if err != nil {
+		slog.Error("volume cache", "error", err)
+		os.Exit(1)
+	}
+	if reserver, ok := rt.(runnerruntime.DiskReserver); ok {
+		reserver.SetDiskReservation(cache.DataDirReservation)
 	}
 
 	handler := runner.NewRouter(rt, cfg, mrec)

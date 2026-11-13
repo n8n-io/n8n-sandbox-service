@@ -25,6 +25,12 @@ const CreateBudget = 3 * time.Minute
 // The idle sweeper derives its RPC deadline from it.
 const TransitionBudget = 2 * time.Minute
 
+// DiskFloorPercent is the free space, as a percentage of a disk, that new
+// sandboxes, volume builds and volume downloads leave alone. New sandboxes take almost no
+// space at first and grow as they write, so the floor is room for the
+// sandboxes already there to grow into.
+const DiskFloorPercent = 5
+
 // ErrSandboxNotFound is returned when a sandbox ID is not found.
 var ErrSandboxNotFound = errors.New("sandbox not found")
 
@@ -134,6 +140,13 @@ type Capacity struct {
 	Used    int32 // slot-blocking sandboxes (Firecracker: running microVMs; Docker: all managed containers, stopped included)
 	Total   int32
 	Stopped int32 // managed but not slot-blocking (Firecracker stopped snapshots)
+}
+
+// DiskReserver is a runtime whose creates and volume builds leave data volume
+// space free for something else on the runner: the volume cache's unused
+// budget.
+type DiskReserver interface {
+	SetDiskReservation(reserved func() int64)
 }
 
 // Runtime is the sandbox backend contract used by the shared runner process.

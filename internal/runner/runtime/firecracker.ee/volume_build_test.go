@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -442,12 +443,15 @@ func TestBuildVolumeRefusesBelowTheDiskFloor(t *testing.T) {
 	harness := newBuilderHarness(t)
 	needed := volumebuild.DriveBytes(testBuildParams.TarBytes) + volumebuild.ImageBytes(testBuildParams)
 	const total = 100 << 30
-	floor := int64(total * createFloorPercent / 100)
+	floor := int64(total * runnerruntime.DiskFloorPercent / 100)
 
 	harness.rt.deps.volumeSpace = func(string) (volumeSpace, error) { return volumeSpace{free: floor + needed - 1, total: total}, nil }
 	err := harness.rt.BuildVolume(context.Background(), testBuildParams, neverRead{t}, discardImage)
 	if !errors.Is(err, runnerruntime.ErrCapacityExhausted) || errors.Is(err, runnerruntime.ErrVolumeBuildBusy) {
 		t.Fatalf("BuildVolume() = %v, want a capacity refusal that is not busy", err)
+	}
+	if strings.Contains(err.Error(), "volume cache") {
+		t.Errorf("BuildVolume() = %v: no cache sets anything aside here", err)
 	}
 	if len(harness.commands) != 0 {
 		t.Errorf("the refused build ran commands: %v", harness.commands)
@@ -461,6 +465,25 @@ func TestBuildVolumeRefusesBelowTheDiskFloor(t *testing.T) {
 	harness.guest = guestBuilds(t, okStatus, "")
 	if err := harness.rt.BuildVolume(context.Background(), testBuildParams, bytes.NewReader(testTar()), discardImage); err != nil {
 		t.Fatalf("BuildVolume() with enough disk: %v", err)
+	}
+
+	// The volume cache's unused budget counts as taken, as for a create.
+	harness.rt.SetDiskReservation(func() int64 { return 1 })
+	err = harness.rt.BuildVolume(context.Background(), testBuildParams, neverRead{t}, discardImage)
+	if !errors.Is(err, runnerruntime.ErrCapacityExhausted) || !strings.Contains(err.Error(), "volume cache") {
+		t.Fatalf("BuildVolume() = %v, want a capacity refusal that names the volume cache", err)
+	}
+	harness.rt.deps.volumeSpace = func(string) (volumeSpace, error) { return volumeSpace{free: floor + needed + 1, total: total}, nil }
+	if err := harness.rt.BuildVolume(context.Background(), testBuildParams, bytes.NewReader(testTar()), discardImage); err != nil {
+		t.Fatalf("BuildVolume() with room for the build and the reservation: %v", err)
+	}
+
+	// However large the reservation, the sums must not wrap around.
+	harness.rt.SetDiskReservation(func() int64 { return math.MaxInt64 })
+	harness.rt.deps.volumeSpace = func(string) (volumeSpace, error) { return volumeSpace{free: 0, total: total}, nil }
+	err = harness.rt.BuildVolume(context.Background(), testBuildParams, neverRead{t}, discardImage)
+	if !errors.Is(err, runnerruntime.ErrCapacityExhausted) {
+		t.Fatalf("BuildVolume() = %v with no space and the largest reservation, want a capacity refusal", err)
 	}
 }
 

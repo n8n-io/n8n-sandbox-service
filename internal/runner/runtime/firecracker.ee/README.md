@@ -69,8 +69,8 @@ A volume drive is a read-only drive the golden snapshot reserves for a volume, a
 
 A build runs in a builder microVM, one per runner at a time, without a sandbox slot:
 
-1. Refuse, before reading any tar byte and as a capacity refusal the API can retry elsewhere, while the runner is cordoned, not ready or already building, or if the tar plus the image would take the data volume below the 5% floor.
-2. Write the tar to `SANDBOX_RUNNER_DATA_DIR/volume-build/`, with a sparse output file sized from the entry count and content bytes (the rule is in `internal/daemon/volumebuild/size.go`), a 4 KiB status file and a clone of the template rootfs.
+1. Refuse, before reading any tar byte and as a capacity refusal the API can retry elsewhere, while the runner is cordoned, not ready or already building, or if the tar plus the image would take the data volume below the 5% floor, with the volume cache's unused budget counted as taken, as for a create.
+2. Check the template kernel as a cold boot does (owned by root, writable by no other user), then write the tar to `SANDBOX_RUNNER_DATA_DIR/volume-build/`, with a sparse output file sized from the entry count and content bytes (the rule is in `internal/daemon/volumebuild/size.go`), a 4 KiB status file and a clone of the template rootfs.
 3. Replay the clone's journal with `e2fsck -E journal_only`: the golden snapshot's microVM left the template mounted read-write, and the kernel does not mount such a file system from a read-only drive. The template itself is never touched.
 4. Make the tar and the clone root-owned `0444` and bind them, and the template kernel, read-only into the jail `volume-build` before jailer starts; the output and status files are bound writable. The jail gets the empty network namespace `fc-volume-build`.
 5. Cold boot with the golden snapshot's vCPUs, memory and kernel command line from `boot.json`, so the builder follows the snapshot without a second copy of those values. Two things differ: no network interface and no `ip=` (which stalls a boot without one), and the build parameters, which reach the daemon as environment. Drives in order: rootfs, tar, output, status.
@@ -87,11 +87,11 @@ CPU, memory and disk are fixed when the golden snapshot and `rootfs.ext4` are bu
 
 Each sandbox keeps its rootfs and memory snapshot under `SANDBOX_RUNNER_DATA_DIR` until it is deleted. On XFS with reflink, the rootfs shares blocks with the template and the memory snapshot with the golden snapshot, so a new sandbox takes almost no space; it grows as the guest writes and when a stop saves its memory. The checks are in `disk.go`:
 
-- **Create:** refused while the volume has less than 5% free, like when no slot is free, so the API tries another runner.
+- **Create:** refused while the volume has less than 5% free, like when no slot is free, so the API tries another runner. When the volume cache is on this volume, its budget less the objects it has finished downloading counts as taken.
 - **Stop:** needs room for the memory snapshot, or it fails before pausing the guest; the sandbox keeps running and the idle sweeper retries. If the snapshot fails after the pause, the guest is resumed, or shut down like a crashed guest if that fails too.
 - **Wake:** not checked; the sandbox already holds its space.
 
-The runner never deletes a sandbox to make room. Sandboxes already on the volume can still fill the last 5%; their writes then fail.
+The runner never deletes a sandbox to make room. Sandboxes already on the volume can still fill the last 5%, and the cache's unused budget when the cache is on this volume; their writes then fail. The cache starts a download only if it fits above the last 5%, evicting unused objects first if it has to.
 
 Setup:
 

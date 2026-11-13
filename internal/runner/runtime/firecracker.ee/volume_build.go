@@ -311,7 +311,8 @@ func (r *Runtime) stopVolumeBuild() (wait func(ctx context.Context)) {
 }
 
 // checkVolumeBuildDiskSpace refuses a build whose tar and image would take
-// the data volume below the floor creates keep. The image is sparse, but a
+// the data volume below the floor creates keep, with what the volume cache
+// sets aside counted as taken, as for a create. The image is sparse, but a
 // build may fill it. The rootfs clone is not counted: like a sandbox's, it
 // shares the template's blocks where the volume can.
 func (r *Runtime) checkVolumeBuildDiskSpace(needed int64) error {
@@ -319,12 +320,23 @@ func (r *Runtime) checkVolumeBuildDiskSpace(needed int64) error {
 	if err != nil {
 		return err
 	}
-	floor := space.total * createFloorPercent / 100
-	if space.free-needed < floor {
+	var reserved int64
+	if r.diskReserved != nil {
+		reserved = r.diskReserved()
+	}
+	floor := space.total * runnerruntime.DiskFloorPercent / 100
+	// The reservation is compared, not subtracted, so none overflows; free,
+	// floor and needed are far below the int64 range.
+	switch {
+	case space.free-floor-needed >= reserved:
+		return nil
+	case reserved > 0:
+		return fmt.Errorf("firecracker data volume has %d MiB free; less the %d MiB set aside for the volume cache (SANDBOX_RUNNER_VOLUME_CACHE_MAX_BYTES), that is too little for a volume build of %d MiB above its %d MiB floor: %w",
+			space.free>>20, reserved>>20, needed>>20, floor>>20, runnerruntime.ErrCapacityExhausted)
+	default:
 		return fmt.Errorf("firecracker data volume has %d MiB free, too little for a volume build of %d MiB above its %d MiB floor: %w",
 			space.free>>20, needed>>20, floor>>20, runnerruntime.ErrCapacityExhausted)
 	}
-	return nil
 }
 
 // receiveVolumeTar writes the tar into the build's fresh directory, padded

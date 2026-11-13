@@ -271,6 +271,46 @@ func TestRunnerRecorderDisabled(t *testing.T) {
 	r.SetUnwiredSlots(func() float64 { return 1 })
 	r.SetCordoned(func() float64 { return 1 })
 	r.AddHTTPInFlight(1)
+	r.ObserveVolumeCacheFetch(VolumeFetchHit)
+	r.ObserveVolumeCacheDownload(time.Second)
+	r.ObserveVolumeCacheEviction()
+	r.SetVolumeCache(func() float64 { return 1 }, func() float64 { return 1 }, func() float64 { return 1 })
+	if got := r.VolumeCacheFetchCount(VolumeFetchHit); got != 0 {
+		t.Errorf("VolumeCacheFetchCount on a disabled recorder = %v, want 0", got)
+	}
+	var nilRecorder *RunnerRecorder
+	nilRecorder.ObserveVolumeCacheFetch(VolumeFetchHit)
+	nilRecorder.SetVolumeCache(nil, nil, nil)
+}
+
+func TestRunnerRecorderVolumeCache(t *testing.T) {
+	rec := NewRunnerRecorder(true)
+	rec.ObserveVolumeCacheFetch(VolumeFetchHit)
+	rec.ObserveVolumeCacheFetch(VolumeFetchHit)
+	rec.ObserveVolumeCacheFetch(VolumeFetchDigest)
+	rec.ObserveVolumeCacheDownload(3 * time.Second)
+	rec.ObserveVolumeCacheEviction()
+	rec.SetVolumeCache(func() float64 { return 4096 }, func() float64 { return 3 }, func() float64 { return 2 })
+
+	if got := rec.VolumeCacheFetchCount(VolumeFetchHit); got != 2 {
+		t.Errorf("volume_cache_fetches_total{result=hit} = %v, want 2", got)
+	}
+	if got := rec.VolumeCacheEvictionCount(); got != 1 {
+		t.Errorf("volume_cache_evictions_total = %v, want 1", got)
+	}
+	body := scrape(t, rec.Registry())
+	for _, want := range []string{
+		`sandbox_volume_cache_fetches_total{result="digest",role="runner"} 1`,
+		`sandbox_volume_cache_download_duration_seconds_count{role="runner"} 1`,
+		`sandbox_volume_cache_evictions_total{role="runner"} 1`,
+		`sandbox_volume_cache_bytes{role="runner"} 4096`,
+		`sandbox_volume_cache_entries{role="runner"} 3`,
+		`sandbox_volume_cache_pinned_entries{role="runner"} 2`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("scrape body missing %q", want)
+		}
+	}
 }
 
 func TestRunnerRecorderStoppedGaugeScrape(t *testing.T) {

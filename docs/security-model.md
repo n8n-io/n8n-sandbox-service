@@ -133,6 +133,16 @@ and lifecycle calls. Lifecycle calls go the other way, over the runner's
 `SandboxControl` gRPC listener, which also requires mTLS with a client
 certificate signed by the configured CA, plus an API key in the call metadata.
 
+Runners download volume objects over `https` only and follow no redirects. A
+URL on the host of `SANDBOX_RUNNER_API_GRPC_ADDR`, on any port, is fetched with
+the registration certificate, verified against the registration CA like the
+registration stream, and never through a proxy. Any other URL, such as cloud
+storage, gets the system's CAs, the proxy from the environment and no client
+certificate, so the registration identity goes to the API's host alone. The
+host is compared by name: a URL that names the API by an address or another
+name gets no certificate. Every object is checked against the size and sha256
+the API recorded before the runner keeps it.
+
 Exec and file traffic is proxied over the runner's HTTP listener, which requires
 the same two things. It serves TLS using the certificate configured for the
 control gRPC listener, so both channels to a runner share one identity and one
@@ -226,9 +236,9 @@ and the jailer arguments in
 Firecracker runs as uid 1000 in a jail that holds its sandbox's own rootfs and
 memory snapshot, and one file every sandbox on the host shares: the guest
 kernel. That file is root-owned with mode `0444` and bind-mounted read-only, so
-a Firecracker process cannot change the kernel later sandboxes boot. Admission
-and every cold boot fail unless that file is owned by root, readable by all and
-writable by no other user.
+a Firecracker process cannot change the kernel later sandboxes boot. Admission,
+every cold boot and every volume build fail unless that file is owned by root,
+readable by all and writable by no other user.
 
 The Sysbox runtime puts sandboxes on one of two Docker bridges: `runner-bridge`
 for `public`, and `runner-no-egress` (a Docker internal network; bridge device
@@ -523,6 +533,7 @@ The boundaries above are covered by tests rather than asserted on paper.
 | Scaler keys: `GET /admin/runners` and runner cordon only, `403` on every other path, no overlap with the other key sets | [internal/api/handlers_runners_test.go](../internal/api/handlers_runners_test.go), [internal/api/config/config_test.go](../internal/api/config/config_test.go), [e2e/tests/admin-runners.spec.ts](../e2e/tests/admin-runners.spec.ts) |
 | Concurrency limits: per tenant (creates included) and per sandbox, the execution `DELETE` limits and timeout, the `timeout_ms` cap | [internal/api/middleware_limits_test.go](../internal/api/middleware_limits_test.go), [internal/runner/middleware_limits_test.go](../internal/runner/middleware_limits_test.go), [internal/limits/limits_test.go](../internal/limits/limits_test.go), [e2e/tests/request-limits.spec.ts](../e2e/tests/request-limits.spec.ts) |
 | Runner listeners require a CA-signed client certificate; the API verifies each runner's host name and refuses a non-https base | [internal/runner/mtls_test.go](../internal/runner/mtls_test.go), [internal/api/runnertls_test.go](../internal/api/runnertls_test.go), [internal/api/registry/validate_test.go](../internal/api/registry/validate_test.go) |
+| Runner volume downloads: `https` only, no redirects followed; the registration certificate and CA, and no proxy, on the API's host alone; size and sha256 checked | [internal/runner/volumecache/transport_test.go](../internal/runner/volumecache/transport_test.go), [internal/runner/volumecache/cache_test.go](../internal/runner/volumecache/cache_test.go) |
 | No caller-set header but `Content-Type` passed on to the daemon; daemon redirects refused; daemon signal headers stripped, sandbox-gone body ignored | [internal/runner/proxy_test.go](../internal/runner/proxy_test.go), [internal/api/handlers_reap_test.go](../internal/api/handlers_reap_test.go), [e2e/tests/runner-restart.spec.ts](../e2e/tests/runner-restart.spec.ts) |
 | Sandbox-to-sandbox (unicast and multicast), blocked-range egress and guest DNS; egress `none` across stop/wake and slot reuse | [e2e/tests/network-isolation.spec.ts](../e2e/tests/network-isolation.spec.ts) |
 | Docker capability policy, absence of a root path, and denied network administration; no user namespaces on either runtime | [e2e/tests/sandbox-capabilities.spec.ts](../e2e/tests/sandbox-capabilities.spec.ts) |

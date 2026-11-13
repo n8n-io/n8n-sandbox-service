@@ -14,11 +14,6 @@ import (
 // file itself.
 const stoppedSnapshotHeadroomBytes = 64 << 20 // 64 MiB
 
-// createFloorPercent is the free space a create needs, as a percentage of the
-// volume. New sandboxes take almost no space at first and grow as they write,
-// so the floor is room for the sandboxes already there to grow into.
-const createFloorPercent = 5
-
 // volumeSpace is the free and total space, in bytes, of the filesystem holding
 // the sandbox data dir. free is what an unprivileged writer can still use.
 type volumeSpace struct {
@@ -39,26 +34,46 @@ func statVolume(path string) (volumeSpace, error) {
 	}, nil
 }
 
-// checkCreateDiskSpace refuses a create while the data volume is below its
-// floor. The refusal wraps ErrCapacityExhausted, so the API tries another
-// runner; nothing has been created yet.
+// SetDiskReservation tells creates and volume builds how much of the data
+// volume is set aside and not written yet: the volume cache's unused budget.
+// Call it before Prepare.
+func (r *Runtime) SetDiskReservation(reserved func() int64) {
+	r.diskReserved = reserved
+}
+
+// checkCreateDiskSpace refuses a create while the data volume, less what is
+// set aside, is below its floor. The refusal wraps ErrCapacityExhausted, so the
+// API tries another runner; nothing has been created yet.
 func (r *Runtime) checkCreateDiskSpace() error {
 	space, err := r.deps.volumeSpace(r.runnerConfig.DataDir)
 	if err != nil {
 		return err
 	}
-	floor := space.total * createFloorPercent / 100
-	if space.free < floor {
+	var reserved int64
+	if r.diskReserved != nil {
+		reserved = r.diskReserved()
+	}
+	floor := space.total * runnerruntime.DiskFloorPercent / 100
+	switch {
+	case space.free-reserved >= floor:
+		return nil
+	case reserved > 0:
+		// Named because on a small disk the cache's default budget alone can keep
+		// the runner from admitting anything, the admission canary included.
+		return fmt.Errorf("firecracker data volume has %d MiB free; less the %d MiB set aside for the volume cache (SANDBOX_RUNNER_VOLUME_CACHE_MAX_BYTES), that is below its %d MiB floor: %w",
+			space.free>>20, reserved>>20, floor>>20, runnerruntime.ErrCapacityExhausted)
+	default:
 		return fmt.Errorf("firecracker data volume has %d MiB free, below its %d MiB floor: %w",
 			space.free>>20, floor>>20, runnerruntime.ErrCapacityExhausted)
 	}
-	return nil
 }
 
 // ensureDiskSpaceForSnapshot fails a stop with no room for its snapshot, before
 // the guest is paused, so the sandbox keeps running and the idle sweeper retries.
 // It never deletes another sandbox to make room: the runner does not know who
-// owns them.
+// owns them. Unlike a create, a stop may use the space the volume cache sets
+// aside: the sandbox is already on the volume, and those may grow into that
+// space as into the floor.
 func (r *Runtime) ensureDiskSpaceForSnapshot(state *sandboxState) error {
 	needed, err := snapshotWriteBytes(state.snapshotMemPath)
 	if err != nil {
