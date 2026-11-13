@@ -86,6 +86,17 @@ func coldBoot(ctx context.Context, socketPath string, params *bootParams) error 
 	}); err != nil {
 		return err
 	}
+	// Same order as the golden snapshot, so vol0 stays /dev/vdb.
+	for _, drive := range params.VolumeDrives {
+		if err := put("/drives/"+drive.DriveID, driveRequest{
+			DriveID:      drive.DriveID,
+			PathOnHost:   drive.Path,
+			IsRootDevice: false,
+			IsReadOnly:   true,
+		}); err != nil {
+			return err
+		}
+	}
 	// The MAC is replayed too. The guest configured its network from the kernel
 	// ip= parameter at first boot and that configuration is in the rootfs, so a
 	// different MAC would boot a guest whose interface it does not recognise.
