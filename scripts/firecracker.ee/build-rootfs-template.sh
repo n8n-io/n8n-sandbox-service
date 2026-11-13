@@ -251,10 +251,11 @@ echo "==> rootfs.ext4 free space: ${free_mb}MiB"
 verify_rootfs_resolv_conf "$ext4_path"
 
 maybe_sudo rm -rf "$TEMPLATE_DIR"
-maybe_sudo install -d -m 0755 "$TEMPLATE_DIR"
-maybe_sudo install -m 0644 "$FIRECRACKER_CI_VMLINUX" "${TEMPLATE_DIR}/vmlinux"
-maybe_sudo install -m 0664 "$ext4_path" "${TEMPLATE_DIR}/rootfs.ext4"
-# Jailer uid/gid 1000 must be able to open rootfs RW for snapshot create and restores.
-maybe_sudo chown -R 1000:1000 "$TEMPLATE_DIR"
+maybe_sudo install -d -m 0755 -o root -g root "$TEMPLATE_DIR"
+# The runner binds this one file into every jail, so the jailer uid/gid 1000 must
+# not be able to write it: the runner refuses a kernel that is not root-owned.
+maybe_sudo install -m 0444 -o root -g root "$FIRECRACKER_CI_VMLINUX" "${TEMPLATE_DIR}/vmlinux"
+# Jailer uid/gid 1000 must be able to open rootfs RW for snapshot create.
+maybe_sudo install -m 0664 -o 1000 -g 1000 "$ext4_path" "${TEMPLATE_DIR}/rootfs.ext4"
 
 echo "==> Firecracker rootfs template ready: ${TEMPLATE_DIR}"

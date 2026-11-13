@@ -306,6 +306,7 @@ type dependencies struct {
 	coldBoot            func(ctx context.Context, socketPath string, params *bootParams) error
 	loadBootParams      func(path string) (*bootParams, error)
 	statTemplateKernel  func(path string) (kernelPin, error)
+	checkTemplateKernel func(path string) error
 	newProxy            func(ctx context.Context, sandboxID string, listenAddr string, netnsName string, guestAddr string) (daemonProxy, error)
 	probeDaemon         func(ctx context.Context, baseURL string) error
 	mountVolumeDrives   func(ctx context.Context, baseURL string, drives []volumedrives.Volume) error
@@ -326,6 +327,7 @@ func defaultDependencies(fc Config) dependencies {
 		coldBoot:            coldBoot,
 		loadBootParams:      loadBootParams,
 		statTemplateKernel:  statTemplateKernel,
+		checkTemplateKernel: checkTemplateKernel,
 		newProxy: func(ctx context.Context, sandboxID string, listenAddr string, netnsName string, guestAddr string) (daemonProxy, error) {
 			return startDaemonProxy(ctx, sandboxID, listenAddr, netnsName, guestAddr)
 		},
@@ -776,9 +778,11 @@ func (s *sandboxState) daemonURLAddr() string {
 // The kernel goes in unconditionally, even though only a cold boot reads it: one
 // jail prep then serves both paths, and which one a sandbox takes is not known
 // until it is activated — a sandbox can be created from its snapshot and cold
-// booted later, on the same jail. It is left with the template's own ownership and
-// mode: Firecracker only reads it, and a bind mount shares the inode, so chowning
-// it would rewrite an asset every other sandbox on the host shares.
+// booted later, on the same jail. It is bound read-only and left with the
+// template's own ownership and mode: Firecracker only reads it, and a bind mount
+// shares the inode, so chowning it would hand every other sandbox's kernel to the
+// uid Firecracker runs as. The mountpoint is created only when missing: a failed
+// cleanup can leave the kernel mounted there, and touch fails on a read-only mount.
 func (r *Runtime) prepareJail(ctx context.Context, state *sandboxState) error {
 	jailRoot := filepath.Join(r.config.JailerBaseDir, "firecracker", state.vmID, "root")
 	rootfsTarget := filepath.Join(jailRoot, strings.TrimPrefix(state.bootParams.RootfsDrivePath, "/"))
@@ -788,16 +792,17 @@ set -eu
 mkdir -p %[1]s
 mkdir -p %[5]s
 mkdir -p %[8]s
-touch %[1]s/snapshot_mem %[1]s/snapshot_state %[6]s %[9]s
+touch %[1]s/snapshot_mem %[1]s/snapshot_state %[6]s
+[ -e %[9]s ] || touch %[9]s
 mount --bind %[2]s %[1]s/snapshot_mem
 mount --bind %[3]s %[1]s/snapshot_state
 mount --bind %[4]s %[6]s
-mount --bind %[7]s %[9]s
+mount --bind -o ro %[7]s %[9]s
 chown 1000:1000 %[1]s/snapshot_mem %[1]s/snapshot_state %[6]s
 chmod 0664 %[1]s/snapshot_mem %[1]s/snapshot_state %[6]s
 `, shellquote.Quote(jailRoot), shellquote.Quote(state.snapshotMemPath), shellquote.Quote(state.snapshotStatePath),
 		shellquote.Quote(state.rootfsPath), shellquote.Quote(filepath.Dir(rootfsTarget)), shellquote.Quote(rootfsTarget),
-		shellquote.Quote(filepath.Join(r.config.TemplateDir, "vmlinux")), shellquote.Quote(filepath.Dir(kernelTarget)), shellquote.Quote(kernelTarget))
+		shellquote.Quote(templateKernelPath(r.config)), shellquote.Quote(filepath.Dir(kernelTarget)), shellquote.Quote(kernelTarget))
 	script += volumeDrivePlaceholders(r.config.JailerBaseDir, jailRoot, state.bootParams.VolumeDrives)
 	return r.deps.run(ctx, "sudo", "/bin/sh", "-c", script)
 }

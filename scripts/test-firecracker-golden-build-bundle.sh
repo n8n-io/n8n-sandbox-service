@@ -29,8 +29,8 @@ maybe_sudo() {
 
 work="$(mktemp -d)"
 template_dir="${work}/template"
-# build-rootfs-template.sh chowns TEMPLATE_DIR to 1000:1000 for the jailer,
-# so cleanup must escalate when the CI runner is a different uid.
+# build-rootfs-template.sh writes TEMPLATE_DIR as root, so cleanup must escalate
+# when the CI runner is a different uid.
 trap 'maybe_sudo rm -rf "$work"' EXIT
 
 echo "==> Building sandbox image ${SANDBOX_IMAGE} from Dockerfile.sandbox..."
@@ -48,6 +48,13 @@ for path in "${template_dir}/vmlinux" "${template_dir}/rootfs.ext4"; do
 		exit 1
 	fi
 done
+
+# Every jail shares the kernel, so the jailer uid 1000 must not be able to write it.
+kernel_perms="$(stat -c '%u:%g %a' "${template_dir}/vmlinux")"
+if [[ "$kernel_perms" != "0:0 444" ]]; then
+	echo "ERROR: template vmlinux must be root-owned with mode 0444; got ${kernel_perms}" >&2
+	exit 1
+fi
 
 resolv="$(debugfs -R 'cat /etc/resolv.conf' "${template_dir}/rootfs.ext4" 2>/dev/null || true)"
 if ! grep -q 'nameserver 8.8.8.8' <<<"$resolv" || ! grep -q 'nameserver 1.1.1.1' <<<"$resolv"; then
