@@ -152,7 +152,8 @@ prepare_runtime_dirs() {
 	if ! mountpoint -q /srv/jailer; then
 		mount -t tmpfs -o "rw,nosuid,mode=0755,size=${JAILER_TMPFS_SIZE}" tmpfs /srv/jailer
 	fi
-	chown -R 1000:1000 /srv/firecracker/template /srv/firecracker/snapshots 2>/dev/null || true
+	# Not the template: its vmlinux is shared by every jail and stays root-owned.
+	chown -R 1000:1000 /srv/firecracker/snapshots 2>/dev/null || true
 }
 
 download_ci_assets() {

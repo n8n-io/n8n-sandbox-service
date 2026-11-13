@@ -133,7 +133,7 @@ Slots give the host-side Firecracker resources stable names without exposing tho
 | `SANDBOX_RUNNER_FIRECRACKER_JAILER_BIN` | `/opt/firecracker/bin/jailer` | Path to the Firecracker jailer binary |
 | `SANDBOX_RUNNER_FIRECRACKER_BIN` | `/opt/firecracker/bin/firecracker` | Path to the Firecracker VMM binary |
 | `SANDBOX_RUNNER_FIRECRACKER_JAILER_BASE_DIR` | `/srv/jailer` | Base directory passed to `jailer --chroot-base-dir` |
-| `SANDBOX_RUNNER_FIRECRACKER_TEMPLATE_DIR` | `/srv/firecracker/template` | Directory containing the snapshot rootfs (`rootfs.ext4`) |
+| `SANDBOX_RUNNER_FIRECRACKER_TEMPLATE_DIR` | `/srv/firecracker/template` | Directory containing the snapshot rootfs (`rootfs.ext4`) and the guest kernel (`vmlinux`). The kernel must be owned by root, readable by all and not writable by group or other, or admission fails |
 | `SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_MEM_PATH` | `/srv/firecracker/snapshots/mem` | Host path bind-mounted into the jail as `/snapshot_mem` |
 | `SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_STATE_PATH` | `/srv/firecracker/snapshots/state` | Host path bind-mounted into the jail as `/snapshot_state`. When auto-create is enabled, must share a directory with `SNAPSHOT_MEM_PATH` |
 | `SANDBOX_RUNNER_FIRECRACKER_GUEST_IP` | `172.16.0.10` | Guest IP expected by the restored snapshot |

@@ -116,6 +116,11 @@ service bundle's `bin/sandbox-daemon` as `/sandbox-daemon` (PID 1). After the
 staged tree is normalized to `root:root`, `/home/user` is restored to `1000:1000`
 so the daemon (which drops privileges) can write the workspace.
 
+`vmlinux` is installed `root:root` with mode `0444` and must stay that way: the
+runner binds it read-only into every jail and fails admission unless it is owned
+by root, readable by all and not writable by group or other. `rootfs.ext4` is
+owned by `1000:1000`, the jailer uid.
+
 ### `configure-host-nat.sh`
 
 Idempotent shell equivalent of `EnsureHostNAT` in
@@ -182,15 +187,17 @@ Rollout order per environment:
    host. Assert `git_sha` in `MANIFEST.json` matches the commit the runner image
    was built from (see above).
 2. Ensure the rootfs template exists (`build_rootfs_template`; rebuild it when
-   `sandbox_image.ref` changed).
+   `sandbox_image.ref` or the kernel pinned in `firecracker-ci-assets.sh`
+   changed).
 3. Set `SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT` (and
    `SANDBOX_RUNNER_FIRECRACKER_DAEMON_BIN`) so the runner creates the host-local
    golden snapshot on first `Prepare`, or run `create-golden-snapshot.sh` by hand.
    The runner creates it only when it is missing, and Firecracker cannot restore
    a snapshot taken by another release: when `firecracker_version` changes on a
-   host that keeps its disk, remove the old snapshot first. A snapshot from before
-   volume drives works without them; an older runner refuses one with them, so
-   remove it before rolling back.
+   host that keeps its disk, remove the old snapshot first. Remove it after a
+   template rebuild as well: it was booted from the old kernel and rootfs. A
+   snapshot from before volume drives works without them; an older runner refuses
+   one with them, so remove it before rolling back.
 4. Roll `runner-firecracker` to the matching version — after step 3, never before.
    The runner stays unhealthy (`/readyz`, registration `Healthy=false`) until pin,
    snapshot and canary pass.

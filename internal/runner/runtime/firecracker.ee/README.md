@@ -7,7 +7,7 @@ Each sandbox is a Firecracker microVM restored from a golden snapshot built on t
 The runner reports `Healthy=false`, fails `/readyz` and `Ready()` until all of these pass, retrying with backoff:
 
 1. Host NAT — IPv4 forwarding plus idempotent MASQUERADE/FORWARD rules.
-2. Guest assets — jailer, firecracker, `template/rootfs.ext4`, `template/vmlinux`, and optionally `MANIFEST.json` / expected `git_sha` / daemon checksum.
+2. Guest assets — jailer, firecracker, `template/rootfs.ext4`, `template/vmlinux`, and optionally `MANIFEST.json` / expected `git_sha` / daemon checksum. `vmlinux` must be owned by root, readable by all and writable by no other user, as `build-rootfs-template.sh` installs it. That is checked here, again after step 3 and before every cold boot.
 3. Golden snapshot — if `snapshot_mem`, `snapshot_state` or `boot.json` is missing and `SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT` is set, run `create-golden-snapshot.sh` locally (snapshots are not portable across CPU generations). The runner passes its own `GUEST_IP`, `HOST_TAP_IP_CIDR`, `HOST_TAP_DEVICE_NAME` and `DAEMON_PORT`; `MEM_MIB`, `VCPUS` and `VOLUME_DRIVES` are script-owned.
 4. Snapshot pin — mem/state exist and `boot.json` agrees with the runner (see [boot.json](../../../../docs/configuration.md#golden-snapshot-boot-parameters-bootjson)).
 5. Canary — create `admission-canary-*`, probe `/healthz`, run a tiny exec and a files round-trip, delete it. A canary whose cleanup fails keeps its slot and fails admission, so a capacity-1 runner is never healthy with a leaked slot.
