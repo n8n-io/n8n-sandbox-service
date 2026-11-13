@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -37,10 +38,13 @@ var zeroBlock [sparseBlock]byte
 // status: the API hands out a URL to the object itself, and following one would
 // let the storage point the runner anywhere it can reach. A client would also
 // parse the Location header first and quote it, token included, in its error.
-func newTransport() *http.Transport {
+// A nil tlsConfig means the system's CAs and no client certificate; a nil proxy
+// means none, whatever the environment says.
+func newTransport(tlsConfig *tls.Config, proxy func(*http.Request) (*url.URL, error)) *http.Transport {
 	dialer := &net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second}
 	return &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
+		Proxy:                 proxy,
+		TLSClientConfig:       tlsConfig,
 		DialContext:           dialer.DialContext,
 		TLSHandshakeTimeout:   tlsHandshakeTimeout,
 		ResponseHeaderTimeout: responseHeaderTimeout,
@@ -61,13 +65,43 @@ func parseSource(src Source) (*url.URL, error) {
 		// Not wrapped: url.Parse quotes the whole URL, token included.
 		return nil, errors.New("invalid volume object URL")
 	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return nil, fmt.Errorf("volume object URL scheme %q is not http or https", parsed.Scheme)
+	if parsed.Scheme != "https" {
+		return nil, fmt.Errorf("volume object URL scheme %q is not https", parsed.Scheme)
 	}
-	if parsed.Host == "" {
+	if parsed.Hostname() == "" {
 		return nil, errors.New("volume object URL has no host")
 	}
 	return parsed, nil
+}
+
+// transportFor picks the registration identity for a URL on the API's host,
+// whatever its port, and the plain transport for every other URL.
+func (c *Cache) transportFor(sourceURL *url.URL) *http.Transport {
+	if c.apiTransport != nil && sameHostName(sourceURL.Hostname(), c.config.APIHost) {
+		return c.apiTransport
+	}
+	return c.transport
+}
+
+// sameHostName compares host names ignoring ASCII case only. strings.EqualFold
+// also folds Unicode, so "ſandbox-api" (a long s) would match "sandbox-api".
+func sameHostName(left, right string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range len(left) {
+		if lowerASCII(left[index]) != lowerASCII(right[index]) {
+			return false
+		}
+	}
+	return true
+}
+
+func lowerASCII(char byte) byte {
+	if 'A' <= char && char <= 'Z' {
+		return char + 'a' - 'A'
+	}
+	return char
 }
 
 // redact is the form of a source URL fit for logs: queries carry SAS or HMAC
@@ -153,7 +187,7 @@ func (c *Cache) download(ctx context.Context, sourceURL *url.URL, size int64, di
 	if err != nil {
 		return 0, failed(metrics.VolumeFetchHTTP, "build request")
 	}
-	resp, err := c.transport.RoundTrip(req)
+	resp, err := c.transportFor(sourceURL).RoundTrip(req)
 	if err != nil {
 		return 0, networkFailure(ctx, err)
 	}

@@ -5,10 +5,13 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -32,8 +35,9 @@ func testConfig(dir, dataDir string) Config {
 	return Config{Dir: dir, DataDir: dataDir, MaxBytes: 1 << 30, FetchTimeout: 10 * time.Second}
 }
 
-// openCache builds a cache with its own metrics on a disk with room to spare.
-func openCache(t *testing.T, cfg Config) (*Cache, *metrics.RunnerRecorder) {
+// newCache builds a cache with its own metrics on a disk with room to spare,
+// its transports as New made them.
+func newCache(t *testing.T, cfg Config) (*Cache, *metrics.RunnerRecorder) {
 	t.Helper()
 	rec := metrics.NewRunnerRecorder(true)
 	cfg.Metrics = rec
@@ -43,6 +47,24 @@ func openCache(t *testing.T, cfg Config) (*Cache, *metrics.RunnerRecorder) {
 	}
 	cache.diskSpace = roomyDisk
 	return cache, rec
+}
+
+// openCache builds a cache that reaches the test storage servers.
+func openCache(t *testing.T, cfg Config) (*Cache, *metrics.RunnerRecorder) {
+	t.Helper()
+	cache, rec := newCache(t, cfg)
+	storageCA, _ := storagePKI(t)
+	cache.trust(storageCA.pool())
+	return cache, rec
+}
+
+// trust makes the plain transport accept the certificates of pool instead of
+// the system's CAs, and keeps whatever else New set on it.
+func (c *Cache) trust(pool *x509.CertPool) {
+	if c.transport.TLSClientConfig == nil {
+		c.transport.TLSClientConfig = &tls.Config{}
+	}
+	c.transport.TLSClientConfig.RootCAs = pool
 }
 
 func newTestCache(t *testing.T, maxBytes int64) (*Cache, *metrics.RunnerRecorder) {
@@ -92,7 +114,7 @@ func serve(t *testing.T, data []byte, gated bool) *server {
 	if gated {
 		srv.gate = make(chan struct{})
 	}
-	srv.Server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, req *http.Request) {
+	srv.Server = serveTLS(t, func(writer http.ResponseWriter, req *http.Request) {
 		srv.hits.Add(1)
 		if srv.gate != nil {
 			select {
@@ -103,7 +125,18 @@ func serve(t *testing.T, data []byte, gated bool) *server {
 		}
 		writer.Header().Set("Content-Length", strconv.Itoa(len(data)))
 		_, _ = writer.Write(data)
-	}))
+	})
+	return srv
+}
+
+// serveTLS starts a server that stands in for object storage: https, with a
+// certificate of the storage test CA, open to any client.
+func serveTLS(t *testing.T, handler http.HandlerFunc) *httptest.Server {
+	t.Helper()
+	_, cert := storagePKI(t)
+	srv := httptest.NewUnstartedServer(handler)
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{cert}}
+	srv.StartTLS()
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -321,8 +354,7 @@ func TestAcquireRejectsWrongSize(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cache, rec := newTestCache(t, 1<<30)
-			srv := httptest.NewServer(tc.handler)
-			defer srv.Close()
+			srv := serveTLS(t, tc.handler)
 
 			_, err := cache.Acquire(context.Background(), keyFor(data), Source{URL: srv.URL, Size: int64(tc.size)}, "sandbox-a")
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
@@ -345,9 +377,7 @@ func TestFailuresKeepSourceSecrets(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	respond := func(handler http.HandlerFunc) string {
-		srv := httptest.NewServer(handler)
-		t.Cleanup(srv.Close)
-		return srv.URL
+		return serveTLS(t, handler).URL
 	}
 	redirectTo := func(location string) string {
 		return respond(func(writer http.ResponseWriter, _ *http.Request) {
@@ -355,7 +385,7 @@ func TestFailuresKeepSourceSecrets(t *testing.T) {
 			writer.WriteHeader(http.StatusFound)
 		})
 	}
-	closed := httptest.NewServer(http.NotFoundHandler())
+	closed := httptest.NewTLSServer(http.NotFoundHandler())
 	closed.Close()
 	target := serve(t, []byte("x"), false)
 
@@ -375,7 +405,7 @@ func TestFailuresKeepSourceSecrets(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("Acquire() error = %v, want %q", err, tc.want)
 			}
-			if strings.Contains(err.Error(), "secret-token") || strings.Contains(err.Error(), strings.TrimPrefix(tc.base, "http://")) {
+			if strings.Contains(err.Error(), "secret-token") || strings.Contains(err.Error(), strings.TrimPrefix(tc.base, "https://")) {
 				t.Errorf("error names the source: %v", err)
 			}
 			if out := logs.String(); !strings.Contains(out, tc.base+"/a") || strings.Contains(out, "secret-token") {
@@ -393,6 +423,10 @@ func TestAcquireRefusesSourceAndKey(t *testing.T) {
 	cache, rec := newTestCache(t, 1<<30)
 	srv := serve(t, randomBytes(t, 4096), false)
 	good := keyFor(srv.data)
+	_, port, err := net.SplitHostPort(srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	for _, tc := range []struct {
 		name string
@@ -400,10 +434,12 @@ func TestAcquireRefusesSourceAndKey(t *testing.T) {
 		src  Source
 	}{
 		{"file scheme", good, Source{URL: "file:///etc/passwd", Size: 4096}},
+		{"http scheme", good, Source{URL: "http://" + srv.Listener.Addr().String() + "/a", Size: 4096}},
 		{"ftp scheme", good, Source{URL: "ftp://" + srv.Listener.Addr().String() + "/a", Size: 4096}},
 		{"no scheme", good, Source{URL: "//" + srv.Listener.Addr().String() + "/a", Size: 4096}},
-		{"no host", good, Source{URL: "http:///a", Size: 4096}},
-		{"unparsable", good, Source{URL: "http://h/%zz?" + token, Size: 4096}},
+		{"no host", good, Source{URL: "https:///a", Size: 4096}},
+		{"port without a host", good, Source{URL: "https://:" + port + "/a", Size: 4096}},
+		{"unparsable", good, Source{URL: "https://h/%zz?" + token, Size: 4096}},
 		{"zero size", good, Source{URL: srv.URL, Size: 0}},
 		{"scope traversal", Key{Scope: "../../etc", SHA256: good.SHA256}, srv.source()},
 		{"scope that is no tenant ID", Key{Scope: "__admin__", SHA256: good.SHA256}, srv.source()},

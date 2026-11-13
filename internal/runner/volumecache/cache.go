@@ -14,6 +14,7 @@ package volumecache
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -60,8 +61,8 @@ func (k Key) validate() error {
 	return nil
 }
 
-// Source is where to download an object and the size the API recorded for it.
-// The URL's query carries a token, so it is never logged.
+// Source is where to download an object, an https URL, and the size the API
+// recorded for it. The URL's query carries a token, so it is never logged.
 type Source struct {
 	URL  string
 	Size int64
@@ -77,14 +78,23 @@ type Config struct {
 	// FetchTimeout bounds one download, however many callers wait for it.
 	FetchTimeout time.Duration
 	Metrics      *metrics.RunnerRecorder
+	// APIHost is the host the runner registers with, and APITLS its
+	// registration identity. A URL on that host, on any port, is fetched with
+	// APITLS and no proxy. Every other URL gets the system's CAs, the proxy
+	// from the environment and no client certificate. Set both or neither.
+	APIHost string
+	APITLS  *tls.Config
 }
 
 // Cache is safe for concurrent use.
 type Cache struct {
 	// config is what New was given, with Dir cleaned.
-	config    Config
-	transport http.RoundTripper
-	diskSpace func(path string) (diskSpace, error)
+	config Config
+	// apiTransport fetches the URLs on config.APIHost and is nil without one;
+	// transport fetches the rest.
+	transport    *http.Transport
+	apiTransport *http.Transport
+	diskSpace    func(path string) (diskSpace, error)
 
 	mu       sync.Mutex
 	dirReady bool
@@ -153,13 +163,20 @@ func New(cfg Config) (*Cache, error) {
 	if cfg.FetchTimeout <= 0 {
 		return nil, fmt.Errorf("volume fetch timeout must be positive, got %s", cfg.FetchTimeout)
 	}
+	if (cfg.APIHost == "") != (cfg.APITLS == nil) {
+		return nil, errors.New("volume cache needs the API host and its TLS config together")
+	}
 	cfg.Dir = dir
 	cache := &Cache{
 		config:    cfg,
-		transport: newTransport(),
+		transport: newTransport(nil, http.ProxyFromEnvironment),
 		diskSpace: statDisk,
 		entries:   make(map[Key]*entry),
 		fetches:   make(map[Key]*fetch),
+	}
+	if cfg.APIHost != "" {
+		// Cloned: the transport adds its protocols to the config it is given.
+		cache.apiTransport = newTransport(cfg.APITLS.Clone(), nil)
 	}
 	if err := cache.prepareDirLocked(); err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
