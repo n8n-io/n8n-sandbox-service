@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 )
 
@@ -26,7 +27,9 @@ func templateKernelPath(cfg Config) string {
 // path, for a file tens of megabytes wide, to answer only whether that file is still
 // the one the sandbox was reserved against. build-rootfs-template.sh replaces the
 // template wholesale, so a rebuild moves both; one that moved neither installed the
-// same kernel again.
+// same kernel again. It does not have to hold against a jailed Firecracker:
+// checkTemplateKernel refuses a file that is not root-owned and read-only, so only
+// root can change it or put its modification time back.
 type kernelPin struct {
 	size    int64
 	modTime time.Time
@@ -44,6 +47,32 @@ func (p kernelPin) String() string {
 	return fmt.Sprintf("%d bytes modified %s", p.size, p.modTime.UTC().Format(time.RFC3339Nano))
 }
 
+// checkTemplateKernel refuses a template kernel that is not what
+// build-rootfs-template.sh installs: owned by root, readable by all and writable
+// by no other user. Every jail binds this file and Firecracker runs as uid 1000,
+// so a VMM that could write it would choose what later sandboxes boot, and one
+// that cannot read it fails the first cold boot.
+func checkTemplateKernel(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("stat template kernel: %w", err)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fmt.Errorf("stat template kernel %s: owner not available", path)
+	}
+	return checkKernelAccess(path, stat.Uid, info.Mode())
+}
+
+// The fix the error names is a rebuild rather than a chown: a kernel that was
+// writable while sandboxes ran may no longer be the one that was installed.
+func checkKernelAccess(path string, uid uint32, mode os.FileMode) error {
+	if uid == 0 && mode.Perm()&0o022 == 0 && mode.Perm()&0o004 != 0 {
+		return nil
+	}
+	return fmt.Errorf("template kernel %s is owned by uid %d with mode %04o, but every jail on this host binds it, so it has to be owned by root, readable by all and writable by no other user; rebuild the template with build-rootfs-template.sh instead of changing its owner, because a kernel that was writable may already have been changed", path, uid, mode.Perm())
+}
+
 // verifyKernelPin refuses a cold boot on a kernel that is not the one the sandbox
 // was reserved against.
 //
@@ -59,6 +88,10 @@ func (p kernelPin) String() string {
 // crash left it, stopped with its rootfs on disk.
 func (r *Runtime) verifyKernelPin(pinned kernelPin) error {
 	path := templateKernelPath(r.config)
+	// Admission checked this, but the cold boot is what reads the file.
+	if err := r.deps.checkTemplateKernel(path); err != nil {
+		return err
+	}
 	current, err := r.deps.statTemplateKernel(path)
 	if err != nil {
 		return err

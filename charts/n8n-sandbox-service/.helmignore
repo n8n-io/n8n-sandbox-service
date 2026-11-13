@@ -5,3 +5,4 @@
 *.swp
 *.tmp
 render-tests.sh
+testdata/

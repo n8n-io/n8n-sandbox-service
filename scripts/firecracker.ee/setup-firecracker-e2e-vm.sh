@@ -314,10 +314,10 @@ pnpm --version
 
 build_template_assets
 write_manifest /srv/firecracker/manifest.json
-sudo chown -R 1000:1000 /srv/firecracker/template /srv/firecracker/snapshots
+# The template keeps the ownership build-rootfs-template.sh gave it: vmlinux is
+# shared by every jail and stays root-owned.
+sudo chown -R 1000:1000 /srv/firecracker/snapshots
 sudo chmod 0755 /srv/firecracker /srv/firecracker/template /srv/firecracker/snapshots
-sudo chmod 0664 /srv/firecracker/template/rootfs.ext4
-sudo chmod 0644 /srv/firecracker/template/vmlinux
 
 echo "==> Building sandbox daemon for local Firecracker snapshot..."
 cd ~/project
@@ -335,7 +335,7 @@ sudo env \
 
 sudo ln -sf snapshot_mem /srv/firecracker/snapshots/mem
 sudo ln -sf snapshot_state /srv/firecracker/snapshots/state
-sudo chown -R 1000:1000 /srv/firecracker/template /srv/firecracker/snapshots
+sudo chown -R 1000:1000 /srv/firecracker/snapshots
 sudo chmod 0644 /srv/firecracker/snapshots/snapshot_mem /srv/firecracker/snapshots/snapshot_state
 
 echo "==> Firecracker VM setup complete"

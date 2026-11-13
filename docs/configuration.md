@@ -130,7 +130,7 @@ Slots give the host-side Firecracker resources stable names without exposing tho
 | `SANDBOX_RUNNER_FIRECRACKER_JAILER_BIN` | `/opt/firecracker/bin/jailer` | Path to the Firecracker jailer binary |
 | `SANDBOX_RUNNER_FIRECRACKER_BIN` | `/opt/firecracker/bin/firecracker` | Path to the Firecracker VMM binary |
 | `SANDBOX_RUNNER_FIRECRACKER_JAILER_BASE_DIR` | `/srv/jailer` | Base directory passed to `jailer --chroot-base-dir` |
-| `SANDBOX_RUNNER_FIRECRACKER_TEMPLATE_DIR` | `/srv/firecracker/template` | Directory containing the snapshot rootfs (`rootfs.ext4`) |
+| `SANDBOX_RUNNER_FIRECRACKER_TEMPLATE_DIR` | `/srv/firecracker/template` | Directory containing the snapshot rootfs (`rootfs.ext4`) and the guest kernel (`vmlinux`). The kernel must be owned by root, readable by all and not writable by group or other, or admission fails |
 | `SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_MEM_PATH` | `/srv/firecracker/snapshots/mem` | Host path bind-mounted into the jail as `/snapshot_mem` |
 | `SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_STATE_PATH` | `/srv/firecracker/snapshots/state` | Host path bind-mounted into the jail as `/snapshot_state`. When auto-create is enabled, must share a directory with `SNAPSHOT_MEM_PATH` |
 | `SANDBOX_RUNNER_FIRECRACKER_GUEST_IP` | `172.16.0.10` | Guest IP expected by the restored snapshot |
@@ -152,11 +152,12 @@ The runner reports healthy only after `Prepare` has verified these assets, creat
 
 #### Golden snapshot boot parameters (`boot.json`)
 
-`create-golden-snapshot.sh` writes `boot.json` next to `snapshot_mem` and `snapshot_state`, recording what it sent to the Firecracker API: `vcpu_count`, `mem_size_mib`, `kernel_image_path`, `boot_args`, `rootfs_drive_path`, `guest_mac`, `guest_ip`, `host_tap_device_name`, `daemon_port`. Paths are as Firecracker sees them inside the jail. The runner has no configuration for most of these; it replays them when it cold boots a sandbox after a guest crash, so recovery stays faithful to how the snapshot was built.
+`create-golden-snapshot.sh` writes `boot.json` next to `snapshot_mem` and `snapshot_state`, recording what it sent to the Firecracker API: `vcpu_count`, `mem_size_mib`, `kernel_image_path`, `boot_args`, `rootfs_drive_path`, `volume_drives`, `guest_mac`, `guest_ip`, `host_tap_device_name`, `daemon_port`. Paths are as Firecracker sees them inside the jail. The runner has no configuration for most of these; it replays them when it cold boots a sandbox after a guest crash, so recovery stays faithful to how the snapshot was built.
 
 - `kernel_image_path` and `rootfs_drive_path` are where the runner bind-mounts those assets into each jail (absolute, no `.`/`..` segments). Because the kernel path names a mount target, the runner also records the size and mtime of `TemplateDir/vmlinux` at create and refuses a later cold boot if they changed — roll a new kernel out by replacing the runner, not by rebuilding the template underneath it.
 - Admission fails if `boot.json` contradicts the runner on `guest_ip`, `host_tap_device_name`, `daemon_port` or the gateway in `boot_args` (third field of the kernel `ip=` parameter; must equal the host address in `SANDBOX_RUNNER_FIRECRACKER_HOST_TAP_IP_CIDR`). These are baked into the guest, so a mismatch would otherwise yield sandboxes that never answer — except the gateway, where the guest still answers the proxy (and passes the canary) but has no egress.
-- Auto-create passes the runner's `GUEST_IP`, `HOST_TAP_IP_CIDR`, `HOST_TAP_DEVICE_NAME` and `DAEMON_PORT` to the script. When running it by hand, set the same variables. `MEM_MIB` and `VCPUS` are script-owned.
+- `volume_drives`: the read-only drives reserved for volumes ([runtime README](../internal/runner/runtime/firecracker.ee/README.md#volume-drives)). A `schema_version` 1 sidecar predates them and still loads if it lists none.
+- Auto-create passes the runner's `GUEST_IP`, `HOST_TAP_IP_CIDR`, `HOST_TAP_DEVICE_NAME` and `DAEMON_PORT` to the script. When running it by hand, set the same variables. `MEM_MIB`, `VCPUS` and `VOLUME_DRIVES` (default 8, 0–15) are script-owned.
 - With auto-create enabled, `SNAPSHOT_MEM_PATH`/`SNAPSHOT_STATE_PATH` must be the generated files or symlinks to them; an independent copy would keep serving an old snapshot under a `boot.json` describing the new one, and admission rejects that.
 - The three files describe one build. A missing `boot.json` is an incomplete snapshot: with the create script configured, `Prepare` rebuilds the set; otherwise admission fails naming the script and `--out` directory to re-run.
 

@@ -19,6 +19,9 @@ HOST_TAP_IP="${HOST_TAP_IP_CIDR%%/*}"
 HOST_TAP_DEVICE_NAME="${HOST_TAP_DEVICE_NAME:-fc-tap-0}"
 DAEMON_PORT="${DAEMON_PORT:-8081}"
 GUEST_MAC="${GUEST_MAC:-AA:FC:00:00:00:01}"
+# Empty read-only drives for volumes. Firecracker can't add drives after a
+# restore. At most 15: 17 MMIO devices on x86_64, less the rootfs and the NIC.
+VOLUME_DRIVES="${VOLUME_DRIVES:-8}"
 # Paths as Firecracker sees them inside the jail. Recorded in boot.json so a
 # later cold boot can reproduce this VM without guessing.
 KERNEL_JAIL_PATH="/vmlinux"
@@ -68,6 +71,10 @@ done
 
 if [[ -z "$KERNEL" || -z "$ROOTFS" || -z "$DAEMON_BIN" || -z "$OUT_DIR" ]]; then
 	usage
+	exit 1
+fi
+if ! [[ "$VOLUME_DRIVES" =~ ^([0-9]|1[0-5])$ ]]; then
+	echo "ERROR: VOLUME_DRIVES must be a number from 0 to 15, got ${VOLUME_DRIVES}" >&2
 	exit 1
 fi
 
@@ -144,6 +151,30 @@ ip netns exec "$NETNS" ip tuntap add name "$HOST_TAP_DEVICE_NAME" mode tap
 ip netns exec "$NETNS" ip addr add "$HOST_TAP_IP_CIDR" dev "$HOST_TAP_DEVICE_NAME"
 ip netns exec "$NETNS" ip link set "$HOST_TAP_DEVICE_NAME" up
 
+echo "==> Preparing Firecracker jail..."
+# Mounted before jailer starts, as the runner does: jailer copies the mounts it
+# finds into its own mount namespace, and one made afterwards arrives there
+# without its read-only flag.
+JAIL_ROOT="${JAILER_BASE_DIR}/firecracker/${VM_ID}/root"
+mkdir -p "$OUT_DIR" "$JAIL_ROOT"
+rm -f "$SNAPSHOT_MEM" "$SNAPSHOT_STATE" "$BOOT_PARAMS" "$BOOT_PARAMS_TMP"
+touch "$SNAPSHOT_MEM" "$SNAPSHOT_STATE"
+# Jailer runs Firecracker as uid/gid 1000; virtio block needs RW on rootfs. The
+# kernel is only read, and the runner binds the same file into every jail, so it
+# keeps its owner and is bound read-only.
+chown 1000:1000 "$ROOTFS" "$SNAPSHOT_MEM" "$SNAPSHOT_STATE"
+touch "${JAIL_ROOT}/vmlinux" "${JAIL_ROOT}/rootfs.ext4" "${JAIL_ROOT}/snapshot_mem" "${JAIL_ROOT}/snapshot_state"
+mount --bind -o ro "$KERNEL" "${JAIL_ROOT}/vmlinux"
+mount --bind "$ROOTFS" "${JAIL_ROOT}/rootfs.ext4"
+mount --bind "$SNAPSHOT_MEM" "${JAIL_ROOT}/snapshot_mem"
+mount --bind "$SNAPSHOT_STATE" "${JAIL_ROOT}/snapshot_state"
+volume_drives_json=""
+for ((i = 0; i < VOLUME_DRIVES; i++)); do
+	touch "${JAIL_ROOT}/vol${i}.img"
+	chmod 0444 "${JAIL_ROOT}/vol${i}.img"
+	volume_drives_json+="${volume_drives_json:+, }{\"drive_id\": \"vol${i}\", \"path\": \"/vol${i}.img\"}"
+done
+
 echo "==> Starting Firecracker for snapshot creation..."
 "$JAILER_BIN" \
 	--id "$VM_ID" \
@@ -156,7 +187,6 @@ echo "==> Starting Firecracker for snapshot creation..."
 	--api-sock /firecracker.socket &
 FC_PID=$!
 
-JAIL_ROOT="${JAILER_BASE_DIR}/firecracker/${VM_ID}/root"
 for _ in $(seq 1 200); do
 	if [[ -S "${JAIL_ROOT}/firecracker.socket" ]]; then
 		break
@@ -167,17 +197,6 @@ if [[ ! -S "${JAIL_ROOT}/firecracker.socket" ]]; then
 	echo "ERROR: timed out waiting for Firecracker API socket" >&2
 	exit 1
 fi
-
-mkdir -p "$OUT_DIR"
-rm -f "$SNAPSHOT_MEM" "$SNAPSHOT_STATE" "$BOOT_PARAMS" "$BOOT_PARAMS_TMP"
-touch "$SNAPSHOT_MEM" "$SNAPSHOT_STATE"
-# Jailer runs Firecracker as uid/gid 1000; virtio block needs RW on rootfs.
-chown 1000:1000 "$KERNEL" "$ROOTFS" "$SNAPSHOT_MEM" "$SNAPSHOT_STATE"
-touch "${JAIL_ROOT}/vmlinux" "${JAIL_ROOT}/rootfs.ext4" "${JAIL_ROOT}/snapshot_mem" "${JAIL_ROOT}/snapshot_state"
-mount --bind "$KERNEL" "${JAIL_ROOT}/vmlinux"
-mount --bind "$ROOTFS" "${JAIL_ROOT}/rootfs.ext4"
-mount --bind "$SNAPSHOT_MEM" "${JAIL_ROOT}/snapshot_mem"
-mount --bind "$SNAPSHOT_STATE" "${JAIL_ROOT}/snapshot_state"
 
 # pci=off is deliberate (virtio on MMIO); see docs/security-model.md before enabling PCI.
 # sysctl.user.max_user_namespaces=0 refuses user namespaces, as Docker's default
@@ -191,6 +210,10 @@ echo "==> Configuring and booting Firecracker snapshot VM..."
 api_put "/machine-config" "{\"vcpu_count\":${VCPUS},\"mem_size_mib\":${MEM_MIB},\"smt\":false}"
 api_put "/boot-source" "{\"kernel_image_path\":\"${KERNEL_JAIL_PATH}\",\"boot_args\":\"${boot_args}\"}"
 api_put "/drives/rootfs" "{\"drive_id\":\"rootfs\",\"path_on_host\":\"${ROOTFS_JAIL_PATH}\",\"is_root_device\":true,\"is_read_only\":false}"
+# In this order, so vol0 is /dev/vdb.
+for ((i = 0; i < VOLUME_DRIVES; i++)); do
+	api_put "/drives/vol${i}" "{\"drive_id\":\"vol${i}\",\"path_on_host\":\"/vol${i}.img\",\"is_root_device\":false,\"is_read_only\":true}"
+done
 api_put "/network-interfaces/eth0" "{\"iface_id\":\"eth0\",\"guest_mac\":\"${GUEST_MAC}\",\"host_dev_name\":\"${HOST_TAP_DEVICE_NAME}\"}"
 api_put "/actions" '{"action_type":"InstanceStart"}'
 
@@ -224,12 +247,13 @@ chmod 0644 "$SNAPSHOT_MEM" "$SNAPSHOT_STATE"
 echo "==> Recording boot parameters at ${BOOT_PARAMS}..."
 cat >"$BOOT_PARAMS_TMP" <<EOF
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "vcpu_count": ${VCPUS},
   "mem_size_mib": ${MEM_MIB},
   "kernel_image_path": "${KERNEL_JAIL_PATH}",
   "boot_args": "${boot_args}",
   "rootfs_drive_path": "${ROOTFS_JAIL_PATH}",
+  "volume_drives": [${volume_drives_json}],
   "guest_mac": "${GUEST_MAC}",
   "guest_ip": "${GUEST_IP}",
   "host_tap_device_name": "${HOST_TAP_DEVICE_NAME}",
