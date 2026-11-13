@@ -346,6 +346,10 @@ var containerOpBuckets = []float64{0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60, 12
 // (snapshot load on a cold page cache), far below the container-op range.
 var lifecycleStepBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5}
 
+// volumeBuildBuckets covers a volume build from the tar's first byte to the
+// image's last: seconds for small volumes, minutes for large ones.
+var volumeBuildBuckets = []float64{1, 2, 5, 10, 20, 30, 60, 120, 300, 600}
+
 // RunnerRecorder owns the metric instruments emitted by the runner binary.
 type RunnerRecorder struct {
 	reg                 *prometheus.Registry
@@ -359,6 +363,8 @@ type RunnerRecorder struct {
 	guestDeaths         prometheus.Counter
 	recoveries          *prometheus.CounterVec
 	volumeMounts        *prometheus.CounterVec
+	volumeBuilds        *prometheus.CounterVec
+	volumeBuildDuration prometheus.Histogram
 }
 
 // NewRunnerRecorder builds the runner recorder. If enabled is false, the
@@ -424,7 +430,25 @@ func NewRunnerRecorder(enabled bool) *RunnerRecorder {
 		},
 		[]string{"result"},
 	)
-	reg.MustRegister(containerOps, containerOpDuration, lifecycleSteps, guestDeaths, recoveries, volumeMounts)
+	volumeBuilds := prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   Namespace,
+			Name:        "volume_builds_total",
+			Help:        "Volume image builds requested from the runner, labeled by result.",
+			ConstLabels: prometheus.Labels{"role": RoleRunner},
+		},
+		[]string{"result"},
+	)
+	volumeBuildDuration := prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace:   Namespace,
+			Name:        "volume_build_duration_seconds",
+			Help:        "Duration of the volume image builds the runner accepted, from the tar's first byte to the end of the call.",
+			Buckets:     volumeBuildBuckets,
+			ConstLabels: prometheus.Labels{"role": RoleRunner},
+		},
+	)
+	reg.MustRegister(containerOps, containerOpDuration, lifecycleSteps, guestDeaths, recoveries, volumeMounts, volumeBuilds, volumeBuildDuration)
 	return &RunnerRecorder{
 		reg:                 reg,
 		httpRequests:        httpReq,
@@ -437,6 +461,8 @@ func NewRunnerRecorder(enabled bool) *RunnerRecorder {
 		guestDeaths:         guestDeaths,
 		recoveries:          recoveries,
 		volumeMounts:        volumeMounts,
+		volumeBuilds:        volumeBuilds,
+		volumeBuildDuration: volumeBuildDuration,
 	}
 }
 
@@ -529,6 +555,25 @@ func (r *RunnerRecorder) ObserveVolumeMount(result string) {
 		return
 	}
 	r.volumeMounts.WithLabelValues(result).Inc()
+}
+
+// ObserveVolumeBuild records the result of a volume build request: "success",
+// a failure reason, or why the runner did not build. The caller passes fixed
+// values only.
+func (r *RunnerRecorder) ObserveVolumeBuild(result string) {
+	if r == nil || r.reg == nil {
+		return
+	}
+	r.volumeBuilds.WithLabelValues(result).Inc()
+}
+
+// ObserveVolumeBuildDuration records how long a volume build the runner
+// accepted took, whatever its result.
+func (r *RunnerRecorder) ObserveVolumeBuildDuration(dur time.Duration) {
+	if r == nil || r.reg == nil {
+		return
+	}
+	r.volumeBuildDuration.Observe(dur.Seconds())
 }
 
 // SetActiveContainers registers a scrape-time gauge that calls f to read the
@@ -641,6 +686,15 @@ func (r *RunnerRecorder) VolumeMountCount(result string) float64 {
 		return 0
 	}
 	return testutil.ToFloat64(r.volumeMounts.WithLabelValues(result))
+}
+
+// VolumeBuildCount returns the counter value for volume build requests with
+// the given result. Intended for tests in other packages.
+func (r *RunnerRecorder) VolumeBuildCount(result string) float64 {
+	if r == nil || r.reg == nil {
+		return 0
+	}
+	return testutil.ToFloat64(r.volumeBuilds.WithLabelValues(result))
 }
 
 func resultLabel(success bool) string {

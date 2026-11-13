@@ -620,6 +620,264 @@ func (x *SetCordonResponse) GetCordoned() bool {
 	return false
 }
 
+// The caller sends the header, then the tar in chunks, then half-closes.
+type BuildVolumeRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Part:
+	//
+	//	*BuildVolumeRequest_Header
+	//	*BuildVolumeRequest_TarChunk
+	Part          isBuildVolumeRequest_Part `protobuf_oneof:"part"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BuildVolumeRequest) Reset() {
+	*x = BuildVolumeRequest{}
+	mi := &file_proto_runner_v1_runner_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BuildVolumeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BuildVolumeRequest) ProtoMessage() {}
+
+func (x *BuildVolumeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_runner_v1_runner_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BuildVolumeRequest.ProtoReflect.Descriptor instead.
+func (*BuildVolumeRequest) Descriptor() ([]byte, []int) {
+	return file_proto_runner_v1_runner_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *BuildVolumeRequest) GetPart() isBuildVolumeRequest_Part {
+	if x != nil {
+		return x.Part
+	}
+	return nil
+}
+
+func (x *BuildVolumeRequest) GetHeader() *BuildVolumeHeader {
+	if x != nil {
+		if x, ok := x.Part.(*BuildVolumeRequest_Header); ok {
+			return x.Header
+		}
+	}
+	return nil
+}
+
+func (x *BuildVolumeRequest) GetTarChunk() []byte {
+	if x != nil {
+		if x, ok := x.Part.(*BuildVolumeRequest_TarChunk); ok {
+			return x.TarChunk
+		}
+	}
+	return nil
+}
+
+type isBuildVolumeRequest_Part interface {
+	isBuildVolumeRequest_Part()
+}
+
+type BuildVolumeRequest_Header struct {
+	Header *BuildVolumeHeader `protobuf:"bytes,1,opt,name=header,proto3,oneof"`
+}
+
+type BuildVolumeRequest_TarChunk struct {
+	TarChunk []byte `protobuf:"bytes,2,opt,name=tar_chunk,json=tarChunk,proto3,oneof"`
+}
+
+func (*BuildVolumeRequest_Header) isBuildVolumeRequest_Part() {}
+
+func (*BuildVolumeRequest_TarChunk) isBuildVolumeRequest_Part() {}
+
+// What the caller counted in the tar under the volume tar policy. The build
+// fails for a tar that holds anything else.
+type BuildVolumeHeader struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Length of the tar as sent, plain or gzip-compressed.
+	TarBytes int64 `protobuf:"varint,1,opt,name=tar_bytes,json=tarBytes,proto3" json:"tar_bytes,omitempty"`
+	// Every entry, directories included.
+	Entries int64 `protobuf:"varint,2,opt,name=entries,proto3" json:"entries,omitempty"`
+	// Sum of the regular file sizes.
+	ContentBytes int64 `protobuf:"varint,3,opt,name=content_bytes,json=contentBytes,proto3" json:"content_bytes,omitempty"`
+	// Length of the tar once decompressed: tar_bytes for a plain tar.
+	DecompressedBytes int64 `protobuf:"varint,4,opt,name=decompressed_bytes,json=decompressedBytes,proto3" json:"decompressed_bytes,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *BuildVolumeHeader) Reset() {
+	*x = BuildVolumeHeader{}
+	mi := &file_proto_runner_v1_runner_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BuildVolumeHeader) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BuildVolumeHeader) ProtoMessage() {}
+
+func (x *BuildVolumeHeader) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_runner_v1_runner_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BuildVolumeHeader.ProtoReflect.Descriptor instead.
+func (*BuildVolumeHeader) Descriptor() ([]byte, []int) {
+	return file_proto_runner_v1_runner_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *BuildVolumeHeader) GetTarBytes() int64 {
+	if x != nil {
+		return x.TarBytes
+	}
+	return 0
+}
+
+func (x *BuildVolumeHeader) GetEntries() int64 {
+	if x != nil {
+		return x.Entries
+	}
+	return 0
+}
+
+func (x *BuildVolumeHeader) GetContentBytes() int64 {
+	if x != nil {
+		return x.ContentBytes
+	}
+	return 0
+}
+
+func (x *BuildVolumeHeader) GetDecompressedBytes() int64 {
+	if x != nil {
+		return x.DecompressedBytes
+	}
+	return 0
+}
+
+// The runner answers with the image size, then the image in chunks, then its
+// digest. A build that fails ends the stream with an error instead.
+type BuildVolumeResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Part:
+	//
+	//	*BuildVolumeResponse_ImageBytes
+	//	*BuildVolumeResponse_ImageChunk
+	//	*BuildVolumeResponse_ImageSha256
+	Part          isBuildVolumeResponse_Part `protobuf_oneof:"part"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BuildVolumeResponse) Reset() {
+	*x = BuildVolumeResponse{}
+	mi := &file_proto_runner_v1_runner_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BuildVolumeResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BuildVolumeResponse) ProtoMessage() {}
+
+func (x *BuildVolumeResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_runner_v1_runner_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BuildVolumeResponse.ProtoReflect.Descriptor instead.
+func (*BuildVolumeResponse) Descriptor() ([]byte, []int) {
+	return file_proto_runner_v1_runner_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *BuildVolumeResponse) GetPart() isBuildVolumeResponse_Part {
+	if x != nil {
+		return x.Part
+	}
+	return nil
+}
+
+func (x *BuildVolumeResponse) GetImageBytes() int64 {
+	if x != nil {
+		if x, ok := x.Part.(*BuildVolumeResponse_ImageBytes); ok {
+			return x.ImageBytes
+		}
+	}
+	return 0
+}
+
+func (x *BuildVolumeResponse) GetImageChunk() []byte {
+	if x != nil {
+		if x, ok := x.Part.(*BuildVolumeResponse_ImageChunk); ok {
+			return x.ImageChunk
+		}
+	}
+	return nil
+}
+
+func (x *BuildVolumeResponse) GetImageSha256() string {
+	if x != nil {
+		if x, ok := x.Part.(*BuildVolumeResponse_ImageSha256); ok {
+			return x.ImageSha256
+		}
+	}
+	return ""
+}
+
+type isBuildVolumeResponse_Part interface {
+	isBuildVolumeResponse_Part()
+}
+
+type BuildVolumeResponse_ImageBytes struct {
+	ImageBytes int64 `protobuf:"varint,1,opt,name=image_bytes,json=imageBytes,proto3,oneof"`
+}
+
+type BuildVolumeResponse_ImageChunk struct {
+	ImageChunk []byte `protobuf:"bytes,2,opt,name=image_chunk,json=imageChunk,proto3,oneof"`
+}
+
+type BuildVolumeResponse_ImageSha256 struct {
+	// SHA-256 of the image, lowercase hex.
+	ImageSha256 string `protobuf:"bytes,3,opt,name=image_sha256,json=imageSha256,proto3,oneof"`
+}
+
+func (*BuildVolumeResponse_ImageBytes) isBuildVolumeResponse_Part() {}
+
+func (*BuildVolumeResponse_ImageChunk) isBuildVolumeResponse_Part() {}
+
+func (*BuildVolumeResponse_ImageSha256) isBuildVolumeResponse_Part() {}
+
 var File_proto_runner_v1_runner_proto protoreflect.FileDescriptor
 
 const file_proto_runner_v1_runner_proto_rawDesc = "" +
@@ -660,15 +918,32 @@ const file_proto_runner_v1_runner_proto_rawDesc = "" +
 	"\bcordoned\x18\x01 \x01(\bR\bcordoned\x12\x1b\n" +
 	"\trunner_id\x18\x02 \x01(\tR\brunnerId\"/\n" +
 	"\x11SetCordonResponse\x12\x1a\n" +
-	"\bcordoned\x18\x01 \x01(\bR\bcordoned2V\n" +
+	"\bcordoned\x18\x01 \x01(\bR\bcordoned\"s\n" +
+	"\x12BuildVolumeRequest\x126\n" +
+	"\x06header\x18\x01 \x01(\v2\x1c.runner.v1.BuildVolumeHeaderH\x00R\x06header\x12\x1d\n" +
+	"\ttar_chunk\x18\x02 \x01(\fH\x00R\btarChunkB\x06\n" +
+	"\x04part\"\x9e\x01\n" +
+	"\x11BuildVolumeHeader\x12\x1b\n" +
+	"\ttar_bytes\x18\x01 \x01(\x03R\btarBytes\x12\x18\n" +
+	"\aentries\x18\x02 \x01(\x03R\aentries\x12#\n" +
+	"\rcontent_bytes\x18\x03 \x01(\x03R\fcontentBytes\x12-\n" +
+	"\x12decompressed_bytes\x18\x04 \x01(\x03R\x11decompressedBytes\"\x88\x01\n" +
+	"\x13BuildVolumeResponse\x12!\n" +
+	"\vimage_bytes\x18\x01 \x01(\x03H\x00R\n" +
+	"imageBytes\x12!\n" +
+	"\vimage_chunk\x18\x02 \x01(\fH\x00R\n" +
+	"imageChunk\x12#\n" +
+	"\fimage_sha256\x18\x03 \x01(\tH\x00R\vimageSha256B\x06\n" +
+	"\x04part2V\n" +
 	"\x0eRunnerRegistry\x12D\n" +
-	"\aConnect\x12\x1a.runner.v1.RunnerHeartbeat\x1a\x19.runner.v1.ControlMessage(\x010\x012\x96\x03\n" +
+	"\aConnect\x12\x1a.runner.v1.RunnerHeartbeat\x1a\x19.runner.v1.ControlMessage(\x010\x012\xe8\x03\n" +
 	"\x0eSandboxControl\x12R\n" +
 	"\rCreateSandbox\x12\x1f.runner.v1.CreateSandboxRequest\x1a .runner.v1.CreateSandboxResponse\x12L\n" +
 	"\vStopSandbox\x12\x1d.runner.v1.StopSandboxRequest\x1a\x1e.runner.v1.StopSandboxResponse\x12R\n" +
 	"\rDeleteSandbox\x12\x1f.runner.v1.DeleteSandboxRequest\x1a .runner.v1.DeleteSandboxResponse\x12F\n" +
 	"\tGetCordon\x12\x1b.runner.v1.GetCordonRequest\x1a\x1c.runner.v1.GetCordonResponse\x12F\n" +
-	"\tSetCordon\x12\x1b.runner.v1.SetCordonRequest\x1a\x1c.runner.v1.SetCordonResponseB;Z9github.com/n8n-io/sandbox-service/internal/api/grpc/pb;pbb\x06proto3"
+	"\tSetCordon\x12\x1b.runner.v1.SetCordonRequest\x1a\x1c.runner.v1.SetCordonResponse\x12P\n" +
+	"\vBuildVolume\x12\x1d.runner.v1.BuildVolumeRequest\x1a\x1e.runner.v1.BuildVolumeResponse(\x010\x01B;Z9github.com/n8n-io/sandbox-service/internal/api/grpc/pb;pbb\x06proto3"
 
 var (
 	file_proto_runner_v1_runner_proto_rawDescOnce sync.Once
@@ -682,7 +957,7 @@ func file_proto_runner_v1_runner_proto_rawDescGZIP() []byte {
 	return file_proto_runner_v1_runner_proto_rawDescData
 }
 
-var file_proto_runner_v1_runner_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_proto_runner_v1_runner_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_proto_runner_v1_runner_proto_goTypes = []any{
 	(*RunnerHeartbeat)(nil),       // 0: runner.v1.RunnerHeartbeat
 	(*ControlMessage)(nil),        // 1: runner.v1.ControlMessage
@@ -696,25 +971,31 @@ var file_proto_runner_v1_runner_proto_goTypes = []any{
 	(*GetCordonResponse)(nil),     // 9: runner.v1.GetCordonResponse
 	(*SetCordonRequest)(nil),      // 10: runner.v1.SetCordonRequest
 	(*SetCordonResponse)(nil),     // 11: runner.v1.SetCordonResponse
+	(*BuildVolumeRequest)(nil),    // 12: runner.v1.BuildVolumeRequest
+	(*BuildVolumeHeader)(nil),     // 13: runner.v1.BuildVolumeHeader
+	(*BuildVolumeResponse)(nil),   // 14: runner.v1.BuildVolumeResponse
 }
 var file_proto_runner_v1_runner_proto_depIdxs = []int32{
-	0,  // 0: runner.v1.RunnerRegistry.Connect:input_type -> runner.v1.RunnerHeartbeat
-	2,  // 1: runner.v1.SandboxControl.CreateSandbox:input_type -> runner.v1.CreateSandboxRequest
-	4,  // 2: runner.v1.SandboxControl.StopSandbox:input_type -> runner.v1.StopSandboxRequest
-	6,  // 3: runner.v1.SandboxControl.DeleteSandbox:input_type -> runner.v1.DeleteSandboxRequest
-	8,  // 4: runner.v1.SandboxControl.GetCordon:input_type -> runner.v1.GetCordonRequest
-	10, // 5: runner.v1.SandboxControl.SetCordon:input_type -> runner.v1.SetCordonRequest
-	1,  // 6: runner.v1.RunnerRegistry.Connect:output_type -> runner.v1.ControlMessage
-	3,  // 7: runner.v1.SandboxControl.CreateSandbox:output_type -> runner.v1.CreateSandboxResponse
-	5,  // 8: runner.v1.SandboxControl.StopSandbox:output_type -> runner.v1.StopSandboxResponse
-	7,  // 9: runner.v1.SandboxControl.DeleteSandbox:output_type -> runner.v1.DeleteSandboxResponse
-	9,  // 10: runner.v1.SandboxControl.GetCordon:output_type -> runner.v1.GetCordonResponse
-	11, // 11: runner.v1.SandboxControl.SetCordon:output_type -> runner.v1.SetCordonResponse
-	6,  // [6:12] is the sub-list for method output_type
-	0,  // [0:6] is the sub-list for method input_type
-	0,  // [0:0] is the sub-list for extension type_name
-	0,  // [0:0] is the sub-list for extension extendee
-	0,  // [0:0] is the sub-list for field type_name
+	13, // 0: runner.v1.BuildVolumeRequest.header:type_name -> runner.v1.BuildVolumeHeader
+	0,  // 1: runner.v1.RunnerRegistry.Connect:input_type -> runner.v1.RunnerHeartbeat
+	2,  // 2: runner.v1.SandboxControl.CreateSandbox:input_type -> runner.v1.CreateSandboxRequest
+	4,  // 3: runner.v1.SandboxControl.StopSandbox:input_type -> runner.v1.StopSandboxRequest
+	6,  // 4: runner.v1.SandboxControl.DeleteSandbox:input_type -> runner.v1.DeleteSandboxRequest
+	8,  // 5: runner.v1.SandboxControl.GetCordon:input_type -> runner.v1.GetCordonRequest
+	10, // 6: runner.v1.SandboxControl.SetCordon:input_type -> runner.v1.SetCordonRequest
+	12, // 7: runner.v1.SandboxControl.BuildVolume:input_type -> runner.v1.BuildVolumeRequest
+	1,  // 8: runner.v1.RunnerRegistry.Connect:output_type -> runner.v1.ControlMessage
+	3,  // 9: runner.v1.SandboxControl.CreateSandbox:output_type -> runner.v1.CreateSandboxResponse
+	5,  // 10: runner.v1.SandboxControl.StopSandbox:output_type -> runner.v1.StopSandboxResponse
+	7,  // 11: runner.v1.SandboxControl.DeleteSandbox:output_type -> runner.v1.DeleteSandboxResponse
+	9,  // 12: runner.v1.SandboxControl.GetCordon:output_type -> runner.v1.GetCordonResponse
+	11, // 13: runner.v1.SandboxControl.SetCordon:output_type -> runner.v1.SetCordonResponse
+	14, // 14: runner.v1.SandboxControl.BuildVolume:output_type -> runner.v1.BuildVolumeResponse
+	8,  // [8:15] is the sub-list for method output_type
+	1,  // [1:8] is the sub-list for method input_type
+	1,  // [1:1] is the sub-list for extension type_name
+	1,  // [1:1] is the sub-list for extension extendee
+	0,  // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_proto_runner_v1_runner_proto_init() }
@@ -722,13 +1003,22 @@ func file_proto_runner_v1_runner_proto_init() {
 	if File_proto_runner_v1_runner_proto != nil {
 		return
 	}
+	file_proto_runner_v1_runner_proto_msgTypes[12].OneofWrappers = []any{
+		(*BuildVolumeRequest_Header)(nil),
+		(*BuildVolumeRequest_TarChunk)(nil),
+	}
+	file_proto_runner_v1_runner_proto_msgTypes[14].OneofWrappers = []any{
+		(*BuildVolumeResponse_ImageBytes)(nil),
+		(*BuildVolumeResponse_ImageChunk)(nil),
+		(*BuildVolumeResponse_ImageSha256)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_runner_v1_runner_proto_rawDesc), len(file_proto_runner_v1_runner_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   12,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

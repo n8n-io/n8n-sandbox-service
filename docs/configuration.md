@@ -146,6 +146,7 @@ Slots give the host-side Firecracker resources stable names without exposing tho
 | `SANDBOX_RUNNER_FIRECRACKER_EXPECTED_GIT_SHA` | _(empty)_ | When set, must match `git_sha` in the manifest (requires `MANIFEST_PATH`) |
 | `SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT` | _(empty)_ | Absolute path to `create-golden-snapshot.sh`. When set and any of `snapshot_mem`, `snapshot_state` or `boot.json` is missing, Prepare runs it (mem/state paths must share a directory). Production Firecracker hosts set this so the runner owns host-local snapshot creation. Empty = do not auto-create |
 | `SANDBOX_RUNNER_FIRECRACKER_DAEMON_BIN` | `/srv/firecracker/bin/sandbox-daemon` | Host path to `sandbox-daemon` used for golden snapshot create and optional manifest checksum |
+| `SANDBOX_RUNNER_FIRECRACKER_VOLUME_BUILD_TIMEOUT` | `5m` | How long a [volume builder](../internal/runner/runtime/firecracker.ee/README.md#volume-builder) microVM may run before the runner ends it and the build fails with `timeout` |
 
 The runner reports healthy only after `Prepare` has verified these assets, created the snapshot if needed, and passed an admission canary — see [the runtime README](../internal/runner/runtime/firecracker.ee/README.md#admission-prepare--ready).
 
@@ -213,7 +214,7 @@ Series exposed today:
 - API: `sandbox_sandbox_operations_total{operation,result}` (`operation="cordon_delete"` counts attempts to delete a stopped sandbox on a cordoned runner instead of waking it), `sandbox_sandboxes_active`, `sandbox_runners_registered`, and `sandbox_create_placements_total{result}`, how each create found a runner (`first_choice`, `retried`, `exhausted`, `no_runner`). `retried` grows while the fleet is full but creates still succeed, so watch it alongside the failures.
 - Runner: `sandbox_container_operations_total{operation,result}`, `sandbox_container_operation_duration_seconds{operation}`, `sandbox_containers_active`, plus `sandbox_guest_deaths_total`, sandbox guests that died on their own, `sandbox_recoveries_total{result}`, attempts to bring one back, and `sandbox_runner_cordoned`, `1` while the runner is cordoned.
 - `sandbox_tls_certificate_expiry_timestamp_seconds{path}`, the expiry of each TLS certificate the process presents, by file (both binaries). See [observability.md](observability.md#tls-certificates).
-- Firecracker runner: `sandbox_lifecycle_step_duration_seconds{operation,step}`, the per-step breakdown of a create, wake or recovery, `sandbox_slots_unwired`, slots whose network namespace is not yet built (zero in steady state), and `sandbox_volume_mount_requests_total{result}`, guest volume mount requests by result. See [observability.md](observability.md).
+- Firecracker runner: `sandbox_lifecycle_step_duration_seconds{operation,step}`, the per-step breakdown of a create, wake or recovery, `sandbox_slots_unwired`, slots whose network namespace is not yet built (zero in steady state), `sandbox_volume_mount_requests_total{result}`, guest volume mount requests by result, and `sandbox_volume_builds_total{result}` with `sandbox_volume_build_duration_seconds`, volume image builds. See [observability.md](observability.md).
 - Plus the standard `go_*` and `process_*` collectors.
 
 ## Disk quotas

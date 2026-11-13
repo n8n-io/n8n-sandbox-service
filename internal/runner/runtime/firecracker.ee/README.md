@@ -59,6 +59,22 @@ The guest daemon is PID 1 with `panic=1 reboot=k`, and jailer execs Firecracker 
 
 The guest runs no NTP. A restored guest would resume with the wall clock it had when its snapshot was taken, so every restore (create and wake) sends `clock_realtime: true`, which makes KVM advance the guest's kvm-clock by the time since then; the guest's monotonic clock jumps with it. That only works while the guest keeps time with kvm-clock, so the golden snapshot boots with `clocksource=kvm-clock`: where the guest sees an invariant TSC (Azure v6 sizes, for example), the kernel would otherwise switch to `tsc`, which resumes at snapshot time. Firecracker supports this on x86_64 only, and refuses the restore unless KVM recorded the wall-clock time in the snapshot, which needs host kernel 5.16 or later and a TSC-based host clocksource (`tsc`, or Hyper-V's TSC page on Azure). A host that never records it fails the admission canary. A stop snapshot taken while KVM could not record it makes that wake fail; the sandbox is then pinned to cold boot like after a failed restore.
 
+## Volume builder
+
+`SandboxControl.BuildVolume` turns a tar into an ext4 image for a read-only volume (`volume_build.go`). The API streams a header (tar length, entry count, content bytes and decompressed length, as it counted them under the volume tar policy) and the tar; the runner streams back the image size, the image and its SHA-256. Nothing in the API calls it yet.
+
+A build runs in a builder microVM, one per runner at a time, without a sandbox slot:
+
+1. Refuse, before reading any tar byte and as a capacity refusal the API can retry elsewhere, while the runner is cordoned, not ready or already building, or if the tar plus the image would take the data volume below the 5% floor.
+2. Write the tar to `SANDBOX_RUNNER_DATA_DIR/volume-build/`, with a sparse output file sized from the entry count and content bytes (the rule is in `internal/daemon/volumebuild/size.go`), a 4 KiB status file and a clone of the template rootfs.
+3. Replay the clone's journal with `e2fsck -E journal_only`: the golden snapshot's microVM left the template mounted read-write, and the kernel does not mount such a file system from a read-only drive. The template itself is never touched.
+4. Make the tar and the clone root-owned `0444` and bind them, and the template kernel, read-only into the jail `volume-build` before jailer starts; the output and status files are bound writable. The jail gets the empty network namespace `fc-volume-build`.
+5. Cold boot with the golden snapshot's vCPUs, memory and kernel command line from `boot.json`, so the builder follows the snapshot without a second copy of those values. Two things differ: no network interface and no `ip=` (which stalls a boot without one), and the build parameters, which reach the daemon as environment. Drives in order: rootfs, tar, output, status.
+6. The daemon, as init in build mode (`internal/daemon/volumebuild`), formats the output drive as ext4 without a journal, unpacks the tar into it up to the counts in the header, checks it with `e2fsck -fn`, writes the status record and reboots, which ends Firecracker.
+7. Read the status record strictly and send the image as opaque bytes. A builder still running after `SANDBOX_RUNNER_FIRECRACKER_VOLUME_BUILD_TIMEOUT` (default `5m`), or whose caller went away, is killed.
+
+A failed build ends the call with one reason: `tar`, `too_large`, `no_space`, `format`, `mount`, `fsck`, `internal` or `timeout`. Jail, binds, namespace and files are removed on every way out, at `Shutdown`, and by startup reconcile. The builder's console is not kept. The runner host needs `e2fsck`, the sandbox image `mke2fs` and `e2fsck`. The builder boots the daemon that `create-golden-snapshot.sh` installed into the template: one from before build mode starts as a normal daemon there, and the build ends with `timeout`. Metrics: [observability.md](../../../../docs/observability.md#metrics); trust: [security-model.md](../../../../docs/security-model.md#volume-builder).
+
 ## Resource limits
 
 CPU, memory and disk are fixed when the golden snapshot and `rootfs.ext4` are built, not by runner env vars: `VCPUS`/`MEM_MIB` in `create-golden-snapshot.sh`, `FIRECRACKER_ROOTFS_SIZE_MB` (default 2048) in `build-rootfs-template.sh`. Each sandbox gets a sparse copy of the rootfs; filling it yields ENOSPC in the guest. Rebuild on the host to change limits.
@@ -80,5 +96,5 @@ Setup:
 
 ## Limitations
 
-- Sandboxes are not reattached after a runner restart; startup reconcile removes orphaned data directories, jail state and slot namespaces (a jail directory still holding an active bind mount is logged and left in place).
+- Sandboxes are not reattached after a runner restart; startup reconcile removes orphaned data directories, jail state and slot namespaces (a sandbox's jail directory still holding an active bind mount is logged and left in place).
 - Egress policy is per-netns iptables, not nftables sets; no per-sandbox allowlists.

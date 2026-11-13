@@ -227,6 +227,36 @@ func TestRunnerRecorderVolumeMounts(t *testing.T) {
 	}
 }
 
+func TestRunnerRecorderVolumeBuilds(t *testing.T) {
+	recorder := NewRunnerRecorder(true)
+
+	recorder.ObserveVolumeBuild("success")
+	recorder.ObserveVolumeBuild("success")
+	recorder.ObserveVolumeBuild("tar")
+	recorder.ObserveVolumeBuildDuration(3 * time.Second)
+
+	if got := recorder.VolumeBuildCount("success"); got != 2 {
+		t.Errorf("volume_builds_total{result=success} = %v, want 2", got)
+	}
+	body := scrape(t, recorder.Registry())
+	for _, want := range []string{
+		`sandbox_volume_builds_total{result="tar",role="runner"} 1`,
+		`sandbox_volume_build_duration_seconds_bucket{role="runner",le="5"} 1`,
+		`sandbox_volume_build_duration_seconds_bucket{role="runner",le="2"} 0`,
+		`sandbox_volume_build_duration_seconds_count{role="runner"} 1`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("scrape body missing %q", want)
+		}
+	}
+
+	var disabled *RunnerRecorder
+	disabled.ObserveVolumeBuild("success")
+	disabled.ObserveVolumeBuildDuration(time.Second)
+	NewRunnerRecorder(false).ObserveVolumeBuild("success")
+	NewRunnerRecorder(false).ObserveVolumeBuildDuration(time.Second)
+}
+
 func TestRunnerRecorderDisabled(t *testing.T) {
 	r := NewRunnerRecorder(false)
 	if r.Enabled() {

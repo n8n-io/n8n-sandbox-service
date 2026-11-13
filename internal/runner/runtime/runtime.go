@@ -7,8 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
+
+	"github.com/n8n-io/sandbox-service/internal/daemon/volumebuild"
 )
 
 // CreateBudget is how long a runtime may spend on CreateSandbox. It is part of
@@ -150,4 +153,54 @@ type Runtime interface {
 	DaemonURL(ctx context.Context, sandboxID string) (string, error)
 
 	Shutdown(ctx context.Context)
+}
+
+// VolumeBuilder is the part of a Runtime that builds volume images. Only the
+// Firecracker runtime has it.
+type VolumeBuilder interface {
+	// BuildVolume builds an ext4 image from the tar and hands it to deliver.
+	// The image is gone once BuildVolume returns. params must be valid, and
+	// tar must end after exactly params.TarBytes.
+	//
+	// It refuses before reading from tar, and before creating anything, with
+	// an error wrapping ErrCapacityExhausted: ErrVolumeBuildBusy, or too
+	// little disk. A build that ran and failed is a *VolumeBuildError.
+	BuildVolume(ctx context.Context, params volumebuild.Params, tar io.Reader, deliver func(image io.Reader, size int64) error) error
+}
+
+// ErrVolumeBuildBusy refuses a build while the runner's one build runs.
+var ErrVolumeBuildBusy = fmt.Errorf("a volume build is already running: %w", ErrCapacityExhausted)
+
+// VolumeBuildTimeout is the Reason of a build the runner ended at its time
+// limit. The other reasons are volumebuild's.
+const VolumeBuildTimeout = "timeout"
+
+// VolumeBuildReasons are the reasons a VolumeBuildError can have. Only these
+// leave the runner, as metric labels or to the API.
+var VolumeBuildReasons = []string{
+	volumebuild.ReasonTar, volumebuild.ReasonTooLarge, volumebuild.ReasonNoSpace,
+	volumebuild.ReasonFormat, volumebuild.ReasonMount, volumebuild.ReasonFsck, volumebuild.ReasonInternal,
+	VolumeBuildTimeout,
+}
+
+// VolumeBuildError is a volume build that ran and failed.
+type VolumeBuildError struct {
+	// Reason is one of VolumeBuildReasons.
+	Reason string
+	Err    error
+}
+
+func (e *VolumeBuildError) Error() string {
+	return fmt.Sprintf("volume build failed (%s): %v", e.Reason, e.Err)
+}
+
+func (e *VolumeBuildError) Unwrap() error { return e.Err }
+
+// CallerFault reports whether the tar caused the failure, not the runner.
+func (e *VolumeBuildError) CallerFault() bool {
+	switch e.Reason {
+	case volumebuild.ReasonTar, volumebuild.ReasonTooLarge, volumebuild.ReasonNoSpace:
+		return true
+	}
+	return false
 }

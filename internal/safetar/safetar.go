@@ -60,12 +60,20 @@ type Policy struct {
 	// headers, padding and anything after the end of the archive included.
 	// It does not bound the compressed input.
 	MaxDecompressedBytes int64
+	// MaxPathBytes bounds each entry's name and each link's target. A pax
+	// header can carry a name of a megabyte.
+	MaxPathBytes int
 }
 
-// Stats counts regular files only.
+// Stats is what an archive held, up to the first failure.
 type Stats struct {
+	// Entries counts as MaxEntries does.
+	Entries int
+	// Files and Bytes count regular files only.
 	Files int
 	Bytes int64
+	// DecompressedBytes counts as MaxDecompressedBytes does.
+	DecompressedBytes int64
 }
 
 // Extract unpacks an archive into root, creating parent directories and
@@ -93,7 +101,7 @@ type sink interface {
 
 func unpack(r io.Reader, p Policy, s sink) (Stats, error) {
 	var stats Stats
-	if p.MaxEntries < 0 || p.MaxBytes < 0 || p.MaxDecompressedBytes < 0 {
+	if p.MaxEntries < 0 || p.MaxBytes < 0 || p.MaxDecompressedBytes < 0 || p.MaxPathBytes < 0 {
 		return stats, fmt.Errorf("%w: negative cap", ErrTooLarge)
 	}
 	if p.AllowSymlinks && p.MaxEntries == 0 {
@@ -103,12 +111,10 @@ func unpack(r io.Reader, p Policy, s sink) (Stats, error) {
 	if err != nil {
 		return stats, invalid(err)
 	}
-	if p.MaxDecompressedBytes > 0 {
-		src = &cappedReader{r: src, max: p.MaxDecompressedBytes}
-	}
+	src = &cappedReader{r: src, max: p.MaxDecompressedBytes, read: &stats.DecompressedBytes}
 	tr := tar.NewReader(src)
 	links := symlinks{}
-	for entries := 1; ; entries++ {
+	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
 			// The tar ends before the gzip stream does: reading on to the end is
@@ -121,12 +127,13 @@ func unpack(r io.Reader, p Policy, s sink) (Stats, error) {
 		if err != nil {
 			return stats, invalid(err)
 		}
-		if p.MaxEntries > 0 && entries > p.MaxEntries {
+		if p.MaxEntries > 0 && stats.Entries >= p.MaxEntries {
 			return stats, fmt.Errorf("%w: more than %d entries", ErrTooLarge, p.MaxEntries)
 		}
 
 		// A pax global header holds metadata for the whole archive, not a file.
 		if hdr.Typeflag == tar.TypeXGlobalHeader {
+			stats.Entries++
 			continue
 		}
 
@@ -156,6 +163,7 @@ func unpack(r io.Reader, p Policy, s sink) (Stats, error) {
 			}
 			links.add(filepath.Clean(name))
 		}
+		stats.Entries++
 	}
 }
 
@@ -163,6 +171,9 @@ func check(hdr *tar.Header, p Policy, links symlinks) error {
 	name := hdr.Name
 	if !filepath.IsLocal(name) || hasDotDot(name) {
 		return fmt.Errorf("%w: path must be relative and must not contain ..", ErrInvalid)
+	}
+	if p.MaxPathBytes > 0 && (len(name) > p.MaxPathBytes || len(hdr.Linkname) > p.MaxPathBytes) {
+		return fmt.Errorf("%w: path and link target must not be longer than %d bytes", ErrInvalid, p.MaxPathBytes)
 	}
 	// The reader hands pax sparse files over as regular ones and fills their
 	// holes with zeros the archive does not carry. Refusing them keeps what is
@@ -282,10 +293,12 @@ func invalid(err error) error {
 	return fmt.Errorf("%w: %w", ErrInvalid, err)
 }
 
+// cappedReader counts what it hands out into read, and fails past max unless
+// max is 0.
 type cappedReader struct {
 	r    io.Reader
 	max  int64
-	read int64
+	read *int64
 	err  error
 }
 
@@ -295,16 +308,16 @@ func (c *cappedReader) Read(p []byte) (int, error) {
 	}
 	// One byte past the cap tells a stream of exactly max bytes from a longer
 	// one.
-	if left := c.max - c.read; left < int64(len(p)) {
+	if left := c.max - *c.read; c.max > 0 && left < int64(len(p)) {
 		p = p[:left+1]
 	}
 	n, err := c.r.Read(p)
-	if left := c.max - c.read; int64(n) > left {
-		c.read = c.max
+	if left := c.max - *c.read; c.max > 0 && int64(n) > left {
+		*c.read = c.max
 		c.err = fmt.Errorf("%w: more than %d bytes decompressed", ErrTooLarge, c.max)
 		return int(left), c.err
 	}
-	c.read += int64(n)
+	*c.read += int64(n)
 	return n, err
 }
 

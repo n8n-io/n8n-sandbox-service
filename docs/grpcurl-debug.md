@@ -47,6 +47,8 @@ grpcurl \
   runner.v1.SandboxControl/SetCordon
 ```
 
+`BuildVolume` is a bidirectional stream of tar and image bytes, which `grpcurl` is of little use for. From a checkout, `go run ./cmd/e2e-runnerctl build-volume <tar> <image>` calls it on a Firecracker runner (settings in `E2E_RUNNER_*` variables, see `cmd/e2e-runnerctl`).
+
 The bootstrap script puts **both** compose runner hostnames in the **same** control server certificate SAN list, so one `control-grpc-server` cert works on every local runner.
 
 ## API: `RunnerRegistry` (bidirectional stream)

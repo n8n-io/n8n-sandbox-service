@@ -16,6 +16,9 @@ service SandboxControl {
   rpc DeleteSandbox(DeleteSandboxRequest) returns (DeleteSandboxResponse);
   rpc GetCordon(GetCordonRequest) returns (GetCordonResponse);
   rpc SetCordon(SetCordonRequest) returns (SetCordonResponse);
+  // BuildVolume turns a tar into an ext4 volume image in a builder microVM.
+  // Firecracker runners only: others answer Unimplemented.
+  rpc BuildVolume(stream BuildVolumeRequest) returns (stream BuildVolumeResponse);
 }
 
 message RunnerHeartbeat {
@@ -76,4 +79,36 @@ message SetCordonRequest {
 // The state after the call.
 message SetCordonResponse {
   bool cordoned = 1;
+}
+
+// The caller sends the header, then the tar in chunks, then half-closes.
+message BuildVolumeRequest {
+  oneof part {
+    BuildVolumeHeader header = 1;
+    bytes tar_chunk = 2;
+  }
+}
+
+// What the caller counted in the tar under the volume tar policy. The build
+// fails for a tar that holds anything else.
+message BuildVolumeHeader {
+  // Length of the tar as sent, plain or gzip-compressed.
+  int64 tar_bytes = 1;
+  // Every entry, directories included.
+  int64 entries = 2;
+  // Sum of the regular file sizes.
+  int64 content_bytes = 3;
+  // Length of the tar once decompressed: tar_bytes for a plain tar.
+  int64 decompressed_bytes = 4;
+}
+
+// The runner answers with the image size, then the image in chunks, then its
+// digest. A build that fails ends the stream with an error instead.
+message BuildVolumeResponse {
+  oneof part {
+    int64 image_bytes = 1;
+    bytes image_chunk = 2;
+    // SHA-256 of the image, lowercase hex.
+    string image_sha256 = 3;
+  }
 }
