@@ -195,7 +195,9 @@ Rollout order per environment:
    The runner creates it only when it is missing, and Firecracker cannot restore
    a snapshot taken by another release: when `firecracker_version` changes on a
    host that keeps its disk, remove the old snapshot first. Remove it after a
-   template rebuild as well: it was booted from the old kernel and rootfs.
+   template rebuild as well: it was booted from the old kernel and rootfs. A
+   snapshot from before volume drives works without them; an older runner refuses
+   one with them, so remove it before rolling back.
 4. Roll `runner-firecracker` to the matching version — after step 3, never before.
    The runner stays unhealthy (`/readyz`, registration `Healthy=false`) until pin,
    snapshot and canary pass.
