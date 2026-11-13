@@ -249,9 +249,10 @@ func main() {
 	}
 	// After the API server has drained, so read URLs it handed out while
 	// draining still work, and after the activity write, which a long download
-	// would otherwise cut off.
+	// would otherwise cut off. A download still running when the shared
+	// deadline passes is expected, so that is not logged as an error.
 	if volumeObjectsSrv != nil {
-		if err := volumeObjectsSrv.Shutdown(ctx); err != nil {
+		if err := volumeObjectsSrv.Shutdown(ctx); err != nil && !errors.Is(err, context.DeadlineExceeded) {
 			slog.Error("volume objects graceful shutdown failed", "error", err)
 		}
 	}

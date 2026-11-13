@@ -617,30 +617,30 @@ runner_grpc_addr=$(render "${local_store[@]}" --show-only templates/runner-state
 test "$volume_host" = "${runner_grpc_addr%:*}"
 render "${local_store[@]}" "${cert_manager[@]}" --show-only templates/cert-manager.yaml |
 	sed -n 's/^[[:space:]]*- //p' |
-	grep -Fxq "$volume_host"
+	grep -Fx "$volume_host" >/dev/null
 render "${local_store[@]}" --show-only templates/api-deployment.yaml |
-	grep -A1 'name: volume-objects' | grep -q 'containerPort: 8443'
+	grep -A1 'name: volume-objects' | grep 'containerPort: 8443' >/dev/null
 render "${local_store[@]}" --show-only templates/api-service.yaml |
-	grep -A1 'name: volume-objects' | grep -q 'port: 8443'
+	grep -A1 'name: volume-objects' | grep 'port: 8443' >/dev/null
 # The same peers as the grpc port: the port joins that rule and no other.
 volume_policy=$(render "${local_store[@]}" --set networkPolicy.enabled=true --show-only templates/networkpolicy.yaml)
-grep -A2 -- '- port: grpc' <<<"$volume_policy" | grep -q 'port: volume-objects'
+grep -A2 -- '- port: grpc' <<<"$volume_policy" | grep 'port: volume-objects' >/dev/null
 test "$(grep -c 'port: volume-objects' <<<"$volume_policy")" = 1
 # A custom Service port moves the URL with it; a custom address moves the
 # container port.
 render "${local_store[@]}" --set api.service.volumeObjectsPort=9443 \
 	--show-only templates/configmap.yaml |
-	grep -q 'SANDBOX_API_VOLUME_LOCAL_URL: "https://n8n-sandbox-service-api:9443"'
+	grep 'SANDBOX_API_VOLUME_LOCAL_URL: "https://n8n-sandbox-service-api:9443"' >/dev/null
 render "${local_store[@]}" --set-string api.config.volumeLocalListenAddr=:9443 \
 	--show-only templates/api-deployment.yaml |
-	grep -A1 'name: volume-objects' | grep -q 'containerPort: 9443'
+	grep -A1 'name: volume-objects' | grep 'containerPort: 9443' >/dev/null
 
 echo "==> with an external data plane, runners need an explicit volume-objects URL"
 must_fail "api.config.volumeLocalUrl is required" "${local_store[@]}" --set dataPlane.mode=external
 external_store=("${local_store[@]}" --set dataPlane.mode=external
 	--set api.config.volumeLocalUrl=https://sandbox-api.example.internal:8443)
 render "${external_store[@]}" --show-only templates/configmap.yaml |
-	grep -q 'SANDBOX_API_VOLUME_LOCAL_URL: "https://sandbox-api.example.internal:8443"'
+	grep 'SANDBOX_API_VOLUME_LOCAL_URL: "https://sandbox-api.example.internal:8443"' >/dev/null
 # As for the grpc port, only the peers listed for it get through.
 external_policy=$(render "${external_store[@]}" --set networkPolicy.enabled=true \
 	--show-only templates/networkpolicy.yaml)
@@ -651,7 +651,7 @@ fi
 render "${external_store[@]}" --set networkPolicy.enabled=true \
 	--set 'networkPolicy.api.grpcIngressFrom[0].ipBlock.cidr=10.0.0.0/8' \
 	--show-only templates/networkpolicy.yaml |
-	grep -A2 -- '- port: grpc' | grep -q 'port: volume-objects'
+	grep -A2 -- '- port: grpc' | grep 'port: volume-objects' >/dev/null
 
 echo "==> the local volume store refuses setups and ports it cannot serve"
 must_fail "requires api.persistence.enabled" "${local_store[@]}" --set api.persistence.enabled=false
@@ -682,16 +682,32 @@ must_fail "repeats the metrics port" "${local_store[@]}" \
 	--set-string api.config.metricsListenAddr=:9100 --set api.service.volumeObjectsPort=9100
 must_fail "api.service.volumeObjectsPort must be a port" "${local_store[@]}" \
 	--set api.service.volumeObjectsPort=0
-# The API refuses these at startup, so the render does.
-for bad_url in http://sandbox-api:8443 https://sandbox-api:8443/path "https://user:pw@sandbox-api" https://:8443; do
+# The API refuses these at startup, so the render does; the rule refuses a
+# few more, such as hosts no DNS name or address can have and ports past 65535.
+for bad_url in http://sandbox-api:8443 https://sandbox-api:8443/path "https://user:pw@sandbox-api" https://:8443 \
+	https://-sandbox-api https://sandbox-api:0 https://sandbox-api:65536 https://sandbox-api: "https://[fd00::1" https://fd00::1 \
+	"https://[.]" "https://[1.2.3.4]" "https://[fd00:1]"; do
 	must_fail "api.config.volumeLocalUrl must be an https URL" "${local_store[@]}" \
 		--set-string "api.config.volumeLocalUrl=$bad_url"
+done
+# --set-json, since --set reads a backslash as an escape.
+for bad_url in '"https://sandbox\\api"' '"https://sandbox\"api"' '"https://sandbox api"'; do
+	must_fail "api.config.volumeLocalUrl must be an https URL" "${local_store[@]}" \
+		--set-json "api.config.volumeLocalUrl=$bad_url"
+done
+for good_url in https://sandbox-api.example.internal https://sandbox-api.example.internal:8443/ \
+	https://10.0.0.1:8443 "https://[fd00::1]:8443" "https://[::ffff:10.0.0.1]:8443"; do
+	render "${local_store[@]}" --set-string "api.config.volumeLocalUrl=$good_url" \
+		--show-only templates/configmap.yaml |
+		grep -F "SANDBOX_API_VOLUME_LOCAL_URL: \"$good_url\"" >/dev/null
 done
 # Turned on through an env entry, the chart would open no port and check nothing.
 must_fail "api.extraEnv sets SANDBOX_API_VOLUME_STORE=local" \
 	--set 'api.extraEnv[0].name=SANDBOX_API_VOLUME_STORE' --set-string 'api.extraEnv[0].value=local'
 # remote through api.extraEnv stays as the README section 'API Sidecars' shows.
-render --set 'api.extraEnv[0].name=SANDBOX_API_VOLUME_STORE' --set-string 'api.extraEnv[0].value=remote' >/dev/null
+render --set 'api.extraEnv[0].name=SANDBOX_API_VOLUME_STORE' --set-string 'api.extraEnv[0].value=remote' \
+	--show-only templates/api-deployment.yaml |
+	grep -A1 'name: SANDBOX_API_VOLUME_STORE' | grep 'value: remote' >/dev/null
 # An env entry would override the chart's settings and leave its ports wrong.
 for name in SANDBOX_API_VOLUME_STORE SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR SANDBOX_API_VOLUME_LOCAL_URL; do
 	must_fail "api.extraEnv sets $name" "${local_store[@]}" \

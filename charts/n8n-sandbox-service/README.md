@@ -501,8 +501,8 @@ The chart then sets `SANDBOX_API_VOLUME_STORE`, `SANDBOX_API_VOLUME_LOCAL_LISTEN
 | `api.config.volumeStore` | `""` | `local` turns the store on. For `remote`, set `SANDBOX_API_VOLUME_STORE` through `api.extraEnv`, as in [API Sidecars](#api-sidecars). |
 | `api.config.volumeLocalListenAddr` | `":8443"` | The listener's address. Its port must differ from the API's other ports. |
 | `api.service.volumeObjectsPort` | `8443` | The listener's Service port. |
-| `api.config.volumeLocalUrl` | `""` | Where runners reach the listener. Empty means `https://<API Service name>:<api.service.volumeObjectsPort>`, the host in-cluster runners register with. |
+| `api.config.volumeLocalUrl` | `""` | Where runners reach the listener. Empty means `https://<API Service name>:<api.service.volumeObjectsPort>`. In either data-plane mode, its host must be the host runners register with, and the API registration certificate must carry it, or the name runners verify registration against if one is set (`tls.certificates.runnerRegistrationClient.serverName` for in-cluster runners), whether cert-manager issues the certificate (`tls.certificates.apiRegistrationServer.dnsNames`) or it comes from an existing Secret. The default meets both for in-cluster runners. |
 
 The store keeps its objects on one API pod's volume and signs read URLs with a key of that pod's own, so it needs `api.persistence.enabled`, `api.replicaCount: 1` and no autoscaling; the render fails otherwise. Read URLs stop working when the pod restarts.
 
-With `dataPlane.mode: external`, runners cannot resolve the API Service name, so the render requires `api.config.volumeLocalUrl`. Its host must be on the API registration certificate (`tls.certificates.apiRegistrationServer.dnsNames` with cert-manager), and the runners must be listed in `networkPolicy.api.grpcIngressFrom` when `networkPolicy.enabled` is set.
+With `dataPlane.mode: external`, runners cannot resolve the API Service name, so the render requires `api.config.volumeLocalUrl`, and with `networkPolicy.enabled` the runners must be listed in `networkPolicy.api.grpcIngressFrom`.
