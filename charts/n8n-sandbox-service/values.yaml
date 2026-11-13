@@ -194,6 +194,28 @@ api:
     accessModes:
       - ReadWriteOnce
 
+  # The API pods' ServiceAccount, for example for Azure Workload Identity. See
+  # the chart README section 'API ServiceAccount'.
+  serviceAccount:
+    create: false
+    # With create, empty means <fullname>-api. Without create, the name of an
+    # existing ServiceAccount; empty keeps the namespace's default one.
+    name: ""
+    # Used only with create.
+    annotations: {}
+
+  # Extra labels for the API pods. Keys of the selector labels are ignored.
+  podLabels: {}
+
+  # Init containers for the API pods. One with restartPolicy: Always runs as a
+  # native sidecar, such as a volume store helper. See the chart README section
+  # 'API Sidecars'.
+  initContainers: []
+
+  # How long the API pods get to stop, in whole seconds. Empty keeps the
+  # Kubernetes default of 30.
+  terminationGracePeriodSeconds: ""
+
   resources: {}
   podSecurityContext:
     fsGroup: 100
