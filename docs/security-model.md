@@ -6,13 +6,14 @@ what it is safe to run on it.
 
 ## Trust boundaries
 
-Four boundaries carry the guarantees. They are enforced by different components
+Five boundaries carry the guarantees. They are enforced by different components
 and fail in different ways.
 
 | Boundary | Enforced by | Protects against |
 | --- | --- | --- |
 | Client → API | API key auth and per-request tenant checks | One tenant reaching another tenant's sandboxes |
 | API → Runner | mTLS on both listeners, plus a shared runner API key | Unauthorized control of sandbox lifecycles |
+| Runner → API volume objects (`local` store) | mTLS on a listener of their own, plus a signed, expiring URL per object | A peer without a client certificate from the registration CA reading volume objects, and a runner reading objects it was not handed |
 | Guest → host and network | Network namespaces, iptables, and the container or microVM boundary | Untrusted code escaping its sandbox or reaching other sandboxes |
 | Build inputs → images and guest assets | Checksums on fetched binaries, digest-pinned releases, an optional manifest check | A substituted build input reaching every sandbox, for the inputs that are verified |
 
@@ -190,6 +191,21 @@ for the Firecracker runtime and a Docker label filter for the Sysbox runtime.
 An ID hosted by a different runner returns `404`. Routing is keyed entirely on
 the `{id}` path segment; no request body, header or query parameter can
 redirect a call to a different sandbox.
+
+With `SANDBOX_API_VOLUME_STORE=local`, the API serves volume objects on a
+listener of its own (`SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR`), which serves
+`GET /volume-objects/…` and nothing else; the public listener has no such
+route. It speaks TLS 1.3 with the registration listener's certificate and
+requires a client certificate signed by that listener's CA, so a peer without
+one gets no connection. It takes no API key. A request also needs a URL the
+API signed for that one object, an HMAC-SHA256 over method, path and an expiry
+at most an hour ahead; a missing, altered or expired signature gets `403`. Any
+client certificate the CA signed opens a connection, so the signature is what
+limits a runner to the objects it was handed. The access log of both listeners
+redacts the signature. With `remote`, the
+[store helper](volume-store-helper.md) holds the storage credentials and issues
+the read URLs; it serves gRPC on its socket without TLS and authenticates
+nobody, so only the API may reach it.
 
 ## Guest to host and network
 
@@ -494,6 +510,7 @@ The boundaries above are covered by tests rather than asserted on paper.
 | Scaler keys: `GET /admin/runners` and runner cordon only, `403` on every other path, no overlap with the other key sets | [internal/api/handlers_runners_test.go](../internal/api/handlers_runners_test.go), [internal/api/config/config_test.go](../internal/api/config/config_test.go), [e2e/tests/admin-runners.spec.ts](../e2e/tests/admin-runners.spec.ts) |
 | Concurrency limits: per tenant (creates included) and per sandbox, the execution `DELETE` limits and timeout, the `timeout_ms` cap | [internal/api/middleware_limits_test.go](../internal/api/middleware_limits_test.go), [internal/runner/middleware_limits_test.go](../internal/runner/middleware_limits_test.go), [internal/limits/limits_test.go](../internal/limits/limits_test.go), [e2e/tests/request-limits.spec.ts](../e2e/tests/request-limits.spec.ts) |
 | Runner listeners require a CA-signed client certificate; the API verifies each runner's host name and refuses a non-https base | [internal/runner/mtls_test.go](../internal/runner/mtls_test.go), [internal/api/runnertls_test.go](../internal/api/runnertls_test.go), [internal/api/registry/validate_test.go](../internal/api/registry/validate_test.go) |
+| `local` volume objects: only on their own listener, which refuses a connection without a client certificate, with one from another CA or below TLS 1.3, and serves an object only with its signature; the public listener has no such route; signatures stay out of both access logs; `http` URLs refused | [cmd/api/volume_objects_server_test.go](../cmd/api/volume_objects_server_test.go), [internal/api/handlers_volume_objects_test.go](../internal/api/handlers_volume_objects_test.go), [internal/api/volumestore/local_test.go](../internal/api/volumestore/local_test.go), [internal/api/config/config_test.go](../internal/api/config/config_test.go) |
 | Runner volume downloads: `https` only, no redirects followed; the registration certificate and CA, and no proxy, on the API's host alone; size and sha256 checked | [internal/runner/volumecache/transport_test.go](../internal/runner/volumecache/transport_test.go), [internal/runner/volumecache/cache_test.go](../internal/runner/volumecache/cache_test.go) |
 | No caller-set header but `Content-Type` passed on to the daemon; daemon redirects refused; daemon signal headers stripped, sandbox-gone body ignored | [internal/runner/proxy_test.go](../internal/runner/proxy_test.go), [internal/api/handlers_reap_test.go](../internal/api/handlers_reap_test.go), [e2e/tests/runner-restart.spec.ts](../e2e/tests/runner-restart.spec.ts) |
 | Sandbox-to-sandbox (unicast and multicast), blocked-range egress and guest DNS; egress `none` across stop/wake and slot reuse | [e2e/tests/network-isolation.spec.ts](../e2e/tests/network-isolation.spec.ts) |

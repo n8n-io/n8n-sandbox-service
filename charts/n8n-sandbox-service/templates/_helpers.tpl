@@ -200,3 +200,34 @@ The HPA template and validation.yaml both key off this.
 {{- define "n8n-sandbox-service.autoscalingTargetSet" -}}
 {{- if not (or (kindIs "invalid" .) (eq (toString .) "")) -}}true{{- end -}}
 {{- end }}
+
+{{/*
+api.config.volumeStore, normalized like apiMetricsListenAddr.
+*/}}
+{{- define "n8n-sandbox-service.apiVolumeStore" -}}
+{{- .Values.api.config.volumeStore | default "" | toString | trim -}}
+{{- end }}
+
+{{/*
+The port of api.config.volumeLocalListenAddr with api.config.volumeStore=local,
+or "" without it. Every volume-objects port, policy rule and setting in the
+chart keys off this; validation.yaml checks the address first.
+*/}}
+{{- define "n8n-sandbox-service.apiVolumeObjectsPort" -}}
+{{- if eq (include "n8n-sandbox-service.apiVolumeStore" .) "local" -}}
+{{- last (splitList ":" (.Values.api.config.volumeLocalListenAddr | default "" | toString | trim)) | atoi -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Where runners reach the volume-objects listener: api.config.volumeLocalUrl, or
+the API Service name and port, the host in-cluster runners register with.
+*/}}
+{{- define "n8n-sandbox-service.apiVolumeLocalUrl" -}}
+{{- $url := .Values.api.config.volumeLocalUrl | default "" | toString | trim -}}
+{{- if $url -}}
+{{- $url -}}
+{{- else -}}
+{{- printf "https://%s:%s" (include "n8n-sandbox-service.apiName" .) (include "n8n-sandbox-service.scalarString" .Values.api.service.volumeObjectsPort) -}}
+{{- end -}}
+{{- end }}

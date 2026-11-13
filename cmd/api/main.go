@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/grpc/pb"
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
+	"github.com/n8n-io/sandbox-service/internal/api/volumestore"
 	"github.com/n8n-io/sandbox-service/internal/grpctls"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/obs"
@@ -78,6 +80,15 @@ func main() {
 		slog.Info("using sqlite store", "path", dbPath, "wal", cfg.SQLiteWAL)
 	}
 	defer sandboxStore.Close()
+
+	volumes, err := newVolumeStore(cfg)
+	if err != nil {
+		slog.Error("open volume store", "error", err)
+		os.Exit(1)
+	}
+	if closer, ok := volumes.(io.Closer); ok {
+		defer closer.Close()
+	}
 
 	mrec := metrics.NewAPIRecorder(cfg.MetricsEnabled)
 	if mrec.Enabled() {
@@ -138,6 +149,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	volumeObjectsSrv, volumeObjectsLis, err := newVolumeObjectsServer(cfg, volumes, mrec)
+	if err != nil {
+		slog.Error("volume objects listener", "addr", cfg.VolumeLocalListenAddr, "error", err)
+		os.Exit(1)
+	}
+
 	grpcLis, err := net.Listen("tcp", cfg.GRPCListenAddr)
 	if err != nil {
 		slog.Error("grpc listen", "addr", cfg.GRPCListenAddr, "error", err)
@@ -166,7 +183,7 @@ func main() {
 	})
 
 	// One slot per listener, so a second failure never blocks its goroutine.
-	serverErr := make(chan error, 3)
+	serverErr := make(chan error, 4)
 	go func() {
 		slog.Info("api listening",
 			"addr", cfg.ListenAddr,
@@ -190,6 +207,16 @@ func main() {
 		go func() {
 			slog.Info("metrics listening", "addr", cfg.MetricsListenAddr, "path", "/metrics")
 			if err := metricsSrv.Serve(metricsLis); err != nil && err != http.ErrServerClosed {
+				serverErr <- err
+			}
+		}()
+	}
+
+	if volumeObjectsSrv != nil {
+		go func() {
+			slog.Info("volume objects listening", "addr", cfg.VolumeLocalListenAddr, "tls", true)
+			// Certificate and key come from volumeObjectsSrv.TLSConfig.
+			if err := volumeObjectsSrv.ServeTLS(volumeObjectsLis, "", ""); err != nil && err != http.ErrServerClosed {
 				serverErr <- err
 			}
 		}()
@@ -220,6 +247,15 @@ func main() {
 	case <-activityDone:
 	case <-ctx.Done():
 	}
+	// After the API server has drained, so read URLs it handed out while
+	// draining still work, and after the activity write, which a long download
+	// would otherwise cut off. A download still running when the shared
+	// deadline passes is expected, so that is not logged as an error.
+	if volumeObjectsSrv != nil {
+		if err := volumeObjectsSrv.Shutdown(ctx); err != nil && !errors.Is(err, context.DeadlineExceeded) {
+			slog.Error("volume objects graceful shutdown failed", "error", err)
+		}
+	}
 	// Metrics last, so a scrape in flight during a normal drain still completes.
 	// The deadline above is deliberately shared: once it is spent the kubelet is
 	// at terminationGracePeriodSeconds and about to SIGKILL us, so that case is
@@ -231,4 +267,28 @@ func main() {
 	}
 
 	slog.Info("api stopped")
+}
+
+// newVolumeStore contacts nothing, so startup never waits on the store helper.
+func newVolumeStore(cfg *config.APIConfig) (volumestore.Store, error) {
+	switch cfg.VolumeStore {
+	case config.VolumeStoreLocal:
+		vs, err := volumestore.NewLocal(cfg.DataDir, cfg.VolumeLocalURL)
+		if err != nil {
+			return nil, err
+		}
+		slog.Info("using local volume store",
+			"dir", filepath.Join(cfg.DataDir, "volumes"),
+			"url", cfg.VolumeLocalURL,
+			"listen_addr", cfg.VolumeLocalListenAddr)
+		return vs, nil
+	case config.VolumeStoreRemote:
+		vs, err := volumestore.NewRemote(cfg.VolumeRemoteSocket)
+		if err != nil {
+			return nil, err
+		}
+		slog.Info("using remote volume store", "socket", cfg.VolumeRemoteSocket)
+		return vs, nil
+	}
+	return nil, nil
 }
