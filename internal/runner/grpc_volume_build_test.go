@@ -39,6 +39,8 @@ type buildRuntime struct {
 	image   []byte
 	// announce, if set, is the size passed to deliver instead of the image's.
 	announce int64
+	// afterTar, if set, runs once the tar is read.
+	afterTar func()
 
 	calls  int
 	params volumebuild.Params
@@ -56,6 +58,9 @@ func (b *buildRuntime) BuildVolume(_ context.Context, params volumebuild.Params,
 		return fmt.Errorf("receive tar: %w", err)
 	}
 	b.tar = data
+	if b.afterTar != nil {
+		b.afterTar()
+	}
 	if b.failure != nil {
 		return b.failure
 	}
@@ -73,8 +78,8 @@ type buildStream struct {
 	requests []*pb.BuildVolumeRequest
 	// recvErr ends the requests instead of a half-close.
 	recvErr error
-	// headerDelay is how long the caller takes to send its header.
-	headerDelay time.Duration
+	// onHeader runs when the header is received.
+	onHeader func()
 
 	received  int
 	responses []*pb.BuildVolumeResponse
@@ -89,8 +94,8 @@ func (s *buildStream) Recv() (*pb.BuildVolumeRequest, error) {
 		}
 		return nil, io.EOF
 	}
-	if s.received == 0 {
-		time.Sleep(s.headerDelay)
+	if s.received == 0 && s.onHeader != nil {
+		s.onHeader()
 	}
 	s.received++
 	return s.requests[s.received-1], nil
@@ -194,16 +199,21 @@ func TestBuildVolumeStreamsTheTarInAndTheImageOut(t *testing.T) {
 // The duration starts at the tar's first byte, as its help says: a slow
 // header is not part of the build.
 func TestBuildVolumeDurationStartsAtTheTarsFirstByte(t *testing.T) {
-	srv := newBuildServer(&buildRuntime{image: []byte("image")})
-	stream := &buildStream{ctx: authorized(), headerDelay: 1100 * time.Millisecond, requests: []*pb.BuildVolumeRequest{
-		buildHeader(5, 1, 5), tarChunk("hello"),
-	}}
+	clock := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+	rt := &buildRuntime{image: []byte("image"), afterTar: func() { clock = clock.Add(3 * time.Second) }}
+	srv := newBuildServer(rt)
+	srv.now = func() time.Time { return clock }
+	stream := &buildStream{
+		ctx:      authorized(),
+		onHeader: func() { clock = clock.Add(10 * time.Second) },
+		requests: []*pb.BuildVolumeRequest{buildHeader(5, 1, 5), tarChunk("hello")},
+	}
 
 	if err := srv.BuildVolume(stream); err != nil {
 		t.Fatalf("BuildVolume() failed: %v", err)
 	}
-	if body := scrapeRegistry(t, srv.Rec); !strings.Contains(body, `sandbox_volume_build_duration_seconds_bucket{role="runner",le="1"} 1`) {
-		t.Errorf("the build took a second or more, so its duration counted the header:\n%s", body)
+	if body := scrapeRegistry(t, srv.Rec); !strings.Contains(body, `sandbox_volume_build_duration_seconds_sum{role="runner"} 3`+"\n") {
+		t.Errorf("want the 3 s from the first byte on, not the 10 s header before it:\n%s", body)
 	}
 }
 

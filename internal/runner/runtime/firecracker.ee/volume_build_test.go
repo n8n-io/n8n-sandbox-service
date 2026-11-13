@@ -552,6 +552,36 @@ func TestBuildVolumeReportsWhatTheBuilderRecorded(t *testing.T) {
 	}
 }
 
+// The builder boots the kernel every jail shares, so it refuses one a jailed
+// Firecracker could have written, before it reads the tar.
+func TestBuildVolumeChecksTheTemplateKernelFirst(t *testing.T) {
+	harness := newBuilderHarness(t)
+	var checked []string
+	harness.rt.deps.checkTemplateKernel = func(path string) error {
+		checked = append(checked, path)
+		return errors.New("template kernel is owned by uid 1000")
+	}
+
+	err := harness.rt.BuildVolume(context.Background(), testBuildParams, neverRead{t}, discardImage)
+
+	if err == nil || !strings.Contains(err.Error(), "owned by uid 1000") {
+		t.Fatalf("BuildVolume() = %v, want the kernel check's error", err)
+	}
+	if errors.Is(err, runnerruntime.ErrCapacityExhausted) {
+		t.Errorf("BuildVolume() = %v: a refusal would have the API retry on a runner as broken", err)
+	}
+	if !slices.Equal(checked, []string{"/srv/firecracker/template/vmlinux"}) {
+		t.Errorf("checked %q, want the template kernel", checked)
+	}
+	harness.mu.Lock()
+	started := len(harness.jailerArgs) > 0
+	harness.mu.Unlock()
+	if started {
+		t.Error("jailer was started")
+	}
+	harness.requireCleanedUp(t)
+}
+
 func TestBuildVolumeEndsABuilderAtItsTimeLimit(t *testing.T) {
 	harness := newBuilderHarness(t)
 	harness.rt.config.VolumeBuildTimeout = 20 * time.Millisecond

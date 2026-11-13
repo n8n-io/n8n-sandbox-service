@@ -51,12 +51,13 @@ func (s *SandboxControlGRPC) BuildVolume(stream volumeBuildStream) error {
 		return status.Error(codes.Unimplemented, "this runner cannot build volumes")
 	}
 
-	tar := &tarStream{stream: stream}
+	now := s.clock()
+	tar := &tarStream{stream: stream, now: now}
 	err := s.buildVolume(stream, builder, tar)
 	result, answer := volumeBuildOutcome(ctx, err)
 	s.Rec.ObserveVolumeBuild(result)
 	if !tar.firstByte.IsZero() {
-		s.Rec.ObserveVolumeBuildDuration(time.Since(tar.firstByte))
+		s.Rec.ObserveVolumeBuildDuration(now().Sub(tar.firstByte))
 	}
 	switch result {
 	case volumeBuildSuccess:
@@ -110,6 +111,7 @@ func (s *SandboxControlGRPC) buildVolume(stream volumeBuildStream, builder runne
 // when the caller half-closes after exactly want bytes.
 type tarStream struct {
 	stream   volumeBuildStream
+	now      func() time.Time
 	want     int64
 	received int64
 	chunk    []byte
@@ -144,7 +146,7 @@ func (t *tarStream) Read(buf []byte) (int, error) {
 			return 0, status.Errorf(codes.InvalidArgument, "the tar is longer than the %d bytes its header says", t.want)
 		}
 		if t.firstByte.IsZero() && len(part.TarChunk) > 0 {
-			t.firstByte = time.Now()
+			t.firstByte = t.now()
 		}
 		t.chunk = part.TarChunk
 	}

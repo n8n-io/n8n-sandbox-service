@@ -195,6 +195,11 @@ func (r *Runtime) BuildVolume(ctx context.Context, params volumebuild.Params, ta
 	if err != nil {
 		return err
 	}
+	// Admission checked the kernel, but the builder boots the file now, as a
+	// sandbox cold boot does.
+	if err := r.deps.checkTemplateKernel(templateKernelPath(r.config)); err != nil {
+		return err
+	}
 	boot := volumeBuilderBoot{
 		vcpuCount:  golden.VCPUCount,
 		memSizeMiB: golden.MemSizeMiB,

@@ -63,26 +63,26 @@ func TestParamsFromEnvRefusesIncompleteOrInvalidParameters(t *testing.T) {
 		return env
 	}
 	for name, env := range map[string]map[string]string{
-		"tar bytes missing":          without(envTarBytes),
-		"entries missing":            without(envEntries),
-		"content bytes missing":      without(envContentBytes),
-		"decompressed bytes missing": without(envDecompressedBytes),
-		"empty":                      with(envEntries, ""),
-		"negative":                   with(envContentBytes, "-1"),
-		"signed":                     with(envEntries, "+3"),
-		"hex":                        with(envEntries, "0x3"),
-		"spaces":                     with(envEntries, " 3"),
-		"fraction":                   with(envTarBytes, "1024.5"),
-		"text":                       with(envTarBytes, "many"),
-		"over int64":                 with(envTarBytes, "9223372036854775808"),
-		"zero tar bytes":             with(envTarBytes, "0"),
-		"zero entries":               with(envEntries, "0"),
-		"zero decompressed bytes":    with(envDecompressedBytes, "0"),
-		"too many tar bytes":         with(envTarBytes, "1099511627777"),
-		"too many entries":           with(envEntries, "268435457"),
-		"too many content":           with(envContentBytes, "1099511627777"),
-		"too many decompressed":      with(envDecompressedBytes, "4398046511105"),
-		"more content than the tar":  with(envContentBytes, "2049"),
+		"tar bytes missing":              without(envTarBytes),
+		"entries missing":                without(envEntries),
+		"content bytes missing":          without(envContentBytes),
+		"decompressed bytes missing":     without(envDecompressedBytes),
+		"empty":                          with(envEntries, ""),
+		"negative":                       with(envContentBytes, "-1"),
+		"signed":                         with(envEntries, "+3"),
+		"hex":                            with(envEntries, "0x3"),
+		"spaces":                         with(envEntries, " 3"),
+		"fraction":                       with(envTarBytes, "1024.5"),
+		"text":                           with(envTarBytes, "many"),
+		"over int64":                     with(envTarBytes, "9223372036854775808"),
+		"zero tar bytes":                 with(envTarBytes, "0"),
+		"zero entries":                   with(envEntries, "0"),
+		"zero decompressed bytes":        with(envDecompressedBytes, "0"),
+		"too many tar bytes":             with(envTarBytes, "1099511627777"),
+		"too many entries":               with(envEntries, "268435457"),
+		"too many content":               with(envContentBytes, "1099511627777"),
+		"too many decompressed":          with(envDecompressedBytes, "4398046511105"),
+		"more content than decompressed": with(envContentBytes, "2049"),
 	} {
 		params, requested, err := ParamsFromEnv(envLookup(env))
 		if !requested || err == nil || params != (Params{}) {
@@ -231,7 +231,7 @@ func TestImageBytes(t *testing.T) {
 		params   Params
 		min, max int64
 	}{
-		// 267 inodes and 256 spare blocks dominate.
+		// 269 inodes and 256 spare blocks dominate.
 		{"one empty file", Params{TarBytes: 1024, Entries: 1}, 1 * mib, 2 * mib},
 		// Two blocks, two inodes and an eighth of a block each: about 9 KiB.
 		{"many tiny files", Params{TarBytes: 1, Entries: 20000, ContentBytes: 20000}, 170 * mib, 200 * mib},
