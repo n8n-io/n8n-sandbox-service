@@ -16,7 +16,7 @@ import (
 func TestRuntimeCreateSandboxRefusesBelowDiskFloor(t *testing.T) {
 	rt := testRuntimeT(t, 4)
 	stubCreateDeps(rt)
-	floor := testVolumeSpace.total * createFloorPercent / 100
+	floor := testVolumeSpace.total * runnerruntime.DiskFloorPercent / 100
 	free := floor - 1
 	rt.deps.volumeSpace = func(string) (volumeSpace, error) {
 		return volumeSpace{free: free, total: testVolumeSpace.total}, nil
@@ -28,8 +28,12 @@ func TestRuntimeCreateSandboxRefusesBelowDiskFloor(t *testing.T) {
 	}
 
 	const refusedID = "sandbox-id-123456"
-	if _, err := rt.CreateSandbox(context.Background(), refusedID, nil); !errors.Is(err, runnerruntime.ErrCapacityExhausted) {
+	_, err := rt.CreateSandbox(context.Background(), refusedID, nil)
+	if !errors.Is(err, runnerruntime.ErrCapacityExhausted) {
 		t.Fatalf("CreateSandbox() below the floor: error = %v, want ErrCapacityExhausted", err)
+	}
+	if strings.Contains(err.Error(), "volume cache") {
+		t.Errorf("refusal with nothing set aside blames the volume cache: %v", err)
 	}
 	rt.mu.Lock()
 	_, tracked := rt.sandboxes[refusedID]
@@ -45,6 +49,45 @@ func TestRuntimeCreateSandboxRefusesBelowDiskFloor(t *testing.T) {
 	free = floor
 	if _, err := rt.CreateSandbox(context.Background(), refusedID, nil); err != nil {
 		t.Fatalf("CreateSandbox() at the floor: %v", err)
+	}
+}
+
+// What the volume cache sets aside counts as taken for a create, so new
+// sandboxes cannot fill the cache's share of the volume.
+func TestRuntimeCreateSandboxLeavesTheVolumeCacheReservation(t *testing.T) {
+	rt := testRuntimeT(t, 4)
+	stubCreateDeps(rt)
+	const reserved = 20 << 30
+	rt.SetDiskReservation(func() int64 { return reserved })
+	floor := testVolumeSpace.total * runnerruntime.DiskFloorPercent / 100
+	free := floor + reserved - 1
+	rt.deps.volumeSpace = func(string) (volumeSpace, error) {
+		return volumeSpace{free: free, total: testVolumeSpace.total}, nil
+	}
+
+	_, err := rt.CreateSandbox(context.Background(), "sandbox-id-123456", nil)
+	if !errors.Is(err, runnerruntime.ErrCapacityExhausted) || !strings.Contains(err.Error(), "SANDBOX_RUNNER_VOLUME_CACHE_MAX_BYTES") {
+		t.Fatalf("CreateSandbox() into the reservation: error = %v, want a capacity refusal naming the cache budget setting", err)
+	}
+
+	free = floor + reserved
+	if _, err := rt.CreateSandbox(context.Background(), "sandbox-id-123456", nil); err != nil {
+		t.Fatalf("CreateSandbox() with the reservation left free: %v", err)
+	}
+}
+
+// A stop may use the reservation: its sandbox is already on the volume.
+func TestRuntimeStopSandboxIgnoresTheVolumeCacheReservation(t *testing.T) {
+	rt := testRuntimeT(t, 2)
+	stubCreateDeps(rt)
+	const sandboxID = "sandbox-id-123456"
+	if _, err := rt.CreateSandbox(context.Background(), sandboxID, nil); err != nil {
+		t.Fatalf("CreateSandbox() failed: %v", err)
+	}
+	rt.SetDiskReservation(func() int64 { return testVolumeSpace.free })
+
+	if err := rt.StopSandbox(context.Background(), sandboxID); err != nil {
+		t.Fatalf("StopSandbox() with the free space all reserved: %v", err)
 	}
 }
 

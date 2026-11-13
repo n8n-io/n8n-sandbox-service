@@ -60,6 +60,31 @@ const (
 	LimitSandbox = "sandbox"
 )
 
+// Volume cache fetch results used with ObserveVolumeCacheFetch.
+const (
+	// VolumeFetchHit is an object served from the cache, including one a
+	// concurrent fetch downloaded.
+	VolumeFetchHit = "hit"
+	// VolumeFetchDownloaded is a download that completed and verified.
+	VolumeFetchDownloaded = "downloaded"
+	// VolumeFetchHTTP is a request that failed or got a status other than
+	// 200, a redirect included.
+	VolumeFetchHTTP = "http"
+	// VolumeFetchSize is a body longer or shorter than the recorded size,
+	// including one cut off mid-transfer.
+	VolumeFetchSize = "size"
+	// VolumeFetchDigest is a body whose sha256 is not the recorded one.
+	VolumeFetchDigest = "digest"
+	// VolumeFetchTimeout is a download that ran out of time.
+	VolumeFetchTimeout = "timeout"
+	// VolumeFetchFull is a fetch refused for want of room, including a disk
+	// that filled during the download, or because the object is larger than
+	// the whole cache.
+	VolumeFetchFull = "full"
+	// VolumeFetchIO is a download that failed writing to the local disk.
+	VolumeFetchIO = "io"
+)
+
 // Handler returns the http.Handler that serves the registry's metrics in
 // Prometheus exposition format.
 func Handler(reg *prometheus.Registry) http.Handler {
@@ -346,19 +371,26 @@ var containerOpBuckets = []float64{0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60, 12
 // (snapshot load on a cold page cache), far below the container-op range.
 var lifecycleStepBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5}
 
+// volumeDownloadBuckets covers objects from megabytes to several gigabytes. 300
+// is the default fetch timeout; 600 is for a raised one.
+var volumeDownloadBuckets = []float64{0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600}
+
 // RunnerRecorder owns the metric instruments emitted by the runner binary.
 type RunnerRecorder struct {
-	reg                 *prometheus.Registry
-	httpRequests        *prometheus.CounterVec
-	httpDuration        *prometheus.HistogramVec
-	httpInflight        prometheus.Gauge
-	httpLimited         *prometheus.CounterVec
-	containerOps        *prometheus.CounterVec
-	containerOpDuration *prometheus.HistogramVec
-	lifecycleSteps      *prometheus.HistogramVec
-	guestDeaths         prometheus.Counter
-	recoveries          *prometheus.CounterVec
-	volumeMounts        *prometheus.CounterVec
+	reg                  *prometheus.Registry
+	httpRequests         *prometheus.CounterVec
+	httpDuration         *prometheus.HistogramVec
+	httpInflight         prometheus.Gauge
+	httpLimited          *prometheus.CounterVec
+	containerOps         *prometheus.CounterVec
+	containerOpDuration  *prometheus.HistogramVec
+	lifecycleSteps       *prometheus.HistogramVec
+	guestDeaths          prometheus.Counter
+	recoveries           *prometheus.CounterVec
+	volumeMounts         *prometheus.CounterVec
+	volumeCacheFetches   *prometheus.CounterVec
+	volumeCacheDownloads prometheus.Histogram
+	volumeCacheEvictions prometheus.Counter
 }
 
 // NewRunnerRecorder builds the runner recorder. If enabled is false, the
@@ -424,19 +456,49 @@ func NewRunnerRecorder(enabled bool) *RunnerRecorder {
 		},
 		[]string{"result"},
 	)
-	reg.MustRegister(containerOps, containerOpDuration, lifecycleSteps, guestDeaths, recoveries, volumeMounts)
+	volumeCacheFetches := prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   Namespace,
+			Name:        "volume_cache_fetches_total",
+			Help:        "Volume object fetches by result: hit, downloaded, or why a download failed or was refused (http, size, digest, timeout, full, io).",
+			ConstLabels: prometheus.Labels{"role": RoleRunner},
+		},
+		[]string{"result"},
+	)
+	volumeCacheDownloads := prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace:   Namespace,
+			Name:        "volume_cache_download_duration_seconds",
+			Help:        "Duration of successful volume object downloads in seconds, verification included.",
+			Buckets:     volumeDownloadBuckets,
+			ConstLabels: prometheus.Labels{"role": RoleRunner},
+		},
+	)
+	volumeCacheEvictions := prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace:   Namespace,
+			Name:        "volume_cache_evictions_total",
+			Help:        "Unused volume objects evicted from the cache to make room for a download.",
+			ConstLabels: prometheus.Labels{"role": RoleRunner},
+		},
+	)
+	reg.MustRegister(containerOps, containerOpDuration, lifecycleSteps, guestDeaths, recoveries, volumeMounts,
+		volumeCacheFetches, volumeCacheDownloads, volumeCacheEvictions)
 	return &RunnerRecorder{
-		reg:                 reg,
-		httpRequests:        httpReq,
-		httpDuration:        httpDur,
-		httpInflight:        buildInflightGauge(reg, RoleRunner),
-		httpLimited:         buildLimitMetrics(reg, RoleRunner),
-		containerOps:        containerOps,
-		containerOpDuration: containerOpDuration,
-		lifecycleSteps:      lifecycleSteps,
-		guestDeaths:         guestDeaths,
-		recoveries:          recoveries,
-		volumeMounts:        volumeMounts,
+		reg:                  reg,
+		httpRequests:         httpReq,
+		httpDuration:         httpDur,
+		httpInflight:         buildInflightGauge(reg, RoleRunner),
+		httpLimited:          buildLimitMetrics(reg, RoleRunner),
+		containerOps:         containerOps,
+		containerOpDuration:  containerOpDuration,
+		lifecycleSteps:       lifecycleSteps,
+		guestDeaths:          guestDeaths,
+		recoveries:           recoveries,
+		volumeMounts:         volumeMounts,
+		volumeCacheFetches:   volumeCacheFetches,
+		volumeCacheDownloads: volumeCacheDownloads,
+		volumeCacheEvictions: volumeCacheEvictions,
 	}
 }
 
@@ -529,6 +591,59 @@ func (r *RunnerRecorder) ObserveVolumeMount(result string) {
 		return
 	}
 	r.volumeMounts.WithLabelValues(result).Inc()
+}
+
+// ObserveVolumeCacheFetch records the result of a volume cache fetch (one of
+// the VolumeFetch* values).
+func (r *RunnerRecorder) ObserveVolumeCacheFetch(result string) {
+	if r == nil || r.reg == nil {
+		return
+	}
+	r.volumeCacheFetches.WithLabelValues(result).Inc()
+}
+
+// ObserveVolumeCacheDownload records how long a successful download took.
+func (r *RunnerRecorder) ObserveVolumeCacheDownload(dur time.Duration) {
+	if r == nil || r.reg == nil {
+		return
+	}
+	r.volumeCacheDownloads.Observe(dur.Seconds())
+}
+
+// ObserveVolumeCacheEviction records one object evicted from the volume cache.
+func (r *RunnerRecorder) ObserveVolumeCacheEviction() {
+	if r == nil || r.reg == nil {
+		return
+	}
+	r.volumeCacheEvictions.Inc()
+}
+
+// SetVolumeCache registers scrape-time gauges for the volume cache: the bytes
+// its budget counts, its entries, and the entries a sandbox holds.
+func (r *RunnerRecorder) SetVolumeCache(bytes, entries, pinned func() float64) {
+	if r == nil || r.reg == nil {
+		return
+	}
+	r.reg.MustRegister(
+		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+			Namespace:   Namespace,
+			Name:        "volume_cache_bytes",
+			Help:        "Bytes the volume cache budget counts: allocated bytes of cached objects plus the declared size of downloads in progress.",
+			ConstLabels: prometheus.Labels{"role": RoleRunner},
+		}, bytes),
+		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+			Namespace:   Namespace,
+			Name:        "volume_cache_entries",
+			Help:        "Volume objects in the cache.",
+			ConstLabels: prometheus.Labels{"role": RoleRunner},
+		}, entries),
+		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+			Namespace:   Namespace,
+			Name:        "volume_cache_pinned_entries",
+			Help:        "Cached volume objects held by at least one sandbox, which are never evicted.",
+			ConstLabels: prometheus.Labels{"role": RoleRunner},
+		}, pinned),
+	)
 }
 
 // SetActiveContainers registers a scrape-time gauge that calls f to read the
@@ -641,6 +756,24 @@ func (r *RunnerRecorder) VolumeMountCount(result string) float64 {
 		return 0
 	}
 	return testutil.ToFloat64(r.volumeMounts.WithLabelValues(result))
+}
+
+// VolumeCacheFetchCount returns the counter value for volume cache fetches with
+// the given result. Intended for tests in other packages.
+func (r *RunnerRecorder) VolumeCacheFetchCount(result string) float64 {
+	if r == nil || r.reg == nil {
+		return 0
+	}
+	return testutil.ToFloat64(r.volumeCacheFetches.WithLabelValues(result))
+}
+
+// VolumeCacheEvictionCount returns the counter value for volume cache
+// evictions. Intended for tests in other packages.
+func (r *RunnerRecorder) VolumeCacheEvictionCount() float64 {
+	if r == nil || r.reg == nil {
+		return 0
+	}
+	return testutil.ToFloat64(r.volumeCacheEvictions)
 }
 
 func resultLabel(success bool) string {
