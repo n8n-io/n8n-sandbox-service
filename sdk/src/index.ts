@@ -3,6 +3,9 @@ export { SandboxServiceError, SandboxCrashedError, EgressMismatchError } from ".
 export type {
   SandboxClientOptions,
   CreateSandboxOptions,
+  CodeRuntime,
+  CodeSandbox,
+  CreateCodeSandboxOptions,
   EgressMode,
   RetryOptions,
   SandboxRecord,

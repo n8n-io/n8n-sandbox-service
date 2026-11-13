@@ -36,6 +36,36 @@ export interface CreateSandboxOptions {
   egress: EgressMode;
 }
 
+/** Runtime of a code sandbox. */
+export type CodeRuntime = "n8n-js" | "n8n-python";
+
+/** Options for creating a code sandbox. */
+export interface CreateCodeSandboxOptions {
+  /**
+   * Chosen by the caller: 1 to 128 characters from `A-Z`, `a-z`, `0-9`, `.`,
+   * `_`, `:` and `-`. Creates of one name return the same sandbox while its
+   * settings are equal; other settings fail with `409`.
+   */
+  name: string;
+  runtime: CodeRuntime;
+  runtimeVersion: string;
+  /** Maximum concurrent tasks. */
+  slots: number;
+  /** Total sandbox memory in MB. */
+  memoryMb: number;
+  idleTimeoutMs?: number;
+  maxAgeMs?: number;
+}
+
+/** A code sandbox, as returned by `createCodeSandbox`. */
+export interface CodeSandbox {
+  id: string;
+  name: string;
+  /** True only for the create that made the sandbox. */
+  created: boolean;
+  state: string;
+}
+
 /** Retry policy for transient HTTP failures. */
 export interface RetryOptions {
   /**
