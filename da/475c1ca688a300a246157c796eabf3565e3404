@@ -1,0 +1,146 @@
+benchmarks/README.md
+  h_8fb27e0cdf6d1e 15-16
+benchmarks/code-rpc-roundtrip.mjs
+  h_8fb27e0cdf6d1e 1-101
+benchmarks/k6-code-task-api.js
+  h_8fb27e0cdf6d1e 1-157
+cmd/api/main.go
+  h_8fb27e0cdf6d1e 106-110
+cmd/code-daemon/main.go
+  h_8fb27e0cdf6d1e 1-60
+cmd/code-init.ee/main.go
+  h_8fb27e0cdf6d1e 1-205
+compose.yaml
+  h_8fb27e0cdf6d1e 54-57,84-86,114-116
+docs/API.md
+  h_8fb27e0cdf6d1e 768-953
+docs/architecture.md
+  h_8fb27e0cdf6d1e 204
+docs/configuration.md
+  h_8fb27e0cdf6d1e 26,40-45,98-99,146-147
+internal/api/code_handlers.go
+  h_8fb27e0cdf6d1e 1-535
+internal/api/code_handlers_test.go
+  h_8fb27e0cdf6d1e 1-173
+internal/api/code_pool.go
+  h_8fb27e0cdf6d1e 1-508
+internal/api/code_pool_test.go
+  h_8fb27e0cdf6d1e 1-301
+internal/api/config/config.go
+  h_8fb27e0cdf6d1e 6,151-171,183-212,228-232,396-438
+internal/api/config/config_test.go
+  h_8fb27e0cdf6d1e 589-623
+internal/api/gateway.go
+  h_8fb27e0cdf6d1e 50-51
+internal/api/handlers.go
+  h_8fb27e0cdf6d1e 74-75,135-138,162-163
+internal/api/registry/memory.go
+  h_8fb27e0cdf6d1e 133-143
+internal/api/registry/postgres.go
+  h_8fb27e0cdf6d1e 95-119
+internal/api/registry/registry.go
+  h_8fb27e0cdf6d1e 33-34
+internal/api/store/migrations_postgres.go
+  h_8fb27e0cdf6d1e 68-73
+internal/api/store/migrations_sqlite.go
+  h_8fb27e0cdf6d1e 34-39
+internal/api/store/postgres.go
+  h_8fb27e0cdf6d1e 59-70,113,122,124,141-142,165,192-243,526-533,541,549
+internal/api/store/sqlite.go
+  h_8fb27e0cdf6d1e 56-57,78-81,93-98,104,106,108,120,129,131,148-149,186,335-399
+internal/api/store/store.go
+  h_8fb27e0cdf6d1e 33-36,61-62,65-67,106-115,154-155
+internal/api/store/store_test.go
+  h_8fb27e0cdf6d1e 96-97,100,105-128,427-499
+internal/api/ttl.go
+  h_8fb27e0cdf6d1e 448-452
+internal/codedaemon/cgroup.go
+  h_8fb27e0cdf6d1e 1-41
+internal/codedaemon/config.go
+  h_8fb27e0cdf6d1e 1-169
+internal/codedaemon/daemon.go
+  h_8fb27e0cdf6d1e 1-546
+internal/codedaemon/daemon_test.go
+  h_8fb27e0cdf6d1e 1-962
+internal/codedaemon/rpc.go
+  h_8fb27e0cdf6d1e 1-153
+internal/codedaemon/shared.go
+  h_8fb27e0cdf6d1e 1-477
+internal/codedaemon/task.go
+  h_8fb27e0cdf6d1e 1-633
+internal/codedaemon/worker.go
+  h_8fb27e0cdf6d1e 1-370
+internal/runner/code_proxy.go
+  h_8fb27e0cdf6d1e 1-116
+internal/runner/code_proxy_test.go
+  h_8fb27e0cdf6d1e 1-179
+internal/runner/daemon_url_forget_test.go
+  h_8fb27e0cdf6d1e 1-102
+internal/runner/exec_proxy.go
+  h_8fb27e0cdf6d1e 91,148
+internal/runner/proxy.go
+  h_8fb27e0cdf6d1e 73,110,116-122,129-136
+internal/runner/runtime/docker/README.md
+  h_8fb27e0cdf6d1e 51-56
+internal/runner/runtime/docker/code.go
+  h_8fb27e0cdf6d1e 1-100
+internal/runner/runtime/docker/code_test.go
+  h_8fb27e0cdf6d1e 1-45
+internal/runner/runtime/docker/config.go
+  h_8fb27e0cdf6d1e 16-17,56-64,75-76,141-149
+internal/runner/runtime/docker/crash.go
+  h_8fb27e0cdf6d1e 23-28,52-54
+internal/runner/runtime/docker/crash_test.go
+  h_8fb27e0cdf6d1e 32,71-74,88
+internal/runner/runtime/docker/daemon_url_cache.go
+  h_8fb27e0cdf6d1e 1-150
+internal/runner/runtime/docker/daemon_url_cache_test.go
+  h_8fb27e0cdf6d1e 1-396
+internal/runner/runtime/docker/docker_client.go
+  h_8fb27e0cdf6d1e 15,97,106,146-147,156-162,167,177-180,317-322,356-366,426-436
+internal/runner/runtime/docker/runtime.go
+  h_8fb27e0cdf6d1e 78-84,93-96,153-166,222-224,270,302,306-317,319,347,352,443-447,494,529,547-550,592-594,596,619,623-627,646
+internal/runner/runtime/docker/runtime_test.go
+  h_8fb27e0cdf6d1e 9,29,89
+internal/runner/runtime/firecracker.ee/README.md
+  h_8fb27e0cdf6d1e 57-64
+internal/runner/runtime/firecracker.ee/admission.go
+  h_8fb27e0cdf6d1e 153-183
+internal/runner/runtime/firecracker.ee/code.go
+  h_8fb27e0cdf6d1e 1-112
+internal/runner/runtime/firecracker.ee/code_test.go
+  h_8fb27e0cdf6d1e 1-125
+internal/runner/runtime/firecracker.ee/config.go
+  h_8fb27e0cdf6d1e 113-122,217-218,313-323
+internal/runner/runtime/firecracker.ee/runtime.go
+  h_8fb27e0cdf6d1e 194-201,318,339-342,419-425,430,469,471,476-485,589,603-605,643,654-659,803-818,829,970,994
+internal/runner/runtime/firecracker.ee/runtime_test.go
+  h_8fb27e0cdf6d1e 704
+internal/runner/runtime/firecracker.ee/stop_wake.go
+  h_8fb27e0cdf6d1e 43,45-48,149,154-156,293-297
+internal/runner/runtime/runtime.go
+  h_8fb27e0cdf6d1e 10,61-64,66-120,141-143,209-215
+internal/runner/server.go
+  h_8fb27e0cdf6d1e 66-67
+scripts/firecracker.ee/build-code-snapshot.sh
+  h_8fb27e0cdf6d1e 1-86
+scripts/firecracker.ee/create-golden-snapshot.sh
+  h_8fb27e0cdf6d1e 11-18,44,66-77,90-104,116,166,169-176,214,225,246-249,286-288
+sdk/src/code.ts
+  h_8fb27e0cdf6d1e 1-437
+sdk/src/index.ts
+  h_8fb27e0cdf6d1e 20-42
+sdk/test/code.test.ts
+  h_8fb27e0cdf6d1e 1-191
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "da475c1ca688a300a246157c796eabf3565e3404",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
