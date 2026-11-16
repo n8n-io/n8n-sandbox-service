@@ -149,7 +149,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	volumeObjectsSrv, volumeObjectsLis, err := newVolumeObjectsServer(cfg, volumes, mrec)
+	volumeObjectsSrv, volumeObjectsLis, err := newVolumeObjectsServer(cfg, volumes, api.VolumeObjectStallTimeout, mrec)
 	if err != nil {
 		slog.Error("volume objects listener", "addr", cfg.VolumeLocalListenAddr, "error", err)
 		os.Exit(1)

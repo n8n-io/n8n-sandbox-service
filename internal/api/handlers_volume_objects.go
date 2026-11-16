@@ -15,10 +15,11 @@ import (
 // local volume store's objects to runners, and nothing else. The caller puts
 // mutual TLS in front of it; no route takes an API key. A signed URL limits a
 // runner to the objects it was handed. Downloads count against a per-scope
-// cap of the same size as the per-tenant one on the public listener.
-func NewVolumeObjectsRouter(vs *volumestore.Local, maxInflight int, rec *metrics.APIRecorder) http.Handler {
+// cap of the same size as the per-tenant one on the public listener, and end
+// once their client has read nothing for stallTimeout.
+func NewVolumeObjectsRouter(vs *volumestore.Local, maxInflight int, stallTimeout time.Duration, rec *metrics.APIRecorder) http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET "+volumestore.LocalObjectPath+"{name...}", handleVolumeObject(vs, limits.NewKeyedLimiter(maxInflight), rec))
+	mux.HandleFunc("GET "+volumestore.LocalObjectPath+"{name...}", handleVolumeObject(vs, limits.NewKeyedLimiter(maxInflight), stallTimeout, rec))
 	var handler http.Handler = mux
 	if rec.Enabled() {
 		handler = metrics.HTTPMiddleware(rec)(handler)
@@ -26,23 +27,24 @@ func NewVolumeObjectsRouter(vs *volumestore.Local, maxInflight int, rec *metrics
 	return RecoveryMiddleware(LoggingMiddleware(handler))
 }
 
-// volumeObjectStallTimeout ends a download whose client has stopped reading,
+// VolumeObjectStallTimeout ends a download whose client has stopped reading,
 // so that it gives back its slot. The server has no write timeout, which a
 // large download would outlast.
-var volumeObjectStallTimeout = time.Minute
+const VolumeObjectStallTimeout = time.Minute
 
 // stallWriter pushes the write deadline forward before every write.
 type stallWriter struct {
 	http.ResponseWriter
-	rc *http.ResponseController
+	rc      *http.ResponseController
+	timeout time.Duration
 }
 
 func (s stallWriter) Write(buf []byte) (int, error) {
-	_ = s.rc.SetWriteDeadline(time.Now().Add(volumeObjectStallTimeout))
+	_ = s.rc.SetWriteDeadline(time.Now().Add(s.timeout))
 	return s.ResponseWriter.Write(buf)
 }
 
-func handleVolumeObject(vs *volumestore.Local, limiter *limits.KeyedLimiter, rec *metrics.APIRecorder) http.HandlerFunc {
+func handleVolumeObject(vs *volumestore.Local, limiter *limits.KeyedLimiter, stallTimeout time.Duration, rec *metrics.APIRecorder) http.HandlerFunc {
 	return func(writer http.ResponseWriter, req *http.Request) {
 		key, err := vs.VerifyRequest(req)
 		if err != nil {
@@ -56,7 +58,7 @@ func handleVolumeObject(vs *volumestore.Local, limiter *limits.KeyedLimiter, rec
 			return
 		}
 		defer limiter.Release(key.Scope)
-		sw := stallWriter{ResponseWriter: writer, rc: http.NewResponseController(writer)}
+		sw := stallWriter{ResponseWriter: writer, rc: http.NewResponseController(writer), timeout: stallTimeout}
 		if err := vs.ServeObject(sw, req, key); errors.Is(err, volumestore.ErrNotFound) {
 			writeError(writer, http.StatusNotFound, "volume object not found")
 		} else if err != nil {

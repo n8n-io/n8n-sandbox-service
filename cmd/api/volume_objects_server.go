@@ -15,7 +15,8 @@ import (
 )
 
 // newVolumeObjectsServer builds the listener that serves the local volume
-// store's objects to runners, or nils for any other store.
+// store's objects to runners, or nils for any other store. A download ends
+// once its client has read nothing for stallTimeout.
 //
 // Only a runner gets a connection: the listener presents the registration
 // listener's certificate and requires a client certificate from its CA, as
@@ -23,7 +24,7 @@ import (
 //
 // The listener is bound here rather than in the serving goroutine, so an
 // occupied port fails at startup instead of racing the signal handler.
-func newVolumeObjectsServer(cfg *config.APIConfig, volumes volumestore.Store, rec *metrics.APIRecorder) (*http.Server, net.Listener, error) {
+func newVolumeObjectsServer(cfg *config.APIConfig, volumes volumestore.Store, stallTimeout time.Duration, rec *metrics.APIRecorder) (*http.Server, net.Listener, error) {
 	local, ok := volumes.(*volumestore.Local)
 	if !ok {
 		return nil, nil, nil
@@ -41,7 +42,7 @@ func newVolumeObjectsServer(cfg *config.APIConfig, volumes volumestore.Store, re
 
 	srv := &http.Server{
 		Addr:              cfg.VolumeLocalListenAddr,
-		Handler:           api.NewVolumeObjectsRouter(local, cfg.MaxInflightPerTenant, rec),
+		Handler:           api.NewVolumeObjectsRouter(local, cfg.MaxInflightPerTenant, stallTimeout, rec),
 		TLSConfig:         tlsConf,
 		ReadTimeout:       30 * time.Second,
 		ReadHeaderTimeout: 10 * time.Second,
@@ -49,6 +50,12 @@ func newVolumeObjectsServer(cfg *config.APIConfig, volumes volumestore.Store, re
 		// stalled one instead.
 		WriteTimeout: 0,
 		IdleTimeout:  120 * time.Second,
+		// Over HTTP/2 the handler's stall timeout only queues a stream reset,
+		// which waits behind the data a client that stopped reading never
+		// takes. This closes such a connection, so its downloads give back
+		// their slots, up to 5 s later: closing TLS gives its close alert
+		// that long.
+		HTTP2: &http.HTTP2Config{WriteByteTimeout: stallTimeout},
 		// A refused handshake is reported here; keep it in the JSON log.
 		ErrorLog: slog.NewLogLogger(slog.Default().Handler(), slog.LevelWarn),
 	}

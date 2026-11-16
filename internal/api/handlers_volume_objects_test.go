@@ -56,7 +56,7 @@ func newVolumeTestLocal(t *testing.T) *volumestore.Local {
 
 // newVolumeObjectsTestRouter returns the volume-objects listener's router.
 func newVolumeObjectsTestRouter(vs *volumestore.Local, maxInflight int) http.Handler {
-	return NewVolumeObjectsRouter(vs, maxInflight, metrics.NewAPIRecorder(true))
+	return NewVolumeObjectsRouter(vs, maxInflight, VolumeObjectStallTimeout, metrics.NewAPIRecorder(true))
 }
 
 // get sends a GET for rawURL, with an API key when key is set.
@@ -184,7 +184,7 @@ func TestVolumeObjectRouteCountsDownloadsPerScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	limiter := limits.NewKeyedLimiter(1)
-	handler := handleVolumeObject(vs, limiter, metrics.NewAPIRecorder(false))
+	handler := handleVolumeObject(vs, limiter, VolumeObjectStallTimeout, metrics.NewAPIRecorder(false))
 
 	limiter.TryAcquire(volumeTenant)
 	if rr := get(t, handler, signed, ""); rr.Code != http.StatusTooManyRequests || rr.Header().Get("Retry-After") != limitRetryAfter {
@@ -199,10 +199,6 @@ func TestVolumeObjectRouteCountsDownloadsPerScope(t *testing.T) {
 // The server has no write timeout, so without the stall timeout a client that
 // stops reading would hold its slot for as long as it keeps the connection.
 func TestVolumeObjectStalledDownloadGivesBackItsSlot(t *testing.T) {
-	previous := volumeObjectStallTimeout
-	volumeObjectStallTimeout = 200 * time.Millisecond
-	t.Cleanup(func() { volumeObjectStallTimeout = previous })
-
 	vs := newVolumeTestLocal(t)
 	const size = 32 << 20 // more than the socket buffers on both ends hold
 	if _, err := vs.Put(context.Background(), volumeKey, io.LimitReader(zeroReader{}, size), volumestore.PutOptions{MaxBytes: size}); err != nil {
@@ -212,7 +208,7 @@ func TestVolumeObjectStalledDownloadGivesBackItsSlot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(newVolumeObjectsTestRouter(vs, 1))
+	srv := httptest.NewServer(NewVolumeObjectsRouter(vs, 1, 200*time.Millisecond, metrics.NewAPIRecorder(true)))
 	defer srv.Close()
 
 	parsed, _ := url.Parse(signed)

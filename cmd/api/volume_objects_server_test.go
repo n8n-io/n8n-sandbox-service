@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -21,10 +22,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/n8n-io/sandbox-service/internal/api"
 	"github.com/n8n-io/sandbox-service/internal/api/config"
 	"github.com/n8n-io/sandbox-service/internal/api/volumestore"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/volume"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/hpack"
 )
 
 // testCA signs the certificates the API and a runner present to each other.
@@ -111,7 +115,9 @@ type volumeObjectsEnv struct {
 	strangerCert *tls.Certificate
 }
 
-func startVolumeObjectsServer(t *testing.T) volumeObjectsEnv {
+// startVolumeObjectsServer allows maxInflight downloads per scope, each until
+// its client has read nothing for stallTimeout.
+func startVolumeObjectsServer(t *testing.T, maxInflight int, stallTimeout time.Duration) volumeObjectsEnv {
 	t.Helper()
 	dir := t.TempDir()
 	registrationCA := newTestCA(t, dir, "registration-ca")
@@ -128,9 +134,9 @@ func startVolumeObjectsServer(t *testing.T) volumeObjectsEnv {
 		GRPCServerCertFile:    serverCert,
 		GRPCServerKeyFile:     serverKey,
 		GRPCClientCAFile:      registrationCA.file,
-		MaxInflightPerTenant:  4,
+		MaxInflightPerTenant:  maxInflight,
 	}
-	srv, lis, err := newVolumeObjectsServer(cfg, store, metrics.NewAPIRecorder(false))
+	srv, lis, err := newVolumeObjectsServer(cfg, store, stallTimeout, metrics.NewAPIRecorder(false))
 	if err != nil {
 		t.Fatalf("newVolumeObjectsServer: %v", err)
 	}
@@ -221,7 +227,7 @@ func TestNewVolumeObjectsServerSkipsOtherStores(t *testing.T) {
 	}
 	defer remote.Close()
 	for name, volumes := range map[string]volumestore.Store{"no store": nil, "remote": remote} {
-		srv, lis, err := newVolumeObjectsServer(&config.APIConfig{}, volumes, metrics.NewAPIRecorder(false))
+		srv, lis, err := newVolumeObjectsServer(&config.APIConfig{}, volumes, api.VolumeObjectStallTimeout, metrics.NewAPIRecorder(false))
 		if err != nil {
 			t.Fatalf("%s: newVolumeObjectsServer: %v", name, err)
 		}
@@ -232,7 +238,7 @@ func TestNewVolumeObjectsServerSkipsOtherStores(t *testing.T) {
 }
 
 func TestVolumeObjectsServerRefusesConnectionsWithoutARunnerCertificate(t *testing.T) {
-	env := startVolumeObjectsServer(t)
+	env := startVolumeObjectsServer(t, 4, api.VolumeObjectStallTimeout)
 
 	tls12 := env.clientTLS(env.runnerCert)
 	tls12.MaxVersion = tls.VersionTLS12
@@ -258,7 +264,7 @@ func TestVolumeObjectsServerRefusesConnectionsWithoutARunnerCertificate(t *testi
 }
 
 func TestVolumeObjectsServerServesSignedURLsToRunners(t *testing.T) {
-	env := startVolumeObjectsServer(t)
+	env := startVolumeObjectsServer(t, 4, api.VolumeObjectStallTimeout)
 	key := volumestore.Key{Scope: volume.SharedScope, ID: "python", Kind: volume.KindExt4}
 	if _, err := env.store.Put(context.Background(), key, strings.NewReader("image bytes"), volumestore.PutOptions{MaxBytes: 100}); err != nil {
 		t.Fatal(err)
@@ -324,7 +330,7 @@ func TestNewVolumeObjectsServerFailsOnOccupiedPort(t *testing.T) {
 		GRPCClientCAFile:      registrationCA.file,
 	}
 
-	srv, lis, err := newVolumeObjectsServer(cfg, store, metrics.NewAPIRecorder(false))
+	srv, lis, err := newVolumeObjectsServer(cfg, store, api.VolumeObjectStallTimeout, metrics.NewAPIRecorder(false))
 	if err == nil {
 		if lis != nil {
 			lis.Close()
@@ -348,7 +354,7 @@ func TestNewVolumeObjectsServerNeedsTheRegistrationCertificates(t *testing.T) {
 		GRPCServerKeyFile:     missing,
 		GRPCClientCAFile:      missing,
 	}
-	srv, lis, err := newVolumeObjectsServer(cfg, store, metrics.NewAPIRecorder(false))
+	srv, lis, err := newVolumeObjectsServer(cfg, store, api.VolumeObjectStallTimeout, metrics.NewAPIRecorder(false))
 	if err == nil {
 		if lis != nil {
 			lis.Close()
@@ -357,5 +363,123 @@ func TestNewVolumeObjectsServerNeedsTheRegistrationCertificates(t *testing.T) {
 	}
 	if srv != nil || lis != nil {
 		t.Fatalf("expected nothing back on error, got srv=%v lis=%v", srv, lis)
+	}
+}
+
+// A runner that stops reading its socket, as a paused or frozen one does,
+// blocks the whole HTTP/2 connection. The stall timeout then only queues a
+// stream reset behind data that never leaves, so the connection's own write
+// timeout has to close the connection and give the slot back. Go's client
+// keeps reading its socket whatever the caller does, so this client writes
+// HTTP/2 frames itself.
+func TestVolumeObjectsServerFreesTheSlotOfAStalledHTTP2Connection(t *testing.T) {
+	const stallTimeout = 300 * time.Millisecond
+	env := startVolumeObjectsServer(t, 1, stallTimeout)
+	key := volumestore.Key{Scope: volume.SharedScope, ID: "large", Kind: volume.KindExt4}
+	const size = 32 << 20 // more than the socket buffers on both ends hold
+	if _, err := env.store.Put(context.Background(), key, bytes.NewReader(make([]byte, size)), volumestore.PutOptions{MaxBytes: size}); err != nil {
+		t.Fatal(err)
+	}
+	signed := env.signedPath(t, key)
+
+	conf := env.clientTLS(env.runnerCert)
+	conf.NextProtos = []string{"h2"}
+	stalled, err := tls.Dial("tcp", env.addr, conf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stalled.Close()
+	if protocol := stalled.ConnectionState().NegotiatedProtocol; protocol != "h2" {
+		t.Fatalf("negotiated %q, want h2", protocol)
+	}
+	if _, err := io.WriteString(stalled, http2.ClientPreface); err != nil {
+		t.Fatal(err)
+	}
+	framer := http2.NewFramer(stalled, stalled)
+	framer.ReadMetaHeaders = hpack.NewDecoder(4096, nil)
+	// The largest windows, so that only the socket holds the server back.
+	const maxWindow = 1<<31 - 1
+	if err := framer.WriteSettings(http2.Setting{ID: http2.SettingInitialWindowSize, Val: maxWindow}); err != nil {
+		t.Fatal(err)
+	}
+	if err := framer.WriteWindowUpdate(0, maxWindow-65535); err != nil {
+		t.Fatal(err)
+	}
+	var headerBlock bytes.Buffer
+	encoder := hpack.NewEncoder(&headerBlock)
+	for _, field := range []hpack.HeaderField{
+		{Name: ":method", Value: http.MethodGet},
+		{Name: ":scheme", Value: "https"},
+		{Name: ":authority", Value: env.addr},
+		{Name: ":path", Value: signed},
+	} {
+		if err := encoder.WriteField(field); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := framer.WriteHeaders(http2.HeadersFrameParam{StreamID: 1, BlockFragment: headerBlock.Bytes(), EndStream: true, EndHeaders: true}); err != nil {
+		t.Fatal(err)
+	}
+	// Once the response has started the download holds the slot; then stop
+	// reading altogether.
+	_ = stalled.SetReadDeadline(time.Now().Add(5 * time.Second))
+	for responseStarted := false; !responseStarted; {
+		frame, err := framer.ReadFrame()
+		if err != nil {
+			t.Fatalf("read the response: %v", err)
+		}
+		switch frame := frame.(type) {
+		case *http2.SettingsFrame:
+			if !frame.IsAck() {
+				if err := framer.WriteSettingsAck(); err != nil {
+					t.Fatal(err)
+				}
+			}
+		case *http2.MetaHeadersFrame:
+			if status := frame.PseudoValue("status"); status != "200" {
+				t.Fatalf("stalled download status %q, want 200", status)
+			}
+			responseStarted = true
+		case *http2.RSTStreamFrame, *http2.GoAwayFrame:
+			t.Fatalf("the server ended the download early: %v", frame)
+		}
+	}
+
+	transport := &http.Transport{TLSClientConfig: env.clientTLS(env.runnerCert)}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport}
+	sawLimit := false
+	// Closing the connection takes up to 5 s more: crypto/tls gives its close
+	// alert that long to get into the full socket.
+	deadline := time.Now().Add(stallTimeout + 10*time.Second)
+	for {
+		resp, err := client.Get("https://" + env.addr + signed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			break
+		}
+		if resp.StatusCode != http.StatusTooManyRequests {
+			t.Fatalf("got %d, want 429 or 200", resp.StatusCode)
+		}
+		sawLimit = true
+		if time.Now().After(deadline) {
+			t.Fatal("the stalled HTTP/2 download still holds its slot")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !sawLimit {
+		t.Fatal("the stalled download never held the slot, so the test proves nothing")
+	}
+	// On macOS a blocked connection moves again after about 5 s, which lets
+	// the reset out and frees the slot without the write timeout, but leaves
+	// the connection open. Only the write timeout closes it.
+	_ = stalled.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, err = io.Copy(io.Discard, stalled)
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		t.Fatal("the stalled connection is still open, so its write timeout did not free the slot")
 	}
 }
