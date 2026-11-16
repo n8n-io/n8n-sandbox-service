@@ -1,0 +1,46 @@
+internal/api/store/migrations_postgres.go
+  h_8fb27e0cdf6d1e 18,20-24,82-96
+internal/api/store/migrations_sqlite.go
+  h_8fb27e0cdf6d1e 36,38,40-51
+internal/api/store/postgres.go
+  h_8fb27e0cdf6d1e 11,18-20,66-74,121,130,132,149-154,156-159,233-245
+internal/api/store/postgres_integration_test.go
+  h_8fb27e0cdf6d1e 241-244
+internal/api/store/sqlite.go
+  h_8fb27e0cdf6d1e 14-15,77-82,94-98,145,154,156,173-178,180-182,189-197,284-296
+internal/api/store/store.go
+  h_8fb27e0cdf6d1e 27-39,75-80,109-111,114-116,175-180,188-194
+internal/api/store/store_test.go
+  h_8fb27e0cdf6d1e 80-108,110-117,120-228,250-258
+docs/API.md
+  h_8fb27e0cdf6d1e 851-908
+internal/api/gateway.go
+  h_8fb27e0cdf6d1e 9-10,58-60
+internal/api/handlers_code.go
+  h_8fb27e0cdf6d1e 1-370
+internal/api/handlers_code_test.go
+  h_8fb27e0cdf6d1e 1-340
+sdk/README.md
+  h_8fb27e0cdf6d1e 71-85
+sdk/src/client.ts
+  h_8fb27e0cdf6d1e 14,18,20,70-79
+sdk/src/code-sandboxes.ts
+  h_8fb27e0cdf6d1e 1-22
+sdk/src/index.ts
+  h_8fb27e0cdf6d1e 6-8
+sdk/src/types.ts
+  h_8fb27e0cdf6d1e 39-68
+sdk/test/code-sandboxes.test.ts
+  h_8fb27e0cdf6d1e 1-83
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "87924ec6bdceeec9289f6ce659da29af911fe532",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}

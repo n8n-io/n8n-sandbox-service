@@ -1,0 +1,18 @@
+docs/API.md
+  h_8fb27e0cdf6d1e 853,896
+internal/api/handlers_code.go
+  h_8fb27e0cdf6d1e 329,331,333,336-360
+internal/api/handlers_code_test.go
+  h_8fb27e0cdf6d1e 6,15,17,215-252,288-316,320-324,327,331-333,335,342-343
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1f68ccee83aaefd753def9e1fb35c3c330007cc1",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
