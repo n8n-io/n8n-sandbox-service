@@ -60,10 +60,10 @@ export const options =
         },
       };
 
-function createSandbox(slots) {
+function createSandbox(maxConcurrency) {
   const res = http.post(
     `${BASE_URL}/v1/code/sandboxes`,
-    JSON.stringify({ runtime: "n8n-js", slots, taskMemoryMb: 256, spareWorkers: SPARE, reuseWorkers: REUSE, labels: { bench: SCENARIO } }),
+    JSON.stringify({ runtime: "n8n-js", maxConcurrency, taskMemoryMb: 256, spareWorkers: SPARE, reuseWorkers: REUSE, labels: { bench: SCENARIO } }),
     { headers: { ...headers, "Content-Type": "application/json" }, timeout: "180s" },
   );
   if (!check(res, { "create 201": (r) => r.status === 201 })) fail(`create failed: ${res.status} ${res.body}`);

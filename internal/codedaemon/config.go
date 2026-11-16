@@ -1,5 +1,5 @@
 // Package codedaemon is the daemon inside a code sandbox. It serves the Task API
-// routes that the runner proxies: task slots, a clean worker process per task
+// routes that the runner proxies: task lanes, a clean worker process per task
 // (or one shared worker process in reuse mode), staged inputs and outputs, the
 // task output stream and the RPC calls.
 //
@@ -19,20 +19,20 @@ import (
 // Config holds the daemon settings. The runner sets them as environment
 // variables when it creates the code sandbox container.
 type Config struct {
-	ListenAddr   string
-	WorkDir      string
-	RuntimesFile string
-	Runtime      string
-	Slots        int
-	TaskMemoryMB int
-	SpareWorkers bool
-	OutputTTL    time.Duration
+	ListenAddr     string
+	WorkDir        string
+	RuntimesFile   string
+	Runtime        string
+	MaxConcurrency int
+	TaskMemoryMB   int
+	SpareWorkers   bool
+	OutputTTL      time.Duration
 	// WorkerEnv is the full environment of each worker process.
 	WorkerEnv []string
 	// ReuseWorkers runs all tasks of the sandbox in one shared worker
-	// process. The slots then limit how many tasks run at the same time. The
+	// process. The lanes then limit how many tasks run at the same time. The
 	// process, its module cache and changes to built-in objects stay between
-	// tasks. Its heap limit is Slots × TaskMemoryMB.
+	// tasks. Its heap limit is MaxConcurrency × TaskMemoryMB.
 	// CODE_DAEMON_REUSE_WORKERS (default false).
 	ReuseWorkers bool
 	// AllowLocalClients lets clients on loopback and container addresses use
@@ -52,31 +52,31 @@ type RuntimeSpec struct {
 }
 
 const (
-	defaultListenAddr   = ":8081"
-	defaultWorkDir      = "/work"
-	defaultRuntimesFile = "/etc/code-runtime/runtimes.json"
-	defaultRuntime      = "n8n-js"
-	defaultSlots        = 1
-	defaultTaskMemoryMB = 512
-	defaultOutputTTL    = 5 * time.Minute
-	maxSlots            = 32
+	defaultListenAddr     = ":8081"
+	defaultWorkDir        = "/work"
+	defaultRuntimesFile   = "/etc/code-runtime/runtimes.json"
+	defaultRuntime        = "n8n-js"
+	defaultMaxConcurrency = 1
+	defaultTaskMemoryMB   = 512
+	defaultOutputTTL      = 5 * time.Minute
+	maxConcurrencyLimit   = 32
 )
 
 // LoadConfig reads CODE_DAEMON_* environment variables.
 func LoadConfig() (Config, error) {
 	cfg := Config{
-		ListenAddr:   envOr("CODE_DAEMON_LISTEN_ADDR", defaultListenAddr),
-		WorkDir:      envOr("CODE_DAEMON_WORK_DIR", defaultWorkDir),
-		RuntimesFile: envOr("CODE_DAEMON_RUNTIMES_FILE", defaultRuntimesFile),
-		Runtime:      envOr("CODE_DAEMON_RUNTIME", defaultRuntime),
-		Slots:        defaultSlots,
-		TaskMemoryMB: defaultTaskMemoryMB,
-		SpareWorkers: true,
-		OutputTTL:    defaultOutputTTL,
-		CgroupDir:    envOr("CODE_DAEMON_CGROUP_DIR", "/sys/fs/cgroup"),
+		ListenAddr:     envOr("CODE_DAEMON_LISTEN_ADDR", defaultListenAddr),
+		WorkDir:        envOr("CODE_DAEMON_WORK_DIR", defaultWorkDir),
+		RuntimesFile:   envOr("CODE_DAEMON_RUNTIMES_FILE", defaultRuntimesFile),
+		Runtime:        envOr("CODE_DAEMON_RUNTIME", defaultRuntime),
+		MaxConcurrency: defaultMaxConcurrency,
+		TaskMemoryMB:   defaultTaskMemoryMB,
+		SpareWorkers:   true,
+		OutputTTL:      defaultOutputTTL,
+		CgroupDir:      envOr("CODE_DAEMON_CGROUP_DIR", "/sys/fs/cgroup"),
 	}
 	var err error
-	if cfg.Slots, err = envInt("CODE_DAEMON_SLOTS", defaultSlots, 1, maxSlots); err != nil {
+	if cfg.MaxConcurrency, err = envInt("CODE_DAEMON_MAX_CONCURRENCY", defaultMaxConcurrency, 1, maxConcurrencyLimit); err != nil {
 		return Config{}, err
 	}
 	if cfg.TaskMemoryMB, err = envInt("CODE_DAEMON_TASK_MEMORY_MB", defaultTaskMemoryMB, 32, 64*1024); err != nil {
@@ -137,7 +137,7 @@ func LoadRuntime(file, name string) (RuntimeSpec, error) {
 }
 
 // workerCommand replaces the placeholders in the command. {taskMemoryMb} is
-// the memory of the worker process (all slots in reuse mode).
+// the memory of the worker process (all lanes in reuse mode).
 // {memoryPerTaskMb} is the memory of one task, for a runtime that runs each
 // task in a process of its own also in reuse mode.
 func (s RuntimeSpec) workerCommand(processMemoryMB, perTaskMemoryMB int) []string {

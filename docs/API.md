@@ -768,13 +768,13 @@ curl "http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/stat?
 ## Task API (code sandboxes)
 
 The Task API runs one-off code tasks in code sandboxes. A code sandbox runs the
-code daemon (`cmd/code-daemon`) instead of the sandbox daemon. It has task slots.
+code daemon (`cmd/code-daemon`) instead of the sandbox daemon. It has task lanes.
 Each task runs in a new worker process with an empty working folder. Code
 sandboxes have egress `none`. They have no stop or wake: they are running or
 deleted. The Docker runner supports them with `SANDBOX_RUNNER_DOCKER_CODE_IMAGE`.
 The Firecracker runner restores them from one golden code snapshot
 (`SANDBOX_RUNNER_FIRECRACKER_CODE_SNAPSHOT_DIR`) and only accepts the
-`runtime`, `slots`, `taskMemoryMb`, `spareWorkers` and `reuseWorkers` that the
+`runtime`, `maxConcurrency`, `taskMemoryMb`, `spareWorkers` and `reuseWorkers` that the
 snapshot was built with.
 
 `GET /sandboxes`, `GET /sandboxes/{id}` and `DELETE /sandboxes/{id}` show and
@@ -799,7 +799,7 @@ Creates a code sandbox. The response comes when the code daemon is ready. When
 `spareWorkers` is `true`, at least one worker has loaded the runtime.
 
 ```json
-{ "name": "c1-5f0e…", "runtime": "n8n-js", "slots": 2, "taskMemoryMb": 512, "spareWorkers": true,
+{ "name": "c1-5f0e…", "runtime": "n8n-js", "maxConcurrency": 2, "taskMemoryMb": 512, "spareWorkers": true,
   "idleTimeoutMs": 30000, "maxAgeMs": 60000, "labels": { "scopeType": "execution" } }
 ```
 
@@ -809,24 +809,24 @@ Creates a code sandbox. The response comes when the code daemon is ready. When
 | `idleTimeoutMs` | `SANDBOX_CODE_IDLE_DELETE_AFTER` | `0`, or at least `1000`. Capped at `SANDBOX_CODE_IDLE_DELETE_AFTER` when that is set |
 | `maxAgeMs` | none | `0` (none), or at least `1000`. Counts from the create or the claim |
 | `runtime` | `n8n-js` | An entry of `/etc/code-runtime/runtimes.json` in the image. The n8n image has `n8n-js` and `n8n-py` |
-| `slots` | `1` | 1 to 32 |
-| `taskMemoryMb` | `512` | 64 to 16384, and `slots × taskMemoryMb` at most 16384. The container memory limit is `slots × taskMemoryMb` plus `SANDBOX_RUNNER_CODE_DAEMON_OVERHEAD_MB` |
-| `spareWorkers` | `true` | Each free slot keeps a started worker |
-| `reuseWorkers` | `false` | One shared worker process runs all tasks of the sandbox. The slots limit how many tasks run at the same time. The process, its module cache and global changes stay between tasks. Its heap limit is `slots × taskMemoryMb` |
+| `maxConcurrency` | `1` | 1 to 32 |
+| `taskMemoryMb` | `512` | 64 to 16384, and `maxConcurrency × taskMemoryMb` at most 16384. The container memory limit is `maxConcurrency × taskMemoryMb` plus `SANDBOX_RUNNER_CODE_DAEMON_OVERHEAD_MB` |
+| `spareWorkers` | `true` | Each free lane keeps a started worker |
+| `reuseWorkers` | `false` | One shared worker process runs all tasks of the sandbox. `maxConcurrency` limits how many tasks run at the same time. The process, its module cache and global changes stay between tasks. Its heap limit is `maxConcurrency × taskMemoryMb` |
 | `labels` | — | Stored and logged only |
 
 Response `201`:
 
 ```json
 {
-  "id": "6f1c…", "name": "c1-5f0e…", "created": true, "runtime": "n8n-js", "runtimeVersion": "2.x.y", "slots": 2, "state": "ready",
+  "id": "6f1c…", "name": "c1-5f0e…", "created": true, "runtime": "n8n-js", "runtimeVersion": "2.x.y", "maxConcurrency": 2, "state": "ready",
   "timings": { "create": 950, "runnerCreate": 930, "daemonReady": 12, "spareReady": 180 }
 }
 ```
 
 **Names.** If the name has a current sandbox, the API returns it with `200`,
 `"created": false`, no `runtimeVersion` and only `timings.create`. If that
-sandbox has other options (`runtime`, `slots`, `taskMemoryMb`, `spareWorkers`,
+sandbox has other options (`runtime`, `maxConcurrency`, `taskMemoryMb`, `spareWorkers`,
 `reuseWorkers`), the API answers `409`. Other fields (`labels`,
 `idleTimeoutMs`, `maxAgeMs`) do not need to match. Concurrent creates of one
 name wait for the first one and get its sandbox. After a delete, max age or idle
@@ -838,7 +838,7 @@ RPC. `daemonReady` and `spareReady` are measured by the code daemon from its own
 process start.
 
 **Warm pool.** When `SANDBOX_CODE_POOLS` has a pool with the same options
-(`runtime`, `slots`, `taskMemoryMb`, `spareWorkers`, `reuseWorkers`), the API
+(`runtime`, `maxConcurrency`, `taskMemoryMb`, `spareWorkers`, `reuseWorkers`), the API
 gives a ready sandbox from the pool and does not create one. The response then
 has `"pooled": true` and `timings.claim` (the time to take the sandbox from the
 pool), and no runner or daemon timings. The API does not check the pooled
@@ -858,8 +858,8 @@ all pods can claim.
 
 ### GET /v1/code/sandboxes/{id}
 
-Returns `id`, `name`, `runtime`, `runtimeVersion`, `slots`, `state` (`draining`
-after max age), `busySlots`,
+Returns `id`, `name`, `runtime`, `runtimeVersion`, `maxConcurrency`, `state` (`draining`
+after max age), `busyLanes`,
 `cpuUsageUsec`, `memoryPeakBytes` and `memoryCurrentBytes` (from the cgroup of
 the sandbox container, since its start; `0` if the daemon cannot read them),
 `uptimeMs` (since the code daemon started) and
@@ -886,21 +886,21 @@ Runs a task. Request: streamed `multipart/form-data`, at most 2200 MiB. Parts:
    example `task.json` or `bin/0`.
 
 The daemon writes each part to disk. It answers `429` before it reads the inputs
-if no slot is free, and `409` if the task id is in use. The API answers `410`
+if no lane is free, and `409` if the task id is in use. The API answers `410`
 before it reads the inputs if the sandbox is draining.
 
 Response `200`, `application/x-ndjson`:
 
 | Event | Fields |
 |---|---|
-| `accepted` | `taskId`, `slot` |
+| `accepted` | `taskId`, `lane` |
 | `stdout`, `stderr` | `data` |
 | `rpc` | `callId`, `name`, `params` (JSON array). An RPC call of the task. Answer it with `POST …/tasks/{taskId}/rpc/{callId}` |
 | `done` | `result` (the JSON of `out/result.json` if it is at most `inlineResultMaxBytes`, else `null`), `outputs` (`path`, `size`), `timings` |
 | `error` | `code` (`user_error`, `timeout`, `cancelled`, `oom`, `crashed`, `invalid`), `message`, `userError`, `timings` |
 
 There is exactly one terminal event (`done` or `error`). If the client closes the
-request first, the daemon kills the task. `timings` (ms): `slotWait`,
+request first, the daemon kills the task. `timings` (ms): `laneWait`,
 `inputWrite`, `handoff`, `run`, `outputMove`, plus `spareHit`, `inputBytes`,
 `outputBytes`, `leftoverFiles` (entries in `/tmp` that changed during the task),
 `workerTasks` (tasks of this worker process, this one included)
@@ -935,8 +935,8 @@ outputs of a finished task. `204`.
 ### Worker protocol
 
 The code daemon starts each worker with the command of the runtime entry, in its
-slot folder, in a new process group. In the command, `{taskMemoryMb}` is replaced
-with the memory of the worker process (slots × task memory in reuse mode), and
+lane folder, in a new process group. In the command, `{taskMemoryMb}` is replaced
+with the memory of the worker process (maxConcurrency × task memory in reuse mode), and
 `{memoryPerTaskMb}` with the memory of one task.
 fd 0 is `/dev/null`, fd 1 and 2 are the task output, fd 3 is a control socket
 with JSON lines:
@@ -944,7 +944,7 @@ with JSON lines:
 | Direction | Message | Fields |
 |---|---|---|
 | worker → daemon | `ready` | — (the runtime is loaded) |
-| daemon → worker | `start` | `taskId`, `dir` (the slot folder), `deadline` (unix ms), `shared` (reuse mode) |
+| daemon → worker | `start` | `taskId`, `dir` (the lane folder), `deadline` (unix ms), `shared` (reuse mode) |
 | worker → daemon | `rpc` | `callId` (`^[A-Za-z0-9_-]{1,64}$`), `name`, `params`, `taskId` (a call for an ended task is refused). The daemon sends it as an `rpc` event in the task stream |
 | daemon → worker | `rpc_result` | `callId`, `ok`, `data` or `error` |
 | worker → daemon | `done` | `taskId`, `timings`. The result is in `out/result.json` |
@@ -954,13 +954,13 @@ with JSON lines:
 | worker → daemon | `cancelled` | `taskId`, `clean` (optional: the worker stopped all code of the task). Reuse mode only |
 | worker → daemon | `failed` | `taskId`, `outcome` (`oom` or `crashed`), `text`. The process of the task died, the worker did not. Reuse mode only |
 
-Without reuse, each task gets its own worker, which runs in the slot folder.
+Without reuse, each task gets its own worker, which runs in the lane folder.
 After the task, the daemon kills the process group and moves `out/` to the
 outputs of the task. A process that the task starts in a new session is not in
 the process group and can stay alive.
 
 In reuse mode, one shared worker runs in `/work/shared` and serves all tasks,
-at the same time up to the slot count. The daemon routes its messages by
+at the same time up to `maxConcurrency`. The daemon routes its messages by
 `taskId`. Console output of a task comes as `output` messages, because the
 pipes are shared. A timeout or a cancel sends `cancel`. If the worker does not
 answer `cancelled` within 1 s, the daemon kills it, the other running tasks fail

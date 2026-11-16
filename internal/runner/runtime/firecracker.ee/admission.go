@@ -164,12 +164,12 @@ func (r *Runtime) pinCodeSnapshot() error {
 		return err
 	}
 	opts := &runnerruntime.CreateOptions{
-		Kind:         runnerruntime.KindCode,
-		Runtime:      baked.Runtime,
-		Slots:        baked.Slots,
-		TaskMemoryMB: baked.TaskMemoryMB,
-		SpareWorkers: baked.SpareWorkers,
-		ReuseWorkers: baked.ReuseWorkers,
+		Kind:           runnerruntime.KindCode,
+		Runtime:        baked.Runtime,
+		MaxConcurrency: baked.MaxConcurrency,
+		TaskMemoryMB:   baked.TaskMemoryMB,
+		SpareWorkers:   baked.SpareWorkers,
+		ReuseWorkers:   baked.ReuseWorkers,
 	}
 	snap, err := r.loadCodeSnapshot(opts)
 	if err != nil {

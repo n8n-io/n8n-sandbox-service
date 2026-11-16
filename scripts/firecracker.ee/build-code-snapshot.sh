@@ -27,13 +27,13 @@ FIRECRACKER_ROOTFS_SIZE_MB="${FIRECRACKER_ROOTFS_SIZE_MB:-6144}"
 
 # The baked code daemon options. The default is `execution` + `shared`.
 CODE_RUNTIME="${CODE_RUNTIME:-n8n-js}"
-CODE_SLOTS="${CODE_SLOTS:-2}"
+CODE_MAX_CONCURRENCY="${CODE_MAX_CONCURRENCY:-2}"
 CODE_TASK_MEMORY_MB="${CODE_TASK_MEMORY_MB:-512}"
 CODE_SPARE_WORKERS="${CODE_SPARE_WORKERS:-true}"
 CODE_REUSE_WORKERS="${CODE_REUSE_WORKERS:-true}"
-# Guest memory: slots x task memory + 256 MiB, the memory limit of a Docker
+# Guest memory: maxConcurrency x task memory + 256 MiB, the memory limit of a Docker
 # code sandbox (SANDBOX_RUNNER_CODE_DAEMON_OVERHEAD_MB).
-MEM_MIB="${MEM_MIB:-$((CODE_SLOTS * CODE_TASK_MEMORY_MB + 256))}"
+MEM_MIB="${MEM_MIB:-$((CODE_MAX_CONCURRENCY * CODE_TASK_MEMORY_MB + 256))}"
 VCPUS="${VCPUS:-1}"
 
 if [[ "$(id -u)" -ne 0 ]]; then
@@ -57,13 +57,13 @@ FIRECRACKER_ROOTFS_SIZE_MB="$FIRECRACKER_ROOTFS_SIZE_MB" \
 
 cat >"${work}/code-daemon.env" <<EOF
 CODE_DAEMON_RUNTIME=${CODE_RUNTIME}
-CODE_DAEMON_SLOTS=${CODE_SLOTS}
+CODE_DAEMON_MAX_CONCURRENCY=${CODE_MAX_CONCURRENCY}
 CODE_DAEMON_TASK_MEMORY_MB=${CODE_TASK_MEMORY_MB}
 CODE_DAEMON_SPARE_WORKERS=${CODE_SPARE_WORKERS}
 CODE_DAEMON_REUSE_WORKERS=${CODE_REUSE_WORKERS}
 EOF
 cat >"${work}/code.json" <<EOF
-{"runtime":"${CODE_RUNTIME}","slots":${CODE_SLOTS},"taskMemoryMb":${CODE_TASK_MEMORY_MB},"spareWorkers":${CODE_SPARE_WORKERS},"reuseWorkers":${CODE_REUSE_WORKERS}}
+{"runtime":"${CODE_RUNTIME}","maxConcurrency":${CODE_MAX_CONCURRENCY},"taskMemoryMb":${CODE_TASK_MEMORY_MB},"spareWorkers":${CODE_SPARE_WORKERS},"reuseWorkers":${CODE_REUSE_WORKERS}}
 EOF
 
 echo "==> Creating golden code snapshot in ${CODE_SNAPSHOT_DIR} (${MEM_MIB} MiB, ${VCPUS} vCPU)..."

@@ -38,7 +38,7 @@ All services are configured via environment variables.
 | `SANDBOX_API_IDLE_STOP_AFTER` | `1h` | Idle time after which the sweeper stops a sandbox (deletes it if `ephemeral`). `0` disables |
 | `SANDBOX_API_IDLE_DELETE_AFTER` | `24h` | Idle time after which the sweeper deletes a sandbox; wakes are refused past this window. `0` disables |
 | `SANDBOX_CODE_IDLE_DELETE_AFTER` | `2m` | Default idle timeout of a code sandbox, and the upper bound of its `idleTimeoutMs`: time without a Task API request after which the API deletes it. A running request counts as activity. `0`: no default and no bound |
-| `SANDBOX_CODE_POOLS` | — | Warm pools of code sandboxes, as a JSON list. Each item has the fields of `POST /v1/code/sandboxes` (`runtime`, `slots`, `taskMemoryMb`, `spareWorkers`, `reuseWorkers`) and `size`, the number of sandboxes to keep ready. Example: `[{"slots":2,"reuseWorkers":true,"size":8}]`. Empty disables the pool |
+| `SANDBOX_CODE_POOLS` | — | Warm pools of code sandboxes, as a JSON list. Each item has the fields of `POST /v1/code/sandboxes` (`runtime`, `maxConcurrency`, `taskMemoryMb`, `spareWorkers`, `reuseWorkers`) and `size`, the number of sandboxes to keep ready. Example: `[{"maxConcurrency":2,"reuseWorkers":true,"size":8}]`. Empty disables the pool |
 | `SANDBOX_CODE_POOL_REFILL_CONCURRENCY` | `2` | Pool creates that run at the same time, for all pools |
 | `SANDBOX_CODE_POOL_MAX_AGE` | `30m` | The pool manager replaces a pooled sandbox that is older |
 | `SANDBOX_CODE_POOL_REFILL_DELAY` | `0` | Wait after a claim before the refill create starts, so that the create does not compete with the first task of the claimed sandbox |
@@ -96,7 +96,7 @@ These variables are parsed by the Docker/sysbox runner entrypoint.
 | --- | --- | --- |
 | `SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE` | *(required)* | Docker image used for sandbox containers |
 | `SANDBOX_RUNNER_DOCKER_CODE_IMAGE` | — | Docker image for code sandboxes (Task API). Unset: the runner cannot create code sandboxes |
-| `SANDBOX_RUNNER_CODE_DAEMON_OVERHEAD_MB` | `256` | Added to `slots × taskMemoryMb` for the memory limit of a code sandbox |
+| `SANDBOX_RUNNER_CODE_DAEMON_OVERHEAD_MB` | `256` | Added to `maxConcurrency × taskMemoryMb` for the memory limit of a code sandbox |
 | `SANDBOX_RUNNER_DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker daemon endpoint used by the runner |
 | `SANDBOX_RUNNER_ENABLE_CGROUPS` | `true` | Whether Docker resource limits are applied |
 | `SANDBOX_RUNNER_DEFAULT_MEMORY_MB` | `512` | Default Docker memory limit per sandbox in megabytes |

@@ -32,9 +32,9 @@ const codeRPCResultMaxBodyBytes int64 = 1 << 30
 
 // Defaults of POST /v1/code/sandboxes.
 const (
-	defaultCodeRuntime      = "n8n-js"
-	defaultCodeSlots        = 1
-	defaultCodeTaskMemoryMB = 512
+	defaultCodeRuntime        = "n8n-js"
+	defaultCodeMaxConcurrency = 1
+	defaultCodeTaskMemoryMB   = 512
 )
 
 // codeDrainGraceSeconds is how long a draining sandbox must have no request
@@ -48,15 +48,15 @@ const minCodeLifetimeMs = 1000
 var codeNameRegex = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,128}$`)
 
 type createCodeSandboxRequest struct {
-	Name          string            `json:"name"`
-	Runtime       string            `json:"runtime"`
-	Slots         int               `json:"slots"`
-	TaskMemoryMB  int               `json:"taskMemoryMb"`
-	SpareWorkers  *bool             `json:"spareWorkers"`
-	ReuseWorkers  bool              `json:"reuseWorkers"`
-	IdleTimeoutMs int64             `json:"idleTimeoutMs"`
-	MaxAgeMs      int64             `json:"maxAgeMs"`
-	Labels        map[string]string `json:"labels"`
+	Name           string            `json:"name"`
+	Runtime        string            `json:"runtime"`
+	MaxConcurrency int               `json:"maxConcurrency"`
+	TaskMemoryMB   int               `json:"taskMemoryMb"`
+	SpareWorkers   *bool             `json:"spareWorkers"`
+	ReuseWorkers   bool              `json:"reuseWorkers"`
+	IdleTimeoutMs  int64             `json:"idleTimeoutMs"`
+	MaxAgeMs       int64             `json:"maxAgeMs"`
+	Labels         map[string]string `json:"labels"`
 }
 
 type codeCreateTimings struct {
@@ -81,10 +81,10 @@ type codeSandboxResponse struct {
 	Created        *bool  `json:"created,omitempty"`
 	Runtime        string `json:"runtime"`
 	RuntimeVersion string `json:"runtimeVersion"`
-	Slots          int    `json:"slots"`
+	MaxConcurrency int    `json:"maxConcurrency"`
 	State          string `json:"state"`
 	Pooled         bool   `json:"pooled,omitempty"`
-	BusySlots      *int   `json:"busySlots,omitempty"`
+	BusyLanes      *int   `json:"busyLanes,omitempty"`
 	WorkersStarted *int64 `json:"workersStarted,omitempty"`
 	// Resource use of the sandbox container since its start (GET only).
 	CPUUsageUsec       *int64             `json:"cpuUsageUsec,omitempty"`
@@ -100,8 +100,8 @@ type codeDaemonState struct {
 	Status             string `json:"status"`
 	Runtime            string `json:"runtime"`
 	RuntimeVersion     string `json:"runtimeVersion"`
-	Slots              int    `json:"slots"`
-	BusySlots          int    `json:"busySlots"`
+	MaxConcurrency     int    `json:"maxConcurrency"`
+	BusyLanes          int    `json:"busyLanes"`
 	WorkersStarted     int64  `json:"workersStarted"`
 	CPUUsageUsec       int64  `json:"cpuUsageUsec"`
 	MemoryPeakBytes    int64  `json:"memoryPeakBytes"`
@@ -202,7 +202,7 @@ func (c *codeAPI) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	requested, err := codeCreateOptions(req.Runtime, req.Slots, req.TaskMemoryMB, req.SpareWorkers, req.ReuseWorkers)
+	requested, err := codeCreateOptions(req.Runtime, req.MaxConcurrency, req.TaskMemoryMB, req.SpareWorkers, req.ReuseWorkers)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -259,13 +259,13 @@ func (c *codeAPI) handleCreate(w http.ResponseWriter, r *http.Request) {
 			created := false
 			obs.FieldsFrom(r.Context()).Add("sandbox_id", cur.ID, "runner_id", cur.RunnerID, "kind", store.KindCode)
 			writeJSON(w, http.StatusOK, codeSandboxResponse{
-				ID:      cur.ID,
-				Name:    cur.Name,
-				Created: &created,
-				Runtime: requested.Runtime,
-				Slots:   requested.Slots,
-				State:   "ready",
-				Timings: &codeCreateTimings{Create: time.Since(t0).Milliseconds()},
+				ID:             cur.ID,
+				Name:           cur.Name,
+				Created:        &created,
+				Runtime:        requested.Runtime,
+				MaxConcurrency: requested.MaxConcurrency,
+				State:          "ready",
+				Timings:        &codeCreateTimings{Create: time.Since(t0).Milliseconds()},
 			})
 			success = true
 			return
@@ -311,7 +311,7 @@ func (c *codeAPI) handleCreate(w http.ResponseWriter, r *http.Request) {
 				Created:        &created,
 				Runtime:        requested.Runtime,
 				RuntimeVersion: pool.takeVersion(rec.ID),
-				Slots:          requested.Slots,
+				MaxConcurrency: requested.MaxConcurrency,
 				State:          "ready",
 				Pooled:         true,
 				Timings:        &codeCreateTimings{Claim: claimMs, Create: time.Since(t0).Milliseconds()},
@@ -350,13 +350,13 @@ func (c *codeAPI) handleCreate(w http.ResponseWriter, r *http.Request) {
 
 	created := true
 	resp := codeSandboxResponse{
-		ID:      sandboxID,
-		Name:    settings.Name,
-		Created: &created,
-		Runtime: requested.Runtime,
-		Slots:   requested.Slots,
-		State:   "ready",
-		Timings: &codeCreateTimings{RunnerCreate: runnerCreateMs},
+		ID:             sandboxID,
+		Name:           settings.Name,
+		Created:        &created,
+		Runtime:        requested.Runtime,
+		MaxConcurrency: requested.MaxConcurrency,
+		State:          "ready",
+		Timings:        &codeCreateTimings{RunnerCreate: runnerCreateMs},
 	}
 	if st, err := c.daemonState(r.Context(), record, "healthz"); err == nil {
 		resp.RuntimeVersion = st.RuntimeVersion
@@ -367,7 +367,7 @@ func (c *codeAPI) handleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	resp.Timings.Create = time.Since(t0).Milliseconds()
 	slog.InfoContext(r.Context(), "create code sandbox succeeded",
-		"sandbox_id", sandboxID, "name", settings.Name, "runner_id", run.ID, "runtime", requested.Runtime, "slots", requested.Slots,
+		"sandbox_id", sandboxID, "name", settings.Name, "runner_id", run.ID, "runtime", requested.Runtime, "maxConcurrency", requested.MaxConcurrency,
 		"task_memory_mb", requested.TaskMemoryMB, "spare_workers", requested.SpareWorkers, "reuse_workers", requested.ReuseWorkers, "labels", req.Labels,
 		"create_ms", resp.Timings.Create, "runner_create_ms", runnerCreateMs)
 	writeJSON(w, http.StatusCreated, resp)
@@ -537,7 +537,7 @@ func (c *codeAPI) handleGet(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, "read code sandbox state: "+err.Error())
 		return
 	}
-	busy := st.BusySlots
+	busy := st.BusyLanes
 	started := st.WorkersStarted
 	state := st.Status
 	if codeDraining(rec, time.Now()) {
@@ -548,9 +548,9 @@ func (c *codeAPI) handleGet(w http.ResponseWriter, r *http.Request) {
 		Name:               rec.Name,
 		Runtime:            st.Runtime,
 		RuntimeVersion:     st.RuntimeVersion,
-		Slots:              st.Slots,
+		MaxConcurrency:     st.MaxConcurrency,
 		State:              state,
-		BusySlots:          &busy,
+		BusyLanes:          &busy,
 		WorkersStarted:     &started,
 		CPUUsageUsec:       &st.CPUUsageUsec,
 		MemoryPeakBytes:    &st.MemoryPeakBytes,

@@ -185,12 +185,12 @@ type APIConfig struct {
 // number of sandboxes that the pool keeps ready. Defaults are the defaults of
 // POST /v1/code/sandboxes.
 type CodePoolConfig struct {
-	Runtime      string `json:"runtime"`
-	Slots        int    `json:"slots"`
-	TaskMemoryMB int    `json:"taskMemoryMb"`
-	SpareWorkers *bool  `json:"spareWorkers"`
-	ReuseWorkers bool   `json:"reuseWorkers"`
-	Size         int    `json:"size"`
+	Runtime        string `json:"runtime"`
+	MaxConcurrency int    `json:"maxConcurrency"`
+	TaskMemoryMB   int    `json:"taskMemoryMb"`
+	SpareWorkers   *bool  `json:"spareWorkers"`
+	ReuseWorkers   bool   `json:"reuseWorkers"`
+	Size           int    `json:"size"`
 }
 
 // maxCodePoolSize bounds one pool, to catch a wrong value in the config.

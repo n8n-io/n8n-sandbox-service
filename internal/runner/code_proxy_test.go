@@ -44,7 +44,7 @@ func TestCodeProxyTaskRPCAndOutputs(t *testing.T) {
 		t.Fatal(err)
 	}
 	d, err := codedaemon.New(codedaemon.Config{
-		WorkDir: filepath.Join(dir, "work"), Runtime: "test", Slots: 1, TaskMemoryMB: 64,
+		WorkDir: filepath.Join(dir, "work"), Runtime: "test", MaxConcurrency: 1, TaskMemoryMB: 64,
 		SpareWorkers: true, OutputTTL: time.Minute, WorkerEnv: []string{"PATH=" + os.Getenv("PATH")},
 		AllowLocalClients: true,
 	}, codedaemon.RuntimeSpec{Version: "9", Command: []string{"/bin/sh", script}})

@@ -27,7 +27,7 @@ func TestCreateCodeSandbox(t *testing.T) {
 	fake := &fakeSandboxControl{}
 	router, s, _ := newIdleTestGateway(t, "admin-key", fake)
 
-	rr := postCode(t, router, `{"runtime":"n8n-js","slots":2,"taskMemoryMb":256,"spareWorkers":true,"reuseWorkers":true,"labels":{"scope":"execution"}}`)
+	rr := postCode(t, router, `{"runtime":"n8n-js","maxConcurrency":2,"taskMemoryMb":256,"spareWorkers":true,"reuseWorkers":true,"labels":{"scope":"execution"}}`)
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("create: %d %s", rr.Code, rr.Body.String())
 	}
@@ -35,13 +35,13 @@ func TestCreateCodeSandbox(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	if resp.Slots != 2 || resp.State != "ready" || resp.Timings == nil {
+	if resp.MaxConcurrency != 2 || resp.State != "ready" || resp.Timings == nil {
 		t.Fatalf("response %+v", resp)
 	}
 	fake.mu.Lock()
 	opts := fake.createOptionsJSON[0]
 	fake.mu.Unlock()
-	for _, want := range []string{`"kind":"code"`, `"egress":"none"`, `"slots":2`, `"taskMemoryMb":256`, `"spareWorkers":true`, `"reuseWorkers":true`} {
+	for _, want := range []string{`"kind":"code"`, `"egress":"none"`, `"maxConcurrency":2`, `"taskMemoryMb":256`, `"spareWorkers":true`, `"reuseWorkers":true`} {
 		if !strings.Contains(opts, want) {
 			t.Errorf("create options %s miss %s", opts, want)
 		}
@@ -66,7 +66,7 @@ func TestCreateCodeSandbox(t *testing.T) {
 
 func TestCreateCodeSandboxValidation(t *testing.T) {
 	router, _, _ := newIdleTestGateway(t, "admin-key", &fakeSandboxControl{})
-	for _, body := range []string{`{"slots":99}`, `{"taskMemoryMb":1}`, `{"runtime":"Bad Runtime"}`} {
+	for _, body := range []string{`{"maxConcurrency":99}`, `{"taskMemoryMb":1}`, `{"runtime":"Bad Runtime"}`} {
 		if rr := postCode(t, router, body); rr.Code != http.StatusBadRequest {
 			t.Errorf("%s: %d %s", body, rr.Code, rr.Body.String())
 		}

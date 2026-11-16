@@ -29,17 +29,17 @@ func codePoolKey(o runnerruntime.CreateOptions) string {
 		}
 		return 0
 	}
-	return fmt.Sprintf("%s/s%d/m%d/spare%d/reuse%d", o.Runtime, o.Slots, o.TaskMemoryMB, b(o.SpareWorkers), b(o.ReuseWorkers))
+	return fmt.Sprintf("%s/c%d/m%d/spare%d/reuse%d", o.Runtime, o.MaxConcurrency, o.TaskMemoryMB, b(o.SpareWorkers), b(o.ReuseWorkers))
 }
 
 // codeCreateOptions applies the defaults of POST /v1/code/sandboxes and
 // validates the result.
-func codeCreateOptions(runtime string, slots, taskMemoryMB int, spare *bool, reuse bool) (runnerruntime.CreateOptions, error) {
+func codeCreateOptions(runtime string, maxConcurrency, taskMemoryMB int, spare *bool, reuse bool) (runnerruntime.CreateOptions, error) {
 	if runtime == "" {
 		runtime = defaultCodeRuntime
 	}
-	if slots == 0 {
-		slots = defaultCodeSlots
+	if maxConcurrency == 0 {
+		maxConcurrency = defaultCodeMaxConcurrency
 	}
 	if taskMemoryMB == 0 {
 		taskMemoryMB = defaultCodeTaskMemoryMB
@@ -49,13 +49,13 @@ func codeCreateOptions(runtime string, slots, taskMemoryMB int, spare *bool, reu
 		spareWorkers = *spare
 	}
 	opts := runnerruntime.CreateOptions{
-		Egress:       runnerruntime.EgressNone,
-		Kind:         runnerruntime.KindCode,
-		Runtime:      runtime,
-		Slots:        slots,
-		TaskMemoryMB: taskMemoryMB,
-		SpareWorkers: spareWorkers,
-		ReuseWorkers: reuse,
+		Egress:         runnerruntime.EgressNone,
+		Kind:           runnerruntime.KindCode,
+		Runtime:        runtime,
+		MaxConcurrency: maxConcurrency,
+		TaskMemoryMB:   taskMemoryMB,
+		SpareWorkers:   spareWorkers,
+		ReuseWorkers:   reuse,
 	}
 	optsJSON, err := json.Marshal(opts)
 	if err != nil {
@@ -214,7 +214,7 @@ func newCodePool(s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.
 	p.client = &http.Client{Transport: transport, Timeout: 30 * time.Second}
 	p.create = p.createPooled
 	for i, pc := range cfg.CodePools {
-		opts, err := codeCreateOptions(pc.Runtime, pc.Slots, pc.TaskMemoryMB, pc.SpareWorkers, pc.ReuseWorkers)
+		opts, err := codeCreateOptions(pc.Runtime, pc.MaxConcurrency, pc.TaskMemoryMB, pc.SpareWorkers, pc.ReuseWorkers)
 		if err != nil {
 			return nil, fmt.Errorf("SANDBOX_CODE_POOLS[%d]: %w", i, err)
 		}

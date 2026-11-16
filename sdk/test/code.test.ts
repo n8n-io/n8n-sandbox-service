@@ -24,16 +24,16 @@ describe("CodeSandboxClient", () => {
             id: "s1",
             runtime: "n8n-js",
             runtimeVersion: "1",
-            slots: 2,
+            maxConcurrency: 2,
             state: "ready",
           }),
         );
       });
     });
     const client = new CodeSandboxClient({ baseUrl: server.baseUrl, apiKey: "k" });
-    const sb = await client.createSandbox({ slots: 2, spareWorkers: true });
+    const sb = await client.createSandbox({ maxConcurrency: 2, spareWorkers: true });
     expect(sb.id).toBe("s1");
-    expect(JSON.parse(body)).toEqual({ slots: 2, spareWorkers: true });
+    expect(JSON.parse(body)).toEqual({ maxConcurrency: 2, spareWorkers: true });
   });
 
   it("deletes the sandboxes of a name", async () => {
@@ -55,7 +55,7 @@ describe("CodeSandboxClient", () => {
       req.on("data", (c) => (received += c));
       req.on("end", () => {
         res.writeHead(200, { "Content-Type": "application/x-ndjson" });
-        res.write('{"type":"accepted","taskId":"t1","slot":0}\n{"type":"stdout","data":"hi\\n"}\n');
+        res.write('{"type":"accepted","taskId":"t1","lane":0}\n{"type":"stdout","data":"hi\\n"}\n');
         res.end(
           '{"type":"done","result":{"result":[1]},"outputs":[{"path":"result.json","size":3}]}\n',
         );
@@ -85,7 +85,7 @@ describe("CodeSandboxClient", () => {
       req.resume();
       req.on("end", () => {
         res.writeHead(200);
-        res.end('{"type":"accepted","taskId":"t1","slot":0}\n');
+        res.end('{"type":"accepted","taskId":"t1","lane":0}\n');
       });
     });
     const client = new CodeSandboxClient({ baseUrl: server.baseUrl });
@@ -110,7 +110,7 @@ describe("CodeSandboxClient", () => {
           return;
         }
         res.writeHead(200, { "Content-Type": "application/x-ndjson" });
-        res.write('{"type":"accepted","taskId":"t1","slot":0}\n');
+        res.write('{"type":"accepted","taskId":"t1","lane":0}\n');
         res.write(
           '{"type":"rpc","callId":"c1","name":"helpers.httpRequest","params":[{"url":"u"}]}\n',
         );

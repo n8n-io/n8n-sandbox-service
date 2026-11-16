@@ -45,7 +45,7 @@ type outputEntry struct {
 
 // taskTimings are the daemon steps of one task, in milliseconds.
 type taskTimings struct {
-	SlotWait      int64 `json:"slotWait"`
+	LaneWait      int64 `json:"laneWait"`
 	InputWrite    int64 `json:"inputWrite"`
 	Handoff       int64 `json:"handoff"`
 	Run           int64 `json:"run"`
@@ -63,7 +63,7 @@ type taskTimings struct {
 type taskEvent struct {
 	Type      string          `json:"type"`
 	TaskID    string          `json:"taskId,omitempty"`
-	Slot      *int            `json:"slot,omitempty"`
+	Lane      *int            `json:"lane,omitempty"`
 	Data      string          `json:"data,omitempty"`
 	Result    json.RawMessage `json:"result,omitempty"`
 	Outputs   []outputEntry   `json:"outputs,omitempty"`
@@ -193,9 +193,9 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancelCause(r.Context())
 	defer cancel(nil)
 
-	// 429 before the inputs are read: the caller owns slot accounting, so this
+	// 429 before the inputs are read: the caller owns lane accounting, so this
 	// only happens when it is wrong.
-	rt, err := d.acquireSlot(spec.TaskID, cancel)
+	rt, err := d.acquireLane(spec.TaskID, cancel)
 	if err != nil {
 		code := http.StatusServiceUnavailable
 		if errors.Is(err, errTaskExists) {
@@ -205,17 +205,17 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if rt == nil {
-		writeError(w, http.StatusTooManyRequests, "no free slot")
+		writeError(w, http.StatusTooManyRequests, "no free lane")
 		return
 	}
-	s := rt.slot
+	s := rt.lane
 	// No RPC result is accepted after the task ends.
 	defer rt.rpc.close()
-	tm := &taskTimings{SlotWait: 0}
+	tm := &taskTimings{LaneWait: 0}
 	outputsStored := false
 	defer func() {
 		if s != nil {
-			d.releaseSlot(s, spec.TaskID, outputsStored)
+			d.releaseLane(s, spec.TaskID, outputsStored)
 		}
 	}()
 
@@ -229,7 +229,7 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 	outDir := filepath.Join(s.dir, "out")
 	for _, dir := range []string{inDir, filepath.Join(outDir, "bin")} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
-			fail("crashed", "prepare slot: "+err.Error())
+			fail("crashed", "prepare lane: "+err.Error())
 			return
 		}
 	}
@@ -275,9 +275,9 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 	tm.LeftoverFiles = countLeftovers(t0)
 
 	if outcome != "done" {
-		releasedSlot := s
+		releasedLane := s
 		s = nil
-		d.releaseSlot(releasedSlot, spec.TaskID, false)
+		d.releaseLane(releasedLane, spec.TaskID, false)
 		ev := taskEvent{Type: "error", Code: outcome, Message: message, UserError: userError, Timings: tm}
 		if outcome == "user_error" {
 			ev.Message = "user code threw an error"
@@ -291,9 +291,9 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 	tOut := time.Now()
 	dest := filepath.Join(d.outputsDir, spec.TaskID)
 	if err := os.Rename(outDir, dest); err != nil {
-		releasedSlot := s
+		releasedLane := s
 		s = nil
-		d.releaseSlot(releasedSlot, spec.TaskID, false)
+		d.releaseLane(releasedLane, spec.TaskID, false)
 		fail("crashed", "move outputs: "+err.Error())
 		return
 	}
@@ -309,12 +309,12 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 	}
 	tm.OutputMove = time.Since(tOut).Milliseconds()
 
-	// Free the slot before the terminal event, so the next task that the
+	// Free the lane before the terminal event, so the next task that the
 	// caller sends on receipt finds it free.
 	outputsStored = true
-	releasedSlot := s
+	releasedLane := s
 	s = nil
-	d.releaseSlot(releasedSlot, spec.TaskID, true)
+	d.releaseLane(releasedLane, spec.TaskID, true)
 
 	ev := taskEvent{Type: "done", Outputs: outputs, Timings: tm}
 	if inline != nil {
@@ -341,9 +341,9 @@ type runResult struct {
 }
 
 // runOwnWorker runs the task in a worker process of its own: the spare of the
-// slot, or a new one. The process is killed after the task.
+// lane, or a new one. The process is killed after the task.
 func (d *Daemon) runOwnWorker(ctx context.Context, ew *eventWriter, rt *runningTask, spec taskSpec, tm *taskTimings, timeout time.Duration) runResult {
-	s := rt.slot
+	s := rt.lane
 	fail := func(code, msg string) runResult {
 		ew.emit(taskEvent{Type: "error", Code: code, Message: msg})
 		return runResult{failedEarly: true}
@@ -368,8 +368,8 @@ func (d *Daemon) runOwnWorker(ctx context.Context, ew *eventWriter, rt *runningT
 		return fail("crashed", "send start: "+err.Error())
 	}
 	tm.Handoff = time.Since(tHand).Milliseconds()
-	slotIdx := s.idx
-	ew.emit(taskEvent{Type: "accepted", TaskID: spec.TaskID, Slot: &slotIdx})
+	laneIdx := s.idx
+	ew.emit(taskEvent{Type: "accepted", TaskID: spec.TaskID, Lane: &laneIdx})
 
 	tRun := time.Now()
 	carry := map[string]*utf8Carry{"stdout": {}, "stderr": {}}

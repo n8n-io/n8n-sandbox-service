@@ -49,7 +49,7 @@ func main() {
 		"listen_addr", cfg.ListenAddr,
 		"runtime", cfg.Runtime,
 		"runtime_version", rt.Version,
-		"slots", cfg.Slots,
+		"maxConcurrency", cfg.MaxConcurrency,
 		"task_memory_mb", cfg.TaskMemoryMB,
 		"spare_workers", cfg.SpareWorkers)
 	if err := d.Run(ctx); err != nil {

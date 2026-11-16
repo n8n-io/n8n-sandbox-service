@@ -13,13 +13,13 @@ import (
 
 func testCodeOptions() *runnerruntime.CreateOptions {
 	return &runnerruntime.CreateOptions{
-		Egress:       runnerruntime.EgressNone,
-		Kind:         runnerruntime.KindCode,
-		Runtime:      "n8n-js",
-		Slots:        2,
-		TaskMemoryMB: 512,
-		SpareWorkers: true,
-		ReuseWorkers: true,
+		Egress:         runnerruntime.EgressNone,
+		Kind:           runnerruntime.KindCode,
+		Runtime:        "n8n-js",
+		MaxConcurrency: 2,
+		TaskMemoryMB:   512,
+		SpareWorkers:   true,
+		ReuseWorkers:   true,
 	}
 }
 
@@ -31,7 +31,7 @@ func codeTestRuntime(t *testing.T) *Runtime {
 	rt.config.CodeTemplateDir = "/srv/firecracker/code-template"
 	rt.config.CodeSnapshotDir = dir
 	if err := os.WriteFile(filepath.Join(dir, codeOptionsFileName),
-		[]byte(`{"runtime":"n8n-js","slots":2,"taskMemoryMb":512,"spareWorkers":true,"reuseWorkers":true}`), 0o644); err != nil {
+		[]byte(`{"runtime":"n8n-js","maxConcurrency":2,"taskMemoryMb":512,"spareWorkers":true,"reuseWorkers":true}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return rt
@@ -92,7 +92,7 @@ func TestCodeSandboxUsesSharedGoldenCodeSnapshot(t *testing.T) {
 func TestCodeSandboxRejectsOtherOptions(t *testing.T) {
 	rt := codeTestRuntime(t)
 	opts := testCodeOptions()
-	opts.Slots = 4
+	opts.MaxConcurrency = 4
 	_, err := rt.CreateSandbox(context.Background(), "sandbox-id-123456", opts)
 	if err == nil || !strings.Contains(err.Error(), "only serves") {
 		t.Fatalf("CreateSandbox() error = %v, want options mismatch", err)

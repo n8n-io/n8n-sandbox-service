@@ -58,7 +58,7 @@ type Config struct {
 	// sandboxes cannot be created. Parsed from SANDBOX_RUNNER_DOCKER_CODE_IMAGE.
 	CodeImage string
 
-	// CodeDaemonOverheadMB is added to slots x taskMemoryMb for the container
+	// CodeDaemonOverheadMB is added to maxConcurrency x taskMemoryMb for the container
 	// memory limit of a code sandbox. It covers the code daemon and the spare
 	// workers. Parsed from SANDBOX_RUNNER_CODE_DAEMON_OVERHEAD_MB (default 256).
 	CodeDaemonOverheadMB int64

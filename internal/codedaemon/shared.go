@@ -12,7 +12,7 @@ import (
 )
 
 // Reuse mode: one shared worker process runs all tasks of the sandbox, at the
-// same time. The slots limit how many tasks run at once. The worker sends the
+// same time. The lanes limit how many tasks run at once. The worker sends the
 // messages of each task with its task id, and the daemon routes them to the
 // task. Console output comes as "output" messages, because the stdout and
 // stderr pipes are shared by all tasks.
@@ -321,7 +321,7 @@ func (sw *sharedWorker) servedCount() int {
 
 // runShared runs the task in the shared worker.
 func (d *Daemon) runShared(ctx context.Context, ew *eventWriter, rt *runningTask, spec taskSpec, tm *taskTimings, timeout time.Duration) runResult {
-	s := rt.slot
+	s := rt.lane
 	fail := func(code, msg string) runResult {
 		ew.emit(taskEvent{Type: "error", Code: code, Message: msg})
 		return runResult{failedEarly: true}
@@ -341,8 +341,8 @@ func (d *Daemon) runShared(ctx context.Context, ew *eventWriter, rt *runningTask
 		return fail("crashed", "send start: "+err.Error())
 	}
 	tm.Handoff = time.Since(tHand).Milliseconds()
-	slotIdx := s.idx
-	ew.emit(taskEvent{Type: "accepted", TaskID: spec.TaskID, Slot: &slotIdx})
+	laneIdx := s.idx
+	ew.emit(taskEvent{Type: "accepted", TaskID: spec.TaskID, Lane: &laneIdx})
 
 	tRun := time.Now()
 	timer := time.NewTimer(timeout)

@@ -29,11 +29,11 @@ var errCodeSandboxNoStop = errors.New("code sandboxes cannot be stopped")
 
 // codeOptions are the code daemon options baked into the golden code snapshot.
 type codeOptions struct {
-	Runtime      string `json:"runtime"`
-	Slots        int    `json:"slots"`
-	TaskMemoryMB int    `json:"taskMemoryMb"`
-	SpareWorkers bool   `json:"spareWorkers"`
-	ReuseWorkers bool   `json:"reuseWorkers"`
+	Runtime        string `json:"runtime"`
+	MaxConcurrency int    `json:"maxConcurrency"`
+	TaskMemoryMB   int    `json:"taskMemoryMb"`
+	SpareWorkers   bool   `json:"spareWorkers"`
+	ReuseWorkers   bool   `json:"reuseWorkers"`
 }
 
 // codeSnapshot is the golden code snapshot a code sandbox is created from.
@@ -99,11 +99,11 @@ func loadCodeOptions(path string) (codeOptions, error) {
 // the code daemon in the snapshot runs with.
 func (o codeOptions) matches(opts *runnerruntime.CreateOptions) error {
 	got := codeOptions{
-		Runtime:      opts.Runtime,
-		Slots:        opts.Slots,
-		TaskMemoryMB: opts.TaskMemoryMB,
-		SpareWorkers: opts.SpareWorkers,
-		ReuseWorkers: opts.ReuseWorkers,
+		Runtime:        opts.Runtime,
+		MaxConcurrency: opts.MaxConcurrency,
+		TaskMemoryMB:   opts.TaskMemoryMB,
+		SpareWorkers:   opts.SpareWorkers,
+		ReuseWorkers:   opts.ReuseWorkers,
 	}
 	if got != o {
 		return fmt.Errorf("the golden code snapshot of this runner only serves %+v, got %+v", o, got)

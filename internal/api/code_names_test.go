@@ -36,7 +36,7 @@ func TestCreateCodeSandboxByName(t *testing.T) {
 	fake := &fakeSandboxControl{}
 	router, s, _ := newIdleTestGateway(t, "admin-key", fake)
 
-	body := `{"name":"n1","slots":2,"labels":{"scopeKey":"w:1","n8nProcessId":"p1"}}`
+	body := `{"name":"n1","maxConcurrency":2,"labels":{"scopeKey":"w:1","n8nProcessId":"p1"}}`
 	rr := postCode(t, router, body)
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("first create: %d %s", rr.Code, rr.Body.String())
@@ -47,7 +47,7 @@ func TestCreateCodeSandboxByName(t *testing.T) {
 	}
 
 	// Another process: same name and options, other labels.
-	rr = postCode(t, router, `{"name":"n1","slots":2,"labels":{"scopeKey":"w:1","n8nProcessId":"p2"}}`)
+	rr = postCode(t, router, `{"name":"n1","maxConcurrency":2,"labels":{"scopeKey":"w:1","n8nProcessId":"p2"}}`)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("second create: %d %s", rr.Code, rr.Body.String())
 	}
@@ -56,7 +56,7 @@ func TestCreateCodeSandboxByName(t *testing.T) {
 		t.Fatalf("second response %+v, want id %s", second, first.ID)
 	}
 
-	if rr := postCode(t, router, `{"name":"n1","slots":3}`); rr.Code != http.StatusConflict {
+	if rr := postCode(t, router, `{"name":"n1","maxConcurrency":3}`); rr.Code != http.StatusConflict {
 		t.Fatalf("other options: %d %s", rr.Code, rr.Body.String())
 	}
 

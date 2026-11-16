@@ -63,13 +63,13 @@ func ParseEgress(s string) (Egress, error) {
 // only to that kind. All fields are comparable, because the API compares the
 // applied options with the requested options.
 type CreateOptions struct {
-	Egress       Egress `json:"egress,omitempty"`
-	Kind         string `json:"kind,omitempty"`
-	Runtime      string `json:"runtime,omitempty"`
-	Slots        int    `json:"slots,omitempty"`
-	TaskMemoryMB int    `json:"taskMemoryMb,omitempty"`
-	SpareWorkers bool   `json:"spareWorkers,omitempty"`
-	ReuseWorkers bool   `json:"reuseWorkers,omitempty"`
+	Egress         Egress `json:"egress,omitempty"`
+	Kind           string `json:"kind,omitempty"`
+	Runtime        string `json:"runtime,omitempty"`
+	MaxConcurrency int    `json:"maxConcurrency,omitempty"`
+	TaskMemoryMB   int    `json:"taskMemoryMb,omitempty"`
+	SpareWorkers   bool   `json:"spareWorkers,omitempty"`
+	ReuseWorkers   bool   `json:"reuseWorkers,omitempty"`
 }
 
 // KindCode is the kind of a code sandbox, created through the Task API.
@@ -77,10 +77,10 @@ const KindCode = "code"
 
 // Limits of a code sandbox.
 const (
-	CodeMaxSlots        = 32
+	CodeMaxConcurrency  = 32
 	CodeMinTaskMemoryMB = 64
 	CodeMaxTaskMemoryMB = 16 * 1024
-	// CodeMaxTotalTaskMemoryMB bounds slots x taskMemoryMb, so one create
+	// CodeMaxTotalTaskMemoryMB bounds maxConcurrency x taskMemoryMb, so one create
 	// cannot ask for a container limit far beyond a runner's memory.
 	CodeMaxTotalTaskMemoryMB = 16 * 1024
 )
@@ -94,7 +94,7 @@ func (o *CreateOptions) IsCode() bool { return o != nil && o.Kind == KindCode }
 func (o *CreateOptions) validateKind() error {
 	switch o.Kind {
 	case "":
-		if o.Runtime != "" || o.Slots != 0 || o.TaskMemoryMB != 0 || o.SpareWorkers || o.ReuseWorkers {
+		if o.Runtime != "" || o.MaxConcurrency != 0 || o.TaskMemoryMB != 0 || o.SpareWorkers || o.ReuseWorkers {
 			return errors.New("code sandbox fields need kind \"code\"")
 		}
 		return nil
@@ -108,14 +108,14 @@ func (o *CreateOptions) validateKind() error {
 	if !codeRuntimeRegex.MatchString(o.Runtime) {
 		return fmt.Errorf("invalid runtime %q", o.Runtime)
 	}
-	if o.Slots < 1 || o.Slots > CodeMaxSlots {
-		return fmt.Errorf("slots must be in [1, %d]", CodeMaxSlots)
+	if o.MaxConcurrency < 1 || o.MaxConcurrency > CodeMaxConcurrency {
+		return fmt.Errorf("maxConcurrency must be in [1, %d]", CodeMaxConcurrency)
 	}
 	if o.TaskMemoryMB < CodeMinTaskMemoryMB || o.TaskMemoryMB > CodeMaxTaskMemoryMB {
 		return fmt.Errorf("taskMemoryMb must be in [%d, %d]", CodeMinTaskMemoryMB, CodeMaxTaskMemoryMB)
 	}
-	if o.Slots*o.TaskMemoryMB > CodeMaxTotalTaskMemoryMB {
-		return fmt.Errorf("slots x taskMemoryMb must be at most %d", CodeMaxTotalTaskMemoryMB)
+	if o.MaxConcurrency*o.TaskMemoryMB > CodeMaxTotalTaskMemoryMB {
+		return fmt.Errorf("maxConcurrency x taskMemoryMb must be at most %d", CodeMaxTotalTaskMemoryMB)
 	}
 	return nil
 }

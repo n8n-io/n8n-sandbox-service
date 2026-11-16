@@ -16,7 +16,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 )
 
-const testPoolKey = "n8n-js/s2/m256/spare1/reuse1"
+const testPoolKey = "n8n-js/c2/m256/spare1/reuse1"
 
 func poolTestConfig(size int) *config.APIConfig {
 	cfg := idleSweepConfig()
@@ -24,7 +24,7 @@ func poolTestConfig(size int) *config.APIConfig {
 	cfg.DefaultMaxSandboxes = 50
 	cfg.CodePoolRefillConcurrency = 2
 	cfg.CodePoolMaxAge = time.Hour
-	cfg.CodePools = []config.CodePoolConfig{{Runtime: "n8n-js", Slots: 2, TaskMemoryMB: 256, ReuseWorkers: true, Size: size}}
+	cfg.CodePools = []config.CodePoolConfig{{Runtime: "n8n-js", MaxConcurrency: 2, TaskMemoryMB: 256, ReuseWorkers: true, Size: size}}
 	return cfg
 }
 
@@ -55,7 +55,7 @@ func TestCodePoolKey(t *testing.T) {
 		t.Fatalf("key = %q, want %q", got, testPoolKey)
 	}
 	if _, err := newCodePool(newSweepStore(t), registry.New(time.Minute), &config.APIConfig{
-		CodePools: []config.CodePoolConfig{{Slots: 99, Size: 1}},
+		CodePools: []config.CodePoolConfig{{MaxConcurrency: 99, Size: 1}},
 	}, nil); err == nil {
 		t.Fatal("invalid pool options: want an error")
 	}
@@ -105,7 +105,7 @@ func TestCodePoolRefillAndClaim(t *testing.T) {
 	createsBefore := len(fake.createOptionsJSON)
 	fake.mu.Unlock()
 
-	rr := postCode(t, router, `{"runtime":"n8n-js","slots":2,"taskMemoryMb":256,"reuseWorkers":true}`)
+	rr := postCode(t, router, `{"runtime":"n8n-js","maxConcurrency":2,"taskMemoryMb":256,"reuseWorkers":true}`)
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("claim: %d %s", rr.Code, rr.Body.String())
 	}
@@ -113,7 +113,7 @@ func TestCodePoolRefillAndClaim(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	if !resp.Pooled || resp.Timings == nil || resp.State != "ready" || resp.Slots != 2 {
+	if !resp.Pooled || resp.Timings == nil || resp.State != "ready" || resp.MaxConcurrency != 2 {
 		t.Fatalf("claim response %+v", resp)
 	}
 	if resp.ID != pooled[0].ID {
@@ -124,7 +124,7 @@ func TestCodePoolRefillAndClaim(t *testing.T) {
 		t.Fatalf("claimed record %+v", rec)
 	}
 
-	rr = postCode(t, router, `{"runtime":"n8n-js","slots":1,"taskMemoryMb":256,"reuseWorkers":true}`)
+	rr = postCode(t, router, `{"runtime":"n8n-js","maxConcurrency":1,"taskMemoryMb":256,"reuseWorkers":true}`)
 	if rr.Code != http.StatusCreated || strings.Contains(rr.Body.String(), `"pooled"`) {
 		t.Fatalf("create with other options: %d %s", rr.Code, rr.Body.String())
 	}
@@ -164,7 +164,7 @@ func TestCodePoolMissCreates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rr := postCode(t, router, `{"runtime":"n8n-js","slots":2,"taskMemoryMb":256,"reuseWorkers":true}`)
+	rr := postCode(t, router, `{"runtime":"n8n-js","maxConcurrency":2,"taskMemoryMb":256,"reuseWorkers":true}`)
 	if rr.Code != http.StatusCreated || strings.Contains(rr.Body.String(), `"pooled"`) {
 		t.Fatalf("create on miss: %d %s", rr.Code, rr.Body.String())
 	}
@@ -209,7 +209,7 @@ func TestCodePoolCleanup(t *testing.T) {
 		return id
 	}
 	tooOld := add(testPoolKey, "runner-a", now.Add(-2*time.Hour))
-	removed := add("n8n-js/s9/m256/spare1/reuse1", "runner-a", now.Add(-time.Minute))
+	removed := add("n8n-js/c9/m256/spare1/reuse1", "runner-a", now.Add(-time.Minute))
 	gone := add(testPoolKey, "runner-gone", now.Add(-time.Minute))
 	keepOld := add(testPoolKey, "runner-a", now.Add(-50*time.Minute))
 	keepNew := add(testPoolKey, "runner-a", now.Add(-40*time.Minute))

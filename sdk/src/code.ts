@@ -27,10 +27,10 @@ export interface CreateCodeSandboxOptions {
    */
   name?: string;
   runtime?: string;
-  slots?: number;
+  maxConcurrency?: number;
   taskMemoryMb?: number;
   spareWorkers?: boolean;
-  /** Run all tasks in one shared worker process. The slots limit how many run at the same time. */
+  /** Run all tasks in one shared worker process. maxConcurrency limits how many run at the same time. */
   reuseWorkers?: boolean;
   /** No task request for this time: the service deletes the sandbox. */
   idleTimeoutMs?: number;
@@ -54,9 +54,9 @@ export interface CodeSandbox {
   created?: boolean;
   runtime: string;
   runtimeVersion: string;
-  slots: number;
+  maxConcurrency: number;
   state: string;
-  busySlots?: number;
+  busyLanes?: number;
   /** Worker processes started since the sandbox started (GET only). */
   workersStarted?: number;
   /** CPU time of the sandbox container since its start, in microseconds (GET only). */
@@ -87,7 +87,7 @@ export interface CodeTaskOutput {
 }
 
 export type CodeTaskEvent =
-  | { type: "accepted"; taskId: string; slot: number }
+  | { type: "accepted"; taskId: string; lane: number }
   | { type: "stdout"; data: string }
   | { type: "stderr"; data: string }
   | CodeTaskRpcEvent

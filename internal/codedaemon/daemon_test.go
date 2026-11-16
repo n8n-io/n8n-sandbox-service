@@ -61,7 +61,7 @@ type testDaemon struct {
 	base string
 }
 
-func startTestDaemon(t *testing.T, slots int, spare bool) *testDaemon {
+func startTestDaemon(t *testing.T, maxConcurrency int, spare bool) *testDaemon {
 	t.Helper()
 	dir := t.TempDir()
 	script := filepath.Join(dir, "worker.sh")
@@ -69,13 +69,13 @@ func startTestDaemon(t *testing.T, slots int, spare bool) *testDaemon {
 		t.Fatal(err)
 	}
 	cfg := Config{
-		WorkDir:      filepath.Join(dir, "work"),
-		Runtime:      "test",
-		Slots:        slots,
-		TaskMemoryMB: 64,
-		SpareWorkers: spare,
-		OutputTTL:    time.Minute,
-		WorkerEnv:    []string{"PATH=" + os.Getenv("PATH")},
+		WorkDir:        filepath.Join(dir, "work"),
+		Runtime:        "test",
+		MaxConcurrency: maxConcurrency,
+		TaskMemoryMB:   64,
+		SpareWorkers:   spare,
+		OutputTTL:      time.Minute,
+		WorkerEnv:      []string{"PATH=" + os.Getenv("PATH")},
 		// The tests call the daemon on loopback.
 		AllowLocalClients: true,
 	}
@@ -252,7 +252,7 @@ func TestTaskDoneWithInputsAndOutputs(t *testing.T) {
 		t.Fatalf("after delete: %d", resp.StatusCode)
 	}
 
-	// The slot is clean for the next task.
+	// The lane is clean for the next task.
 	status, events = td.runTask(t, map[string]any{"taskId": "t2"},
 		inputFile{"task.json", `{"mode":"ok2"}`}, inputFile{"bin/0", "x"})
 	if status != 200 || terminal(t, events).Type != "done" {
@@ -318,7 +318,7 @@ func TestInvalidInputs(t *testing.T) {
 	}
 }
 
-func TestNoFreeSlotAndCancel(t *testing.T) {
+func TestNoFreeLaneAndCancel(t *testing.T) {
 	td := startTestDaemon(t, 1, true)
 	body, ct := taskBody(t, map[string]any{"taskId": "busy", "timeoutMs": 20000}, inputFile{"task.json", `{"mode":"sleep"}`})
 	resp, err := http.Post(td.base+"/tasks", ct, body)
@@ -493,15 +493,15 @@ func TestRPCClientGone(t *testing.T) {
 	}
 	resp.Body.Close()
 
-	// The slot becomes free, and the call is not open any more.
+	// The lane becomes free, and the call is not open any more.
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		st, _ := td.d.state()
-		if st.BusySlots == 0 {
+		if st.BusyLanes == 0 {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("slot not freed after the client left")
+			t.Fatal("lane not freed after the client left")
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -538,7 +538,7 @@ func TestSafeRelPath(t *testing.T) {
 }
 
 func TestRefusesLocalClientsByDefault(t *testing.T) {
-	d, err := New(Config{WorkDir: t.TempDir(), Slots: 1}, RuntimeSpec{Command: []string{"/bin/true"}})
+	d, err := New(Config{WorkDir: t.TempDir(), MaxConcurrency: 1}, RuntimeSpec{Command: []string{"/bin/true"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -610,12 +610,12 @@ while read -r line <&3; do
 done
 `
 
-func startSharedDaemon(t *testing.T, slots int) *testDaemon {
+func startSharedDaemon(t *testing.T, maxConcurrency int) *testDaemon {
 	t.Helper()
-	return startSharedDaemonWith(t, slots, sharedWorkerScript)
+	return startSharedDaemonWith(t, maxConcurrency, sharedWorkerScript)
 }
 
-func startSharedDaemonWith(t *testing.T, slots int, workerScript string) *testDaemon {
+func startSharedDaemonWith(t *testing.T, maxConcurrency int, workerScript string) *testDaemon {
 	t.Helper()
 	dir := t.TempDir()
 	script := filepath.Join(dir, "worker.sh")
@@ -623,7 +623,7 @@ func startSharedDaemonWith(t *testing.T, slots int, workerScript string) *testDa
 		t.Fatal(err)
 	}
 	d, err := New(Config{
-		WorkDir: filepath.Join(dir, "work"), Runtime: "test", Slots: slots, TaskMemoryMB: 64,
+		WorkDir: filepath.Join(dir, "work"), Runtime: "test", MaxConcurrency: maxConcurrency, TaskMemoryMB: 64,
 		SpareWorkers: true, ReuseWorkers: true, OutputTTL: time.Minute,
 		WorkerEnv: []string{"PATH=" + os.Getenv("PATH")}, AllowLocalClients: true,
 	}, RuntimeSpec{Version: "1", Command: []string{"/bin/sh", script}})
@@ -686,11 +686,11 @@ func TestSharedWorker(t *testing.T) {
 		if got := collect(events, "stdout"); got != fmt.Sprintf("task %d\n", i) {
 			t.Fatalf("task %d: stdout %q", i, got)
 		}
-		// The slot folders are clean again.
-		for _, slot := range []string{"0", "1"} {
-			entries, err := os.ReadDir(filepath.Join(td.d.slotsDir, slot))
+		// The lane folders are clean again.
+		for _, lane := range []string{"0", "1"} {
+			entries, err := os.ReadDir(filepath.Join(td.d.lanesDir, lane))
 			if err != nil || len(entries) != 0 {
-				t.Fatalf("slot %s folder: %v %v", slot, entries, err)
+				t.Fatalf("lane %s folder: %v %v", lane, entries, err)
 			}
 		}
 	}
@@ -810,7 +810,7 @@ func TestSharedWorkerRPC(t *testing.T) {
 }
 
 func TestSharedWorkerHeapLimit(t *testing.T) {
-	d, err := New(Config{WorkDir: t.TempDir(), Slots: 4, TaskMemoryMB: 128, ReuseWorkers: true},
+	d, err := New(Config{WorkDir: t.TempDir(), MaxConcurrency: 4, TaskMemoryMB: 128, ReuseWorkers: true},
 		RuntimeSpec{Command: []string{"node", "--max-old-space-size={taskMemoryMb}", "--task-memory-mb={memoryPerTaskMb}"}})
 	if err != nil {
 		t.Fatal(err)
@@ -892,11 +892,11 @@ func (td *testDaemon) workersStarted(t *testing.T) int64 {
 	return st.WorkersStarted
 }
 
-// Process churn: a new process per task starts one spare per slot plus one
+// Process churn: a new process per task starts one spare per lane plus one
 // replacement per task. Reuse starts one shared process.
 func TestWorkersStarted(t *testing.T) {
 	td := startTestDaemon(t, 2, true)
-	// Wait for the spare of the second slot.
+	// Wait for the spare of the second lane.
 	deadline := time.Now().Add(5 * time.Second)
 	for td.workersStarted(t) < 2 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)

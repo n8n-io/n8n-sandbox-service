@@ -53,7 +53,7 @@ func (m *Runtime) ensureCodeImage(ctx context.Context) {
 
 // codeMemoryLimitMB is the container memory limit of a code sandbox.
 func codeMemoryLimitMB(opts *runnerruntime.CreateOptions, overheadMB int64) int64 {
-	return int64(opts.Slots)*int64(opts.TaskMemoryMB) + overheadMB
+	return int64(opts.MaxConcurrency)*int64(opts.TaskMemoryMB) + overheadMB
 }
 
 // codeDaemonEnv is the environment that configures the code daemon.
@@ -61,7 +61,7 @@ func codeDaemonEnv(opts *runnerruntime.CreateOptions) []string {
 	return []string{
 		"HOME=/home/node",
 		"CODE_DAEMON_RUNTIME=" + opts.Runtime,
-		"CODE_DAEMON_SLOTS=" + strconv.Itoa(opts.Slots),
+		"CODE_DAEMON_MAX_CONCURRENCY=" + strconv.Itoa(opts.MaxConcurrency),
 		"CODE_DAEMON_TASK_MEMORY_MB=" + strconv.Itoa(opts.TaskMemoryMB),
 		"CODE_DAEMON_SPARE_WORKERS=" + strconv.FormatBool(opts.SpareWorkers),
 		"CODE_DAEMON_REUSE_WORKERS=" + strconv.FormatBool(opts.ReuseWorkers),

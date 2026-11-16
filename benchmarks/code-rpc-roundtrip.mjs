@@ -50,7 +50,7 @@ function stats(name, values) {
 
 const sandbox = await client.createSandbox({
   runtime: "n8n-js",
-  slots: 1,
+  maxConcurrency: 1,
   taskMemoryMb: 256,
   spareWorkers: true,
   reuseWorkers: REUSE,

@@ -22,8 +22,8 @@ const workerReadyTimeout = 30 * time.Second
 
 var taskIDRegex = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
-// slot is one task slot. A slot runs at most one task at a time.
-type slot struct {
+// lane is one task lane. A lane runs at most one task at a time.
+type lane struct {
 	idx int
 	dir string
 
@@ -33,9 +33,9 @@ type slot struct {
 	taskID string
 }
 
-// runningTask is a task that has a slot.
+// runningTask is a task that has a lane.
 type runningTask struct {
-	slot   *slot
+	lane   *lane
 	cancel context.CancelCauseFunc
 	// rpc holds the open RPC calls of the task.
 	rpc *pendingCalls
@@ -47,14 +47,14 @@ type Daemon struct {
 	runtime RuntimeSpec
 	command []string
 
-	slotsDir   string
+	lanesDir   string
 	outputsDir string
 	trashDir   string
 	// sharedDir is the working folder of the shared worker (reuse mode).
 	sharedDir string
 
 	mu       sync.Mutex
-	slots    []*slot
+	lanes    []*lane
 	running  map[string]*runningTask
 	finished map[string]time.Time // taskId -> when its outputs were stored
 	closed   bool
@@ -72,18 +72,18 @@ type Daemon struct {
 	firstSpareOnce sync.Once
 }
 
-// New prepares the work folders and the slots. It does not start workers.
+// New prepares the work folders and the lanes. It does not start workers.
 func New(cfg Config, rt RuntimeSpec) (*Daemon, error) {
 	heapMB := cfg.TaskMemoryMB
 	if cfg.ReuseWorkers {
-		// One process runs the tasks of all slots.
-		heapMB = cfg.TaskMemoryMB * cfg.Slots
+		// One process runs the tasks of all lanes.
+		heapMB = cfg.TaskMemoryMB * cfg.MaxConcurrency
 	}
 	d := &Daemon{
 		cfg:        cfg,
 		runtime:    rt,
 		command:    rt.workerCommand(heapMB, cfg.TaskMemoryMB),
-		slotsDir:   filepath.Join(cfg.WorkDir, "slots"),
+		lanesDir:   filepath.Join(cfg.WorkDir, "lanes"),
 		outputsDir: filepath.Join(cfg.WorkDir, "outputs"),
 		trashDir:   filepath.Join(cfg.WorkDir, "trash"),
 		sharedDir:  filepath.Join(cfg.WorkDir, "shared"),
@@ -91,17 +91,17 @@ func New(cfg Config, rt RuntimeSpec) (*Daemon, error) {
 		finished:   make(map[string]time.Time),
 		startedAt:  time.Now(),
 	}
-	for _, dir := range []string{d.slotsDir, d.outputsDir, d.trashDir, d.sharedDir} {
+	for _, dir := range []string{d.lanesDir, d.outputsDir, d.trashDir, d.sharedDir} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return nil, fmt.Errorf("create %s: %w", dir, err)
 		}
 	}
-	for i := 0; i < cfg.Slots; i++ {
-		s := &slot{idx: i, dir: filepath.Join(d.slotsDir, strconv.Itoa(i))}
+	for i := 0; i < cfg.MaxConcurrency; i++ {
+		s := &lane{idx: i, dir: filepath.Join(d.lanesDir, strconv.Itoa(i))}
 		if err := os.MkdirAll(s.dir, 0o700); err != nil {
-			return nil, fmt.Errorf("create slot %d: %w", i, err)
+			return nil, fmt.Errorf("create lane %d: %w", i, err)
 		}
-		d.slots = append(d.slots, s)
+		d.lanes = append(d.lanes, s)
 	}
 	return d, nil
 }
@@ -209,7 +209,7 @@ func (d *Daemon) shutdown() {
 	d.mu.Lock()
 	d.closed = true
 	var spares []*worker
-	for _, s := range d.slots {
+	for _, s := range d.lanes {
 		if s.spare != nil {
 			spares = append(spares, s.spare)
 			s.spare = nil
@@ -229,13 +229,13 @@ func (d *Daemon) shutdown() {
 	}
 }
 
-// startInitialSpares starts the spare of the first slot alone, and the other
+// startInitialSpares starts the spare of the first lane alone, and the other
 // spares after it is ready. The sandbox is ready when one spare is ready, and
 // workers that load at the same time share the CPU limit of the container.
 func (d *Daemon) startInitialSpares() {
-	first := d.slots[0]
+	first := d.lanes[0]
 	d.startSpare(first)
-	if len(d.slots) == 1 {
+	if len(d.lanes) == 1 {
 		return
 	}
 	d.mu.Lock()
@@ -249,17 +249,17 @@ func (d *Daemon) startInitialSpares() {
 			case <-time.After(workerReadyTimeout):
 			}
 		}
-		for _, s := range d.slots[1:] {
+		for _, s := range d.lanes[1:] {
 			d.startSpare(s)
 		}
 	}()
 }
 
-// startSpare starts a worker for the slot, so the next task does not wait for
+// startSpare starts a worker for the lane, so the next task does not wait for
 // the runtime to load.
-func (d *Daemon) startSpare(s *slot) {
+func (d *Daemon) startSpare(s *lane) {
 	d.mu.Lock()
-	// A busy slot gets its spare when the task ends (releaseSlot).
+	// A busy lane gets its spare when the task ends (releaseLane).
 	if d.closed || s.spare != nil || s.busy {
 		d.mu.Unlock()
 		return
@@ -270,7 +270,7 @@ func (d *Daemon) startSpare(s *slot) {
 	}
 	if err != nil {
 		d.mu.Unlock()
-		slog.Error("start spare worker", "slot", s.idx, "err", err)
+		slog.Error("start spare worker", "lane", s.idx, "err", err)
 		return
 	}
 	s.spare = w
@@ -281,7 +281,7 @@ func (d *Daemon) startSpare(s *slot) {
 		case <-w.ready:
 			d.firstSpareOnce.Do(func() { d.firstSpareAt.Store(time.Now().UnixNano()) })
 		case <-w.exited:
-			slog.Warn("spare worker exited", "slot", s.idx, "state", w.exitDescription(), "stderr", w.stderrTailString())
+			slog.Warn("spare worker exited", "lane", s.idx, "state", w.exitDescription(), "stderr", w.stderrTailString())
 			d.mu.Lock()
 			if s.spare == w {
 				s.spare = nil
@@ -292,8 +292,8 @@ func (d *Daemon) startSpare(s *slot) {
 	}()
 }
 
-// takeWorker returns the spare worker of the slot or starts a new one.
-func (d *Daemon) takeWorker(s *slot) (*worker, bool, error) {
+// takeWorker returns the spare worker of the lane or starts a new one.
+func (d *Daemon) takeWorker(s *lane) (*worker, bool, error) {
 	d.mu.Lock()
 	w := s.spare
 	s.spare = nil
@@ -313,9 +313,9 @@ func (d *Daemon) takeWorker(s *slot) (*worker, bool, error) {
 	return w, false, err
 }
 
-// acquireSlot reserves a free slot for taskID. It returns nil if no slot is
+// acquireLane reserves a free lane for taskID. It returns nil if no lane is
 // free.
-func (d *Daemon) acquireSlot(taskID string, cancel context.CancelCauseFunc) (*runningTask, error) {
+func (d *Daemon) acquireLane(taskID string, cancel context.CancelCauseFunc) (*runningTask, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.closed {
@@ -327,11 +327,11 @@ func (d *Daemon) acquireSlot(taskID string, cancel context.CancelCauseFunc) (*ru
 	if _, ok := d.finished[taskID]; ok {
 		return nil, errTaskExists
 	}
-	for _, s := range d.slots {
+	for _, s := range d.lanes {
 		if !s.busy {
 			s.busy = true
 			s.taskID = taskID
-			rt := &runningTask{slot: s, cancel: cancel, rpc: newPendingCalls()}
+			rt := &runningTask{lane: s, cancel: cancel, rpc: newPendingCalls()}
 			d.running[taskID] = rt
 			return rt, nil
 		}
@@ -339,9 +339,9 @@ func (d *Daemon) acquireSlot(taskID string, cancel context.CancelCauseFunc) (*ru
 	return nil, nil
 }
 
-// releaseSlot cleans the slot folder and frees the slot.
-func (d *Daemon) releaseSlot(s *slot, taskID string, outputsStored bool) {
-	// Rename first, so the slot is clean at once. Large input files are
+// releaseLane cleans the lane folder and frees the lane.
+func (d *Daemon) releaseLane(s *lane, taskID string, outputsStored bool) {
+	// Rename first, so the lane is clean at once. Large input files are
 	// deleted in the background.
 	trash := filepath.Join(d.trashDir, fmt.Sprintf("%d-%d", s.idx, time.Now().UnixNano()))
 	if err := os.Rename(s.dir, trash); err == nil {
@@ -371,8 +371,8 @@ type stateResponse struct {
 	Status         string `json:"status"`
 	Runtime        string `json:"runtime"`
 	RuntimeVersion string `json:"runtimeVersion"`
-	Slots          int    `json:"slots"`
-	BusySlots      int    `json:"busySlots"`
+	MaxConcurrency int    `json:"maxConcurrency"`
+	BusyLanes      int    `json:"busyLanes"`
 	SpareReady     int    `json:"spareReady"`
 	SpareWorkers   bool   `json:"spareWorkers"`
 	ReuseWorkers   bool   `json:"reuseWorkers"`
@@ -394,7 +394,7 @@ func (d *Daemon) state() (stateResponse, bool) {
 	var st stateResponse
 	st.Runtime = d.cfg.Runtime
 	st.RuntimeVersion = d.runtime.Version
-	st.Slots = d.cfg.Slots
+	st.MaxConcurrency = d.cfg.MaxConcurrency
 	st.SpareWorkers = d.cfg.SpareWorkers
 	st.ReuseWorkers = d.cfg.ReuseWorkers
 	st.WorkersStarted = d.workersStarted.Load()
@@ -403,9 +403,9 @@ func (d *Daemon) state() (stateResponse, bool) {
 	st.UptimeMs = time.Since(d.startedAt).Milliseconds()
 
 	d.mu.Lock()
-	for _, s := range d.slots {
+	for _, s := range d.lanes {
 		if s.busy {
-			st.BusySlots++
+			st.BusyLanes++
 		}
 		if s.spare != nil {
 			select {

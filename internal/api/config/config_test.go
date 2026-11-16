@@ -600,7 +600,7 @@ func TestLoadAPICodePools(t *testing.T) {
 		t.Fatalf("pool defaults: %+v %d %s %s", cfg.CodePools, cfg.CodePoolRefillConcurrency, cfg.CodePoolMaxAge, cfg.CodePoolCheckInterval)
 	}
 
-	t.Setenv("SANDBOX_CODE_POOLS", `[{"slots":2,"reuseWorkers":true,"size":8},{"runtime":"n8n-js","slots":4,"spareWorkers":false,"size":4}]`)
+	t.Setenv("SANDBOX_CODE_POOLS", `[{"maxConcurrency":2,"reuseWorkers":true,"size":8},{"runtime":"n8n-js","maxConcurrency":4,"spareWorkers":false,"size":4}]`)
 	t.Setenv("SANDBOX_CODE_POOL_REFILL_CONCURRENCY", "4")
 	t.Setenv("SANDBOX_CODE_POOL_MAX_AGE", "5m")
 	cfg, err = LoadAPI()

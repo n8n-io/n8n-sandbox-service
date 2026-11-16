@@ -8,7 +8,7 @@ import (
 )
 
 func TestCodeContainerArgs(t *testing.T) {
-	opts := &runnerruntime.CreateOptions{Egress: runnerruntime.EgressNone, Kind: runnerruntime.KindCode, Runtime: "n8n-js", Slots: 2, TaskMemoryMB: 512, SpareWorkers: true, ReuseWorkers: true}
+	opts := &runnerruntime.CreateOptions{Egress: runnerruntime.EgressNone, Kind: runnerruntime.KindCode, Runtime: "n8n-js", MaxConcurrency: 2, TaskMemoryMB: 512, SpareWorkers: true, ReuseWorkers: true}
 	if got := codeMemoryLimitMB(opts, 256); got != 1280 {
 		t.Fatalf("memory limit %d", got)
 	}
@@ -17,7 +17,7 @@ func TestCodeContainerArgs(t *testing.T) {
 	if idx < 0 || args[idx+1] != "no" {
 		t.Fatalf("restart policy: %v", args)
 	}
-	for _, want := range []string{"--user", "1000:1000", "--cap-drop", "ALL", "no-new-privileges", "CODE_DAEMON_SLOTS=2", "CODE_DAEMON_REUSE_WORKERS=true", "--memory", "1280m"} {
+	for _, want := range []string{"--user", "1000:1000", "--cap-drop", "ALL", "no-new-privileges", "CODE_DAEMON_MAX_CONCURRENCY=2", "CODE_DAEMON_REUSE_WORKERS=true", "--memory", "1280m"} {
 		if !slices.Contains(args, want) {
 			t.Errorf("missing %q in %v", want, args)
 		}
@@ -30,16 +30,16 @@ func TestCodeContainerArgs(t *testing.T) {
 
 func TestCodeOptionsValidation(t *testing.T) {
 	for _, js := range []string{
-		`{"egress":"public","kind":"code","runtime":"n8n-js","slots":1,"taskMemoryMb":512}`,
-		`{"egress":"none","kind":"code","runtime":"n8n-js","slots":32,"taskMemoryMb":16384}`,
-		`{"egress":"none","slots":2}`,
+		`{"egress":"public","kind":"code","runtime":"n8n-js","maxConcurrency":1,"taskMemoryMb":512}`,
+		`{"egress":"none","kind":"code","runtime":"n8n-js","maxConcurrency":32,"taskMemoryMb":16384}`,
+		`{"egress":"none","maxConcurrency":2}`,
 		`{"egress":"none","kind":"other"}`,
 	} {
 		if _, err := runnerruntime.ParseCreateOptions(js); err == nil {
 			t.Errorf("accepted %s", js)
 		}
 	}
-	if _, err := runnerruntime.ParseCreateOptions(`{"egress":"none","kind":"code","runtime":"n8n-js","slots":4,"taskMemoryMb":512,"spareWorkers":true}`); err != nil {
+	if _, err := runnerruntime.ParseCreateOptions(`{"egress":"none","kind":"code","runtime":"n8n-js","maxConcurrency":4,"taskMemoryMb":512,"spareWorkers":true}`); err != nil {
 		t.Fatal(err)
 	}
 }
