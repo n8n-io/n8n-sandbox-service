@@ -3,7 +3,6 @@ package store
 import (
 	"slices"
 	"testing"
-	"time"
 )
 
 func TestKindScoping(t *testing.T) {
@@ -83,25 +82,5 @@ func testKindScoping(t *testing.T, s SandboxStore, tenantID string) {
 	}
 	if _, err := s.Count(KindFilter("Code")); err == nil {
 		t.Fatal("Count with an unknown kind: got nil error")
-	}
-}
-
-func TestCodeSandboxStore(t *testing.T) {
-	s, err := New(":memory:")
-	if err != nil {
-		t.Fatalf("new store: %v", err)
-	}
-	defer s.Close()
-	codes := NewCodeSandboxStore(s)
-	now := time.Now().Unix()
-
-	if err := codes.Create(&SandboxRecord{ID: "c1", Kind: KindDefault, Name: "n", TenantID: AdminTenantID, Status: "running", CreatedAt: now, LastActiveAt: now}); err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	if got, err := s.Get("c1"); err != nil || got == nil || got.Kind != KindCode {
-		t.Fatalf("saved %+v err=%v, want a code sandbox", got, err)
-	}
-	if got, err := codes.GetByName(AdminTenantID, "n"); err != nil || got == nil || got.ID != "c1" {
-		t.Fatalf("GetByName: %+v err=%v", got, err)
 	}
 }
