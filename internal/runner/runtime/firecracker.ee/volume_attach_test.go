@@ -45,12 +45,13 @@ func cachedImage(vol runnerruntime.Volume) string {
 }
 
 // fakeVolumeCache pins by holder, like the real cache. An object listed in
-// stall waits for ctx.
+// stall waits for ctx; with a gate, every Acquire waits for it to close.
 type fakeVolumeCache struct {
 	mu       sync.Mutex
 	record   func(string)
 	errs     map[string]error
 	stall    map[string]bool
+	gate     chan struct{}
 	pins     map[string]map[string]bool
 	releases int
 }
@@ -63,6 +64,9 @@ func (c *fakeVolumeCache) Acquire(ctx context.Context, vol runnerruntime.Volume,
 	if stall {
 		<-ctx.Done()
 		return "", ctx.Err()
+	}
+	if c.gate != nil {
+		<-c.gate
 	}
 	if err != nil {
 		return "", err
@@ -278,7 +282,7 @@ func TestCreateAttachesVolumes(t *testing.T) {
 	for drive, vol := range []runnerruntime.Volume{first, second} {
 		bind := rig.bindLine(vol, drive)
 		placed := fmt.Sprintf("mv -fT '%s/.vol%d.img' '%s/vol%d.img'\n", filepath.Dir(rig.jailRoot()), drive, rig.jailRoot(), drive)
-		if !strings.Contains(script, bind) || strings.Index(script, bind) < strings.Index(script, placed) {
+		if bindAt, placedAt := strings.Index(script, bind), strings.Index(script, placed); bindAt < 0 || placedAt < 0 || bindAt < placedAt {
 			t.Fatalf("jail script does not bind volume %d read-only over its placeholder:\nwant %s after %s\ngot\n%s", drive, bind, placed, script)
 		}
 	}
@@ -525,14 +529,74 @@ func TestCreateRefusesVolumesItCannotAttach(t *testing.T) {
 			if tt.noCache {
 				rig.rt.volumeCache = nil
 			}
-			if _, err := rig.rt.CreateSandbox(context.Background(), volumeTestSandbox, tt.opts); err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("CreateSandbox() error = %v, want one containing %q", err, tt.wantErr)
+			_, err := rig.rt.CreateSandbox(context.Background(), volumeTestSandbox, tt.opts)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) || !errors.Is(err, runnerruntime.ErrVolumesUnsupported) {
+				t.Fatalf("CreateSandbox() error = %v, want ErrVolumesUnsupported containing %q", err, tt.wantErr)
 			}
 			rig.requireGone(t)
 			if events := rig.recorded(); slices.ContainsFunc(events, func(event string) bool { return !strings.HasPrefix(event, "release") }) {
 				t.Fatalf("events %q, want nothing done", events)
 			}
 		})
+	}
+}
+
+// A create that fails is not counted or logged as leaving volumes out, even
+// for an optional volume decided before the failure.
+func TestFailedCreateReportsNoVolumeLeftOut(t *testing.T) {
+	for name, fault := range map[string]func(*volumeRig){
+		"download, then a required volume the guest did not mount": func(rig *volumeRig) {
+			rig.cache.errs[testVolume(0, true).SHA256] = errors.New("download volume object: status 404")
+			rig.failed = map[int]string{1: volumedrives.ReasonMount}
+		},
+		"optional, then required, the guest mounted neither": func(rig *volumeRig) {
+			rig.failed = map[int]string{0: volumedrives.ReasonMount, 1: volumedrives.ReasonMount}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rig := newVolumeRig(t)
+			fault(rig)
+			if _, err := rig.rt.CreateSandbox(context.Background(), volumeTestSandbox, volumeOptions(testVolume(0, true), testVolume(1, false))); err == nil {
+				t.Fatal("CreateSandbox() succeeded, want the required volume to fail it")
+			}
+			for _, reason := range runnerruntime.VolumeLeftOutReasons {
+				if got := rig.rec.VolumeLeftOutCount(reason); got != 0 {
+					t.Fatalf("volumes left out for %s = %v, want none for a failed create", reason, got)
+				}
+			}
+		})
+	}
+}
+
+// Shutdown can take a sandbox while its acquires still wait. What they pin
+// after that is released too.
+func TestShutdownDuringAcquireLeavesNoPins(t *testing.T) {
+	rig := newVolumeRig(t)
+	rig.cache.gate = make(chan struct{})
+
+	created := make(chan error, 1)
+	go func() {
+		_, err := rig.rt.CreateSandbox(context.Background(), volumeTestSandbox, volumeOptions(testVolume(0, false)))
+		created <- err
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for !slices.Contains(rig.recorded(), "acquire /mnt/v0") {
+		if time.Now().After(deadline) {
+			t.Fatal("the create never started acquiring")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	rig.rt.Shutdown(context.Background())
+	close(rig.cache.gate)
+
+	if err := <-created; err == nil || !strings.Contains(err.Error(), "torn down while its volumes were acquired") {
+		t.Fatalf("CreateSandbox() error = %v, want the create abandoned", err)
+	}
+	if got := rig.cache.pinned(volumeTestSandbox); got != 0 {
+		t.Fatalf("pins = %d, want none after shutdown", got)
+	}
+	if events := rig.recorded(); slices.Contains(events, "clone rootfs") {
+		t.Fatalf("events %q: the abandoned create went on", events)
 	}
 }
 

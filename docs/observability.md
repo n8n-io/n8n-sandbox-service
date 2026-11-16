@@ -110,9 +110,11 @@ A wake skips the two clone steps, since the sandbox's disk already exists, and
 `mount_volumes`. A recovery skips the clone steps too and swaps `load_snapshot`
 for `cold_boot` — the field to compare when reading recovery latency against an
 ordinary wake. `acquire_volumes` and `patch_volumes` appear only for sandboxes
-with volumes. A download longer than the histogram's top bucket (5 s) lands
-above it; the event has its time, and
-`sandbox_volume_cache_download_duration_seconds` the download's.
+with volumes. In `sandbox_lifecycle_step_duration_seconds`, an
+`acquire_volumes` that waited for a download longer than 5 s lands above the
+top bucket; the event has its time, and
+`sandbox_volume_cache_download_duration_seconds` (buckets up to 600 s) the
+download's.
 
 ### Runner: volumes
 
@@ -120,8 +122,8 @@ Each line names `sandbox_id`, `drive` and `sha256`, never the read URL.
 
 | Event | Level | Notes |
 | --- | --- | --- |
-| `firecracker volume attached` | info | At the end of a create, per volume the sandbox has |
-| `firecracker volume left out` | warn | An optional volume the create left out; `reason` as in the echo, and for a download the cache's `err` |
+| `firecracker volume attached` | info | At the end of a create that succeeded, per volume the sandbox has |
+| `firecracker volume left out` | warn | At the end of a create that succeeded, per optional volume it left out; `reason` as in the echo, and for one left out before the guest started the cache's `err` |
 | `firecracker volume not mounted after cold boot` | warn | A cold boot's guest did not mount an optional volume the create had mounted; `reason` |
 
 ### Runner: guest deaths
@@ -174,8 +176,8 @@ Related series:
   request), `already_mounted`, `unsupported` (the daemon has no endpoint or no
   root; a failure only when volumes were named), or `error`.
 - `sandbox_volumes_left_out_total{reason}` — optional volumes a Firecracker
-  create left out: `cache_full`, `timeout`, `download`, `drive`,
-  `mount_point` or `mount`.
+  create that succeeded left out: `cache_full`, `timeout`, `download`,
+  `drive`, `mount_point` or `mount`.
 - `sandbox_container_operation_duration_seconds{operation}` — the totals the
   steps add up to, a recovery's under `operation="recover"` like its steps.
 - `sandbox_http_request_duration_seconds{role,route,method}` — end-to-end per

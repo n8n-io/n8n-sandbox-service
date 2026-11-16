@@ -49,6 +49,9 @@ func toGRPCError(err error) error {
 	if errors.Is(err, runnerruntime.ErrCapacityExhausted) {
 		return runnerctl.CapacityRefusal(err.Error())
 	}
+	if errors.Is(err, runnerruntime.ErrVolumesUnsupported) {
+		return status.Error(codes.FailedPrecondition, err.Error())
+	}
 	return status.Errorf(codes.Internal, "%v", err)
 }
 

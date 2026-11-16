@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -44,6 +45,15 @@ type attachedVolume struct {
 
 const volumeSectorBytes = 512
 
+// leftOutVolume is an optional volume a create left out. err is the cache's
+// error, for one left out before the guest started.
+type leftOutVolume struct {
+	drive  int
+	sha256 string
+	reason string
+	err    error
+}
+
 // volumeAcquireReserve is the part of a create's budget that waiting for
 // volume downloads leaves to the rest of the create. A var so tests can
 // shrink it.
@@ -51,19 +61,19 @@ var volumeAcquireReserve = time.Minute
 
 // acquireVolumes gets the image of every volume from the cache, all at once,
 // pinned for the sandbox, before anything exists on the host. It returns the
-// optional volumes it left out, by index, and why. A required volume that
-// fails fails the create; a capacity refusal stays one, so the API tries
-// another runner. Downloads that outlast the wait go on in the cache.
-func (r *Runtime) acquireVolumes(ctx context.Context, state *sandboxState, volumes []runnerruntime.Volume) (map[int]string, error) {
+// optional volumes it left out. A required volume that fails fails the
+// create; a capacity refusal stays one, so the API tries another runner.
+// Downloads that outlast the wait go on in the cache.
+func (r *Runtime) acquireVolumes(ctx context.Context, state *sandboxState, volumes []runnerruntime.Volume) ([]leftOutVolume, error) {
 	if r.volumeCache == nil {
-		return nil, errors.New("this runner has no volume cache")
+		return nil, fmt.Errorf("this runner has no volume cache: %w", runnerruntime.ErrVolumesUnsupported)
 	}
 	if drives := len(state.bootParams.VolumeDrives); len(volumes) > drives {
-		return nil, fmt.Errorf("the golden snapshot has %d volume drives, the create asks for %d volumes", drives, len(volumes))
+		return nil, fmt.Errorf("the golden snapshot has %d volume drives, the create asks for %d volumes: %w", drives, len(volumes), runnerruntime.ErrVolumesUnsupported)
 	}
 	for index, vol := range volumes {
 		if vol.Kind != volume.KindExt4 {
-			return nil, fmt.Errorf("volume %d: Firecracker attaches %s images, not %s", index, volume.KindExt4, vol.Kind)
+			return nil, fmt.Errorf("volume %d: Firecracker attaches %s images, not %s: %w", index, volume.KindExt4, vol.Kind, runnerruntime.ErrVolumesUnsupported)
 		}
 	}
 	r.mu.Lock()
@@ -104,19 +114,12 @@ func (r *Runtime) acquireVolumes(ctx context.Context, state *sandboxState, volum
 		})
 	}
 	wg.Wait()
-	if failed != nil {
-		return nil, failed
-	}
 
-	leftOut := map[int]string{}
+	var leftOut []leftOutVolume
 	attached := make([]attachedVolume, 0, len(volumes))
 	for index, vol := range volumes {
 		if err := errs[index]; err != nil {
-			reason := acquireLeftOutReason(err)
-			slog.Warn("firecracker volume left out",
-				"sandbox_id", state.id, "drive", index, "sha256", vol.SHA256, "reason", reason, "err", err)
-			r.metrics.ObserveVolumeLeftOut(reason)
-			leftOut[index] = reason
+			leftOut = append(leftOut, leftOutVolume{drive: index, sha256: vol.SHA256, reason: acquireLeftOutReason(err), err: err})
 			continue
 		}
 		attached = append(attached, attachedVolume{
@@ -128,9 +131,23 @@ func (r *Runtime) acquireVolumes(ctx context.Context, state *sandboxState, volum
 			optional:  vol.Optional,
 		})
 	}
+
+	// Shutdown can take the sandbox while acquires still wait, which then pin
+	// after it released the sandbox's pins. Once it has untracked the sandbox,
+	// nothing else would release them.
 	r.mu.Lock()
+	defer r.mu.Unlock()
+	current, tracked := r.sandboxes[state.id]
+	if !tracked {
+		r.releaseVolumesLocked(state)
+	}
+	if current != state || state.deleting() {
+		return nil, errors.New("sandbox was torn down while its volumes were acquired")
+	}
+	if failed != nil {
+		return nil, failed
+	}
 	state.volumes = attached
-	r.mu.Unlock()
 	return leftOut, nil
 }
 
@@ -247,7 +264,8 @@ func (r *Runtime) patchVolumeDrives(ctx context.Context, state *sandboxState, vo
 // create every volume, on a cold boot those the create mounted. A required
 // volume the guest did not mount fails the activation. An optional one the
 // create did not get is left out: its image stays bound and pinned, as the
-// drive's size is in the guest and a wake restores it from the same path.
+// drive's size is in the guest and a wake restores it from the same path. The
+// create reports it once it has succeeded (reportVolumes).
 func (r *Runtime) mountGuestVolumes(ctx context.Context, state *sandboxState, creating bool, t *stepTimer) error {
 	volumes := r.volumesOf(state)
 	var drives []volumedrives.Volume
@@ -283,9 +301,6 @@ func (r *Runtime) mountGuestVolumes(ctx context.Context, state *sandboxState, cr
 				"sandbox_id", state.id, "drive", vol.drive, "sha256", vol.sha256, "reason", reason)
 			continue
 		}
-		slog.Warn("firecracker volume left out",
-			"sandbox_id", state.id, "drive", vol.drive, "sha256", vol.sha256, "reason", reason)
-		r.metrics.ObserveVolumeLeftOut(reason)
 		r.mu.Lock()
 		for index := range state.volumes {
 			if state.volumes[index].drive == vol.drive {
@@ -295,6 +310,30 @@ func (r *Runtime) mountGuestVolumes(ctx context.Context, state *sandboxState, cr
 		r.mu.Unlock()
 	}
 	return nil
+}
+
+// reportVolumes logs and counts what a create that succeeded attached and
+// left out, and returns the echo's left-out reasons by drive.
+func (r *Runtime) reportVolumes(sandboxID string, acquireLeftOut []leftOutVolume, volumes []attachedVolume) map[int]string {
+	leftOut := slices.Clone(acquireLeftOut)
+	for _, vol := range volumes {
+		if vol.leftOut != "" {
+			leftOut = append(leftOut, leftOutVolume{drive: vol.drive, sha256: vol.sha256, reason: vol.leftOut})
+			continue
+		}
+		slog.Info("firecracker volume attached", "sandbox_id", sandboxID, "drive", vol.drive, "sha256", vol.sha256)
+	}
+	reasons := make(map[int]string, len(leftOut))
+	for _, vol := range leftOut {
+		attrs := []any{"sandbox_id", sandboxID, "drive", vol.drive, "sha256", vol.sha256, "reason", vol.reason}
+		if vol.err != nil {
+			attrs = append(attrs, "err", vol.err)
+		}
+		slog.Warn("firecracker volume left out", attrs...)
+		r.metrics.ObserveVolumeLeftOut(vol.reason)
+		reasons[vol.drive] = vol.reason
+	}
+	return reasons
 }
 
 // guestLeftOutReason maps a reason the daemon gave, already checked against

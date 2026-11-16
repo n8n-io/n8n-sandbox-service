@@ -1,6 +1,7 @@
 package firecracker
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"io"
@@ -299,7 +300,13 @@ func TestMountVolumeDrivesLeavesOutAMalformedAnswer(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		_, _ = io.ReadAll(io.LimitReader(conn, 1))
+		// The whole request first: closing with some of it unread can reset the
+		// connection before the client reads the answer.
+		req, err := http.ReadRequest(bufio.NewReader(conn))
+		if err != nil {
+			return
+		}
+		_, _ = io.Copy(io.Discard, req.Body)
 		_, _ = io.WriteString(conn, "guest-text-/etc/shadow\r\n\r\n")
 	}()
 

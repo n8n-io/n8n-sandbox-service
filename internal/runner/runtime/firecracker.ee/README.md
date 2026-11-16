@@ -65,7 +65,7 @@ A volume drive is a read-only drive the golden snapshot reserves for a volume, a
 
 ### Attaching volumes
 
-The create options name the volumes (`ext4` only); the position in the list is the drive. A sandbox keeps its volumes for its lifetime.
+The create options name the volumes (`ext4` only); the position in the list is the drive. A create naming more volumes than the golden snapshot has drives (`VOLUME_DRIVES`) fails with `FailedPrecondition` before anything is created, like one naming another kind. A sandbox keeps its volumes for its lifetime.
 
 - **Create:** after the slot is reserved and before anything exists on the host, every image is acquired from the volume cache at once, pinned for the sandbox, waiting until a minute before the create's deadline (half the time left if that is more). The images are bound read-only at their drives' jail paths, over the placeholders, before jailer starts. After the restore, `PATCH /drives/vol<i>` with the same path makes the guest see each size, and the mount request names each drive, its sectors and mount path. The echo says per volume whether the sandbox has it.
 - **Failures:** a required volume that can't be downloaded, verified or mounted fails the create; a capacity refusal from the cache stays one, so the API tries another runner. An optional one is left out for a fault of its own: `cache_full`, `timeout` (its download goes on in the cache), `download`, or the guest's `drive`, `mount_point` or `mount`. One the guest didn't mount keeps its bind and pin: the guest has the drive's size, and a wake restores it from the same path. Host faults fail the create for any volume: a cached image that isn't root-owned and unwritable, a bind, a `PATCH`, an invalid answer.

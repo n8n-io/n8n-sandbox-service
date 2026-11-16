@@ -566,7 +566,7 @@ func TestCreateSandboxRefusesVolumes(t *testing.T) {
 	m.imageReady.Store(true)
 
 	opts := &runnerruntime.CreateOptions{Volumes: []runnerruntime.Volume{{MountPath: "/mnt/a"}}}
-	if _, err := m.CreateSandbox(context.Background(), "sandbox-id-1234", opts); err == nil || !strings.Contains(err.Error(), "can't attach volumes") {
+	if _, err := m.CreateSandbox(context.Background(), "sandbox-id-1234", opts); !errors.Is(err, runnerruntime.ErrVolumesUnsupported) {
 		t.Fatalf("CreateSandbox() error = %v, want a refusal", err)
 	}
 	if len(events) != 0 {

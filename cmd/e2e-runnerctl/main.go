@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -27,8 +28,10 @@ func usage() {
   %[1]s delete <sandbox-id>
   %[1]s exec <sandbox-id> <command>
 
-create and exec print their outcome as one line of JSON. exec goes to the
-runner's HTTP listener at E2E_RUNNER_HTTP_ADDR, with the control mTLS identity.
+create and exec print their outcome as one line of JSON. create exits 1 when
+the create fails, exec when the runner answers other than 200 or the command's
+exit never arrives. exec goes to the runner's HTTP listener at
+E2E_RUNNER_HTTP_ADDR, with the control mTLS identity.
 `, os.Args[0])
 	os.Exit(2)
 }
@@ -190,7 +193,8 @@ func execute(sandboxID, command string) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+httpAddr+"/sandboxes/"+sandboxID+"/executions", bytes.NewReader(body))
+	execURL := "https://" + httpAddr + "/sandboxes/" + url.PathEscape(sandboxID) + "/executions"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, execURL, bytes.NewReader(body))
 	exitOn("build exec request", err)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Api-Key", to.apiKey)
@@ -203,9 +207,10 @@ func execute(sandboxID, command string) {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 		outcome.Body = string(raw)
 		printJSON(outcome)
-		return
+		os.Exit(1)
 	}
 	var stdout, stderr strings.Builder
+	exited := false
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64<<10), 4<<20)
 	for scanner.Scan() {
@@ -218,6 +223,7 @@ func execute(sandboxID, command string) {
 			stderr.WriteString(event.Data)
 		case daemon.ResponseTypeExit:
 			outcome.ExitCode = event.ExitCode
+			exited = true
 		case daemon.ResponseTypeError:
 			outcome.Body = event.Error
 		}
@@ -225,6 +231,9 @@ func execute(sandboxID, command string) {
 	exitOn("read exec stream", scanner.Err())
 	outcome.Stdout, outcome.Stderr = stdout.String(), stderr.String()
 	printJSON(outcome)
+	if !exited {
+		os.Exit(1)
+	}
 }
 
 func printJSON(value any) {

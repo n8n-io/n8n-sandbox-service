@@ -475,8 +475,9 @@ func (r *Runtime) CreateSandbox(ctx context.Context, sandboxID string, opts *run
 	}
 
 	timer := newStepTimer(metrics.OpCreate, r.metrics)
-	var leftOut map[int]string
-	if opts != nil && len(opts.Volumes) > 0 {
+	hasVolumes := opts != nil && len(opts.Volumes) > 0
+	var leftOut []leftOutVolume
+	if hasVolumes {
 		// Nothing exists on the host yet, so a failure only hands back the
 		// reservation and the pins.
 		if err := timer.step(stepAcquireVolumes, func() error {
@@ -515,14 +516,9 @@ func (r *Runtime) CreateSandbox(ctx context.Context, sandboxID string, opts *run
 	info := *state.info
 	volumes := slices.Clone(state.volumes)
 	r.mu.Unlock()
-	for _, vol := range volumes {
-		if vol.leftOut != "" {
-			leftOut[vol.drive] = vol.leftOut
-			continue
-		}
-		slog.Info("firecracker volume attached", "sandbox_id", sandboxID, "drive", vol.drive, "sha256", vol.sha256)
+	if hasVolumes {
+		info.VolumesLeftOut = r.reportVolumes(sandboxID, leftOut, volumes)
 	}
-	info.VolumesLeftOut = leftOut
 	slog.Info("firecracker sandbox created",
 		append([]any{
 			"sandbox_id", sandboxID,

@@ -43,6 +43,10 @@ var ErrSandboxNotRunning = errors.New("sandbox not running")
 // the API place the same sandbox on another runner.
 var ErrCapacityExhausted = errors.New("runner capacity exhausted")
 
+// ErrVolumesUnsupported is returned when CreateSandbox refuses volumes this
+// runner can't attach, before anything is created.
+var ErrVolumesUnsupported = errors.New("runner can't attach these volumes")
+
 // Egress is a sandbox's outbound network policy.
 type Egress string
 

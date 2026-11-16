@@ -5,7 +5,6 @@ package docker
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -259,7 +258,7 @@ func (m *Runtime) Capacity(ctx context.Context) (runnerruntime.Capacity, error) 
 // It refuses volumes rather than start the sandbox without them.
 func (m *Runtime) CreateSandbox(ctx context.Context, sandboxID string, opts *runnerruntime.CreateOptions) (*runnerruntime.SandboxInfo, error) {
 	if opts != nil && len(opts.Volumes) > 0 {
-		return nil, errors.New("the Docker runtime can't attach volumes")
+		return nil, fmt.Errorf("the Docker runtime attaches no volumes: %w", runnerruntime.ErrVolumesUnsupported)
 	}
 	return m.CreateContainer(ctx, sandboxID, opts)
 }

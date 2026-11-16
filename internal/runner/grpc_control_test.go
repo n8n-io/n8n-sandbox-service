@@ -212,6 +212,7 @@ func TestSandboxControlGRPCCreateSandboxErrorCodes(t *testing.T) {
 		{name: "capacity", err: fmt.Errorf("firecracker %w", runnerruntime.ErrCapacityExhausted), want: codes.ResourceExhausted, refusal: true},
 		{name: "other", err: errors.New("clone sandbox rootfs: no space left on device"), want: codes.Internal},
 		{name: "deadline", err: context.DeadlineExceeded, want: codes.DeadlineExceeded},
+		{name: "volumes unsupported", err: fmt.Errorf("no volume cache: %w", runnerruntime.ErrVolumesUnsupported), want: codes.FailedPrecondition},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := &SandboxControlGRPC{
