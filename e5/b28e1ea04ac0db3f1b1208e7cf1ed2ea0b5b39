@@ -1,0 +1,14 @@
+internal/api/handlers_code.go
+  h_8fb27e0cdf6d1e 255,376-379,382,387,391-392
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e5b28e1ea04ac0db3f1b1208e7cf1ed2ea0b5b39",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
