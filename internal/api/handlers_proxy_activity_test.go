@@ -16,7 +16,7 @@ import (
 
 // newActivityTestGateway is newTestGateway with the activity recorder exposed,
 // so a test can run its writes. Nothing runs it otherwise.
-func newActivityTestGateway(t *testing.T, adminKey string) (http.Handler, store.Store, *ActivityRecorder) {
+func newActivityTestGateway(t *testing.T, adminKey string) (http.Handler, store.SandboxStore, *ActivityRecorder) {
 	t.Helper()
 	s, err := store.New(":memory:")
 	if err != nil {

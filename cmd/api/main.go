@@ -44,7 +44,7 @@ func main() {
 	logLevel.Set(cfg.LogLevel)
 
 	var (
-		sandboxStore store.Store
+		sandboxStore store.SandboxStore
 		runnerReg    registry.RunnerRegistry
 		sweepLockDB  *sql.DB
 	)

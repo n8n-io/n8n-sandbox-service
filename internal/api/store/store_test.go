@@ -130,7 +130,7 @@ func TestCodeSandboxNames(t *testing.T) {
 }
 
 // testCodeSandboxNames runs against both backends; the tenants must not exist yet.
-func testCodeSandboxNames(t *testing.T, s Store, tenantA, tenantB string) {
+func testCodeSandboxNames(t *testing.T, s SandboxStore, tenantA, tenantB string) {
 	t.Helper()
 	now := time.Now().Unix()
 	for _, id := range []string{tenantA, tenantB} {
@@ -440,7 +440,7 @@ func TestListForIdleReapDeleteAndStop(t *testing.T) {
 	})
 
 	cutoff := int64(200)
-	delRows, err := s.ListForIdleReapDelete(KindFilter(AllKinds()...), cutoff)
+	delRows, err := s.ListForIdleReapDelete(cutoff)
 	if err != nil {
 		t.Fatalf("ListForIdleReapDelete: %v", err)
 	}
@@ -462,7 +462,7 @@ func TestListForIdleReapDeleteAndStop(t *testing.T) {
 		ephemeral bool
 		want      string
 	}{{false, "a-run-old"}, {true, "d-eph-old"}} {
-		stopRows, err := s.ListForIdleReapStop(KindFilter(AllKinds()...), cutoff, tc.ephemeral)
+		stopRows, err := s.ListForIdleReapStop(cutoff, tc.ephemeral)
 		if err != nil {
 			t.Fatalf("ListForIdleReapStop(ephemeral=%v): %v", tc.ephemeral, err)
 		}
@@ -538,7 +538,7 @@ func TestRecordActivity(t *testing.T) {
 
 // testRecordActivity runs against both backends; no id starting with prefix
 // may exist yet.
-func testRecordActivity(t *testing.T, s Store, prefix string) {
+func testRecordActivity(t *testing.T, s SandboxStore, prefix string) {
 	t.Helper()
 	ctx := context.Background()
 	a, b := prefix+"-a", prefix+"-b"
@@ -598,7 +598,7 @@ func TestUpdateTenantLimits(t *testing.T) {
 }
 
 // testUpdateTenantLimits runs against both backends; tenantID must not exist yet.
-func testUpdateTenantLimits(t *testing.T, s Store, tenantID string) {
+func testUpdateTenantLimits(t *testing.T, s SandboxStore, tenantID string) {
 	t.Helper()
 	now := time.Now().Unix()
 	if err := s.CreateTenant(&Tenant{ID: tenantID, Name: "t", ExternalRef: "ext", MaxSandboxes: 5, CreatedAt: now}); err != nil {
@@ -649,7 +649,7 @@ func TestCreateEnforcesTenantQuota(t *testing.T) {
 }
 
 // testCreateEnforcesTenantQuota runs against both backends; tenantID must not exist yet.
-func testCreateEnforcesTenantQuota(t *testing.T, s Store, tenantID string) {
+func testCreateEnforcesTenantQuota(t *testing.T, s SandboxStore, tenantID string) {
 	t.Helper()
 	now := time.Now().Unix()
 	if err := s.CreateTenant(&Tenant{ID: tenantID, Name: "t", MaxSandboxes: 2, CreatedAt: now}); err != nil {
@@ -712,13 +712,13 @@ func TestConcurrentCreatesStopAtTenantQuota(t *testing.T) {
 		t.Fatalf("new store: %v", err)
 	}
 	defer s.Close()
-	testConcurrentCreatesStopAtTenantQuota(t, []Store{s}, "13131313-1313-1313-1313-131313131313")
+	testConcurrentCreatesStopAtTenantQuota(t, []SandboxStore{s}, "13131313-1313-1313-1313-131313131313")
 }
 
 // testConcurrentCreatesStopAtTenantQuota saves a burst of sandboxes for one
 // tenant in parallel, spread over stores (one per API pod sharing a database),
 // and expects exactly the quota to be saved. tenantID must not exist yet.
-func testConcurrentCreatesStopAtTenantQuota(t *testing.T, stores []Store, tenantID string) {
+func testConcurrentCreatesStopAtTenantQuota(t *testing.T, stores []SandboxStore, tenantID string) {
 	t.Helper()
 	const quota, creates = 3, 12
 	now := time.Now().Unix()

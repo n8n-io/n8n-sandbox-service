@@ -347,31 +347,21 @@ func (s *SQLiteStore) LockSandbox(ctx context.Context, id string) (func(), error
 	}
 }
 
-func (s *SQLiteStore) ListForIdleReapDelete(f SandboxFilter, cutoff int64) ([]*SandboxRecord, error) {
-	cond, args, err := f.where([]any{cutoff}, sqlitePlaceholder)
-	if err != nil {
-		return nil, err
-	}
+func (s *SQLiteStore) ListForIdleReapDelete(cutoff int64) ([]*SandboxRecord, error) {
 	q := `SELECT ` + sqliteSandboxCols + `
 		FROM sandboxes
 		WHERE status = 'stopped'
-		  AND last_active_at <= ?
-		  AND ` + cond
-	return s.querySandboxRecords(q, args...)
+		  AND last_active_at <= ?`
+	return s.querySandboxRecords(q, cutoff)
 }
 
-func (s *SQLiteStore) ListForIdleReapStop(f SandboxFilter, cutoff int64, ephemeral bool) ([]*SandboxRecord, error) {
-	cond, args, err := f.where([]any{cutoff, ephemeral}, sqlitePlaceholder)
-	if err != nil {
-		return nil, err
-	}
+func (s *SQLiteStore) ListForIdleReapStop(cutoff int64, ephemeral bool) ([]*SandboxRecord, error) {
 	q := `SELECT ` + sqliteSandboxCols + `
 		FROM sandboxes
 		WHERE status = 'running'
 		  AND last_active_at <= ?
-		  AND ephemeral = ?
-		  AND ` + cond
-	return s.querySandboxRecords(q, args...)
+		  AND ephemeral = ?`
+	return s.querySandboxRecords(q, cutoff, ephemeral)
 }
 
 func (s *SQLiteStore) querySandboxRecords(q string, args ...any) ([]*SandboxRecord, error) {

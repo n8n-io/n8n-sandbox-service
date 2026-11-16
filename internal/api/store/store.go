@@ -50,7 +50,7 @@ func checkKind(kind Kind) error {
 	return nil
 }
 
-// SandboxFilter selects sandbox rows for the methods that read many.
+// SandboxFilter selects the sandboxes of List and Count.
 type SandboxFilter struct {
 	// Kinds is required: no kinds is an error, not every kind.
 	Kinds []Kind
@@ -150,11 +150,11 @@ type APIKey struct {
 	RevokedAt int64 // 0 = active
 }
 
-// Store is a SQLite or Postgres store. A method on one sandbox takes its id,
-// which is unique across kinds, and works on a sandbox of any kind and tenant:
-// callers check both on the row they read. A method on many sandboxes takes a
-// SandboxFilter.
-type Store interface {
+// SandboxStore is a SQLite or Postgres store. A method on one sandbox takes
+// its id, which is unique across kinds, and works on a sandbox of any kind and
+// tenant: callers check both on the row they read. List and Count take a
+// SandboxFilter; the idle reap lists cover every kind.
+type SandboxStore interface {
 	io.Closer
 	Backend() Backend
 
@@ -182,13 +182,13 @@ type Store interface {
 	RecordActivity(ctx context.Context, lastActiveAt map[string]int64) error
 	// LockSandbox locks the sandbox id, whatever its kind: it reads no row.
 	LockSandbox(ctx context.Context, id string) (unlock func(), err error)
-	// ListForIdleReapDelete returns the stopped sandboxes f selects that are
-	// idle since cutoff.
-	ListForIdleReapDelete(f SandboxFilter, cutoff int64) ([]*SandboxRecord, error)
-	// ListForIdleReapStop returns the running sandboxes f selects that are idle
-	// since cutoff and have the given ephemeral flag: regular rows are stop
-	// candidates, ephemeral rows delete candidates.
-	ListForIdleReapStop(f SandboxFilter, cutoff int64, ephemeral bool) ([]*SandboxRecord, error)
+	// ListForIdleReapDelete returns the stopped sandboxes of every kind that
+	// are idle since cutoff.
+	ListForIdleReapDelete(cutoff int64) ([]*SandboxRecord, error)
+	// ListForIdleReapStop returns the running sandboxes of every kind that are
+	// idle since cutoff and have the given ephemeral flag: regular rows are
+	// stop candidates, ephemeral rows delete candidates.
+	ListForIdleReapStop(cutoff int64, ephemeral bool) ([]*SandboxRecord, error)
 
 	CreateTenant(t *Tenant) error
 	// CreateTenantWithAPIKey inserts the tenant and its first API key in one transaction.
@@ -211,8 +211,8 @@ type Store interface {
 }
 
 var (
-	_ Store = (*SQLiteStore)(nil)
-	_ Store = (*PostgresStore)(nil)
+	_ SandboxStore = (*SQLiteStore)(nil)
+	_ SandboxStore = (*PostgresStore)(nil)
 )
 
 // scanner is the common interface satisfied by both *sql.Row and *sql.Rows.

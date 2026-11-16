@@ -21,7 +21,7 @@ const (
 	provMaxDflt  = 50
 )
 
-func newProvisionerGateway(t *testing.T) (http.Handler, store.Store) {
+func newProvisionerGateway(t *testing.T) (http.Handler, store.SandboxStore) {
 	t.Helper()
 	s, err := store.New(":memory:")
 	if err != nil {

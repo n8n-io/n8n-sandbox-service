@@ -81,16 +81,13 @@ func logSandboxDeleted(sandboxID, runnerID, reason string) {
 
 // sweeperStore is the store of the idle sweeper.
 type sweeperStore interface {
-	ListForIdleReapDelete(f store.SandboxFilter, cutoff int64) ([]*store.SandboxRecord, error)
-	ListForIdleReapStop(f store.SandboxFilter, cutoff int64, ephemeral bool) ([]*store.SandboxRecord, error)
+	ListForIdleReapDelete(cutoff int64) ([]*store.SandboxRecord, error)
+	ListForIdleReapStop(cutoff int64, ephemeral bool) ([]*store.SandboxRecord, error)
 	Get(id string) (*store.SandboxRecord, error)
 	UpdateStatus(id, status string) error
 	Delete(id string) error
 	LockSandbox(ctx context.Context, id string) (unlock func(), err error)
 }
-
-// sweptSandboxes selects the sandboxes the idle sweeper lists: every kind.
-func sweptSandboxes() store.SandboxFilter { return store.KindFilter(store.AllKinds()...) }
 
 // StartIdleSweeper runs periodic stop/delete for idle sandboxes until ctx is done.
 // When sweepLockDB is non-nil (Postgres multi-pod), only the advisory-lock holder runs each sweep.
@@ -437,7 +434,7 @@ func deleteActivityLag(cfg *config.APIConfig) int64 {
 func sweepIdleDeleteSandboxes(ctx context.Context, s sweeperStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) sweepStats {
 	deleteCutoff := now.Unix() - idleSeconds(cfg.IdleDeleteAfter) - deleteActivityLag(cfg) - idleSeconds(cfg.IdleDeleteSafetyBuffer)
 
-	records, err := s.ListForIdleReapDelete(sweptSandboxes(), deleteCutoff)
+	records, err := s.ListForIdleReapDelete(deleteCutoff)
 	if err != nil {
 		slog.Error("idle sweep list delete candidates failed", "err", err)
 		return sweepStats{}
@@ -458,7 +455,7 @@ func sweepIdleDeleteSandboxes(ctx context.Context, s sweeperStore, reg registry.
 func sweepEphemeralSandboxes(ctx context.Context, s sweeperStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) sweepStats {
 	cutoff := now.Unix() - idleSeconds(ephemeralIdleWindow(cfg)) - deleteActivityLag(cfg) - idleSeconds(cfg.IdleDeleteSafetyBuffer)
 
-	records, err := s.ListForIdleReapStop(sweptSandboxes(), cutoff, true)
+	records, err := s.ListForIdleReapStop(cutoff, true)
 	if err != nil {
 		slog.Error("idle sweep list ephemeral candidates failed", "err", err)
 		return sweepStats{}
@@ -475,7 +472,7 @@ func sweepEphemeralSandboxes(ctx context.Context, s sweeperStore, reg registry.R
 func sweepIdleStopSandboxes(ctx context.Context, s sweeperStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) sweepStats {
 	stopCutoff := now.Unix() - idleSeconds(cfg.IdleStopAfter) - idleSeconds(activityLag(cfg))
 
-	records, err := s.ListForIdleReapStop(sweptSandboxes(), stopCutoff, false)
+	records, err := s.ListForIdleReapStop(stopCutoff, false)
 	if err != nil {
 		slog.Error("idle sweep list stop candidates failed", "err", err)
 		return sweepStats{}

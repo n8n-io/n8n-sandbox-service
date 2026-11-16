@@ -16,7 +16,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 )
 
-func newTestGateway(t *testing.T, adminKey string) (http.Handler, store.Store) {
+func newTestGateway(t *testing.T, adminKey string) (http.Handler, store.SandboxStore) {
 	t.Helper()
 	s, err := store.New(":memory:")
 	if err != nil {

@@ -85,7 +85,7 @@ func TestSandboxProxyReapsStoreOnRunnerSandboxGone(t *testing.T) {
 // deleteFailingStore makes reaping fail while leaving every other store
 // operation intact.
 type deleteFailingStore struct {
-	store.Store
+	store.SandboxStore
 }
 
 func (deleteFailingStore) Delete(string) error {

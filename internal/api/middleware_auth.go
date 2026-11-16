@@ -62,6 +62,11 @@ func authFromContext(ctx context.Context) (authIdentity, bool) {
 	return id, ok
 }
 
+// apiKeyStore looks up tenant API keys.
+type apiKeyStore interface {
+	ListActiveAPIKeysByPrefix(prefix string) ([]*store.APIKey, error)
+}
+
 func hashAPIKey(plaintext string) string {
 	sum := sha256.Sum256([]byte(plaintext))
 	return hex.EncodeToString(sum[:])
@@ -140,11 +145,6 @@ func AuthMiddleware(adminKeys, provisionerKeys, scalerKeys map[string]struct{}, 
 			writeError(w, http.StatusUnauthorized, "invalid API key")
 		})
 	}
-}
-
-// apiKeyStore looks up tenant API keys.
-type apiKeyStore interface {
-	ListActiveAPIKeysByPrefix(prefix string) ([]*store.APIKey, error)
 }
 
 // lookupTenantKey returns the tenant of the active key whose hash is keyHash,

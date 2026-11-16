@@ -320,31 +320,21 @@ func (s *PostgresStore) LockSandbox(ctx context.Context, id string) (func(), err
 	return unlock, nil
 }
 
-func (s *PostgresStore) ListForIdleReapDelete(f SandboxFilter, cutoff int64) ([]*SandboxRecord, error) {
-	cond, args, err := f.where([]any{cutoff}, pgPlaceholder)
-	if err != nil {
-		return nil, err
-	}
+func (s *PostgresStore) ListForIdleReapDelete(cutoff int64) ([]*SandboxRecord, error) {
 	q := `SELECT ` + pgSandboxCols + `
 		FROM sandboxes
 		WHERE status = 'stopped'
-		  AND last_active_at <= $1
-		  AND ` + cond
-	return s.querySandboxRecords(q, args...)
+		  AND last_active_at <= $1`
+	return s.querySandboxRecords(q, cutoff)
 }
 
-func (s *PostgresStore) ListForIdleReapStop(f SandboxFilter, cutoff int64, ephemeral bool) ([]*SandboxRecord, error) {
-	cond, args, err := f.where([]any{cutoff, ephemeral}, pgPlaceholder)
-	if err != nil {
-		return nil, err
-	}
+func (s *PostgresStore) ListForIdleReapStop(cutoff int64, ephemeral bool) ([]*SandboxRecord, error) {
 	q := `SELECT ` + pgSandboxCols + `
 		FROM sandboxes
 		WHERE status = 'running'
 		  AND last_active_at <= $1
-		  AND ephemeral = $2
-		  AND ` + cond
-	return s.querySandboxRecords(q, args...)
+		  AND ephemeral = $2`
+	return s.querySandboxRecords(q, cutoff, ephemeral)
 }
 
 func (s *PostgresStore) querySandboxRecords(q string, args ...any) ([]*SandboxRecord, error) {

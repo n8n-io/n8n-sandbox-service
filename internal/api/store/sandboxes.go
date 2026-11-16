@@ -1,10 +1,10 @@
 package store
 
 // CodeSandboxStore holds the queries of the code sandbox routes.
-type CodeSandboxStore struct{ s Store }
+type CodeSandboxStore struct{ s SandboxStore }
 
 // NewCodeSandboxStore returns the code sandboxes of s.
-func NewCodeSandboxStore(s Store) *CodeSandboxStore { return &CodeSandboxStore{s: s} }
+func NewCodeSandboxStore(s SandboxStore) *CodeSandboxStore { return &CodeSandboxStore{s: s} }
 
 // Create inserts the record as a code sandbox.
 func (c *CodeSandboxStore) Create(record *SandboxRecord) error {

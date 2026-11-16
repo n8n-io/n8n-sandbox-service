@@ -9,7 +9,7 @@ import (
 
 // countTenantSandboxes counts a tenant's sandboxes of every kind, which share
 // max_sandboxes.
-func countTenantSandboxes(s store.Store) func(tenantID string) (int64, error) {
+func countTenantSandboxes(s store.SandboxStore) func(tenantID string) (int64, error) {
 	return func(tenantID string) (int64, error) {
 		if tenantID == "" {
 			return 0, errors.New("api: count sandboxes without a tenant")

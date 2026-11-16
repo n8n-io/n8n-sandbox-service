@@ -205,7 +205,7 @@ func TestCreateSandboxQuotaExceeded(t *testing.T) {
 }
 
 // newIdleTestGateway is newTestGateway with idle windows and a runner serving fake.
-func newIdleTestGateway(t *testing.T, adminKey string, fake *fakeSandboxControl) (http.Handler, store.Store, *config.APIConfig) {
+func newIdleTestGateway(t *testing.T, adminKey string, fake *fakeSandboxControl) (http.Handler, store.SandboxStore, *config.APIConfig) {
 	t.Helper()
 	routers, s, cfg := newIdleTestGatewayPods(t, adminKey, fake, 1)
 	return routers[0], s, cfg
@@ -213,7 +213,7 @@ func newIdleTestGateway(t *testing.T, adminKey string, fake *fakeSandboxControl)
 
 // newIdleTestGatewayPods is newIdleTestGateway with one router per API pod,
 // all sharing one store.
-func newIdleTestGatewayPods(t *testing.T, adminKey string, fake *fakeSandboxControl, pods int) ([]http.Handler, store.Store, *config.APIConfig) {
+func newIdleTestGatewayPods(t *testing.T, adminKey string, fake *fakeSandboxControl, pods int) ([]http.Handler, store.SandboxStore, *config.APIConfig) {
 	t.Helper()
 	s, err := store.New(":memory:")
 	if err != nil {
@@ -336,10 +336,10 @@ func TestCreateSandboxFreesQuotaSlotWhenCreateEnds(t *testing.T) {
 		name string
 		want int
 		// Makes the first create end with want; returns what undoes it.
-		fail func(f *fakeSandboxControl, s store.Store, tenantID string) (undo func())
+		fail func(f *fakeSandboxControl, s store.SandboxStore, tenantID string) (undo func())
 	}{
 		{name: "created", want: http.StatusCreated},
-		{name: "runner error", want: http.StatusInternalServerError, fail: func(f *fakeSandboxControl, _ store.Store, _ string) func() {
+		{name: "runner error", want: http.StatusInternalServerError, fail: func(f *fakeSandboxControl, _ store.SandboxStore, _ string) func() {
 			f.mu.Lock()
 			defer f.mu.Unlock()
 			f.createErr = status.Error(codes.Internal, "runner broke")
@@ -349,11 +349,11 @@ func TestCreateSandboxFreesQuotaSlotWhenCreateEnds(t *testing.T) {
 				f.createErr = nil
 			}
 		}},
-		{name: "egress not applied", want: http.StatusBadGateway, fail: func(f *fakeSandboxControl, _ store.Store, _ string) func() {
+		{name: "egress not applied", want: http.StatusBadGateway, fail: func(f *fakeSandboxControl, _ store.SandboxStore, _ string) func() {
 			f.applied = func(string) string { return `{"egress":"none"}` }
 			return func() { f.applied = nil }
 		}},
-		{name: "refused when saving", want: http.StatusForbidden, fail: func(f *fakeSandboxControl, s store.Store, tenantID string) func() {
+		{name: "refused when saving", want: http.StatusForbidden, fail: func(f *fakeSandboxControl, s store.SandboxStore, tenantID string) func() {
 			// Saved meanwhile, as by another API pod.
 			const other = "12121212-1212-4212-8212-121212121212"
 			f.createHook = func(context.Context) {
@@ -397,14 +397,14 @@ func TestCreateSandboxFreesQuotaSlotWhenCreateEnds(t *testing.T) {
 // createErrStore returns err from every sandbox Create, after saving the row
 // when save is set.
 type createErrStore struct {
-	store.Store
+	store.SandboxStore
 	save bool
 	err  error
 }
 
 func (s createErrStore) Create(r *store.SandboxRecord) error {
 	if s.save {
-		if err := s.Store.Create(r); err != nil {
+		if err := s.SandboxStore.Create(r); err != nil {
 			return err
 		}
 	}
@@ -439,7 +439,7 @@ func TestCreateSandboxCountsUnclearSaveAsSaved(t *testing.T) {
 			hold, _, _ := q.reserve(tenantID, 2)
 			defer hold(false)
 
-			h := handleCreateSandbox(createErrStore{Store: s, save: tc.save, err: tc.err}, s, reg, idleSweepConfig(), metrics.NewAPIRecorder(false), q)
+			h := handleCreateSandbox(createErrStore{SandboxStore: s, save: tc.save, err: tc.err}, s, reg, idleSweepConfig(), metrics.NewAPIRecorder(false), q)
 			req := httptest.NewRequest(http.MethodPost, "/sandboxes", nil)
 			req = req.WithContext(withAuthIdentity(req.Context(), authIdentity{Role: roleTenant, TenantID: tenantID}))
 			rr := httptest.NewRecorder()
@@ -571,7 +571,7 @@ func TestCreateSandboxClientDisconnectStillStoresRow(t *testing.T) {
 // runner create first. Asserts the 409 for the lost tenant.
 func createWithTenantDeletedMidCreate(t *testing.T, fake *fakeSandboxControl, inCreate func(context.Context)) {
 	t.Helper()
-	var s store.Store
+	var s store.SandboxStore
 	var tenantID string
 	fake.createHook = func(ctx context.Context) {
 		if inCreate != nil {

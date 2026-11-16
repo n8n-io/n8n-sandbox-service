@@ -162,7 +162,7 @@ func idleSweepConfig() *config.APIConfig {
 	})
 }
 
-func newSweepStore(t *testing.T) store.Store {
+func newSweepStore(t *testing.T) store.SandboxStore {
 	t.Helper()
 	s, err := store.New(":memory:")
 	if err != nil {
@@ -172,7 +172,7 @@ func newSweepStore(t *testing.T) store.Store {
 	return s
 }
 
-func seedRunningSandbox(t *testing.T, s store.Store, id, controlAddr string, lastActiveAt int64, ephemeral bool) {
+func seedRunningSandbox(t *testing.T, s store.SandboxStore, id, controlAddr string, lastActiveAt int64, ephemeral bool) {
 	t.Helper()
 	if err := s.Create(&store.SandboxRecord{
 		ID:                    id,
@@ -189,7 +189,7 @@ func seedRunningSandbox(t *testing.T, s store.Store, id, controlAddr string, las
 	}
 }
 
-func mustGet(t *testing.T, s store.Store, id string) *store.SandboxRecord {
+func mustGet(t *testing.T, s store.SandboxStore, id string) *store.SandboxRecord {
 	t.Helper()
 	rec, err := s.Get(id)
 	if err != nil {
@@ -200,7 +200,7 @@ func mustGet(t *testing.T, s store.Store, id string) *store.SandboxRecord {
 
 // runSweep runs one full sweep pass exactly as StartIdleSweeper would, so the
 // tests cover the config gating as well as each sweep's own logic.
-func runSweep(t *testing.T, s store.Store, cfg *config.APIConfig, now time.Time) {
+func runSweep(t *testing.T, s store.SandboxStore, cfg *config.APIConfig, now time.Time) {
 	t.Helper()
 	if err := sweepIdleSandboxes(context.Background(), s, registry.New(45*time.Second), cfg, runnerControlTLS(cfg), now); err != nil {
 		t.Fatalf("sweep: %v", err)

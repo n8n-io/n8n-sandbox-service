@@ -24,7 +24,7 @@ var refusal = runnerctl.CapacityRefusal("firecracker runner capacity exhausted")
 // newPlacementTestGateway serves the API against one runner per fake, named
 // runner-1, runner-2, ... and reporting equal load, so placement tries them in
 // that order.
-func newPlacementTestGateway(t *testing.T, fakes ...*fakeSandboxControl) (http.Handler, store.Store, *metrics.APIRecorder) {
+func newPlacementTestGateway(t *testing.T, fakes ...*fakeSandboxControl) (http.Handler, store.SandboxStore, *metrics.APIRecorder) {
 	t.Helper()
 	s := newSweepStore(t)
 	cfg := idleSweepConfig()
@@ -72,7 +72,7 @@ func assertNoCapacity(t *testing.T, rr *httptest.ResponseRecorder) {
 	}
 }
 
-func assertNothingStored(t *testing.T, s store.Store) {
+func assertNothingStored(t *testing.T, s store.SandboxStore) {
 	t.Helper()
 	if n, err := s.Count(store.KindFilter(store.AllKinds()...)); err != nil || n != 0 {
 		t.Fatalf("stored %d sandboxes (err=%v), want none", n, err)

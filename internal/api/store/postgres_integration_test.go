@@ -146,7 +146,7 @@ func TestPostgresStoreCRUD(t *testing.T) {
 
 	// Running and idle: a stop candidate. Other tests share the database, so
 	// look for this row rather than counting.
-	rows, err := s.ListForIdleReapStop(KindFilter(AllKinds()...), 9999999999, false)
+	rows, err := s.ListForIdleReapStop(9999999999, false)
 	if err != nil {
 		t.Fatalf("list stop: %v", err)
 	}
@@ -163,14 +163,14 @@ func TestPostgresStoreCRUD(t *testing.T) {
 	}
 
 	// Stopped: no longer a stop candidate, now a delete candidate.
-	rows, err = s.ListForIdleReapStop(KindFilter(AllKinds()...), 9999999999, false)
+	rows, err = s.ListForIdleReapStop(9999999999, false)
 	if err != nil {
 		t.Fatalf("list stop: %v", err)
 	}
 	if containsSandbox(rows, rec.ID) {
 		t.Fatalf("stopped sandbox %s is still a stop candidate", rec.ID)
 	}
-	rows, err = s.ListForIdleReapDelete(KindFilter(AllKinds()...), 9999999999)
+	rows, err = s.ListForIdleReapDelete(9999999999)
 	if err != nil {
 		t.Fatalf("list delete: %v", err)
 	}
@@ -257,7 +257,7 @@ func TestPostgresCreateEnforcesTenantQuota(t *testing.T) {
 
 // Two stores on one database stand in for two API pods.
 func TestPostgresConcurrentCreatesStopAtTenantQuota(t *testing.T) {
-	stores := []Store{openTestPostgresStore(t), openTestPostgresStore(t)}
+	stores := []SandboxStore{openTestPostgresStore(t), openTestPostgresStore(t)}
 	testConcurrentCreatesStopAtTenantQuota(t, stores, uuid.New().String())
 }
 

@@ -35,13 +35,13 @@ type cordonTestEnv struct {
 // lockCountingStore counts LockSandbox calls, which is how a test sees
 // requests queue on a sandbox's lock.
 type lockCountingStore struct {
-	store.Store
+	store.SandboxStore
 	locks atomic.Int32
 }
 
 func (s *lockCountingStore) LockSandbox(ctx context.Context, id string) (func(), error) {
 	s.locks.Add(1)
-	return s.Store.LockSandbox(ctx, id)
+	return s.SandboxStore.LockSandbox(ctx, id)
 }
 
 // newCordonTestEnv serves one sandbox with the given status on runner-1, which
@@ -55,7 +55,7 @@ func newCordonTestEnv(t *testing.T, sandboxStatus string, cordoned bool) *cordon
 	}))
 	controlAddr := startFakeRunnerControl(t, env.control)
 
-	env.store = &lockCountingStore{Store: newSweepStore(t)}
+	env.store = &lockCountingStore{SandboxStore: newSweepStore(t)}
 	now := time.Now().Unix()
 	if err := env.store.Create(&store.SandboxRecord{
 		ID:                    cordonSandboxID,

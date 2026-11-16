@@ -17,7 +17,7 @@ func TestKindScoping(t *testing.T) {
 
 // testKindScoping runs against both backends; tenantID must not exist yet.
 // Methods on many sandboxes see only the rows their filter selects.
-func testKindScoping(t *testing.T, s Store, tenantID string) {
+func testKindScoping(t *testing.T, s SandboxStore, tenantID string) {
 	t.Helper()
 	if err := s.CreateTenant(&Tenant{ID: tenantID, Name: "t", CreatedAt: 1}); err != nil {
 		t.Fatalf("create tenant: %v", err)
@@ -65,12 +65,8 @@ func testKindScoping(t *testing.T, s Store, tenantID string) {
 	wantIDs("List(tenant, code)", recs, err, code)
 	recs, err = s.List(SandboxFilter{Kinds: AllKinds(), TenantID: "other"})
 	wantIDs("List(other tenant)", recs, err)
-	recs, err = s.ListForIdleReapStop(KindFilter(KindCode), 200, false)
-	wantIDs("ListForIdleReapStop(code)", recs, err, code)
-	recs, err = s.ListForIdleReapStop(KindFilter(AllKinds()...), 200, false)
-	wantIDs("ListForIdleReapStop(all)", recs, err, def, code)
-	recs, err = s.ListForIdleReapDelete(KindFilter(KindDefault), 200)
-	wantIDs("ListForIdleReapDelete(default)", recs, err)
+	recs, err = s.ListForIdleReapStop(200, false)
+	wantIDs("ListForIdleReapStop", recs, err, def, code)
 	if n, err := s.Count(ofTenant(KindDefault)); err != nil || n != 1 {
 		t.Fatalf("Count(tenant, default) = %d err=%v, want 1", n, err)
 	}
@@ -82,8 +78,8 @@ func testKindScoping(t *testing.T, s Store, tenantID string) {
 	if _, err := s.List(KindFilter("")); err == nil {
 		t.Fatal("List with an empty kind: got nil error")
 	}
-	if _, err := s.ListForIdleReapDelete(SandboxFilter{}, 200); err == nil {
-		t.Fatal("ListForIdleReapDelete without kinds: got nil error")
+	if _, err := s.List(SandboxFilter{}); err == nil {
+		t.Fatal("List without kinds: got nil error")
 	}
 	if _, err := s.Count(KindFilter("Code")); err == nil {
 		t.Fatal("Count with an unknown kind: got nil error")

@@ -18,7 +18,7 @@ import (
 // wraps the request chain, and its /metrics handler is mounted here unless
 // cfg gives metrics a listener of their own. Proxied requests report sandbox
 // activity to activity, which the caller runs.
-func NewGatewayRouter(s store.Store, cfg *config.APIConfig, reg registry.RunnerRegistry, rec *metrics.APIRecorder, activity *ActivityRecorder) (http.Handler, error) {
+func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.RunnerRegistry, rec *metrics.APIRecorder, activity *ActivityRecorder) (http.Handler, error) {
 	if activity == nil {
 		return nil, errors.New("api: an activity recorder is required")
 	}
