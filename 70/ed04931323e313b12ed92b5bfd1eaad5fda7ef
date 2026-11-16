@@ -1,0 +1,68 @@
+benchmarks/code-rpc-roundtrip.mjs
+  h_8fb27e0cdf6d1e 53
+benchmarks/k6-code-task-api.js
+  h_8fb27e0cdf6d1e 63,66
+cmd/code-daemon/main.go
+  h_8fb27e0cdf6d1e 52
+docs/API.md
+  h_8fb27e0cdf6d1e 771,777,802,812-815,822,829,841,861-862,889,896,903,938-939,947,957,963
+docs/configuration.md
+  h_8fb27e0cdf6d1e 41,99
+internal/api/code_handlers.go
+  h_8fb27e0cdf6d1e 35-37,51-59,84,87,103-104,205,262-268,314,353-359,370,540,551,553
+internal/api/code_handlers_test.go
+  h_8fb27e0cdf6d1e 30,38,44,69
+internal/api/code_names_test.go
+  h_8fb27e0cdf6d1e 39,50,59
+internal/api/code_pool.go
+  h_8fb27e0cdf6d1e 32,37,41-42,52-58,217
+internal/api/code_pool_test.go
+  h_8fb27e0cdf6d1e 19,27,58,108,116,127,167,212
+internal/api/config/config.go
+  h_8fb27e0cdf6d1e 188-193
+internal/api/config/config_test.go
+  h_8fb27e0cdf6d1e 603
+internal/codedaemon/config.go
+  h_8fb27e0cdf6d1e 2,22-29,33,35,55-62,68-76,79,140
+internal/codedaemon/daemon.go
+  h_8fb27e0cdf6d1e 25-26,36,38,50,57,75,79-80,86,94,99-100,102,104,212,232,236,238,252,258,260,262,273,284,295-296,316,318,330,334,342-344,374-375,397,406,408
+internal/codedaemon/daemon_test.go
+  h_8fb27e0cdf6d1e 64,72-78,255,321,496,500,504,541,613,615,618,626,689-691,693,813,895,899
+internal/codedaemon/shared.go
+  h_8fb27e0cdf6d1e 15,324,344-345
+internal/codedaemon/task.go
+  h_8fb27e0cdf6d1e 48,66,196,198,208,211,214,218,232,278,280,294,296,312,315,317,344,346,371-372
+internal/runner/code_proxy_test.go
+  h_8fb27e0cdf6d1e 47
+internal/runner/runtime/docker/code.go
+  h_8fb27e0cdf6d1e 56,64
+internal/runner/runtime/docker/code_test.go
+  h_8fb27e0cdf6d1e 11,20,33-35,42
+internal/runner/runtime/docker/config.go
+  h_8fb27e0cdf6d1e 61
+internal/runner/runtime/firecracker.ee/admission.go
+  h_8fb27e0cdf6d1e 167-172
+internal/runner/runtime/firecracker.ee/code.go
+  h_8fb27e0cdf6d1e 32-36,102-106
+internal/runner/runtime/firecracker.ee/code_test.go
+  h_8fb27e0cdf6d1e 16-22,34,95
+internal/runner/runtime/runtime.go
+  h_8fb27e0cdf6d1e 66-72,80,83,97,111-112,117-118
+scripts/firecracker.ee/build-code-snapshot.sh
+  h_8fb27e0cdf6d1e 30,34,36,60,66
+sdk/src/code.ts
+  h_8fb27e0cdf6d1e 30,33,57,59,90
+sdk/test/code.test.ts
+  h_8fb27e0cdf6d1e 27,34,36,58,88,113
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "70ed04931323e313b12ed92b5bfd1eaad5fda7ef",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
