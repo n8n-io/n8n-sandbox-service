@@ -1,0 +1,26 @@
+docs/API.md
+  h_8fb27e0cdf6d1e 855-856,866,878-879,907
+internal/api/handlers_code.go
+  h_8fb27e0cdf6d1e 50,64-65,82,94
+internal/api/handlers_code_test.go
+  h_8fb27e0cdf6d1e 20,85,120-133,230-231,242,289,308,314,331-332
+sdk/README.md
+  h_8fb27e0cdf6d1e 80
+sdk/src/code-sandboxes.ts
+  h_8fb27e0cdf6d1e 14
+sdk/src/types.ts
+  h_8fb27e0cdf6d1e 52-53
+sdk/test/code-sandboxes.test.ts
+  h_8fb27e0cdf6d1e 11
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "45ab53294b0dbd5d88462a14c0d6957e8e4499fa",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
