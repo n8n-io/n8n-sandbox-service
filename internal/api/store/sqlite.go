@@ -170,7 +170,7 @@ func (s *SQLiteStore) insertSandbox(e sqliteExecer, record *SandboxRecord) error
 		record.TenantID,
 		record.Ephemeral,
 		record.Egress,
-		recordKind(record),
+		string(record.Kind),
 		record.Name,
 		record.OptionsHash,
 		record.IdleTimeoutMs,
@@ -224,6 +224,9 @@ func rollbackConn(conn *sql.Conn) {
 }
 
 func (s *SQLiteStore) Create(record *SandboxRecord) error {
+	if err := checkKind(record.Kind); err != nil {
+		return err
+	}
 	if IsAdminTenantID(record.TenantID) {
 		return s.insertSandbox(s.db, record)
 	}
@@ -268,17 +271,47 @@ func (s *SQLiteStore) Create(record *SandboxRecord) error {
 	return nil
 }
 
-func (s *SQLiteStore) Get(id string) (*SandboxRecord, error) {
-	q := `SELECT ` + sqliteSandboxCols + ` FROM sandboxes WHERE id = ?`
-	row := s.db.QueryRow(q, id)
+// sqliteKindFilter returns the condition that kind is one of kinds, and its
+// arguments.
+func sqliteKindFilter(kinds []Kind) (string, []any, error) {
+	names, err := kindArgs(kinds)
+	if err != nil {
+		return "", nil, err
+	}
+	args := make([]any, len(names))
+	for i, name := range names {
+		args[i] = name
+	}
+	return `kind IN (?` + strings.Repeat(`, ?`, len(names)-1) + `)`, args, nil
+}
+
+func (s *SQLiteStore) GetByIDAndKind(id string, kind Kind) (*SandboxRecord, error) {
+	if err := checkKind(kind); err != nil {
+		return nil, err
+	}
+	q := `SELECT ` + sqliteSandboxCols + ` FROM sandboxes WHERE id = ? AND kind = ?`
+	row := s.db.QueryRow(q, id, string(kind))
 	rec, err := scanRecord(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("store: get sandbox %s: %w", id, err)
+		return nil, fmt.Errorf("store: get %s sandbox %s: %w", kind, id, err)
 	}
 	return rec, nil
+}
+
+func (s *SQLiteStore) ExistsByIDAndKinds(id string, kinds []Kind) (bool, error) {
+	filter, args, err := sqliteKindFilter(kinds)
+	if err != nil {
+		return false, err
+	}
+	var exists bool
+	q := `SELECT EXISTS (SELECT 1 FROM sandboxes WHERE id = ? AND ` + filter + `)`
+	if err := s.db.QueryRow(q, append([]any{id}, args...)...).Scan(&exists); err != nil {
+		return false, fmt.Errorf("store: check sandbox %s exists: %w", id, err)
+	}
+	return exists, nil
 }
 
 func (s *SQLiteStore) GetCodeSandboxByName(tenantID, name string) (*SandboxRecord, error) {
@@ -294,15 +327,21 @@ func (s *SQLiteStore) GetCodeSandboxByName(tenantID, name string) (*SandboxRecor
 	return rec, nil
 }
 
-func (s *SQLiteStore) UpdateStatus(id, status string) error {
-	const q = `UPDATE sandboxes SET status = ? WHERE id = ?`
-	if _, err := s.db.Exec(q, status, id); err != nil {
-		return fmt.Errorf("store: update status for %s: %w", id, err)
+func (s *SQLiteStore) UpdateStatusByIDAndKind(id string, kind Kind, status string) error {
+	if err := checkKind(kind); err != nil {
+		return err
+	}
+	const q = `UPDATE sandboxes SET status = ? WHERE id = ? AND kind = ?`
+	if _, err := s.db.Exec(q, status, id, string(kind)); err != nil {
+		return fmt.Errorf("store: update status for %s sandbox %s: %w", kind, id, err)
 	}
 	return nil
 }
 
-func (s *SQLiteStore) RecordActivity(ctx context.Context, lastActiveAt map[string]int64) error {
+func (s *SQLiteStore) RecordActivityByKind(ctx context.Context, kind Kind, lastActiveAt map[string]int64) error {
+	if err := checkKind(kind); err != nil {
+		return err
+	}
 	if len(lastActiveAt) == 0 {
 		return nil
 	}
@@ -315,17 +354,21 @@ func (s *SQLiteStore) RecordActivity(ctx context.Context, lastActiveAt map[strin
 		   SET last_active_at = MAX(sandboxes.last_active_at, b.at), status = 'running'
 		  FROM (SELECT key AS id, value AS at FROM json_each(?)) AS b
 		 WHERE sandboxes.id = b.id
+		   AND sandboxes.kind = ?
 		   AND (sandboxes.last_active_at < b.at OR sandboxes.status <> 'running')`
-	if _, err := s.db.ExecContext(ctx, q, string(batch)); err != nil {
-		return fmt.Errorf("store: record activity for %d sandboxes: %w", len(lastActiveAt), err)
+	if _, err := s.db.ExecContext(ctx, q, string(batch), string(kind)); err != nil {
+		return fmt.Errorf("store: record activity for %d %s sandboxes: %w", len(lastActiveAt), kind, err)
 	}
 	return nil
 }
 
-func (s *SQLiteStore) Delete(id string) error {
-	const q = `DELETE FROM sandboxes WHERE id = ?`
-	if _, err := s.db.Exec(q, id); err != nil {
-		return fmt.Errorf("store: delete sandbox %s: %w", id, err)
+func (s *SQLiteStore) DeleteByIDAndKind(id string, kind Kind) error {
+	if err := checkKind(kind); err != nil {
+		return err
+	}
+	const q = `DELETE FROM sandboxes WHERE id = ? AND kind = ?`
+	if _, err := s.db.Exec(q, id, string(kind)); err != nil {
+		return fmt.Errorf("store: delete %s sandbox %s: %w", kind, id, err)
 	}
 	return nil
 }
@@ -342,21 +385,31 @@ func (s *SQLiteStore) LockSandbox(ctx context.Context, id string) (func(), error
 	}
 }
 
-func (s *SQLiteStore) ListForIdleReapDelete(cutoff int64) ([]*SandboxRecord, error) {
+func (s *SQLiteStore) ListForIdleReapDeleteByKinds(kinds []Kind, cutoff int64) ([]*SandboxRecord, error) {
+	filter, args, err := sqliteKindFilter(kinds)
+	if err != nil {
+		return nil, err
+	}
 	q := `SELECT ` + sqliteSandboxCols + `
 		FROM sandboxes
 		WHERE status = 'stopped'
-		  AND last_active_at <= ?`
-	return s.querySandboxRecords(q, cutoff)
+		  AND last_active_at <= ?
+		  AND ` + filter
+	return s.querySandboxRecords(q, append([]any{cutoff}, args...)...)
 }
 
-func (s *SQLiteStore) ListForIdleReapStop(cutoff int64, ephemeral bool) ([]*SandboxRecord, error) {
+func (s *SQLiteStore) ListForIdleReapStopByKinds(kinds []Kind, cutoff int64, ephemeral bool) ([]*SandboxRecord, error) {
+	filter, args, err := sqliteKindFilter(kinds)
+	if err != nil {
+		return nil, err
+	}
 	q := `SELECT ` + sqliteSandboxCols + `
 		FROM sandboxes
 		WHERE status = 'running'
 		  AND last_active_at <= ?
-		  AND ephemeral = ?`
-	return s.querySandboxRecords(q, cutoff, ephemeral)
+		  AND ephemeral = ?
+		  AND ` + filter
+	return s.querySandboxRecords(q, append([]any{cutoff, ephemeral}, args...)...)
 }
 
 func (s *SQLiteStore) querySandboxRecords(q string, args ...any) ([]*SandboxRecord, error) {
@@ -380,30 +433,45 @@ func (s *SQLiteStore) querySandboxRecords(q string, args ...any) ([]*SandboxReco
 	return records, nil
 }
 
-func (s *SQLiteStore) Count() (int64, error) {
+func (s *SQLiteStore) CountByKinds(kinds []Kind) (int64, error) {
+	filter, args, err := sqliteKindFilter(kinds)
+	if err != nil {
+		return 0, err
+	}
 	var n int64
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sandboxes`).Scan(&n); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sandboxes WHERE `+filter, args...).Scan(&n); err != nil {
 		return 0, fmt.Errorf("store: count sandboxes: %w", err)
 	}
 	return n, nil
 }
 
-func (s *SQLiteStore) CountByTenant(tenantID string) (int64, error) {
+func (s *SQLiteStore) CountByTenantAndKinds(tenantID string, kinds []Kind) (int64, error) {
+	filter, args, err := sqliteKindFilter(kinds)
+	if err != nil {
+		return 0, err
+	}
 	var n int64
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sandboxes WHERE tenant_id = ?`, tenantID).Scan(&n); err != nil {
+	q := `SELECT COUNT(*) FROM sandboxes WHERE tenant_id = ? AND ` + filter
+	if err := s.db.QueryRow(q, append([]any{tenantID}, args...)...).Scan(&n); err != nil {
 		return 0, fmt.Errorf("store: count sandboxes by tenant: %w", err)
 	}
 	return n, nil
 }
 
-func (s *SQLiteStore) List() ([]*SandboxRecord, error) {
-	q := `SELECT ` + sqliteSandboxCols + ` FROM sandboxes ORDER BY created_at DESC`
-	return s.querySandboxRecords(q)
+func (s *SQLiteStore) ListByKind(kind Kind) ([]*SandboxRecord, error) {
+	if err := checkKind(kind); err != nil {
+		return nil, err
+	}
+	q := `SELECT ` + sqliteSandboxCols + ` FROM sandboxes WHERE kind = ? ORDER BY created_at DESC`
+	return s.querySandboxRecords(q, string(kind))
 }
 
-func (s *SQLiteStore) ListByTenant(tenantID string) ([]*SandboxRecord, error) {
-	q := `SELECT ` + sqliteSandboxCols + ` FROM sandboxes WHERE tenant_id = ? ORDER BY created_at DESC`
-	return s.querySandboxRecords(q, tenantID)
+func (s *SQLiteStore) ListByTenantAndKind(tenantID string, kind Kind) ([]*SandboxRecord, error) {
+	if err := checkKind(kind); err != nil {
+		return nil, err
+	}
+	q := `SELECT ` + sqliteSandboxCols + ` FROM sandboxes WHERE tenant_id = ? AND kind = ? ORDER BY created_at DESC`
+	return s.querySandboxRecords(q, tenantID, string(kind))
 }
 
 func (s *SQLiteStore) CreateTenant(t *Tenant) error {

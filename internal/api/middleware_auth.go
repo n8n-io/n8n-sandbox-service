@@ -83,7 +83,7 @@ func apiKeyPrefix(plaintext string) string {
 // keys, then env scaler keys, then DB-backed tenant keys, whose lookups
 // keyCache remembers. GET and HEAD on /healthz and /metrics are always allowed
 // through.
-func AuthMiddleware(adminKeys, provisionerKeys, scalerKeys map[string]struct{}, s store.SandboxStore, keyCache *apiKeyCache) func(http.Handler) http.Handler {
+func AuthMiddleware(adminKeys, provisionerKeys, scalerKeys map[string]struct{}, s store.APIKeyStore, keyCache *apiKeyCache) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if publicPaths.Public(r) {
@@ -144,7 +144,7 @@ func AuthMiddleware(adminKeys, provisionerKeys, scalerKeys map[string]struct{}, 
 
 // lookupTenantKey returns the tenant of the active key whose hash is keyHash,
 // or "" when there is none.
-func lookupTenantKey(s store.SandboxStore, key, keyHash string) (string, error) {
+func lookupTenantKey(s store.APIKeyStore, key, keyHash string) (string, error) {
 	candidates, err := s.ListActiveAPIKeysByPrefix(apiKeyPrefix(key))
 	if err != nil {
 		return "", err

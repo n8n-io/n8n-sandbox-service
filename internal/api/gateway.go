@@ -18,7 +18,7 @@ import (
 // wraps the request chain, and its /metrics handler is mounted here unless
 // cfg gives metrics a listener of their own. Proxied requests report sandbox
 // activity to activity, which the caller runs.
-func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.RunnerRegistry, rec *metrics.APIRecorder, activity *ActivityRecorder) (http.Handler, error) {
+func NewGatewayRouter(p store.Persistence, cfg *config.APIConfig, reg registry.RunnerRegistry, rec *metrics.APIRecorder, activity *ActivityRecorder) (http.Handler, error) {
 	if activity == nil {
 		return nil, errors.New("api: an activity recorder is required")
 	}
@@ -26,7 +26,9 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	if err != nil {
 		return nil, err
 	}
-	sandboxProxy := sandboxProxyHandler(s, reg, cfg, runnerTransport, activity, rec)
+	defaults := store.NewDefaultSandboxStore(p)
+	quota := newTenantQuota(countTenantSandboxes(p))
+	sandboxProxy := sandboxProxyHandler(defaults, reg, cfg, runnerTransport, activity, rec)
 	keyCache := newAPIKeyCache(cfg.APIKeyCacheTTL)
 
 	mux := http.NewServeMux()
@@ -50,21 +52,21 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 		maxDeletes = maxExecutionDeletesPerTenant
 	}
 	limitTenantDeletes := tenantLimit(limits.NewKeyedLimiter(maxDeletes), rec)
-	mux.HandleFunc("GET /sandboxes", handleListSandboxes(s))
+	mux.HandleFunc("GET /sandboxes", handleListSandboxes(defaults))
 	// A create holds its slot until the runner is done, even after the client
 	// has gone, so a burst of creates is bounded like any other request.
-	mux.HandleFunc("POST /sandboxes", limitTenant(handleCreateSandbox(s, reg, cfg, rec, newTenantQuota(s.CountByTenant))))
-	mux.HandleFunc("GET /sandboxes/{id}", handleGetSandbox(s, cfg))
-	mux.HandleFunc("DELETE /sandboxes/{id}", handleDeleteSandbox(s, cfg, rec))
+	mux.HandleFunc("POST /sandboxes", limitTenant(handleCreateSandbox(defaults, p, reg, cfg, rec, quota)))
+	mux.HandleFunc("GET /sandboxes/{id}", handleGetSandbox(defaults, cfg))
+	mux.HandleFunc("DELETE /sandboxes/{id}", handleDeleteSandbox(defaults, cfg, rec))
 
-	mux.HandleFunc("GET /admin/tenants", handleListTenants(s))
-	mux.HandleFunc("POST /admin/tenants", handleCreateTenant(s, cfg))
-	mux.HandleFunc("GET /admin/tenants/{id}", handleGetTenant(s))
-	mux.HandleFunc("PATCH /admin/tenants/{id}", handleUpdateTenant(s, cfg))
-	mux.HandleFunc("DELETE /admin/tenants/{id}", handleDeleteTenant(s, keyCache))
-	mux.HandleFunc("GET /admin/tenants/{id}/keys", handleListTenantKeys(s))
-	mux.HandleFunc("POST /admin/tenants/{id}/keys", handleCreateTenantKey(s))
-	mux.HandleFunc("DELETE /admin/tenants/{id}/keys/{keyId}", handleRevokeTenantKey(s, keyCache))
+	mux.HandleFunc("GET /admin/tenants", handleListTenants(p))
+	mux.HandleFunc("POST /admin/tenants", handleCreateTenant(p, cfg))
+	mux.HandleFunc("GET /admin/tenants/{id}", handleGetTenant(p))
+	mux.HandleFunc("PATCH /admin/tenants/{id}", handleUpdateTenant(p, cfg))
+	mux.HandleFunc("DELETE /admin/tenants/{id}", handleDeleteTenant(p, keyCache))
+	mux.HandleFunc("GET /admin/tenants/{id}/keys", handleListTenantKeys(p))
+	mux.HandleFunc("POST /admin/tenants/{id}/keys", handleCreateTenantKey(p))
+	mux.HandleFunc("DELETE /admin/tenants/{id}/keys/{keyId}", handleRevokeTenantKey(p, keyCache))
 	mux.HandleFunc("GET /admin/scaler", handleGetScaler(cfg))
 	mux.HandleFunc("GET /admin/runners", handleListRunners(reg))
 	mux.HandleFunc("PUT /admin/runners/{id}/cordon", handleSetRunnerCordon(reg, cfg, true))
@@ -92,7 +94,7 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	if rec.Enabled() {
 		handler = metrics.HTTPMiddleware(rec)(handler)
 	}
-	handler = AuthMiddleware(cfg.APIKeys, cfg.ProvisionerKeys, cfg.ScalerKeys, s, keyCache)(handler)
+	handler = AuthMiddleware(cfg.APIKeys, cfg.ProvisionerKeys, cfg.ScalerKeys, p, keyCache)(handler)
 	handler = publicPaths.RejectOtherMethods(handler)
 	handler = LoggingMiddleware(handler)
 	if cfg.EnableCORS {

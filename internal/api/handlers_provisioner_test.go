@@ -21,7 +21,7 @@ const (
 	provMaxDflt  = 50
 )
 
-func newProvisionerGateway(t *testing.T) (http.Handler, store.SandboxStore) {
+func newProvisionerGateway(t *testing.T) (http.Handler, store.Persistence) {
 	t.Helper()
 	s, err := store.New(":memory:")
 	if err != nil {
@@ -98,6 +98,7 @@ func TestProvisionerDeletesEmptyTenantOnly(t *testing.T) {
 	sandboxID := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 	if err := s.Create(&store.SandboxRecord{
 		ID: sandboxID, Status: "running", CreatedAt: 1, LastActiveAt: 1, TenantID: created.Tenant.ID,
+		Kind: store.KindDefault,
 	}); err != nil {
 		t.Fatalf("create sandbox: %v", err)
 	}
@@ -105,7 +106,7 @@ func TestProvisionerDeletesEmptyTenantOnly(t *testing.T) {
 		t.Fatalf("delete with sandboxes: expected %d, got %d body=%s", http.StatusConflict, rr.Code, rr.Body.String())
 	}
 
-	if err := s.Delete(sandboxID); err != nil {
+	if err := s.DeleteByIDAndKind(sandboxID, store.KindDefault); err != nil {
 		t.Fatalf("delete sandbox: %v", err)
 	}
 	if rr := doJSON(t, router, http.MethodDelete, "/admin/tenants/"+created.Tenant.ID, provKey, ""); rr.Code != http.StatusNoContent {
@@ -251,6 +252,7 @@ func TestProvisionerDeniedRoutes(t *testing.T) {
 	if err := s.Create(&store.SandboxRecord{
 		ID: sandboxID, Status: "running", CreatedAt: 1, LastActiveAt: 1,
 		TenantID: tenantID, RunnerHTTPBase: "https://runner.invalid",
+		Kind: store.KindDefault,
 	}); err != nil {
 		t.Fatalf("create sandbox: %v", err)
 	}
@@ -305,7 +307,7 @@ func TestProvisionerCannotCreateAdminOwnedSandbox(t *testing.T) {
 	if rr.Code != http.StatusForbidden {
 		t.Fatalf("expected %d, got %d body=%s", http.StatusForbidden, rr.Code, rr.Body.String())
 	}
-	records, err := s.List()
+	records, err := s.ListByKind(store.KindDefault)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -325,8 +327,8 @@ func TestSandboxHandlersRejectUnknownRoleWithoutMiddleware(t *testing.T) {
 	cfg := withRunnerTLS(&config.APIConfig{DefaultMaxSandboxes: provMaxDflt})
 
 	for name, h := range map[string]http.Handler{
-		"list":   handleListSandboxes(s),
-		"create": handleCreateSandbox(s, registry.New(45*time.Second), cfg, metrics.NewAPIRecorder(false), newTenantQuota(s.CountByTenant)),
+		"list":   handleListSandboxes(store.NewDefaultSandboxStore(s)),
+		"create": handleCreateSandbox(store.NewDefaultSandboxStore(s), s, registry.New(45*time.Second), cfg, metrics.NewAPIRecorder(false), newTenantQuota(countTenantSandboxes(s))),
 	} {
 		method := http.MethodGet
 		if name == "create" {
@@ -340,7 +342,7 @@ func TestSandboxHandlersRejectUnknownRoleWithoutMiddleware(t *testing.T) {
 			t.Errorf("%s: expected %d, got %d body=%s", name, http.StatusForbidden, rr.Code, rr.Body.String())
 		}
 	}
-	records, err := s.List()
+	records, err := s.ListByKind(store.KindDefault)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}

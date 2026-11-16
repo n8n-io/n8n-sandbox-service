@@ -16,7 +16,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 )
 
-func newTestGateway(t *testing.T, adminKey string) (http.Handler, store.SandboxStore) {
+func newTestGateway(t *testing.T, adminKey string) (http.Handler, store.Persistence) {
 	t.Helper()
 	s, err := store.New(":memory:")
 	if err != nil {
@@ -153,6 +153,7 @@ func TestTenantCannotAccessOtherTenantSandbox(t *testing.T) {
 	if err := s.Create(&store.SandboxRecord{
 		ID: sid, Status: "running", CreatedAt: 1, LastActiveAt: 1,
 		TenantID: tenantA, RunnerHTTPBase: "http://127.0.0.1:9",
+		Kind: store.KindDefault,
 	}); err != nil {
 		t.Fatalf("create sandbox: %v", err)
 	}
@@ -334,6 +335,7 @@ func TestLoweredTenantLimitBlocksCreatesAndKeepsSandboxes(t *testing.T) {
 	for _, id := range sandboxIDs {
 		if err := s.Create(&store.SandboxRecord{
 			ID: id, Status: "running", CreatedAt: 1, LastActiveAt: 1, TenantID: tenant.Tenant.ID,
+			Kind: store.KindDefault,
 		}); err != nil {
 			t.Fatalf("seed sandbox: %v", err)
 		}
@@ -347,7 +349,7 @@ func TestLoweredTenantLimitBlocksCreatesAndKeepsSandboxes(t *testing.T) {
 		t.Fatalf("create above lowered limit: expected %d quota exceeded, got %d body=%s", http.StatusForbidden, rr.Code, rr.Body.String())
 	}
 	for _, id := range sandboxIDs {
-		rec, err := s.Get(id)
+		rec, err := s.GetByIDAndKind(id, store.KindDefault)
 		if err != nil || rec == nil || rec.Status != "running" {
 			t.Fatalf("sandbox %s after lowering the limit: %+v err=%v", id, rec, err)
 		}
@@ -379,6 +381,7 @@ func TestDeleteTenantConflictWhenSandboxesExist(t *testing.T) {
 		ID:     "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
 		Status: "running", CreatedAt: 1, LastActiveAt: 1,
 		TenantID: created.Tenant.ID,
+		Kind:     store.KindDefault,
 	}); err != nil {
 		t.Fatalf("create sandbox: %v", err)
 	}
@@ -391,7 +394,7 @@ func TestDeleteTenantConflictWhenSandboxesExist(t *testing.T) {
 		t.Fatalf("delete with sandboxes: expected %d, got %d body=%s", http.StatusConflict, delRR.Code, delRR.Body.String())
 	}
 
-	if err := s.Delete("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"); err != nil {
+	if err := s.DeleteByIDAndKind("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", store.KindDefault); err != nil {
 		t.Fatalf("delete sandbox: %v", err)
 	}
 	del2 := httptest.NewRequest(http.MethodDelete, "/admin/tenants/"+created.Tenant.ID, nil)

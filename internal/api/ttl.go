@@ -81,7 +81,7 @@ func logSandboxDeleted(sandboxID, runnerID, reason string) {
 
 // StartIdleSweeper runs periodic stop/delete for idle sandboxes until ctx is done.
 // When sweepLockDB is non-nil (Postgres multi-pod), only the advisory-lock holder runs each sweep.
-func StartIdleSweeper(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, sweepLockDB *sql.DB) {
+func StartIdleSweeper(ctx context.Context, s store.SweeperStore, reg registry.RunnerRegistry, cfg *config.APIConfig, sweepLockDB *sql.DB) {
 	if cfg.IdleStopAfter <= 0 && cfg.IdleDeleteAfter <= 0 {
 		return
 	}
@@ -118,7 +118,7 @@ func StartIdleSweeper(ctx context.Context, s store.SandboxStore, reg registry.Ru
 }
 
 // sweepIdleSandboxes runs one pass of every sweep the config enables.
-func sweepIdleSandboxes(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) error {
+func sweepIdleSandboxes(ctx context.Context, s store.SweeperStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) error {
 	if cfg.IdleStopAfter > 0 {
 		sweepIdleStopSandboxes(ctx, s, reg, cfg, tlsCfg, now)
 	}
@@ -168,22 +168,24 @@ func orphanReapDue(reg registry.RunnerRegistry, runnerID string, cfg *config.API
 	return reg.GoneLongEnough(runnerID, orphanReapBuffer(cfg), now)
 }
 
-func reapOrphanSandbox(s store.SandboxStore, rec *store.SandboxRecord, runnerID string) {
-	if err := s.Delete(rec.ID); err != nil {
+func reapOrphanSandbox(s store.SweeperStore, rec *store.SandboxRecord, runnerID string) {
+	if err := s.DeleteByIDAndKind(rec.ID, rec.Kind); err != nil {
 		slog.Error("idle orphan reap store failed", "sandbox_id", rec.ID, "runner_id", runnerID, "err", err)
 		return
 	}
 	logSandboxDeleted(rec.ID, runnerID, "orphan")
 }
 
-func withLockedSandbox(ctx context.Context, s store.SandboxStore, id string, fn func(*store.SandboxRecord)) error {
-	unlock, err := s.LockSandbox(ctx, id)
+// withLockedSandbox runs fn with listed read again under its sandbox lock,
+// unless it has been deleted since.
+func withLockedSandbox(ctx context.Context, s store.SweeperStore, listed *store.SandboxRecord, fn func(*store.SandboxRecord)) error {
+	unlock, err := s.LockSandbox(ctx, listed.ID)
 	if err != nil {
 		return err
 	}
 	defer unlock()
 
-	rec, err := s.Get(id)
+	rec, err := s.GetByIDAndKind(listed.ID, listed.Kind)
 	if err != nil {
 		return err
 	}
@@ -253,7 +255,7 @@ func (w *workPool) Wait() { _ = w.g.Wait() }
 // runner's remaining candidates once one call proves it unreachable.
 type sweepPool struct {
 	ctx   context.Context
-	store store.SandboxStore
+	store store.SweeperStore
 	phase string
 	act   sweepAction
 	pool  *workPool
@@ -263,7 +265,7 @@ type sweepPool struct {
 	stats       sweepStats
 }
 
-func newSweepPool(ctx context.Context, s store.SandboxStore, phase string, limit, candidates int, act sweepAction) *sweepPool {
+func newSweepPool(ctx context.Context, s store.SweeperStore, phase string, limit, candidates int, act sweepAction) *sweepPool {
 	return &sweepPool{
 		ctx:         ctx,
 		store:       s,
@@ -279,7 +281,7 @@ func newSweepPool(ctx context.Context, s store.SandboxStore, phase string, limit
 func (p *sweepPool) run(rec *store.SandboxRecord) {
 	var acted bool
 	var actErr error
-	lockErr := withLockedSandbox(p.ctx, p.store, rec.ID, func(fresh *store.SandboxRecord) {
+	lockErr := withLockedSandbox(p.ctx, p.store, rec, func(fresh *store.SandboxRecord) {
 		acted, actErr = p.act(p.ctx, fresh)
 	})
 
@@ -359,7 +361,7 @@ func (p *sweepPool) unreachableCount() int {
 }
 
 // sweepConcurrently runs act over records with a bounded, runner-aware pool.
-func sweepConcurrently(ctx context.Context, s store.SandboxStore, cfg *config.APIConfig, phase string, records []*store.SandboxRecord, act sweepAction) sweepStats {
+func sweepConcurrently(ctx context.Context, s store.SweeperStore, cfg *config.APIConfig, phase string, records []*store.SandboxRecord, act sweepAction) sweepStats {
 	start := time.Now()
 	p := newSweepPool(ctx, s, phase, sweepConcurrency(cfg), len(records), act)
 	p.submit(groupByRunner(records))
@@ -380,7 +382,7 @@ func sweepConcurrently(ctx context.Context, s store.SandboxStore, cfg *config.AP
 
 // deleteIdleSandbox deletes rec on the runner, then in the store. Callers hold
 // the sandbox lock. Any failure leaves the row in place so the next sweep retries.
-func deleteIdleSandbox(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, rec *store.SandboxRecord, now time.Time, reason string) (bool, error) {
+func deleteIdleSandbox(ctx context.Context, s store.SweeperStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, rec *store.SandboxRecord, now time.Time, reason string) (bool, error) {
 	if orphanReapDue(reg, rec.RunnerID, cfg, now) {
 		reapOrphanSandbox(s, rec, rec.RunnerID)
 		return true, nil
@@ -395,7 +397,7 @@ func deleteIdleSandbox(ctx context.Context, s store.SandboxStore, reg registry.R
 		}
 		return false, &runnerCallError{err}
 	}
-	if err := s.Delete(rec.ID); err != nil {
+	if err := s.DeleteByIDAndKind(rec.ID, rec.Kind); err != nil {
 		slog.Error("idle delete store failed", "sandbox_id", rec.ID, "reason", reason, "err", err)
 		return false, err
 	}
@@ -421,7 +423,7 @@ func deleteActivityLag(cfg *config.APIConfig) int64 {
 	return 2 * idleSeconds(activityLag(cfg))
 }
 
-func sweepIdleDeleteSandboxes(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) sweepStats {
+func sweepIdleDeleteSandboxes(ctx context.Context, s store.SweeperStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) sweepStats {
 	deleteCutoff := now.Unix() - idleSeconds(cfg.IdleDeleteAfter) - deleteActivityLag(cfg) - idleSeconds(cfg.IdleDeleteSafetyBuffer)
 
 	records, err := s.ListForIdleReapDelete(deleteCutoff)
@@ -442,7 +444,7 @@ func sweepIdleDeleteSandboxes(ctx context.Context, s store.SandboxStore, reg reg
 // window, twice the activity lag and the safety buffer. The request path
 // already refuses them past the window and one lag, so the fence is up before
 // the irreversible delete.
-func sweepEphemeralSandboxes(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) sweepStats {
+func sweepEphemeralSandboxes(ctx context.Context, s store.SweeperStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) sweepStats {
 	cutoff := now.Unix() - idleSeconds(ephemeralIdleWindow(cfg)) - deleteActivityLag(cfg) - idleSeconds(cfg.IdleDeleteSafetyBuffer)
 
 	records, err := s.ListForIdleReapStop(cutoff, true)
@@ -459,7 +461,7 @@ func sweepEphemeralSandboxes(ctx context.Context, s store.SandboxStore, reg regi
 	})
 }
 
-func sweepIdleStopSandboxes(ctx context.Context, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) sweepStats {
+func sweepIdleStopSandboxes(ctx context.Context, s store.SweeperStore, reg registry.RunnerRegistry, cfg *config.APIConfig, tlsCfg *runnerctl.TLS, now time.Time) sweepStats {
 	stopCutoff := now.Unix() - idleSeconds(cfg.IdleStopAfter) - idleSeconds(activityLag(cfg))
 
 	records, err := s.ListForIdleReapStop(stopCutoff, false)
@@ -486,7 +488,7 @@ func sweepIdleStopSandboxes(ctx context.Context, s store.SandboxStore, reg regis
 			}
 			return false, &runnerCallError{err}
 		}
-		if err := s.UpdateStatus(rec.ID, "stopped"); err != nil {
+		if err := s.UpdateStatusByIDAndKind(rec.ID, rec.Kind, "stopped"); err != nil {
 			slog.Error("idle stop status update failed", "sandbox_id", rec.ID, "err", err)
 			return false, err
 		}

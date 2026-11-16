@@ -88,7 +88,7 @@ func maxSandboxesError(role authRole, n int, cfg *config.APIConfig) string {
 	return ""
 }
 
-func handleListTenants(s store.SandboxStore) http.HandlerFunc {
+func handleListTenants(s store.TenantPersistence) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !requireAdmin(w, r) {
 			return
@@ -106,7 +106,7 @@ func handleListTenants(s store.SandboxStore) http.HandlerFunc {
 	}
 }
 
-func handleCreateTenant(s store.SandboxStore, cfg *config.APIConfig) http.HandlerFunc {
+func handleCreateTenant(s store.TenantPersistence, cfg *config.APIConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		role, ok := requireAdminOrProvisioner(w, r)
 		if !ok {
@@ -168,7 +168,7 @@ func handleCreateTenant(s store.SandboxStore, cfg *config.APIConfig) http.Handle
 	}
 }
 
-func handleGetTenant(s store.SandboxStore) http.HandlerFunc {
+func handleGetTenant(s store.TenantPersistence) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !requireAdmin(w, r) {
 			return
@@ -194,7 +194,7 @@ func handleGetTenant(s store.SandboxStore) http.HandlerFunc {
 // handleUpdateTenant changes a tenant's limits and never touches its sandboxes:
 // a tenant above a lowered max_sandboxes keeps them and cannot create more until
 // it is below the limit again. Provisioner keys get the same bounds as on create.
-func handleUpdateTenant(s store.SandboxStore, cfg *config.APIConfig) http.HandlerFunc {
+func handleUpdateTenant(s store.TenantPersistence, cfg *config.APIConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		role, ok := requireAdminOrProvisioner(w, r)
 		if !ok {
@@ -254,7 +254,7 @@ func handleUpdateTenant(s store.SandboxStore, cfg *config.APIConfig) http.Handle
 }
 
 // handleDeleteTenant is safe for provisioners because of the 409 below.
-func handleDeleteTenant(s store.SandboxStore, keyCache *apiKeyCache) http.HandlerFunc {
+func handleDeleteTenant(s store.TenantPersistence, keyCache *apiKeyCache) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := requireAdminOrProvisioner(w, r); !ok {
 			return
@@ -290,7 +290,7 @@ func handleDeleteTenant(s store.SandboxStore, keyCache *apiKeyCache) http.Handle
 	}
 }
 
-func handleListTenantKeys(s store.SandboxStore) http.HandlerFunc {
+func handleListTenantKeys(s store.TenantPersistence) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !requireAdmin(w, r) {
 			return
@@ -322,7 +322,7 @@ func handleListTenantKeys(s store.SandboxStore) http.HandlerFunc {
 	}
 }
 
-func handleCreateTenantKey(s store.SandboxStore) http.HandlerFunc {
+func handleCreateTenantKey(s store.TenantPersistence) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !requireAdmin(w, r) {
 			return
@@ -350,7 +350,7 @@ func handleCreateTenantKey(s store.SandboxStore) http.HandlerFunc {
 	}
 }
 
-func handleRevokeTenantKey(s store.SandboxStore, keyCache *apiKeyCache) http.HandlerFunc {
+func handleRevokeTenantKey(s store.TenantPersistence, keyCache *apiKeyCache) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !requireAdmin(w, r) {
 			return
@@ -402,7 +402,7 @@ func newAPIKey(tenantID string) (*store.APIKey, string, error) {
 	return k, plaintext, nil
 }
 
-func mintAPIKey(s store.SandboxStore, tenantID string) (*apiKeyResponse, error) {
+func mintAPIKey(s store.TenantPersistence, tenantID string) (*apiKeyResponse, error) {
 	k, plaintext, err := newAPIKey(tenantID)
 	if err != nil {
 		return nil, err

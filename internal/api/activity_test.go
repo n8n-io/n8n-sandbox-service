@@ -13,17 +13,16 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/store"
 )
 
-// activityStore records the batches RecordActivity gets, and fails them while
-// fail is set. The recorder needs no other store method.
+// activityStore records the batches RecordActivityByKind gets, and fails
+// them while fail is set.
 type activityStore struct {
-	store.SandboxStore
 	mu      sync.Mutex
 	batches []map[string]int64
 	timeout time.Duration // left on the context of the last call
 	fail    error
 }
 
-func (s *activityStore) RecordActivity(ctx context.Context, batch map[string]int64) error {
+func (s *activityStore) RecordActivityByKind(ctx context.Context, _ store.Kind, batch map[string]int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.batches = append(s.batches, maps.Clone(batch))
@@ -90,7 +89,7 @@ func wantBatches(t *testing.T, s *activityStore, want ...map[string]int64) {
 }
 
 func row(id, status string, lastActiveAt int64) *store.SandboxRecord {
-	return &store.SandboxRecord{ID: id, Status: status, LastActiveAt: lastActiveAt}
+	return &store.SandboxRecord{Kind: store.KindDefault, ID: id, Status: status, LastActiveAt: lastActiveAt}
 }
 
 func (a *ActivityRecorder) tracked(id string) bool {
@@ -121,6 +120,39 @@ func TestActivityRecorderWritesEachSandboxOnceWithItsLatestRequest(t *testing.T)
 	wantBatches(t, s)
 	if a.tracked("a") || a.tracked("b") {
 		t.Fatal("sandboxes still tracked after a write with nothing new")
+	}
+}
+
+// Each sandbox's activity is written with its kind.
+func TestActivityRecorderWritesEachKind(t *testing.T) {
+	s, err := store.New(":memory:")
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	defer s.Close()
+	recs := []*store.SandboxRecord{
+		{ID: "d", Kind: store.KindDefault, Status: "running", LastActiveAt: t0},
+		{ID: "c", Kind: store.KindCode, Name: "n", Status: "running", LastActiveAt: t0},
+	}
+	for _, rec := range recs {
+		rec.TenantID = store.AdminTenantID
+		if err := s.Create(rec); err != nil {
+			t.Fatalf("create %s: %v", rec.ID, err)
+		}
+	}
+	a := NewActivityRecorder(s, nil)
+	a.now = func() time.Time { return time.Unix(t0+5, 0) }
+	for _, rec := range recs {
+		a.trackResponse(rec)()
+	}
+	if !a.write() {
+		t.Fatal("write failed")
+	}
+	for _, rec := range recs {
+		got, err := s.GetByIDAndKind(rec.ID, rec.Kind)
+		if err != nil || got == nil || got.LastActiveAt != t0+5 {
+			t.Fatalf("%s sandbox after write: %+v err=%v, want last_active_at %d", rec.Kind, got, err, t0+5)
+		}
 	}
 }
 

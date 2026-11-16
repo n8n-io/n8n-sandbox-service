@@ -63,6 +63,7 @@ func TestGatewayCapsArchiveBody(t *testing.T) {
 	if err := s.Create(&store.SandboxRecord{
 		ID: sid, Status: "running", CreatedAt: 1, LastActiveAt: 1,
 		TenantID: store.AdminTenantID, RunnerHTTPBase: runner.URL,
+		Kind: store.KindDefault,
 	}); err != nil {
 		t.Fatalf("create sandbox: %v", err)
 	}
@@ -93,6 +94,7 @@ func TestGatewayDoesNotProxyVolumeMount(t *testing.T) {
 	if err := s.Create(&store.SandboxRecord{
 		ID: sid, Status: "running", CreatedAt: 1, LastActiveAt: 1,
 		TenantID: store.AdminTenantID, RunnerHTTPBase: runner.URL,
+		Kind: store.KindDefault,
 	}); err != nil {
 		t.Fatalf("create sandbox: %v", err)
 	}

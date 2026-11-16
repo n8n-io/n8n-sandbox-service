@@ -263,13 +263,13 @@ func TestAPIKeyCacheLookupAfterInvalidationDoesNotJoinAnEarlierOne(t *testing.T)
 
 // keyLookupCountingStore counts tenant key lookups that reach the store.
 type keyLookupCountingStore struct {
-	store.SandboxStore
+	store.Persistence
 	lookups atomic.Int64
 }
 
 func (s *keyLookupCountingStore) ListActiveAPIKeysByPrefix(prefix string) ([]*store.APIKey, error) {
 	s.lookups.Add(1)
-	return s.SandboxStore.ListActiveAPIKeysByPrefix(prefix)
+	return s.Persistence.ListActiveAPIKeysByPrefix(prefix)
 }
 
 // newCachingTestGateways returns one router per API pod over one store, each
@@ -281,7 +281,7 @@ func newCachingTestGateways(t *testing.T, pods int) ([]http.Handler, *keyLookupC
 		t.Fatalf("create store: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	cs := &keyLookupCountingStore{SandboxStore: s}
+	cs := &keyLookupCountingStore{Persistence: s}
 
 	cfg := withRunnerTLS(&config.APIConfig{
 		APIKeys:             map[string]struct{}{"admin-key": {}},

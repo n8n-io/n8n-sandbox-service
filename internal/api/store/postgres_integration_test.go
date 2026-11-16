@@ -104,7 +104,7 @@ func TestPostgresCodeSandboxColumnsMigrationBackfillsDefaults(t *testing.T) {
 		t.Fatalf("reopen store: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	got, err := s.Get("legacy")
+	got, err := s.GetByIDAndKind("legacy", KindDefault)
 	if err != nil || got == nil {
 		t.Fatalf("get legacy row: got=%v err=%v", got, err)
 	}
@@ -129,13 +129,14 @@ func TestPostgresStoreCRUD(t *testing.T) {
 		RunnerID:              "r1",
 		RunnerHTTPBase:        "http://runner:8080",
 		RunnerControlGRPCAddr: "runner:9091",
+		Kind:                  KindDefault,
 	}
 	if err := s.Create(rec); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	t.Cleanup(func() { _ = s.Delete(rec.ID) })
+	t.Cleanup(func() { _ = s.DeleteByIDAndKind(rec.ID, KindDefault) })
 
-	got, err := s.Get(rec.ID)
+	got, err := s.GetByIDAndKind(rec.ID, KindDefault)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -145,7 +146,7 @@ func TestPostgresStoreCRUD(t *testing.T) {
 
 	// Running and idle: a stop candidate. Other tests share the database, so
 	// look for this row rather than counting.
-	rows, err := s.ListForIdleReapStop(9999999999, false)
+	rows, err := s.ListForIdleReapStopByKinds(AllKinds(), 9999999999, false)
 	if err != nil {
 		t.Fatalf("list stop: %v", err)
 	}
@@ -153,23 +154,23 @@ func TestPostgresStoreCRUD(t *testing.T) {
 		t.Fatalf("stop candidates %v, want %s", sandboxIDs(rows), rec.ID)
 	}
 
-	if err := s.UpdateStatus(rec.ID, "stopped"); err != nil {
+	if err := s.UpdateStatusByIDAndKind(rec.ID, KindDefault, "stopped"); err != nil {
 		t.Fatalf("update status: %v", err)
 	}
-	got, err = s.Get(rec.ID)
+	got, err = s.GetByIDAndKind(rec.ID, KindDefault)
 	if err != nil || got == nil || got.Status != "stopped" {
 		t.Fatalf("after stop: %+v err=%v, want stopped", got, err)
 	}
 
 	// Stopped: no longer a stop candidate, now a delete candidate.
-	rows, err = s.ListForIdleReapStop(9999999999, false)
+	rows, err = s.ListForIdleReapStopByKinds(AllKinds(), 9999999999, false)
 	if err != nil {
 		t.Fatalf("list stop: %v", err)
 	}
 	if containsSandbox(rows, rec.ID) {
 		t.Fatalf("stopped sandbox %s is still a stop candidate", rec.ID)
 	}
-	rows, err = s.ListForIdleReapDelete(9999999999)
+	rows, err = s.ListForIdleReapDeleteByKinds(AllKinds(), 9999999999)
 	if err != nil {
 		t.Fatalf("list delete: %v", err)
 	}
@@ -202,10 +203,10 @@ func TestPostgresRecordActivityConcurrentBatches(t *testing.T) {
 	ids := make([]string, 50)
 	for i := range ids {
 		ids[i] = prefix + "-" + strconv.Itoa(i)
-		if err := s.Create(&SandboxRecord{ID: ids[i], Status: "running", CreatedAt: 1, LastActiveAt: 1}); err != nil {
+		if err := s.Create(&SandboxRecord{Kind: KindDefault, ID: ids[i], Status: "running", CreatedAt: 1, LastActiveAt: 1}); err != nil {
 			t.Fatalf("create: %v", err)
 		}
-		t.Cleanup(func() { _ = s.Delete(ids[i]) })
+		t.Cleanup(func() { _ = s.DeleteByIDAndKind(ids[i], KindDefault) })
 	}
 
 	const pods, rounds = 4, 25
@@ -218,7 +219,7 @@ func TestPostgresRecordActivityConcurrentBatches(t *testing.T) {
 				for _, id := range ids {
 					batch[id] = int64(1000 + round*pods + pod)
 				}
-				if err := s.RecordActivity(context.Background(), batch); err != nil {
+				if err := s.RecordActivityByKind(context.Background(), KindDefault, batch); err != nil {
 					errs <- err
 					return
 				}
@@ -232,7 +233,7 @@ func TestPostgresRecordActivityConcurrentBatches(t *testing.T) {
 	}
 	const newest = 1000 + (rounds-1)*pods + pods - 1
 	for _, id := range ids {
-		if got, err := s.Get(id); err != nil || got == nil || got.LastActiveAt != newest {
+		if got, err := s.GetByIDAndKind(id, KindDefault); err != nil || got == nil || got.LastActiveAt != newest {
 			t.Fatalf("%s: %+v err=%v, want last_active_at %d", id, got, err, newest)
 		}
 	}
@@ -240,6 +241,10 @@ func TestPostgresRecordActivityConcurrentBatches(t *testing.T) {
 
 func TestPostgresCodeSandboxNames(t *testing.T) {
 	testCodeSandboxNames(t, openTestPostgresStore(t), uuid.New().String(), uuid.New().String())
+}
+
+func TestPostgresKindScoping(t *testing.T) {
+	testKindScoping(t, openTestPostgresStore(t), uuid.New().String())
 }
 
 func TestPostgresUpdateTenantLimits(t *testing.T) {
@@ -252,7 +257,7 @@ func TestPostgresCreateEnforcesTenantQuota(t *testing.T) {
 
 // Two stores on one database stand in for two API pods.
 func TestPostgresConcurrentCreatesStopAtTenantQuota(t *testing.T) {
-	stores := []SandboxStore{openTestPostgresStore(t), openTestPostgresStore(t)}
+	stores := []Persistence{openTestPostgresStore(t), openTestPostgresStore(t)}
 	testConcurrentCreatesStopAtTenantQuota(t, stores, uuid.New().String())
 }
 
@@ -270,7 +275,7 @@ func TestPostgresSandboxLockKeepsStoreUsableAndReleasesAfterCancellation(t *test
 
 	countDone := make(chan error, 1)
 	go func() {
-		_, err := s.Count()
+		_, err := s.CountByKinds(AllKinds())
 		countDone <- err
 	}()
 	select {

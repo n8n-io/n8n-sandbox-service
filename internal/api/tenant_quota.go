@@ -1,6 +1,18 @@
 package api
 
-import "sync"
+import (
+	"sync"
+
+	"github.com/n8n-io/sandbox-service/internal/api/store"
+)
+
+// countTenantSandboxes counts a tenant's sandboxes of every kind, which share
+// max_sandboxes.
+func countTenantSandboxes(p store.SandboxPersistence) func(tenantID string) (int64, error) {
+	return func(tenantID string) (int64, error) {
+		return p.CountByTenantAndKinds(tenantID, store.AllKinds())
+	}
+}
 
 // tenantQuota checks max_sandboxes before a create reaches a runner. Besides a
 // tenant's saved sandboxes it counts the creates on this API pod that passed

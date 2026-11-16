@@ -162,7 +162,7 @@ func idleSweepConfig() *config.APIConfig {
 	})
 }
 
-func newSweepStore(t *testing.T) store.SandboxStore {
+func newSweepStore(t *testing.T) store.Persistence {
 	t.Helper()
 	s, err := store.New(":memory:")
 	if err != nil {
@@ -172,7 +172,7 @@ func newSweepStore(t *testing.T) store.SandboxStore {
 	return s
 }
 
-func seedRunningSandbox(t *testing.T, s store.SandboxStore, id, controlAddr string, lastActiveAt int64, ephemeral bool) {
+func seedRunningSandbox(t *testing.T, s store.Persistence, id, controlAddr string, lastActiveAt int64, ephemeral bool) {
 	t.Helper()
 	if err := s.Create(&store.SandboxRecord{
 		ID:                    id,
@@ -183,14 +183,15 @@ func seedRunningSandbox(t *testing.T, s store.SandboxStore, id, controlAddr stri
 		RunnerControlGRPCAddr: controlAddr,
 		TenantID:              store.AdminTenantID,
 		Ephemeral:             ephemeral,
+		Kind:                  store.KindDefault,
 	}); err != nil {
 		t.Fatalf("seed sandbox %s: %v", id, err)
 	}
 }
 
-func mustGet(t *testing.T, s store.SandboxStore, id string) *store.SandboxRecord {
+func mustGet(t *testing.T, s store.Persistence, id string) *store.SandboxRecord {
 	t.Helper()
-	rec, err := s.Get(id)
+	rec, err := s.GetByIDAndKind(id, store.KindDefault)
 	if err != nil {
 		t.Fatalf("get %s: %v", id, err)
 	}
@@ -199,9 +200,9 @@ func mustGet(t *testing.T, s store.SandboxStore, id string) *store.SandboxRecord
 
 // runSweep runs one full sweep pass exactly as StartIdleSweeper would, so the
 // tests cover the config gating as well as each sweep's own logic.
-func runSweep(t *testing.T, s store.SandboxStore, cfg *config.APIConfig, now time.Time) {
+func runSweep(t *testing.T, s store.Persistence, cfg *config.APIConfig, now time.Time) {
 	t.Helper()
-	if err := sweepIdleSandboxes(context.Background(), s, registry.New(45*time.Second), cfg, runnerControlTLS(cfg), now); err != nil {
+	if err := sweepIdleSandboxes(context.Background(), store.NewSweeperStore(s, store.AllKinds()), registry.New(45*time.Second), cfg, runnerControlTLS(cfg), now); err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
 }
@@ -420,6 +421,7 @@ func TestIdleSweepsWaitOutTheActivityLag(t *testing.T) {
 				ID: id, Status: tc.status, CreatedAt: lastActive, LastActiveAt: lastActive,
 				RunnerHTTPBase: "https://127.0.0.1:9", RunnerControlGRPCAddr: addr,
 				TenantID: store.AdminTenantID, Ephemeral: tc.ephemeral,
+				Kind: store.KindDefault,
 			}); err != nil {
 				t.Fatalf("seed sandbox: %v", err)
 			}
@@ -477,7 +479,7 @@ func TestIsPastIdleDeleteWindow(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			rec := &store.SandboxRecord{LastActiveAt: tc.lastActiveAt, Ephemeral: tc.ephemeral}
+			rec := &store.SandboxRecord{Kind: store.KindDefault, LastActiveAt: tc.lastActiveAt, Ephemeral: tc.ephemeral}
 			if got := isPastIdleDeleteWindow(rec, tc.cfg, now); got != tc.want {
 				t.Fatalf("isPastIdleDeleteWindow = %v, want %v", got, tc.want)
 			}
@@ -547,7 +549,7 @@ func TestIdleStopSweepBoundsConcurrency(t *testing.T) {
 
 	done := make(chan sweepStats, 1)
 	go func() {
-		done <- sweepIdleStopSandboxes(context.Background(), s, registry.New(45*time.Second), cfg, runnerControlTLS(cfg), now)
+		done <- sweepIdleStopSandboxes(context.Background(), store.NewSweeperStore(s, store.AllKinds()), registry.New(45*time.Second), cfg, runnerControlTLS(cfg), now)
 	}()
 
 	waitFor(t, "the pool to fill", func() bool { return inFlight.Load() == limit })
@@ -611,7 +613,7 @@ func TestIdleStopSweepIsolatesHangingRunner(t *testing.T) {
 	}
 
 	start := time.Now()
-	stats := sweepIdleStopSandboxes(context.Background(), s, registry.New(45*time.Second), cfg, runnerControlTLS(cfg), now)
+	stats := sweepIdleStopSandboxes(context.Background(), store.NewSweeperStore(s, store.AllKinds()), registry.New(45*time.Second), cfg, runnerControlTLS(cfg), now)
 	if elapsed := time.Since(start); elapsed > 10*runnerLifecycleBudget {
 		t.Fatalf("sweep took %s with a %s per-call budget: the hanging runner held the sweep", elapsed, runnerLifecycleBudget)
 	}
@@ -631,7 +633,7 @@ func TestIdleStopSweepIsolatesHangingRunner(t *testing.T) {
 
 	hang.Store(false)
 	releaseAll()
-	stats = sweepIdleStopSandboxes(context.Background(), s, registry.New(45*time.Second), cfg, runnerControlTLS(cfg), now.Add(cfg.IdleSweepInterval))
+	stats = sweepIdleStopSandboxes(context.Background(), store.NewSweeperStore(s, store.AllKinds()), registry.New(45*time.Second), cfg, runnerControlTLS(cfg), now.Add(cfg.IdleSweepInterval))
 	if stats.acted != 2 || stats.failed != 0 {
 		t.Fatalf("retry stats = %+v, want the 2 abandoned stops to succeed", stats)
 	}
@@ -668,7 +670,7 @@ func TestIdleStopSweepSkipsUnreachableRunnerAfterFirstFailure(t *testing.T) {
 	healthyID := staleID(3)
 	seedRunningSandbox(t, s, healthyID, healthyAddr, stale, false)
 
-	stats := sweepIdleStopSandboxes(context.Background(), s, registry.New(45*time.Second), cfg, runnerControlTLS(cfg), now)
+	stats := sweepIdleStopSandboxes(context.Background(), store.NewSweeperStore(s, store.AllKinds()), registry.New(45*time.Second), cfg, runnerControlTLS(cfg), now)
 	if stats.failed != 1 || stats.skippedUnreachable != 2 || stats.acted != 1 {
 		t.Fatalf("stats = %+v, want 1 failed (the probe), 2 skipped, 1 acted", stats)
 	}

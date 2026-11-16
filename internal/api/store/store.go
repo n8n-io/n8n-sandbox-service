@@ -4,6 +4,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 )
 
@@ -28,11 +29,41 @@ var ErrAPIKeyTenantMismatch = errors.New("api key tenant_id does not match tenan
 // already points to a code sandbox of the tenant that is not draining.
 var ErrSandboxNameTaken = errors.New("sandbox name taken")
 
+// Kind is the kind of a sandbox. Every sandbox method of the store names the
+// kinds it reads or writes.
+type Kind string
+
 // Sandbox kinds.
 const (
-	KindDefault = "default"
-	KindCode    = "code"
+	KindDefault Kind = "default"
+	KindCode    Kind = "code"
 )
+
+// AllKinds returns every sandbox kind.
+func AllKinds() []Kind { return []Kind{KindDefault, KindCode} }
+
+func checkKind(kind Kind) error {
+	if kind != KindDefault && kind != KindCode {
+		return fmt.Errorf("store: invalid sandbox kind %q", kind)
+	}
+	return nil
+}
+
+// kindArgs checks kinds and returns them as query arguments. An empty list
+// is an error, not a filter that matches every kind.
+func kindArgs(kinds []Kind) ([]string, error) {
+	if len(kinds) == 0 {
+		return nil, errors.New("store: no sandbox kinds given")
+	}
+	args := make([]string, len(kinds))
+	for i, kind := range kinds {
+		if err := checkKind(kind); err != nil {
+			return nil, err
+		}
+		args[i] = string(kind)
+	}
+	return args, nil
+}
 
 // codeNameIndex is the unique index on the names of code sandboxes.
 const codeNameIndex = "sandboxes_code_name_uniq"
@@ -72,7 +103,7 @@ type SandboxRecord struct {
 	TenantID              string // AdminTenantID = admin-owned; otherwise a tenants.id UUID
 	Ephemeral             bool   // Deleted instead of stopped when idle; never enters "stopped"
 	Egress                string // Outbound network policy: "public" or "none"; fixed at creation
-	Kind                  string // KindDefault or KindCode; empty is saved as KindDefault
+	Kind                  Kind   // Required on create
 	Name                  string // Code sandboxes: chosen by the client, unique per tenant among those not draining
 	OptionsHash           string // Code sandboxes: hash of the options the sandbox was created with
 	IdleTimeoutMs         int64  // Code sandboxes: 0 = not set
@@ -99,38 +130,46 @@ type APIKey struct {
 	RevokedAt int64 // 0 = active
 }
 
-// SandboxStore exposes CRUD operations for SandboxRecord rows and tenant keys.
-type SandboxStore interface {
-	io.Closer
-	// Create inserts the record. For a tenant-owned record it returns
-	// ErrTenantNotFound when the tenant is gone, and ErrTenantQuotaExceeded
-	// when the tenant already holds max_sandboxes sandboxes (0 = unlimited).
-	// Creates for the same tenant count and insert one at a time, so
-	// concurrent creates cannot take a tenant past its quota. It returns
-	// ErrSandboxNameTaken when a code sandbox of the tenant that is not
-	// draining already has the name.
+// SandboxPersistence stores sandbox rows. Every method that reads or writes
+// rows names the kinds it works on: a row of another kind is as good as
+// missing.
+type SandboxPersistence interface {
+	// Create inserts the record, whose Kind is required. For a tenant-owned
+	// record it returns ErrTenantNotFound when the tenant is gone, and
+	// ErrTenantQuotaExceeded when the tenant already holds max_sandboxes
+	// sandboxes of any kind (0 = unlimited). Creates for the same tenant count
+	// and insert one at a time, so concurrent creates cannot take a tenant past
+	// its quota. It returns ErrSandboxNameTaken when a code sandbox of the
+	// tenant that is not draining already has the name.
 	Create(record *SandboxRecord) error
-	Get(id string) (*SandboxRecord, error)
+	GetByIDAndKind(id string, kind Kind) (*SandboxRecord, error)
+	// ExistsByIDAndKinds reports whether a sandbox of one of kinds has the id.
+	ExistsByIDAndKinds(id string, kinds []Kind) (bool, error)
 	// GetCodeSandboxByName returns the code sandbox of the tenant that has the
 	// name and is not draining, or nil when there is none.
 	GetCodeSandboxByName(tenantID, name string) (*SandboxRecord, error)
-	UpdateStatus(id, status string) error
-	// RecordActivity sets each sandbox in lastActiveAt (id to unix seconds)
-	// running and moves its last_active_at forward to that time, never back,
-	// in one statement. Ids without a row are skipped.
-	RecordActivity(ctx context.Context, lastActiveAt map[string]int64) error
-	Delete(id string) error
+	ListByKind(kind Kind) ([]*SandboxRecord, error)
+	ListByTenantAndKind(tenantID string, kind Kind) ([]*SandboxRecord, error)
+	UpdateStatusByIDAndKind(id string, kind Kind, status string) error
+	// RecordActivityByKind sets each sandbox of the kind in lastActiveAt (id
+	// to unix seconds) running and moves its last_active_at forward to that
+	// time, never back, in one statement. Ids without a row of the kind are
+	// skipped.
+	RecordActivityByKind(ctx context.Context, kind Kind, lastActiveAt map[string]int64) error
+	DeleteByIDAndKind(id string, kind Kind) error
+	// LockSandbox locks the sandbox id, whatever its kind: it reads no row.
 	LockSandbox(ctx context.Context, id string) (unlock func(), err error)
-	ListForIdleReapDelete(cutoff int64) ([]*SandboxRecord, error)
-	// ListForIdleReapStop returns running rows idle since cutoff with the given
-	// ephemeral flag: regular rows are stop candidates, ephemeral rows delete candidates.
-	ListForIdleReapStop(cutoff int64, ephemeral bool) ([]*SandboxRecord, error)
-	Count() (int64, error)
-	CountByTenant(tenantID string) (int64, error)
-	List() ([]*SandboxRecord, error)
-	ListByTenant(tenantID string) ([]*SandboxRecord, error)
-	Backend() Backend
+	ListForIdleReapDeleteByKinds(kinds []Kind, cutoff int64) ([]*SandboxRecord, error)
+	// ListForIdleReapStopByKinds returns running rows idle since cutoff with
+	// the given ephemeral flag: regular rows are stop candidates, ephemeral
+	// rows delete candidates.
+	ListForIdleReapStopByKinds(kinds []Kind, cutoff int64, ephemeral bool) ([]*SandboxRecord, error)
+	CountByKinds(kinds []Kind) (int64, error)
+	CountByTenantAndKinds(tenantID string, kinds []Kind) (int64, error)
+}
 
+// TenantStore stores tenants.
+type TenantStore interface {
 	CreateTenant(t *Tenant) error
 	// CreateTenantWithAPIKey inserts the tenant and its first API key in one transaction.
 	// k.TenantID must equal t.ID.
@@ -140,14 +179,39 @@ type SandboxStore interface {
 	// UpdateTenantLimits sets the tenant's limits and leaves its sandboxes
 	// alone. Returns ErrTenantNotFound when no tenant has that id.
 	UpdateTenantLimits(id string, maxSandboxes int) error
+	// DeleteTenant returns ErrTenantHasSandboxes while the tenant owns
+	// sandboxes of any kind.
 	DeleteTenant(id string) error
+}
 
+// APIKeyStore stores tenant API keys.
+type APIKeyStore interface {
 	CreateAPIKey(k *APIKey) error
 	GetAPIKey(id string) (*APIKey, error)
 	ListAPIKeysByTenant(tenantID string) ([]*APIKey, error)
 	ListActiveAPIKeysByPrefix(prefix string) ([]*APIKey, error)
 	RevokeAPIKey(id string) error
 }
+
+// TenantPersistence stores tenants and their API keys.
+type TenantPersistence interface {
+	TenantStore
+	APIKeyStore
+}
+
+// Persistence is a whole store: SQLite or Postgres. Only startup wiring holds
+// one; everything else gets a narrower interface (see views.go).
+type Persistence interface {
+	io.Closer
+	SandboxPersistence
+	TenantPersistence
+	Backend() Backend
+}
+
+var (
+	_ Persistence = (*SQLiteStore)(nil)
+	_ Persistence = (*PostgresStore)(nil)
+)
 
 // scanner is the common interface satisfied by both *sql.Row and *sql.Rows.
 type scanner interface {
@@ -183,13 +247,6 @@ func scanRecord(row scanner) (*SandboxRecord, error) {
 		return nil, err
 	}
 	return &r, nil
-}
-
-func recordKind(r *SandboxRecord) string {
-	if r.Kind == "" {
-		return KindDefault
-	}
-	return r.Kind
 }
 
 func scanTenant(row scanner) (*Tenant, error) {
