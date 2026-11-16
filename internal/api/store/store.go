@@ -24,6 +24,19 @@ var ErrTenantQuotaExceeded = errors.New("tenant sandbox quota exceeded")
 // k.TenantID != t.ID.
 var ErrAPIKeyTenantMismatch = errors.New("api key tenant_id does not match tenant")
 
+// ErrSandboxNameTaken is returned when creating a code sandbox whose name
+// already points to a code sandbox of the tenant that is not draining.
+var ErrSandboxNameTaken = errors.New("sandbox name taken")
+
+// Sandbox kinds.
+const (
+	KindDefault = "default"
+	KindCode    = "code"
+)
+
+// codeNameIndex is the unique index on the names of code sandboxes.
+const codeNameIndex = "sandboxes_code_name_uniq"
+
 // Backend identifies the sandbox store implementation.
 type Backend string
 
@@ -59,6 +72,12 @@ type SandboxRecord struct {
 	TenantID              string // AdminTenantID = admin-owned; otherwise a tenants.id UUID
 	Ephemeral             bool   // Deleted instead of stopped when idle; never enters "stopped"
 	Egress                string // Outbound network policy: "public" or "none"; fixed at creation
+	Kind                  string // KindDefault or KindCode; empty is saved as KindDefault
+	Name                  string // Code sandboxes: chosen by the client, unique per tenant among those not draining
+	OptionsHash           string // Code sandboxes: hash of the options the sandbox was created with
+	IdleTimeoutMs         int64  // Code sandboxes: 0 = not set
+	MaxAgeMs              int64  // Code sandboxes: 0 = not set
+	DrainingSince         int64  // Unix seconds the sandbox started draining; 0 = not draining
 }
 
 // Tenant is a provisioned consumer of the sandbox API (e.g. an n8n instance).
@@ -87,9 +106,14 @@ type SandboxStore interface {
 	// ErrTenantNotFound when the tenant is gone, and ErrTenantQuotaExceeded
 	// when the tenant already holds max_sandboxes sandboxes (0 = unlimited).
 	// Creates for the same tenant count and insert one at a time, so
-	// concurrent creates cannot take a tenant past its quota.
+	// concurrent creates cannot take a tenant past its quota. It returns
+	// ErrSandboxNameTaken when a code sandbox of the tenant that is not
+	// draining already has the name.
 	Create(record *SandboxRecord) error
 	Get(id string) (*SandboxRecord, error)
+	// GetCodeSandboxByName returns the code sandbox of the tenant that has the
+	// name and is not draining, or nil when there is none.
+	GetCodeSandboxByName(tenantID, name string) (*SandboxRecord, error)
 	UpdateStatus(id, status string) error
 	// RecordActivity sets each sandbox in lastActiveAt (id to unix seconds)
 	// running and moves its last_active_at forward to that time, never back,
@@ -148,11 +172,24 @@ func scanRecord(row scanner) (*SandboxRecord, error) {
 		&r.TenantID,
 		&r.Ephemeral,
 		&r.Egress,
+		&r.Kind,
+		&r.Name,
+		&r.OptionsHash,
+		&r.IdleTimeoutMs,
+		&r.MaxAgeMs,
+		&r.DrainingSince,
 	)
 	if err != nil {
 		return nil, err
 	}
 	return &r, nil
+}
+
+func recordKind(r *SandboxRecord) string {
+	if r.Kind == "" {
+		return KindDefault
+	}
+	return r.Kind
 }
 
 func scanTenant(row scanner) (*Tenant, error) {

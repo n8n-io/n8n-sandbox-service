@@ -77,6 +77,185 @@ func TestEgressMigrationBackfillsPublic(t *testing.T) {
 	}
 }
 
+// Rows from before the code sandbox columns existed read back as default-kind
+// sandboxes without a name or lifetime settings.
+func TestCodeSandboxColumnsMigrationBackfillsDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "api.db")
+	s, err := New(path)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	// Roll the schema back to before the columns and plant a row there.
+	if _, err := s.db.Exec(`DROP INDEX ` + codeNameIndex); err != nil {
+		t.Fatalf("drop code name index: %v", err)
+	}
+	for _, col := range []string{"kind", "name", "options_hash", "idle_timeout_ms", "max_age_ms", "draining_since"} {
+		if _, err := s.db.Exec(`ALTER TABLE sandboxes DROP COLUMN ` + col); err != nil {
+			t.Fatalf("drop %s column: %v", col, err)
+		}
+	}
+	if _, err := s.db.Exec(`INSERT INTO sandboxes (id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip)
+		VALUES ('legacy', 'running', 1, 2, '', '', '')`); err != nil {
+		t.Fatalf("insert legacy row: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	s, err = New(path)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	got, err := s.Get("legacy")
+	if err != nil || got == nil {
+		t.Fatalf("get legacy row: got=%v err=%v", got, err)
+	}
+	if got.Kind != KindDefault || got.Name != "" || got.OptionsHash != "" ||
+		got.IdleTimeoutMs != 0 || got.MaxAgeMs != 0 || got.DrainingSince != 0 {
+		t.Fatalf("legacy row: %+v, want default kind and zero code sandbox fields", got)
+	}
+	// The migration also brings back the name index and the column checks.
+	testCodeSandboxNames(t, s, "16161616-1616-1616-1616-161616161616", "17171717-1717-1717-1717-171717171717")
+}
+
+func TestCodeSandboxNames(t *testing.T) {
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	defer s.Close()
+	testCodeSandboxNames(t, s, "14141414-1414-1414-1414-141414141414", "15151515-1515-1515-1515-151515151515")
+}
+
+// testCodeSandboxNames runs against both backends; the tenants must not exist yet.
+func testCodeSandboxNames(t *testing.T, s SandboxStore, tenantA, tenantB string) {
+	t.Helper()
+	now := time.Now().Unix()
+	for _, id := range []string{tenantA, tenantB} {
+		if err := s.CreateTenant(&Tenant{ID: id, Name: "t", CreatedAt: now}); err != nil {
+			t.Fatalf("create tenant: %v", err)
+		}
+		t.Cleanup(func() { _ = s.DeleteTenant(id) })
+	}
+
+	created := 0
+	create := func(rec SandboxRecord) (*SandboxRecord, error) {
+		created++
+		rec.ID = fmt.Sprintf("code-%d-%s", created, tenantA)
+		rec.Status, rec.CreatedAt, rec.LastActiveAt = "running", now, now
+		err := s.Create(&rec)
+		if err == nil {
+			t.Cleanup(func() { _ = s.Delete(rec.ID) })
+		}
+		return &rec, err
+	}
+	code := func(tenantID, name string) SandboxRecord {
+		return SandboxRecord{TenantID: tenantID, Kind: KindCode, Name: name, OptionsHash: "h"}
+	}
+
+	// Every field round-trips.
+	first, err := create(SandboxRecord{
+		TenantID: tenantA, Kind: KindCode, Name: "n1", OptionsHash: "hash-1",
+		IdleTimeoutMs: 30000, MaxAgeMs: 60000, Egress: "none",
+	})
+	if err != nil {
+		t.Fatalf("create code sandbox: %v", err)
+	}
+	got, err := s.Get(first.ID)
+	if err != nil || got == nil || *got != *first {
+		t.Fatalf("Get: %+v err=%v, want %+v", got, err, first)
+	}
+	got, err = s.GetCodeSandboxByName(tenantA, "n1")
+	if err != nil || got == nil || got.ID != first.ID {
+		t.Fatalf("GetCodeSandboxByName: %+v err=%v, want %s", got, err, first.ID)
+	}
+
+	// An empty kind is saved as the default kind.
+	plain, err := create(SandboxRecord{TenantID: tenantA})
+	if err != nil {
+		t.Fatalf("create default sandbox: %v", err)
+	}
+	if got, err := s.Get(plain.ID); err != nil || got == nil || got.Kind != KindDefault {
+		t.Fatalf("default sandbox: %+v err=%v, want kind %q", got, err, KindDefault)
+	}
+
+	if _, err := create(code(tenantA, "n1")); !errors.Is(err, ErrSandboxNameTaken) {
+		t.Fatalf("same name, same tenant: got %v, want ErrSandboxNameTaken", err)
+	}
+	if _, err := create(code(tenantB, "n1")); err != nil {
+		t.Fatalf("same name, other tenant: %v", err)
+	}
+	// Default-kind sandboxes do not take code sandbox names.
+	if _, err := create(SandboxRecord{TenantID: tenantA, Name: "n2"}); err != nil {
+		t.Fatalf("default kind with a name: %v", err)
+	}
+	if _, err := create(SandboxRecord{TenantID: tenantA, Name: "n2"}); err != nil {
+		t.Fatalf("second default kind with the same name: %v", err)
+	}
+	if got, err := s.GetCodeSandboxByName(tenantA, "n2"); err != nil || got != nil {
+		t.Fatalf("GetCodeSandboxByName(default kind): %+v err=%v, want nil", got, err)
+	}
+	if got, err := s.GetCodeSandboxByName(tenantA, "missing"); err != nil || got != nil {
+		t.Fatalf("GetCodeSandboxByName(missing): %+v err=%v, want nil", got, err)
+	}
+
+	// A draining sandbox frees its name, and the lookup skips it.
+	draining := code(tenantA, "n3")
+	draining.DrainingSince = now
+	drained, err := create(draining)
+	if err != nil {
+		t.Fatalf("create draining code sandbox: %v", err)
+	}
+	if got, err := s.GetCodeSandboxByName(tenantA, "n3"); err != nil || got != nil {
+		t.Fatalf("GetCodeSandboxByName(draining only): %+v err=%v, want nil", got, err)
+	}
+	current, err := create(code(tenantA, "n3"))
+	if err != nil {
+		t.Fatalf("create next to a draining sandbox: %v", err)
+	}
+	got, err = s.GetCodeSandboxByName(tenantA, "n3")
+	if err != nil || got == nil || got.ID != current.ID {
+		t.Fatalf("GetCodeSandboxByName(n3): %+v err=%v, want %s, not draining %s", got, err, current.ID, drained.ID)
+	}
+
+	// A duplicate id is not a name conflict.
+	dup := code(tenantA, "n4")
+	dup.ID, dup.Status, dup.CreatedAt, dup.LastActiveAt = first.ID, "running", now, now
+	if err := s.Create(&dup); err == nil || errors.Is(err, ErrSandboxNameTaken) {
+		t.Fatalf("duplicate id: got %v, want a non-name error", err)
+	}
+
+	// Both backends hold the same limits on kind and on lengths.
+	for _, tc := range []struct {
+		name string
+		rec  SandboxRecord
+		ok   bool
+	}{
+		{name: "unknown kind", rec: SandboxRecord{TenantID: tenantA, Kind: "Code", Name: "k1"}},
+		{name: "name at limit", rec: code(tenantA, strings.Repeat("n", 128)), ok: true},
+		{name: "name too long", rec: code(tenantA, strings.Repeat("m", 129))},
+		{name: "options hash at limit", rec: SandboxRecord{TenantID: tenantA, Kind: KindCode, Name: "h1", OptionsHash: strings.Repeat("h", 512)}, ok: true},
+		{name: "options hash too long", rec: SandboxRecord{TenantID: tenantA, Kind: KindCode, Name: "h2", OptionsHash: strings.Repeat("h", 513)}},
+	} {
+		_, err := create(tc.rec)
+		if tc.ok && err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if !tc.ok && (err == nil || errors.Is(err, ErrSandboxNameTaken)) {
+			t.Fatalf("%s: got %v, want a constraint error", tc.name, err)
+		}
+	}
+
+	// Deleting the sandbox frees its name.
+	if err := s.Delete(first.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := create(code(tenantA, "n1")); err != nil {
+		t.Fatalf("create after delete: %v", err)
+	}
+}
+
 func TestSQLiteDSNEnablesForeignKeys(t *testing.T) {
 	s, err := New(":memory:")
 	if err != nil {

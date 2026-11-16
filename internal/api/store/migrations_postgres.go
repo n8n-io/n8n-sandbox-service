@@ -15,7 +15,13 @@ CREATE TABLE IF NOT EXISTS sandboxes (
 	runner_control_grpc_addr  TEXT NOT NULL DEFAULT '',
 	tenant_id                 TEXT NOT NULL DEFAULT '__admin__',
 	ephemeral                 BOOLEAN NOT NULL DEFAULT false,
-	egress                    TEXT NOT NULL DEFAULT 'public'
+	egress                    TEXT NOT NULL DEFAULT 'public',
+	kind                      VARCHAR(32) NOT NULL DEFAULT 'default' CONSTRAINT sandboxes_kind_check CHECK (kind IN ('default', 'code')),
+	name                      VARCHAR(128) NOT NULL DEFAULT '',
+	options_hash              VARCHAR(512) NOT NULL DEFAULT '',
+	idle_timeout_ms           BIGINT NOT NULL DEFAULT 0,
+	max_age_ms                BIGINT NOT NULL DEFAULT 0,
+	draining_since            BIGINT NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS sandboxes_idle_reap_idx
 	ON sandboxes (status, last_active_at);
@@ -64,6 +70,29 @@ const postgresAddTenantIDCol = `ALTER TABLE sandboxes ADD COLUMN IF NOT EXISTS t
 const postgresAddEphemeralCol = `ALTER TABLE sandboxes ADD COLUMN IF NOT EXISTS ephemeral BOOLEAN NOT NULL DEFAULT false`
 
 const postgresAddEgressCol = `ALTER TABLE sandboxes ADD COLUMN IF NOT EXISTS egress TEXT NOT NULL DEFAULT 'public'`
+
+// One statement, so the ACCESS EXCLUSIVE lock is taken once per startup.
+const postgresAddCodeSandboxCols = `ALTER TABLE sandboxes
+	ADD COLUMN IF NOT EXISTS kind VARCHAR(32) NOT NULL DEFAULT 'default' CONSTRAINT sandboxes_kind_check CHECK (kind IN ('default', 'code')),
+	ADD COLUMN IF NOT EXISTS name VARCHAR(128) NOT NULL DEFAULT '',
+	ADD COLUMN IF NOT EXISTS options_hash VARCHAR(512) NOT NULL DEFAULT '',
+	ADD COLUMN IF NOT EXISTS idle_timeout_ms BIGINT NOT NULL DEFAULT 0,
+	ADD COLUMN IF NOT EXISTS max_age_ms BIGINT NOT NULL DEFAULT 0,
+	ADD COLUMN IF NOT EXISTS draining_since BIGINT NOT NULL DEFAULT 0`
+
+// Runs after postgresAddCodeSandboxCols, so existing tables get the comments too.
+const postgresCommentCodeSandboxCols = `
+COMMENT ON COLUMN sandboxes.kind IS 'Sandbox kind: default or code';
+COMMENT ON COLUMN sandboxes.name IS 'Code sandboxes: name chosen by the client. Unique per tenant among code sandboxes that are not draining';
+COMMENT ON COLUMN sandboxes.options_hash IS 'Code sandboxes: hash of the options the sandbox was created with';
+COMMENT ON COLUMN sandboxes.idle_timeout_ms IS 'Code sandboxes: delete after this many milliseconds without activity. 0 = not set';
+COMMENT ON COLUMN sandboxes.max_age_ms IS 'Code sandboxes: drain this many milliseconds after creation. 0 = not set';
+COMMENT ON COLUMN sandboxes.draining_since IS 'Unix seconds when the sandbox started draining. 0 = not draining';
+`
+
+// A name points to at most one code sandbox per tenant that is not draining.
+const postgresSandboxCodeNameIndex = `CREATE UNIQUE INDEX IF NOT EXISTS ` + codeNameIndex + `
+	ON sandboxes (tenant_id, name) WHERE kind = 'code' AND draining_since = 0`
 
 const postgresAddRunnerCordonedCol = `ALTER TABLE runners ADD COLUMN IF NOT EXISTS cordoned BOOLEAN NOT NULL DEFAULT false`
 
