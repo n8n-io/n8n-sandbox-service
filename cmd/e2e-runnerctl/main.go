@@ -127,8 +127,9 @@ type createOutcome struct {
 	Result string `json:"result"`
 	// Applied is applied_create_options_json.
 	Applied json.RawMessage `json:"applied,omitempty"`
-	// Code is the gRPC status code of an error.
-	Code string `json:"code,omitempty"`
+	// Code and Message are the gRPC status of an error.
+	Code    string `json:"code,omitempty"`
+	Message string `json:"message,omitempty"`
 }
 
 func create(sandboxID, createOptions string) {
@@ -144,7 +145,7 @@ func create(sandboxID, createOptions string) {
 	case runnerctl.IsCapacityRefusal(err):
 		outcome = createOutcome{Result: "refused"}
 	default:
-		outcome = createOutcome{Result: "error", Code: status.Code(err).String()}
+		outcome = createOutcome{Result: "error", Code: status.Code(err).String(), Message: status.Convert(err).Message()}
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "create sandbox: %v\n", err)

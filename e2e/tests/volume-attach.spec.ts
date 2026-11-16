@@ -32,7 +32,12 @@ type VolumeOption = {
   optional?: boolean;
 };
 type AppliedVolume = { mount_path: string; attached: boolean; reason?: string; url?: string };
-type CreateOutcome = { result: string; applied?: { egress?: string; volumes?: AppliedVolume[] }; code?: string };
+type CreateOutcome = {
+  result: string;
+  applied?: { egress?: string; volumes?: AppliedVolume[] };
+  code?: string;
+  message?: string;
+};
 type ExecOutcome = { status: number; exit_code: number; stdout: string; stderr: string; body?: string };
 
 const token = `sig=e2e-${randomBytes(12).toString('hex')}`;
@@ -70,6 +75,14 @@ function buildImage(name: string, files: Record<string, { content: string; mode?
   }
   const content = readFileSync(path);
   return { path, sha256: createHash('sha256').update(content).digest('hex'), size: statSync(path).size };
+}
+
+// rawImage is an image of the given bytes, for objects the guest can't mount
+// or the runner never gets.
+function rawImage(name: string, content: Buffer): Image {
+  const path = join(workDir, `${name}.img`);
+  writeFileSync(path, content);
+  return { path, sha256: createHash('sha256').update(content).digest('hex'), size: content.length };
 }
 
 function serve(name: string, image: Image): string {
@@ -148,6 +161,7 @@ test.describe('Volumes attached on create', FIRECRACKER_ONLY, () => {
   let other: Image;
 
   test.beforeAll(async () => {
+    test.setTimeout(180_000);
     const tlsDir = process.env.E2E_TLS_DIR;
     test.skip(
       !tlsDir || !process.env.E2E_RUNNER_CONTROL_GRPC_ADDR || !process.env.E2E_RUNNER_HTTP_ADDR,
@@ -191,6 +205,7 @@ test.describe('Volumes attached on create', FIRECRACKER_ONLY, () => {
   });
 
   test.afterAll(async () => {
+    server?.closeAllConnections();
     await new Promise<void>((resolve) => (server ? server.close(() => resolve()) : resolve()));
     if (workDir) {
       rmSync(workDir, { recursive: true, force: true });
@@ -234,8 +249,11 @@ test.describe('Volumes attached on create', FIRECRACKER_ONLY, () => {
       const rootWrite = run('sudo', ['sh', '-c', `: >> ${image}`]);
       expect(rootWrite.status, rootWrite.output).not.toBe(0);
       expect(rootWrite.output).toContain('Read-only file system');
-      const replace = asJailerUid(`: > ${image}.new && mv -f ${image}.new ${image}`);
+      const planted = asJailerUid(`: > ${image}.new`);
+      expect(planted.status, planted.output).toBe(0);
+      const replace = asJailerUid(`mv -f ${image}.new ${image}`);
       expect(replace.status, replace.output).not.toBe(0);
+      expect(replace.output).toContain('Device or resource busy');
       expect(run('sudo', ['stat', '-c', '%u %a', '-L', image]).output).toBe('0 444');
     } finally {
       await remove(id);
@@ -295,35 +313,52 @@ test.describe('Volumes attached on create', FIRECRACKER_ONLY, () => {
     }
   });
 
-  test('an optional volume that fails is left out; a required one fails the create and leaves nothing', async () => {
+  // The cache serves an object it holds whatever the URL says, so the failing
+  // volumes are objects no other test fetches.
+  test('an optional volume that fails is left out, and the sandbox runs without it', async () => {
+    const unfetched = rawImage('unfetched-optional', randomBytes(64 << 10));
+    const unmountable = rawImage('unmountable-optional', Buffer.alloc(1 << 20));
     const id = randomUUID();
-    const missing = `${baseURL}/missing?${token}`;
     const created = await create(id, [
       volume(data, serve('data', data), '/mnt/data'),
-      volume(other, missing, '/mnt/optional', true),
+      volume(unfetched, `${baseURL}/not-served?${token}`, '/mnt/unfetched', true),
+      volume(unmountable, serve('unmountable-optional', unmountable), '/mnt/unmountable', true),
     ]);
     try {
       expect(created.result).toBe('ok');
       expect(created.applied?.volumes).toEqual([
         expect.objectContaining({ mount_path: '/mnt/data', attached: true }),
-        expect.objectContaining({ mount_path: '/mnt/optional', attached: false, reason: 'download' }),
+        expect.objectContaining({ mount_path: '/mnt/unfetched', attached: false, reason: 'download' }),
+        expect.objectContaining({ mount_path: '/mnt/unmountable', attached: false, reason: 'mount' }),
       ]);
       expect(await read(id, '/mnt/data/hello.txt')).toBe('hello from a volume\n');
-      expect((await exec(id, 'test -e /mnt/optional/other.txt')).exit_code).not.toBe(0);
     } finally {
       await remove(id);
     }
+  });
 
+  // One fails before anything exists (the download), one after the jail, the
+  // binds and the guest did (the guest's mount).
+  test('a required volume that fails fails the create and leaves nothing behind', async () => {
     const pinnedBefore = parseGauge(scrapeRunnerMetrics(), PINNED);
-    const failed = randomUUID();
-    const refused = await create(failed, [
-      volume(data, serve('data', data), '/mnt/data'),
-      volume(other, missing, '/mnt/required'),
-    ]);
-    expect(refused.result).toBe('error');
-    expect(run('sudo', ['test', '-e', `/srv/jailer/firecracker/${vmID(failed)}`]).status).not.toBe(0);
-    expect(hostMounts(failed)).toEqual([]);
-    expect(parseGauge(scrapeRunnerMetrics(), PINNED)).toBe(pinnedBefore);
+    const unfetched = rawImage('unfetched-required', randomBytes(64 << 10));
+    const unmountable = rawImage('unmountable-required', Buffer.alloc(1 << 20));
+    for (const [failing, why] of [
+      [volume(unfetched, `${baseURL}/not-served?${token}`, '/mnt/required'), 'download volume object: status 404'],
+      [volume(unmountable, serve('unmountable-required', unmountable), '/mnt/required'), 'guest did not mount required volume 1'],
+    ] as const) {
+      const id = randomUUID();
+      const outcome = await create(id, [volume(data, serve('data', data), '/mnt/data'), failing]);
+      if (outcome.result === 'ok') {
+        await remove(id);
+      }
+      expect(outcome.result, why).toBe('error');
+      expect(outcome.message).toContain(why);
+      expect(outcome.message).not.toContain(token);
+      expect(run('sudo', ['test', '-e', `/srv/jailer/firecracker/${vmID(id)}`]).status).not.toBe(0);
+      expect(hostMounts(id)).toEqual([]);
+      expect(parseGauge(scrapeRunnerMetrics(), PINNED)).toBe(pinnedBefore);
+    }
   });
 
   test('a sandbox without volumes is unchanged', async () => {
@@ -340,11 +375,18 @@ test.describe('Volumes attached on create', FIRECRACKER_ONLY, () => {
     }
   });
 
-  test('the read URLs reach no runner log line', () => {
+  test('the read URLs reach no runner log line', async () => {
     const log = process.env.E2E_RUNNER_LOG;
     test.skip(!log, 'needs E2E_RUNNER_LOG from e2e/run-firecracker.sh');
-    const content = readFileSync(log!, 'utf8');
-    expect(content).toContain('volume cache download finished');
-    expect(content).not.toContain(token.split('=')[1]);
+    // A download of its own, so the log has one whatever ran before.
+    const logged = buildImage('logged', { 'logged.txt': { content: 'logged\n' } });
+    const id = randomUUID();
+    const created = await create(id, [volume(logged, serve('logged', logged), '/mnt/logged')]);
+    await remove(id);
+    expect(created.result).toBe('ok');
+
+    const lines = readFileSync(log!, 'utf8').split('\n');
+    expect(lines.some((line) => line.includes('volume cache download finished') && line.includes(logged.sha256))).toBe(true);
+    expect(lines.filter((line) => line.includes(token.split('=')[1]))).toEqual([]);
   });
 });
