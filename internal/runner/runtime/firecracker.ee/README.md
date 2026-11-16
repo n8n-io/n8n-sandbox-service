@@ -49,7 +49,7 @@ Invariants (rationale in the code comments of `stop_wake.go`, `crash.go`, `netwo
 - Teardown marks its slot unwired, and slot setup deletes leftover netns/veth before creating them, so a slot handed back with leftovers comes up clean.
 - A teardown never touches a slot another sandbox holds: `clearSlotNetwork` runs under the slot's network lock and re-reads the owner there, per incarnation, because `Shutdown` can release a slot from under a concurrent teardown while the next sandbox takes it. A stopped sandbox has no slot by the time it is deleted, so only its jail is cleaned.
 - Every microVM incarnation has a `generation`; an exit callback carrying an old generation is ignored, which is how runner-initiated kills are told apart from guest deaths.
-- The guest daemon holds root, and serves only `/healthz` and `POST /volumes/mount`, until the first `POST /volumes/mount` ([security-model.md](../../../../docs/security-model.md#guest-to-host-and-network)). Create and cold boot send it after `probe_daemon`, with no volumes, and fail on any answer but `204`, `404` or `501`. A wake from a stop snapshot doesn't: its daemon dropped root before the snapshot.
+- The guest daemon holds root, and serves only `/healthz` and `POST /volumes/mount`, until the first `POST /volumes/mount` ([security-model.md](../../../../docs/security-model.md#guest-to-host-and-network)). Create and cold boot send it after `probe_daemon`, with the sandbox's volumes or none. A wake from a stop snapshot doesn't: its daemon dropped root before the snapshot. Without volumes, any answer but `204`, `404` or `501` fails the activation. With volumes, the daemon answers `200` with each drive's outcome; daemons that mount all or none answer `204` (all) or `500` with a reason (none), which the runner reads as such; anything else fails the activation.
 
 ## Guest death and cold boot
 
@@ -62,6 +62,18 @@ The guest runs no NTP. A restored guest would resume with the wall clock it had 
 ## Volume drives
 
 A volume drive is a read-only drive the golden snapshot reserves for a volume, a read-only filesystem for the sandbox. Firecracker can't add drives to a restored VM, so the snapshot attaches `VOLUME_DRIVES` of them up front (default 8: `vol0`–`vol7`, right after the rootfs, seen by the guest as `/dev/vdb`–`/dev/vdi`). Each is empty: every jail hard-links them to one root-owned read-only file, `volume-drive-placeholder` in the jailer base dir. A cold boot attaches them again.
+
+### Attaching volumes
+
+The create options name the volumes (`ext4` only); the position in the list is the drive. A sandbox keeps its volumes for its lifetime.
+
+- **Create:** after the slot is reserved and before anything exists on the host, every image is acquired from the volume cache at once, pinned for the sandbox, waiting until a minute before the create's deadline (half the time left if that is more). The images are bound read-only at their drives' jail paths, over the placeholders, before jailer starts. After the restore, `PATCH /drives/vol<i>` with the same path makes the guest see each size, and the mount request names each drive, its sectors and mount path. The echo says per volume whether the sandbox has it.
+- **Failures:** a required volume that can't be downloaded, verified or mounted fails the create; a capacity refusal from the cache stays one, so the API tries another runner. An optional one is left out for a fault of its own: `cache_full`, `timeout` (its download goes on in the cache), `download`, or the guest's `drive`, `mount_point` or `mount`. One the guest didn't mount keeps its bind and pin: the guest has the drive's size, and a wake restores it from the same path. Host faults fail the create for any volume: a cached image that isn't root-owned and unwritable, a bind, a `PATCH`, an invalid answer.
+- **Wake:** the same images bound at the same paths, no `PATCH` and no mount request: the stop snapshot has the sizes and the mounts.
+- **Cold boot:** the same binds, the drives replayed with the images, and the mount request again for the volumes the create mounted.
+- **Stop, guest death, delete, failed create, shutdown:** `cleanupHost` unmounts the binds before it removes the jail. Delete, a failed create and shutdown also release the pins, once the sandbox is untracked; a delete whose cleanup fails keeps them for its retry. A failed create releases them even when its cleanup fails, like its slot: an image the cache then evicts stays on disk while the leaked jail binds it. Startup reconcile doesn't unmount: a jail left with binds after a runner crash stays in place (see [Limitations](#limitations)).
+
+A sandbox without volumes takes none of these steps.
 
 ## Resource limits
 

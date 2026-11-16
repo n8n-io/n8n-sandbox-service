@@ -455,7 +455,7 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 		// asked for would leave the record saying one thing and the network
 		// another, so the sandbox is removed rather than tracked.
 		applied, err := runnerruntime.ParseCreateOptions(gresp.GetAppliedCreateOptionsJson())
-		if err != nil || *applied != requested {
+		if err != nil || applied.Egress != requested.Egress {
 			rollbackRunnerCreate()
 			slog.ErrorContext(
 				r.Context(),

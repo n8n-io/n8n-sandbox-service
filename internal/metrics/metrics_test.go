@@ -283,6 +283,24 @@ func TestRunnerRecorderVolumeCache(t *testing.T) {
 	}
 }
 
+func TestRunnerRecorderVolumesLeftOut(t *testing.T) {
+	rec := NewRunnerRecorder(true)
+	rec.ObserveVolumeLeftOut("download")
+	rec.ObserveVolumeLeftOut("download")
+	rec.ObserveVolumeLeftOut("mount")
+
+	if got := rec.VolumeLeftOutCount("download"); got != 2 {
+		t.Errorf("volumes_left_out_total{reason=download} = %v, want 2", got)
+	}
+	body := scrape(t, rec.Registry())
+	if want := `sandbox_volumes_left_out_total{reason="mount",role="runner"} 1`; !strings.Contains(body, want) {
+		t.Errorf("scrape body missing %q", want)
+	}
+	var nilRecorder *RunnerRecorder
+	nilRecorder.ObserveVolumeLeftOut("mount")
+	NewRunnerRecorder(false).ObserveVolumeLeftOut("mount")
+}
+
 func TestRunnerRecorderStoppedGaugeScrape(t *testing.T) {
 	r := NewRunnerRecorder(true)
 	r.SetActiveContainers(func() float64 { return 2 })

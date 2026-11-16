@@ -16,4 +16,3 @@ func (unsupportedSys) DeviceSize(string) (uint64, error) { return 0, errors.ErrU
 func (unsupportedSys) FlushBuffers(string) error         { return errors.ErrUnsupported }
 func (unsupportedSys) MakeMountPoint(string) error       { return errors.ErrUnsupported }
 func (unsupportedSys) Mount(string, string) error        { return errors.ErrUnsupported }
-func (unsupportedSys) Unmount(string) error              { return errors.ErrUnsupported }

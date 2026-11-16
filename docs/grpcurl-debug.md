@@ -33,6 +33,8 @@ grpcurl \
 
 `create_options_json` is a JSON `CreateOptions` (`internal/runner/runtime`): `{}` for the defaults, `{"egress":"none"}` for no egress. Unknown values are `InvalidArgument`. The response echoes what was applied in `applied_create_options_json`; the API refuses a sandbox whose echo does not match.
 
+`volumes` lists read-only volumes, Firecracker only: `{"volumes":[{"scope":"shared","sha256":"<hex>","size":<bytes>,"kind":"ext4","url":"https://…","mount_path":"/mnt/data","optional":true}]}`. The echo repeats each volume without its `url`, with `"attached"` and, for one left out, a `"reason"`. A Docker runner refuses a create with volumes.
+
 Cordon a runner: it takes no new creates, and the API deletes its stopped sandboxes instead of waking them ([API.md](API.md#put-adminrunnersidcordon--delete-adminrunnersidcordon)), until it is uncordoned (`{"cordoned": false}`) or restarts. `runner_id` is optional; when set, a runner with another id refuses. `GetCordon` with `-d '{}'` reads the state.
 
 ```bash

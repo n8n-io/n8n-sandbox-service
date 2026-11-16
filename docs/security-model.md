@@ -240,6 +240,23 @@ a Firecracker process cannot change the kernel later sandboxes boot. Admission
 and every cold boot fail unless that file is owned by root, readable by all and
 writable by no other user.
 
+Volume images are shared the same way: every jail that attaches an image binds
+the one file in the runner's cache. Read-only rests on that file and its bind,
+not on the drive's `is_read_only`, which sits in the per-sandbox snapshot state
+Firecracker's uid can write. The cache, run by the runner as root, writes each
+image `0444` in a `0700` directory, and the runner refuses to bind one that
+isn't root-owned and unwritable. It binds each image read-only over a
+placeholder it has just renamed into place, before jailer starts, so the bind
+reaches Firecracker's mount namespace read-only. It never chowns a bind target.
+A jailed Firecracker therefore can't write an image (file mode for uid 1000,
+read-only mount for root), can't replace what a drive path points at (a mount
+point can't be renamed or removed), and sees no other sandbox's images. Binds
+are unmounted before a jail is removed, skipping a path that is a symlink. A
+sandbox pins its images until it is deleted, so the cache doesn't evict an image
+its jail binds. The one exception is a failed create whose cleanup fails too:
+its pins go with its slot, and an image the cache then evicts stays on disk,
+unchanged, while the leaked jail binds it.
+
 The Sysbox runtime puts sandboxes on one of two Docker bridges: `runner-bridge`
 for `public`, and `runner-no-egress` (a Docker internal network; bridge device
 `br-no-egress`) for `none`. Two chains cover every container on a bridge, both
@@ -298,13 +315,19 @@ The first `POST /volumes/mount` can only mount the volume drives `/dev/vdb` to
 `/dev/vdp` read-only, `nodev` and `nosuid`, below `/mnt/`, refusing a symlink,
 or a directory that root doesn't own or that group or others can write, on the
 path. It mounts by path, which is safe only because
-no other process runs in the guest while the daemon holds root. After it,
-whatever the outcome, the daemon drops to uid 1000, or exits if it cannot, and
-only then serves its other routes; later requests to the route get `409`. The
-runner sends that request, with no volumes, on every create and cold boot,
-before any client request reaches the sandbox, and rolls the activation back if
-it fails. Neither the API nor the runner proxies the route. On Docker the daemon
-starts as uid 1000 and answers it with `501`.
+no other process runs in the guest while the daemon holds root. It mounts each
+volume on its own and answers with each drive and whether it mounted, with one
+of three reasons if not; nothing else from the guest. After it, whatever the
+outcome, the daemon drops to uid 1000, or exits if it cannot, and only then
+serves its other routes; later requests to the route get `409`. The runner
+sends that request, with the sandbox's volumes or none, on every create and
+cold boot, before any client request reaches the sandbox, and rolls the
+activation back if it fails or a required volume did not mount. It takes
+nothing from the answer but its shape: a bounded body, parsed strictly, naming
+exactly the drives it asked for, once each, with allowlisted reasons; no text
+from the guest reaches its logs, metrics or errors. Neither the API nor the
+runner proxies the route. On Docker the daemon starts as uid 1000 and answers
+it with `501`.
 
 A sandbox therefore has no root by the time it runs anything, and no
 `apt-get`. Packages install unprivileged, under `/home/user`: `pip` runs from a
@@ -499,6 +522,7 @@ The boundaries above are covered by tests rather than asserted on paper.
 | Sandbox-to-sandbox (unicast and multicast), blocked-range egress and guest DNS; egress `none` across stop/wake and slot reuse | [e2e/tests/network-isolation.spec.ts](../e2e/tests/network-isolation.spec.ts) |
 | Docker capability policy, absence of a root path, and denied network administration; no user namespaces on either runtime | [e2e/tests/sandbox-capabilities.spec.ts](../e2e/tests/sandbox-capabilities.spec.ts) |
 | Firecracker daemon root: only the volume mount request is served while it holds root, dropped after that request, sent on every create and cold boot, never proxied | [internal/daemon/volume_mount_test.go](../internal/daemon/volume_mount_test.go), [internal/runner/runtime/firecracker.ee/volume_mount_test.go](../internal/runner/runtime/firecracker.ee/volume_mount_test.go), [internal/runner/server_test.go](../internal/runner/server_test.go), [internal/api/gateway_test.go](../internal/api/gateway_test.go), [e2e/tests/sandbox-capabilities.spec.ts](../e2e/tests/sandbox-capabilities.spec.ts), [e2e/tests/sandbox-crash-recovery.spec.ts](../e2e/tests/sandbox-crash-recovery.spec.ts) |
+| Firecracker volumes: images bound read-only before jailer starts, never chowned, unwritable by the jailed Firecracker as uid 1000 and as root, drive paths not replaceable; mounted `ro,nodev,nosuid`; unmounted and unpinned on every path that ends a sandbox; the daemon's answer trusted only for its shape; read URLs in no error, log line or echo | [internal/runner/runtime/firecracker.ee/volume_attach_test.go](../internal/runner/runtime/firecracker.ee/volume_attach_test.go), [internal/runner/runtime/firecracker.ee/volume_mount_test.go](../internal/runner/runtime/firecracker.ee/volume_mount_test.go), [internal/daemon/volume_mount_test.go](../internal/daemon/volume_mount_test.go), [internal/daemon/volumedrives/volumedrives_test.go](../internal/daemon/volumedrives/volumedrives_test.go), [internal/runner/runtime/volume_test.go](../internal/runner/runtime/volume_test.go), [internal/runner/grpc_control_test.go](../internal/runner/grpc_control_test.go), [e2e/tests/volume-attach.spec.ts](../e2e/tests/volume-attach.spec.ts) |
 | Unprivileged npm and PyPI installation, and the build toolchain | [e2e/tests/sandbox-packages.spec.ts](../e2e/tests/sandbox-packages.spec.ts) |
 | Blocked list and egress rule generation | [internal/runner/runtime/netpolicy/private_ranges_test.go](../internal/runner/runtime/netpolicy/private_ranges_test.go), [internal/runner/runtime/docker/netrules/netrules_test.go](../internal/runner/runtime/docker/netrules/netrules_test.go), [internal/runner/runtime/firecracker.ee/network/egress_test.go](../internal/runner/runtime/firecracker.ee/network/egress_test.go) |
 | Firecracker: creates refused below 5% free disk, no sandbox deleted to make room | [internal/runner/runtime/firecracker.ee/disk_test.go](../internal/runner/runtime/firecracker.ee/disk_test.go), [internal/runner/runtime/firecracker.ee/stop_wake_test.go](../internal/runner/runtime/firecracker.ee/stop_wake_test.go) |

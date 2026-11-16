@@ -53,7 +53,6 @@ func (f *fakeSys) DeviceSize(string) (uint64, error) {
 func (f *fakeSys) FlushBuffers(device string) error { return f.record("flush " + device) }
 func (f *fakeSys) MakeMountPoint(path string) error { return f.record("mkdir " + path) }
 func (f *fakeSys) Mount(device, path string) error  { return f.record("mount " + device + " " + path) }
-func (f *fakeSys) Unmount(path string) error        { return f.record("unmount " + path) }
 
 func requireCalls(t *testing.T, sys *fakeSys, want ...string) {
 	t.Helper()
@@ -110,8 +109,8 @@ func TestVolumeMountEndpointMountsThenDropsRoot(t *testing.T) {
 	handler := newRootHandler(t, sys)
 
 	body := volumesBody(t, oneVolume)
-	if rr := postVolumes(handler, body); rr.Code != http.StatusNoContent {
-		t.Fatalf("first request: status %d, want 204: %s", rr.Code, rr.Body.String())
+	if rr := postVolumes(handler, body); rr.Code != http.StatusOK || rr.Body.String() != `{"volumes":[{"drive":0,"mounted":true}]}`+"\n" {
+		t.Fatalf("first request: status %d body %s, want 200 with the drive mounted", rr.Code, rr.Body.String())
 	}
 	for _, later := range []string{body, `{"volumes":[]}`, `not json`} {
 		if rr := postVolumes(handler, later); rr.Code != http.StatusConflict {
@@ -142,8 +141,7 @@ func TestVolumeMountEndpointDropsRootWhenTheRequestFails(t *testing.T) {
 		{"invalid", volumesBody(t, volumedrives.Volume{Drive: 0, Sectors: 1, Path: "/etc/cron.d"}), http.StatusBadRequest, "is not below"},
 		{"too large", `{"volumes":[]}` + strings.Repeat(" ", volumedrives.MaxRequestBytes), http.StatusBadRequest, "too large"},
 		{"not JSON", `volumes`, http.StatusBadRequest, "invalid character"},
-		{"mount failed", volumesBody(t, oneVolume), http.StatusInternalServerError,
-			`volume drive 0 at /mnt/a: mount /dev/vdb: invalid argument","code":500,"reason":"mount"`},
+		{"mount failed", volumesBody(t, oneVolume), http.StatusOK, `{"volumes":[{"drive":0,"mounted":false,"reason":"mount"}]}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -160,6 +158,49 @@ func TestVolumeMountEndpointDropsRootWhenTheRequestFails(t *testing.T) {
 			}
 			if rr := postVolumes(handler, `{"volumes":[]}`); rr.Code != http.StatusConflict {
 				t.Fatalf("later request: status %d, want 409: %s", rr.Code, rr.Body.String())
+			}
+		})
+	}
+}
+
+// Each volume mounts on its own: a failure takes no other volume with it, and
+// the answer names every drive with its outcome, never the guest's error.
+func TestVolumeMountEndpointMountsEachVolumeOnItsOwn(t *testing.T) {
+	first := volumedrives.Volume{Drive: 0, Sectors: 1, Path: "/mnt/a"}
+	second := volumedrives.Volume{Drive: 1, Sectors: 1, Path: "/mnt/b"}
+	tests := []struct {
+		name      string
+		failing   string
+		want      string
+		wantMount string
+	}{
+		{"first fails, second mounts", "mount /dev/vdb /mnt/a",
+			`{"volumes":[{"drive":0,"mounted":false,"reason":"mount"},{"drive":1,"mounted":true}]}`, "mount /dev/vdc /mnt/b"},
+		{"first mounts, second fails", "mkdir /mnt/b",
+			`{"volumes":[{"drive":0,"mounted":true},{"drive":1,"mounted":false,"reason":"mount_point"}]}`, "mount /dev/vdb /mnt/a"},
+		{"first's drive fails", "flush /dev/vdb",
+			`{"volumes":[{"drive":0,"mounted":false,"reason":"drive"},{"drive":1,"mounted":true}]}`, "mount /dev/vdc /mnt/b"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logs := captureLogs(t)
+			sys := newFakeSys()
+			sys.errs[tt.failing] = errors.New("guest detail /etc/secret")
+			handler := newRootHandler(t, sys)
+
+			rr := postVolumes(handler, volumesBody(t, first, second))
+			if rr.Code != http.StatusOK || rr.Body.String() != tt.want+"\n" {
+				t.Fatalf("status %d body %s, want 200 with %s", rr.Code, rr.Body.String(), tt.want)
+			}
+			calls := sys.recorded()
+			if !slices.Contains(calls, tt.wantMount) {
+				t.Fatalf("calls %q lack %q", calls, tt.wantMount)
+			}
+			if calls[len(calls)-1] != "drop root" || slices.ContainsFunc(calls, func(call string) bool { return strings.HasPrefix(call, "exit") }) {
+				t.Fatalf("calls %q, want root dropped last and no exit", calls)
+			}
+			if !strings.Contains(logs.String(), "guest detail") {
+				t.Fatalf("logs = %s, want the failure's detail in the guest's log", logs.String())
 			}
 		})
 	}
@@ -227,8 +268,8 @@ func TestVolumeMountEndpointHandlesOneOfConcurrentRequests(t *testing.T) {
 	for code := range codes {
 		counts[code]++
 	}
-	if counts[http.StatusNoContent] != 1 || counts[http.StatusConflict] != requests-1 {
-		t.Fatalf("status counts = %v, want one 204 and %d 409", counts, requests-1)
+	if counts[http.StatusOK] != 1 || counts[http.StatusConflict] != requests-1 {
+		t.Fatalf("status counts = %v, want one 200 and %d 409", counts, requests-1)
 	}
 	requireCalls(t, sys, "flush /dev/vdb", "mkdir /mnt/a", "mount /dev/vdb /mnt/a", "drop root")
 }

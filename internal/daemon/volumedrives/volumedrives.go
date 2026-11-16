@@ -32,12 +32,17 @@ const (
 	pollInterval = 10 * time.Millisecond
 )
 
-// Why MountAll failed, as Reason reports it.
+// Why a volume did not mount, as an Outcome reports it.
 const (
 	ReasonDrive      = "drive"
 	ReasonMountPoint = "mount_point"
 	ReasonMount      = "mount"
 )
+
+// KnownReason reports whether reason is one of the Reason values.
+func KnownReason(reason string) bool {
+	return reason == ReasonDrive || reason == ReasonMountPoint || reason == ReasonMount
+}
 
 // Volume is one drive and where to mount it.
 type Volume struct {
@@ -98,6 +103,54 @@ func validate(volumes []Volume) error {
 	return nil
 }
 
+// Outcome is how one volume of a mount request went: mounted, or why not.
+type Outcome struct {
+	Drive   int    `json:"drive"`
+	Mounted bool   `json:"mounted"`
+	Reason  string `json:"reason,omitempty"`
+}
+
+// Answer is the answer to a mount request with volumes.
+type Answer struct {
+	Volumes []Outcome `json:"volumes"`
+}
+
+// MaxAnswerBytes bounds an Answer.
+const MaxAnswerBytes = 4 << 10
+
+// ParseAnswer decodes the answer to a mount request with volumes,
+// {"volumes":[...]}, and checks it against the request: one outcome per
+// requested volume, in request order, with a known reason for each that did
+// not mount and none for each that did.
+func ParseAnswer(body []byte, requested []Volume) ([]Outcome, error) {
+	if len(body) > MaxAnswerBytes {
+		return nil, fmt.Errorf("answer is longer than %d bytes", MaxAnswerBytes)
+	}
+	var answer Answer
+	// Decode errors are left out: they can quote the answer.
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+	if dec.Decode(&answer) != nil {
+		return nil, errors.New("answer is not a JSON object of volume outcomes")
+	}
+	var extra json.RawMessage
+	if err := dec.Decode(&extra); err != io.EOF {
+		return nil, errors.New("answer must contain a single JSON value")
+	}
+	if len(answer.Volumes) != len(requested) {
+		return nil, fmt.Errorf("answer has %d volumes, the request %d", len(answer.Volumes), len(requested))
+	}
+	for index, outcome := range answer.Volumes {
+		if outcome.Drive != requested[index].Drive {
+			return nil, fmt.Errorf("answer volume %d is drive %d, the request's is drive %d", index, outcome.Drive, requested[index].Drive)
+		}
+		if !(outcome.Mounted && outcome.Reason == "") && !(!outcome.Mounted && KnownReason(outcome.Reason)) {
+			return nil, fmt.Errorf("answer volume %d has an unknown reason or one that contradicts mounted", index)
+		}
+	}
+	return answer.Volumes, nil
+}
+
 // Sys is the system calls a Mounter makes; tests fake it.
 type Sys interface {
 	DeviceSize(device string) (uint64, error)
@@ -106,7 +159,6 @@ type Sys interface {
 	// directory another user owns or can write, on the path.
 	MakeMountPoint(path string) error
 	Mount(device, path string) error
-	Unmount(path string) error
 }
 
 // Mounter mounts volume drives.
@@ -120,39 +172,39 @@ func NewMounter(sys Sys) *Mounter {
 	return &Mounter{sys: sys, sizeTimeout: sizeTimeout, pollInterval: pollInterval}
 }
 
-// MountAll mounts all volumes or, after a failure, none.
-func (m *Mounter) MountAll(volumes []Volume) error {
-	mounted := make([]string, 0, len(volumes))
-	for _, v := range volumes {
-		if err := m.mountOne(v); err != nil {
-			errs := []error{fmt.Errorf("volume drive %d at %s: %w", v.Drive, v.Path, err)}
-			for i := len(mounted) - 1; i >= 0; i-- {
-				if uerr := m.sys.Unmount(mounted[i]); uerr != nil {
-					errs = append(errs, fmt.Errorf("roll back %s: %w", mounted[i], uerr))
-				}
-			}
-			return errors.Join(errs...)
+// MountEach mounts each volume on its own, in order: one that fails leaves the
+// others as they are. It returns an outcome per volume, and the failures, with
+// details from the guest, joined.
+func (m *Mounter) MountEach(volumes []Volume) ([]Outcome, error) {
+	outcomes := make([]Outcome, 0, len(volumes))
+	var errs []error
+	for _, vol := range volumes {
+		if reason, err := m.mountOne(vol); err != nil {
+			errs = append(errs, fmt.Errorf("volume drive %d at %s: %w", vol.Drive, vol.Path, err))
+			outcomes = append(outcomes, Outcome{Drive: vol.Drive, Reason: reason})
+			continue
 		}
-		mounted = append(mounted, v.Path)
+		outcomes = append(outcomes, Outcome{Drive: vol.Drive, Mounted: true})
 	}
-	return nil
+	return outcomes, errors.Join(errs...)
 }
 
-func (m *Mounter) mountOne(v Volume) error {
-	device := devicePath(v.Drive)
-	if err := m.waitForSize(device, v.Sectors*sectorBytes); err != nil {
-		return &mountError{ReasonDrive, err}
+// mountOne mounts one volume, or returns why not and the error.
+func (m *Mounter) mountOne(vol Volume) (string, error) {
+	device := devicePath(vol.Drive)
+	if err := m.waitForSize(device, vol.Sectors*sectorBytes); err != nil {
+		return ReasonDrive, err
 	}
 	if err := m.sys.FlushBuffers(device); err != nil {
-		return &mountError{ReasonDrive, fmt.Errorf("flush buffers of %s: %w", device, err)}
+		return ReasonDrive, fmt.Errorf("flush buffers of %s: %w", device, err)
 	}
-	if err := m.sys.MakeMountPoint(v.Path); err != nil {
-		return &mountError{ReasonMountPoint, fmt.Errorf("create mount point: %w", err)}
+	if err := m.sys.MakeMountPoint(vol.Path); err != nil {
+		return ReasonMountPoint, fmt.Errorf("create mount point: %w", err)
 	}
-	if err := m.sys.Mount(device, v.Path); err != nil {
-		return &mountError{ReasonMount, fmt.Errorf("mount %s: %w", device, err)}
+	if err := m.sys.Mount(device, vol.Path); err != nil {
+		return ReasonMount, fmt.Errorf("mount %s: %w", device, err)
 	}
-	return nil
+	return "", nil
 }
 
 // waitForSize waits for the size the runner patched in. Without it, some
@@ -172,24 +224,6 @@ func (m *Mounter) waitForSize(device string, want uint64) error {
 		}
 		time.Sleep(m.pollInterval)
 	}
-}
-
-type mountError struct {
-	reason string
-	err    error
-}
-
-func (e *mountError) Error() string { return e.err.Error() }
-func (e *mountError) Unwrap() error { return e.err }
-
-// Reason returns why a MountAll error failed, ReasonDrive, ReasonMountPoint or
-// ReasonMount, or "" for another error.
-func Reason(err error) string {
-	var failed *mountError
-	if errors.As(err, &failed) {
-		return failed.reason
-	}
-	return ""
 }
 
 // makeMountPoint creates path and its missing parents below base, mode 0755.

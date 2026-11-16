@@ -29,6 +29,19 @@ import (
 
 type RuntimeFactory func(*config.Config) (runnerruntime.Runtime, error)
 
+// volumeCache is the volume cache as a runtime sees it.
+type volumeCache struct {
+	cache *volumecache.Cache
+}
+
+func (v volumeCache) Acquire(ctx context.Context, vol runnerruntime.Volume, holder string) (string, error) {
+	return v.cache.Acquire(ctx, volumecache.Key{Scope: vol.Scope, SHA256: vol.SHA256}, volumecache.Source{URL: vol.URL, Size: vol.Size}, holder)
+}
+
+func (v volumeCache) ReleaseAll(holder string) {
+	v.cache.ReleaseAll(holder)
+}
+
 // Main loads shared runner config, constructs the backend runtime, and runs the
 // common HTTP, registration, and control gRPC servers.
 func Main(runtimeName string, factory RuntimeFactory) {
@@ -92,9 +105,9 @@ func Run(cfg *config.Config, rt runnerruntime.Runtime) {
 	}
 
 	// After the runtime is built: Firecracker's startup reconcile removes every
-	// directory in the data dir, the default cache dir included. Nothing
-	// acquires from the cache yet; building it wipes the dir, registers its
-	// metrics and sets its budget aside from creates.
+	// directory in the data dir, the default cache dir included. Building it
+	// wipes the dir, registers its metrics and sets its budget aside from
+	// creates.
 	cacheConfig := volumecache.Config{
 		Dir:          cfg.VolumeCacheDir,
 		DataDir:      cfg.DataDir,
@@ -122,6 +135,9 @@ func Run(cfg *config.Config, rt runnerruntime.Runtime) {
 	}
 	if reserver, ok := rt.(runnerruntime.DiskReserver); ok {
 		reserver.SetDiskReservation(cache.DataDirReservation)
+	}
+	if attacher, ok := rt.(runnerruntime.VolumeAttacher); ok {
+		attacher.SetVolumeCache(volumeCache{cache})
 	}
 
 	handler := runner.NewRouter(rt, cfg, mrec)

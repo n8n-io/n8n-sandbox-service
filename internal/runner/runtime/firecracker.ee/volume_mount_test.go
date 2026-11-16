@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -31,7 +32,7 @@ func (c *volumeMountCalls) install(rt *Runtime) {
 		c.calls = append(c.calls, "probe")
 		return nil
 	}
-	rt.deps.mountVolumeDrives = func(_ context.Context, baseURL string, drives []volumedrives.Volume) error {
+	rt.deps.mountVolumeDrives = func(_ context.Context, baseURL string, drives []volumedrives.Volume) (map[int]string, error) {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		if len(drives) != 0 {
@@ -39,7 +40,7 @@ func (c *volumeMountCalls) install(rt *Runtime) {
 		} else {
 			c.calls = append(c.calls, "mount "+baseURL)
 		}
-		return c.err
+		return nil, c.err
 	}
 }
 
@@ -126,7 +127,7 @@ func TestCreateSandboxFailsWhenTheVolumeMountRequestFails(t *testing.T) {
 	rt.SetMetricsRecorder(rec)
 	calls := &volumeMountCalls{}
 	calls.install(rt)
-	calls.fail(&volumeMountError{status: http.StatusInternalServerError, reason: "mount", msg: "mount volumes: bad superblock"})
+	calls.fail(&volumeMountError{status: http.StatusInternalServerError, reason: "mount"})
 
 	const sandboxID = "sandbox-id-123456"
 	_, err := rt.CreateSandbox(context.Background(), sandboxID, nil)
@@ -183,29 +184,44 @@ func TestColdBootFailsWhenTheVolumeMountRequestFails(t *testing.T) {
 }
 
 func TestMountVolumeDrives(t *testing.T) {
-	drives := []volumedrives.Volume{{Drive: 0, Sectors: 8, Path: "/mnt/a"}}
+	drives := []volumedrives.Volume{{Drive: 0, Sectors: 8, Path: "/mnt/a"}, {Drive: 2, Sectors: 16, Path: "/mnt/b"}}
 	tests := []struct {
-		name    string
-		drives  []volumedrives.Volume
-		status  int
-		answer  string
-		wantErr string
-		result  string
+		name       string
+		drives     []volumedrives.Volume
+		status     int
+		answer     string
+		wantFailed map[int]string
+		wantErr    string
+		result     string
 	}{
-		{"mounted nothing", nil, http.StatusNoContent, "", "", "success"},
-		{"mounted", drives, http.StatusNoContent, "", "", "success"},
-		{"daemon without the endpoint", nil, http.StatusNotFound, "404 page not found\n", "", "success"},
-		{"daemon not root", nil, http.StatusNotImplemented, `{"error":"not root","code":501}`, "", "success"},
-		{"drives for a daemon without the endpoint", drives, http.StatusNotFound, "404 page not found\n", "daemon answered 404: 404 page not found", "unsupported"},
-		{"drives for a daemon not root", drives, http.StatusNotImplemented, `{"error":"not root","code":501}`, "daemon answered 501: not root", "unsupported"},
-		{"request already made", nil, http.StatusConflict, `{"error":"first request only","code":409}`, "daemon answered 409: first request only", "already_mounted"},
-		{"invalid request", drives, http.StatusBadRequest, `{"error":"invalid request body: x","code":400}`, "daemon answered 400: invalid request body: x", "invalid_request"},
-		{"drive never ready", drives, http.StatusInternalServerError, `{"error":"/dev/vdb has 0 bytes","code":500,"reason":"drive"}`, "daemon answered 500: /dev/vdb has 0 bytes", "drive"},
-		{"mount point refused", drives, http.StatusInternalServerError, `{"error":"symlink","code":500,"reason":"mount_point"}`, "daemon answered 500: symlink", "mount_point"},
-		{"mount refused", drives, http.StatusInternalServerError, `{"error":"bad superblock","code":500,"reason":"mount"}`, "daemon answered 500: bad superblock", "mount"},
-		{"unknown reason", drives, http.StatusInternalServerError, `{"error":"x","code":500,"reason":"made up"}`, "daemon answered 500: x", "error"},
-		{"not JSON", nil, http.StatusInternalServerError, "guest says no\n", "daemon answered 500: guest says no", "error"},
-		{"redirect", nil, http.StatusTemporaryRedirect, "", "daemon answered 307", "error"},
+		{"mounted nothing", nil, http.StatusNoContent, "", nil, "", "success"},
+		{"daemon without the endpoint", nil, http.StatusNotFound, "404 page not found\n", nil, "", "success"},
+		{"daemon not root", nil, http.StatusNotImplemented, `{"error":"not root","code":501}`, nil, "", "success"},
+		{"request already made", nil, http.StatusConflict, `{"error":"first request only","code":409}`, nil, "daemon answered 409", "already_mounted"},
+		{"not JSON", nil, http.StatusInternalServerError, "guest says no\n", nil, "daemon answered 500", "error"},
+		{"redirect", nil, http.StatusTemporaryRedirect, "", nil, "daemon answered 307", "error"},
+		{"answer without drives", nil, http.StatusOK, `{"volumes":[]}`, nil, "daemon answered 200", "error"},
+
+		{"each mounted", drives, http.StatusOK, `{"volumes":[{"drive":0,"mounted":true},{"drive":2,"mounted":true}]}`, map[int]string{}, "", "success"},
+		{"second not mounted", drives, http.StatusOK, `{"volumes":[{"drive":0,"mounted":true},{"drive":2,"mounted":false,"reason":"mount"}]}`,
+			map[int]string{2: "mount"}, "", "mount"},
+		{"first not mounted", drives, http.StatusOK, `{"volumes":[{"drive":0,"mounted":false,"reason":"mount_point"},{"drive":2,"mounted":false,"reason":"drive"}]}`,
+			map[int]string{0: "mount_point", 2: "drive"}, "", "mount_point"},
+		{"older daemon mounted all", drives, http.StatusNoContent, "", nil, "", "success"},
+		{"older daemon mounted none", drives, http.StatusInternalServerError, `{"error":"bad superblock","code":500,"reason":"mount"}`,
+			map[int]string{0: "mount", 2: "mount"}, "", "mount"},
+		{"older daemon with an unknown reason", drives, http.StatusInternalServerError, `{"error":"x","code":500,"reason":"made up"}`, nil, "daemon answered 500", "error"},
+		{"drives for a daemon without the endpoint", drives, http.StatusNotFound, "404 page not found\n", nil, "daemon answered 404", "unsupported"},
+		{"drives for a daemon not root", drives, http.StatusNotImplemented, `{"error":"not root","code":501}`, nil, "daemon answered 501", "unsupported"},
+		{"invalid request", drives, http.StatusBadRequest, `{"error":"invalid request body: x","code":400}`, nil, "daemon answered 400", "invalid_request"},
+
+		{"unknown drive", drives, http.StatusOK, `{"volumes":[{"drive":0,"mounted":true},{"drive":5,"mounted":true}]}`, nil, "invalid answer", "invalid_answer"},
+		{"drive twice", drives, http.StatusOK, `{"volumes":[{"drive":0,"mounted":true},{"drive":0,"mounted":true}]}`, nil, "invalid answer", "invalid_answer"},
+		{"drive missing", drives, http.StatusOK, `{"volumes":[{"drive":0,"mounted":true}]}`, nil, "invalid answer", "invalid_answer"},
+		{"unknown reason", drives, http.StatusOK, `{"volumes":[{"drive":0,"mounted":true},{"drive":2,"mounted":false,"reason":"/etc/shadow"}]}`, nil, "invalid answer", "invalid_answer"},
+		{"extra field", drives, http.StatusOK, `{"volumes":[{"drive":0,"mounted":true,"detail":"/etc/shadow"},{"drive":2,"mounted":true}]}`, nil, "invalid answer", "invalid_answer"},
+		{"oversized", drives, http.StatusOK, `{"volumes":[{"drive":0,"mounted":true},{"drive":2,"mounted":true}]}` + strings.Repeat(" ", volumedrives.MaxAnswerBytes), nil, "invalid answer", "invalid_answer"},
+		{"not JSON with drives", drives, http.StatusOK, "/etc/shadow", nil, "invalid answer", "invalid_answer"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -227,14 +243,29 @@ func TestMountVolumeDrives(t *testing.T) {
 			}))
 			defer daemon.Close()
 
-			err := mountVolumeDrives(context.Background(), daemon.URL, tt.drives)
+			failed, err := mountVolumeDrives(context.Background(), daemon.URL, tt.drives)
 			if tt.wantErr == "" && err != nil {
 				t.Fatalf("mountVolumeDrives() error = %v, want none", err)
 			}
 			if tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {
 				t.Fatalf("mountVolumeDrives() error = %v, want one containing %q", err, tt.wantErr)
 			}
-			if got := volumeMountResult(err); got != tt.result {
+			if err != nil {
+				for _, guestText := range []string{"guest says", "superblock", "/etc/shadow", "not root", "first request", "made up"} {
+					if strings.Contains(err.Error(), guestText) {
+						t.Fatalf("mountVolumeDrives() error %q repeats the daemon's answer", err)
+					}
+				}
+			}
+			if len(failed) != len(tt.wantFailed) {
+				t.Fatalf("failed drives = %v, want %v", failed, tt.wantFailed)
+			}
+			for drive, reason := range tt.wantFailed {
+				if failed[drive] != reason {
+					t.Fatalf("failed drives = %v, want %v", failed, tt.wantFailed)
+				}
+			}
+			if got := volumeMountResult(tt.drives, failed, err); got != tt.result {
 				t.Fatalf("volumeMountResult() = %q, want %q", got, tt.result)
 			}
 			if got := requests.Load(); got != 1 {
@@ -245,7 +276,7 @@ func TestMountVolumeDrives(t *testing.T) {
 			}
 			wantBody := `{"volumes":[]}`
 			if len(tt.drives) > 0 {
-				wantBody = `{"volumes":[{"drive":0,"sectors":8,"path":"/mnt/a"}]}`
+				wantBody = `{"volumes":[{"drive":0,"sectors":8,"path":"/mnt/a"},{"drive":2,"sectors":16,"path":"/mnt/b"}]}`
 			}
 			if body != wantBody {
 				t.Fatalf("request body = %s, want %s", body, wantBody)
@@ -254,13 +285,40 @@ func TestMountVolumeDrives(t *testing.T) {
 	}
 }
 
+// net/http quotes a malformed status line in its error; none of it may reach
+// the runner's.
+func TestMountVolumeDrivesLeavesOutAMalformedAnswer(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = io.ReadAll(io.LimitReader(conn, 1))
+		_, _ = io.WriteString(conn, "guest-text-/etc/shadow\r\n\r\n")
+	}()
+
+	_, err = mountVolumeDrives(context.Background(), "http://"+listener.Addr().String(), []volumedrives.Volume{{Drive: 0, Sectors: 1, Path: "/mnt/a"}})
+	if err == nil || strings.Contains(err.Error(), "shadow") || strings.Contains(err.Error(), "guest-text") {
+		t.Fatalf("mountVolumeDrives() error = %v, want one without the answer", err)
+	}
+	if got := volumeMountResult(nil, nil, err); got != "no_response" {
+		t.Fatalf("volumeMountResult() = %q, want no_response", got)
+	}
+}
+
 func TestMountVolumeDrivesWithoutAnAnswer(t *testing.T) {
 	daemon := httptest.NewServer(http.NotFoundHandler())
 	url := daemon.URL
 	daemon.Close()
 
-	err := mountVolumeDrives(context.Background(), url, nil)
-	if got := volumeMountResult(err); err == nil || got != "no_response" {
+	_, err := mountVolumeDrives(context.Background(), url, nil)
+	if got := volumeMountResult(nil, nil, err); err == nil || got != "no_response" {
 		t.Fatalf("mountVolumeDrives() error = %v, result %q; want an error counted as no_response", err, got)
 	}
 }

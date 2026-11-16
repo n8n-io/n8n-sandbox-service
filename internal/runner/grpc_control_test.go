@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -127,6 +128,65 @@ func TestSandboxControlGRPCCreateSandboxParsesOptions(t *testing.T) {
 				t.Fatalf("applied_create_options_json = %q, want %q", got, tc.wantApplied)
 			}
 		})
+	}
+}
+
+type volumesRuntime struct {
+	fakeRuntime
+	opts    *runnerruntime.CreateOptions
+	leftOut map[int]string
+}
+
+func (v *volumesRuntime) CreateSandbox(_ context.Context, sandboxID string, opts *runnerruntime.CreateOptions) (*runnerruntime.SandboxInfo, error) {
+	v.opts = opts
+	return &runnerruntime.SandboxInfo{ID: sandboxID, IP: "10.0.0.2", VolumesLeftOut: v.leftOut}, nil
+}
+
+// The echo says per volume whether the sandbox has it, and never repeats the
+// read URL, which carries a token.
+func TestSandboxControlGRPCCreateSandboxEchoesVolumes(t *testing.T) {
+	const (
+		id     = "11111111-1111-4111-8111-111111111111"
+		token  = "sig=secret-token"
+		digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	)
+	volumeJSON := func(digest, mountPath string, optional bool) string {
+		return fmt.Sprintf(`{"scope":"shared","sha256":%q,"size":4096,"kind":"ext4","url":"https://objects.example/x?%s","mount_path":%q,"optional":%t}`,
+			digest, token, mountPath, optional)
+	}
+	otherDigest := strings.Repeat("f", 64)
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-api-key", "runner-key"))
+	rt := &volumesRuntime{leftOut: map[int]string{1: runnerruntime.VolumeLeftOutMount}}
+	srv := &SandboxControlGRPC{
+		Runtime: rt,
+		Cfg:     &config.Config{APIKeys: map[string]struct{}{"runner-key": {}}},
+		Rec:     metrics.NewRunnerRecorder(false),
+		Cordon:  cordon.New(),
+	}
+
+	resp, err := srv.CreateSandbox(ctx, &pb.CreateSandboxRequest{
+		SandboxId:         id,
+		CreateOptionsJson: `{"volumes":[` + volumeJSON(digest, "/mnt/a", false) + `,` + volumeJSON(otherDigest, "/mnt/b", true) + `]}`,
+	})
+	if err != nil {
+		t.Fatalf("CreateSandbox() failed: %v", err)
+	}
+	if len(rt.opts.Volumes) != 2 || !strings.Contains(rt.opts.Volumes[0].URL, token) {
+		t.Fatalf("runtime got volumes %v, want both with their URLs", rt.opts.Volumes)
+	}
+	want := `{"egress":"public","volumes":[` +
+		`{"scope":"shared","sha256":"` + digest + `","size":4096,"kind":"ext4","mount_path":"/mnt/a","attached":true},` +
+		`{"scope":"shared","sha256":"` + otherDigest + `","size":4096,"kind":"ext4","mount_path":"/mnt/b","optional":true,"attached":false,"reason":"mount"}]}`
+	if got := resp.GetAppliedCreateOptionsJson(); got != want {
+		t.Fatalf("applied_create_options_json =\n%s\nwant\n%s", got, want)
+	}
+
+	_, err = srv.CreateSandbox(ctx, &pb.CreateSandboxRequest{
+		SandboxId:         id,
+		CreateOptionsJson: `{"volumes":[` + volumeJSON(digest, "/etc", false) + `]}`,
+	})
+	if status.Code(err) != codes.InvalidArgument || strings.Contains(err.Error(), token) {
+		t.Fatalf("CreateSandbox() error = %v, want InvalidArgument without the URL", err)
 	}
 }
 

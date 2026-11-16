@@ -301,6 +301,13 @@ func (r *Runtime) activateSandboxVM(ctx context.Context, state *sandboxState, t 
 	if err != nil {
 		return err
 	}
+	// Only a guest restored from the golden snapshot needs the sizes: a cold boot
+	// opens the images as it boots, and a stop snapshot was taken with them.
+	if volumes := r.volumesOf(state); creating && len(volumes) > 0 {
+		if err := t.step(stepPatchVolumes, func() error { return r.patchVolumeDrives(ctx, state, volumes) }); err != nil {
+			return err
+		}
+	}
 	guestAddr := net.JoinHostPort(r.config.GuestIP, fmt.Sprintf("%d", r.config.DaemonPort))
 	var proxy daemonProxy
 	err = t.step(stepStartProxy, func() error {
@@ -324,11 +331,7 @@ func (r *Runtime) activateSandboxVM(ctx context.Context, state *sandboxState, t 
 	// The guest daemon of the golden snapshot and of a cold boot holds root and
 	// serves nothing else until this request. A stop snapshot is taken after it.
 	if creating || coldBooted {
-		mountErr := t.step(stepMountVolumes, func() error { return r.deps.mountVolumeDrives(ctx, state.daemonURL, nil) })
-		r.metrics.ObserveVolumeMount(volumeMountResult(mountErr))
-		if mountErr != nil {
-			return fmt.Errorf("mount guest volume drives: %w", mountErr)
-		}
+		return r.mountGuestVolumes(ctx, state, creating, t)
 	}
 	return nil
 }
