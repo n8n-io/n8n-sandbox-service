@@ -11,7 +11,7 @@ export async function createCodeSandbox(
       name: options.name,
       runtime: options.runtime,
       runtimeVersion: options.runtimeVersion,
-      slots: options.slots,
+      maxConcurrency: options.maxConcurrency,
       memoryMb: options.memoryMb,
       idleTimeoutMs: options.idleTimeoutMs,
       maxAgeMs: options.maxAgeMs,

@@ -77,7 +77,7 @@ const code = await client.createCodeSandbox({
   name: 'scope-1',
   runtime: 'n8n-js',
   runtimeVersion: '2.42.0',
-  slots: 2,
+  maxConcurrency: 2,
   memoryMb: 1024,
 });
 console.log(code.id, code.created);

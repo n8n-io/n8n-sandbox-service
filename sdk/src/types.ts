@@ -50,8 +50,8 @@ export interface CreateCodeSandboxOptions {
   runtime: CodeRuntime;
   /** Version of the runtime image. Should match the n8n version. */
   runtimeVersion: string;
-  /** Maximum concurrent tasks. */
-  slots: number;
+  /** Number of lanes: each lane runs one task at a time. */
+  maxConcurrency: number;
   /** Total sandbox memory in MB. */
   memoryMb: number;
   idleTimeoutMs?: number;

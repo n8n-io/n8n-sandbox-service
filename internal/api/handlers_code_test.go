@@ -17,7 +17,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 )
 
-const codeCreateBody = `{"name":"scope-1","runtime":"n8n-js","runtimeVersion":"2.42.0","slots":2,"memoryMb":1024,"idleTimeoutMs":30000,"maxAgeMs":60000}`
+const codeCreateBody = `{"name":"scope-1","runtime":"n8n-js","runtimeVersion":"2.42.0","maxConcurrency":2,"memoryMb":1024,"idleTimeoutMs":30000,"maxAgeMs":60000}`
 
 func postCreateCodeSandbox(t *testing.T, router http.Handler, apiKey, body string) *httptest.ResponseRecorder {
 	t.Helper()
@@ -82,7 +82,7 @@ func TestCreateCodeSandboxOtherSettingsConflict(t *testing.T) {
 		t.Fatalf("create: got %d body=%s", rr.Code, rr.Body.String())
 	}
 	for _, body := range []string{
-		strings.Replace(codeCreateBody, `"slots":2`, `"slots":3`, 1),
+		strings.Replace(codeCreateBody, `"maxConcurrency":2`, `"maxConcurrency":3`, 1),
 		strings.Replace(codeCreateBody, `"n8n-js"`, `"n8n-python"`, 1),
 		strings.Replace(codeCreateBody, `"2.42.0"`, `"2.43.0"`, 1),
 		strings.Replace(codeCreateBody, `"memoryMb":1024`, `"memoryMb":2048`, 1),
@@ -117,20 +117,20 @@ func TestCreateCodeSandboxRejectsInvalidRequests(t *testing.T) {
 	tenant := mintTenantKey(t, router, `{"name":"code"}`)
 
 	for name, body := range map[string]string{
-		"empty":            ``,
-		"not json":         `nope`,
-		"trailing data":    codeCreateBody + `{}`,
-		"unknown field":    strings.Replace(codeCreateBody, `{`, `{"labels":{"scopeKey":"w:1"},`, 1),
-		"no name":          strings.Replace(codeCreateBody, `"name":"scope-1",`, ``, 1),
-		"bad name":         strings.Replace(codeCreateBody, `"scope-1"`, `"a/b"`, 1),
-		"long name":        strings.Replace(codeCreateBody, `"scope-1"`, `"`+strings.Repeat("a", 129)+`"`, 1),
-		"bad runtime":      strings.Replace(codeCreateBody, `"n8n-js"`, `"bash"`, 1),
-		"no version":       strings.Replace(codeCreateBody, `"2.42.0"`, `""`, 1),
-		"bad version":      strings.Replace(codeCreateBody, `"2.42.0"`, `"2 42"`, 1),
-		"no slots":         strings.Replace(codeCreateBody, `"slots":2,`, ``, 1),
-		"negative memory":  strings.Replace(codeCreateBody, `"memoryMb":1024`, `"memoryMb":-1`, 1),
-		"negative idle":    strings.Replace(codeCreateBody, `"idleTimeoutMs":30000`, `"idleTimeoutMs":-1`, 1),
-		"negative max age": strings.Replace(codeCreateBody, `"maxAgeMs":60000`, `"maxAgeMs":-1`, 1),
+		"empty":             ``,
+		"not json":          `nope`,
+		"trailing data":     codeCreateBody + `{}`,
+		"unknown field":     strings.Replace(codeCreateBody, `{`, `{"labels":{"scopeKey":"w:1"},`, 1),
+		"no name":           strings.Replace(codeCreateBody, `"name":"scope-1",`, ``, 1),
+		"bad name":          strings.Replace(codeCreateBody, `"scope-1"`, `"a/b"`, 1),
+		"long name":         strings.Replace(codeCreateBody, `"scope-1"`, `"`+strings.Repeat("a", 129)+`"`, 1),
+		"bad runtime":       strings.Replace(codeCreateBody, `"n8n-js"`, `"bash"`, 1),
+		"no version":        strings.Replace(codeCreateBody, `"2.42.0"`, `""`, 1),
+		"bad version":       strings.Replace(codeCreateBody, `"2.42.0"`, `"2 42"`, 1),
+		"no maxConcurrency": strings.Replace(codeCreateBody, `"maxConcurrency":2,`, ``, 1),
+		"negative memory":   strings.Replace(codeCreateBody, `"memoryMb":1024`, `"memoryMb":-1`, 1),
+		"negative idle":     strings.Replace(codeCreateBody, `"idleTimeoutMs":30000`, `"idleTimeoutMs":-1`, 1),
+		"negative max age":  strings.Replace(codeCreateBody, `"maxAgeMs":60000`, `"maxAgeMs":-1`, 1),
 	} {
 		if rr := postCreateCodeSandbox(t, router, tenant.Key.APIKey, body); rr.Code != http.StatusBadRequest {
 			t.Errorf("%s: got %d body=%s, want %d", name, rr.Code, rr.Body.String(), http.StatusBadRequest)

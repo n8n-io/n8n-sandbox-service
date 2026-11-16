@@ -8,7 +8,7 @@ const options: CreateCodeSandboxOptions = {
   name: "scope-1",
   runtime: "n8n-js",
   runtimeVersion: "2.42.0",
-  slots: 2,
+  maxConcurrency: 2,
   memoryMb: 1024,
   idleTimeoutMs: 30000,
 };

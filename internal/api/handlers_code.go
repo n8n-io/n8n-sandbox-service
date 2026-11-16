@@ -56,7 +56,7 @@ type createCodeSandboxRequest struct {
 	Name           string `json:"name"`
 	Runtime        string `json:"runtime"`
 	RuntimeVersion string `json:"runtimeVersion"`
-	Slots          int    `json:"slots"`
+	MaxConcurrency int    `json:"maxConcurrency"`
 	MemoryMb       int    `json:"memoryMb"`
 	IdleTimeoutMs  int64  `json:"idleTimeoutMs"`
 	MaxAgeMs       int64  `json:"maxAgeMs"`
@@ -70,8 +70,8 @@ func (req *createCodeSandboxRequest) validate() error {
 		return fmt.Errorf("invalid runtime: must be %q or %q", codeRuntimeJS, codeRuntimePython)
 	case !codeRuntimeVersionRegex.MatchString(req.RuntimeVersion):
 		return errors.New("invalid runtimeVersion")
-	case req.Slots <= 0:
-		return errors.New("invalid slots: must be greater than 0")
+	case req.MaxConcurrency <= 0:
+		return errors.New("invalid maxConcurrency: must be greater than 0")
 	case req.MemoryMb <= 0:
 		return errors.New("invalid memoryMb: must be greater than 0")
 	case req.IdleTimeoutMs < 0:
@@ -88,7 +88,7 @@ func (req *createCodeSandboxRequest) validate() error {
 type codeSandboxSettings struct {
 	Runtime        string `json:"runtime"`
 	RuntimeVersion string `json:"runtimeVersion"`
-	Slots          int    `json:"slots"`
+	MaxConcurrency int    `json:"maxConcurrency"`
 	MemoryMb       int    `json:"memoryMb"`
 	IdleTimeoutMs  int64  `json:"idleTimeoutMs"`
 	MaxAgeMs       int64  `json:"maxAgeMs"`
@@ -100,7 +100,7 @@ func (req *createCodeSandboxRequest) optionsHash() string {
 	b, _ := json.Marshal(codeSandboxSettings{
 		Runtime:        req.Runtime,
 		RuntimeVersion: req.RuntimeVersion,
-		Slots:          req.Slots,
+		MaxConcurrency: req.MaxConcurrency,
 		MemoryMb:       req.MemoryMb,
 		IdleTimeoutMs:  req.IdleTimeoutMs,
 		MaxAgeMs:       req.MaxAgeMs,

@@ -863,7 +863,7 @@ Return the current code sandbox of a name, or create one. The client picks the n
   "name": "550e8400-e29b-41d4-a716-446655440000",
   "runtime": "n8n-js",
   "runtimeVersion": "2.42.0",
-  "slots": 2,
+  "maxConcurrency": 2,
   "memoryMb": 1024,
   "idleTimeoutMs": 30000,
   "maxAgeMs": 60000
@@ -875,7 +875,8 @@ Return the current code sandbox of a name, or create one. The client picks the n
 - `name` (required) — 1 to 128 characters from `A-Z`, `a-z`, `0-9`, `.`, `_`, `:` and `-`. A name points to at most one current sandbox per tenant. Other tenants can use the same name.
 - `runtime` (required) — `n8n-js` or `n8n-python`.
 - `runtimeVersion` (required) — up to 64 characters from `A-Z`, `a-z`, `0-9`, `.`, `+` and `-`.
-- `slots`, `memoryMb` (required) — greater than `0`.
+- `maxConcurrency` (required) — number of lanes, greater than `0`. A lane runs one task at a time.
+- `memoryMb` (required) — greater than `0`.
 - `idleTimeoutMs`, `maxAgeMs` (optional) — `0` or more; `0` or left out means not set.
 
 Unknown fields return `400`. The service stores these settings but does not apply them yet. Every code sandbox has egress `none` and is ephemeral (see `POST /sandboxes`).
@@ -903,7 +904,7 @@ With a tenant key, the sandbox counts toward the tenant's `max_sandboxes` quota.
 curl -X POST http://localhost:8080/code/sandboxes \
   -H "X-Api-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"name":"scope-1","runtime":"n8n-js","runtimeVersion":"2.42.0","slots":2,"memoryMb":1024}'
+  -d '{"name":"scope-1","runtime":"n8n-js","runtimeVersion":"2.42.0","maxConcurrency":2,"memoryMb":1024}'
 ```
 
 ---
