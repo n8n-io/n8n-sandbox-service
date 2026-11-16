@@ -1,0 +1,74 @@
+cmd/api/main.go
+  h_8fb27e0cdf6d1e 47,96,118
+internal/api/activity.go
+  h_8fb27e0cdf6d1e 38,49,69,103-104,106-124,126,129-131,135,142-145,151,159,195,198
+internal/api/activity_test.go
+  h_8fb27e0cdf6d1e 16-17,25,92,126-158
+internal/api/apikey_cache_test.go
+  h_8fb27e0cdf6d1e 266,272,284
+internal/api/gateway.go
+  h_8fb27e0cdf6d1e 21,29-31,55,58-60,62-69,97
+internal/api/gateway_test.go
+  h_8fb27e0cdf6d1e 66,97
+internal/api/handlers.go
+  h_8fb27e0cdf6d1e 81,217,258,312,382-393,401,499,571,583,707,766
+internal/api/handlers_cordon_test.go
+  h_8fb27e0cdf6d1e 38,44,58,69,272
+internal/api/handlers_create_sandbox_test.go
+  h_8fb27e0cdf6d1e 92,106,120,140,167,186,208,216,309,339,342,352,356,360,380,385,400,407,437,442,560,574,648,682,710,715,730,777,814
+internal/api/handlers_kind_test.go
+  h_8fb27e0cdf6d1e 1-83
+internal/api/handlers_list_test.go
+  h_8fb27e0cdf6d1e 25,104,109,124
+internal/api/handlers_provisioner_test.go
+  h_8fb27e0cdf6d1e 24,101,109,255,310,330-331,345
+internal/api/handlers_proxy_activity_test.go
+  h_8fb27e0cdf6d1e 19,72,93,112,140,154,180,194,223,252,291,358
+internal/api/handlers_proxy_redirect_test.go
+  h_8fb27e0cdf6d1e 45,75
+internal/api/handlers_proxy_tenant_test.go
+  h_8fb27e0cdf6d1e 35
+internal/api/handlers_reap_test.go
+  h_8fb27e0cdf6d1e 44,68,88,91,118,144,180,204,249,266
+internal/api/handlers_tenants.go
+  h_8fb27e0cdf6d1e 91,109,171,197,257,293,325,353,405
+internal/api/handlers_tenants_test.go
+  h_8fb27e0cdf6d1e 19,156,338,352,384,397
+internal/api/middleware_auth.go
+  h_8fb27e0cdf6d1e 86,147
+internal/api/middleware_limits_test.go
+  h_8fb27e0cdf6d1e 107
+internal/api/placement_test.go
+  h_8fb27e0cdf6d1e 27,75,77,98
+internal/api/store/postgres.go
+  h_8fb27e0cdf6d1e 149,180-182,223-228,234,239-251,265-271,276-279,298-299,307-308,313-319,346-350,354-356,359-363,368-370,394-398,400,406-410,412-413,419-424,427-432
+internal/api/store/postgres_integration_test.go
+  h_8fb27e0cdf6d1e 107,132,137,139,149,157,160,166,173,206,209,222,236,246-249,260,278
+internal/api/store/sqlite.go
+  h_8fb27e0cdf6d1e 173,227-229,274-293,299,304-316,330-336,341-344,357,359-360,365-371,388-392,396-398,401-405,410-412,436-440,442,448-452,454-455,461-466,469-474
+internal/api/store/store.go
+  h_8fb27e0cdf6d1e 7,32-35,38-39,42-67,106,133-143,145-147,151-160,162-169,171-172,182-183,185,187-188,196-215
+internal/api/store/store_test.go
+  h_8fb27e0cdf6d1e 30,36,72,111,133,150,166,175-177,187,190,248,340,368,375,424,429,434,439,443,465,503,508,512,541,546,549,558,562,580,601,612,616,633,652,664,666,672,715,721,736,741,760,785,792,818,827,854
+internal/api/store/views.go
+  h_8fb27e0cdf6d1e 1-153
+internal/api/store/views_test.go
+  h_8fb27e0cdf6d1e 1-160
+internal/api/tenant_quota.go
+  h_8fb27e0cdf6d1e 3-15
+internal/api/ttl.go
+  h_8fb27e0cdf6d1e 84,121,171-172,179-182,188,258,268,284,364,385,400,426,447,464,491
+internal/api/ttl_test.go
+  h_8fb27e0cdf6d1e 165,175,186,192,194,203,205,424,482,552,616,636,673
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8c68afd65859d7a9a9816a88b5f903dace2e9ef2",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
