@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -220,33 +221,23 @@ func (s *PostgresStore) Create(record *SandboxRecord) error {
 	return nil
 }
 
-func (s *PostgresStore) GetByIDAndKind(id string, kind Kind) (*SandboxRecord, error) {
-	if err := checkKind(kind); err != nil {
+// pgPlaceholder returns the placeholder of the nth query argument.
+func pgPlaceholder(n int) string { return "$" + strconv.Itoa(n) }
+
+func (s *PostgresStore) Get(id string, f SandboxFilter) (*SandboxRecord, error) {
+	cond, args, err := f.where([]any{id}, pgPlaceholder)
+	if err != nil {
 		return nil, err
 	}
-	q := `SELECT ` + pgSandboxCols + ` FROM sandboxes WHERE id = $1 AND kind = $2`
-	row := s.db.QueryRow(q, id, string(kind))
-	rec, err := scanRecord(row)
+	q := `SELECT ` + pgSandboxCols + ` FROM sandboxes WHERE id = $1 AND ` + cond
+	rec, err := scanRecord(s.db.QueryRow(q, args...))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("store: get %s sandbox %s: %w", kind, id, err)
+		return nil, fmt.Errorf("store: get sandbox %s: %w", id, err)
 	}
 	return rec, nil
-}
-
-func (s *PostgresStore) ExistsByIDAndKinds(id string, kinds []Kind) (bool, error) {
-	names, err := kindArgs(kinds)
-	if err != nil {
-		return false, err
-	}
-	var exists bool
-	q := `SELECT EXISTS (SELECT 1 FROM sandboxes WHERE id = $1 AND kind = ANY($2::text[]))`
-	if err := s.db.QueryRow(q, id, names).Scan(&exists); err != nil {
-		return false, fmt.Errorf("store: check sandbox %s exists: %w", id, err)
-	}
-	return exists, nil
 }
 
 func (s *PostgresStore) GetCodeSandboxByName(tenantID, name string) (*SandboxRecord, error) {
@@ -262,21 +253,19 @@ func (s *PostgresStore) GetCodeSandboxByName(tenantID, name string) (*SandboxRec
 	return rec, nil
 }
 
-func (s *PostgresStore) UpdateStatusByIDAndKind(id string, kind Kind, status string) error {
-	if err := checkKind(kind); err != nil {
+func (s *PostgresStore) UpdateStatus(id string, f SandboxFilter, status string) error {
+	cond, args, err := f.where([]any{status, id}, pgPlaceholder)
+	if err != nil {
 		return err
 	}
-	const q = `UPDATE sandboxes SET status = $1 WHERE id = $2 AND kind = $3`
-	if _, err := s.db.Exec(q, status, id, string(kind)); err != nil {
-		return fmt.Errorf("store: update status for %s sandbox %s: %w", kind, id, err)
+	q := `UPDATE sandboxes SET status = $1 WHERE id = $2 AND ` + cond
+	if _, err := s.db.Exec(q, args...); err != nil {
+		return fmt.Errorf("store: update status for %s: %w", id, err)
 	}
 	return nil
 }
 
-func (s *PostgresStore) RecordActivityByKind(ctx context.Context, kind Kind, lastActiveAt map[string]int64) error {
-	if err := checkKind(kind); err != nil {
-		return err
-	}
+func (s *PostgresStore) RecordActivity(ctx context.Context, lastActiveAt map[string]int64) error {
 	if len(lastActiveAt) == 0 {
 		return nil
 	}
@@ -295,8 +284,7 @@ func (s *PostgresStore) RecordActivityByKind(ctx context.Context, kind Kind, las
 		), locked AS (
 			SELECT s.id, b.at
 			  FROM sandboxes s JOIN batch b ON b.id = s.id
-			 WHERE s.kind = $3
-			   AND (s.last_active_at < b.at OR s.status <> 'running')
+			 WHERE s.last_active_at < b.at OR s.status <> 'running'
 			 ORDER BY s.id
 			   FOR UPDATE OF s
 		)
@@ -304,19 +292,19 @@ func (s *PostgresStore) RecordActivityByKind(ctx context.Context, kind Kind, las
 		   SET last_active_at = GREATEST(s.last_active_at, locked.at), status = 'running'
 		  FROM locked
 		 WHERE s.id = locked.id`
-	if _, err := s.db.ExecContext(ctx, q, ids, ats, string(kind)); err != nil {
-		return fmt.Errorf("store: record activity for %d %s sandboxes: %w", len(ids), kind, err)
+	if _, err := s.db.ExecContext(ctx, q, ids, ats); err != nil {
+		return fmt.Errorf("store: record activity for %d sandboxes: %w", len(ids), err)
 	}
 	return nil
 }
 
-func (s *PostgresStore) DeleteByIDAndKind(id string, kind Kind) error {
-	if err := checkKind(kind); err != nil {
+func (s *PostgresStore) Delete(id string, f SandboxFilter) error {
+	cond, args, err := f.where([]any{id}, pgPlaceholder)
+	if err != nil {
 		return err
 	}
-	const q = `DELETE FROM sandboxes WHERE id = $1 AND kind = $2`
-	if _, err := s.db.Exec(q, id, string(kind)); err != nil {
-		return fmt.Errorf("store: delete %s sandbox %s: %w", kind, id, err)
+	if _, err := s.db.Exec(`DELETE FROM sandboxes WHERE id = $1 AND `+cond, args...); err != nil {
+		return fmt.Errorf("store: delete sandbox %s: %w", id, err)
 	}
 	return nil
 }
@@ -343,8 +331,8 @@ func (s *PostgresStore) LockSandbox(ctx context.Context, id string) (func(), err
 	return unlock, nil
 }
 
-func (s *PostgresStore) ListForIdleReapDeleteByKinds(kinds []Kind, cutoff int64) ([]*SandboxRecord, error) {
-	names, err := kindArgs(kinds)
+func (s *PostgresStore) ListForIdleReapDelete(f SandboxFilter, cutoff int64) ([]*SandboxRecord, error) {
+	cond, args, err := f.where([]any{cutoff}, pgPlaceholder)
 	if err != nil {
 		return nil, err
 	}
@@ -352,12 +340,12 @@ func (s *PostgresStore) ListForIdleReapDeleteByKinds(kinds []Kind, cutoff int64)
 		FROM sandboxes
 		WHERE status = 'stopped'
 		  AND last_active_at <= $1
-		  AND kind = ANY($2::text[])`
-	return s.querySandboxRecords(q, cutoff, names)
+		  AND ` + cond
+	return s.querySandboxRecords(q, args...)
 }
 
-func (s *PostgresStore) ListForIdleReapStopByKinds(kinds []Kind, cutoff int64, ephemeral bool) ([]*SandboxRecord, error) {
-	names, err := kindArgs(kinds)
+func (s *PostgresStore) ListForIdleReapStop(f SandboxFilter, cutoff int64, ephemeral bool) ([]*SandboxRecord, error) {
+	cond, args, err := f.where([]any{cutoff, ephemeral}, pgPlaceholder)
 	if err != nil {
 		return nil, err
 	}
@@ -366,8 +354,8 @@ func (s *PostgresStore) ListForIdleReapStopByKinds(kinds []Kind, cutoff int64, e
 		WHERE status = 'running'
 		  AND last_active_at <= $1
 		  AND ephemeral = $2
-		  AND kind = ANY($3::text[])`
-	return s.querySandboxRecords(q, cutoff, ephemeral, names)
+		  AND ` + cond
+	return s.querySandboxRecords(q, args...)
 }
 
 func (s *PostgresStore) querySandboxRecords(q string, args ...any) ([]*SandboxRecord, error) {
@@ -391,45 +379,25 @@ func (s *PostgresStore) querySandboxRecords(q string, args ...any) ([]*SandboxRe
 	return records, nil
 }
 
-func (s *PostgresStore) CountByKinds(kinds []Kind) (int64, error) {
-	names, err := kindArgs(kinds)
+func (s *PostgresStore) Count(f SandboxFilter) (int64, error) {
+	cond, args, err := f.where(nil, pgPlaceholder)
 	if err != nil {
 		return 0, err
 	}
 	var n int64
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sandboxes WHERE kind = ANY($1::text[])`, names).Scan(&n); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sandboxes WHERE `+cond, args...).Scan(&n); err != nil {
 		return 0, fmt.Errorf("store: count sandboxes: %w", err)
 	}
 	return n, nil
 }
 
-func (s *PostgresStore) CountByTenantAndKinds(tenantID string, kinds []Kind) (int64, error) {
-	names, err := kindArgs(kinds)
+func (s *PostgresStore) List(f SandboxFilter) ([]*SandboxRecord, error) {
+	cond, args, err := f.where(nil, pgPlaceholder)
 	if err != nil {
-		return 0, err
-	}
-	var n int64
-	q := `SELECT COUNT(*) FROM sandboxes WHERE tenant_id = $1 AND kind = ANY($2::text[])`
-	if err := s.db.QueryRow(q, tenantID, names).Scan(&n); err != nil {
-		return 0, fmt.Errorf("store: count sandboxes by tenant: %w", err)
-	}
-	return n, nil
-}
-
-func (s *PostgresStore) ListByKind(kind Kind) ([]*SandboxRecord, error) {
-	if err := checkKind(kind); err != nil {
 		return nil, err
 	}
-	q := `SELECT ` + pgSandboxCols + ` FROM sandboxes WHERE kind = $1 ORDER BY created_at DESC`
-	return s.querySandboxRecords(q, string(kind))
-}
-
-func (s *PostgresStore) ListByTenantAndKind(tenantID string, kind Kind) ([]*SandboxRecord, error) {
-	if err := checkKind(kind); err != nil {
-		return nil, err
-	}
-	q := `SELECT ` + pgSandboxCols + ` FROM sandboxes WHERE tenant_id = $1 AND kind = $2 ORDER BY created_at DESC`
-	return s.querySandboxRecords(q, tenantID, string(kind))
+	q := `SELECT ` + pgSandboxCols + ` FROM sandboxes WHERE ` + cond + ` ORDER BY created_at DESC`
+	return s.querySandboxRecords(q, args...)
 }
 
 func (s *PostgresStore) CreateTenant(t *Tenant) error {

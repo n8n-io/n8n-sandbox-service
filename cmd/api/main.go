@@ -44,7 +44,7 @@ func main() {
 	logLevel.Set(cfg.LogLevel)
 
 	var (
-		sandboxStore store.Persistence
+		sandboxStore store.Store
 		runnerReg    registry.RunnerRegistry
 		sweepLockDB  *sql.DB
 	)
@@ -93,7 +93,7 @@ func main() {
 	mrec := metrics.NewAPIRecorder(cfg.MetricsEnabled)
 	if mrec.Enabled() {
 		mrec.SetActiveSandboxes(func() float64 {
-			n, err := sandboxStore.CountByKinds(store.AllKinds())
+			n, err := sandboxStore.Count(store.KindFilter(store.AllKinds()...))
 			if err != nil {
 				slog.Warn("metrics: count sandboxes", "error", err)
 				return 0
@@ -115,7 +115,7 @@ func main() {
 
 	sweepCtx, sweepCancel := context.WithCancel(context.Background())
 	defer sweepCancel()
-	api.StartIdleSweeper(sweepCtx, store.NewSweeperStore(sandboxStore, store.AllKinds()), runnerReg, cfg, sweepLockDB)
+	api.StartIdleSweeper(sweepCtx, sandboxStore, runnerReg, cfg, sweepLockDB)
 
 	// Stopped after the HTTP server has drained, so open streams count until
 	// then; on stop it writes the activity it has collected once more.

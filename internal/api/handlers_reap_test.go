@@ -65,7 +65,7 @@ func TestSandboxProxyReapsStoreOnRunnerSandboxGone(t *testing.T) {
 		t.Fatalf("exec status = %d, want 404", rr.Code)
 	}
 
-	rec, err := s.GetByIDAndKind(sandboxID, store.KindDefault)
+	rec, err := s.Get(sandboxID, store.KindFilter(store.KindDefault))
 	if err != nil {
 		t.Fatalf("Get() failed: %v", err)
 	}
@@ -85,10 +85,10 @@ func TestSandboxProxyReapsStoreOnRunnerSandboxGone(t *testing.T) {
 // deleteFailingStore makes reaping fail while leaving every other store
 // operation intact.
 type deleteFailingStore struct {
-	store.Persistence
+	store.Store
 }
 
-func (deleteFailingStore) DeleteByIDAndKind(string, store.Kind) error {
+func (deleteFailingStore) Delete(string, store.SandboxFilter) error {
 	return errors.New("delete unavailable")
 }
 
@@ -141,7 +141,7 @@ func TestSandboxProxyDoesNotMarkActiveWhenReapDeleteFails(t *testing.T) {
 	}
 	activity.write()
 
-	rec, err := s.GetByIDAndKind(sandboxID, store.KindDefault)
+	rec, err := s.Get(sandboxID, store.KindFilter(store.KindDefault))
 	if err != nil {
 		t.Fatalf("Get() failed: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestSandboxProxyKeepsStoreOnRunnerExecutionNotFound(t *testing.T) {
 		t.Fatalf("exec status = %d, want 404", rr.Code)
 	}
 
-	rec, err := s.GetByIDAndKind(sandboxID, store.KindDefault)
+	rec, err := s.Get(sandboxID, store.KindFilter(store.KindDefault))
 	if err != nil {
 		t.Fatalf("Get() failed: %v", err)
 	}
@@ -263,7 +263,7 @@ func TestSandboxProxyKeepsStoreOnDaemonForgedSandboxGone(t *testing.T) {
 		if rr.Code != http.StatusNotFound {
 			t.Fatalf("%s %s: status = %d, want the daemon's 404: %s", route.method, route.path, rr.Code, rr.Body.String())
 		}
-		rec, err := s.GetByIDAndKind(sandboxID, store.KindDefault)
+		rec, err := s.Get(sandboxID, store.KindFilter(store.KindDefault))
 		if err != nil {
 			t.Fatalf("Get() failed: %v", err)
 		}

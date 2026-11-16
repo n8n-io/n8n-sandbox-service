@@ -21,7 +21,7 @@ const (
 	provMaxDflt  = 50
 )
 
-func newProvisionerGateway(t *testing.T) (http.Handler, store.Persistence) {
+func newProvisionerGateway(t *testing.T) (http.Handler, store.Store) {
 	t.Helper()
 	s, err := store.New(":memory:")
 	if err != nil {
@@ -106,7 +106,7 @@ func TestProvisionerDeletesEmptyTenantOnly(t *testing.T) {
 		t.Fatalf("delete with sandboxes: expected %d, got %d body=%s", http.StatusConflict, rr.Code, rr.Body.String())
 	}
 
-	if err := s.DeleteByIDAndKind(sandboxID, store.KindDefault); err != nil {
+	if err := s.Delete(sandboxID, store.KindFilter(store.KindDefault)); err != nil {
 		t.Fatalf("delete sandbox: %v", err)
 	}
 	if rr := doJSON(t, router, http.MethodDelete, "/admin/tenants/"+created.Tenant.ID, provKey, ""); rr.Code != http.StatusNoContent {
@@ -307,7 +307,7 @@ func TestProvisionerCannotCreateAdminOwnedSandbox(t *testing.T) {
 	if rr.Code != http.StatusForbidden {
 		t.Fatalf("expected %d, got %d body=%s", http.StatusForbidden, rr.Code, rr.Body.String())
 	}
-	records, err := s.ListByKind(store.KindDefault)
+	records, err := s.List(store.KindFilter(store.KindDefault))
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -342,7 +342,7 @@ func TestSandboxHandlersRejectUnknownRoleWithoutMiddleware(t *testing.T) {
 			t.Errorf("%s: expected %d, got %d body=%s", name, http.StatusForbidden, rr.Code, rr.Body.String())
 		}
 	}
-	records, err := s.ListByKind(store.KindDefault)
+	records, err := s.List(store.KindFilter(store.KindDefault))
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}

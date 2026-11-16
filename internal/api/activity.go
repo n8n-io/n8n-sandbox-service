@@ -32,10 +32,16 @@ func maxResponseActivity(cfg *config.APIConfig) time.Duration {
 	return cfg.MaxResponseActivity
 }
 
+// activityStore is the store of the activity recorder. It writes the activity
+// of sandboxes of every kind.
+type activityStore interface {
+	RecordActivity(ctx context.Context, lastActiveAt map[string]int64) error
+}
+
 // ActivityRecorder collects which sandboxes this API pod serves and writes
 // their last_active_at in one statement per interval, from Run.
 type ActivityRecorder struct {
-	store               store.ActivityStore
+	store               activityStore
 	interval            time.Duration
 	maxResponseActivity time.Duration
 	now                 func() time.Time
@@ -46,7 +52,6 @@ type ActivityRecorder struct {
 }
 
 type sandboxActivity struct {
-	kind store.Kind
 	// numActiveRequests counts this pod's requests to the sandbox whose
 	// response is still open.
 	numActiveRequests int
@@ -66,7 +71,7 @@ func (e *sandboxActivity) activeAt(t int64) {
 	}
 }
 
-func NewActivityRecorder(s store.ActivityStore, cfg *config.APIConfig) *ActivityRecorder {
+func NewActivityRecorder(s activityStore, cfg *config.APIConfig) *ActivityRecorder {
 	return &ActivityRecorder{
 		store:               s,
 		interval:            activityWriteInterval(cfg),
@@ -100,55 +105,51 @@ func (a *ActivityRecorder) Run(ctx context.Context) {
 	}
 }
 
-// write stores everything collected since the last write in one statement
-// per sandbox kind. A failed write is retried by the next one.
+// write stores everything collected since the last write in one statement. A
+// failed write is retried by the next one.
 func (a *ActivityRecorder) write() (ok bool) {
-	batches := a.takeUnwritten()
-	ok = true
-	for kind, batch := range batches {
-		// One interval at most, so the next write starts on time.
-		ctx, cancel := context.WithTimeout(context.Background(), a.interval)
-		err := a.store.RecordActivityByKind(ctx, kind, batch)
-		cancel()
-		if err == nil {
-			continue
-		}
-		ok = false
-		slog.Error("record sandbox activity failed", "kind", kind, "sandboxes", len(batch), "err", err)
-		a.mu.Lock()
-		for id, at := range batch {
-			e := a.entryLocked(id, kind)
-			e.lastActiveAt = max(e.lastActiveAt, at)
-			e.unwritten = true
-		}
-		a.mu.Unlock()
+	batch := a.takeUnwritten()
+	if len(batch) == 0 {
+		return true
 	}
-	return ok
+	// One interval at most, so the next write starts on time.
+	ctx, cancel := context.WithTimeout(context.Background(), a.interval)
+	err := a.store.RecordActivity(ctx, batch)
+	cancel()
+	if err == nil {
+		return true
+	}
+	slog.Error("record sandbox activity failed", "sandboxes", len(batch), "err", err)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for id, at := range batch {
+		e := a.entryLocked(id)
+		e.lastActiveAt = max(e.lastActiveAt, at)
+		e.unwritten = true
+	}
+	return false
 }
 
-// takeUnwritten returns the last_active_at to write for each sandbox, by
-// kind, marks them written, and forgets sandboxes with nothing new to write.
-func (a *ActivityRecorder) takeUnwritten() map[store.Kind]map[string]int64 {
+// takeUnwritten returns the last_active_at to write for each sandbox, marks
+// them written, and forgets sandboxes with nothing new to write.
+func (a *ActivityRecorder) takeUnwritten() map[string]int64 {
 	now := a.now().Unix()
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	batches := make(map[store.Kind]map[string]int64)
+	batch := make(map[string]int64)
 	for id, e := range a.bySandboxID {
 		if e.numActiveRequests > 0 {
 			e.activeAt(now)
 		}
 		switch {
 		case e.unwritten:
-			if batches[e.kind] == nil {
-				batches[e.kind] = make(map[string]int64)
-			}
-			batches[e.kind][id] = e.lastActiveAt
+			batch[id] = e.lastActiveAt
 			e.unwritten = false
 		case e.numActiveRequests == 0:
 			delete(a.bySandboxID, id)
 		}
 	}
-	return batches
+	return batch
 }
 
 // trackResponse counts a response from the sandbox as activity from now until
@@ -156,7 +157,7 @@ func (a *ActivityRecorder) takeUnwritten() map[store.Kind]map[string]int64 {
 func (a *ActivityRecorder) trackResponse(rec *store.SandboxRecord) (end func()) {
 	now := a.now().Unix()
 	a.mu.Lock()
-	e := a.entryLocked(rec.ID, rec.Kind)
+	e := a.entryLocked(rec.ID)
 	e.numActiveRequests++
 	e.activeAt(now)
 	a.mu.Unlock()
@@ -192,10 +193,10 @@ func (a *ActivityRecorder) trackResponse(rec *store.SandboxRecord) (end func()) 
 	}
 }
 
-func (a *ActivityRecorder) entryLocked(id string, kind store.Kind) *sandboxActivity {
+func (a *ActivityRecorder) entryLocked(id string) *sandboxActivity {
 	e, ok := a.bySandboxID[id]
 	if !ok {
-		e = &sandboxActivity{kind: kind}
+		e = &sandboxActivity{}
 		a.bySandboxID[id] = e
 	}
 	return e

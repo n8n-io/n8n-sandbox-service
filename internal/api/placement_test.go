@@ -24,7 +24,7 @@ var refusal = runnerctl.CapacityRefusal("firecracker runner capacity exhausted")
 // newPlacementTestGateway serves the API against one runner per fake, named
 // runner-1, runner-2, ... and reporting equal load, so placement tries them in
 // that order.
-func newPlacementTestGateway(t *testing.T, fakes ...*fakeSandboxControl) (http.Handler, store.Persistence, *metrics.APIRecorder) {
+func newPlacementTestGateway(t *testing.T, fakes ...*fakeSandboxControl) (http.Handler, store.Store, *metrics.APIRecorder) {
 	t.Helper()
 	s := newSweepStore(t)
 	cfg := idleSweepConfig()
@@ -72,9 +72,9 @@ func assertNoCapacity(t *testing.T, rr *httptest.ResponseRecorder) {
 	}
 }
 
-func assertNothingStored(t *testing.T, s store.Persistence) {
+func assertNothingStored(t *testing.T, s store.Store) {
 	t.Helper()
-	if n, err := s.CountByKinds(store.AllKinds()); err != nil || n != 0 {
+	if n, err := s.Count(store.KindFilter(store.AllKinds()...)); err != nil || n != 0 {
 		t.Fatalf("stored %d sandboxes (err=%v), want none", n, err)
 	}
 }
@@ -95,7 +95,7 @@ func TestCreateSandboxRetriesRefusedCreateOnNextRunner(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if stored, err := s.GetByIDAndKind(resp.ID, store.KindDefault); err != nil || stored == nil || stored.RunnerID != "runner-2" {
+	if stored, err := s.Get(resp.ID, store.KindFilter(store.KindDefault)); err != nil || stored == nil || stored.RunnerID != "runner-2" {
 		t.Fatalf("stored row = %+v err=%v, want it on runner-2", stored, err)
 	}
 	if full.creates() != 1 || free.creates() != 1 {

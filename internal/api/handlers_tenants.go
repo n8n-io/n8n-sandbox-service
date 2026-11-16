@@ -17,6 +17,20 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/store"
 )
 
+// tenantStore is the store of the tenant admin routes.
+type tenantStore interface {
+	CreateTenant(t *store.Tenant) error
+	CreateTenantWithAPIKey(t *store.Tenant, k *store.APIKey) error
+	GetTenant(id string) (*store.Tenant, error)
+	ListTenants() ([]*store.Tenant, error)
+	UpdateTenantLimits(id string, maxSandboxes int) error
+	DeleteTenant(id string) error
+	CreateAPIKey(k *store.APIKey) error
+	GetAPIKey(id string) (*store.APIKey, error)
+	ListAPIKeysByTenant(tenantID string) ([]*store.APIKey, error)
+	RevokeAPIKey(id string) error
+}
+
 type createTenantRequest struct {
 	Name         string `json:"name"`
 	ExternalRef  string `json:"external_ref"`
@@ -88,7 +102,7 @@ func maxSandboxesError(role authRole, n int, cfg *config.APIConfig) string {
 	return ""
 }
 
-func handleListTenants(s store.TenantPersistence) http.HandlerFunc {
+func handleListTenants(s tenantStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !requireAdmin(w, r) {
 			return
@@ -106,7 +120,7 @@ func handleListTenants(s store.TenantPersistence) http.HandlerFunc {
 	}
 }
 
-func handleCreateTenant(s store.TenantPersistence, cfg *config.APIConfig) http.HandlerFunc {
+func handleCreateTenant(s tenantStore, cfg *config.APIConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		role, ok := requireAdminOrProvisioner(w, r)
 		if !ok {
@@ -168,7 +182,7 @@ func handleCreateTenant(s store.TenantPersistence, cfg *config.APIConfig) http.H
 	}
 }
 
-func handleGetTenant(s store.TenantPersistence) http.HandlerFunc {
+func handleGetTenant(s tenantStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !requireAdmin(w, r) {
 			return
@@ -194,7 +208,7 @@ func handleGetTenant(s store.TenantPersistence) http.HandlerFunc {
 // handleUpdateTenant changes a tenant's limits and never touches its sandboxes:
 // a tenant above a lowered max_sandboxes keeps them and cannot create more until
 // it is below the limit again. Provisioner keys get the same bounds as on create.
-func handleUpdateTenant(s store.TenantPersistence, cfg *config.APIConfig) http.HandlerFunc {
+func handleUpdateTenant(s tenantStore, cfg *config.APIConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		role, ok := requireAdminOrProvisioner(w, r)
 		if !ok {
@@ -254,7 +268,7 @@ func handleUpdateTenant(s store.TenantPersistence, cfg *config.APIConfig) http.H
 }
 
 // handleDeleteTenant is safe for provisioners because of the 409 below.
-func handleDeleteTenant(s store.TenantPersistence, keyCache *apiKeyCache) http.HandlerFunc {
+func handleDeleteTenant(s tenantStore, keyCache *apiKeyCache) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := requireAdminOrProvisioner(w, r); !ok {
 			return
@@ -290,7 +304,7 @@ func handleDeleteTenant(s store.TenantPersistence, keyCache *apiKeyCache) http.H
 	}
 }
 
-func handleListTenantKeys(s store.TenantPersistence) http.HandlerFunc {
+func handleListTenantKeys(s tenantStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !requireAdmin(w, r) {
 			return
@@ -322,7 +336,7 @@ func handleListTenantKeys(s store.TenantPersistence) http.HandlerFunc {
 	}
 }
 
-func handleCreateTenantKey(s store.TenantPersistence) http.HandlerFunc {
+func handleCreateTenantKey(s tenantStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !requireAdmin(w, r) {
 			return
@@ -350,7 +364,7 @@ func handleCreateTenantKey(s store.TenantPersistence) http.HandlerFunc {
 	}
 }
 
-func handleRevokeTenantKey(s store.TenantPersistence, keyCache *apiKeyCache) http.HandlerFunc {
+func handleRevokeTenantKey(s tenantStore, keyCache *apiKeyCache) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !requireAdmin(w, r) {
 			return
@@ -402,7 +416,7 @@ func newAPIKey(tenantID string) (*store.APIKey, string, error) {
 	return k, plaintext, nil
 }
 
-func mintAPIKey(s store.TenantPersistence, tenantID string) (*apiKeyResponse, error) {
+func mintAPIKey(s tenantStore, tenantID string) (*apiKeyResponse, error) {
 	k, plaintext, err := newAPIKey(tenantID)
 	if err != nil {
 		return nil, err

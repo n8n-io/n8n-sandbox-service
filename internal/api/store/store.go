@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
+	"strings"
 )
 
 // ErrTenantHasSandboxes is returned when DeleteTenant is called while the tenant
@@ -29,8 +31,7 @@ var ErrAPIKeyTenantMismatch = errors.New("api key tenant_id does not match tenan
 // already points to a code sandbox of the tenant that is not draining.
 var ErrSandboxNameTaken = errors.New("sandbox name taken")
 
-// Kind is the kind of a sandbox. Every sandbox method of the store names the
-// kinds it reads or writes.
+// Kind is the kind of a sandbox.
 type Kind string
 
 // Sandbox kinds.
@@ -49,20 +50,40 @@ func checkKind(kind Kind) error {
 	return nil
 }
 
-// kindArgs checks kinds and returns them as query arguments. An empty list
-// is an error, not a filter that matches every kind.
-func kindArgs(kinds []Kind) ([]string, error) {
-	if len(kinds) == 0 {
-		return nil, errors.New("store: no sandbox kinds given")
+// SandboxFilter selects sandbox rows. A row it does not select is as good as
+// missing to the method given the filter.
+type SandboxFilter struct {
+	// Kinds is required: no kinds is an error, not every kind.
+	Kinds []Kind
+	// TenantID selects the sandboxes of one tenant; "" selects every tenant.
+	TenantID string
+}
+
+// KindFilter selects the sandboxes of kinds, whatever their tenant.
+func KindFilter(kinds ...Kind) SandboxFilter { return SandboxFilter{Kinds: kinds} }
+
+// where returns the condition of f and the query arguments: args followed by
+// those of the condition. placeholder returns the placeholder of the nth
+// argument.
+func (f SandboxFilter) where(args []any, placeholder func(n int) string) (string, []any, error) {
+	if len(f.Kinds) == 0 {
+		return "", nil, errors.New("store: no sandbox kinds given")
 	}
-	args := make([]string, len(kinds))
-	for i, kind := range kinds {
+	args = slices.Clip(args)
+	marks := make([]string, len(f.Kinds))
+	for i, kind := range f.Kinds {
 		if err := checkKind(kind); err != nil {
-			return nil, err
+			return "", nil, err
 		}
-		args[i] = string(kind)
+		args = append(args, string(kind))
+		marks[i] = placeholder(len(args))
 	}
-	return args, nil
+	cond := "kind IN (" + strings.Join(marks, ", ") + ")"
+	if f.TenantID != "" {
+		args = append(args, f.TenantID)
+		cond += " AND tenant_id = " + placeholder(len(args))
+	}
+	return cond, args, nil
 }
 
 // codeNameIndex is the unique index on the names of code sandboxes.
@@ -130,10 +151,13 @@ type APIKey struct {
 	RevokedAt int64 // 0 = active
 }
 
-// SandboxPersistence stores sandbox rows. Every method that reads or writes
-// rows names the kinds it works on: a row of another kind is as good as
-// missing.
-type SandboxPersistence interface {
+// Store is a SQLite or Postgres store. Every sandbox method that reads or
+// writes rows takes a SandboxFilter, apart from Create, RecordActivity and
+// LockSandbox.
+type Store interface {
+	io.Closer
+	Backend() Backend
+
 	// Create inserts the record, whose Kind is required. For a tenant-owned
 	// record it returns ErrTenantNotFound when the tenant is gone, and
 	// ErrTenantQuotaExceeded when the tenant already holds max_sandboxes
@@ -142,34 +166,30 @@ type SandboxPersistence interface {
 	// its quota. It returns ErrSandboxNameTaken when a code sandbox of the
 	// tenant that is not draining already has the name.
 	Create(record *SandboxRecord) error
-	GetByIDAndKind(id string, kind Kind) (*SandboxRecord, error)
-	// ExistsByIDAndKinds reports whether a sandbox of one of kinds has the id.
-	ExistsByIDAndKinds(id string, kinds []Kind) (bool, error)
+	// Get returns the sandbox id that f selects, or nil when there is none.
+	Get(id string, f SandboxFilter) (*SandboxRecord, error)
 	// GetCodeSandboxByName returns the code sandbox of the tenant that has the
 	// name and is not draining, or nil when there is none.
 	GetCodeSandboxByName(tenantID, name string) (*SandboxRecord, error)
-	ListByKind(kind Kind) ([]*SandboxRecord, error)
-	ListByTenantAndKind(tenantID string, kind Kind) ([]*SandboxRecord, error)
-	UpdateStatusByIDAndKind(id string, kind Kind, status string) error
-	// RecordActivityByKind sets each sandbox of the kind in lastActiveAt (id
-	// to unix seconds) running and moves its last_active_at forward to that
-	// time, never back, in one statement. Ids without a row of the kind are
-	// skipped.
-	RecordActivityByKind(ctx context.Context, kind Kind, lastActiveAt map[string]int64) error
-	DeleteByIDAndKind(id string, kind Kind) error
+	// List returns the sandboxes f selects, newest first.
+	List(f SandboxFilter) ([]*SandboxRecord, error)
+	Count(f SandboxFilter) (int64, error)
+	UpdateStatus(id string, f SandboxFilter, status string) error
+	Delete(id string, f SandboxFilter) error
+	// RecordActivity sets each sandbox in lastActiveAt (id to unix seconds),
+	// whatever its kind, running and moves its last_active_at forward to that
+	// time, never back, in one statement. Ids without a row are skipped.
+	RecordActivity(ctx context.Context, lastActiveAt map[string]int64) error
 	// LockSandbox locks the sandbox id, whatever its kind: it reads no row.
 	LockSandbox(ctx context.Context, id string) (unlock func(), err error)
-	ListForIdleReapDeleteByKinds(kinds []Kind, cutoff int64) ([]*SandboxRecord, error)
-	// ListForIdleReapStopByKinds returns running rows idle since cutoff with
-	// the given ephemeral flag: regular rows are stop candidates, ephemeral
-	// rows delete candidates.
-	ListForIdleReapStopByKinds(kinds []Kind, cutoff int64, ephemeral bool) ([]*SandboxRecord, error)
-	CountByKinds(kinds []Kind) (int64, error)
-	CountByTenantAndKinds(tenantID string, kinds []Kind) (int64, error)
-}
+	// ListForIdleReapDelete returns the stopped sandboxes f selects that are
+	// idle since cutoff.
+	ListForIdleReapDelete(f SandboxFilter, cutoff int64) ([]*SandboxRecord, error)
+	// ListForIdleReapStop returns the running sandboxes f selects that are idle
+	// since cutoff and have the given ephemeral flag: regular rows are stop
+	// candidates, ephemeral rows delete candidates.
+	ListForIdleReapStop(f SandboxFilter, cutoff int64, ephemeral bool) ([]*SandboxRecord, error)
 
-// TenantStore stores tenants.
-type TenantStore interface {
 	CreateTenant(t *Tenant) error
 	// CreateTenantWithAPIKey inserts the tenant and its first API key in one transaction.
 	// k.TenantID must equal t.ID.
@@ -182,10 +202,7 @@ type TenantStore interface {
 	// DeleteTenant returns ErrTenantHasSandboxes while the tenant owns
 	// sandboxes of any kind.
 	DeleteTenant(id string) error
-}
 
-// APIKeyStore stores tenant API keys.
-type APIKeyStore interface {
 	CreateAPIKey(k *APIKey) error
 	GetAPIKey(id string) (*APIKey, error)
 	ListAPIKeysByTenant(tenantID string) ([]*APIKey, error)
@@ -193,24 +210,9 @@ type APIKeyStore interface {
 	RevokeAPIKey(id string) error
 }
 
-// TenantPersistence stores tenants and their API keys.
-type TenantPersistence interface {
-	TenantStore
-	APIKeyStore
-}
-
-// Persistence is a whole store: SQLite or Postgres. Only startup wiring holds
-// one; everything else gets a narrower interface (see views.go).
-type Persistence interface {
-	io.Closer
-	SandboxPersistence
-	TenantPersistence
-	Backend() Backend
-}
-
 var (
-	_ Persistence = (*SQLiteStore)(nil)
-	_ Persistence = (*PostgresStore)(nil)
+	_ Store = (*SQLiteStore)(nil)
+	_ Store = (*PostgresStore)(nil)
 )
 
 // scanner is the common interface satisfied by both *sql.Row and *sql.Rows.

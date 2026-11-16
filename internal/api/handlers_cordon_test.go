@@ -35,13 +35,13 @@ type cordonTestEnv struct {
 // lockCountingStore counts LockSandbox calls, which is how a test sees
 // requests queue on a sandbox's lock.
 type lockCountingStore struct {
-	store.Persistence
+	store.Store
 	locks atomic.Int32
 }
 
 func (s *lockCountingStore) LockSandbox(ctx context.Context, id string) (func(), error) {
 	s.locks.Add(1)
-	return s.Persistence.LockSandbox(ctx, id)
+	return s.Store.LockSandbox(ctx, id)
 }
 
 // newCordonTestEnv serves one sandbox with the given status on runner-1, which
@@ -55,7 +55,7 @@ func newCordonTestEnv(t *testing.T, sandboxStatus string, cordoned bool) *cordon
 	}))
 	controlAddr := startFakeRunnerControl(t, env.control)
 
-	env.store = &lockCountingStore{Persistence: newSweepStore(t)}
+	env.store = &lockCountingStore{Store: newSweepStore(t)}
 	now := time.Now().Unix()
 	if err := env.store.Create(&store.SandboxRecord{
 		ID:                    cordonSandboxID,
@@ -269,7 +269,7 @@ func shrinkSilentRunnerDeleteBudget(t *testing.T, budget time.Duration) {
 func TestSandboxProxyDeletesWithoutTheRunnerHTTPBase(t *testing.T) {
 	env := newCordonTestEnv(t, "stopped", true)
 	rec := mustGet(t, env.store, cordonSandboxID)
-	if err := env.store.DeleteByIDAndKind(cordonSandboxID, store.KindDefault); err != nil {
+	if err := env.store.Delete(cordonSandboxID, store.KindFilter(store.KindDefault)); err != nil {
 		t.Fatalf("Delete() failed: %v", err)
 	}
 	rec.RunnerHTTPBase = ""

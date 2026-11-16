@@ -13,16 +13,16 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/store"
 )
 
-// activityStore records the batches RecordActivityByKind gets, and fails
-// them while fail is set.
-type activityStore struct {
+// fakeActivityStore records the batches RecordActivity gets, and fails them while
+// fail is set.
+type fakeActivityStore struct {
 	mu      sync.Mutex
 	batches []map[string]int64
 	timeout time.Duration // left on the context of the last call
 	fail    error
 }
 
-func (s *activityStore) RecordActivityByKind(ctx context.Context, _ store.Kind, batch map[string]int64) error {
+func (s *fakeActivityStore) RecordActivity(ctx context.Context, batch map[string]int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.batches = append(s.batches, maps.Clone(batch))
@@ -32,20 +32,20 @@ func (s *activityStore) RecordActivityByKind(ctx context.Context, _ store.Kind, 
 	return s.fail
 }
 
-func (s *activityStore) setFail(err error) {
+func (s *fakeActivityStore) setFail(err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.fail = err
 }
 
-func (s *activityStore) count() int {
+func (s *fakeActivityStore) count() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.batches)
 }
 
 // drain returns the batches since the last drain.
-func (s *activityStore) drain() []map[string]int64 {
+func (s *fakeActivityStore) drain() []map[string]int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	batches := s.batches
@@ -56,9 +56,9 @@ func (s *activityStore) drain() []map[string]int64 {
 // t0 is the test recorder's starting clock.
 const t0 = int64(1_000_000)
 
-func newTestActivityRecorder(t *testing.T, cfg *config.APIConfig) (*ActivityRecorder, *activityStore, func(int64)) {
+func newTestActivityRecorder(t *testing.T, cfg *config.APIConfig) (*ActivityRecorder, *fakeActivityStore, func(int64)) {
 	t.Helper()
-	s := &activityStore{}
+	s := &fakeActivityStore{}
 	a := NewActivityRecorder(s, cfg)
 	var mu sync.Mutex
 	clock := t0
@@ -75,7 +75,7 @@ func newTestActivityRecorder(t *testing.T, cfg *config.APIConfig) (*ActivityReco
 	return a, s, setClock
 }
 
-func wantBatches(t *testing.T, s *activityStore, want ...map[string]int64) {
+func wantBatches(t *testing.T, s *fakeActivityStore, want ...map[string]int64) {
 	t.Helper()
 	got := s.drain()
 	if len(got) != len(want) {
@@ -123,8 +123,8 @@ func TestActivityRecorderWritesEachSandboxOnceWithItsLatestRequest(t *testing.T)
 	}
 }
 
-// Each sandbox's activity is written with its kind.
-func TestActivityRecorderWritesEachKind(t *testing.T) {
+// Sandboxes of every kind are written in the same batch.
+func TestActivityRecorderWritesEveryKind(t *testing.T) {
 	s, err := store.New(":memory:")
 	if err != nil {
 		t.Fatalf("new store: %v", err)
@@ -149,7 +149,7 @@ func TestActivityRecorderWritesEachKind(t *testing.T) {
 		t.Fatal("write failed")
 	}
 	for _, rec := range recs {
-		got, err := s.GetByIDAndKind(rec.ID, rec.Kind)
+		got, err := s.Get(rec.ID, store.KindFilter(rec.Kind))
 		if err != nil || got == nil || got.LastActiveAt != t0+5 {
 			t.Fatalf("%s sandbox after write: %+v err=%v, want last_active_at %d", rec.Kind, got, err, t0+5)
 		}
@@ -244,7 +244,7 @@ func TestActivityRecorderAsksForAWriteOnWakeAndAfterQuiet(t *testing.T) {
 // Run writes every interval, when asked, and once more when it stops; each
 // write may take up to one interval.
 func TestActivityRecorderRunWritesOnTickOnRequestAndOnStop(t *testing.T) {
-	run := func(t *testing.T, interval time.Duration) (*ActivityRecorder, *activityStore, func()) {
+	run := func(t *testing.T, interval time.Duration) (*ActivityRecorder, *fakeActivityStore, func()) {
 		t.Helper()
 		a, s, _ := newTestActivityRecorder(t, &config.APIConfig{ActivityWriteInterval: interval})
 		ctx, cancel := context.WithCancel(context.Background())

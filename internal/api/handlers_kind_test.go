@@ -58,7 +58,7 @@ func TestDefaultRoutesDoNotServeCodeSandboxes(t *testing.T) {
 	if hits := upstreamHits.Load(); hits != 0 {
 		t.Fatalf("%d requests for a code sandbox reached its runner", hits)
 	}
-	if got, err := s.GetByIDAndKind(codeID, store.KindCode); err != nil || got == nil {
+	if got, err := s.Get(codeID, store.KindFilter(store.KindCode)); err != nil || got == nil {
 		t.Fatalf("code sandbox after DELETE /sandboxes/{id}: %+v err=%v, want kept", got, err)
 	}
 

@@ -16,7 +16,7 @@ import (
 
 // newActivityTestGateway is newTestGateway with the activity recorder exposed,
 // so a test can run its writes. Nothing runs it otherwise.
-func newActivityTestGateway(t *testing.T, adminKey string) (http.Handler, store.Persistence, *ActivityRecorder) {
+func newActivityTestGateway(t *testing.T, adminKey string) (http.Handler, store.Store, *ActivityRecorder) {
 	t.Helper()
 	s, err := store.New(":memory:")
 	if err != nil {
@@ -90,7 +90,7 @@ func TestSandboxProxyDoesNotCountServerErrorsAsActivity(t *testing.T) {
 		}
 		activity.write()
 
-		rec, err := s.GetByIDAndKind(sid, store.KindDefault)
+		rec, err := s.Get(sid, store.KindFilter(store.KindDefault))
 		if err != nil {
 			t.Fatalf("get sandbox: %v", err)
 		}
@@ -109,7 +109,7 @@ func TestSandboxProxyDoesNotCountServerErrorsAsActivity(t *testing.T) {
 		t.Fatalf("upstream 200: proxy returned %d", rr.Code)
 	}
 	activity.write()
-	rec, err := s.GetByIDAndKind(sid, store.KindDefault)
+	rec, err := s.Get(sid, store.KindFilter(store.KindDefault))
 	if err != nil {
 		t.Fatalf("get sandbox: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestSandboxProxyCountsClientErrorsAsActivity(t *testing.T) {
 	}
 	activity.write()
 
-	rec, err := s.GetByIDAndKind(sid, store.KindDefault)
+	rec, err := s.Get(sid, store.KindFilter(store.KindDefault))
 	if err != nil {
 		t.Fatalf("get sandbox: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestSandboxProxyDoesNotCountUnreachableRunnerAsActivity(t *testing.T) {
 	}
 	activity.write()
 
-	rec, err := s.GetByIDAndKind(sid, store.KindDefault)
+	rec, err := s.Get(sid, store.KindFilter(store.KindDefault))
 	if err != nil {
 		t.Fatalf("get sandbox: %v", err)
 	}

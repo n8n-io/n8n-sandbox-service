@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"sync"
 
 	"github.com/n8n-io/sandbox-service/internal/api/store"
@@ -8,9 +9,12 @@ import (
 
 // countTenantSandboxes counts a tenant's sandboxes of every kind, which share
 // max_sandboxes.
-func countTenantSandboxes(p store.SandboxPersistence) func(tenantID string) (int64, error) {
+func countTenantSandboxes(s store.Store) func(tenantID string) (int64, error) {
 	return func(tenantID string) (int64, error) {
-		return p.CountByTenantAndKinds(tenantID, store.AllKinds())
+		if tenantID == "" {
+			return 0, errors.New("api: count sandboxes without a tenant")
+		}
+		return s.Count(store.SandboxFilter{Kinds: store.AllKinds(), TenantID: tenantID})
 	}
 }
 

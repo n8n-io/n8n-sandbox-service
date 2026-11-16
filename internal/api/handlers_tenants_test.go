@@ -16,7 +16,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 )
 
-func newTestGateway(t *testing.T, adminKey string) (http.Handler, store.Persistence) {
+func newTestGateway(t *testing.T, adminKey string) (http.Handler, store.Store) {
 	t.Helper()
 	s, err := store.New(":memory:")
 	if err != nil {
@@ -349,7 +349,7 @@ func TestLoweredTenantLimitBlocksCreatesAndKeepsSandboxes(t *testing.T) {
 		t.Fatalf("create above lowered limit: expected %d quota exceeded, got %d body=%s", http.StatusForbidden, rr.Code, rr.Body.String())
 	}
 	for _, id := range sandboxIDs {
-		rec, err := s.GetByIDAndKind(id, store.KindDefault)
+		rec, err := s.Get(id, store.KindFilter(store.KindDefault))
 		if err != nil || rec == nil || rec.Status != "running" {
 			t.Fatalf("sandbox %s after lowering the limit: %+v err=%v", id, rec, err)
 		}
@@ -394,7 +394,7 @@ func TestDeleteTenantConflictWhenSandboxesExist(t *testing.T) {
 		t.Fatalf("delete with sandboxes: expected %d, got %d body=%s", http.StatusConflict, delRR.Code, delRR.Body.String())
 	}
 
-	if err := s.DeleteByIDAndKind("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", store.KindDefault); err != nil {
+	if err := s.Delete("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", store.KindFilter(store.KindDefault)); err != nil {
 		t.Fatalf("delete sandbox: %v", err)
 	}
 	del2 := httptest.NewRequest(http.MethodDelete, "/admin/tenants/"+created.Tenant.ID, nil)

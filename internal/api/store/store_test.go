@@ -33,7 +33,7 @@ func TestStorePersistsDockerMetadata(t *testing.T) {
 		t.Fatalf("create record: %v", err)
 	}
 
-	got, err := s.GetByIDAndKind(rec.ID, KindDefault)
+	got, err := s.Get(rec.ID, KindFilter(KindDefault))
 	if err != nil {
 		t.Fatalf("get record: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestEgressMigrationBackfillsPublic(t *testing.T) {
 		t.Fatalf("reopen store: %v", err)
 	}
 	defer s.Close()
-	got, err := s.GetByIDAndKind("legacy", KindDefault)
+	got, err := s.Get("legacy", KindFilter(KindDefault))
 	if err != nil || got == nil {
 		t.Fatalf("get legacy row: got=%v err=%v", got, err)
 	}
@@ -108,7 +108,7 @@ func TestCodeSandboxColumnsMigrationBackfillsDefaults(t *testing.T) {
 		t.Fatalf("reopen store: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	got, err := s.GetByIDAndKind("legacy", KindDefault)
+	got, err := s.Get("legacy", KindFilter(KindDefault))
 	if err != nil || got == nil {
 		t.Fatalf("get legacy row: got=%v err=%v", got, err)
 	}
@@ -130,7 +130,7 @@ func TestCodeSandboxNames(t *testing.T) {
 }
 
 // testCodeSandboxNames runs against both backends; the tenants must not exist yet.
-func testCodeSandboxNames(t *testing.T, s Persistence, tenantA, tenantB string) {
+func testCodeSandboxNames(t *testing.T, s Store, tenantA, tenantB string) {
 	t.Helper()
 	now := time.Now().Unix()
 	for _, id := range []string{tenantA, tenantB} {
@@ -147,7 +147,7 @@ func testCodeSandboxNames(t *testing.T, s Persistence, tenantA, tenantB string) 
 		rec.Status, rec.CreatedAt, rec.LastActiveAt = "running", now, now
 		err := s.Create(&rec)
 		if err == nil {
-			t.Cleanup(func() { _ = s.DeleteByIDAndKind(rec.ID, rec.Kind) })
+			t.Cleanup(func() { _ = s.Delete(rec.ID, KindFilter(rec.Kind)) })
 		}
 		return &rec, err
 	}
@@ -163,7 +163,7 @@ func testCodeSandboxNames(t *testing.T, s Persistence, tenantA, tenantB string) 
 	if err != nil {
 		t.Fatalf("create code sandbox: %v", err)
 	}
-	got, err := s.GetByIDAndKind(first.ID, KindCode)
+	got, err := s.Get(first.ID, KindFilter(KindCode))
 	if err != nil || got == nil || *got != *first {
 		t.Fatalf("Get: %+v err=%v, want %+v", got, err, first)
 	}
@@ -245,7 +245,7 @@ func testCodeSandboxNames(t *testing.T, s Persistence, tenantA, tenantB string) 
 	}
 
 	// Deleting the sandbox frees its name.
-	if err := s.DeleteByIDAndKind(first.ID, KindCode); err != nil {
+	if err := s.Delete(first.ID, KindFilter(KindCode)); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	if _, err := create(code(tenantA, "n1")); err != nil {
@@ -365,14 +365,14 @@ func TestSQLiteDisablesWALAfterReopen(t *testing.T) {
 	if sync != 2 {
 		t.Errorf("synchronous = %d, want 2 (FULL)", sync)
 	}
-	got, err := s.GetByIDAndKind(rec.ID, KindDefault)
+	got, err := s.Get(rec.ID, KindFilter(KindDefault))
 	if err != nil || got == nil {
 		t.Fatalf("get persisted record: got=%v err=%v", got, err)
 	}
 	if got.Status != rec.Status {
 		t.Errorf("status = %q, want %q", got.Status, rec.Status)
 	}
-	if err := s.UpdateStatusByIDAndKind(rec.ID, KindDefault, "stopped"); err != nil {
+	if err := s.UpdateStatus(rec.ID, KindFilter(KindDefault), "stopped"); err != nil {
 		t.Fatalf("write after disabling WAL: %v", err)
 	}
 }
@@ -440,7 +440,7 @@ func TestListForIdleReapDeleteAndStop(t *testing.T) {
 	})
 
 	cutoff := int64(200)
-	delRows, err := s.ListForIdleReapDeleteByKinds(AllKinds(), cutoff)
+	delRows, err := s.ListForIdleReapDelete(KindFilter(AllKinds()...), cutoff)
 	if err != nil {
 		t.Fatalf("ListForIdleReapDelete: %v", err)
 	}
@@ -462,7 +462,7 @@ func TestListForIdleReapDeleteAndStop(t *testing.T) {
 		ephemeral bool
 		want      string
 	}{{false, "a-run-old"}, {true, "d-eph-old"}} {
-		stopRows, err := s.ListForIdleReapStopByKinds(AllKinds(), cutoff, tc.ephemeral)
+		stopRows, err := s.ListForIdleReapStop(KindFilter(AllKinds()...), cutoff, tc.ephemeral)
 		if err != nil {
 			t.Fatalf("ListForIdleReapStop(ephemeral=%v): %v", tc.ephemeral, err)
 		}
@@ -505,11 +505,11 @@ func TestTenantAndAPIKeyCRUD(t *testing.T) {
 		t.Fatalf("create sandbox: %v", err)
 	}
 
-	n, err := s.CountByTenantAndKinds(tenant.ID, AllKinds())
+	n, err := s.Count(SandboxFilter{TenantID: tenant.ID, Kinds: AllKinds()})
 	if err != nil || n != 1 {
 		t.Fatalf("CountByTenant: n=%d err=%v", n, err)
 	}
-	listed, err := s.ListByTenantAndKind(tenant.ID, KindDefault)
+	listed, err := s.List(SandboxFilter{TenantID: tenant.ID, Kinds: []Kind{KindDefault}})
 	if err != nil || len(listed) != 1 {
 		t.Fatalf("ListByTenant: len=%d err=%v", len(listed), err)
 	}
@@ -538,7 +538,7 @@ func TestRecordActivity(t *testing.T) {
 
 // testRecordActivity runs against both backends; no id starting with prefix
 // may exist yet.
-func testRecordActivity(t *testing.T, s Persistence, prefix string) {
+func testRecordActivity(t *testing.T, s Store, prefix string) {
 	t.Helper()
 	ctx := context.Background()
 	a, b := prefix+"-a", prefix+"-b"
@@ -546,7 +546,7 @@ func testRecordActivity(t *testing.T, s Persistence, prefix string) {
 		if err := s.Create(&SandboxRecord{Kind: KindDefault, ID: id, Status: "running", CreatedAt: 100, LastActiveAt: 100}); err != nil {
 			t.Fatalf("create: %v", err)
 		}
-		t.Cleanup(func() { _ = s.DeleteByIDAndKind(id, KindDefault) })
+		t.Cleanup(func() { _ = s.Delete(id, KindFilter(KindDefault)) })
 	}
 
 	type row struct {
@@ -555,11 +555,11 @@ func testRecordActivity(t *testing.T, s Persistence, prefix string) {
 	}
 	check := func(step string, batch map[string]int64, want map[string]row) {
 		t.Helper()
-		if err := s.RecordActivityByKind(ctx, KindDefault, batch); err != nil {
+		if err := s.RecordActivity(ctx, batch); err != nil {
 			t.Fatalf("%s: record activity: %v", step, err)
 		}
 		for id, w := range want {
-			got, err := s.GetByIDAndKind(id, KindDefault)
+			got, err := s.Get(id, KindFilter(KindDefault))
 			if err != nil || got == nil {
 				t.Fatalf("%s: get %s: %+v err=%v", step, id, got, err)
 			}
@@ -577,7 +577,7 @@ func testRecordActivity(t *testing.T, s Persistence, prefix string) {
 		map[string]int64{a: 200, b: 250},
 		map[string]row{a: {200, "running"}, b: {300, "running"}})
 
-	if err := s.UpdateStatusByIDAndKind(a, KindDefault, "stopped"); err != nil {
+	if err := s.UpdateStatus(a, KindFilter(KindDefault), "stopped"); err != nil {
 		t.Fatalf("update status: %v", err)
 	}
 	// A wake: running again, without moving the time back.
@@ -598,7 +598,7 @@ func TestUpdateTenantLimits(t *testing.T) {
 }
 
 // testUpdateTenantLimits runs against both backends; tenantID must not exist yet.
-func testUpdateTenantLimits(t *testing.T, s Persistence, tenantID string) {
+func testUpdateTenantLimits(t *testing.T, s Store, tenantID string) {
 	t.Helper()
 	now := time.Now().Unix()
 	if err := s.CreateTenant(&Tenant{ID: tenantID, Name: "t", ExternalRef: "ext", MaxSandboxes: 5, CreatedAt: now}); err != nil {
@@ -613,7 +613,7 @@ func testUpdateTenantLimits(t *testing.T, s Persistence, tenantID string) {
 	}); err != nil {
 		t.Fatalf("create sandbox: %v", err)
 	}
-	t.Cleanup(func() { _ = s.DeleteByIDAndKind(sandboxID, KindDefault) })
+	t.Cleanup(func() { _ = s.Delete(sandboxID, KindFilter(KindDefault)) })
 
 	// Unchanged values still count as a match, so they are not "not found".
 	for _, n := range []int{50, 50, 0} {
@@ -630,7 +630,7 @@ func testUpdateTenantLimits(t *testing.T, s Persistence, tenantID string) {
 		}
 	}
 
-	if n, err := s.CountByTenantAndKinds(tenantID, AllKinds()); err != nil || n != 1 {
+	if n, err := s.Count(SandboxFilter{TenantID: tenantID, Kinds: AllKinds()}); err != nil || n != 1 {
 		t.Fatalf("sandboxes after update: n=%d err=%v", n, err)
 	}
 
@@ -649,7 +649,7 @@ func TestCreateEnforcesTenantQuota(t *testing.T) {
 }
 
 // testCreateEnforcesTenantQuota runs against both backends; tenantID must not exist yet.
-func testCreateEnforcesTenantQuota(t *testing.T, s Persistence, tenantID string) {
+func testCreateEnforcesTenantQuota(t *testing.T, s Store, tenantID string) {
 	t.Helper()
 	now := time.Now().Unix()
 	if err := s.CreateTenant(&Tenant{ID: tenantID, Name: "t", MaxSandboxes: 2, CreatedAt: now}); err != nil {
@@ -663,13 +663,13 @@ func testCreateEnforcesTenantQuota(t *testing.T, s Persistence, tenantID string)
 		id := fmt.Sprintf("quota-%d-%s", created, tenantID)
 		err := s.Create(&SandboxRecord{Kind: KindDefault, ID: id, Status: "running", CreatedAt: now, LastActiveAt: now, TenantID: owner})
 		if err == nil {
-			t.Cleanup(func() { _ = s.DeleteByIDAndKind(id, KindDefault) })
+			t.Cleanup(func() { _ = s.Delete(id, KindFilter(KindDefault)) })
 		}
 		return err
 	}
 	wantCount := func(want int64) {
 		t.Helper()
-		if n, err := s.CountByTenantAndKinds(tenantID, AllKinds()); err != nil || n != want {
+		if n, err := s.Count(SandboxFilter{TenantID: tenantID, Kinds: AllKinds()}); err != nil || n != want {
 			t.Fatalf("CountByTenant: n=%d err=%v, want %d", n, err, want)
 		}
 	}
@@ -712,13 +712,13 @@ func TestConcurrentCreatesStopAtTenantQuota(t *testing.T) {
 		t.Fatalf("new store: %v", err)
 	}
 	defer s.Close()
-	testConcurrentCreatesStopAtTenantQuota(t, []Persistence{s}, "13131313-1313-1313-1313-131313131313")
+	testConcurrentCreatesStopAtTenantQuota(t, []Store{s}, "13131313-1313-1313-1313-131313131313")
 }
 
 // testConcurrentCreatesStopAtTenantQuota saves a burst of sandboxes for one
 // tenant in parallel, spread over stores (one per API pod sharing a database),
 // and expects exactly the quota to be saved. tenantID must not exist yet.
-func testConcurrentCreatesStopAtTenantQuota(t *testing.T, stores []Persistence, tenantID string) {
+func testConcurrentCreatesStopAtTenantQuota(t *testing.T, stores []Store, tenantID string) {
 	t.Helper()
 	const quota, creates = 3, 12
 	now := time.Now().Unix()
@@ -733,7 +733,7 @@ func testConcurrentCreatesStopAtTenantQuota(t *testing.T, stores []Persistence, 
 	var wg sync.WaitGroup
 	for i := range creates {
 		id := fmt.Sprintf("burst-%d-%s", i, tenantID)
-		t.Cleanup(func() { _ = s.DeleteByIDAndKind(id, KindDefault) })
+		t.Cleanup(func() { _ = s.Delete(id, KindFilter(KindDefault)) })
 		wg.Go(func() {
 			<-start
 			errs[i] = stores[i%len(stores)].Create(&SandboxRecord{
@@ -757,7 +757,7 @@ func testConcurrentCreatesStopAtTenantQuota(t *testing.T, stores []Persistence, 
 	if saved != quota {
 		t.Fatalf("saved %d of %d parallel creates, want exactly the quota %d", saved, creates, quota)
 	}
-	if n, err := s.CountByTenantAndKinds(tenantID, AllKinds()); err != nil || n != quota {
+	if n, err := s.Count(SandboxFilter{TenantID: tenantID, Kinds: AllKinds()}); err != nil || n != quota {
 		t.Fatalf("CountByTenant: n=%d err=%v, want %d", n, err, quota)
 	}
 }
@@ -789,7 +789,7 @@ func TestDeleteTenantRejectsWhenSandboxesExist(t *testing.T) {
 	if err := s.DeleteTenant(tenantID); !errors.Is(err, ErrTenantHasSandboxes) {
 		t.Fatalf("DeleteTenant: got %v, want ErrTenantHasSandboxes", err)
 	}
-	if err := s.DeleteByIDAndKind("s-orphan", KindDefault); err != nil {
+	if err := s.Delete("s-orphan", KindFilter(KindDefault)); err != nil {
 		t.Fatalf("delete sandbox: %v", err)
 	}
 	if err := s.DeleteTenant(tenantID); err != nil {
