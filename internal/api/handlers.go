@@ -78,7 +78,7 @@ type proxyRoute struct {
 }
 
 // sandboxProxyHandler proxies sandbox routes to the sandbox's runner.
-func sandboxProxyHandler(s *store.DefaultSandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, transport http.RoundTripper, activity *ActivityRecorder, mrec *metrics.APIRecorder) func(proxyRoute) http.HandlerFunc {
+func sandboxProxyHandler(s sandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, transport http.RoundTripper, activity *ActivityRecorder, mrec *metrics.APIRecorder) func(proxyRoute) http.HandlerFunc {
 	return func(route proxyRoute) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			id := r.PathValue("id")
@@ -92,7 +92,7 @@ func sandboxProxyHandler(s *store.DefaultSandboxStore, reg registry.RunnerRegist
 				writeError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
-			if rec == nil || !canAccessSandbox(r, rec) {
+			if rec == nil || !canAccessSandbox(r, rec, store.KindDefault) {
 				writeError(w, http.StatusNotFound, "sandbox not found")
 				return
 			}
@@ -214,7 +214,7 @@ func listTenantFilter(w http.ResponseWriter, r *http.Request, role authRole) (te
 	return tenantID, true
 }
 
-func handleListSandboxes(s *store.DefaultSandboxStore) http.HandlerFunc {
+func handleListSandboxes(s sandboxStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, ok := authFromContext(r.Context())
 		if !ok {
@@ -235,14 +235,18 @@ func handleListSandboxes(s *store.DefaultSandboxStore) http.HandlerFunc {
 			records []*store.SandboxRecord
 			err     error
 		)
+		f := store.KindFilter(store.KindDefault)
 		switch {
 		case id.Role == roleTenant:
-			records, err = s.ListByTenant(id.TenantID)
+			f.TenantID = id.TenantID
 		case filter != "":
-			records, err = s.ListByTenant(filter)
-		default:
-			records, err = s.List()
+			f.TenantID = filter
 		}
+		if id.Role == roleTenant && f.TenantID == "" {
+			writeError(w, http.StatusForbidden, "tenant API key without a tenant")
+			return
+		}
+		records, err = s.List(f)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -255,7 +259,7 @@ func handleListSandboxes(s *store.DefaultSandboxStore) http.HandlerFunc {
 	}
 }
 
-func handleGetSandbox(s *store.DefaultSandboxStore, cfg *config.APIConfig) http.HandlerFunc {
+func handleGetSandbox(s sandboxStore, cfg *config.APIConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if !isValidUUID(id) {
@@ -267,7 +271,7 @@ func handleGetSandbox(s *store.DefaultSandboxStore, cfg *config.APIConfig) http.
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		if rec == nil || !canAccessSandbox(r, rec) {
+		if rec == nil || !canAccessSandbox(r, rec, store.KindDefault) {
 			writeError(w, http.StatusNotFound, "sandbox not found")
 			return
 		}
@@ -309,12 +313,22 @@ func runnerControlTLS(cfg *config.APIConfig) *runnerctl.TLS {
 // see. The runtime's own create budget plus a margin for the round trip.
 const runnerCreateBudget = runnerruntime.CreateBudget + time.Minute
 
+// sandboxStore is the store of the default sandbox routes. Get finds a
+// sandbox of any kind: the routes check its kind with canAccessSandbox.
+type sandboxStore interface {
+	Create(record *store.SandboxRecord) error
+	Get(id string) (*store.SandboxRecord, error)
+	List(f store.SandboxFilter) ([]*store.SandboxRecord, error)
+	Delete(id string) error
+	LockSandbox(ctx context.Context, id string) (unlock func(), err error)
+}
+
 // tenantGetter reads tenants.
 type tenantGetter interface {
 	GetTenant(id string) (*store.Tenant, error)
 }
 
-func handleCreateSandbox(s *store.DefaultSandboxStore, tenants tenantGetter, reg registry.RunnerRegistry, cfg *config.APIConfig, rec *metrics.APIRecorder, quota *tenantQuota) http.HandlerFunc {
+func handleCreateSandbox(s sandboxStore, tenants tenantGetter, reg registry.RunnerRegistry, cfg *config.APIConfig, rec *metrics.APIRecorder, quota *tenantQuota) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		success := false
 		defer func() { rec.ObserveSandboxOp(metrics.OpCreate, success) }()
@@ -373,7 +387,7 @@ func handleCreateSandbox(s *store.DefaultSandboxStore, tenants tenantGetter, reg
 				return
 			}
 			if existing != nil {
-				if !canAccessSandbox(r, existing) {
+				if !canAccessSandbox(r, existing, store.KindDefault) {
 					writeError(w, http.StatusConflict, "sandbox id unavailable")
 					return
 				}
@@ -382,18 +396,6 @@ func handleCreateSandbox(s *store.DefaultSandboxStore, tenants tenantGetter, reg
 					return
 				}
 				if !deleteSandboxRecord(w, r, s, cfg, existing) {
-					return
-				}
-			} else {
-				// A sandbox of another kind may have the id: the runner create
-				// would collide with it, and its rollback delete it.
-				taken, err := s.IDTaken(sandboxID)
-				if err != nil {
-					writeError(w, http.StatusInternalServerError, err.Error())
-					return
-				}
-				if taken {
-					writeError(w, http.StatusConflict, "sandbox id unavailable")
 					return
 				}
 			}
@@ -501,6 +503,7 @@ func handleCreateSandbox(s *store.DefaultSandboxStore, tenants tenantGetter, reg
 			TenantID:              tenantID,
 			Ephemeral:             req.Ephemeral,
 			Egress:                string(egress),
+			Kind:                  store.KindDefault,
 		}
 		if err := s.Create(record); err != nil {
 			rollbackRunnerCreate()
@@ -508,7 +511,7 @@ func handleCreateSandbox(s *store.DefaultSandboxStore, tenants tenantGetter, reg
 			// say when a commit's reply was lost: count it as saved, the safe side.
 			releaseQuota(!errors.Is(err, store.ErrTenantQuotaExceeded) && !errors.Is(err, store.ErrTenantNotFound))
 			if existing, getErr := s.Get(sandboxID); getErr == nil && existing != nil {
-				if !canAccessSandbox(r, existing) {
+				if !canAccessSandbox(r, existing, store.KindDefault) {
 					writeError(w, http.StatusConflict, "sandbox id unavailable")
 					return
 				}
@@ -572,7 +575,7 @@ func writeExistingSandbox(w http.ResponseWriter, existing *store.SandboxRecord, 
 	return true
 }
 
-func deleteSandboxRecord(w http.ResponseWriter, r *http.Request, s *store.DefaultSandboxStore, cfg *config.APIConfig, rec *store.SandboxRecord) bool {
+func deleteSandboxRecord(w http.ResponseWriter, r *http.Request, s sandboxStore, cfg *config.APIConfig, rec *store.SandboxRecord) bool {
 	if err := runnerctl.DeleteSandbox(r.Context(), rec.RunnerControlGRPCAddr, cfg.RunnerAPIKey, runnerControlTLS(cfg), rec.ID); err != nil {
 		writeError(w, http.StatusBadGateway, "failed to delete container: "+err.Error())
 		return false
@@ -584,7 +587,7 @@ func deleteSandboxRecord(w http.ResponseWriter, r *http.Request, s *store.Defaul
 	return true
 }
 
-func handleDeleteSandbox(s *store.DefaultSandboxStore, cfg *config.APIConfig, mrec *metrics.APIRecorder) http.HandlerFunc {
+func handleDeleteSandbox(s sandboxStore, cfg *config.APIConfig, mrec *metrics.APIRecorder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		success := false
 		defer func() { mrec.ObserveSandboxOp(metrics.OpDelete, success) }()
@@ -607,7 +610,7 @@ func handleDeleteSandbox(s *store.DefaultSandboxStore, cfg *config.APIConfig, mr
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		if rec == nil || !canAccessSandbox(r, rec) {
+		if rec == nil || !canAccessSandbox(r, rec, store.KindDefault) {
 			// Same 404 as GET for missing and inaccessible — do not leak
 			// cross-tenant existence via 204 vs 404.
 			writeError(w, http.StatusNotFound, "sandbox not found")
@@ -708,7 +711,7 @@ func newRunnerReverseProxy(runnerURL *url.URL, runnerAPIKey string, transport ht
 // never evidence of a working sandbox — counting it as activity would let a
 // retrying client refresh last_active_at and keep the idle sweeper from ever
 // reclaiming the row left behind.
-func reapSandboxIfRunnerGone(s *store.DefaultSandboxStore, sandboxID string, resp *http.Response) bool {
+func reapSandboxIfRunnerGone(s sandboxStore, sandboxID string, resp *http.Response) bool {
 	if !sandboxproxy.RunnerReportsSandboxGone(resp) {
 		return false
 	}
@@ -767,7 +770,7 @@ func runnerCordoned(reg registry.RunnerRegistry, runnerID string) bool {
 // sandbox no longer stopped on a cordoned runner gets a 503, and its retry is
 // proxied as usual. A delete that the runner fails keeps the row and answers
 // 503 too, so the retry tries again.
-func deleteStoppedOnCordonedRunner(writer http.ResponseWriter, req *http.Request, s *store.DefaultSandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, mrec *metrics.APIRecorder, id string) {
+func deleteStoppedOnCordonedRunner(writer http.ResponseWriter, req *http.Request, s sandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, mrec *metrics.APIRecorder, id string) {
 	unlock, err := s.LockSandbox(req.Context(), id)
 	if err != nil {
 		writeError(writer, http.StatusInternalServerError, err.Error())
@@ -780,7 +783,7 @@ func deleteStoppedOnCordonedRunner(writer http.ResponseWriter, req *http.Request
 		writeError(writer, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if rec == nil || !canAccessSandbox(req, rec) {
+	if rec == nil || !canAccessSandbox(req, rec, store.KindDefault) {
 		writeError(writer, http.StatusNotFound, "sandbox not found")
 		return
 	}

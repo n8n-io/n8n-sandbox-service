@@ -83,9 +83,9 @@ func logSandboxDeleted(sandboxID, runnerID, reason string) {
 type sweeperStore interface {
 	ListForIdleReapDelete(f store.SandboxFilter, cutoff int64) ([]*store.SandboxRecord, error)
 	ListForIdleReapStop(f store.SandboxFilter, cutoff int64, ephemeral bool) ([]*store.SandboxRecord, error)
-	Get(id string, f store.SandboxFilter) (*store.SandboxRecord, error)
-	UpdateStatus(id string, f store.SandboxFilter, status string) error
-	Delete(id string, f store.SandboxFilter) error
+	Get(id string) (*store.SandboxRecord, error)
+	UpdateStatus(id, status string) error
+	Delete(id string) error
 	LockSandbox(ctx context.Context, id string) (unlock func(), err error)
 }
 
@@ -182,23 +182,21 @@ func orphanReapDue(reg registry.RunnerRegistry, runnerID string, cfg *config.API
 }
 
 func reapOrphanSandbox(s sweeperStore, rec *store.SandboxRecord, runnerID string) {
-	if err := s.Delete(rec.ID, store.KindFilter(rec.Kind)); err != nil {
+	if err := s.Delete(rec.ID); err != nil {
 		slog.Error("idle orphan reap store failed", "sandbox_id", rec.ID, "runner_id", runnerID, "err", err)
 		return
 	}
 	logSandboxDeleted(rec.ID, runnerID, "orphan")
 }
 
-// withLockedSandbox runs fn with listed read again under its sandbox lock,
-// unless it has been deleted since.
-func withLockedSandbox(ctx context.Context, s sweeperStore, listed *store.SandboxRecord, fn func(*store.SandboxRecord)) error {
-	unlock, err := s.LockSandbox(ctx, listed.ID)
+func withLockedSandbox(ctx context.Context, s sweeperStore, id string, fn func(*store.SandboxRecord)) error {
+	unlock, err := s.LockSandbox(ctx, id)
 	if err != nil {
 		return err
 	}
 	defer unlock()
 
-	rec, err := s.Get(listed.ID, store.KindFilter(listed.Kind))
+	rec, err := s.Get(id)
 	if err != nil {
 		return err
 	}
@@ -294,7 +292,7 @@ func newSweepPool(ctx context.Context, s sweeperStore, phase string, limit, cand
 func (p *sweepPool) run(rec *store.SandboxRecord) {
 	var acted bool
 	var actErr error
-	lockErr := withLockedSandbox(p.ctx, p.store, rec, func(fresh *store.SandboxRecord) {
+	lockErr := withLockedSandbox(p.ctx, p.store, rec.ID, func(fresh *store.SandboxRecord) {
 		acted, actErr = p.act(p.ctx, fresh)
 	})
 
@@ -410,7 +408,7 @@ func deleteIdleSandbox(ctx context.Context, s sweeperStore, reg registry.RunnerR
 		}
 		return false, &runnerCallError{err}
 	}
-	if err := s.Delete(rec.ID, store.KindFilter(rec.Kind)); err != nil {
+	if err := s.Delete(rec.ID); err != nil {
 		slog.Error("idle delete store failed", "sandbox_id", rec.ID, "reason", reason, "err", err)
 		return false, err
 	}
@@ -501,7 +499,7 @@ func sweepIdleStopSandboxes(ctx context.Context, s sweeperStore, reg registry.Ru
 			}
 			return false, &runnerCallError{err}
 		}
-		if err := s.UpdateStatus(rec.ID, store.KindFilter(rec.Kind), "stopped"); err != nil {
+		if err := s.UpdateStatus(rec.ID, "stopped"); err != nil {
 			slog.Error("idle stop status update failed", "sandbox_id", rec.ID, "err", err)
 			return false, err
 		}

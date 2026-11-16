@@ -106,7 +106,7 @@ func TestProvisionerDeletesEmptyTenantOnly(t *testing.T) {
 		t.Fatalf("delete with sandboxes: expected %d, got %d body=%s", http.StatusConflict, rr.Code, rr.Body.String())
 	}
 
-	if err := s.Delete(sandboxID, store.KindFilter(store.KindDefault)); err != nil {
+	if err := s.Delete(sandboxID); err != nil {
 		t.Fatalf("delete sandbox: %v", err)
 	}
 	if rr := doJSON(t, router, http.MethodDelete, "/admin/tenants/"+created.Tenant.ID, provKey, ""); rr.Code != http.StatusNoContent {
@@ -327,8 +327,8 @@ func TestSandboxHandlersRejectUnknownRoleWithoutMiddleware(t *testing.T) {
 	cfg := withRunnerTLS(&config.APIConfig{DefaultMaxSandboxes: provMaxDflt})
 
 	for name, h := range map[string]http.Handler{
-		"list":   handleListSandboxes(store.NewDefaultSandboxStore(s)),
-		"create": handleCreateSandbox(store.NewDefaultSandboxStore(s), s, registry.New(45*time.Second), cfg, metrics.NewAPIRecorder(false), newTenantQuota(countTenantSandboxes(s))),
+		"list":   handleListSandboxes(s),
+		"create": handleCreateSandbox(s, s, registry.New(45*time.Second), cfg, metrics.NewAPIRecorder(false), newTenantQuota(countTenantSandboxes(s))),
 	} {
 		method := http.MethodGet
 		if name == "create" {

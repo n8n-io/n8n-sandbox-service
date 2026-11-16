@@ -274,13 +274,9 @@ func (s *SQLiteStore) Create(record *SandboxRecord) error {
 // sqlitePlaceholder returns the placeholder of a query argument.
 func sqlitePlaceholder(int) string { return "?" }
 
-func (s *SQLiteStore) Get(id string, f SandboxFilter) (*SandboxRecord, error) {
-	cond, args, err := f.where([]any{id}, sqlitePlaceholder)
-	if err != nil {
-		return nil, err
-	}
-	q := `SELECT ` + sqliteSandboxCols + ` FROM sandboxes WHERE id = ? AND ` + cond
-	rec, err := scanRecord(s.db.QueryRow(q, args...))
+func (s *SQLiteStore) Get(id string) (*SandboxRecord, error) {
+	q := `SELECT ` + sqliteSandboxCols + ` FROM sandboxes WHERE id = ?`
+	rec, err := scanRecord(s.db.QueryRow(q, id))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -303,13 +299,9 @@ func (s *SQLiteStore) GetCodeSandboxByName(tenantID, name string) (*SandboxRecor
 	return rec, nil
 }
 
-func (s *SQLiteStore) UpdateStatus(id string, f SandboxFilter, status string) error {
-	cond, args, err := f.where([]any{status, id}, sqlitePlaceholder)
-	if err != nil {
-		return err
-	}
-	q := `UPDATE sandboxes SET status = ? WHERE id = ? AND ` + cond
-	if _, err := s.db.Exec(q, args...); err != nil {
+func (s *SQLiteStore) UpdateStatus(id, status string) error {
+	const q = `UPDATE sandboxes SET status = ? WHERE id = ?`
+	if _, err := s.db.Exec(q, status, id); err != nil {
 		return fmt.Errorf("store: update status for %s: %w", id, err)
 	}
 	return nil
@@ -335,12 +327,9 @@ func (s *SQLiteStore) RecordActivity(ctx context.Context, lastActiveAt map[strin
 	return nil
 }
 
-func (s *SQLiteStore) Delete(id string, f SandboxFilter) error {
-	cond, args, err := f.where([]any{id}, sqlitePlaceholder)
-	if err != nil {
-		return err
-	}
-	if _, err := s.db.Exec(`DELETE FROM sandboxes WHERE id = ? AND `+cond, args...); err != nil {
+func (s *SQLiteStore) Delete(id string) error {
+	const q = `DELETE FROM sandboxes WHERE id = ?`
+	if _, err := s.db.Exec(q, id); err != nil {
 		return fmt.Errorf("store: delete sandbox %s: %w", id, err)
 	}
 	return nil

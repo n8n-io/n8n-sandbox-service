@@ -269,7 +269,7 @@ func shrinkSilentRunnerDeleteBudget(t *testing.T, budget time.Duration) {
 func TestSandboxProxyDeletesWithoutTheRunnerHTTPBase(t *testing.T) {
 	env := newCordonTestEnv(t, "stopped", true)
 	rec := mustGet(t, env.store, cordonSandboxID)
-	if err := env.store.Delete(cordonSandboxID, store.KindFilter(store.KindDefault)); err != nil {
+	if err := env.store.Delete(cordonSandboxID); err != nil {
 		t.Fatalf("Delete() failed: %v", err)
 	}
 	rec.RunnerHTTPBase = ""

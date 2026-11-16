@@ -201,9 +201,13 @@ func requireAdminOrScaler(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-// canAccessSandbox reports whether the caller may see/mutate the sandbox.
-// Unknown identity is denied. Admin may access any; tenants only their own.
-func canAccessSandbox(r *http.Request, rec *store.SandboxRecord) bool {
+// canAccessSandbox reports whether the caller may see/mutate the sandbox on a
+// route that serves sandboxes of kind. Unknown identity is denied. Admin may
+// access any of the kind; tenants only their own.
+func canAccessSandbox(r *http.Request, rec *store.SandboxRecord, kind store.Kind) bool {
+	if rec.Kind != kind {
+		return false
+	}
 	id, ok := authFromContext(r.Context())
 	if !ok {
 		return false

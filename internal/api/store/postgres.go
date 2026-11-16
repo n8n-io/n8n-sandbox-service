@@ -224,13 +224,9 @@ func (s *PostgresStore) Create(record *SandboxRecord) error {
 // pgPlaceholder returns the placeholder of the nth query argument.
 func pgPlaceholder(n int) string { return "$" + strconv.Itoa(n) }
 
-func (s *PostgresStore) Get(id string, f SandboxFilter) (*SandboxRecord, error) {
-	cond, args, err := f.where([]any{id}, pgPlaceholder)
-	if err != nil {
-		return nil, err
-	}
-	q := `SELECT ` + pgSandboxCols + ` FROM sandboxes WHERE id = $1 AND ` + cond
-	rec, err := scanRecord(s.db.QueryRow(q, args...))
+func (s *PostgresStore) Get(id string) (*SandboxRecord, error) {
+	q := `SELECT ` + pgSandboxCols + ` FROM sandboxes WHERE id = $1`
+	rec, err := scanRecord(s.db.QueryRow(q, id))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -253,13 +249,9 @@ func (s *PostgresStore) GetCodeSandboxByName(tenantID, name string) (*SandboxRec
 	return rec, nil
 }
 
-func (s *PostgresStore) UpdateStatus(id string, f SandboxFilter, status string) error {
-	cond, args, err := f.where([]any{status, id}, pgPlaceholder)
-	if err != nil {
-		return err
-	}
-	q := `UPDATE sandboxes SET status = $1 WHERE id = $2 AND ` + cond
-	if _, err := s.db.Exec(q, args...); err != nil {
+func (s *PostgresStore) UpdateStatus(id, status string) error {
+	const q = `UPDATE sandboxes SET status = $1 WHERE id = $2`
+	if _, err := s.db.Exec(q, status, id); err != nil {
 		return fmt.Errorf("store: update status for %s: %w", id, err)
 	}
 	return nil
@@ -298,12 +290,9 @@ func (s *PostgresStore) RecordActivity(ctx context.Context, lastActiveAt map[str
 	return nil
 }
 
-func (s *PostgresStore) Delete(id string, f SandboxFilter) error {
-	cond, args, err := f.where([]any{id}, pgPlaceholder)
-	if err != nil {
-		return err
-	}
-	if _, err := s.db.Exec(`DELETE FROM sandboxes WHERE id = $1 AND `+cond, args...); err != nil {
+func (s *PostgresStore) Delete(id string) error {
+	const q = `DELETE FROM sandboxes WHERE id = $1`
+	if _, err := s.db.Exec(q, id); err != nil {
 		return fmt.Errorf("store: delete sandbox %s: %w", id, err)
 	}
 	return nil

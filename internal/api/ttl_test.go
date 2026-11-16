@@ -191,7 +191,7 @@ func seedRunningSandbox(t *testing.T, s store.Store, id, controlAddr string, las
 
 func mustGet(t *testing.T, s store.Store, id string) *store.SandboxRecord {
 	t.Helper()
-	rec, err := s.Get(id, store.KindFilter(store.KindDefault))
+	rec, err := s.Get(id)
 	if err != nil {
 		t.Fatalf("get %s: %v", id, err)
 	}

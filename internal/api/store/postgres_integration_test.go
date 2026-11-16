@@ -104,7 +104,7 @@ func TestPostgresCodeSandboxColumnsMigrationBackfillsDefaults(t *testing.T) {
 		t.Fatalf("reopen store: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	got, err := s.Get("legacy", KindFilter(KindDefault))
+	got, err := s.Get("legacy")
 	if err != nil || got == nil {
 		t.Fatalf("get legacy row: got=%v err=%v", got, err)
 	}
@@ -134,9 +134,9 @@ func TestPostgresStoreCRUD(t *testing.T) {
 	if err := s.Create(rec); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	t.Cleanup(func() { _ = s.Delete(rec.ID, KindFilter(KindDefault)) })
+	t.Cleanup(func() { _ = s.Delete(rec.ID) })
 
-	got, err := s.Get(rec.ID, KindFilter(KindDefault))
+	got, err := s.Get(rec.ID)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -154,10 +154,10 @@ func TestPostgresStoreCRUD(t *testing.T) {
 		t.Fatalf("stop candidates %v, want %s", sandboxIDs(rows), rec.ID)
 	}
 
-	if err := s.UpdateStatus(rec.ID, KindFilter(KindDefault), "stopped"); err != nil {
+	if err := s.UpdateStatus(rec.ID, "stopped"); err != nil {
 		t.Fatalf("update status: %v", err)
 	}
-	got, err = s.Get(rec.ID, KindFilter(KindDefault))
+	got, err = s.Get(rec.ID)
 	if err != nil || got == nil || got.Status != "stopped" {
 		t.Fatalf("after stop: %+v err=%v, want stopped", got, err)
 	}
@@ -206,7 +206,7 @@ func TestPostgresRecordActivityConcurrentBatches(t *testing.T) {
 		if err := s.Create(&SandboxRecord{Kind: KindDefault, ID: ids[i], Status: "running", CreatedAt: 1, LastActiveAt: 1}); err != nil {
 			t.Fatalf("create: %v", err)
 		}
-		t.Cleanup(func() { _ = s.Delete(ids[i], KindFilter(KindDefault)) })
+		t.Cleanup(func() { _ = s.Delete(ids[i]) })
 	}
 
 	const pods, rounds = 4, 25
@@ -233,7 +233,7 @@ func TestPostgresRecordActivityConcurrentBatches(t *testing.T) {
 	}
 	const newest = 1000 + (rounds-1)*pods + pods - 1
 	for _, id := range ids {
-		if got, err := s.Get(id, KindFilter(KindDefault)); err != nil || got == nil || got.LastActiveAt != newest {
+		if got, err := s.Get(id); err != nil || got == nil || got.LastActiveAt != newest {
 			t.Fatalf("%s: %+v err=%v, want last_active_at %d", id, got, err, newest)
 		}
 	}

@@ -50,8 +50,7 @@ func checkKind(kind Kind) error {
 	return nil
 }
 
-// SandboxFilter selects sandbox rows. A row it does not select is as good as
-// missing to the method given the filter.
+// SandboxFilter selects sandbox rows for the methods that read many.
 type SandboxFilter struct {
 	// Kinds is required: no kinds is an error, not every kind.
 	Kinds []Kind
@@ -151,9 +150,10 @@ type APIKey struct {
 	RevokedAt int64 // 0 = active
 }
 
-// Store is a SQLite or Postgres store. Every sandbox method that reads or
-// writes rows takes a SandboxFilter, apart from Create, RecordActivity and
-// LockSandbox.
+// Store is a SQLite or Postgres store. A method on one sandbox takes its id,
+// which is unique across kinds, and works on a sandbox of any kind and tenant:
+// callers check both on the row they read. A method on many sandboxes takes a
+// SandboxFilter.
 type Store interface {
 	io.Closer
 	Backend() Backend
@@ -166,16 +166,16 @@ type Store interface {
 	// its quota. It returns ErrSandboxNameTaken when a code sandbox of the
 	// tenant that is not draining already has the name.
 	Create(record *SandboxRecord) error
-	// Get returns the sandbox id that f selects, or nil when there is none.
-	Get(id string, f SandboxFilter) (*SandboxRecord, error)
+	// Get returns the sandbox id, or nil when there is none.
+	Get(id string) (*SandboxRecord, error)
 	// GetCodeSandboxByName returns the code sandbox of the tenant that has the
 	// name and is not draining, or nil when there is none.
 	GetCodeSandboxByName(tenantID, name string) (*SandboxRecord, error)
 	// List returns the sandboxes f selects, newest first.
 	List(f SandboxFilter) ([]*SandboxRecord, error)
 	Count(f SandboxFilter) (int64, error)
-	UpdateStatus(id string, f SandboxFilter, status string) error
-	Delete(id string, f SandboxFilter) error
+	UpdateStatus(id, status string) error
+	Delete(id string) error
 	// RecordActivity sets each sandbox in lastActiveAt (id to unix seconds),
 	// whatever its kind, running and moves its last_active_at forward to that
 	// time, never back, in one statement. Ids without a row are skipped.
