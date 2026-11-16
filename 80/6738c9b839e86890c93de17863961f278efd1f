@@ -1,0 +1,66 @@
+cmd/api/main.go
+  h_8fb27e0cdf6d1e 47,96,118
+internal/api/activity.go
+  h_8fb27e0cdf6d1e 35-40,44,74,108-109,111-120,122-130,133-135,139,146,152,160,196,199
+internal/api/activity_test.go
+  h_8fb27e0cdf6d1e 16-18,25,35,41,48,59,61,78,126-127,152,247
+internal/api/apikey_cache_test.go
+  h_8fb27e0cdf6d1e 266,272,284
+internal/api/gateway.go
+  h_8fb27e0cdf6d1e 21,29-30,58,62-69,97
+internal/api/handlers.go
+  h_8fb27e0cdf6d1e 81,217,258,312-317,575,587,711,770
+internal/api/handlers_cordon_test.go
+  h_8fb27e0cdf6d1e 38,44,58,272
+internal/api/handlers_create_sandbox_test.go
+  h_8fb27e0cdf6d1e 106,208,216,309,339,342,352,356,380,385,400,407,442,560,574,648,682,710,715,730,814
+internal/api/handlers_kind_test.go
+  h_8fb27e0cdf6d1e 61
+internal/api/handlers_provisioner_test.go
+  h_8fb27e0cdf6d1e 24,109,310,345
+internal/api/handlers_proxy_activity_test.go
+  h_8fb27e0cdf6d1e 19,93,112,154,194
+internal/api/handlers_proxy_redirect_test.go
+  h_8fb27e0cdf6d1e 75
+internal/api/handlers_reap_test.go
+  h_8fb27e0cdf6d1e 68,88,91,144,204,266
+internal/api/handlers_tenants.go
+  h_8fb27e0cdf6d1e 20-33,105,123,185,211,271,307,339,367,419
+internal/api/handlers_tenants_test.go
+  h_8fb27e0cdf6d1e 19,352,397
+internal/api/middleware_auth.go
+  h_8fb27e0cdf6d1e 86,145-149,152
+internal/api/placement_test.go
+  h_8fb27e0cdf6d1e 27,75,77,98
+internal/api/store/postgres.go
+  h_8fb27e0cdf6d1e 9,224-229,232-233,238,256-258,261-263,268,287,295-296,301-303,306-307,334-335,343-344,347-348,357-358,382-383,388,394-395,399-400
+internal/api/store/postgres_integration_test.go
+  h_8fb27e0cdf6d1e 107,137,139,149,157,160,166,173,209,222,236,260,278
+internal/api/store/sandboxes.go
+  h_8fb27e0cdf6d1e 5,8-10,14,16-19,22,24,26-31,34,36-37,40-42,44-46,49-53,56-58,60-62,65-68
+internal/api/store/sandboxes_test.go
+  h_8fb27e0cdf6d1e 19-21,36,56,58-65,68-80,83-85,87-88,90-91,93-94,98-99,101-102,104-105,109,118-119,122-128,133-137
+internal/api/store/sqlite.go
+  h_8fb27e0cdf6d1e 274-275,277-279,282-283,288,306-308,311-313,318,332-333,338-340,343-344,361-362,370-371,374-375,384-385,409-410,415,421-422,426-427
+internal/api/store/store.go
+  h_8fb27e0cdf6d1e 9-10,34,53-70,72-74,76,78-84,86,154-160,169-170,174-182,185-191,214-215
+internal/api/store/store_test.go
+  h_8fb27e0cdf6d1e 36,72,111,133,150,166,248,368,375,443,465,508,512,541,549,558,562,580,601,616,633,652,666,672,715,721,736,760,792
+internal/api/tenant_quota.go
+  h_8fb27e0cdf6d1e 4,12,14-17
+internal/api/ttl.go
+  h_8fb27e0cdf6d1e 82-94,97,134,184-185,194,201,271,281,377,398,413,439,442,460,463,477,480,504
+internal/api/ttl_test.go
+  h_8fb27e0cdf6d1e 165,175,192,194,203,205,552,616,636,673
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "806738c9b839e86890c93de17863961f278efd1f",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
