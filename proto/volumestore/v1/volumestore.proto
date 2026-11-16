@@ -1,0 +1,113 @@
+syntax = "proto3";
+
+package volumestore.v1;
+
+option go_package = "github.com/n8n-io/sandbox-service/internal/api/volumestore/storepb;storepb";
+
+// VolumeStore keeps the objects behind read-only sandbox volumes. A store
+// helper next to the API serves it on a Unix socket and holds the storage
+// credentials; the API sends none.
+//
+// Objects are immutable. Status messages must not contain credentials, tokens
+// or URLs: the API logs them. Content travels in data messages of at most
+// 1 MiB; both sides accept messages up to 4 MiB.
+service VolumeStore {
+  // Put stores a new object. The first message carries the header, every later
+  // one data. The helper stores the object only after the client half-closes
+  // the stream, with all data received, at most max_bytes, and matching sha256
+  // if given. If the stream ends any other way, nothing is stored. It never
+  // replaces an object, and answers OK only for an object this call created,
+  // with the size and sha256 it recorded.
+  //
+  // ALREADY_EXISTS: the object exists. OUT_OF_RANGE: more than max_bytes.
+  // DATA_LOSS: not the given sha256. INVALID_ARGUMENT: a malformed key or
+  // header, or data before the header.
+  rpc Put(stream PutRequest) returns (Object);
+
+  // Stat returns the size and sha256 recorded for an object. NOT_FOUND if it
+  // does not exist.
+  rpc Stat(StatRequest) returns (Object);
+
+  // Get streams an object: the first message carries its size and sha256,
+  // every later one data. NOT_FOUND if it does not exist.
+  rpc Get(GetRequest) returns (stream GetResponse);
+
+  // Delete removes an object. OK also when it does not exist.
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+
+  // ReadURL returns an https URL, without credentials in its authority, that
+  // allows a plain GET of this one object and nothing else, and expires within
+  // ttl_seconds (1 to 3600). The object need not exist.
+  rpc ReadURL(ReadURLRequest) returns (ReadURLResponse);
+}
+
+enum Kind {
+  KIND_UNSPECIFIED = 0;
+  // An ext4 image, for Firecracker runners.
+  KIND_EXT4 = 1;
+  // A tar, for Docker runners.
+  KIND_TAR = 2;
+}
+
+// ObjectKey names an object. The helper derives where it is stored from the
+// key alone, and refuses any other key with INVALID_ARGUMENT.
+message ObjectKey {
+  // "shared", or the owning tenant's ID: a lowercase UUID.
+  string scope = 1;
+  // 1 to 64 characters of a-z, 0-9 and -.
+  string id = 2;
+  Kind kind = 3;
+}
+
+message Object {
+  int64 size = 1;
+  // Lowercase hex.
+  string sha256 = 2;
+}
+
+message PutRequest {
+  oneof part {
+    // First message only.
+    PutHeader header = 1;
+    bytes data = 2;
+  }
+}
+
+message PutHeader {
+  ObjectKey key = 1;
+  // Positive.
+  int64 max_bytes = 2;
+  // Optional, lowercase hex.
+  string sha256 = 3;
+}
+
+message StatRequest {
+  ObjectKey key = 1;
+}
+
+message GetRequest {
+  ObjectKey key = 1;
+}
+
+message GetResponse {
+  oneof part {
+    // First message only.
+    Object object = 1;
+    bytes data = 2;
+  }
+}
+
+message DeleteRequest {
+  ObjectKey key = 1;
+}
+
+message DeleteResponse {}
+
+message ReadURLRequest {
+  ObjectKey key = 1;
+  int64 ttl_seconds = 2;
+}
+
+message ReadURLResponse {
+  string url = 1;
+}

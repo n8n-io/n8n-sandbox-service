@@ -181,6 +181,9 @@ To follow a renewal through both processes:
   authenticated request or call in which the other side presented this
   certificate. The runner logs the API's client certificate (HTTP and control
   gRPC); the API logs the runner's server certificate (proxy and control gRPC).
+- `http: TLS handshake error from <address>: …` (warning) on the API, with
+  `SANDBOX_API_VOLUME_STORE=local`: the volume-objects listener refused a peer,
+  for example one without a client certificate from the registration CA.
 - On the registration stream, `runner registered` on the API carries
   `client_cert_serial` and `client_cert_not_after`, and `runner registration
   stream established` on the runner carries `server_cert_serial` and
