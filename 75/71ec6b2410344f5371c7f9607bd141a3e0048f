@@ -1,0 +1,58 @@
+docs/security-model.md
+  h_8fb27e0cdf6d1e 75-78
+internal/api/activity_test.go
+  h_8fb27e0cdf6d1e 152
+internal/api/gateway.go
+  h_8fb27e0cdf6d1e 30,54,57-59
+internal/api/handlers.go
+  h_8fb27e0cdf6d1e 81,95,217,238,241,243,245-249,262,274,316-325,331,390,506,514,578,590,613,714,773,786
+internal/api/handlers_cordon_test.go
+  h_8fb27e0cdf6d1e 272
+internal/api/handlers_create_sandbox_test.go
+  h_8fb27e0cdf6d1e 106,385,442,560,648,682
+internal/api/handlers_kind_test.go
+  h_8fb27e0cdf6d1e 14-15,61,84-98
+internal/api/handlers_provisioner_test.go
+  h_8fb27e0cdf6d1e 109,330-331
+internal/api/handlers_proxy_activity_test.go
+  h_8fb27e0cdf6d1e 93,112,154,194
+internal/api/handlers_proxy_redirect_test.go
+  h_8fb27e0cdf6d1e 75
+internal/api/handlers_reap_test.go
+  h_8fb27e0cdf6d1e 68,91,144,204,266
+internal/api/handlers_tenants_test.go
+  h_8fb27e0cdf6d1e 352,397
+internal/api/middleware_auth.go
+  h_8fb27e0cdf6d1e 204-210
+internal/api/placement_test.go
+  h_8fb27e0cdf6d1e 98
+internal/api/store/postgres.go
+  h_8fb27e0cdf6d1e 227-229,252-254,293-295
+internal/api/store/postgres_integration_test.go
+  h_8fb27e0cdf6d1e 107,137,139,157,160,209,236
+internal/api/store/sandboxes.go
+  h_8fb27e0cdf6d1e 3-4,7-12
+internal/api/store/sandboxes_test.go
+  h_8fb27e0cdf6d1e 19,35,57-59,66-67,72-73,82-83,93,99,103,105-106,109
+internal/api/store/sqlite.go
+  h_8fb27e0cdf6d1e 277-279,302-304,330-332
+internal/api/store/store.go
+  h_8fb27e0cdf6d1e 53,153-156,169-170,177-178
+internal/api/store/store_test.go
+  h_8fb27e0cdf6d1e 36,72,111,150,166,248,368,375,514,549,562,580,616,666,736,792
+internal/api/ttl.go
+  h_8fb27e0cdf6d1e 86-88,185,192-193,199,295,411,502
+internal/api/ttl_test.go
+  h_8fb27e0cdf6d1e 194
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7571ec6b2410344f5371c7f9607bd141a3e0048f",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
