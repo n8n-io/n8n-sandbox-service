@@ -1,0 +1,20 @@
+docs/security-model.md
+  h_8fb27e0cdf6d1e 78-82
+internal/api/handlers_provisioner_test.go
+  h_8fb27e0cdf6d1e 310,345
+internal/api/store/postgres_integration_test.go
+  h_8fb27e0cdf6d1e 247
+internal/api/store/sandboxes_test.go
+  h_8fb27e0cdf6d1e 14,17-19,21-29,31-44,48-49,53,67-75,78-79,83-94,96-98
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "28a5ac1d5c684ba20bdb9f68e57ceb27cddb3ede",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
