@@ -307,7 +307,7 @@ func TestProvisionerCannotCreateAdminOwnedSandbox(t *testing.T) {
 	if rr.Code != http.StatusForbidden {
 		t.Fatalf("expected %d, got %d body=%s", http.StatusForbidden, rr.Code, rr.Body.String())
 	}
-	records, err := s.List(store.KindFilter(store.KindDefault))
+	records, err := s.List(store.KindFilter(store.AllKinds()...))
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -342,7 +342,7 @@ func TestSandboxHandlersRejectUnknownRoleWithoutMiddleware(t *testing.T) {
 			t.Errorf("%s: expected %d, got %d body=%s", name, http.StatusForbidden, rr.Code, rr.Body.String())
 		}
 	}
-	records, err := s.List(store.KindFilter(store.KindDefault))
+	records, err := s.List(store.KindFilter(store.AllKinds()...))
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}

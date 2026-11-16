@@ -75,9 +75,11 @@ Authorization runs on every sandbox request through `canAccessSandbox` in
   and compare its `tenant_id` against the caller's, and its `kind` against the
   route's. An admin key passes the tenant check for every sandbox, whoever owns
   it. A create whose id belongs to a sandbox of another kind gets `409`.
-- List is scoped at the query level by the tenant and kind in its filter. The `tenant_id` query
-  parameter that narrows an admin's listing is refused with `403` for tenant
-  keys, so it cannot be used to probe other tenants' ids. Every sandbox
+- List is scoped at the query level. It always filters by the route's kind.
+  A tenant key lists only its own sandboxes; an admin key lists every tenant's
+  unless it narrows the listing with the `tenant_id` query parameter. That
+  parameter is refused with `403` for tenant keys, so it cannot be used to
+  probe other tenants' ids. Every sandbox
   response names its owner in `tenant_id`; for a tenant that is always its own.
 - Create sets `tenant_id` from the authenticated identity. A caller cannot
   assign a sandbox to another tenant. Create and list switch on the role

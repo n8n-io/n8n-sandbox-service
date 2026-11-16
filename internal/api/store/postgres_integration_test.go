@@ -244,7 +244,7 @@ func TestPostgresCodeSandboxNames(t *testing.T) {
 }
 
 func TestPostgresKindScoping(t *testing.T) {
-	testKindScoping(t, openTestPostgresStore(t), uuid.New().String())
+	testKindScoping(t, openTestPostgresStore(t), uuid.New().String(), uuid.New().String())
 }
 
 func TestPostgresUpdateTenantLimits(t *testing.T) {

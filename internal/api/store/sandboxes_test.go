@@ -11,33 +11,46 @@ func TestKindScoping(t *testing.T) {
 		t.Fatalf("new store: %v", err)
 	}
 	defer s.Close()
-	testKindScoping(t, s, "18181818-1818-1818-1818-181818181818")
+	testKindScoping(t, s, "18181818-1818-1818-1818-181818181818", "19191919-1919-1919-1919-191919191919")
 }
 
-// testKindScoping runs against both backends; tenantID must not exist yet.
-// Methods on many sandboxes see only the rows their filter selects.
-func testKindScoping(t *testing.T, s SandboxStore, tenantID string) {
+// testKindScoping runs against both backends; tenantA and tenantB must not
+// exist yet. Methods on many sandboxes see only the rows their filter selects.
+func testKindScoping(t *testing.T, s SandboxStore, tenantA, tenantB string) {
 	t.Helper()
-	if err := s.CreateTenant(&Tenant{ID: tenantID, Name: "t", CreatedAt: 1}); err != nil {
-		t.Fatalf("create tenant: %v", err)
-	}
-	t.Cleanup(func() { _ = s.DeleteTenant(tenantID) })
-
-	def, code := "default-"+tenantID, "code-"+tenantID
-	for _, rec := range []*SandboxRecord{
-		{ID: def, Kind: KindDefault, Status: "running", CreatedAt: 1, LastActiveAt: 100, TenantID: tenantID},
-		{ID: code, Kind: KindCode, Name: "n", Status: "running", CreatedAt: 1, LastActiveAt: 100, TenantID: tenantID},
+	// Each tenant has a sandbox of each kind: tenantA's are running, tenantB's
+	// stopped.
+	var defA, codeA, defB, codeB string
+	for _, tc := range []struct {
+		tenantID, status string
+		def, code        *string
+	}{
+		{tenantA, "running", &defA, &codeA},
+		{tenantB, "stopped", &defB, &codeB},
 	} {
-		if err := s.Create(rec); err != nil {
-			t.Fatalf("create %s: %v", rec.ID, err)
+		if err := s.CreateTenant(&Tenant{ID: tc.tenantID, Name: "t", CreatedAt: 1}); err != nil {
+			t.Fatalf("create tenant: %v", err)
 		}
-		t.Cleanup(func() { _ = s.Delete(rec.ID) })
+		t.Cleanup(func() { _ = s.DeleteTenant(tc.tenantID) })
+		*tc.def, *tc.code = "default-"+tc.tenantID, "code-"+tc.tenantID
+		for _, rec := range []*SandboxRecord{
+			{ID: *tc.def, Kind: KindDefault},
+			{ID: *tc.code, Kind: KindCode, Name: "n"},
+		} {
+			rec.Status, rec.CreatedAt, rec.LastActiveAt, rec.TenantID = tc.status, 1, 100, tc.tenantID
+			if err := s.Create(rec); err != nil {
+				t.Fatalf("create %s: %v", rec.ID, err)
+			}
+			t.Cleanup(func() { _ = s.Delete(rec.ID) })
+		}
 	}
 
+	// The Postgres database is shared with other tests, so only the rows of
+	// the two tenants count.
 	ids := func(recs []*SandboxRecord) []string {
 		var out []string
 		for _, r := range recs {
-			if r.TenantID == tenantID {
+			if r.TenantID == tenantA || r.TenantID == tenantB {
 				out = append(out, r.ID)
 			}
 		}
@@ -51,27 +64,38 @@ func testKindScoping(t *testing.T, s SandboxStore, tenantID string) {
 			t.Fatalf("%s: %v err=%v, want %v", what, ids(recs), err, want)
 		}
 	}
-	ofTenant := func(kinds ...Kind) SandboxFilter { return SandboxFilter{Kinds: kinds, TenantID: tenantID} }
+	ofTenant := func(tenantID string, kinds ...Kind) SandboxFilter {
+		return SandboxFilter{Kinds: kinds, TenantID: tenantID}
+	}
+	wantCount := func(what string, f SandboxFilter, want int64) {
+		t.Helper()
+		if n, err := s.Count(f); err != nil || n != want {
+			t.Fatalf("%s = %d err=%v, want %d", what, n, err, want)
+		}
+	}
 
 	// One sandbox is found by its id, whatever its kind.
-	if got, err := s.Get(code); err != nil || got == nil || got.Kind != KindCode {
-		t.Fatalf("Get(code): %+v err=%v", got, err)
+	if got, err := s.Get(codeA); err != nil || got == nil || got.Kind != KindCode {
+		t.Fatalf("Get(codeA): %+v err=%v", got, err)
 	}
 
 	recs, err := s.List(KindFilter(KindDefault))
-	wantIDs("List(default)", recs, err, def)
-	recs, err = s.List(ofTenant(KindCode))
-	wantIDs("List(tenant, code)", recs, err, code)
-	recs, err = s.List(SandboxFilter{Kinds: AllKinds(), TenantID: "other"})
-	wantIDs("List(other tenant)", recs, err)
+	wantIDs("List(default)", recs, err, defA, defB)
+	recs, err = s.List(KindFilter(AllKinds()...))
+	wantIDs("List(all)", recs, err, defA, codeA, defB, codeB)
+	recs, err = s.List(ofTenant(tenantA, KindCode))
+	wantIDs("List(tenantA, code)", recs, err, codeA)
+	recs, err = s.List(ofTenant(tenantB, AllKinds()...))
+	wantIDs("List(tenantB, all)", recs, err, defB, codeB)
+	wantCount("Count(tenantA, default)", ofTenant(tenantA, KindDefault), 1)
+	wantCount("Count(tenantA, all)", ofTenant(tenantA, AllKinds()...), 2)
+	wantCount("Count(tenantB, code)", ofTenant(tenantB, KindCode), 1)
+
+	// The idle reap lists cover every kind.
 	recs, err = s.ListForIdleReapStop(200, false)
-	wantIDs("ListForIdleReapStop", recs, err, def, code)
-	if n, err := s.Count(ofTenant(KindDefault)); err != nil || n != 1 {
-		t.Fatalf("Count(tenant, default) = %d err=%v, want 1", n, err)
-	}
-	if n, err := s.Count(ofTenant(AllKinds()...)); err != nil || n != 2 {
-		t.Fatalf("Count(tenant, all) = %d err=%v, want 2", n, err)
-	}
+	wantIDs("ListForIdleReapStop", recs, err, defA, codeA)
+	recs, err = s.ListForIdleReapDelete(200)
+	wantIDs("ListForIdleReapDelete", recs, err, defB, codeB)
 
 	// Kinds are checked, and no kinds is an error rather than every kind.
 	if _, err := s.List(KindFilter("")); err == nil {
