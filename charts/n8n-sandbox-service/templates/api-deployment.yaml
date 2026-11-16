@@ -58,6 +58,10 @@ spec:
             - name: metrics
               containerPort: {{ . }}
             {{- end }}
+            {{- with (include "n8n-sandbox-service.apiVolumeObjectsPort" .) }}
+            - name: volume-objects
+              containerPort: {{ . }}
+            {{- end }}
           envFrom:
             - configMapRef:
                 name: {{ include "n8n-sandbox-service.apiName" . }}-config
