@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,7 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/n8n-io/sandbox-service/internal/api/registry"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
+	"github.com/n8n-io/sandbox-service/internal/metrics"
 )
 
 const codeCreateBody = `{"name":"scope-1","runtime":"n8n-js","runtimeVersion":"2.42.0","slots":2,"memoryMb":1024,"idleTimeoutMs":30000,"maxAgeMs":60000}`
@@ -209,6 +212,44 @@ func TestCreateCodeSandboxRunnerDidNotApplyEgress(t *testing.T) {
 	}
 }
 
+// A save that errored may still have saved the row. Its runner sandbox is kept
+// when the row is there, so the name never points to a deleted sandbox, and
+// deleted when it is not.
+func TestCreateCodeSandboxReconcilesUnclearSave(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		save        bool
+		wantCode    int
+		wantDeletes int
+	}{
+		{name: "saved, reply lost", save: true, wantCode: http.StatusCreated},
+		{name: "not saved", wantCode: http.StatusInternalServerError, wantDeletes: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeSandboxControl{}
+			router, s := newCodeTestGateway(t, fake, func(s store.SandboxStore) store.SandboxStore {
+				return createErrStore{SandboxStore: s, save: tc.save, err: errors.New("connection reset")}
+			})
+			tenant := mintTenantKey(t, router, `{"name":"code"}`)
+
+			rr := postCreateCodeSandbox(t, router, tenant.Key.APIKey, codeCreateBody)
+			if rr.Code != tc.wantCode {
+				t.Fatalf("create: got %d body=%s, want %d", rr.Code, rr.Body.String(), tc.wantCode)
+			}
+			if _, deleted := fake.calls(); len(deleted) != tc.wantDeletes {
+				t.Fatalf("runner deletes = %v, want %d", deleted, tc.wantDeletes)
+			}
+			stored, err := s.List(store.SandboxFilter{Kinds: []store.Kind{store.KindCode}, TenantID: tenant.Tenant.ID})
+			if err != nil {
+				t.Fatalf("list: %v", err)
+			}
+			if tc.save != (len(stored) == 1) {
+				t.Fatalf("stored = %v, want a row only when it was saved", stored)
+			}
+		})
+	}
+}
+
 // A name whose sandbox is past its idle window gets a new sandbox, and the old
 // one is deleted.
 func TestCreateCodeSandboxReplacesIdleSandbox(t *testing.T) {
@@ -244,26 +285,62 @@ func TestCreateCodeSandboxReplacesIdleSandbox(t *testing.T) {
 	}
 }
 
+// newCodeTestGateway is newIdleTestGateway with its store wrapped by wrap.
+func newCodeTestGateway(t *testing.T, fake *fakeSandboxControl, wrap func(store.SandboxStore) store.SandboxStore) (http.Handler, store.SandboxStore) {
+	t.Helper()
+	s := newSweepStore(t)
+	cfg := idleSweepConfig()
+	cfg.APIKeys = map[string]struct{}{"admin-key": {}}
+	cfg.MaxFileBytes = 1024
+	cfg.DefaultMaxSandboxes = 50
+	reg := registry.New(45 * time.Second)
+	reg.Upsert("runner-1", "https://127.0.0.1:9", startFakeRunnerControl(t, fake), true, false, 10, 0, 0)
+	router, err := NewGatewayRouter(wrap(s), cfg, reg, metrics.NewAPIRecorder(false), NewActivityRecorder(s, nil))
+	if err != nil {
+		t.Fatalf("create gateway router: %v", err)
+	}
+	return router, s
+}
+
+// getTenantCountingStore counts GetTenant calls, which a tenant's create makes
+// once before it joins the creates of its name.
+type getTenantCountingStore struct {
+	store.SandboxStore
+	calls *atomic.Int32
+}
+
+func (s getTenantCountingStore) GetTenant(id string) (*store.Tenant, error) {
+	s.calls.Add(1)
+	return s.SandboxStore.GetTenant(id)
+}
+
 // Concurrent creates of one name on one API pod share one runner create.
 func TestCreateCodeSandboxConcurrentCreatesShareOneSandbox(t *testing.T) {
 	const creates = 8
-	release := make(chan struct{})
+	var calls atomic.Int32
+	allStarted := make(chan struct{})
+	// The first runner create, and so the save, waits until every create has
+	// got past its tenant lookup, so none can find the sandbox already saved
+	// instead of joining the shared create.
 	fake := &fakeSandboxControl{createHook: func(context.Context) {
 		select {
-		case <-release:
+		case <-allStarted:
 		case <-time.After(10 * time.Second):
 		}
 	}}
-	router, _, _ := newIdleTestGateway(t, "admin-key", fake)
+	router, _ := newCodeTestGateway(t, fake, func(s store.SandboxStore) store.SandboxStore {
+		return getTenantCountingStore{SandboxStore: s, calls: &calls}
+	})
 	tenant := mintTenantKey(t, router, `{"name":"code"}`)
+	calls.Store(0)
 
 	responses := make([]*httptest.ResponseRecorder, creates)
 	var wg sync.WaitGroup
 	for i := range creates {
 		wg.Go(func() { responses[i] = postCreateCodeSandbox(t, router, tenant.Key.APIKey, codeCreateBody) })
 	}
-	time.Sleep(100 * time.Millisecond)
-	close(release)
+	waitFor(t, "every create to look up its tenant", func() bool { return calls.Load() >= creates })
+	close(allStarted)
 	wg.Wait()
 
 	assertOneSandboxForName(t, responses)

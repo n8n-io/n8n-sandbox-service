@@ -335,19 +335,38 @@ func createCodeSandbox(r *http.Request, s codeSandboxStore, reg registry.RunnerR
 		}
 		return &codeCreateResult{rec: winner}, nil
 	}
-	if err != nil {
+	if errors.Is(err, store.ErrTenantQuotaExceeded) || errors.Is(err, store.ErrTenantNotFound) {
 		rollbackRunnerCreate()
-		// Unless the store refused the row, it may have been saved anyway,
-		// say when a commit's reply was lost: count it as saved, the safe side.
-		releaseQuota(!errors.Is(err, store.ErrTenantQuotaExceeded) && !errors.Is(err, store.ErrTenantNotFound))
+		slog.ErrorContext(ctx, "create code sandbox failed: store refused record",
+			"sandbox_id", sandboxID, "runner_id", run.ID, "error", err)
+		if errors.Is(err, store.ErrTenantQuotaExceeded) {
+			return nil, &codeCreateError{code: http.StatusForbidden, msg: "tenant sandbox quota exceeded"}
+		}
+		return nil, &codeCreateError{code: http.StatusConflict, msg: "tenant not found"}
+	}
+	if err != nil {
+		// The row may have been saved anyway, say when a commit's reply was
+		// lost. A saved row must keep its runner sandbox, or the name would
+		// point to a sandbox that is gone.
+		saved, getErr := s.GetCodeSandbox(sandboxID)
+		if getErr == nil && saved != nil {
+			releaseQuota(true)
+			slog.WarnContext(ctx, "create code sandbox: record saved despite store error",
+				"sandbox_id", sandboxID, "runner_id", run.ID, "error", err)
+			return &codeCreateResult{rec: saved, created: true}, nil
+		}
+		rollbackRunnerCreate()
+		if getErr != nil {
+			// Unknown whether the row is saved: remove it if it is, and count
+			// it as saved for the quota, the safe side.
+			if delErr := s.Delete(sandboxID); delErr != nil {
+				slog.ErrorContext(ctx, "create code sandbox failed: removing a possibly saved record",
+					"sandbox_id", sandboxID, "error", delErr)
+			}
+			releaseQuota(true)
+		}
 		slog.ErrorContext(ctx, "create code sandbox failed: store record",
 			"sandbox_id", sandboxID, "runner_id", run.ID, "error", err)
-		switch {
-		case errors.Is(err, store.ErrTenantQuotaExceeded):
-			return nil, &codeCreateError{code: http.StatusForbidden, msg: "tenant sandbox quota exceeded"}
-		case errors.Is(err, store.ErrTenantNotFound):
-			return nil, &codeCreateError{code: http.StatusConflict, msg: "tenant not found"}
-		}
 		return nil, &codeCreateError{code: http.StatusInternalServerError, msg: "failed to store sandbox: " + err.Error()}
 	}
 	releaseQuota(true)

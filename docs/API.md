@@ -850,7 +850,7 @@ curl "http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/stat?
 
 ## Code sandboxes
 
-Sandboxes for the code execution. Admin and tenant keys; any other key gets `403`. With an admin key the sandbox is owned by `__admin__`, a single tenant for all admin keys.
+Sandboxes for the code execution. Admin and tenant keys; provisioner and scaler keys get `403`, and a missing or unknown key gets `401`. With an admin key the sandbox is owned by `__admin__`, a single tenant for all admin keys.
 
 The `/sandboxes` routes do not serve code sandboxes: they answer `404` for a code sandbox's id, leave code sandboxes out of `GET /sandboxes`, and `POST /sandboxes` answers `409` for an id a code sandbox has.
 
@@ -895,7 +895,7 @@ With a tenant key, the sandbox counts toward the tenant's `max_sandboxes` quota.
 }
 ```
 
-**Errors:** `400` invalid request body, `403` key that is neither admin nor tenant, or tenant sandbox quota exceeded, `409` `sandbox_settings_mismatch` or tenant deleted, `429` [too many requests in progress](#http-429--too-many-requests-in-progress), `502` the runner did not confirm egress `none` or deleting a sandbox past its idle window failed, `503` `no_capacity`, or the name moved to another sandbox during the create (retry)
+**Errors:** `400` invalid request body, `401` missing or unknown API key, `403` provisioner or scaler key, or tenant sandbox quota exceeded, `409` `sandbox_settings_mismatch` or tenant deleted, `429` [too many requests in progress](#http-429--too-many-requests-in-progress), `502` the runner did not confirm egress `none` or deleting a sandbox past its idle window failed, `503` `no_capacity`, or the name moved to another sandbox during the create (retry)
 
 **Example:**
 
