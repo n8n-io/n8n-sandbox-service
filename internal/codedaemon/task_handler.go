@@ -43,7 +43,7 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 	}
 	defer root.Close()
 	stream := newTaskStream(w)
-	x, err := d.dispatch(r.Context(), spec.TaskID, dir)
+	x, err := d.dispatch(r.Context(), spec.TaskID, dir, d.taskTimeout(spec.TimeoutMs))
 	if err != nil {
 		slog.Warn("dispatch code task", "task_id", spec.TaskID, "error", err)
 		_ = stream.emit(newErrorEvent(spec.TaskID, "crashed", "runtime unavailable"))
@@ -64,10 +64,14 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 func (d *Daemon) waitForTask(r *http.Request, spec taskSpec, stream taskStream, x *execution, root *os.Root) (taskEvent, bool) {
 	heartbeat := time.NewTicker(heartbeatInterval)
 	defer heartbeat.Stop()
+	timer := time.NewTimer(time.Until(x.deadline))
+	defer timer.Stop()
 	for {
 		select {
 		case msg, ok := <-x.result:
 			return d.terminalEvent(spec, root, msg, ok), true
+		case <-timer.C:
+			return x.timeoutEvent(spec), true
 		case <-heartbeat.C:
 			if stream.emit(newHeartbeatEvent(spec.TaskID)) == nil {
 				continue
@@ -78,8 +82,12 @@ func (d *Daemon) waitForTask(r *http.Request, spec taskSpec, stream taskStream, 
 			// Daemon shutdown also cancels the request while the stream is
 			// still open. Wait for the task so the stream gets a terminal event.
 			// After a client disconnect, writing that event fails harmlessly.
-			msg, ok := <-x.result
-			return d.terminalEvent(spec, root, msg, ok), true
+			select {
+			case msg, ok := <-x.result:
+				return d.terminalEvent(spec, root, msg, ok), true
+			case <-timer.C:
+				return x.timeoutEvent(spec), true
+			}
 		}
 	}
 }
@@ -90,4 +98,11 @@ func (d *Daemon) terminalEvent(spec taskSpec, root *os.Root, msg workerMessage, 
 		return newErrorEvent(spec.TaskID, "crashed", "runtime exited")
 	}
 	return d.resultEvent(spec, root, msg)
+}
+
+// timeoutEvent stops the worker after the task deadline passes.
+func (x *execution) timeoutEvent(spec taskSpec) any {
+	x.worker.kill()
+	<-x.worker.done
+	return newErrorEvent(spec.TaskID, "timeout", "task execution deadline exceeded")
 }

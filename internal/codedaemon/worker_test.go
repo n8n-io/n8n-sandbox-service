@@ -85,6 +85,9 @@ func TestRuntimeFixture(t *testing.T) {
 		if m.TaskID == "quiet" {
 			time.Sleep(heartbeatInterval + 250*time.Millisecond)
 		}
+		if m.TaskID == "hang" {
+			time.Sleep(time.Minute)
+		}
 		_, _ = os.Stdout.WriteString("raw-runtime-stdout\n")
 		_, _ = os.Stderr.WriteString("raw-runtime-stderr\n")
 		input, err := os.ReadFile(filepath.Join(m.Dir, "in", "bin", "0"))
@@ -120,7 +123,7 @@ func TestWorkerExitPreservesResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer root.Close()
-	x, err := d.dispatch(t.Context(), spec.TaskID, dir)
+	x, err := d.dispatch(t.Context(), spec.TaskID, dir, d.taskTimeout(0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +164,7 @@ func TestStageAndDispatchSharedRuntime(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		x, err := d.dispatch(ctx, spec.TaskID, dir)
+		x, err := d.dispatch(ctx, spec.TaskID, dir, d.taskTimeout(0))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -201,12 +204,12 @@ func TestDispatchRejectsActiveTaskID(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, "out"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	x, err := d.dispatch(t.Context(), "same", dir)
+	x, err := d.dispatch(t.Context(), "same", dir, d.taskTimeout(0))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer x.close()
-	if _, err := d.dispatch(t.Context(), "same", dir); !errors.Is(err, errDuplicateTask) {
+	if _, err := d.dispatch(t.Context(), "same", dir, d.taskTimeout(0)); !errors.Is(err, errDuplicateTask) {
 		t.Fatalf("duplicate dispatch: %v", err)
 	}
 	x.worker.mu.Lock()
@@ -242,7 +245,7 @@ func TestControlMessageLimit(t *testing.T) {
 	d := testDaemon(t, Config{})
 	result := func(id string) (workerMessage, bool) {
 		t.Helper()
-		x, err := d.dispatch(t.Context(), id, d.cfg.WorkDir)
+		x, err := d.dispatch(t.Context(), id, d.cfg.WorkDir, d.taskTimeout(0))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -273,7 +276,7 @@ func TestControlMessageLimit(t *testing.T) {
 
 func TestFailedWorkerStartIsUnhealthyAndNotRetried(t *testing.T) {
 	d := testDaemon(t, Config{RuntimeCommand: []string{filepath.Join(t.TempDir(), "missing")}})
-	if _, err := d.dispatch(t.Context(), "first", d.cfg.WorkDir); err == nil || errors.Is(err, errWorkerUnavailable) {
+	if _, err := d.dispatch(t.Context(), "first", d.cfg.WorkDir, d.taskTimeout(0)); err == nil || errors.Is(err, errWorkerUnavailable) {
 		t.Fatalf("want the start error, got %v", err)
 	}
 	probe := httptest.NewRecorder()
@@ -281,7 +284,7 @@ func TestFailedWorkerStartIsUnhealthyAndNotRetried(t *testing.T) {
 	if probe.Code != http.StatusServiceUnavailable {
 		t.Fatalf("worker failed to start but health probe returned %d", probe.Code)
 	}
-	if _, err := d.dispatch(t.Context(), "second", d.cfg.WorkDir); !errors.Is(err, errWorkerUnavailable) {
+	if _, err := d.dispatch(t.Context(), "second", d.cfg.WorkDir, d.taskTimeout(0)); !errors.Is(err, errWorkerUnavailable) {
 		t.Fatalf("unexpected dispatch error: %v", err)
 	}
 }
@@ -291,7 +294,7 @@ func TestUnreadyWorkerIsStoppedAfterCallerGivesUp(t *testing.T) {
 	d.startupTimeout = 200 * time.Millisecond
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
 	defer cancel()
-	if _, err := d.dispatch(ctx, "first", d.cfg.WorkDir); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := d.dispatch(ctx, "first", d.cfg.WorkDir, d.taskTimeout(0)); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("unexpected dispatch error: %v", err)
 	}
 	d.workerMu.Lock()
@@ -354,7 +357,7 @@ func TestStoppedWorkerFailsPendingTasksAndCleansUpDescendants(t *testing.T) {
 			d := testDaemon(t, Config{RuntimeCommand: []string{
 				os.Args[0], "-test.run=^TestRuntimeLifecycleFixture$", "--", "lifecycle-fixture", "leader", listener.Addr().String(),
 			}})
-			pending, err := d.dispatch(t.Context(), "pending", d.cfg.WorkDir)
+			pending, err := d.dispatch(t.Context(), "pending", d.cfg.WorkDir, d.taskTimeout(0))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -369,7 +372,7 @@ func TestStoppedWorkerFailsPendingTasksAndCleansUpDescendants(t *testing.T) {
 			defer descendant.Close()
 
 			if mode == "crash" {
-				crash, err := d.dispatch(t.Context(), "crash", d.cfg.WorkDir)
+				crash, err := d.dispatch(t.Context(), "crash", d.cfg.WorkDir, d.taskTimeout(0))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -385,7 +388,7 @@ func TestStoppedWorkerFailsPendingTasksAndCleansUpDescendants(t *testing.T) {
 			case <-time.After(timeout):
 				t.Fatal("pending task was not unblocked")
 			}
-			if _, err := d.dispatch(t.Context(), "next", d.cfg.WorkDir); !errors.Is(err, errWorkerUnavailable) {
+			if _, err := d.dispatch(t.Context(), "next", d.cfg.WorkDir, d.taskTimeout(0)); !errors.Is(err, errWorkerUnavailable) {
 				t.Fatalf("unexpected dispatch error: %v", err)
 			}
 			probe := httptest.NewRecorder()

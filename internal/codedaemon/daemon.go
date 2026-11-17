@@ -26,6 +26,8 @@ type Config struct {
 	// RuntimeLogWrites caps the writes to each of the runtime's stdout and
 	// stderr that reach the daemon log. Non-positive uses the default of 16.
 	RuntimeLogWrites int
+	DefaultTimeout   time.Duration
+	MaxTimeout       time.Duration
 }
 
 func LoadConfig() (Config, error) {
@@ -43,6 +45,9 @@ func LoadConfig() (Config, error) {
 	}
 	cfg.Limits = limits
 	if err := envvar.IntBetween("CODE_DAEMON_RUNTIME_LOG_WRITES", &cfg.RuntimeLogWrites, 1, 10_000); err != nil {
+		return Config{}, err
+	}
+	if cfg.DefaultTimeout, cfg.MaxTimeout, err = loadTaskTimeouts(); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
@@ -67,6 +72,12 @@ func New(cfg Config) *Daemon {
 	cfg.Limits = cfg.Limits.withDefaults()
 	if cfg.RuntimeLogWrites <= 0 {
 		cfg.RuntimeLogWrites = defaultRuntimeLogWrites
+	}
+	if cfg.DefaultTimeout <= 0 {
+		cfg.DefaultTimeout = defaultTaskTimeout
+	}
+	if cfg.MaxTimeout <= 0 {
+		cfg.MaxTimeout = maxTaskTimeout
 	}
 	return &Daemon{
 		cfg: cfg, lanes: make(chan struct{}, max(1, cfg.MaxConcurrency)), dispatchedByTaskID: make(map[string]bool),
