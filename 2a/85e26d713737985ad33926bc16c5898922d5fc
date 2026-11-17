@@ -1,0 +1,16 @@
+internal/api/store/sandboxes_test.go
+  h_8fb27e0cdf6d1e 4,9-34
+internal/api/store/store.go
+  h_8fb27e0cdf6d1e 66-67,72,77-86,89-101,103
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2a85e26d713737985ad33926bc16c5898922d5fc",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
