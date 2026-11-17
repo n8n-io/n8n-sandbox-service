@@ -2,6 +2,8 @@ package codedaemon
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -16,6 +18,9 @@ func finishTask(t *testing.T, dec *json.Decoder, code string) decodedEvent {
 	}
 	if code == "" && ev.Type != "done" || code != "" && (ev.Type != "error" || ev.Code != code) {
 		t.Fatalf("terminal = %+v, want code %q", ev, code)
+	}
+	if err := dec.Decode(new(decodedEvent)); !errors.Is(err, io.EOF) {
+		t.Fatalf("expected end of stream after terminal event, got %v", err)
 	}
 	return ev
 }

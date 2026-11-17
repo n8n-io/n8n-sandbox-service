@@ -217,7 +217,7 @@ The `code-daemon` runs inside a code sandbox and is reached only by the runner. 
 
 At the execution timeout, or when the runner cancels a task or closes its stream, the daemon asks the runtime to cancel the task. The shared runtime then takes no new tasks and stops when its tasks end. If the runtime does not confirm the cancel within one second, the daemon stops it at once, which can fail the other tasks on it. The next task starts a fresh runtime.
 
-A runtime process that reaches either recycle limit takes no new tasks. The daemon replaces it after its tasks end. If the process exits, its running tasks fail with `crashed`, or `oom` when the daemon detects an out-of-memory kill. The daemon does not run them again. A task that the daemon cannot send to a runtime gets `503`.
+A runtime process that reaches either recycle limit takes no new tasks. The daemon replaces it after its tasks end. If the process exits, its running tasks fail with `crashed`, or `oom` when the daemon detects an out-of-memory kill. The daemon does not run them again. A task that the daemon rejects before it sends the task to a runtime gets `503`. If the task may have reached the runtime, the daemon sends a terminal `error` event instead and does not run the task again.
 
 Input and output file paths are at most 1024 bytes. A task's input files can create up to 4096 directories. The output limits apply to the files a task returns, found in up to 4096 directories; writes to the output directory are not capped. A task fails if its output directory holds a symlink or another entry that is not a regular file or a directory.
 

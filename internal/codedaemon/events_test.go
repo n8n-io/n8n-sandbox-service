@@ -161,3 +161,60 @@ func TestUserErrorInlinesResult(t *testing.T) {
 		t.Fatalf("user error = %s, result = %s", terminal.UserError, terminal.Result)
 	}
 }
+
+type terminalFlushRecorder struct {
+	*httptest.ResponseRecorder
+	flushes    int
+	onTerminal func()
+}
+
+func (r *terminalFlushRecorder) Flush() {
+	r.flushes++
+	if r.flushes == 2 {
+		r.onTerminal()
+	}
+	r.ResponseRecorder.Flush()
+}
+
+func TestTerminalFlushHoldsLane(t *testing.T) {
+	h := testDaemon(t, Config{MaxConcurrency: 1}).Handler()
+	recorder := &terminalFlushRecorder{
+		ResponseRecorder: httptest.NewRecorder(),
+		onTerminal: func() {
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, taskRequest(t, `{"taskId":"next"}`, nil))
+			if w.Code != http.StatusTooManyRequests {
+				t.Errorf("status during terminal flush = %d, want 429", w.Code)
+			}
+		},
+	}
+	h.ServeHTTP(recorder, taskRequest(t, `{"taskId":"first"}`, nil))
+	if recorder.flushes != 2 {
+		t.Fatalf("flushes = %d, want 2", recorder.flushes)
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, taskRequest(t, `{"taskId":"next"}`, nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status after terminal flush = %d, want 200: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestCancelledBeforeDispatchReleasesTaskID(t *testing.T) {
+	d := testDaemon(t, Config{})
+	if _, err := d.getWorker(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	h := d.Handler()
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, taskRequest(t, `{"taskId":"retry"}`, nil).WithContext(ctx))
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status before dispatch = %d, want 503: %s", w.Code, w.Body.String())
+	}
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, taskRequest(t, `{"taskId":"retry"}`, nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("retry status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+}

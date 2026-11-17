@@ -115,12 +115,8 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 	if mr == nil {
 		return
 	}
-	laneHeld := true
-	defer func() {
-		if laneHeld {
-			d.releaseLane()
-		}
-	}()
+	// Keep staged files and the terminal response within the admission bound.
+	defer d.releaseLane()
 	defer d.releaseTask(spec.TaskID)
 	dir, err := d.stageInputs(mr)
 	if err != nil {
@@ -151,8 +147,6 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 	}
 	stream := newTaskStream(w)
 	if event, ok := d.runTask(r.Context(), spec, stream, x, root); ok {
-		d.releaseLane()
-		laneHeld = false
 		_ = stream.emit(event)
 	}
 }

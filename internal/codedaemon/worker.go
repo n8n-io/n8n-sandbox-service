@@ -376,14 +376,15 @@ func (d *Daemon) dispatch(ctx context.Context, id, dir string, timeout time.Dura
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", errBeforeDispatch, err)
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
 	x := &execution{
 		worker: w, id: id, result: make(chan workerMessage, 1), deadline: time.Now().Add(timeout),
 		cancelRequested: make(chan struct{}), cancelAck: make(chan struct{}, 1),
 	}
 	w.mu.Lock()
+	if err := ctx.Err(); err != nil {
+		w.mu.Unlock()
+		return nil, fmt.Errorf("%w: %w", errBeforeDispatch, err)
+	}
 	if w.isStopped() || w.retiring {
 		w.mu.Unlock()
 		return nil, errBeforeDispatch
