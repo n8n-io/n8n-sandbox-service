@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
@@ -207,7 +208,7 @@ func TestExtractWritesFiles(t *testing.T) {
 			setuid := tarFile("deep/nested/y.txt", "yy")
 			setuid.hdr.Mode = 0o4755
 			// "./" and "./"-prefixed names are what `tar -C dir .` writes.
-			body := buildTar(t,
+			plain := buildTar(t,
 				tarEntry{hdr: tar.Header{Typeflag: tar.TypeXGlobalHeader, PAXRecords: map[string]string{"comment": "global"}}},
 				tarDir("./"),
 				tarEntry{hdr: tar.Header{Name: "./empty/", Typeflag: tar.TypeDir, Mode: 0o700}},
@@ -215,15 +216,16 @@ func TestExtractWritesFiles(t *testing.T) {
 				setuid,
 				tarFile(strings.Repeat("long/", 40)+"name.txt", ""),
 			)
+			body := plain
 			if compress {
-				body = gzipped(t, body)
+				body = gzipped(t, plain)
 			}
 
 			stats, err := unpackBoth(t, target, body, Policy{})
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if stats != (Stats{Files: 3, Bytes: 5}) {
+			if stats != (Stats{Entries: 6, Files: 3, Bytes: 5, DecompressedBytes: int64(len(plain))}) {
 				t.Fatalf("unexpected stats: %+v", stats)
 			}
 			if got := readString(t, filepath.Join(target, "x.txt")); got != "new" {
@@ -577,7 +579,7 @@ func TestSymlinks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if stats != (Stats{Files: 1, Bytes: 1}) {
+	if stats != (Stats{Entries: 4, Files: 1, Bytes: 1, DecompressedBytes: int64(len(body))}) {
 		t.Fatalf("symlinks are not files: %+v", stats)
 	}
 	for name, want := range map[string]string{"d/up": "../f.txt", "nested/abs": base} {
@@ -726,10 +728,18 @@ func TestMaxEntries(t *testing.T) {
 		tarEntry{hdr: tar.Header{Typeflag: tar.TypeXGlobalHeader, PAXRecords: map[string]string{"comment": "x"}}},
 		tarDir("a/"), tarDir("b/"), tarDir("c/"),
 	)
-	for maxEntries, want := range map[int]error{3: ErrTooLarge, 4: nil, 0: nil} {
+	// An archive's own count is the smallest cap that accepts it.
+	for maxEntries, want := range map[int]struct {
+		err     error
+		entries int
+	}{3: {ErrTooLarge, 3}, 4: {nil, 4}, 0: {nil, 4}} {
 		_, target := newTarget(t)
-		if _, err := unpackBoth(t, target, body, Policy{MaxEntries: maxEntries}); !errors.Is(err, want) {
-			t.Fatalf("MaxEntries %d: expected %v, got %v", maxEntries, want, err)
+		stats, err := unpackBoth(t, target, body, Policy{MaxEntries: maxEntries})
+		if !errors.Is(err, want.err) {
+			t.Fatalf("MaxEntries %d: expected %v, got %v", maxEntries, want.err, err)
+		}
+		if stats.Entries != want.entries {
+			t.Fatalf("MaxEntries %d: counted %d entries, want %d", maxEntries, stats.Entries, want.entries)
 		}
 	}
 }
@@ -752,13 +762,23 @@ func TestMaxDecompressedBytes(t *testing.T) {
 		if compress {
 			body = gzipped(t, plain)
 		}
-		for maxDecompressed, want := range map[int64]error{size - 1: ErrTooLarge, size: nil, math.MaxInt64: nil} {
+		for maxDecompressed, want := range map[int64]error{size - 1: ErrTooLarge, size: nil, math.MaxInt64: nil, 0: nil} {
 			_, target := newTarget(t)
-			_, err := unpackBoth(t, target, body, Policy{MaxDecompressedBytes: maxDecompressed})
+			stats, err := unpackBoth(t, target, body, Policy{MaxDecompressedBytes: maxDecompressed})
 			if !errors.Is(err, want) || want != nil && errors.Is(err, ErrInvalid) {
 				t.Fatalf("gzip=%v MaxDecompressedBytes %d: expected %v, got %v", compress, maxDecompressed, want, err)
 			}
+			// The count of one run is the cap the next run passes at.
+			if want == nil && stats.DecompressedBytes != size {
+				t.Fatalf("gzip=%v MaxDecompressedBytes %d: counted %d bytes, want %d", compress, maxDecompressed, stats.DecompressedBytes, size)
+			}
 		}
+	}
+
+	_, target := newTarget(t)
+	padded := gzipped(t, append(bytes.Clone(plain), make([]byte, 4096)...))
+	if stats, err := unpackBoth(t, target, padded, Policy{}); err != nil || stats.DecompressedBytes != size+4096 {
+		t.Fatalf("data after the end: counted %d bytes, %v; want %d", stats.DecompressedBytes, err, size+4096)
 	}
 
 	big := strings.Repeat("x", 512<<10)
@@ -777,14 +797,113 @@ func TestMaxDecompressedBytes(t *testing.T) {
 
 func TestCappedReader(t *testing.T) {
 	for limit, want := range map[int64]error{5: ErrTooLarge, 6: nil} {
-		c := &cappedReader{r: iotest.OneByteReader(strings.NewReader("abcdef")), max: limit}
-		got, err := io.ReadAll(c)
-		if !errors.Is(err, want) || int64(len(got)) != min(limit, 6) {
-			t.Fatalf("cap %d: got %q, %v", limit, got, err)
+		var read int64
+		capped := &cappedReader{r: iotest.OneByteReader(strings.NewReader("abcdef")), max: limit, read: &read}
+		got, err := io.ReadAll(capped)
+		if !errors.Is(err, want) || int64(len(got)) != min(limit, 6) || read != int64(len(got)) {
+			t.Fatalf("cap %d: got %q, counted %d, %v", limit, got, read, err)
 		}
-		if n, err := c.Read(make([]byte, 1)); want != nil && (n != 0 || !errors.Is(err, ErrTooLarge)) {
-			t.Fatalf("cap %d: the error is not sticky: %d, %v", limit, n, err)
+		if again, err := capped.Read(make([]byte, 1)); want != nil && (again != 0 || !errors.Is(err, ErrTooLarge)) {
+			t.Fatalf("cap %d: the error is not sticky: %d, %v", limit, again, err)
 		}
+	}
+
+	var read int64
+	uncapped := &cappedReader{r: strings.NewReader("abcdef"), read: &read}
+	if got, err := io.ReadAll(uncapped); err != nil || string(got) != "abcdef" || read != 6 {
+		t.Fatalf("no cap: got %q, counted %d, %v", got, read, err)
+	}
+}
+
+func TestMaxPathBytes(t *testing.T) {
+	policy := Policy{AllowSymlinks: true, MaxEntries: 10, MaxPathBytes: 20}
+	atLimit := strings.Repeat("d/", 9) + "ab"
+	for name, tt := range map[string]struct {
+		body []byte
+		want error
+	}{
+		"a name at the limit":          {buildTar(t, tarFile(atLimit, "x")), nil},
+		"a name past the limit":        {buildTar(t, tarFile(atLimit+"c", "x")), ErrInvalid},
+		"a link target at the limit":   {buildTar(t, tarSymlink("link", atLimit)), nil},
+		"a link target past the limit": {buildTar(t, tarSymlink("link", "/"+atLimit)), ErrInvalid},
+		// A pax header carries it; unpacking would open every directory.
+		"a name of 100,000 directories": {buildTar(t, tarDir(strings.Repeat("d/", 100_000))), ErrInvalid},
+		// Only a link's target is used; a file's is ignored.
+		"a long link target on a file": {buildTar(t, tarEntry{hdr: tar.Header{Name: "file", Typeflag: tar.TypeReg, Mode: 0o644, Linkname: "/" + atLimit}}), nil},
+	} {
+		_, target := newTarget(t)
+		_, err := unpackBoth(t, target, tt.body, policy)
+		if !errors.Is(err, tt.want) || tt.want != nil && !strings.Contains(err.Error(), "longer than 20 bytes") {
+			t.Fatalf("%s: expected %v for the length, got %v", name, tt.want, err)
+		}
+		if entries, err := os.ReadDir(target); err != nil || tt.want != nil && len(entries) != 0 {
+			t.Fatalf("%s: a refused entry was written: %v, %v", name, entries, err)
+		}
+	}
+
+	_, target := newTarget(t)
+	if _, err := unpackBoth(t, target, buildTar(t, tarFile(atLimit+"c", "x")), Policy{}); err != nil {
+		t.Fatalf("without the cap: %v", err)
+	}
+}
+
+func TestCountParentDirectories(t *testing.T) {
+	body := buildTar(t,
+		tarFile("a/b/c.txt", "c"), // a and a/b are left out
+		tarFile("./a/b/d.txt", "d"),
+		tarFile("a/e.txt", "e"),
+		tarDir("x/"),
+		tarSymlink("x/y/link", "../../a/e.txt"), // x/y is left out
+		tarDir("./"),
+	)
+	policy := Policy{AllowSymlinks: true, MaxEntries: 9, CountParentDirectories: true}
+
+	_, target := newTarget(t)
+	stats, err := unpackBoth(t, target, body, policy)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stats.Entries != 9 {
+		t.Errorf("counted %d entries, want 6 and the 3 directories left out", stats.Entries)
+	}
+	// The count is what unpacking made: the root's own entry, and one per path.
+	made := 0
+	if err := filepath.WalkDir(target, func(string, fs.DirEntry, error) error {
+		made++
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if made != stats.Entries {
+		t.Errorf("unpacking made %d paths and the root, counted %d", made-1, stats.Entries)
+	}
+
+	// Six made before the link, which needs two more.
+	policy.MaxEntries = 7
+	_, target = newTarget(t)
+	if _, err := unpackBoth(t, target, body, policy); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("the link and its directory over the cap: expected %v, got %v", ErrTooLarge, err)
+	}
+	if _, err := os.Lstat(filepath.Join(target, "x", "y")); !os.IsNotExist(err) {
+		t.Errorf("the entry over the cap made its directory: %v", err)
+	}
+
+	_, target = newTarget(t)
+	if stats, err := unpackBoth(t, target, body, Policy{AllowSymlinks: true, MaxEntries: 6}); err != nil || stats.Entries != 6 {
+		t.Errorf("without counting: %d entries, %v; want the archive's 6", stats.Entries, err)
+	}
+
+	// Their FNV-1a hashes collide, and so do those of every path below them.
+	_, target = newTarget(t)
+	colliding := buildTar(t, tarFile("0253ce1e19557990/d/f", "f"), tarFile("64362355f854fe03/d/f", "f"))
+	if stats, err := unpackBoth(t, target, colliding, Policy{MaxEntries: 10, CountParentDirectories: true}); err != nil || stats.Entries != 6 {
+		t.Errorf("two names whose FNV-1a hashes collide: %d entries, %v; want 6", stats.Entries, err)
+	}
+
+	_, target = newTarget(t)
+	deep := buildTar(t, tarFile(strings.Repeat("d/", 300)+"f", "f"))
+	if stats, err := unpackBoth(t, target, deep, Policy{MaxEntries: 1000, CountParentDirectories: true}); err != nil || stats.Entries != 301 {
+		t.Errorf("one file 300 directories deep: %d entries, %v; want 301", stats.Entries, err)
 	}
 }
 
@@ -794,6 +913,7 @@ func TestPolicyChecks(t *testing.T) {
 		"MaxEntries":           {MaxEntries: -1},
 		"MaxBytes":             {MaxBytes: -1},
 		"MaxDecompressedBytes": {MaxDecompressedBytes: -1},
+		"MaxPathBytes":         {MaxPathBytes: -1},
 	} {
 		_, target := newTarget(t)
 		if _, err := unpackBoth(t, target, body, p); !errors.Is(err, ErrTooLarge) {
@@ -804,10 +924,15 @@ func TestPolicyChecks(t *testing.T) {
 		}
 	}
 
-	_, target := newTarget(t)
-	_, err := unpackBoth(t, target, body, Policy{AllowSymlinks: true})
-	if err == nil || errors.Is(err, ErrInvalid) || errors.Is(err, ErrTooLarge) {
-		t.Fatalf("expected AllowSymlinks without MaxEntries to be refused, got %v", err)
+	for name, policy := range map[string]Policy{
+		"AllowSymlinks":          {AllowSymlinks: true},
+		"CountParentDirectories": {CountParentDirectories: true},
+	} {
+		_, target := newTarget(t)
+		_, err := unpackBoth(t, target, body, policy)
+		if err == nil || errors.Is(err, ErrInvalid) || errors.Is(err, ErrTooLarge) {
+			t.Fatalf("expected %s without MaxEntries to be refused, got %v", name, err)
+		}
 	}
 }
 
@@ -823,7 +948,7 @@ func TestMaxBytesRefusesExpandingGzip(t *testing.T) {
 	if !errors.Is(err, ErrTooLarge) || !errors.As(err, &entryErr) || entryErr.Name != "bomb" {
 		t.Fatalf("expected the expanding entry to be refused, got %v", err)
 	}
-	if stats != (Stats{Files: 1, Bytes: 3}) {
+	if stats.Entries != 1 || stats.Files != 1 || stats.Bytes != 3 {
 		t.Fatalf("unexpected stats: %+v", stats)
 	}
 	if _, statErr := os.Lstat(filepath.Join(target, "bomb")); !os.IsNotExist(statErr) {

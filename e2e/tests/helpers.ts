@@ -548,7 +548,7 @@ export function dockerOutput(args: string[]): string {
   }
 }
 
-function e2eProjectDir(): string {
+export function e2eProjectDir(): string {
   return process.env.E2E_PROJECT_DIR || `${process.cwd()}/..`;
 }
 
