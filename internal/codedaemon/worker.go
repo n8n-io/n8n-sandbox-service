@@ -46,16 +46,17 @@ type workerMessage struct {
 }
 
 type worker struct {
-	cmd      *exec.Cmd
-	conn     net.Conn
-	ready    chan struct{} // closed when the runtime reports readiness
-	stopped  chan struct{} // closed when shutdown begins; no new executions can register
-	done     chan struct{} // closed after the worker process is reaped
-	stopOnce sync.Once
-	writeMu  sync.Mutex
+	cmd       *exec.Cmd
+	conn      net.Conn
+	ready     chan struct{} // closed when the runtime reports readiness
+	stopped   chan struct{} // closed when shutdown begins; no new executions can register
+	done      chan struct{} // closed after the worker process is reaped
+	stopOnce  sync.Once
+	writeGate chan struct{}
 
 	mu                 sync.Mutex // guards execution registration, delivery, and cleanup
 	executionsByTaskID map[string]*execution
+	retiring           bool // protected by mu; a retiring worker cannot take new tasks
 }
 
 // startWorker launches the runtime in its own process group and gives it the
@@ -87,7 +88,7 @@ func startWorker(cfg Config, startupTimeout time.Duration) (*worker, error) {
 	}
 	w := &worker{
 		cmd: cmd, conn: conn, ready: make(chan struct{}), stopped: make(chan struct{}),
-		done: make(chan struct{}), executionsByTaskID: make(map[string]*execution),
+		done: make(chan struct{}), writeGate: make(chan struct{}, 1), executionsByTaskID: make(map[string]*execution),
 	}
 	controlDone := make(chan struct{})
 	go func() {
@@ -172,6 +173,15 @@ func (w *worker) readControl() {
 				ready = true
 				close(w.ready)
 			}
+		case "cancelled":
+			w.mu.Lock()
+			if task := w.executionsByTaskID[msg.TaskID]; task != nil {
+				select {
+				case task.cancelAck <- struct{}{}:
+				default:
+				}
+			}
+			w.mu.Unlock()
 		case "done", "error":
 			w.mu.Lock()
 			if task := w.executionsByTaskID[msg.TaskID]; task != nil {
@@ -222,10 +232,18 @@ func (w *worker) isStopped() bool {
 }
 
 // send serializes writes so concurrent tasks cannot interleave control messages.
-func (w *worker) send(msg workerMessage) error {
-	w.writeMu.Lock()
-	defer w.writeMu.Unlock()
-	if err := w.conn.SetWriteDeadline(time.Now().Add(time.Second)); err != nil {
+func (w *worker) send(msg workerMessage, deadline time.Time) error {
+	timer := time.NewTimer(time.Until(deadline))
+	defer timer.Stop()
+	select {
+	case w.writeGate <- struct{}{}:
+		defer func() { <-w.writeGate }()
+	case <-timer.C:
+		return context.DeadlineExceeded
+	case <-w.done:
+		return errWorkerUnavailable
+	}
+	if err := w.conn.SetWriteDeadline(deadline); err != nil {
 		return err
 	}
 	return json.NewEncoder(w.conn).Encode(msg)
@@ -278,10 +296,12 @@ func (d *Daemon) Close() {
 // execution is one task dispatched to the shared runtime. It receives the
 // task's "done" or "error" message until close unregisters it.
 type execution struct {
-	worker   *worker
-	id       string
-	result   chan workerMessage // closed on worker failure; any buffered result is still readable
-	deadline time.Time          // Set at dispatch, after the worker is ready.
+	worker          *worker
+	id              string
+	result          chan workerMessage // closed on worker failure; any buffered result is still readable
+	deadline        time.Time          // Set at dispatch, after the worker is ready.
+	cancelRequested chan struct{}
+	cancelAck       chan struct{}
 }
 
 // dispatch registers a result receiver before sending the start command to the shared runtime.
@@ -293,9 +313,12 @@ func (d *Daemon) dispatch(ctx context.Context, id, dir string, timeout time.Dura
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	x := &execution{worker: w, id: id, result: make(chan workerMessage, 1), deadline: time.Now().Add(timeout)}
+	x := &execution{
+		worker: w, id: id, result: make(chan workerMessage, 1), deadline: time.Now().Add(timeout),
+		cancelRequested: make(chan struct{}), cancelAck: make(chan struct{}, 1),
+	}
 	w.mu.Lock()
-	if w.isStopped() {
+	if w.isStopped() || w.retiring {
 		w.mu.Unlock()
 		return nil, errWorkerUnavailable
 	}
@@ -306,7 +329,7 @@ func (d *Daemon) dispatch(ctx context.Context, id, dir string, timeout time.Dura
 	w.executionsByTaskID[id] = x
 	w.mu.Unlock()
 	d.markDispatched(id)
-	if err := w.send(workerMessage{Type: "start", TaskID: id, Dir: dir, Deadline: x.deadline.UnixMilli()}); err != nil {
+	if err := w.send(workerMessage{Type: "start", TaskID: id, Dir: dir, Deadline: x.deadline.UnixMilli()}, time.Now().Add(time.Second)); err != nil {
 		w.kill() // a partial command leaves the shared protocol unusable
 		x.close()
 		return nil, err
@@ -317,6 +340,10 @@ func (d *Daemon) dispatch(ctx context.Context, id, dir string, timeout time.Dura
 // close unregisters the result receiver without stopping the shared runtime.
 func (x *execution) close() {
 	x.worker.mu.Lock()
-	defer x.worker.mu.Unlock()
 	delete(x.worker.executionsByTaskID, x.id)
+	retired := x.worker.retiring && len(x.worker.executionsByTaskID) == 0
+	x.worker.mu.Unlock()
+	if retired {
+		x.worker.kill()
+	}
 }

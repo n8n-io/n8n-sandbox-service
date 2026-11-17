@@ -96,6 +96,7 @@ func (d *Daemon) Handler() http.Handler {
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("POST /tasks", d.handleTask)
+	mux.HandleFunc("DELETE /tasks/{taskId}", d.handleCancel)
 	if d.cfg.AllowLocalClients {
 		return mux
 	}

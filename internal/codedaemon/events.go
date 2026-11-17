@@ -142,28 +142,33 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer x.close()
+	ctx, stop := context.WithCancel(r.Context())
+	defer stop()
 	// Start monitoring before the first HTTP write. The buffered result lets the
 	// watcher finish even when the response is blocked.
 	finished := make(chan executionOutcome, 1)
-	go func() { finished <- x.watch() }()
+	go func() { finished <- x.watch(ctx) }()
 	if stream.emit(newAcceptedEvent(spec.TaskID)) != nil {
+		stop()
 		<-finished
 		return
 	}
-	outcome, ok := waitForTask(r.Context(), spec, stream, finished)
+	outcome, ok := waitForTask(ctx, spec, stream, stop, finished)
 	if !ok {
 		return
 	}
+	var event any
 	if outcome.code != "" {
-		_ = stream.emit(newErrorEvent(spec.TaskID, outcome.code, outcome.message))
-		return
+		event = newErrorEvent(spec.TaskID, outcome.code, outcome.message)
+	} else {
+		event = d.resultEvent(spec, root, outcome.result)
 	}
-	_ = stream.emit(d.resultEvent(spec, root, outcome.result))
+	_ = stream.emit(event)
 }
 
 // waitForTask sends heartbeats while awaiting a terminal event. If the stream
 // closes first, it waits for execution to end and returns no event to write.
-func waitForTask(ctx context.Context, spec taskSpec, stream taskStream, finished <-chan executionOutcome) (executionOutcome, bool) {
+func waitForTask(ctx context.Context, spec taskSpec, stream taskStream, stop context.CancelFunc, finished <-chan executionOutcome) (executionOutcome, bool) {
 	heartbeat := time.NewTicker(heartbeatInterval)
 	defer heartbeat.Stop()
 	for {
@@ -176,8 +181,7 @@ func waitForTask(ctx context.Context, spec taskSpec, stream taskStream, finished
 			}
 		case <-ctx.Done():
 		}
-		// Until the runtime supports per-task cancellation, retain the lane
-		// and files until the task ends or its deadline stops the process.
+		stop()
 		<-finished
 		return executionOutcome{}, false
 	}
