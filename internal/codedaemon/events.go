@@ -49,7 +49,7 @@ type doneEvent struct {
 	Result  json.RawMessage `json:"result"`            // Inline result.json, or JSON null when not inlined.
 	Outputs []outputEntry   `json:"outputs,omitempty"` // Manifest of published output files.
 
-	OutputExpiresAt *time.Time `json:"outputExpiresAt,omitempty"`
+	OutputExpiresAt *time.Time `json:"outputExpiresAt,omitempty"` // Present only when outputs were published.
 }
 
 func newDoneEvent(taskID string, result json.RawMessage, outputs []outputEntry) doneEvent {
@@ -130,6 +130,7 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	// The handler cleans up unless ownership passes to the output store.
 	retained := false
 	defer func() {
 		if !retained {
@@ -170,6 +171,7 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if done, isDone := event.(doneEvent); isDone {
+		// Retain the task directory only after its staged inputs are removed.
 		if err := taskRoot.RemoveAll("in"); err != nil {
 			event = newErrorEvent(spec.TaskID, "crashed", "could not clean up task inputs")
 		} else {
@@ -195,8 +197,7 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 	_ = stream.emit(event)
 }
 
-// runTask streams updates while the execution watcher runs. It releases the
-// execution before returning a terminal event, or returns false if the stream breaks.
+// runTask streams updates until the task ends. It returns false if the stream breaks.
 func (d *Daemon) runTask(ctx context.Context, spec taskSpec, stream taskStream, x *execution, root *os.Root) (any, bool) {
 	ctx, stop := context.WithCancel(ctx)
 	defer stop()

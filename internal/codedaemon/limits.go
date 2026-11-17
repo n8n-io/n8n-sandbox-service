@@ -117,6 +117,7 @@ func collectOutputs(root *os.Root, limits Limits) ([]outputEntry, error) {
 			if len(entries) == limits.Files {
 				return nil, errOutputLimit
 			}
+			// Read file metadata relative to the open output root.
 			info, err := root.Lstat(rel)
 			if err != nil {
 				return nil, err

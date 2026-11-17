@@ -11,7 +11,8 @@ import (
 // cancelGrace covers sending the cancel command and waiting for the runtime's reply.
 const cancelGrace = time.Second
 
-// handleCancel reports whether a cancellation was requested, not whether it succeeded.
+// handleCancel requests cancellation of an active task or removes its retained
+// outputs if it has already finished.
 func (d *Daemon) handleCancel(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("taskId")
 	if d.requestCancel(id) {

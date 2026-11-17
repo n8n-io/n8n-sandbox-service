@@ -369,6 +369,7 @@ func (d *Daemon) Close() {
 		w.kill()
 		<-w.done
 	}
+	// Release output directories and expiry timers owned by the daemon.
 	d.outputs.close()
 }
 

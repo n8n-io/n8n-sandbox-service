@@ -13,6 +13,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/envvar"
 )
 
+// Config sets the daemon's network, runtime, and task limits.
 type Config struct {
 	ListenAddr string
 	// AllowLocalClients disables the check that rejects requests from inside
@@ -31,8 +32,8 @@ type Config struct {
 	RecycleAfterTasks int           // Dispatches allowed before the runtime stops taking new tasks.
 	RecycleHeapBytes  int           // Heap usage reported by the runtime, above which it stops taking new tasks.
 	CgroupDir         string        // Directory containing the cgroup v2 memory.events file used for OOM detection.
-	OutputTTL         time.Duration
-	RetainedBytes     int
+	OutputTTL         time.Duration // How long outputs are available after publication.
+	RetainedBytes     int           // Total retained output budget across tasks.
 }
 
 func LoadConfig() (Config, error) {
@@ -70,6 +71,7 @@ func LoadConfig() (Config, error) {
 	if err := envvar.DurationBetween("CODE_DAEMON_OUTPUT_TTL", &cfg.OutputTTL, time.Millisecond, 24*time.Hour); err != nil {
 		return Config{}, err
 	}
+	// Cap the retained output budget at 1 TiB.
 	if err := envvar.IntBetween("CODE_DAEMON_MAX_RETAINED_OUTPUT_BYTES", &cfg.RetainedBytes, 1, 1<<40); err != nil {
 		return Config{}, err
 	}
@@ -118,7 +120,7 @@ func New(cfg Config) *Daemon {
 	return &Daemon{
 		cfg: cfg, lanes: make(chan struct{}, max(1, cfg.MaxConcurrency)), dispatchedByTaskID: make(map[string]bool),
 		startupTimeout: workerStartupTimeout,
-		outputs:        outputStore{tasks: make(map[string]*retainedOutputs), maxBytes: int64(cfg.RetainedBytes)},
+		outputs:        outputStore{outputsByTaskID: make(map[string]*retainedOutputs), maxBytes: int64(cfg.RetainedBytes)},
 	}
 }
 

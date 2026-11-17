@@ -53,7 +53,7 @@ func TestDownloadAndDeleteOutputsWithoutReusingTaskID(t *testing.T) {
 }
 
 func TestOutputExpiryLeavesOpenDownloadReadable(t *testing.T) {
-	store := outputStore{tasks: make(map[string]*retainedOutputs), maxBytes: 3}
+	store := outputStore{outputsByTaskID: make(map[string]*retainedOutputs), maxBytes: 3}
 	defer store.close()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "result.json"), []byte("123"), 0o600); err != nil {
@@ -121,7 +121,7 @@ func TestTaskOutputRetentionCapacity(t *testing.T) {
 
 	// Simulate an elapsed expiry time whose timer callback has not run yet.
 	d.outputs.mu.Lock()
-	first := d.outputs.tasks["first"]
+	first := d.outputs.outputsByTaskID["first"]
 	first.timer.Stop()
 	first.expiresAt = time.Now().Add(-time.Second)
 	d.outputs.mu.Unlock()

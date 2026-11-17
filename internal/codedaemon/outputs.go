@@ -1,3 +1,5 @@
+// This file retains published task outputs until expiry and serves downloads.
+
 package codedaemon
 
 import (
@@ -12,8 +14,8 @@ import (
 
 const (
 	defaultOutputTTL     = 5 * time.Minute
-	defaultRetainedBytes = 512 << 20
-	maxRetainedTasks     = 256 // each retained output set owns a directory descriptor
+	defaultRetainedBytes = 512 << 20 // 512 MiB
+	maxRetainedTasks     = 256       // each retained output set owns a directory descriptor
 	outputWriteTimeout   = 2 * time.Minute
 )
 
@@ -23,26 +25,27 @@ var (
 )
 
 type retainedOutputs struct {
-	dir       string
-	root      *os.Root
-	files     map[string]outputEntry
-	expiresAt time.Time
-	bytes     int64
-	timer     *time.Timer
+	dir         string   // Whole task directory, removed on cleanup.
+	root        *os.Root // Output directory used to open downloads.
+	filesByPath map[string]outputEntry
+	expiresAt   time.Time
+	bytes       int64
+	timer       *time.Timer
 }
 
 type outputStore struct {
 	mu              sync.Mutex
-	tasks           map[string]*retainedOutputs // nil after shutdown
-	bytes, maxBytes int64
+	outputsByTaskID map[string]*retainedOutputs // nil after shutdown
+	bytes, maxBytes int64                       // Total retained bytes and the limit.
 }
 
-// add takes ownership of root and dir only on success. Dispatched task IDs are
-// never reused, including after expiry or deletion.
+// add publishes a task's outputs if there is room and takes ownership of root
+// and dir only on success. Dispatched task IDs are never reused, including after
+// expiry or deletion.
 func (s *outputStore) add(id, dir string, root *os.Root, entries []outputEntry, ttl time.Duration) (time.Time, error) {
-	outputs := &retainedOutputs{dir: dir, root: root, files: make(map[string]outputEntry, len(entries))}
+	outputs := &retainedOutputs{dir: dir, root: root, filesByPath: make(map[string]outputEntry, len(entries))}
 	for _, entry := range entries {
-		outputs.files[entry.Path] = entry
+		outputs.filesByPath[entry.Path] = entry
 		outputs.bytes += entry.Size
 	}
 	var expired []*retainedOutputs
@@ -53,14 +56,14 @@ func (s *outputStore) add(id, dir string, root *os.Root, entries []outputEntry, 
 			outputs.cleanup()
 		}
 	}()
-	if s.tasks == nil {
+	if s.outputsByTaskID == nil {
 		return time.Time{}, errOutputStoreClosed
 	}
 	if !s.hasRoom(outputs.bytes) {
 		// Timers may not have run yet. Expired sets are already unavailable
 		// to download and should not cause a retention limit error.
 		now := time.Now()
-		for id, outputs := range s.tasks {
+		for id, outputs := range s.outputsByTaskID {
 			if !now.Before(outputs.expiresAt) {
 				expired = append(expired, s.detach(id))
 			}
@@ -70,7 +73,7 @@ func (s *outputStore) add(id, dir string, root *os.Root, entries []outputEntry, 
 		}
 	}
 	outputs.expiresAt = time.Now().Add(ttl)
-	s.tasks[id] = outputs
+	s.outputsByTaskID[id] = outputs
 	s.bytes += outputs.bytes
 	outputs.timer = time.AfterFunc(ttl, func() { s.remove(id) })
 	return outputs.expiresAt.UTC(), nil
@@ -78,17 +81,18 @@ func (s *outputStore) add(id, dir string, root *os.Root, entries []outputEntry, 
 
 // hasRoom is called with mu held.
 func (s *outputStore) hasRoom(bytes int64) bool {
-	return len(s.tasks) < maxRetainedTasks && bytes <= s.maxBytes-s.bytes
+	return len(s.outputsByTaskID) < maxRetainedTasks && bytes <= s.maxBytes-s.bytes
 }
 
+// open only serves files listed in the published output set before it expires.
 func (s *outputStore) open(id, path string) (*os.File, int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	outputs := s.tasks[id]
+	outputs := s.outputsByTaskID[id]
 	if outputs == nil || !time.Now().Before(outputs.expiresAt) {
 		return nil, 0
 	}
-	entry, ok := outputs.files[path]
+	entry, ok := outputs.filesByPath[path]
 	if !ok {
 		return nil, 0
 	}
@@ -110,23 +114,25 @@ func (s *outputStore) remove(id string) {
 	}
 }
 
-// detach is called with mu held. The caller cleans up after releasing mu.
+// detach unpublishes an output set and frees its capacity with mu held. The
+// caller cleans up the files after releasing mu.
 func (s *outputStore) detach(id string) *retainedOutputs {
-	outputs := s.tasks[id]
+	outputs := s.outputsByTaskID[id]
 	if outputs != nil {
-		delete(s.tasks, id)
+		delete(s.outputsByTaskID, id)
 		s.bytes -= outputs.bytes
 		outputs.timer.Stop()
 	}
 	return outputs
 }
 
+// close prevents future publication and cleans up all remaining output sets.
 func (s *outputStore) close() {
 	s.mu.Lock()
-	tasks := s.tasks
-	s.tasks, s.bytes = nil, 0
+	outputsByTaskID := s.outputsByTaskID
+	s.outputsByTaskID, s.bytes = nil, 0
 	s.mu.Unlock()
-	for _, outputs := range tasks {
+	for _, outputs := range outputsByTaskID {
 		outputs.timer.Stop()
 		outputs.cleanup()
 	}
