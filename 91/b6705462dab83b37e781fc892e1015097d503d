@@ -1,0 +1,50 @@
+docs/security-model.md
+  h_8fb27e0cdf6d1e 75-78
+internal/api/activity_test.go
+  h_8fb27e0cdf6d1e 152
+internal/api/handlers.go
+  h_8fb27e0cdf6d1e 28,31-32,105,110,284,289,384-385,391,514-515,609,614,782,787
+internal/api/handlers_create_sandbox_test.go
+  h_8fb27e0cdf6d1e 106,560,648,682
+internal/api/handlers_kind_test.go
+  h_8fb27e0cdf6d1e 14-15,61
+internal/api/handlers_proxy_activity_test.go
+  h_8fb27e0cdf6d1e 93,112,154,194
+internal/api/handlers_proxy_redirect_test.go
+  h_8fb27e0cdf6d1e 75
+internal/api/handlers_reap_test.go
+  h_8fb27e0cdf6d1e 68,144,204,266
+internal/api/handlers_tenants_test.go
+  h_8fb27e0cdf6d1e 352
+internal/api/middleware_auth.go
+  h_8fb27e0cdf6d1e 204-206
+internal/api/placement_test.go
+  h_8fb27e0cdf6d1e 98
+internal/api/store/postgres.go
+  h_8fb27e0cdf6d1e 227-246
+internal/api/store/postgres_integration_test.go
+  h_8fb27e0cdf6d1e 107,139,160,236
+internal/api/store/sandboxes_test.go
+  h_8fb27e0cdf6d1e 18,77-94
+internal/api/store/sqlite.go
+  h_8fb27e0cdf6d1e 277-296
+internal/api/store/store.go
+  h_8fb27e0cdf6d1e 153-157,170-177
+internal/api/store/store_test.go
+  h_8fb27e0cdf6d1e 36,72,111,166,368,562
+internal/api/ttl.go
+  h_8fb27e0cdf6d1e 86,196
+internal/api/ttl_test.go
+  h_8fb27e0cdf6d1e 194
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "91b6705462dab83b37e781fc892e1015097d503d",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
