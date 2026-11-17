@@ -789,6 +789,9 @@ must_keep_one_pod "${volume_claim[@]}"
 must_keep_one_pod "${volume_secret[@]}"
 # A blank value counts as unset.
 must_keep_one_pod "${volume_claim[@]}" --set-string 'api.volumeLocal.existingSecret= '
+# Several pods share a store only on postgres, as with autoscaling.
+must_fail "api.config.volumeStore=local with api.replicaCount=2 requires api.config.store=postgres" \
+	"${local_store[@]}" "${volume_claim[@]}" "${volume_secret[@]}" --set api.replicaCount=2
 # The data volume must not cover the claim.
 for data_dir in /var/lib/n8n-sandbox-volumes /var/lib/n8n-sandbox-volumes/ /var/lib/n8n-sandbox-volumes/volumes; do
 	must_fail "must lie outside /var/lib/n8n-sandbox-volumes" "${shared_store[@]}" \

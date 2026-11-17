@@ -509,7 +509,7 @@ With `dataPlane.mode: external`, runners cannot resolve the API Service name, so
 
 ### Sharing the Volume Store
 
-With a shared claim and a signing key, the store serves several API pods, with autoscaling too:
+With a shared claim and a signing key, the store serves several API pods on Postgres, with autoscaling too:
 
 ```yaml
 api:

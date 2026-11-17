@@ -866,24 +866,30 @@ func setLocalVolumeEnv(t *testing.T) {
 	t.Setenv("SANDBOX_API_VOLUME_LOCAL_URL", "https://sandbox-api:8443")
 }
 
-func TestLoadAPIVolumeLocalDir(t *testing.T) {
-	setLocalVolumeEnv(t)
+// mustLoadAPI returns the configuration and ends the test if LoadAPI fails.
+func mustLoadAPI(t *testing.T) *APIConfig {
+	t.Helper()
 	cfg, err := LoadAPI()
 	if err != nil {
 		t.Fatalf("LoadAPI() failed: %v", err)
 	}
-	if cfg.VolumeLocalDir != "/var/lib/n8n-sandbox-api/volumes" {
+	return cfg
+}
+
+func TestLoadAPIVolumeLocalDir(t *testing.T) {
+	setLocalVolumeEnv(t)
+	if cfg := mustLoadAPI(t); cfg.VolumeLocalDir != "/var/lib/n8n-sandbox-api/volumes" {
 		t.Errorf("VolumeLocalDir = %q, want the default under the default data dir", cfg.VolumeLocalDir)
 	}
 
 	t.Setenv("SANDBOX_API_DATA_DIR", "/data/api")
-	if cfg, err = LoadAPI(); err != nil || cfg.VolumeLocalDir != "/data/api/volumes" {
-		t.Errorf("VolumeLocalDir = %q, %v; want /data/api/volumes", cfg.VolumeLocalDir, err)
+	if cfg := mustLoadAPI(t); cfg.VolumeLocalDir != "/data/api/volumes" {
+		t.Errorf("VolumeLocalDir = %q, want /data/api/volumes", cfg.VolumeLocalDir)
 	}
 
 	t.Setenv("SANDBOX_API_VOLUME_LOCAL_DIR", " /mnt/shared/volumes/ ")
-	if cfg, err = LoadAPI(); err != nil || cfg.VolumeLocalDir != "/mnt/shared/volumes" {
-		t.Errorf("VolumeLocalDir = %q, %v; want /mnt/shared/volumes", cfg.VolumeLocalDir, err)
+	if cfg := mustLoadAPI(t); cfg.VolumeLocalDir != "/mnt/shared/volumes" {
+		t.Errorf("VolumeLocalDir = %q, want /mnt/shared/volumes", cfg.VolumeLocalDir)
 	}
 
 	for _, dir := range []string{"volumes", "./volumes", "/", "/.."} {
@@ -918,14 +924,13 @@ func TestLoadAPIVolumeLocalSigningKeys(t *testing.T) {
 	}
 
 	setLocalVolumeEnv(t)
-	cfg, err := LoadAPI()
-	if err != nil || cfg.VolumeLocalSigningKey != nil {
-		t.Fatalf("without a key: %x, %v; want no key, for a random one", cfg.VolumeLocalSigningKey, err)
+	if cfg := mustLoadAPI(t); cfg.VolumeLocalSigningKey != nil {
+		t.Fatalf("without a key: %x; want no key, for a random one", cfg.VolumeLocalSigningKey)
 	}
 	t.Setenv("SANDBOX_API_VOLUME_LOCAL_SIGNING_KEY", padded)
 	t.Setenv("SANDBOX_API_VOLUME_LOCAL_PREVIOUS_SIGNING_KEY", base64.StdEncoding.EncodeToString(previous))
-	if cfg, err = LoadAPI(); err != nil || !bytes.Equal(cfg.VolumeLocalPreviousSigningKey, previous) {
-		t.Fatalf("previous key %x, %v; want %x", cfg.VolumeLocalPreviousSigningKey, err, previous)
+	if cfg := mustLoadAPI(t); !bytes.Equal(cfg.VolumeLocalPreviousSigningKey, previous) {
+		t.Fatalf("previous key %x; want %x", cfg.VolumeLocalPreviousSigningKey, previous)
 	}
 }
 
