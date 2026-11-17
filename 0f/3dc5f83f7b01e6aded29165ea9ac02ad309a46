@@ -1,0 +1,42 @@
+cmd/daemon/main.go
+  h_8fb27e0cdf6d1e 15,32,41-46,51
+docs/configuration.md
+  h_8fb27e0cdf6d1e 3,190-191
+internal/api/config/config.go
+  h_8fb27e0cdf6d1e 17,255,263,274,280,290-291,293,311,316-317,320-322,330,334-335,337-338,340-341,343-344,347-348,351-353,369-372,388-389,391-392,394-395,402-403,407-408,412-413,416-417,420,428-429,432,442-444,446-448,450,465,475,493,509,530
+internal/daemon/config.go
+  h_8fb27e0cdf6d1e 5-6,9-21,25-29,31-32,34
+internal/daemon/config_test.go
+  h_8fb27e0cdf6d1e 1-46
+internal/daemon/daemon.go
+  h_8fb27e0cdf6d1e 108-109,140-141
+internal/daemon/daemon_http_test.go
+  h_8fb27e0cdf6d1e 19,70,94,111,126,158,224,253
+internal/daemon/exec_manager.go
+  h_8fb27e0cdf6d1e 32,35-36
+internal/daemon/exec_manager_test.go
+  h_8fb27e0cdf6d1e 24,55,87,99,111,128,137,198,233,266,318
+internal/daemon/volume_mount_test.go
+  h_8fb27e0cdf6d1e 69,310,322
+internal/envvar/envvar.go
+  h_8fb27e0cdf6d1e 1-92
+internal/envvar/envvar_test.go
+  h_8fb27e0cdf6d1e 1-126
+internal/runner/config/config.go
+  h_8fb27e0cdf6d1e 18,190,199,214-215,218,227-229,231-232,235,237-238,241-242,247,257-260,262-263,266-269,322-326
+internal/runner/runtime/docker/config.go
+  h_8fb27e0cdf6d1e 8,87,89,94-95,97-98,100-101,103-104,106-107,109-113,116
+internal/runner/runtime/firecracker.ee/config.go
+  h_8fb27e0cdf6d1e 10,145-160,163,166,169-170,173-174,177
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0f3dc5f83f7b01e6aded29165ea9ac02ad309a46",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
