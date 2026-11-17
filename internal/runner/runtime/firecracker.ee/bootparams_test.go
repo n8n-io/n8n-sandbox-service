@@ -59,6 +59,7 @@ func useTestGoldenSnapshotDir(t *testing.T, rt *Runtime) string {
 	rt.config.SnapshotMemPath = filepath.Join(dir, "mem")
 	rt.config.SnapshotStatePath = filepath.Join(dir, "state")
 	writeBootParams(t, bootParamsPath(rt.config), testBootParams(rt.config))
+	rt.hostPaths = fakeHostMemory(t, 64*gib, "")
 	return dir
 }
 

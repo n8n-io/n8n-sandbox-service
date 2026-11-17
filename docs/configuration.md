@@ -161,7 +161,7 @@ Slots give the host-side Firecracker resources stable names without exposing tho
 | `SANDBOX_RUNNER_FIRECRACKER_EXPECTED_GIT_SHA` | _(empty)_ | When set, must match `git_sha` in the manifest (requires `MANIFEST_PATH`) |
 | `SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT` | _(empty)_ | Absolute path to `create-golden-snapshot.sh`. When set and any of `snapshot_mem`, `snapshot_state` or `boot.json` is missing, Prepare runs it (mem/state paths must share a directory). Production Firecracker hosts set this so the runner owns host-local snapshot creation. Empty = do not auto-create |
 | `SANDBOX_RUNNER_FIRECRACKER_DAEMON_BIN` | `/srv/firecracker/bin/sandbox-daemon` | Host path to `sandbox-daemon` used for golden snapshot create and optional manifest checksum |
-| `SANDBOX_RUNNER_FIRECRACKER_MEMORY_RATIO` | `1.0` | Multiplier on the memory-derived slot count; a finite number above 0. Above `1.0` admits more guest RAM than the host holds, and nothing watches memory pressure |
+| `SANDBOX_RUNNER_FIRECRACKER_MEMORY_RATIO` | `1.0` | Multiplier on the memory-derived slot count; a finite number above 0. Above `1.0` can overcommit host memory, and nothing watches memory pressure |
 | `SANDBOX_RUNNER_FIRECRACKER_VOLUME_BUILD_TIMEOUT` | `5m` | How long a [volume builder](../internal/runner/runtime/firecracker.ee/README.md#volume-builder) microVM may run before the runner ends it and the build fails with `timeout` |
 
 The runner reports healthy only after `Prepare` has verified these assets, created the snapshot if needed, and passed an admission canary — see [the runtime README](../internal/runner/runtime/firecracker.ee/README.md#admission-prepare--ready).

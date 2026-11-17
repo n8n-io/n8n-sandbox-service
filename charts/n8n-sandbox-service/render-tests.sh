@@ -54,6 +54,8 @@ for bad in '' 0 -5 abc 1.5; do
 	must_fail "runner.config.capacityTotal must be a positive whole number" --set "runner.config.capacityTotal=$bad"
 done
 must_fail "runner.config.capacityTotal must be a positive whole number" --set-string "runner.config.capacityTotal="
+must_fail "no greater than 2147483647" --set-string "runner.config.capacityTotal=2147483648"
+render --set-string "runner.config.capacityTotal=2147483647" >/dev/null
 # Without the helper's pinned value, the empty default fails.
 if helm template n8n-sandbox-service "$CHART_DIR" --set auth.existingSecret=n8n-sandbox-auth >/dev/null 2>&1; then
 	echo "expected the render to fail without runner.config.capacityTotal" >&2

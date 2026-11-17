@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
@@ -26,12 +27,48 @@ func setupCapacityHost(t *testing.T, memTotalBytes int64, cgroupLimit string, me
 		p.MemSizeMiB = memMiB
 		writeBootParams(t, filepath.Join(dir, bootParamsFileName), p)
 	}
-	h := capacityHost{meminfo: filepath.Join(dir, "meminfo"), selfCgroup: filepath.Join(dir, "cgroup"), cgroupRoot: filepath.Join(dir, "cg")}
-	if err := os.WriteFile(h.meminfo, []byte("MemTotal: "+strconv.FormatInt(memTotalBytes/1024, 10)+" kB\n"), 0o600); err != nil {
+	return fakeHostMemory(t, memTotalBytes, cgroupLimit)
+}
+
+// An empty cgroupLimit leaves the cgroup unlimited, so the budget is MemTotal.
+func fakeHostMemory(t *testing.T, memTotalBytes int64, cgroupLimit string) hostPaths {
+	t.Helper()
+	h, err := writeHostMemory(t.TempDir(), memTotalBytes, cgroupLimit)
+	if err != nil {
 		t.Fatal(err)
 	}
+	return h
+}
+
+// Shared fake host so tests do not read /proc/meminfo.
+func testHostPaths() hostPaths {
+	testHostOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "fc-hostmem-")
+		if err != nil {
+			testHostErr = err
+			return
+		}
+		testHost, testHostErr = writeHostMemory(dir, 64*gib, "")
+	})
+	if testHostErr != nil {
+		panic(testHostErr)
+	}
+	return testHost
+}
+
+var (
+	testHostOnce sync.Once
+	testHost     hostPaths
+	testHostErr  error
+)
+
+func writeHostMemory(dir string, memTotalBytes int64, cgroupLimit string) (hostPaths, error) {
+	h := hostPaths{meminfo: filepath.Join(dir, "meminfo"), selfCgroup: filepath.Join(dir, "cgroup"), cgroupRoot: filepath.Join(dir, "cg")}
+	if err := os.WriteFile(h.meminfo, []byte("MemTotal: "+strconv.FormatInt(memTotalBytes/1024, 10)+" kB\n"), 0o600); err != nil {
+		return hostPaths{}, err
+	}
 	if err := os.MkdirAll(filepath.Join(h.cgroupRoot, "runner.slice"), 0o755); err != nil {
-		t.Fatal(err)
+		return hostPaths{}, err
 	}
 	// The root file says max; the process's own cgroup carries the limit.
 	for rel, v := range map[string]string{"": "max", "runner.slice": cgroupLimit} {
@@ -39,13 +76,13 @@ func setupCapacityHost(t *testing.T, memTotalBytes int64, cgroupLimit string, me
 			continue
 		}
 		if err := os.WriteFile(filepath.Join(h.cgroupRoot, rel, "memory.max"), []byte(v+"\n"), 0o600); err != nil {
-			t.Fatal(err)
+			return hostPaths{}, err
 		}
 	}
 	if err := os.WriteFile(h.selfCgroup, []byte("0::/runner.slice\n"), 0o600); err != nil {
-		t.Fatal(err)
+		return hostPaths{}, err
 	}
-	return h
+	return h, nil
 }
 
 func resolve(h capacityHost, set bool, total int32) (int32, error) {
@@ -129,8 +166,9 @@ func TestResolveCapacityNamesMissingInputs(t *testing.T) {
 }
 
 func TestResolveCapacityLimitedByStructuralCeilings(t *testing.T) {
-	// 4 TiB at 512 MiB guests would be far above both ceilings.
-	h := setupCapacityHost(t, 4096*gib, "", 512)
+	// Large enough that the port range and MaxSlots bind before memory.
+	perSlot := int64(512<<20 + 64<<20)
+	h := setupCapacityHost(t, (int64(fcnetwork.MaxSlots)+1)*perSlot+4*gib, "", 512)
 	t.Setenv("SANDBOX_RUNNER_FIRECRACKER_PROXY_PORT_START", "60000")
 	if got, err := resolve(h, false, 0); err != nil || got != 65535-60000+1 {
 		t.Fatalf("port range: got %d, %v", got, err)

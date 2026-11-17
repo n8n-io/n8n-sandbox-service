@@ -32,7 +32,6 @@ JAIL_ROOT=""
 FC_PID=""
 ROOTFS_MOUNT=""
 
-# Prints the required CLI arguments for the snapshot helper.
 usage() {
 	cat >&2 <<EOF
 Usage: $0 --kernel PATH --ext4 PATH --daemon-bin PATH --out DIR

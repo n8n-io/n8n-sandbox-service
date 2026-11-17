@@ -307,6 +307,7 @@ func TestLoadRejectsInvalidMaxExecTimeout(t *testing.T) {
 
 func TestLoadRecordsWhetherCapacityWasSet(t *testing.T) {
 	setRequiredEnv(t)
+	t.Setenv("SANDBOX_RUNNER_CAPACITY_TOTAL", "")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load() failed: %v", err)

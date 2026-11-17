@@ -8,7 +8,7 @@ Create or provide:
 
 - An auth Secret with API keys and runner registration tokens, or set `auth.*` values and let the chart create one.
 - TLS Secrets for the API registration server, API control client, runner registration client, and runner control server, or set `tls.mode=certManager`.
-- A `runner.config.capacityTotal` (see [Runner Capacity](#runner-capacity)).
+- For `dataPlane.mode=in-cluster`, set `runner.config.capacityTotal` (see [Runner Capacity](#runner-capacity)).
 - A Sysbox-ready node pool for `runner.isolation=sysbox` (the default). Use `runner.isolation=privileged` on clusters that cannot install sysbox.
 
 ```sh
@@ -20,7 +20,7 @@ helm upgrade --install n8n-sandbox-service ./charts/n8n-sandbox-service \
 
 ## Runner Capacity
 
-`runner.config.capacityTotal` is the number of sandboxes the Docker runner admits. It has no default, and the render fails when it is empty, `0` or not a whole number with `dataPlane.mode=in-cluster`. The Docker runner does not derive it from memory: size it from the node's memory and each sandbox's memory limit. The Firecracker runner derives its own count from host memory when `SANDBOX_RUNNER_CAPACITY_TOTAL` is unset ([Firecracker slots](../../docs/configuration.md#firecracker-slots)).
+`runner.config.capacityTotal` is what the in-cluster Docker runner reports to the API for placement. The runner does not refuse a create past it. It has no default, and with `dataPlane.mode=in-cluster` the render fails when it is empty, `0`, above `2147483647`, or not a whole number. The Docker runner does not derive it from memory: size it from the node's memory and each sandbox's memory limit. The Firecracker runner derives its own count from host memory when `SANDBOX_RUNNER_CAPACITY_TOTAL` is unset ([Firecracker slots](../../docs/configuration.md#firecracker-slots)).
 
 ## Data Plane Mode
 
