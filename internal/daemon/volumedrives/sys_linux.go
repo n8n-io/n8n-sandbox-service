@@ -45,7 +45,3 @@ func (linuxSys) MakeMountPoint(path string) error {
 func (linuxSys) Mount(device, path string) error {
 	return unix.Mount(device, path, "ext4", unix.MS_RDONLY|unix.MS_NODEV|unix.MS_NOSUID, "noload")
 }
-
-func (linuxSys) Unmount(path string) error {
-	return unix.Unmount(path, unix.MNT_DETACH)
-}

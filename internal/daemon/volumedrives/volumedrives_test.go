@@ -156,7 +156,6 @@ func (f *fakeSys) DeviceSize(device string) (uint64, error) {
 
 func (f *fakeSys) FlushBuffers(device string) error { return f.record("flush " + device) }
 func (f *fakeSys) MakeMountPoint(path string) error { return f.record("mkdir " + path) }
-func (f *fakeSys) Unmount(path string) error        { return f.record("unmount " + path) }
 func (f *fakeSys) Mount(device, path string) error  { return f.record("mount " + device + " " + path) }
 
 func testMounter(sys Sys) *Mounter {
@@ -173,17 +172,20 @@ func requireCalls(t *testing.T, sys *fakeSys, want ...string) {
 	}
 }
 
-func TestMountAllMountsEachVolumeInOrder(t *testing.T) {
+func TestMountEachMountsEachVolumeInOrder(t *testing.T) {
 	sys := newFakeSys()
 	sys.sizes["/dev/vdb"] = 8 * 512
 	sys.sizes["/dev/vdc"] = 16 * 512
 
-	err := testMounter(sys).MountAll([]Volume{
+	outcomes, err := testMounter(sys).MountEach([]Volume{
 		{Drive: 0, Sectors: 8, Path: "/mnt/a"},
 		{Drive: 1, Sectors: 16, Path: "/mnt/b"},
 	})
 	if err != nil {
-		t.Fatalf("MountAll() error = %v", err)
+		t.Fatalf("MountEach() error = %v", err)
+	}
+	if want := []Outcome{{Drive: 0, Mounted: true}, {Drive: 1, Mounted: true}}; !slices.Equal(outcomes, want) {
+		t.Fatalf("outcomes = %+v, want %+v", outcomes, want)
 	}
 	requireCalls(t, sys,
 		"flush /dev/vdb", "mkdir /mnt/a", "mount /dev/vdb /mnt/a",
@@ -191,115 +193,185 @@ func TestMountAllMountsEachVolumeInOrder(t *testing.T) {
 	)
 }
 
-func TestMountAllWaitsForTheNewSize(t *testing.T) {
+func TestMountEachWaitsForTheNewSize(t *testing.T) {
 	sys := newFakeSys()
 	sys.sizes["/dev/vdb"] = 8 * 512
 	sys.readyAfter["/dev/vdb"] = 3
 
-	if err := testMounter(sys).MountAll([]Volume{{Drive: 0, Sectors: 8, Path: "/mnt/a"}}); err != nil {
-		t.Fatalf("MountAll() error = %v", err)
+	if _, err := testMounter(sys).MountEach([]Volume{{Drive: 0, Sectors: 8, Path: "/mnt/a"}}); err != nil {
+		t.Fatalf("MountEach() error = %v", err)
 	}
 	if got := sys.sizeReads["/dev/vdb"]; got != 4 {
 		t.Fatalf("size reads = %d, want 4: three before the size arrived and the one that saw it", got)
 	}
 }
 
-func TestMountAllRefusesADeviceWithoutItsSize(t *testing.T) {
+func TestMountEachRefusesADeviceWithoutItsSize(t *testing.T) {
 	for name, size := range map[string]uint64{"never resized": 0, "another size": 9 * 512} {
 		t.Run(name, func(t *testing.T) {
 			sys := newFakeSys()
 			sys.sizes["/dev/vdb"] = 8 * 512
 			sys.sizes["/dev/vdc"] = size
 
-			err := testMounter(sys).MountAll([]Volume{
+			outcomes, err := testMounter(sys).MountEach([]Volume{
 				{Drive: 0, Sectors: 8, Path: "/mnt/a"},
 				{Drive: 1, Sectors: 8, Path: "/mnt/b"},
 			})
 			if err == nil || !strings.Contains(err.Error(), "want 4096") {
-				t.Fatalf("MountAll() error = %v, want the size mismatch", err)
+				t.Fatalf("MountEach() error = %v, want the size mismatch", err)
+			}
+			if want := []Outcome{{Drive: 0, Mounted: true}, {Drive: 1, Reason: ReasonDrive}}; !slices.Equal(outcomes, want) {
+				t.Fatalf("outcomes = %+v, want %+v", outcomes, want)
 			}
 			if sys.sizeReads["/dev/vdc"] < 2 {
 				t.Fatalf("size reads = %d, want the mount to have waited", sys.sizeReads["/dev/vdc"])
 			}
-			requireCalls(t, sys, "flush /dev/vdb", "mkdir /mnt/a", "mount /dev/vdb /mnt/a", "unmount /mnt/a")
+			requireCalls(t, sys, "flush /dev/vdb", "mkdir /mnt/a", "mount /dev/vdb /mnt/a")
 		})
 	}
 }
 
-func TestMountAllRollsBackWhatItMounted(t *testing.T) {
+// A volume that fails leaves the volumes before and after it as they are.
+func TestMountEachMountsTheOthersAroundAFailure(t *testing.T) {
 	tests := []struct {
 		name, failing, reason string
 	}{
-		{"size never arrives", "", "drive"},
-		{"flush", "flush /dev/vdd", "drive"},
-		{"mkdir", "mkdir /mnt/c", "mount_point"},
-		{"mount", "mount /dev/vdd /mnt/c", "mount"},
+		{"size never arrives", "", ReasonDrive},
+		{"flush", "flush /dev/vdc", ReasonDrive},
+		{"mkdir", "mkdir /mnt/b", ReasonMountPoint},
+		{"mount", "mount /dev/vdc /mnt/b", ReasonMount},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			sys := newFakeSys()
-			for _, dev := range []string{"/dev/vdb", "/dev/vdc", "/dev/vdd", "/dev/vde"} {
+			for _, dev := range []string{"/dev/vdb", "/dev/vdc", "/dev/vdd"} {
 				sys.sizes[dev] = 512
 			}
 			if tt.failing != "" {
 				sys.errs[tt.failing] = errors.New("boom")
 			} else {
-				delete(sys.sizes, "/dev/vdd")
+				delete(sys.sizes, "/dev/vdc")
 			}
 
-			err := testMounter(sys).MountAll([]Volume{
+			outcomes, err := testMounter(sys).MountEach([]Volume{
 				{Drive: 0, Sectors: 1, Path: "/mnt/a"},
 				{Drive: 1, Sectors: 1, Path: "/mnt/b"},
 				{Drive: 2, Sectors: 1, Path: "/mnt/c"},
-				{Drive: 3, Sectors: 1, Path: "/mnt/d"},
 			})
-			if err == nil || !strings.Contains(err.Error(), "volume drive 2 at /mnt/c") {
-				t.Fatalf("MountAll() error = %v, want the third volume's failure", err)
+			if err == nil || !strings.Contains(err.Error(), "volume drive 1 at /mnt/b") {
+				t.Fatalf("MountEach() error = %v, want the second volume's failure", err)
 			}
-			if got := Reason(err); got != tt.reason {
-				t.Fatalf("Reason() = %q, want %q", got, tt.reason)
+			want := []Outcome{{Drive: 0, Mounted: true}, {Drive: 1, Reason: tt.reason}, {Drive: 2, Mounted: true}}
+			if !slices.Equal(outcomes, want) {
+				t.Fatalf("outcomes = %+v, want %+v", outcomes, want)
 			}
 			calls := sys.recorded()
-			if slices.ContainsFunc(calls, func(c string) bool { return strings.Contains(c, "/dev/vde") || strings.Contains(c, "/mnt/d") }) {
-				t.Fatalf("calls %q went on past the failed volume", calls)
-			}
-			if got, want := calls[len(calls)-2:], []string{"unmount /mnt/b", "unmount /mnt/a"}; !slices.Equal(got, want) {
-				t.Fatalf("calls end with %q, want %q: the mounted volumes undone, latest first", got, want)
-			}
-			if slices.Contains(calls, "unmount /mnt/c") {
-				t.Fatalf("calls %q unmount the volume that failed", calls)
+			for _, mount := range []string{"mount /dev/vdb /mnt/a", "mount /dev/vdd /mnt/c"} {
+				if !slices.Contains(calls, mount) {
+					t.Fatalf("calls %q lack %q", calls, mount)
+				}
 			}
 		})
 	}
 }
 
-func TestMountAllReportsAFailedRollback(t *testing.T) {
+func TestMountEachReportsEveryFailure(t *testing.T) {
 	sys := newFakeSys()
 	sys.sizes["/dev/vdb"] = 512
 	sys.sizes["/dev/vdc"] = 512
-	sys.errs["mount /dev/vdc /mnt/b"] = errors.New("bad superblock")
-	sys.errs["unmount /mnt/a"] = errors.New("device busy")
+	sys.errs["mount /dev/vdb /mnt/a"] = errors.New("bad superblock")
+	sys.errs["mkdir /mnt/b"] = errors.New("symlink on the path")
 
-	err := testMounter(sys).MountAll([]Volume{
+	outcomes, err := testMounter(sys).MountEach([]Volume{
 		{Drive: 0, Sectors: 1, Path: "/mnt/a"},
 		{Drive: 1, Sectors: 1, Path: "/mnt/b"},
 	})
-	if err == nil || !strings.Contains(err.Error(), "bad superblock") || !strings.Contains(err.Error(), "roll back /mnt/a: device busy") {
-		t.Fatalf("MountAll() error = %v, want the mount failure and the failed rollback", err)
+	if err == nil || !strings.Contains(err.Error(), "bad superblock") || !strings.Contains(err.Error(), "symlink on the path") {
+		t.Fatalf("MountEach() error = %v, want both failures", err)
+	}
+	if want := []Outcome{{Drive: 0, Reason: ReasonMount}, {Drive: 1, Reason: ReasonMountPoint}}; !slices.Equal(outcomes, want) {
+		t.Fatalf("outcomes = %+v, want %+v", outcomes, want)
 	}
 }
 
-func TestMountAllWithNoVolumesTouchesNothing(t *testing.T) {
+func TestMountEachWithNoVolumesTouchesNothing(t *testing.T) {
 	sys := newFakeSys()
-	if err := testMounter(sys).MountAll(nil); err != nil {
-		t.Fatalf("MountAll() error = %v", err)
+	outcomes, err := testMounter(sys).MountEach(nil)
+	if err != nil || len(outcomes) != 0 {
+		t.Fatalf("MountEach() = %+v, %v; want nothing", outcomes, err)
 	}
 	requireCalls(t, sys)
 }
 
-func TestReasonOfAnotherError(t *testing.T) {
-	if got := Reason(errors.New("boom")); got != "" {
-		t.Fatalf("Reason() = %q, want none", got)
+func TestParseAnswer(t *testing.T) {
+	requested := []Volume{
+		{Drive: 0, Sectors: 1, Path: "/mnt/a"},
+		{Drive: 3, Sectors: 1, Path: "/mnt/b"},
+	}
+	tests := []struct {
+		name    string
+		body    string
+		want    []Outcome
+		wantErr string
+	}{
+		{"all mounted", `{"volumes":[{"drive":0,"mounted":true},{"drive":3,"mounted":true}]}`,
+			[]Outcome{{Drive: 0, Mounted: true}, {Drive: 3, Mounted: true}}, ""},
+		{"one failed", `{"volumes":[{"drive":0,"mounted":false,"reason":"mount_point"},{"drive":3,"mounted":true}]}` + "\n",
+			[]Outcome{{Drive: 0, Reason: ReasonMountPoint}, {Drive: 3, Mounted: true}}, ""},
+		{"reason drive", `{"volumes":[{"drive":0,"mounted":true},{"drive":3,"mounted":false,"reason":"drive"}]}`,
+			[]Outcome{{Drive: 0, Mounted: true}, {Drive: 3, Reason: ReasonDrive}}, ""},
+
+		{"drive missing", `{"volumes":[{"drive":0,"mounted":true}]}`, nil, "answer has 1 volumes, the request 2"},
+		{"no volumes", `{}`, nil, "answer has 0 volumes, the request 2"},
+		{"extra drive", `{"volumes":[{"drive":0,"mounted":true},{"drive":3,"mounted":true},{"drive":4,"mounted":true}]}`, nil, "answer has 3 volumes"},
+		{"drive not asked for", `{"volumes":[{"drive":0,"mounted":true},{"drive":4,"mounted":true}]}`, nil, "answer volume 1 is drive 4"},
+		{"drive twice", `{"volumes":[{"drive":0,"mounted":true},{"drive":0,"mounted":true}]}`, nil, "answer volume 1 is drive 0"},
+		{"out of order", `{"volumes":[{"drive":3,"mounted":true},{"drive":0,"mounted":true}]}`, nil, "answer volume 0 is drive 3"},
+		{"unknown reason", `{"volumes":[{"drive":0,"mounted":false,"reason":"/etc/shadow"},{"drive":3,"mounted":true}]}`, nil, "answer volume 0 has an unknown reason"},
+		{"failed without reason", `{"volumes":[{"drive":0,"mounted":false},{"drive":3,"mounted":true}]}`, nil, "answer volume 0 has an unknown reason"},
+		{"mounted with reason", `{"volumes":[{"drive":0,"mounted":true,"reason":"mount"},{"drive":3,"mounted":true}]}`, nil, "contradicts mounted"},
+		{"unknown field", `{"volumes":[{"drive":0,"mounted":true,"path":"/etc"},{"drive":3,"mounted":true}]}`, nil, "not a JSON object of volume outcomes"},
+		{"trailing value", `{"volumes":[{"drive":0,"mounted":true},{"drive":3,"mounted":true}]}{}`, nil, "single JSON value"},
+		{"not JSON", `guest says no`, nil, "not a JSON object"},
+		{"oversized", `{"volumes":[{"drive":0,"mounted":true},{"drive":3,"mounted":true}]}` + strings.Repeat(" ", MaxAnswerBytes), nil, "longer than 4096 bytes"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseAnswer([]byte(tt.body), requested)
+			if tt.wantErr == "" {
+				if err != nil || !slices.Equal(got, tt.want) {
+					t.Fatalf("ParseAnswer() = %+v, %v; want %+v", got, err, tt.want)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("ParseAnswer() error = %v, want one containing %q", err, tt.wantErr)
+			}
+			for _, guestText := range []string{"/etc", "guest says"} {
+				if strings.Contains(err.Error(), guestText) {
+					t.Fatalf("ParseAnswer() error %q repeats the answer", err)
+				}
+			}
+		})
+	}
+}
+
+func TestMaxAnswerBytesFitsTheLargestAnswer(t *testing.T) {
+	requested := make([]Volume, volume.MaxDrives)
+	outcomes := make([]Outcome, volume.MaxDrives)
+	for index := range requested {
+		requested[index] = Volume{Drive: index, Sectors: 1, Path: fmt.Sprintf("/mnt/%c", 'a'+index)}
+		outcomes[index] = Outcome{Drive: index, Reason: ReasonMountPoint}
+	}
+	body, err := json.Marshal(Answer{Volumes: outcomes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(body) > MaxAnswerBytes {
+		t.Fatalf("answer for %d volumes has %d bytes, more than MaxAnswerBytes (%d)", len(outcomes), len(body), MaxAnswerBytes)
+	}
+	if _, err := ParseAnswer(body, requested); err != nil {
+		t.Fatalf("ParseAnswer() error = %v, want none", err)
 	}
 }
 

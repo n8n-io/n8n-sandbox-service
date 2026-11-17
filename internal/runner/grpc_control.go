@@ -30,6 +30,16 @@ type SandboxControlGRPC struct {
 	Cfg     *config.Config
 	Rec     *metrics.RunnerRecorder
 	Cordon  *cordon.State
+
+	// now is time.Now unless a test sets it.
+	now func() time.Time
+}
+
+func (s *SandboxControlGRPC) clock() func() time.Time {
+	if s.now != nil {
+		return s.now
+	}
+	return time.Now
 }
 
 var _ pb.SandboxControlServer = (*SandboxControlGRPC)(nil)
@@ -48,6 +58,9 @@ func toGRPCError(err error) error {
 	// nothing was created.
 	if errors.Is(err, runnerruntime.ErrCapacityExhausted) {
 		return runnerctl.CapacityRefusal(err.Error())
+	}
+	if errors.Is(err, runnerruntime.ErrVolumesUnsupported) {
+		return status.Error(codes.FailedPrecondition, err.Error())
 	}
 	return status.Errorf(codes.Internal, "%v", err)
 }
@@ -107,12 +120,6 @@ func (s *SandboxControlGRPC) CreateSandbox(ctx context.Context, req *pb.CreateSa
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid create options: "+err.Error())
 	}
-	// Echoed so the API can tell a runner that applied the options from one that
-	// ignored them. Marshalled here, before anything is created.
-	applied, err := json.Marshal(opts)
-	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
-	}
 	ctx = withTrace(ctx)
 	start := time.Now()
 	info, err := s.Runtime.CreateSandbox(ctx, sandboxID, opts)
@@ -122,6 +129,13 @@ func (s *SandboxControlGRPC) CreateSandbox(ctx context.Context, req *pb.CreateSa
 	}
 	if info == nil {
 		return nil, status.Error(codes.Internal, "create sandbox returned nil info")
+	}
+	// Echoed so the API can tell a runner that applied the options from one that
+	// ignored them, and see which optional volumes the sandbox did not get.
+	// Strings, numbers and booleans only, so marshalling can't fail.
+	applied, err := json.Marshal(opts.Applied(info.VolumesLeftOut))
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
 	}
 	return &pb.CreateSandboxResponse{SandboxId: sandboxID, ContainerIp: info.IP, AppliedCreateOptionsJson: string(applied)}, nil
 }

@@ -224,6 +224,10 @@ export E2E_RUNNER_CONTROL_TLS_CA="$TLS_DIR/api/ca.crt"
 export E2E_RUNNER_CONTROL_TLS_CERT="$TLS_DIR/api/control-grpc-api-client.crt"
 export E2E_RUNNER_CONTROL_TLS_KEY="$TLS_DIR/api/control-grpc-api-client.key"
 export E2E_RUNNER_CONTROL_TLS_SERVER_NAME="localhost"
+# volume-attach.spec.ts serves volume images with the API's registration
+# server certificate and checks the runner log for their URLs.
+export E2E_TLS_DIR="$TLS_DIR"
+export E2E_RUNNER_LOG="$RUNNER_LOG"
 
 if [[ "${E2E_SKIP_BUILD:-}" != "1" ]]; then
 	echo "Building SDK..."

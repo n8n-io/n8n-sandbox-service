@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -37,6 +38,9 @@ type Runtime struct {
 	config       Config
 	deps         dependencies
 	slots        []slotState
+	// volumeCache holds the images of attached volumes; nil attaches none. Set
+	// once at startup.
+	volumeCache runnerruntime.VolumeCache
 
 	mu          sync.Mutex
 	sandboxes   map[string]*sandboxState
@@ -48,8 +52,8 @@ type Runtime struct {
 	hostNATMu   sync.Mutex
 	hostNATOK   bool
 
-	// diskReserved reports data volume space that creates must leave free; nil
-	// means none. Set once at startup.
+	// diskReserved reports data volume space that creates and volume builds
+	// must leave free; nil means none. Set once at startup.
 	diskReserved func() int64
 
 	// hostPaths locates the host memory files; zero means the real ones. Tests set it.
@@ -59,6 +63,11 @@ type Runtime struct {
 	// non-blocking send, so a release never waits on it and a burst of releases
 	// collapses into one pass over the slots.
 	wireCh chan struct{}
+
+	// volumeBuild is the one volume build the runner runs at a time, if any
+	// (volume_build.go).
+	volumeBuildMu sync.Mutex
+	volumeBuild   *volumeBuild
 }
 
 var (
@@ -206,6 +215,13 @@ type sandboxState struct {
 	// activation applies it to whatever slot the sandbox lands on.
 	blockEgress bool
 
+	// volumes are the images the sandbox has, set once by its create.
+	// pinsVolumes marks a create that may have pinned images in the volume
+	// cache, which untracking the sandbox releases (volume_attach.go). Both are
+	// guarded by r.mu.
+	volumes     []attachedVolume
+	pinsVolumes bool
+
 	// bootParams is the sidecar of the golden snapshot this sandbox was created
 	// from, resolved once at reservation and never re-read. Recovery replays it, so
 	// re-resolving would boot a different guest than the one this sandbox is a
@@ -319,8 +335,11 @@ type dependencies struct {
 	checkTemplateKernel func(path string) error
 	newProxy            func(ctx context.Context, sandboxID string, listenAddr string, netnsName string, guestAddr string) (daemonProxy, error)
 	probeDaemon         func(ctx context.Context, baseURL string) error
-	mountVolumeDrives   func(ctx context.Context, baseURL string, drives []volumedrives.Volume) error
+	checkVolumeImage    func(path string) error
+	patchVolumeDrive    func(ctx context.Context, socketPath string, drive volumeDrive) error
+	mountVolumeDrives   func(ctx context.Context, baseURL string, drives []volumedrives.Volume) (map[int]string, error)
 	volumeSpace         func(path string) (volumeSpace, error)
+	bootVolumeBuilder   func(ctx context.Context, socketPath string, boot volumeBuilderBoot) error
 }
 
 func defaultDependencies(fc Config) dependencies {
@@ -344,8 +363,11 @@ func defaultDependencies(fc Config) dependencies {
 		probeDaemon: func(ctx context.Context, baseURL string) error {
 			return probeDaemon(ctx, baseURL, fc.DaemonWaitTimeout)
 		},
+		checkVolumeImage:  checkVolumeImage,
+		patchVolumeDrive:  patchVolumeDrive,
 		mountVolumeDrives: mountVolumeDrives,
 		volumeSpace:       statVolume,
+		bootVolumeBuilder: bootVolumeBuilder,
 	}
 }
 
@@ -463,6 +485,20 @@ func (r *Runtime) CreateSandbox(ctx context.Context, sandboxID string, opts *run
 	}
 
 	timer := newStepTimer(metrics.OpCreate, r.metrics)
+	hasVolumes := opts != nil && len(opts.Volumes) > 0
+	var leftOut []leftOutVolume
+	if hasVolumes {
+		// Nothing exists on the host yet, so a failure only hands back the
+		// reservation and the pins.
+		if err := timer.step(stepAcquireVolumes, func() error {
+			var err error
+			leftOut, err = r.acquireVolumes(ctx, state, opts.Volumes)
+			return err
+		}); err != nil {
+			r.untrackSandbox(state)
+			return nil, fmt.Errorf("acquire volumes: %w", err)
+		}
+	}
 	templateRootfs := filepath.Join(r.config.TemplateDir, "rootfs.ext4")
 	slog.Debug("firecracker cloning rootfs", "sandbox_id", sandboxID, "template", templateRootfs, "dest", state.rootfsPath)
 	if err := timer.step(stepCloneRootfs, func() error {
@@ -488,7 +524,11 @@ func (r *Runtime) CreateSandbox(ctx context.Context, sandboxID string, opts *run
 	state.running = true
 	state.transition = transitionNone
 	info := *state.info
+	volumes := slices.Clone(state.volumes)
 	r.mu.Unlock()
+	if hasVolumes {
+		info.VolumesLeftOut = r.reportVolumes(sandboxID, leftOut, volumes)
+	}
 	slog.Info("firecracker sandbox created",
 		append([]any{
 			"sandbox_id", sandboxID,
@@ -545,9 +585,14 @@ func (r *Runtime) DaemonURL(_ context.Context, sandboxID string) (string, error)
 	return state.daemonURL, nil
 }
 
-// Shutdown best-effort deletes every sandbox currently tracked by this runtime,
-// then, equally best-effort, clears the namespaces of the slots left free.
+// Shutdown ends a running volume build, best-effort deletes every sandbox
+// currently tracked by this runtime, then, equally best-effort, clears the
+// namespaces of the slots left free. The build cleans up next to the
+// sandboxes and is waited for last, so it takes nothing from their budget.
 func (r *Runtime) Shutdown(ctx context.Context) {
+	waitForVolumeBuild := r.stopVolumeBuild()
+	defer waitForVolumeBuild(ctx)
+
 	r.mu.Lock()
 	states := make([]*sandboxState, 0, len(r.sandboxes))
 	for _, state := range r.sandboxes {
@@ -719,6 +764,7 @@ func (r *Runtime) untrackSandbox(state *sandboxState) {
 	if state.slot >= 0 && r.slotOwnedByLocked(state.slot, state.id) {
 		r.releaseSlotLocked(state.slot)
 	}
+	r.releaseVolumesLocked(state)
 }
 
 // reserveSlotLocked marks the first free Firecracker slot as occupied. r.mu
@@ -814,6 +860,7 @@ chmod 0664 %[1]s/snapshot_mem %[1]s/snapshot_state %[6]s
 		shellquote.Quote(state.rootfsPath), shellquote.Quote(filepath.Dir(rootfsTarget)), shellquote.Quote(rootfsTarget),
 		shellquote.Quote(templateKernelPath(r.config)), shellquote.Quote(filepath.Dir(kernelTarget)), shellquote.Quote(kernelTarget))
 	script += volumeDrivePlaceholders(r.config.JailerBaseDir, jailRoot, state.bootParams.VolumeDrives)
+	script += volumeBinds(jailRoot, state.bootParams.VolumeDrives, r.volumesOf(state))
 	return r.deps.run(ctx, "sudo", "/bin/sh", "-c", script)
 }
 
@@ -879,8 +926,9 @@ umount -l %[1]s/root/snapshot_mem 2>/dev/null || true
 umount -l %[1]s/root/snapshot_state 2>/dev/null || true
 umount -l %[2]s 2>/dev/null || true
 umount -l %[3]s 2>/dev/null || true
-rm -rf %[1]s
 `, shellquote.Quote(jailDir), shellquote.Quote(rootfsTarget), shellquote.Quote(kernelTarget))
+	script += volumeUnmounts(filepath.Join(jailDir, "root"), state.bootParams.VolumeDrives, r.volumesOf(state))
+	script += fmt.Sprintf("rm -rf %s\n", shellquote.Quote(jailDir))
 	return r.deps.run(ctx, "sudo", "/bin/sh", "-c", script)
 }
 

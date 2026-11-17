@@ -145,6 +145,10 @@ spec:
             {{- end }}
             - name: docker-data
               mountPath: {{ include "n8n-sandbox-service.runnerDockerDataMountPath" . | quote }}
+            {{- if $runner.volumeCache.emptyDir.enabled }}
+            - name: volume-cache
+              mountPath: {{ include "n8n-sandbox-service.runnerVolumeCacheDir" . | quote }}
+            {{- end }}
             {{- with $runner.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -176,6 +180,11 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
+        {{- end }}
+        {{- if $runner.volumeCache.emptyDir.enabled }}
+        - name: volume-cache
+          emptyDir:
+            sizeLimit: {{ $runner.volumeCache.emptyDir.sizeLimit }}
         {{- end }}
         {{- with $runner.extraVolumes }}
         {{- toYaml . | nindent 8 }}

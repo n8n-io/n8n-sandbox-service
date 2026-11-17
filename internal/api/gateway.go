@@ -26,6 +26,7 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	if err != nil {
 		return nil, err
 	}
+	quota := newTenantQuota(countTenantSandboxes(s))
 	sandboxProxy := sandboxProxyHandler(s, reg, cfg, runnerTransport, activity, rec)
 	keyCache := newAPIKeyCache(cfg.APIKeyCacheTTL)
 
@@ -53,7 +54,7 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	mux.HandleFunc("GET /sandboxes", handleListSandboxes(s))
 	// A create holds its slot until the runner is done, even after the client
 	// has gone, so a burst of creates is bounded like any other request.
-	mux.HandleFunc("POST /sandboxes", limitTenant(handleCreateSandbox(s, reg, cfg, rec, newTenantQuota(s.CountByTenant))))
+	mux.HandleFunc("POST /sandboxes", limitTenant(handleCreateSandbox(s, s, reg, cfg, rec, quota)))
 	mux.HandleFunc("GET /sandboxes/{id}", handleGetSandbox(s, cfg))
 	mux.HandleFunc("DELETE /sandboxes/{id}", handleDeleteSandbox(s, cfg, rec))
 

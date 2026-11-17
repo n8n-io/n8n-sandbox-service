@@ -33,6 +33,8 @@ grpcurl \
 
 `create_options_json` is a JSON `CreateOptions` (`internal/runner/runtime`): `{}` for the defaults, `{"egress":"none"}` for no egress. Unknown values are `InvalidArgument`. The response echoes what was applied in `applied_create_options_json`; the API refuses a sandbox whose echo does not match.
 
+`volumes` lists read-only volumes, `ext4` images for Firecracker, `tar`s for Docker: `{"volumes":[{"scope":"shared","sha256":"<hex>","size":<bytes>,"kind":"ext4","url":"https://…","mount_path":"/mnt/data","optional":true}]}`. A `tar` also carries what the API counted in it, which bounds its unpack: `{"volumes":[{"scope":"shared","sha256":"<hex>","size":<bytes>,"kind":"tar","url":"https://…","mount_path":"/mnt/data","tar":{"entries":<n>,"content_bytes":<n>,"decompressed_bytes":<n>}}]}` (`go run ./cmd/e2e-runnerctl tar-counts <tar>` prints the counts). Invalid volumes are `InvalidArgument`, an `ext4` size that isn't whole 512-byte sectors among them (rules: `ParseCreateOptions`). A runner that can't attach them refuses with `FailedPrecondition`: a runner of the other kind, a Firecracker runner asked for more volumes than its golden snapshot has drives, or a Docker runner that can't make its volume cache `nosuid,nodev`. The echo repeats each volume without its `url`, with `"attached"`, and a `"reason"` for an optional volume left out. The API sends no volumes and checks only the echo's egress.
+
 Cordon a runner: it takes no new creates, and the API deletes its stopped sandboxes instead of waking them ([API.md](API.md#put-adminrunnersidcordon--delete-adminrunnersidcordon)), until it is uncordoned (`{"cordoned": false}`) or restarts. `runner_id` is optional; when set, a runner with another id refuses. `GetCordon` with `-d '{}'` reads the state.
 
 ```bash
@@ -46,6 +48,8 @@ grpcurl \
   n8n-sandbox-service-runner-dind-local-1:9091 \
   runner.v1.SandboxControl/SetCordon
 ```
+
+`BuildVolume` is a bidirectional stream of tar and image bytes, which `grpcurl` is of little use for. From a checkout, `go run ./cmd/e2e-runnerctl build-volume <tar> <image>` calls it on a Firecracker runner (settings in `E2E_RUNNER_*` variables, see `cmd/e2e-runnerctl`).
 
 The bootstrap script puts **both** compose runner hostnames in the **same** control server certificate SAN list, so one `control-grpc-server` cert works on every local runner.
 

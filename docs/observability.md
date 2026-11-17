@@ -92,6 +92,7 @@ Steps, in order:
 
 | Step | Operation | What it covers |
 | --- | --- | --- |
+| `acquire_volumes` | create, with volumes | Get every volume image from the runner's cache, waiting for downloads |
 | `clone_rootfs` | create | Copy the template rootfs for the new sandbox |
 | `clone_snapshot` | create | Copy the golden memory and state snapshot |
 | `prepare_jail` | create, wake, recover | Jailer directory and device setup |
@@ -99,6 +100,7 @@ Steps, in order:
 | `start_jailer` | create, wake, recover | Launch the jailer and Firecracker process |
 | `wait_socket` | create, wake, recover | Wait for the Firecracker API socket |
 | `load_snapshot` | create, wake | Restore the VM from the snapshot |
+| `patch_volumes` | create, with volumes | Tell the guest each volume drive's size |
 | `cold_boot` | recover | Boot the sandbox's own rootfs, replacing the restore |
 | `start_proxy` | create, wake, recover | Start the host-side daemon proxy |
 | `probe_daemon` | create, wake, recover | First successful call to the in-guest daemon |
@@ -107,7 +109,26 @@ Steps, in order:
 A wake skips the two clone steps, since the sandbox's disk already exists, and
 `mount_volumes`. A recovery skips the clone steps too and swaps `load_snapshot`
 for `cold_boot` — the field to compare when reading recovery latency against an
-ordinary wake.
+ordinary wake. `acquire_volumes` and `patch_volumes` appear only for sandboxes
+with volumes. In `sandbox_lifecycle_step_duration_seconds`, an
+`acquire_volumes` that waited for a download longer than 5 s lands above the
+top bucket; the event has its time, and
+`sandbox_volume_cache_download_duration_seconds` (buckets up to 600 s) the
+download's.
+
+### Runner: volumes
+
+The attach and left-out events name `sandbox_id`, the volume's `drive`
+(Firecracker) or `index` (Docker) and `sha256`; the unpack events name the
+object's `scope` and `sha256`. None names the read URL or a path from inside
+a tar.
+
+| Event | Level | Notes |
+| --- | --- | --- |
+| `firecracker volume attached`, `docker volume attached` | info | At the end of a create that succeeded, per volume the sandbox has |
+| `firecracker volume left out`, `docker volume left out` | warn | At the end of a create that succeeded, per optional volume it left out; `reason` as in the echo, and for one left out by the cache its `err` |
+| `firecracker volume not mounted after cold boot` | warn | A cold boot's guest did not mount an optional volume the create had mounted; `reason` |
+| `volume cache unpack finished`, `volume cache unpack failed` | info, warn | Per `tar` the cache unpacked, after its download: `scope`, `sha256`, `duration_ms`, and the tree's `inodes` and `allocated_bytes`, or the `result` and `err` |
 
 ### Runner: guest deaths
 
@@ -149,12 +170,36 @@ Related series:
   refused for want of capacity before any boot was attempted. `result` carries
   `success` or `error`, the same pair as every other `result` label here.
 - `sandbox_volume_mount_requests_total{result}` — the guest volume mount request
-  of each Firecracker create and cold boot. `result` is `success` or why it
-  failed: `no_response`, `invalid_request`, `already_mounted`, `unsupported`
-  (the daemon has no endpoint or no root; a failure only when volumes were
-  named), `drive` (a drive could not be read or flushed, or never showed its
-  expected size), `mount_point`, `mount`, or `error`. Every failure fails the
-  create or wake.
+  of each Firecracker create and cold boot, once per request. `result` is
+  `success` when every drive mounted. A request where some did not counts
+  under the reason of the first in request order: `drive` (a drive could not
+  be read or flushed, or never showed its expected size), `mount_point` or
+  `mount`; whether that fails the create depends on the volume. A request
+  that failed as a whole fails the create or wake: `no_response`,
+  `invalid_request`, `invalid_answer` (an answer that doesn't fit the
+  request), `already_mounted`, `unsupported` (the daemon has no endpoint or no
+  root; a failure only when volumes were named), or `error`.
+- `sandbox_volumes_left_out_total{reason}` — optional volumes a create that
+  succeeded left out: `cache_full`, `timeout`, `download`, `unpack` (a `tar`
+  that breaks the volume tar rules or holds more than its counts, Docker),
+  or the guest's `drive`, `mount_point` or `mount` (Firecracker).
+- `sandbox_volume_cache_unpacks_total{result}` — `tar` objects the volume
+  cache unpacked after their download: `success`, `invalid` (the tar breaks
+  the volume tar rules or holds more than its counts), `full` (the disk filled
+  up), `timeout` (the fetch timeout ended the unpack or its wait for one of
+  the two unpack slots), `io`. A failed unpack fails the fetch and leaves
+  nothing on disk. `sandbox_volume_cache_unpack_duration_seconds` times the
+  unpacks that succeeded.
+- `sandbox_volume_builds_total{result}` — volume image builds asked of a
+  Firecracker runner. `result` is `success`; a failed build's reason: `tar`,
+  `too_large` or `no_space` (the tar's fault), `format`, `mount`, `fsck` or
+  `internal` (the runner's or its builder's), `timeout`; or why none ran:
+  `busy` (the runner's one build was running), `refused` (cordoned, not ready
+  or short of disk), `invalid_request`, `canceled`.
+  `sandbox_volume_build_duration_seconds` times the builds the runner
+  accepted, from the tar's first byte to the end of the call. Each build logs
+  `firecracker volume build finished` or `firecracker volume build failed`
+  with its sizes and step timings.
 - `sandbox_container_operation_duration_seconds{operation}` — the totals the
   steps add up to, a recovery's under `operation="recover"` like its steps.
 - `sandbox_http_request_duration_seconds{role,route,method}` — end-to-end per

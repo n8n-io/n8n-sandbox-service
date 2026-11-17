@@ -10,9 +10,13 @@ import (
 )
 
 // mountVolumes serves POST /volumes/mount. In a daemon started as root, the
-// first request mounts its volume drives and then drops root, whatever the
-// outcome; later requests get 409. A daemon that did not start as root answers
-// 501.
+// first request mounts each of its volume drives on its own and then drops
+// root, whatever the outcome; later requests get 409. A daemon that did not
+// start as root answers 501.
+//
+// An empty list gets 204, which older runners expect. A list with volumes gets
+// 200 and a volumedrives.Answer: each drive with its outcome and nothing else
+// from the guest. An invalid request mounts nothing and gets 400.
 func (h *Handler) mountVolumes(w http.ResponseWriter, r *http.Request) {
 	if h.volumes == nil {
 		writeError(w, http.StatusNotImplemented, "volumes can only be mounted by a daemon started as root")
@@ -35,29 +39,45 @@ func (h *Handler) mountVolumes(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	resp := errorResponse{Code: http.StatusNoContent}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, volumedrives.MaxRequestBytes))
 	var volumes []volumedrives.Volume
 	if err == nil {
 		volumes, err = volumedrives.ParseRequest(body)
 	}
+	var invalid string
+	var outcomes []volumedrives.Outcome
+	var mountErr error
 	if err != nil {
-		resp = errorResponse{Code: http.StatusBadRequest, Error: "invalid request body: " + err.Error()}
-	} else if err := h.volumes.MountAll(volumes); err != nil {
-		resp = errorResponse{Code: http.StatusInternalServerError, Error: "mount volumes: " + err.Error(), Reason: volumedrives.Reason(err)}
+		invalid = "invalid request body: " + err.Error()
+	} else {
+		outcomes, mountErr = h.volumes.MountEach(volumes)
 	}
 
 	if err := h.dropRoot(); err != nil {
-		slog.Error("drop root after volume mounts", "err", err, "status", resp.Code, "request_err", resp.Error)
+		slog.Error("drop root after volume mounts", "err", err, "request_err", invalid, "mount_err", mountErr)
 		return
 	}
 	droppedRoot = true
 
-	if resp.Code != http.StatusNoContent {
-		slog.Warn("mount volumes", "status", resp.Code, "reason", resp.Reason, "err", resp.Error)
-		writeJSON(w, resp.Code, resp)
+	if invalid != "" {
+		slog.Warn("mount volumes", "status", http.StatusBadRequest, "err", invalid)
+		writeError(w, http.StatusBadRequest, invalid)
 		return
 	}
-	slog.Info("volumes mounted", "count", len(volumes))
-	w.WriteHeader(http.StatusNoContent)
+	if mountErr != nil {
+		slog.Warn("mount volumes", "err", mountErr)
+	}
+	if len(volumes) == 0 {
+		slog.Info("volumes mounted", "count", 0)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	mounted := 0
+	for _, outcome := range outcomes {
+		if outcome.Mounted {
+			mounted++
+		}
+	}
+	slog.Info("volumes mounted", "count", mounted, "failed", len(outcomes)-mounted)
+	writeJSON(w, http.StatusOK, volumedrives.Answer{Volumes: outcomes})
 }

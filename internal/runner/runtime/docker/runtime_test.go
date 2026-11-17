@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -26,25 +27,56 @@ type fakeDockerBackend struct {
 	stopErr        error
 	// network the container was created on, and the one inspect reports.
 	network string
+	// mounts the container was created with.
+	mounts    []volumeMount
+	createErr error
+	removeErr error
+	// created is whether the container exists, as far as create and remove
+	// know.
+	created bool
+	// mu guards events and the fields above, for tests that call the runtime
+	// from several goroutines.
+	mu sync.Mutex
+	// found is what findContainerByLabels returns; the container if nil.
+	found func(filters []string) []string
+}
+
+func (f *fakeDockerBackend) record(event string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	*f.events = append(*f.events, event)
+}
+
+func (f *fakeDockerBackend) isCreated() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.created
 }
 
 func (f *fakeDockerBackend) ping(context.Context) error {
 	return errors.New("unexpected ping")
 }
 
-func (f *fakeDockerBackend) createContainer(_ context.Context, _, _, _, network string, _ *ResourceLimits, _ bool) (string, error) {
-	*f.events = append(*f.events, "create")
+func (f *fakeDockerBackend) createContainer(_ context.Context, _, _, _, network string, _ *ResourceLimits, _ bool, mounts []volumeMount) (string, error) {
+	f.record("create")
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.network = network
+	f.mounts = mounts
+	if f.createErr != nil {
+		return "", f.createErr
+	}
+	f.created = true
 	return f.containerID, nil
 }
 
 func (f *fakeDockerBackend) startContainer(context.Context, string) error {
-	*f.events = append(*f.events, "start")
+	f.record("start")
 	return nil
 }
 
 func (f *fakeDockerBackend) stopContainer(context.Context, string) error {
-	*f.events = append(*f.events, "stop")
+	f.record("stop")
 	return f.stopErr
 }
 
@@ -52,12 +84,17 @@ func (f *fakeDockerBackend) removeContainer(ctx context.Context, _ string) error
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	*f.events = append(*f.events, "remove")
-	return nil
+	f.record("remove")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.removeErr == nil {
+		f.created = false
+	}
+	return f.removeErr
 }
 
 func (f *fakeDockerBackend) containerIP(context.Context, string) (string, error) {
-	*f.events = append(*f.events, "containerIP")
+	f.record("containerIP")
 	if f.containerIPErr != nil {
 		return "", f.containerIPErr
 	}
@@ -65,7 +102,7 @@ func (f *fakeDockerBackend) containerIP(context.Context, string) (string, error)
 }
 
 func (f *fakeDockerBackend) inspectContainer(context.Context, string) (*containerInspect, error) {
-	*f.events = append(*f.events, "inspect")
+	f.record("inspect")
 	inspect := &containerInspect{
 		ID:    f.containerID,
 		State: containerState{Status: containerStatusExited},
@@ -83,8 +120,11 @@ func (f *fakeDockerBackend) inspectNetwork(context.Context, string) (*networkIns
 	return nil, errors.New("unexpected inspectNetwork")
 }
 
-func (f *fakeDockerBackend) findContainerByLabels(context.Context, ...string) ([]string, error) {
-	*f.events = append(*f.events, "find")
+func (f *fakeDockerBackend) findContainerByLabels(_ context.Context, filters ...string) ([]string, error) {
+	f.record("find")
+	if f.found != nil {
+		return f.found(filters), nil
+	}
 	return []string{f.containerID}, nil
 }
 
@@ -127,7 +167,7 @@ func TestDockerContainerCreateArgs(t *testing.T) {
 		DiskMB:     1024,
 	}
 
-	got := dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerNoEgressNetwork, limits, true, []string{"1.1.1.1", "8.8.8.8"}, false)
+	got := dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerNoEgressNetwork, limits, true, []string{"1.1.1.1", "8.8.8.8"}, false, nil)
 	want := []string{
 		"container", "create",
 		"--name", "sandbox-name",
@@ -174,7 +214,7 @@ func TestDockerContainerCreateArgsSkipIPv6SysctlsOnIPv4OnlyHost(t *testing.T) {
 		return got
 	}
 
-	got := sysctls(dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerBridgeNetwork, nil, false, nil, false))
+	got := sysctls(dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerBridgeNetwork, nil, false, nil, false, nil))
 	want := []string{
 		"net.ipv6.conf.all.disable_ipv6=1",
 		"net.ipv6.conf.default.disable_ipv6=1",
@@ -184,7 +224,7 @@ func TestDockerContainerCreateArgsSkipIPv6SysctlsOnIPv4OnlyHost(t *testing.T) {
 		t.Fatalf("sysctls by default = %#v, want %#v", got, want)
 	}
 
-	if got := sysctls(dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerBridgeNetwork, nil, false, nil, true)); got != nil {
+	if got := sysctls(dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerBridgeNetwork, nil, false, nil, true, nil)); got != nil {
 		t.Fatalf("sysctls on IPv4-only host = %#v, want nil", got)
 	}
 }
@@ -256,7 +296,7 @@ func TestDockerContainerCreateArgsAlwaysApplySecurityPolicy(t *testing.T) {
 	}
 
 	for _, enableCgroups := range []bool{false, true} {
-		gotArgs := dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerBridgeNetwork, nil, enableCgroups, nil, false)
+		gotArgs := dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerBridgeNetwork, nil, enableCgroups, nil, false, nil)
 		var got []string
 		for i := 0; i < len(gotArgs); i++ {
 			if gotArgs[i] != "--cap-drop" && gotArgs[i] != "--cap-add" && gotArgs[i] != "--security-opt" {

@@ -13,17 +13,16 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/store"
 )
 
-// activityStore records the batches RecordActivity gets, and fails them while
-// fail is set. The recorder needs no other store method.
-type activityStore struct {
-	store.SandboxStore
+// fakeActivityStore records the batches RecordActivity gets, and fails them while
+// fail is set.
+type fakeActivityStore struct {
 	mu      sync.Mutex
 	batches []map[string]int64
 	timeout time.Duration // left on the context of the last call
 	fail    error
 }
 
-func (s *activityStore) RecordActivity(ctx context.Context, batch map[string]int64) error {
+func (s *fakeActivityStore) RecordActivity(ctx context.Context, batch map[string]int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.batches = append(s.batches, maps.Clone(batch))
@@ -33,20 +32,20 @@ func (s *activityStore) RecordActivity(ctx context.Context, batch map[string]int
 	return s.fail
 }
 
-func (s *activityStore) setFail(err error) {
+func (s *fakeActivityStore) setFail(err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.fail = err
 }
 
-func (s *activityStore) count() int {
+func (s *fakeActivityStore) count() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.batches)
 }
 
 // drain returns the batches since the last drain.
-func (s *activityStore) drain() []map[string]int64 {
+func (s *fakeActivityStore) drain() []map[string]int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	batches := s.batches
@@ -57,9 +56,9 @@ func (s *activityStore) drain() []map[string]int64 {
 // t0 is the test recorder's starting clock.
 const t0 = int64(1_000_000)
 
-func newTestActivityRecorder(t *testing.T, cfg *config.APIConfig) (*ActivityRecorder, *activityStore, func(int64)) {
+func newTestActivityRecorder(t *testing.T, cfg *config.APIConfig) (*ActivityRecorder, *fakeActivityStore, func(int64)) {
 	t.Helper()
-	s := &activityStore{}
+	s := &fakeActivityStore{}
 	a := NewActivityRecorder(s, cfg)
 	var mu sync.Mutex
 	clock := t0
@@ -76,7 +75,7 @@ func newTestActivityRecorder(t *testing.T, cfg *config.APIConfig) (*ActivityReco
 	return a, s, setClock
 }
 
-func wantBatches(t *testing.T, s *activityStore, want ...map[string]int64) {
+func wantBatches(t *testing.T, s *fakeActivityStore, want ...map[string]int64) {
 	t.Helper()
 	got := s.drain()
 	if len(got) != len(want) {
@@ -90,7 +89,7 @@ func wantBatches(t *testing.T, s *activityStore, want ...map[string]int64) {
 }
 
 func row(id, status string, lastActiveAt int64) *store.SandboxRecord {
-	return &store.SandboxRecord{ID: id, Status: status, LastActiveAt: lastActiveAt}
+	return &store.SandboxRecord{Kind: store.KindDefault, ID: id, Status: status, LastActiveAt: lastActiveAt}
 }
 
 func (a *ActivityRecorder) tracked(id string) bool {
@@ -121,6 +120,39 @@ func TestActivityRecorderWritesEachSandboxOnceWithItsLatestRequest(t *testing.T)
 	wantBatches(t, s)
 	if a.tracked("a") || a.tracked("b") {
 		t.Fatal("sandboxes still tracked after a write with nothing new")
+	}
+}
+
+// Sandboxes of every kind are written in the same batch.
+func TestActivityRecorderWritesEveryKind(t *testing.T) {
+	s, err := store.New(":memory:")
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	defer s.Close()
+	recs := []*store.SandboxRecord{
+		{ID: "d", Kind: store.KindDefault, Status: "running", LastActiveAt: t0},
+		{ID: "c", Kind: store.KindCode, Name: "n", Status: "running", LastActiveAt: t0},
+	}
+	for _, rec := range recs {
+		rec.TenantID = store.AdminTenantID
+		if err := s.Create(rec); err != nil {
+			t.Fatalf("create %s: %v", rec.ID, err)
+		}
+	}
+	a := NewActivityRecorder(s, nil)
+	a.now = func() time.Time { return time.Unix(t0+5, 0) }
+	for _, rec := range recs {
+		a.trackResponse(rec)()
+	}
+	if !a.write() {
+		t.Fatal("write failed")
+	}
+	for _, rec := range recs {
+		got, err := s.GetAnyKind(rec.ID)
+		if err != nil || got == nil || got.LastActiveAt != t0+5 {
+			t.Fatalf("%s sandbox after write: %+v err=%v, want last_active_at %d", rec.Kind, got, err, t0+5)
+		}
 	}
 }
 
@@ -212,7 +244,7 @@ func TestActivityRecorderAsksForAWriteOnWakeAndAfterQuiet(t *testing.T) {
 // Run writes every interval, when asked, and once more when it stops; each
 // write may take up to one interval.
 func TestActivityRecorderRunWritesOnTickOnRequestAndOnStop(t *testing.T) {
-	run := func(t *testing.T, interval time.Duration) (*ActivityRecorder, *activityStore, func()) {
+	run := func(t *testing.T, interval time.Duration) (*ActivityRecorder, *fakeActivityStore, func()) {
 		t.Helper()
 		a, s, _ := newTestActivityRecorder(t, &config.APIConfig{ActivityWriteInterval: interval})
 		ctx, cancel := context.WithCancel(context.Background())

@@ -7,8 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
+
+	"github.com/n8n-io/sandbox-service/internal/daemon/volumebuild"
 )
 
 // CreateBudget is how long a runtime may spend on CreateSandbox. It is part of
@@ -23,7 +26,7 @@ const CreateBudget = 3 * time.Minute
 const TransitionBudget = 2 * time.Minute
 
 // DiskFloorPercent is the free space, as a percentage of a disk, that new
-// sandboxes and volume downloads leave alone. New sandboxes take almost no
+// sandboxes, volume builds and volume downloads leave alone. New sandboxes take almost no
 // space at first and grow as they write, so the floor is room for the
 // sandboxes already there to grow into.
 const DiskFloorPercent = 5
@@ -42,6 +45,10 @@ var ErrSandboxNotRunning = errors.New("sandbox not running")
 // of capacity. The refusal comes before anything is created, which is what lets
 // the API place the same sandbox on another runner.
 var ErrCapacityExhausted = errors.New("runner capacity exhausted")
+
+// ErrVolumesUnsupported is returned when CreateSandbox refuses volumes this
+// runner can't attach, before anything is created.
+var ErrVolumesUnsupported = errors.New("runner can't attach these volumes")
 
 // Egress is a sandbox's outbound network policy.
 type Egress string
@@ -66,14 +73,16 @@ func ParseEgress(s string) (Egress, error) {
 }
 
 // CreateOptions holds optional parameters for sandbox creation. It is also the
-// JSON shape of the create RPC's create_options_json and
-// applied_create_options_json fields.
+// JSON shape of the create RPC's create_options_json field; the echo in
+// applied_create_options_json is an AppliedCreateOptions.
 type CreateOptions struct {
-	Egress Egress `json:"egress,omitempty"`
+	Egress  Egress  `json:"egress,omitempty"`
+	Volumes Volumes `json:"volumes,omitempty"`
 }
 
 // ParseCreateOptions decodes the wire form of CreateOptions. Empty means the
-// defaults; otherwise it must be an object with a valid Egress.
+// defaults; otherwise it must be an object with a valid Egress and valid
+// volumes.
 func ParseCreateOptions(s string) (*CreateOptions, error) {
 	opts := &CreateOptions{}
 	if strings.TrimSpace(s) != "" {
@@ -90,6 +99,12 @@ func ParseCreateOptions(s string) (*CreateOptions, error) {
 		return nil, err
 	}
 	opts.Egress = egress
+	if err := validateVolumes(opts.Volumes); err != nil {
+		return nil, err
+	}
+	if len(opts.Volumes) == 0 {
+		opts.Volumes = nil
+	}
 	return opts, nil
 }
 
@@ -113,6 +128,11 @@ type SandboxInfo struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 	IP   string `json:"ip"`
+
+	// VolumesLeftOut maps the index in CreateOptions.Volumes of each optional
+	// volume the sandbox did not get to why, a VolumeLeftOut value. Only
+	// CreateSandbox sets it.
+	VolumesLeftOut map[int]string `json:"-"`
 }
 
 // WakeResult reports how a sandbox came back.
@@ -139,10 +159,28 @@ type Capacity struct {
 	Stopped int32 // managed but not slot-blocking (Firecracker stopped snapshots)
 }
 
-// DiskReserver is a runtime whose creates leave data volume space free for
-// something else on the runner: the volume cache's unused budget.
+// DiskReserver is a runtime whose creates and volume builds leave data volume
+// space free for something else on the runner: the volume cache's unused
+// budget.
 type DiskReserver interface {
 	SetDiskReservation(reserved func() int64)
+}
+
+// VolumeCache keeps the volume objects a runtime attaches on the runner's
+// disk: the volume cache.
+type VolumeCache interface {
+	// Acquire returns the path of a verified copy of vol's object and pins it
+	// for holder. ctx bounds only the wait. An error wrapping
+	// ErrCapacityExhausted is a refusal for want of room.
+	Acquire(ctx context.Context, vol Volume, holder string) (string, error)
+	// ReleaseAll unpins every object holder holds.
+	ReleaseAll(holder string)
+}
+
+// VolumeAttacher is a runtime that attaches volumes to the sandboxes it
+// creates. A runtime that isn't refuses a create that names any.
+type VolumeAttacher interface {
+	SetVolumeCache(cache VolumeCache)
 }
 
 // Runtime is the sandbox backend contract used by the shared runner process.
@@ -162,4 +200,54 @@ type Runtime interface {
 	DaemonURL(ctx context.Context, sandboxID string) (string, error)
 
 	Shutdown(ctx context.Context)
+}
+
+// VolumeBuilder is the part of a Runtime that builds volume images. Only the
+// Firecracker runtime has it.
+type VolumeBuilder interface {
+	// BuildVolume builds an ext4 image from the tar and hands it to deliver.
+	// The image is gone once BuildVolume returns. params must be valid, and
+	// tar must end after exactly params.TarBytes.
+	//
+	// It refuses before reading from tar, and before creating anything, with
+	// an error wrapping ErrCapacityExhausted: ErrVolumeBuildBusy, or too
+	// little disk. A build that ran and failed is a *VolumeBuildError.
+	BuildVolume(ctx context.Context, params volumebuild.Params, tar io.Reader, deliver func(image io.Reader, size int64) error) error
+}
+
+// ErrVolumeBuildBusy refuses a build while the runner's one build runs.
+var ErrVolumeBuildBusy = fmt.Errorf("a volume build is already running: %w", ErrCapacityExhausted)
+
+// VolumeBuildTimeout is the Reason of a build the runner ended at its time
+// limit. The other reasons are volumebuild's.
+const VolumeBuildTimeout = "timeout"
+
+// VolumeBuildReasons are the reasons a VolumeBuildError can have. Only these
+// leave the runner, as metric labels or to the API.
+var VolumeBuildReasons = []string{
+	volumebuild.ReasonTar, volumebuild.ReasonTooLarge, volumebuild.ReasonNoSpace,
+	volumebuild.ReasonFormat, volumebuild.ReasonMount, volumebuild.ReasonFsck, volumebuild.ReasonInternal,
+	VolumeBuildTimeout,
+}
+
+// VolumeBuildError is a volume build that ran and failed.
+type VolumeBuildError struct {
+	// Reason is one of VolumeBuildReasons.
+	Reason string
+	Err    error
+}
+
+func (e *VolumeBuildError) Error() string {
+	return fmt.Sprintf("volume build failed (%s): %v", e.Reason, e.Err)
+}
+
+func (e *VolumeBuildError) Unwrap() error { return e.Err }
+
+// CallerFault reports whether the tar caused the failure, not the runner.
+func (e *VolumeBuildError) CallerFault() bool {
+	switch e.Reason {
+	case volumebuild.ReasonTar, volumebuild.ReasonTooLarge, volumebuild.ReasonNoSpace:
+		return true
+	}
+	return false
 }

@@ -3,6 +3,7 @@ package firecracker
 import (
 	"strings"
 	"testing"
+	"time"
 
 	fcnetwork "github.com/n8n-io/sandbox-service/internal/runner/runtime/firecracker.ee/network"
 )
@@ -69,6 +70,28 @@ func TestLoadConfigParsesOverrides(t *testing.T) {
 	}
 	if cfg.DaemonBin != "/srv/firecracker/bin/sandbox-daemon" {
 		t.Errorf("expected daemon bin, got %s", cfg.DaemonBin)
+	}
+}
+
+func TestLoadConfigVolumeBuildTimeout(t *testing.T) {
+	cfg, err := LoadConfig(1)
+	if err != nil {
+		t.Fatalf("LoadConfig() failed: %v", err)
+	}
+	if cfg.VolumeBuildTimeout != 5*time.Minute {
+		t.Errorf("default volume build timeout = %s, want 5m", cfg.VolumeBuildTimeout)
+	}
+
+	t.Setenv("SANDBOX_RUNNER_FIRECRACKER_VOLUME_BUILD_TIMEOUT", "90s")
+	if cfg, err = LoadConfig(1); err != nil || cfg.VolumeBuildTimeout != 90*time.Second {
+		t.Errorf("LoadConfig() = %s, %v; want 1m30s", cfg.VolumeBuildTimeout, err)
+	}
+
+	for _, invalid := range []string{"0", "-1m", "soon", "90"} {
+		t.Setenv("SANDBOX_RUNNER_FIRECRACKER_VOLUME_BUILD_TIMEOUT", invalid)
+		if _, err := LoadConfig(1); err == nil || !strings.Contains(err.Error(), "SANDBOX_RUNNER_FIRECRACKER_VOLUME_BUILD_TIMEOUT") {
+			t.Errorf("LoadConfig() with %q = %v, want the variable refused", invalid, err)
+		}
 	}
 }
 

@@ -25,6 +25,12 @@ const (
 	stepMountVolumes  = "mount_volumes"
 )
 
+// Steps recorded only for sandboxes with volumes.
+const (
+	stepAcquireVolumes = "acquire_volumes"
+	stepPatchVolumes   = "patch_volumes"
+)
+
 // stepTimer measures each phase of one create or wake. The durations go to the
 // per-step histogram, for fleet-wide percentiles, and to the event the runtime
 // logs when the operation finishes, which is where a single slow create can be

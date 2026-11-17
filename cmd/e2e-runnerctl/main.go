@@ -2,29 +2,126 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"crypto/tls"
+	"encoding/json"
+	"errors"
+	"flag"
 	"fmt"
+	"io"
+	"math"
+	"net/http"
+	"net/url"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
+	"google.golang.org/grpc/status"
+
+	"github.com/n8n-io/sandbox-service/internal/api/grpc/pb"
 	"github.com/n8n-io/sandbox-service/internal/api/runnerctl"
+	"github.com/n8n-io/sandbox-service/internal/daemon"
+	"github.com/n8n-io/sandbox-service/internal/grpctls"
+	"github.com/n8n-io/sandbox-service/internal/safetar"
+	"github.com/n8n-io/sandbox-service/internal/volume"
 )
 
+func usage() {
+	fmt.Fprintf(os.Stderr, `usage:
+  %[1]s stop <sandbox-id>
+  %[1]s create <sandbox-id> [create-options-json]
+  %[1]s delete <sandbox-id>
+  %[1]s exec <sandbox-id> <command>
+  %[1]s build-volume [-entries N -content-bytes N -decompressed-bytes N] [-hold DURATION] <tar> <image>
+  %[1]s tar-counts <tar>
+  %[1]s serve-files -cert FILE -key FILE -client-ca FILE -dir DIR -token QUERY [-addr ADDR]
+
+create and exec print their outcome as one line of JSON. create exits 1 when
+the create fails, exec when the runner answers other than 200 or the command's
+exit never arrives. exec goes to the runner's HTTP listener at
+E2E_RUNNER_HTTP_ADDR, with the control mTLS identity.
+
+build-volume has the runner build an ext4 image from the tar and prints the
+outcome as one line of JSON. It counts the tar's entries, content and
+decompressed length with the volume tar policy, unless all three counts are
+given. -hold waits that long between the header and the tar.
+
+tar-counts prints a tar's counts under the volume tar policy, as the tar
+counts of a volume in create-options-json.
+
+serve-files serves the files directly in DIR over https, TLS 1.3, to clients
+with a certificate the client CA signed and requests whose query is QUERY,
+and prints "listening" once it accepts connections.
+`, os.Args[0])
+	os.Exit(2)
+}
+
+type target struct {
+	addr   string
+	apiKey string
+	tls    *runnerctl.TLS
+}
+
 func main() {
-	if len(os.Args) != 3 || os.Args[1] != "stop" {
-		fmt.Fprintf(os.Stderr, "usage: %s stop <sandbox-id>\n", os.Args[0])
-		os.Exit(2)
+	if len(os.Args) < 2 {
+		usage()
 	}
-	sandboxID := strings.TrimSpace(os.Args[2])
-	if sandboxID == "" {
+	switch os.Args[1] {
+	case "stop":
+		if len(os.Args) != 3 {
+			usage()
+		}
+		stop(strings.TrimSpace(os.Args[2]))
+	case "create":
+		if len(os.Args) != 3 && len(os.Args) != 4 {
+			usage()
+		}
+		createOptions := ""
+		if len(os.Args) == 4 {
+			createOptions = os.Args[3]
+		}
+		create(sandboxID(os.Args[2]), createOptions)
+	case "delete":
+		if len(os.Args) != 3 {
+			usage()
+		}
+		remove(sandboxID(os.Args[2]))
+	case "exec":
+		if len(os.Args) != 4 {
+			usage()
+		}
+		execute(sandboxID(os.Args[2]), os.Args[3])
+	case "build-volume":
+		buildVolume(os.Args[2:])
+	case "tar-counts":
+		if len(os.Args) != 3 {
+			usage()
+		}
+		tarCounts(os.Args[2])
+	case "serve-files":
+		serveFiles(os.Args[2:])
+	default:
+		usage()
+	}
+}
+
+func sandboxID(arg string) string {
+	id := strings.TrimSpace(arg)
+	if id == "" {
 		fmt.Fprintln(os.Stderr, "sandbox id is required")
 		os.Exit(2)
 	}
+	return id
+}
 
-	target := strings.TrimSpace(os.Getenv("E2E_RUNNER_CONTROL_GRPC_ADDR"))
+func runner() target {
+	addr := strings.TrimSpace(os.Getenv("E2E_RUNNER_CONTROL_GRPC_ADDR"))
 	apiKey := strings.TrimSpace(os.Getenv("E2E_RUNNER_API_KEY"))
-	if target == "" || apiKey == "" {
+	if addr == "" || apiKey == "" {
 		fmt.Fprintln(os.Stderr, "E2E_RUNNER_CONTROL_GRPC_ADDR and E2E_RUNNER_API_KEY must be set")
 		os.Exit(2)
 	}
@@ -39,11 +136,301 @@ func main() {
 		fmt.Fprintln(os.Stderr, "E2E_RUNNER_CONTROL_TLS_CA, _CERT, and _KEY must be set")
 		os.Exit(2)
 	}
+	return target{addr: addr, apiKey: apiKey, tls: tlsCfg}
+}
+
+func stop(sandboxID string) {
+	if sandboxID == "" {
+		fmt.Fprintln(os.Stderr, "sandbox id is required")
+		os.Exit(2)
+	}
+	to := runner()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if err := runnerctl.StopSandbox(ctx, target, apiKey, tlsCfg, sandboxID); err != nil {
+	if err := runnerctl.StopSandbox(ctx, to.addr, to.apiKey, to.tls, sandboxID); err != nil {
 		fmt.Fprintf(os.Stderr, "stop sandbox: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// createOutcome is what create prints.
+type createOutcome struct {
+	// Result is "ok", "refused" (a capacity refusal) or "error".
+	Result string `json:"result"`
+	// Applied is applied_create_options_json.
+	Applied json.RawMessage `json:"applied,omitempty"`
+	// Code and Message are the gRPC status of an error.
+	Code    string `json:"code,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+func create(sandboxID, createOptions string) {
+	to := runner()
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	resp, err := runnerctl.CreateSandbox(ctx, to.addr, to.apiKey, to.tls, sandboxID, createOptions)
+	outcome := createOutcome{Result: "ok"}
+	switch {
+	case err == nil && resp.GetAppliedCreateOptionsJson() != "":
+		outcome.Applied = json.RawMessage(resp.GetAppliedCreateOptionsJson())
+	case err == nil:
+	case runnerctl.IsCapacityRefusal(err):
+		outcome = createOutcome{Result: "refused"}
+	default:
+		outcome = createOutcome{Result: "error", Code: status.Code(err).String(), Message: status.Convert(err).Message()}
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "create sandbox: %v\n", err)
+	}
+	printJSON(outcome)
+	if err != nil {
+		os.Exit(1)
+	}
+}
+
+func remove(sandboxID string) {
+	to := runner()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	if err := runnerctl.DeleteSandbox(ctx, to.addr, to.apiKey, to.tls, sandboxID); err != nil {
+		fmt.Fprintf(os.Stderr, "delete sandbox: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// execOutcome is what exec prints: the HTTP status and, for 200, the output
+// and exit code; otherwise the body.
+type execOutcome struct {
+	Status   int    `json:"status"`
+	ExitCode int    `json:"exit_code"`
+	Stdout   string `json:"stdout"`
+	Stderr   string `json:"stderr"`
+	Body     string `json:"body,omitempty"`
+}
+
+func execute(sandboxID, command string) {
+	to := runner()
+	httpAddr := strings.TrimSpace(os.Getenv("E2E_RUNNER_HTTP_ADDR"))
+	if httpAddr == "" {
+		fmt.Fprintln(os.Stderr, "E2E_RUNNER_HTTP_ADDR must be set")
+		os.Exit(2)
+	}
+	tlsConfig, err := grpctls.NewClientTLSConfig(to.tls.CAFile, to.tls.CertFile, to.tls.KeyFile, to.tls.ServerName)
+	fatal("runner TLS", err)
+	client := &http.Client{
+		Transport:     &http.Transport{TLSClientConfig: tlsConfig},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	body, err := json.Marshal(map[string]any{"command": command, "timeout_ms": 60_000})
+	fatal("encode exec", err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	execURL := "https://" + httpAddr + "/sandboxes/" + url.PathEscape(sandboxID) + "/executions"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, execURL, bytes.NewReader(body))
+	fatal("build exec request", err)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Api-Key", to.apiKey)
+	resp, err := client.Do(req)
+	fatal("exec", err)
+	defer resp.Body.Close()
+
+	outcome := execOutcome{Status: resp.StatusCode, ExitCode: -1}
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		outcome.Body = string(raw)
+		printJSON(outcome)
+		os.Exit(1)
+	}
+	var stdout, stderr strings.Builder
+	exited := false
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64<<10), 4<<20)
+	for scanner.Scan() {
+		var event daemon.Response
+		fatal("decode exec event", json.Unmarshal(scanner.Bytes(), &event))
+		switch event.Type {
+		case daemon.ResponseTypeStdout:
+			stdout.WriteString(event.Data)
+		case daemon.ResponseTypeStderr:
+			stderr.WriteString(event.Data)
+		case daemon.ResponseTypeExit:
+			outcome.ExitCode = event.ExitCode
+			exited = true
+		case daemon.ResponseTypeError:
+			outcome.Body = event.Error
+		}
+	}
+	fatal("read exec stream", scanner.Err())
+	outcome.Stdout, outcome.Stderr = stdout.String(), stderr.String()
+	printJSON(outcome)
+	if !exited {
+		os.Exit(1)
+	}
+}
+
+// buildOutcome is what build-volume prints.
+type buildOutcome struct {
+	// Result is "ok", "failed" (the build ran and failed, see Reason),
+	// "refused" (a capacity refusal) or "error".
+	Result     string `json:"result"`
+	Reason     string `json:"reason,omitempty"`
+	ImageBytes int64  `json:"image_bytes,omitempty"`
+	SHA256     string `json:"sha256,omitempty"`
+}
+
+func buildVolume(args []string) {
+	flags := flag.NewFlagSet("build-volume", flag.ExitOnError)
+	entries := flags.Int64("entries", -1, "entry count for the header, instead of counting the tar's")
+	contentBytes := flags.Int64("content-bytes", -1, "content bytes for the header, instead of counting the tar's")
+	decompressedBytes := flags.Int64("decompressed-bytes", -1, "decompressed length for the header, instead of counting the tar's")
+	hold := flags.Duration("hold", 0, "wait between the header and the tar")
+	_ = flags.Parse(args)
+	counted := *entries < 0
+	if flags.NArg() != 2 || (*contentBytes < 0) != counted || (*decompressedBytes < 0) != counted {
+		usage()
+	}
+	tarPath, imagePath := flags.Arg(0), flags.Arg(1)
+	to := runner()
+
+	tar, err := os.Open(tarPath)
+	exitOn("open tar", err)
+	defer tar.Close()
+	info, err := tar.Stat()
+	exitOn("stat tar", err)
+	header := &pb.BuildVolumeHeader{TarBytes: info.Size(), Entries: *entries, ContentBytes: *contentBytes, DecompressedBytes: *decompressedBytes}
+	if counted {
+		stats, err := safetar.Validate(tar, volume.TarPolicy(math.MaxInt32, 0, 0))
+		exitOn("validate tar", err)
+		header.Entries, header.ContentBytes, header.DecompressedBytes = int64(stats.Entries), stats.Bytes, stats.DecompressedBytes
+		_, err = tar.Seek(0, io.SeekStart)
+		exitOn("rewind tar", err)
+	}
+
+	// Creating the image truncates it.
+	if existing, err := os.Stat(imagePath); err == nil && os.SameFile(info, existing) {
+		exitOn("create image", errors.New("the image path names the tar"))
+	}
+	image, err := os.OpenFile(imagePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	exitOn("create image", err)
+	defer image.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	built, err := runnerctl.BuildVolume(ctx, to.addr, to.apiKey, to.tls, header, &heldReader{reader: tar, hold: *hold}, image)
+	if err == nil {
+		err = image.Close()
+	}
+
+	outcome := buildOutcome{Result: "ok", ImageBytes: built.Bytes, SHA256: built.SHA256}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "build volume: %v\n", err)
+		outcome = buildOutcome{Result: "error"}
+		if reason, failed := runnerctl.BuildFailureReason(err); failed {
+			outcome = buildOutcome{Result: "failed", Reason: reason}
+		} else if runnerctl.IsCapacityRefusal(err) {
+			outcome = buildOutcome{Result: "refused"}
+		}
+	}
+	line, _ := json.Marshal(outcome)
+	fmt.Println(string(line))
+	if err != nil {
+		os.Exit(1)
+	}
+}
+
+func tarCounts(path string) {
+	tar, err := os.Open(path)
+	fatal("open tar", err)
+	defer tar.Close()
+	stats, err := safetar.Validate(tar, volume.TarPolicy(math.MaxInt32, 0, 0))
+	fatal("validate tar", err)
+	printJSON(volume.TarCounts{Entries: int64(stats.Entries), ContentBytes: stats.Bytes, DecompressedBytes: stats.DecompressedBytes})
+}
+
+func serveFiles(args []string) {
+	flags := flag.NewFlagSet("serve-files", flag.ExitOnError)
+	addr := flags.String("addr", ":9444", "listen address")
+	certFile := flags.String("cert", "", "TLS certificate")
+	keyFile := flags.String("key", "", "TLS key")
+	clientCAFile := flags.String("client-ca", "", "CA that must have signed the client certificate")
+	dir := flags.String("dir", "", "directory to serve")
+	token := flags.String("token", "", "query every request must carry")
+	_ = flags.Parse(args)
+	if *certFile == "" || *keyFile == "" || *clientCAFile == "" || *dir == "" || *token == "" || flags.NArg() != 0 {
+		usage()
+	}
+	// Everything that can fail before it serves, before it says it listens.
+	tlsConfig, err := grpctls.NewServerTLSConfig(*certFile, *keyFile, *clientCAFile, tls.RequireAndVerifyClientCert)
+	fatal("TLS", err)
+	tlsConfig.MinVersion = tls.VersionTLS13
+	root, err := os.OpenRoot(*dir)
+	fatal("open dir", err)
+	defer root.Close()
+	handler := http.HandlerFunc(func(writer http.ResponseWriter, req *http.Request) {
+		name := strings.TrimPrefix(req.URL.Path, "/")
+		if req.URL.RawQuery != *token || !filepath.IsLocal(name) || strings.ContainsRune(name, '/') {
+			http.NotFound(writer, req)
+			return
+		}
+		// Through the root, so a link in the dir can't serve what is outside.
+		file, err := root.Open(name)
+		if err != nil {
+			http.NotFound(writer, req)
+			return
+		}
+		defer file.Close()
+		info, err := file.Stat()
+		if err != nil || !info.Mode().IsRegular() {
+			http.NotFound(writer, req)
+			return
+		}
+		writer.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
+		_, _ = io.Copy(writer, file)
+	})
+	listener, err := tls.Listen("tcp", *addr, tlsConfig)
+	fatal("listen", err)
+	fmt.Println("listening")
+	server := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	fatal("serve", server.Serve(listener))
+}
+
+func printJSON(value any) {
+	line, err := json.Marshal(value)
+	fatal("encode outcome", err)
+	fmt.Println(string(line))
+}
+
+// fatal ends a sandbox command that failed: the error on stderr.
+func fatal(action string, err error) {
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", action, err)
+		os.Exit(1)
+	}
+}
+
+// heldReader waits before its first read: the header is sent by then.
+type heldReader struct {
+	reader io.Reader
+	hold   time.Duration
+}
+
+func (h *heldReader) Read(buf []byte) (int, error) {
+	if h.hold > 0 {
+		time.Sleep(h.hold)
+		h.hold = 0
+	}
+	return h.reader.Read(buf)
+}
+
+// exitOn ends build-volume as a call that failed ends: the error on stderr,
+// the outcome "error" on stdout.
+func exitOn(action string, err error) {
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", action, err)
+		line, _ := json.Marshal(buildOutcome{Result: "error"})
+		fmt.Println(string(line))
 		os.Exit(1)
 	}
 }
