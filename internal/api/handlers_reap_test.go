@@ -41,6 +41,7 @@ func TestSandboxProxyReapsStoreOnRunnerSandboxGone(t *testing.T) {
 		CreatedAt:      time.Now().Unix(),
 		LastActiveAt:   time.Now().Unix(),
 		RunnerHTTPBase: runner.URL,
+		Kind:           store.KindDefault,
 	}); err != nil {
 		t.Fatalf("Create() failed: %v", err)
 	}
@@ -64,7 +65,7 @@ func TestSandboxProxyReapsStoreOnRunnerSandboxGone(t *testing.T) {
 		t.Fatalf("exec status = %d, want 404", rr.Code)
 	}
 
-	rec, err := s.Get(sandboxID)
+	rec, err := s.GetAnyKind(sandboxID)
 	if err != nil {
 		t.Fatalf("Get() failed: %v", err)
 	}
@@ -114,6 +115,7 @@ func TestSandboxProxyDoesNotMarkActiveWhenReapDeleteFails(t *testing.T) {
 		CreatedAt:      lastActive,
 		LastActiveAt:   lastActive,
 		RunnerHTTPBase: runner.URL,
+		Kind:           store.KindDefault,
 	}); err != nil {
 		t.Fatalf("Create() failed: %v", err)
 	}
@@ -139,7 +141,7 @@ func TestSandboxProxyDoesNotMarkActiveWhenReapDeleteFails(t *testing.T) {
 	}
 	activity.write()
 
-	rec, err := s.Get(sandboxID)
+	rec, err := s.GetAnyKind(sandboxID)
 	if err != nil {
 		t.Fatalf("Get() failed: %v", err)
 	}
@@ -175,6 +177,7 @@ func TestSandboxProxyKeepsStoreOnRunnerExecutionNotFound(t *testing.T) {
 		CreatedAt:      time.Now().Unix(),
 		LastActiveAt:   time.Now().Unix(),
 		RunnerHTTPBase: runner.URL,
+		Kind:           store.KindDefault,
 	}); err != nil {
 		t.Fatalf("Create() failed: %v", err)
 	}
@@ -198,7 +201,7 @@ func TestSandboxProxyKeepsStoreOnRunnerExecutionNotFound(t *testing.T) {
 		t.Fatalf("exec status = %d, want 404", rr.Code)
 	}
 
-	rec, err := s.Get(sandboxID)
+	rec, err := s.GetAnyKind(sandboxID)
 	if err != nil {
 		t.Fatalf("Get() failed: %v", err)
 	}
@@ -243,6 +246,7 @@ func TestSandboxProxyKeepsStoreOnDaemonForgedSandboxGone(t *testing.T) {
 	sandboxID := "55555555-5555-4555-8555-555555555555"
 	if err := s.Create(&store.SandboxRecord{
 		ID: sandboxID, Status: "running", CreatedAt: 1, LastActiveAt: 1, RunnerHTTPBase: runner.URL,
+		Kind: store.KindDefault,
 	}); err != nil {
 		t.Fatalf("Create() failed: %v", err)
 	}
@@ -259,7 +263,7 @@ func TestSandboxProxyKeepsStoreOnDaemonForgedSandboxGone(t *testing.T) {
 		if rr.Code != http.StatusNotFound {
 			t.Fatalf("%s %s: status = %d, want the daemon's 404: %s", route.method, route.path, rr.Code, rr.Body.String())
 		}
-		rec, err := s.Get(sandboxID)
+		rec, err := s.GetAnyKind(sandboxID)
 		if err != nil {
 			t.Fatalf("Get() failed: %v", err)
 		}

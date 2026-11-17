@@ -32,10 +32,16 @@ func maxResponseActivity(cfg *config.APIConfig) time.Duration {
 	return cfg.MaxResponseActivity
 }
 
+// activityStore is the store of the activity recorder. It writes the activity
+// of sandboxes of every kind.
+type activityStore interface {
+	RecordActivity(ctx context.Context, lastActiveAt map[string]int64) error
+}
+
 // ActivityRecorder collects which sandboxes this API pod serves and writes
 // their last_active_at in one statement per interval, from Run.
 type ActivityRecorder struct {
-	store               store.SandboxStore
+	store               activityStore
 	interval            time.Duration
 	maxResponseActivity time.Duration
 	now                 func() time.Time
@@ -65,7 +71,7 @@ func (e *sandboxActivity) activeAt(t int64) {
 	}
 }
 
-func NewActivityRecorder(s store.SandboxStore, cfg *config.APIConfig) *ActivityRecorder {
+func NewActivityRecorder(s activityStore, cfg *config.APIConfig) *ActivityRecorder {
 	return &ActivityRecorder{
 		store:               s,
 		interval:            activityWriteInterval(cfg),

@@ -104,6 +104,7 @@ func newLimitTestGateway(t *testing.T, runner *blockingRunner, tune func(*config
 		if err := s.Create(&store.SandboxRecord{
 			ID: id, Status: "running", CreatedAt: 1, LastActiveAt: time.Now().Unix(),
 			TenantID: tenant, RunnerHTTPBase: runner.URL,
+			Kind: store.KindDefault,
 		}); err != nil {
 			t.Fatalf("create sandbox: %v", err)
 		}

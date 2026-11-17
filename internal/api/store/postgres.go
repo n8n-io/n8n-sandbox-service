@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -146,7 +147,7 @@ func (s *PostgresStore) insertSandbox(e pgExecer, record *SandboxRecord) error {
 		record.TenantID,
 		record.Ephemeral,
 		record.Egress,
-		recordKind(record),
+		string(record.Kind),
 		record.Name,
 		record.OptionsHash,
 		record.IdleTimeoutMs,
@@ -177,6 +178,9 @@ func lockTenantForUpdate(tx *sql.Tx, id string) (maxSandboxes int, ok bool, err 
 }
 
 func (s *PostgresStore) Create(record *SandboxRecord) error {
+	if err := checkKind(record.Kind); err != nil {
+		return err
+	}
 	if IsAdminTenantID(record.TenantID) {
 		return s.insertSandbox(s.db, record)
 	}
@@ -217,10 +221,30 @@ func (s *PostgresStore) Create(record *SandboxRecord) error {
 	return nil
 }
 
-func (s *PostgresStore) Get(id string) (*SandboxRecord, error) {
-	q := `SELECT ` + pgSandboxCols + ` FROM sandboxes WHERE id = $1`
-	row := s.db.QueryRow(q, id)
-	rec, err := scanRecord(row)
+// pgPlaceholder returns the placeholder of the nth query argument.
+func pgPlaceholder(n int) string { return "$" + strconv.Itoa(n) }
+
+func (s *PostgresStore) GetAnyKind(id string) (*SandboxRecord, error) {
+	return s.getSandbox(id, AllKinds()...)
+}
+
+func (s *PostgresStore) GetDefaultSandbox(id string) (*SandboxRecord, error) {
+	return s.getSandbox(id, KindDefault)
+}
+
+func (s *PostgresStore) GetCodeSandbox(id string) (*SandboxRecord, error) {
+	return s.getSandbox(id, KindCode)
+}
+
+// getSandbox returns the record of the sandbox with the given id when it is
+// of one of kinds, or nil.
+func (s *PostgresStore) getSandbox(id string, kinds ...Kind) (*SandboxRecord, error) {
+	cond, args, err := KindFilter(kinds...).where([]string{"id = $1"}, []any{id}, pgPlaceholder)
+	if err != nil {
+		return nil, err
+	}
+	q := `SELECT ` + pgSandboxCols + ` FROM sandboxes WHERE ` + cond
+	rec, err := scanRecord(s.db.QueryRow(q, args...))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -352,30 +376,33 @@ func (s *PostgresStore) querySandboxRecords(q string, args ...any) ([]*SandboxRe
 	return records, nil
 }
 
-func (s *PostgresStore) Count() (int64, error) {
+func (s *PostgresStore) Count(f SandboxFilter) (int64, error) {
+	cond, args, err := f.where(nil, nil, pgPlaceholder)
+	if err != nil {
+		return 0, err
+	}
+	q := `SELECT COUNT(*) FROM sandboxes`
+	if cond != "" {
+		q += ` WHERE ` + cond
+	}
 	var n int64
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sandboxes`).Scan(&n); err != nil {
+	if err := s.db.QueryRow(q, args...).Scan(&n); err != nil {
 		return 0, fmt.Errorf("store: count sandboxes: %w", err)
 	}
 	return n, nil
 }
 
-func (s *PostgresStore) CountByTenant(tenantID string) (int64, error) {
-	var n int64
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sandboxes WHERE tenant_id = $1`, tenantID).Scan(&n); err != nil {
-		return 0, fmt.Errorf("store: count sandboxes by tenant: %w", err)
+func (s *PostgresStore) List(f SandboxFilter) ([]*SandboxRecord, error) {
+	cond, args, err := f.where(nil, nil, pgPlaceholder)
+	if err != nil {
+		return nil, err
 	}
-	return n, nil
-}
-
-func (s *PostgresStore) List() ([]*SandboxRecord, error) {
-	q := `SELECT ` + pgSandboxCols + ` FROM sandboxes ORDER BY created_at DESC`
-	return s.querySandboxRecords(q)
-}
-
-func (s *PostgresStore) ListByTenant(tenantID string) ([]*SandboxRecord, error) {
-	q := `SELECT ` + pgSandboxCols + ` FROM sandboxes WHERE tenant_id = $1 ORDER BY created_at DESC`
-	return s.querySandboxRecords(q, tenantID)
+	q := `SELECT ` + pgSandboxCols + ` FROM sandboxes`
+	if cond != "" {
+		q += ` WHERE ` + cond
+	}
+	q += ` ORDER BY created_at DESC`
+	return s.querySandboxRecords(q, args...)
 }
 
 func (s *PostgresStore) CreateTenant(t *Tenant) error {

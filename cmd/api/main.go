@@ -93,7 +93,7 @@ func main() {
 	mrec := metrics.NewAPIRecorder(cfg.MetricsEnabled)
 	if mrec.Enabled() {
 		mrec.SetActiveSandboxes(func() float64 {
-			n, err := sandboxStore.Count()
+			n, err := sandboxStore.Count(store.KindFilter(store.AllKinds()...))
 			if err != nil {
 				slog.Warn("metrics: count sandboxes", "error", err)
 				return 0

@@ -104,7 +104,7 @@ func TestPostgresCodeSandboxColumnsMigrationBackfillsDefaults(t *testing.T) {
 		t.Fatalf("reopen store: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	got, err := s.Get("legacy")
+	got, err := s.GetAnyKind("legacy")
 	if err != nil || got == nil {
 		t.Fatalf("get legacy row: got=%v err=%v", got, err)
 	}
@@ -129,13 +129,14 @@ func TestPostgresStoreCRUD(t *testing.T) {
 		RunnerID:              "r1",
 		RunnerHTTPBase:        "http://runner:8080",
 		RunnerControlGRPCAddr: "runner:9091",
+		Kind:                  KindDefault,
 	}
 	if err := s.Create(rec); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Delete(rec.ID) })
 
-	got, err := s.Get(rec.ID)
+	got, err := s.GetAnyKind(rec.ID)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -156,7 +157,7 @@ func TestPostgresStoreCRUD(t *testing.T) {
 	if err := s.UpdateStatus(rec.ID, "stopped"); err != nil {
 		t.Fatalf("update status: %v", err)
 	}
-	got, err = s.Get(rec.ID)
+	got, err = s.GetAnyKind(rec.ID)
 	if err != nil || got == nil || got.Status != "stopped" {
 		t.Fatalf("after stop: %+v err=%v, want stopped", got, err)
 	}
@@ -202,7 +203,7 @@ func TestPostgresRecordActivityConcurrentBatches(t *testing.T) {
 	ids := make([]string, 50)
 	for i := range ids {
 		ids[i] = prefix + "-" + strconv.Itoa(i)
-		if err := s.Create(&SandboxRecord{ID: ids[i], Status: "running", CreatedAt: 1, LastActiveAt: 1}); err != nil {
+		if err := s.Create(&SandboxRecord{Kind: KindDefault, ID: ids[i], Status: "running", CreatedAt: 1, LastActiveAt: 1}); err != nil {
 			t.Fatalf("create: %v", err)
 		}
 		t.Cleanup(func() { _ = s.Delete(ids[i]) })
@@ -232,7 +233,7 @@ func TestPostgresRecordActivityConcurrentBatches(t *testing.T) {
 	}
 	const newest = 1000 + (rounds-1)*pods + pods - 1
 	for _, id := range ids {
-		if got, err := s.Get(id); err != nil || got == nil || got.LastActiveAt != newest {
+		if got, err := s.GetAnyKind(id); err != nil || got == nil || got.LastActiveAt != newest {
 			t.Fatalf("%s: %+v err=%v, want last_active_at %d", id, got, err, newest)
 		}
 	}
@@ -240,6 +241,10 @@ func TestPostgresRecordActivityConcurrentBatches(t *testing.T) {
 
 func TestPostgresCodeSandboxNames(t *testing.T) {
 	testCodeSandboxNames(t, openTestPostgresStore(t), uuid.New().String(), uuid.New().String())
+}
+
+func TestPostgresKindScoping(t *testing.T) {
+	testKindScoping(t, openTestPostgresStore(t), uuid.New().String(), uuid.New().String())
 }
 
 func TestPostgresUpdateTenantLimits(t *testing.T) {
@@ -270,7 +275,7 @@ func TestPostgresSandboxLockKeepsStoreUsableAndReleasesAfterCancellation(t *test
 
 	countDone := make(chan error, 1)
 	go func() {
-		_, err := s.Count()
+		_, err := s.Count(KindFilter(AllKinds()...))
 		countDone <- err
 	}()
 	select {

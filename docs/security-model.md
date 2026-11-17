@@ -72,11 +72,15 @@ Authorization runs on every sandbox request through `canAccessSandbox` in
 [internal/api/middleware_auth.go](../internal/api/middleware_auth.go):
 
 - Read, delete and all proxied routes (exec and files) load the sandbox record
-  and compare its `tenant_id` against the caller's. An admin key passes this
-  check for every sandbox, whoever owns it.
-- List is scoped at the query level with `ListByTenant`. The `tenant_id` query
-  parameter that narrows an admin's listing is refused with `403` for tenant
-  keys, so it cannot be used to probe other tenants' ids. Every sandbox
+  of the route's kind only, so a sandbox of another kind is not found, and
+  compare its `tenant_id` against the caller's. An admin key passes this check
+  for every sandbox, whoever owns it. A create whose id belongs to a sandbox
+  of another kind gets `409`.
+- List is scoped at the query level. It always filters by the route's kind.
+  A tenant key lists only its own sandboxes; an admin key lists every tenant's
+  unless it narrows the listing with the `tenant_id` query parameter. That
+  parameter is refused with `403` for tenant keys, so it cannot be used to
+  probe other tenants' ids. Every sandbox
   response names its owner in `tenant_id`; for a tenant that is always its own.
 - Create sets `tenant_id` from the authenticated identity. A caller cannot
   assign a sandbox to another tenant. Create and list switch on the role
