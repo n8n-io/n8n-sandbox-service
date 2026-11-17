@@ -82,7 +82,7 @@ func (x *execution) watch(ctx context.Context) executionOutcome {
 	select {
 	case msg, ok := <-x.result:
 		if !ok {
-			return executionOutcome{code: "crashed", message: "runtime exited"}
+			return executionOutcome{code: x.worker.exitCode, message: "runtime exited"}
 		}
 		return executionOutcome{result: msg}
 	case <-timer.C:

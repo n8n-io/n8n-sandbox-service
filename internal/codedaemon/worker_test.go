@@ -100,6 +100,12 @@ func TestRuntimeFixture(t *testing.T) {
 		if m.TaskID == "pending" || m.TaskID == "cooperative" {
 			continue
 		}
+		if m.TaskID == "crash" || m.TaskID == "oom" {
+			if m.TaskID == "oom" {
+				_, _ = os.Stderr.WriteString("FATAL ERROR: JavaScript heap out of memory\n")
+			}
+			os.Exit(2)
+		}
 		_, _ = os.Stdout.WriteString("raw-runtime-stdout\n")
 		_, _ = os.Stderr.WriteString("raw-runtime-stderr\n")
 		input, err := os.ReadFile(filepath.Join(m.Dir, "in", "bin", "0"))
@@ -113,8 +119,12 @@ func TestRuntimeFixture(t *testing.T) {
 			os.Exit(2)
 		}
 		result, _ := json.Marshal([]string{strconv.Itoa(os.Getpid()), m.TaskID, string(input)})
+		var heap int64
+		if m.TaskID == "large_heap" {
+			heap = 4096
+		}
 		if os.WriteFile(filepath.Join(m.Dir, "out", "result.json"), result, 0o600) != nil ||
-			enc.Encode(workerMessage{Type: "done", TaskID: m.TaskID}) != nil {
+			enc.Encode(workerMessage{Type: "done", TaskID: m.TaskID, HeapUsedBytes: heap}) != nil {
 			os.Exit(2)
 		}
 		if m.TaskID == "exit-after-result" {

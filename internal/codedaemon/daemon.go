@@ -25,13 +25,19 @@ type Config struct {
 	Limits         Limits   // per-task budgets; non-positive values use defaults
 	// RuntimeLogWrites caps the writes to each of the runtime's stdout and
 	// stderr that reach the daemon log. Non-positive uses the default of 16.
-	RuntimeLogWrites int
-	DefaultTimeout   time.Duration // Execution budget when the request does not shorten it.
-	MaxTimeout       time.Duration // Service cap on the execution budget.
+	RuntimeLogWrites  int
+	DefaultTimeout    time.Duration // Execution budget when the request does not shorten it.
+	MaxTimeout        time.Duration // Service cap on the execution budget.
+	RecycleAfterTasks int
+	RecycleHeapBytes  int
+	CgroupDir         string
 }
 
 func LoadConfig() (Config, error) {
-	cfg := Config{ListenAddr: ":8081", MaxConcurrency: 1, RuntimeLogWrites: defaultRuntimeLogWrites}
+	cfg := Config{
+		ListenAddr: ":8081", MaxConcurrency: 1, RuntimeLogWrites: defaultRuntimeLogWrites,
+		RecycleAfterTasks: 1000, RecycleHeapBytes: 256 << 20, CgroupDir: "/sys/fs/cgroup",
+	}
 	envvar.String("CODE_DAEMON_LISTEN_ADDR", &cfg.ListenAddr)
 	if err := envvar.Bool("CODE_DAEMON_ALLOW_LOCAL_CLIENTS", &cfg.AllowLocalClients); err != nil {
 		return Config{}, err
@@ -50,6 +56,13 @@ func LoadConfig() (Config, error) {
 	if cfg.DefaultTimeout, cfg.MaxTimeout, err = loadTaskTimeouts(); err != nil {
 		return Config{}, err
 	}
+	if err := envvar.IntBetween("CODE_DAEMON_RECYCLE_AFTER_TASKS", &cfg.RecycleAfterTasks, 1, 1_000_000); err != nil {
+		return Config{}, err
+	}
+	if err := envvar.IntBetween("CODE_DAEMON_RECYCLE_HEAP_BYTES", &cfg.RecycleHeapBytes, 1, 1<<40); err != nil {
+		return Config{}, err
+	}
+	envvar.String("CODE_DAEMON_CGROUP_DIR", &cfg.CgroupDir)
 	return cfg, nil
 }
 
@@ -78,6 +91,12 @@ func New(cfg Config) *Daemon {
 	}
 	if cfg.MaxTimeout <= 0 {
 		cfg.MaxTimeout = maxTaskTimeout
+	}
+	if cfg.RecycleAfterTasks <= 0 {
+		cfg.RecycleAfterTasks = 1000
+	}
+	if cfg.RecycleHeapBytes <= 0 {
+		cfg.RecycleHeapBytes = 256 << 20
 	}
 	return &Daemon{
 		cfg: cfg, lanes: make(chan struct{}, max(1, cfg.MaxConcurrency)), dispatchedByTaskID: make(map[string]bool),

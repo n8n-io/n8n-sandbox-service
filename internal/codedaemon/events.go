@@ -115,7 +115,12 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 	if mr == nil {
 		return
 	}
-	defer d.releaseLane()
+	laneHeld := true
+	defer func() {
+		if laneHeld {
+			d.releaseLane()
+		}
+	}()
 	defer d.releaseTask(spec.TaskID)
 	dir, err := d.stageInputs(mr)
 	if err != nil {
@@ -134,14 +139,20 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer root.Close()
-	stream := newTaskStream(w)
 	x, err := d.dispatch(r.Context(), spec.TaskID, dir, d.taskTimeout(spec.TimeoutMs))
 	if err != nil {
+		if errors.Is(err, errBeforeDispatch) {
+			writeTaskRejection(w, http.StatusServiceUnavailable, "runtime_unavailable", "runtime unavailable before dispatch")
+			return
+		}
 		slog.Warn("dispatch code task", "task_id", spec.TaskID, "error", err)
-		_ = stream.emit(newErrorEvent(spec.TaskID, "crashed", "runtime unavailable"))
+		_ = newTaskStream(w).emit(newErrorEvent(spec.TaskID, "crashed", "runtime unavailable"))
 		return
 	}
+	stream := newTaskStream(w)
 	if event, ok := d.runTask(r.Context(), spec, stream, x, root); ok {
+		d.releaseLane()
+		laneHeld = false
 		_ = stream.emit(event)
 	}
 }
@@ -212,6 +223,13 @@ func (d *Daemon) resultEvent(spec taskSpec, root *os.Root, msg workerMessage) an
 			}
 		}
 		return e
+	}
+	if msg.Type == "failed" {
+		code := "crashed"
+		if msg.Outcome == "oom" {
+			code = "oom"
+		}
+		return newErrorEvent(spec.TaskID, code, "runtime task failed")
 	}
 	outputs, err := collectOutputs(root, d.cfg.Limits)
 	if err != nil {

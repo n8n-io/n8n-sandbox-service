@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -24,7 +25,10 @@ const (
 	maxControlMessage = 512 << 10 // 512 KiB
 )
 
-var errWorkerUnavailable = errors.New("runtime unavailable")
+var (
+	errWorkerUnavailable = errors.New("runtime unavailable")
+	errBeforeDispatch    = errors.New("runtime unavailable before dispatch")
+)
 
 // workerMessage is any message between the daemon and the runtime, in either
 // direction, sent as newline-delimited JSON over FD 3. The runtime's stdout and
@@ -43,6 +47,9 @@ type workerMessage struct {
 	Error  json.RawMessage `json:"error,omitempty"`
 	// Deadline is the execution deadline in a start message, in Unix milliseconds.
 	Deadline int64 `json:"deadline,omitempty"`
+
+	HeapUsedBytes int64  `json:"heapUsedBytes,omitempty"`
+	Outcome       string `json:"outcome,omitempty"`
 }
 
 type worker struct {
@@ -56,7 +63,12 @@ type worker struct {
 
 	mu                 sync.Mutex // guards execution registration, delivery, and cleanup
 	executionsByTaskID map[string]*execution
-	retiring           bool // rejects new tasks while existing ones drain; protected by mu
+	startedAt          time.Time
+	heapLimit          int64
+	served             int // protected by mu
+	killed             atomic.Bool
+	exitCode           string // published by closing done
+	retiring           bool   // rejects new tasks while existing ones drain; protected by mu
 }
 
 // startWorker launches the runtime in its own process group and gives it the
@@ -80,7 +92,9 @@ func startWorker(cfg Config, startupTimeout time.Duration) (*worker, error) {
 	cmd.WaitDelay = time.Second
 	logs := newRuntimeLogger(cfg.RuntimeLogWrites)
 	cmd.Stdout = logs.writer("stdout")
-	cmd.Stderr = logs.writer("stderr")
+	stderr := logs.writer("stderr")
+	cmd.Stderr = stderr
+	initialOOM := oomKillCount(cfg.CgroupDir)
 	if err := cmd.Start(); err != nil {
 		logs.close()
 		_ = conn.Close()
@@ -88,7 +102,9 @@ func startWorker(cfg Config, startupTimeout time.Duration) (*worker, error) {
 	}
 	w := &worker{
 		cmd: cmd, conn: conn, ready: make(chan struct{}), stopped: make(chan struct{}),
-		done: make(chan struct{}), writeGate: make(chan struct{}, 1), executionsByTaskID: make(map[string]*execution),
+		done: make(chan struct{}), startedAt: time.Now(),
+		writeGate: make(chan struct{}, 1), executionsByTaskID: make(map[string]*execution),
+		heapLimit: int64(cfg.RecycleHeapBytes),
 	}
 	controlDone := make(chan struct{})
 	go func() {
@@ -109,8 +125,15 @@ func startWorker(cfg Config, startupTimeout time.Duration) (*worker, error) {
 		waitWorkerExit(cmd.Process.Pid)
 		// The unreaped leader reserves the group ID. Any other caller of kill
 		// either signals it first or waits for this call via stopOnce.
-		w.kill()
+		w.stop(false)
 		_ = cmd.Wait()
+		w.exitCode = "crashed"
+		if state := cmd.ProcessState; state != nil && !state.Success() {
+			status, _ := state.Sys().(syscall.WaitStatus)
+			if stderr.oom || (status.Signal() == syscall.SIGKILL && !w.killed.Load() && initialOOM >= 0 && oomKillCount(cfg.CgroupDir) > initialOOM) {
+				w.exitCode = "oom"
+			}
+		}
 		logs.close()
 		<-controlDone
 		_ = conn.Close()
@@ -182,15 +205,22 @@ func (w *worker) readControl() {
 				}
 			}
 			w.mu.Unlock()
-		case "done", "error":
+		case "heap", "done", "error", "failed":
 			w.mu.Lock()
-			if task := w.executionsByTaskID[msg.TaskID]; task != nil {
+			if msg.HeapUsedBytes > w.heapLimit {
+				w.retiring = true
+			}
+			if task := w.executionsByTaskID[msg.TaskID]; task != nil && msg.Type != "heap" {
 				select {
 				case task.result <- msg:
 				default:
 				}
 			}
+			retireIdle := w.retiring && len(w.executionsByTaskID) == 0
 			w.mu.Unlock()
+			if retireIdle {
+				w.kill()
+			}
 		}
 	}
 	if err := scanner.Err(); errors.Is(err, bufio.ErrTooLong) {
@@ -202,12 +232,17 @@ func (w *worker) readControl() {
 	if stopErr != nil && !w.isStopped() {
 		slog.Warn("stopping code runtime", "error", stopErr)
 	}
-	w.kill()
+	w.stop(false)
 }
 
 // kill releases pending result waiters and signals the runtime's process group once.
 func (w *worker) kill() {
+	w.stop(true)
+}
+
+func (w *worker) stop(intentional bool) {
 	w.stopOnce.Do(func() {
+		w.killed.Store(intentional)
 		w.mu.Lock()
 		close(w.stopped)
 		w.mu.Unlock()
@@ -256,6 +291,10 @@ func (d *Daemon) getWorker(ctx context.Context) (*worker, error) {
 		select {
 		case <-d.worker.done:
 			// Replace the exited worker on this dispatch, not during shutdown.
+			if !d.worker.wasReady() && time.Since(d.worker.startedAt) < time.Second {
+				d.workerMu.Unlock()
+				return nil, errWorkerUnavailable
+			}
 			d.worker = nil
 			continue
 		default:
@@ -299,6 +338,15 @@ func (d *Daemon) getWorker(ctx context.Context) (*worker, error) {
 	}
 }
 
+func (w *worker) wasReady() bool {
+	select {
+	case <-w.ready:
+		return true
+	default:
+		return false
+	}
+}
+
 // Close prevents worker startup and waits for any existing worker to exit and be reaped.
 func (d *Daemon) Close() {
 	d.workerMu.Lock()
@@ -326,7 +374,7 @@ type execution struct {
 func (d *Daemon) dispatch(ctx context.Context, id, dir string, timeout time.Duration) (*execution, error) {
 	w, err := d.getWorker(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", errBeforeDispatch, err)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -338,13 +386,15 @@ func (d *Daemon) dispatch(ctx context.Context, id, dir string, timeout time.Dura
 	w.mu.Lock()
 	if w.isStopped() || w.retiring {
 		w.mu.Unlock()
-		return nil, errWorkerUnavailable
+		return nil, errBeforeDispatch
 	}
 	if _, exists := w.executionsByTaskID[id]; exists {
 		w.mu.Unlock()
 		return nil, errDuplicateTask
 	}
 	w.executionsByTaskID[id] = x
+	w.served++
+	w.retiring = w.served >= d.cfg.RecycleAfterTasks
 	w.mu.Unlock()
 	d.markDispatched(id)
 	if err := w.send(workerMessage{Type: "start", TaskID: id, Dir: dir, Deadline: x.deadline.UnixMilli()}, time.Now().Add(time.Second)); err != nil {

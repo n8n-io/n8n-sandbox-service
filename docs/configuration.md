@@ -207,12 +207,17 @@ The `code-daemon` runs inside a code sandbox and is reached only by the runner. 
 | `CODE_DAEMON_RUNTIME` | `n8n-js` | Registry entry to run |
 | `CODE_DAEMON_DEFAULT_TASK_TIMEOUT` | `5m` | Execution timeout of a task, at most `CODE_DAEMON_MAX_TASK_TIMEOUT` (Go [`time.ParseDuration`](https://pkg.go.dev/time#ParseDuration) syntax). The default drops to the maximum when the maximum is lower. A task's `spec.timeoutMs` can only shorten it. Upload and runtime startup have separate deadlines |
 | `CODE_DAEMON_MAX_TASK_TIMEOUT` | `24h` | Upper bound of the task timeout (`1ms`–`24h`) |
+| `CODE_DAEMON_RECYCLE_AFTER_TASKS` | `1000` | Tasks a runtime process takes before the daemon replaces it (`1`–`1000000`) |
+| `CODE_DAEMON_RECYCLE_HEAP_BYTES` | `268435456` | Reported heap use above which the daemon replaces the runtime process (256 MiB; `1`–`1099511627776`) |
+| `CODE_DAEMON_CGROUP_DIR` | `/sys/fs/cgroup` | cgroup v2 directory whose `memory.events` tells an out-of-memory kill from a crash |
 | `CODE_DAEMON_RUNTIME_LOG_WRITES` | `16` | Writes sampled from each of the runtime's stdout and stderr into the daemon log, at most 1 KiB each (up to `10000`). Later output is dropped. A sampled write is also dropped when the log queue is full |
 | `CODE_DAEMON_MAX_INPUT_BYTES` | `67108864` | Max total bytes of a task's input files, including task.json and binary files (64 MiB; up to 1 GiB) |
 | `CODE_DAEMON_MAX_OUTPUT_BYTES` | `67108864` | Max total bytes of the output files a task returns (64 MiB; up to 1 GiB) |
 | `CODE_DAEMON_MAX_FILES` | `256` | Max input files and max output files a task returns (up to `4096`) |
 
 At the execution timeout, or when the runner cancels a task or closes its stream, the daemon asks the runtime to cancel the task. The shared runtime then takes no new tasks and stops when its tasks end. If the runtime does not confirm the cancel within one second, the daemon stops it at once, which can fail the other tasks on it. The next task starts a fresh runtime.
+
+A runtime process that reaches either recycle limit takes no new tasks. The daemon replaces it after its tasks end. If the process exits, its running tasks fail with `crashed`, or `oom` when the daemon detects an out-of-memory kill. The daemon does not run them again. A task that the daemon cannot send to a runtime gets `503`.
 
 Input and output file paths are at most 1024 bytes. A task's input files can create up to 4096 directories. The output limits apply to the files a task returns, found in up to 4096 directories; writes to the output directory are not capped. A task fails if its output directory holds a symlink or another entry that is not a regular file or a directory.
 
