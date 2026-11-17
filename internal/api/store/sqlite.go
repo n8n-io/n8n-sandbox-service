@@ -286,7 +286,8 @@ func (s *SQLiteStore) GetCodeSandbox(id string) (*SandboxRecord, error) {
 	return s.getSandbox(id, KindCode)
 }
 
-// getSandbox returns the sandbox id when it is of one of kinds, or nil.
+// getSandbox returns the record of the sandbox with the given id when it is
+// of one of kinds, or nil.
 func (s *SQLiteStore) getSandbox(id string, kinds ...Kind) (*SandboxRecord, error) {
 	cond, args, err := KindFilter(kinds...).where([]string{"id = ?"}, []any{id}, sqlitePlaceholder)
 	if err != nil {

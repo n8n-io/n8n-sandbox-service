@@ -183,13 +183,14 @@ type SandboxStore interface {
 	// its quota. It returns ErrSandboxNameTaken when a code sandbox of the
 	// tenant that is not draining already has the name.
 	Create(record *SandboxRecord) error
-	// GetAnyKind returns the sandbox id whatever its kind, or nil when there
-	// is none.
+	// GetAnyKind returns the record of the sandbox with the given id, whatever
+	// its kind, or nil when there is none.
 	GetAnyKind(id string) (*SandboxRecord, error)
-	// GetDefaultSandbox returns the sandbox id when it is a default sandbox,
-	// or nil.
+	// GetDefaultSandbox returns the record of the sandbox with the given id
+	// when it is a default sandbox, or nil.
 	GetDefaultSandbox(id string) (*SandboxRecord, error)
-	// GetCodeSandbox returns the sandbox id when it is a code sandbox, or nil.
+	// GetCodeSandbox returns the record of the sandbox with the given id when
+	// it is a code sandbox, or nil.
 	GetCodeSandbox(id string) (*SandboxRecord, error)
 	// GetCodeSandboxByName returns the code sandbox of the tenant that has the
 	// name and is not draining, or nil when there is none.
