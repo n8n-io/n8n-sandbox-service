@@ -31,12 +31,15 @@ type Config struct {
 	RecycleAfterTasks int           // Dispatches allowed before the runtime stops taking new tasks.
 	RecycleHeapBytes  int           // Heap usage reported by the runtime, above which it stops taking new tasks.
 	CgroupDir         string        // Directory containing the cgroup v2 memory.events file used for OOM detection.
+	OutputTTL         time.Duration
+	RetainedBytes     int
 }
 
 func LoadConfig() (Config, error) {
 	cfg := Config{
 		ListenAddr: ":8081", MaxConcurrency: 1, RuntimeLogWrites: defaultRuntimeLogWrites,
 		RecycleAfterTasks: 1000, RecycleHeapBytes: 256 << 20, CgroupDir: "/sys/fs/cgroup",
+		OutputTTL: defaultOutputTTL, RetainedBytes: defaultRetainedBytes,
 	}
 	envvar.String("CODE_DAEMON_LISTEN_ADDR", &cfg.ListenAddr)
 	if err := envvar.Bool("CODE_DAEMON_ALLOW_LOCAL_CLIENTS", &cfg.AllowLocalClients); err != nil {
@@ -64,6 +67,12 @@ func LoadConfig() (Config, error) {
 		return Config{}, err
 	}
 	envvar.String("CODE_DAEMON_CGROUP_DIR", &cfg.CgroupDir)
+	if err := envvar.DurationBetween("CODE_DAEMON_OUTPUT_TTL", &cfg.OutputTTL, time.Millisecond, 24*time.Hour); err != nil {
+		return Config{}, err
+	}
+	if err := envvar.IntBetween("CODE_DAEMON_MAX_RETAINED_OUTPUT_BYTES", &cfg.RetainedBytes, 1, 1<<40); err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
 }
 
@@ -80,6 +89,7 @@ type Daemon struct {
 	worker         *worker       // current runtime, started on demand and replaced after it exits
 	startFailed    bool          // set when the worker could not be started; it is not retried
 	closed         bool          // prevents starting a worker after Close
+	outputs        outputStore
 }
 
 func New(cfg Config) *Daemon {
@@ -99,9 +109,16 @@ func New(cfg Config) *Daemon {
 	if cfg.RecycleHeapBytes <= 0 {
 		cfg.RecycleHeapBytes = 256 << 20 // 256 MiB
 	}
+	if cfg.OutputTTL <= 0 {
+		cfg.OutputTTL = defaultOutputTTL
+	}
+	if cfg.RetainedBytes <= 0 {
+		cfg.RetainedBytes = defaultRetainedBytes
+	}
 	return &Daemon{
 		cfg: cfg, lanes: make(chan struct{}, max(1, cfg.MaxConcurrency)), dispatchedByTaskID: make(map[string]bool),
 		startupTimeout: workerStartupTimeout,
+		outputs:        outputStore{tasks: make(map[string]*retainedOutputs), maxBytes: int64(cfg.RetainedBytes)},
 	}
 }
 
@@ -117,6 +134,7 @@ func (d *Daemon) Handler() http.Handler {
 	})
 	mux.HandleFunc("POST /tasks", d.handleTask)
 	mux.HandleFunc("DELETE /tasks/{taskId}", d.handleCancel)
+	mux.HandleFunc("GET /tasks/{taskId}/outputs/{path...}", d.handleOutput)
 	if d.cfg.AllowLocalClients {
 		return mux
 	}

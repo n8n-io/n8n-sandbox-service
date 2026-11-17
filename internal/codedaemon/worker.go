@@ -369,6 +369,7 @@ func (d *Daemon) Close() {
 		w.kill()
 		<-w.done
 	}
+	d.outputs.close()
 }
 
 // execution is one task dispatched to the shared runtime. It receives the

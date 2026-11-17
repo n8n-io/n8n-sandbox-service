@@ -143,6 +143,8 @@ type decodedEvent struct {
 	Code      string          `json:"code"`
 	Message   string          `json:"message"`
 	UserError json.RawMessage `json:"userError"`
+
+	OutputExpiresAt *time.Time `json:"outputExpiresAt"`
 }
 
 func TestUserErrorInlinesResult(t *testing.T) {

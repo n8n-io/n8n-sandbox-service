@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
 	"syscall"
 	"time"
 )
@@ -49,6 +48,8 @@ type doneEvent struct {
 	TaskID  string          `json:"taskId"`
 	Result  json.RawMessage `json:"result"`            // Inline result.json, or JSON null when not inlined.
 	Outputs []outputEntry   `json:"outputs,omitempty"` // Manifest of published output files.
+
+	OutputExpiresAt *time.Time `json:"outputExpiresAt,omitempty"`
 }
 
 func newDoneEvent(taskID string, result json.RawMessage, outputs []outputEntry) doneEvent {
@@ -62,8 +63,8 @@ type errorEvent struct {
 	Code      string          `json:"code"`
 	Message   string          `json:"message"`
 	UserError json.RawMessage `json:"userError,omitempty"`
-	// Result is the inline result.json of a user_error task, when it has a
-	// valid one within the inline limit.
+	// Result is the inline result.json of a user_error or output_limit task,
+	// when it has a valid one within the inline limit.
 	Result json.RawMessage `json:"result,omitempty"`
 }
 
@@ -128,13 +129,28 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	defer os.RemoveAll(dir)
-	root, err := os.OpenRoot(filepath.Join(dir, "out"))
+	retained := false
+	defer func() {
+		if !retained {
+			_ = os.RemoveAll(dir)
+		}
+	}()
+	taskRoot, err := os.OpenRoot(dir)
+	if err != nil {
+		writeTaskRejection(w, http.StatusServiceUnavailable, "crashed", "could not open task directory")
+		return
+	}
+	defer taskRoot.Close()
+	root, err := taskRoot.OpenRoot("out")
 	if err != nil {
 		writeTaskRejection(w, http.StatusServiceUnavailable, "crashed", "could not open output directory")
 		return
 	}
-	defer root.Close()
+	defer func() {
+		if !retained {
+			_ = root.Close()
+		}
+	}()
 	x, err := d.dispatch(r.Context(), spec.TaskID, dir, d.taskTimeout(spec.TimeoutMs))
 	if err != nil {
 		// Only a failure before the start message was attempted can be retried safely.
@@ -147,15 +163,32 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	stream := newTaskStream(w)
-	if event, ok := d.runTask(r.Context(), spec, stream, x, root); ok {
-		_ = stream.emit(event)
+	event, ok := d.runTask(r.Context(), spec, stream, x, root)
+	if !ok {
+		d.releaseExecution(x)
+		return
 	}
+	if done, isDone := event.(doneEvent); isDone {
+		if err := taskRoot.RemoveAll("in"); err != nil {
+			event = newErrorEvent(spec.TaskID, "crashed", "could not clean up task inputs")
+		} else if expiresAt, ok := d.outputs.add(spec.TaskID, dir, root, done.Outputs, d.cfg.OutputTTL); ok {
+			retained = true
+			done.OutputExpiresAt = &expiresAt
+			event = done
+		} else {
+			e := newErrorEvent(spec.TaskID, "output_limit", "output retention capacity exceeded")
+			e.Result = inlinedResult(done.Result)
+			event = e
+		}
+	}
+	// Publish outputs before marking execution inactive for DELETE handling.
+	d.releaseExecution(x)
+	_ = stream.emit(event)
 }
 
 // runTask streams updates while the execution watcher runs. It releases the
 // execution before returning a terminal event, or returns false if the stream breaks.
 func (d *Daemon) runTask(ctx context.Context, spec taskSpec, stream taskStream, x *execution, root *os.Root) (any, bool) {
-	defer d.releaseExecution(x)
 	ctx, stop := context.WithCancel(ctx)
 	defer stop()
 	// Start monitoring before the first HTTP write. The buffered result lets the
@@ -241,6 +274,15 @@ func (d *Daemon) resultEvent(spec taskSpec, root *os.Root, msg workerMessage) an
 		}
 	}
 	return newDoneEvent(spec.TaskID, result, outputs)
+}
+
+// inlinedResult returns an inline result for an error event, or nil when
+// done had none.
+func inlinedResult(result json.RawMessage) json.RawMessage {
+	if string(result) == "null" {
+		return nil
+	}
+	return result
 }
 
 // readResult reads a result.json that must still match its manifest entry and be valid JSON.

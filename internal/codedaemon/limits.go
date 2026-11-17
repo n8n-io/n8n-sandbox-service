@@ -117,7 +117,7 @@ func collectOutputs(root *os.Root, limits Limits) ([]outputEntry, error) {
 			if len(entries) == limits.Files {
 				return nil, errOutputLimit
 			}
-			info, err := entry.Info()
+			info, err := root.Lstat(rel)
 			if err != nil {
 				return nil, err
 			}

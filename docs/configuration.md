@@ -210,6 +210,8 @@ The `code-daemon` runs inside a code sandbox and is reached only by the runner. 
 | `CODE_DAEMON_RECYCLE_AFTER_TASKS` | `1000` | Tasks a runtime process takes before the daemon replaces it (`1`–`1000000`) |
 | `CODE_DAEMON_RECYCLE_HEAP_BYTES` | `268435456` | Reported heap use above which the daemon replaces the runtime process (256 MiB; `1`–`1099511627776`) |
 | `CODE_DAEMON_CGROUP_DIR` | `/sys/fs/cgroup` | cgroup v2 directory whose `memory.events` tells an out-of-memory kill from a crash |
+| `CODE_DAEMON_OUTPUT_TTL` | `5m` | How long the daemon keeps the output files of a finished task (`1ms`–`24h`) |
+| `CODE_DAEMON_MAX_RETAINED_OUTPUT_BYTES` | `536870912` | Max total bytes of kept output files across all tasks (512 MiB; `1`–`1099511627776`) |
 | `CODE_DAEMON_RUNTIME_LOG_WRITES` | `16` | Writes sampled from each of the runtime's stdout and stderr into the daemon log, at most 1 KiB each (up to `10000`). Later output is dropped. A sampled write is also dropped when the log queue is full |
 | `CODE_DAEMON_MAX_INPUT_BYTES` | `67108864` | Max total bytes of a task's input files, including task.json and binary files (64 MiB; up to 1 GiB) |
 | `CODE_DAEMON_MAX_OUTPUT_BYTES` | `67108864` | Max total bytes of the output files a task returns (64 MiB; up to 1 GiB) |
@@ -218,6 +220,8 @@ The `code-daemon` runs inside a code sandbox and is reached only by the runner. 
 At the execution timeout, or when the runner cancels a task or closes its stream, the daemon asks the runtime to cancel the task. The shared runtime then takes no new tasks and stops when its tasks end. If the runtime does not confirm the cancel within one second, the daemon stops it at once, which can fail the other tasks on it. The next task starts a fresh runtime.
 
 A runtime process that reaches either recycle limit takes no new tasks. The daemon replaces it after its tasks end. If the process exits, its running tasks fail with `crashed`, or `oom` when the daemon detects an out-of-memory kill. The daemon does not run them again. A task that the daemon rejects before it sends the task to a runtime gets `503`. If the task may have reached the runtime, the daemon sends a terminal `error` event instead and does not run the task again.
+
+The `done` event gives `outputExpiresAt` and the path and size of each kept output file. The runner downloads a file with `GET /tasks/{taskId}/outputs/{path}` until that time. A download that started before can finish. `DELETE /tasks/{taskId}` on a finished task removes its outputs at once and returns `204`. The task ID stays used. The daemon keeps the outputs of at most 256 tasks. A task whose outputs do not fit gets an `output_limit` error.
 
 Input and output file paths are at most 1024 bytes. A task's input files can create up to 4096 directories. The output limits apply to the files a task returns, found in up to 4096 directories; writes to the output directory are not capped. A task fails if its output directory holds a symlink or another entry that is not a regular file or a directory.
 
@@ -230,6 +234,8 @@ The runtime registry is a JSON object keyed by runtime name. Each entry has a `c
 ```
 
 The daemon starts that command once, as the shared runtime process, when it dispatches the first task. The runtime must report ready within 15 seconds. A command that cannot be run, such as a wrong executable path, is only detected then: it fails that task and the health probe.
+
+The runtime sends newline-delimited JSON on inherited FD 3, starting with `ready`. The daemon sends `start` (`taskId`, `dir`, Unix-millisecond `deadline`) or `cancel` (`taskId`). Input files are under `dir/in`. Before it sends `done` or `error`, the runtime writes `dir/out/result.json` and any other output files. The runtime keeps the task's console output itself and puts it in `result.json`; the daemon does not read it. Runtime responses use `taskId`: `done`, `error` (optional `error` details), `failed` (optional `outcome`), and `cancelled`. A `heap` sample or a terminal event can report `heapUsedBytes` for process recycling. Raw stdout and stderr are not part of the protocol.
 
 ## Metrics
 

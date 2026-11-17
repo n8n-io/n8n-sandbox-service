@@ -13,11 +13,20 @@ const cancelGrace = time.Second
 
 // handleCancel reports whether a cancellation was requested, not whether it succeeded.
 func (d *Daemon) handleCancel(w http.ResponseWriter, r *http.Request) {
-	if !d.requestCancel(r.PathValue("taskId")) {
+	id := r.PathValue("taskId")
+	if d.requestCancel(id) {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+	d.tasksMu.Lock()
+	known := d.dispatchedByTaskID[id]
+	d.tasksMu.Unlock()
+	if !known {
 		http.NotFound(w, r)
 		return
 	}
-	w.WriteHeader(http.StatusAccepted)
+	d.outputs.remove(id)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // requestCancel signals a dispatched task once and retires its worker before
