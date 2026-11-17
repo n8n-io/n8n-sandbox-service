@@ -85,13 +85,23 @@
 {{- fail (printf "runner.volumeCache.emptyDir.sizeLimit (%s) must hold runner.config.volumeCacheMaxBytes (%s, default 20 GiB) and 5%% more: the kubelet evicts a pod whose emptyDir outgrows its limit" $sizeLimit $maxBytes) -}}
 {{- end -}}
 {{- end -}}
-{{- $cacheDir := include "n8n-sandbox-service.runnerVolumeCacheDir" . | clean -}}
-{{- if not (isAbs $cacheDir) -}}
+{{- $cacheDir := include "n8n-sandbox-service.runnerVolumeCacheDir" . -}}
+{{- /* The runner resolves a relative default against its working dir; an explicit dir and a mount path must be absolute. */ -}}
+{{- if and (or (default "" .Values.runner.config.volumeCacheDir | toString | trim) .Values.runner.volumeCache.emptyDir.enabled) (not (isAbs $cacheDir)) -}}
 {{- fail (printf "the runner's volume cache dir (%s) must be an absolute path" $cacheDir) -}}
+{{- end -}}
+{{- if isAbs $cacheDir -}}
+{{- if eq $cacheDir "/" -}}
+{{- fail "the runner's volume cache dir must not be /: the runner empties the cache dir at startup" -}}
+{{- end -}}
+{{- $dataDir := include "n8n-sandbox-service.runnerDataDir" . | clean -}}
+{{- if and (isAbs $dataDir) (or (eq $cacheDir $dataDir) (hasPrefix (printf "%s/" $cacheDir) $dataDir)) -}}
+{{- fail (printf "the runner's volume cache dir (%s) must not be the data dir (%s) or contain it: the runner empties the cache dir at startup" $cacheDir $dataDir) -}}
 {{- end -}}
 {{- range $dockerDir := list "/var/lib/docker" (include "n8n-sandbox-service.runnerDockerDataMountPath" $ | clean) -}}
 {{- if or (eq $cacheDir $dockerDir) (hasPrefix (printf "%s/" $dockerDir) $cacheDir) (hasPrefix (printf "%s/" $cacheDir) $dockerDir) -}}
 {{- fail (printf "the runner's volume cache dir (%s) must not be %s, inside it or contain it: the runner empties the cache dir at startup" $cacheDir $dockerDir) -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

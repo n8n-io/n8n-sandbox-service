@@ -6,12 +6,15 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/safetar"
 )
 
-// Bounds on TarCounts that keep sizing arithmetic from overflowing. Product
-// limits are the API's and far lower.
+// Bounds on a volume tar's length and counts that keep sizing arithmetic from
+// overflowing, the builder's included. Product limits are the API's and far
+// lower.
 const (
-	maxTarEntries           = 1 << 28
-	maxTarContentBytes      = 1 << 40
-	maxTarDecompressedBytes = 4 * maxTarContentBytes
+	MaxTarBytes   = 1 << 40
+	MaxTarEntries = 1 << 28
+	// MaxTarDecompressedBytes has room for the most content with its headers
+	// and padding.
+	MaxTarDecompressedBytes = 4 * MaxTarBytes
 )
 
 // TarCounts is what the API counted in a volume's tar under TarPolicy, as
@@ -27,15 +30,16 @@ type TarCounts struct {
 }
 
 func (counts TarCounts) Validate() error {
-	if counts.Entries < 1 || counts.Entries > maxTarEntries {
-		return fmt.Errorf("entries must be 1 to %d, got %d", int64(maxTarEntries), counts.Entries)
+	if counts.Entries < 1 || counts.Entries > MaxTarEntries {
+		return fmt.Errorf("entries must be 1 to %d, got %d", int64(MaxTarEntries), counts.Entries)
 	}
-	if counts.ContentBytes < 0 || counts.ContentBytes > maxTarContentBytes {
-		return fmt.Errorf("content bytes must be 0 to %d, got %d", int64(maxTarContentBytes), counts.ContentBytes)
+	if counts.ContentBytes < 0 || counts.ContentBytes > MaxTarBytes {
+		return fmt.Errorf("content bytes must be 0 to %d, got %d", int64(MaxTarBytes), counts.ContentBytes)
 	}
-	if counts.DecompressedBytes < 1 || counts.DecompressedBytes > maxTarDecompressedBytes {
-		return fmt.Errorf("decompressed bytes must be 1 to %d, got %d", int64(maxTarDecompressedBytes), counts.DecompressedBytes)
+	if counts.DecompressedBytes < 1 || counts.DecompressedBytes > MaxTarDecompressedBytes {
+		return fmt.Errorf("decompressed bytes must be 1 to %d, got %d", int64(MaxTarDecompressedBytes), counts.DecompressedBytes)
 	}
+	// The files' content is part of the decompressed tar.
 	if counts.ContentBytes > counts.DecompressedBytes {
 		return fmt.Errorf("content bytes %d exceed the decompressed bytes %d", counts.ContentBytes, counts.DecompressedBytes)
 	}

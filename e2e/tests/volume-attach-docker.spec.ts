@@ -12,8 +12,9 @@ import { DOCKER_ONLY } from './tags';
 // Sandboxes here are created on the runner directly, through cmd/e2e-runnerctl:
 // the API has no volumes field yet. The tars are served over https from the
 // host the runner registers with, the API container, by a file server sharing
-// its network namespace, with the API's registration server certificate: the
-// runner fetches them with its registration identity like objects the API
+// its network namespace, with the API's registration server certificate and
+// client CA. It requires a client certificate, so the downloads pass only if
+// the runner presents its registration identity, as for objects the API
 // serves.
 
 const execFileAsync = promisify(execFile);
@@ -208,7 +209,7 @@ test.describe('Docker volumes attached on create', DOCKER_ONLY, () => {
       '-v', `${linuxRunnerctl}:/e2e-runnerctl:ro`, '-v', `${serveDir}:/srv:ro`, '-v', `${tlsDir}/api:/tls:ro`,
       '--entrypoint', '/e2e-runnerctl', apiImage,
       'serve-files', '-addr', `:${SERVE_PORT}`, '-cert', '/tls/grpc-server.crt', '-key', '/tls/grpc-server.key',
-      '-dir', '/srv', '-token', token,
+      '-client-ca', '/tls/ca.crt', '-dir', '/srv', '-token', token,
     ]);
     const deadline = Date.now() + 30_000;
     while (!run('docker', ['logs', serverName]).output.includes('listening')) {

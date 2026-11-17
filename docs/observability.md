@@ -118,8 +118,10 @@ download's.
 
 ### Runner: volumes
 
-Each line names `sandbox_id`, the volume's `drive` (Firecracker) or `index`
-(Docker) and `sha256`, never the read URL or a path from inside a tar.
+The attach and left-out events name `sandbox_id`, the volume's `drive`
+(Firecracker) or `index` (Docker) and `sha256`; the unpack events name the
+object's `scope` and `sha256`. None names the read URL or a path from inside
+a tar.
 
 | Event | Level | Notes |
 | --- | --- | --- |

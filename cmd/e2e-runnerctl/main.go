@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -39,7 +38,7 @@ func usage() {
   %[1]s exec <sandbox-id> <command>
   %[1]s build-volume [-entries N -content-bytes N -decompressed-bytes N] [-hold DURATION] <tar> <image>
   %[1]s tar-counts <tar>
-  %[1]s serve-files -cert FILE -key FILE -dir DIR -token QUERY [-addr ADDR]
+  %[1]s serve-files -cert FILE -key FILE -client-ca FILE -dir DIR -token QUERY [-addr ADDR]
 
 create and exec print their outcome as one line of JSON. create exits 1 when
 the create fails, exec when the runner answers other than 200 or the command's
@@ -54,8 +53,9 @@ given. -hold waits that long between the header and the tar.
 tar-counts prints a tar's counts under the volume tar policy, as the tar
 counts of a volume in create-options-json.
 
-serve-files serves the files directly in DIR over https, TLS 1.3, to requests
-whose query is QUERY, and prints "listening" once it accepts connections.
+serve-files serves the files directly in DIR over https, TLS 1.3, to clients
+with a certificate the client CA signed and requests whose query is QUERY,
+and prints "listening" once it accepts connections.
 `, os.Args[0])
 	os.Exit(2)
 }
@@ -354,19 +354,28 @@ func serveFiles(args []string) {
 	addr := flags.String("addr", ":9444", "listen address")
 	certFile := flags.String("cert", "", "TLS certificate")
 	keyFile := flags.String("key", "", "TLS key")
+	clientCAFile := flags.String("client-ca", "", "CA that must have signed the client certificate")
 	dir := flags.String("dir", "", "directory to serve")
 	token := flags.String("token", "", "query every request must carry")
 	_ = flags.Parse(args)
-	if *certFile == "" || *keyFile == "" || *dir == "" || *token == "" || flags.NArg() != 0 {
+	if *certFile == "" || *keyFile == "" || *clientCAFile == "" || *dir == "" || *token == "" || flags.NArg() != 0 {
 		usage()
 	}
+	// Everything that can fail before it serves, before it says it listens.
+	tlsConfig, err := grpctls.NewServerTLSConfig(*certFile, *keyFile, *clientCAFile, tls.RequireAndVerifyClientCert)
+	fatal("TLS", err)
+	tlsConfig.MinVersion = tls.VersionTLS13
+	root, err := os.OpenRoot(*dir)
+	fatal("open dir", err)
+	defer root.Close()
 	handler := http.HandlerFunc(func(writer http.ResponseWriter, req *http.Request) {
 		name := strings.TrimPrefix(req.URL.Path, "/")
 		if req.URL.RawQuery != *token || !filepath.IsLocal(name) || strings.ContainsRune(name, '/') {
 			http.NotFound(writer, req)
 			return
 		}
-		file, err := os.Open(filepath.Join(*dir, name))
+		// Through the root, so a link in the dir can't serve what is outside.
+		file, err := root.Open(name)
 		if err != nil {
 			http.NotFound(writer, req)
 			return
@@ -380,15 +389,11 @@ func serveFiles(args []string) {
 		writer.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
 		_, _ = io.Copy(writer, file)
 	})
-	listener, err := net.Listen("tcp", *addr)
+	listener, err := tls.Listen("tcp", *addr, tlsConfig)
 	fatal("listen", err)
 	fmt.Println("listening")
-	server := &http.Server{
-		Handler:           handler,
-		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS13},
-		ReadHeaderTimeout: 10 * time.Second,
-	}
-	fatal("serve", server.ServeTLS(listener, *certFile, *keyFile))
+	server := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	fatal("serve", server.Serve(listener))
 }
 
 func printJSON(value any) {

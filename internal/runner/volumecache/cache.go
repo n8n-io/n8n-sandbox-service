@@ -481,8 +481,10 @@ func (c *Cache) makeRoomLocked(need room) ([]evictedEntry, error) {
 // tree out of the lock and frees the room before the download writes into it.
 func (c *Cache) run(ctx context.Context, key Key, src Source, sourceURL *url.URL, dest string, pending *fetch, reserved room, evicted []evictedEntry) {
 	for _, gone := range evicted {
+		// What a failed removal leaves stays counted until the startup wipe.
 		if err := os.RemoveAll(gone.path); err != nil {
-			slog.Warn("volume cache: remove evicted object", "path", gone.path, "err", withoutPath(err))
+			slog.Warn("volume cache: remove evicted object; its bytes stay counted until the runner restarts", "path", gone.path, "err", withoutPath(err))
+			continue
 		}
 		c.mu.Lock()
 		c.removingBytes -= gone.bytes

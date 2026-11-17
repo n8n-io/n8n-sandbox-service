@@ -195,7 +195,7 @@ runner:
       sizeLimit: 24Gi
 ```
 
-The render fails unless `sizeLimit` is a whole number of Gi that holds the budget and 5% more: the kubelet evicts a pod whose `emptyDir` outgrows its limit. It also fails for a cache dir on the Docker data root, since the runner empties the cache dir at startup. The cache shares the node's disk with the Docker data root, and with disk quotas, with the pool image, which grows as sandboxes write. The cache keeps 5% of the disk free, but cannot see what the pool has yet to grow into, so size the node's disk for both volumes' limits.
+The render fails unless `sizeLimit` is a whole number of Gi that holds the budget and 5% more: the kubelet evicts a pod whose `emptyDir` outgrows its limit. It also fails for a cache dir the runner would refuse or whose startup wipe would delete something else: `/`, the data dir or a dir containing it, or a dir inside or containing the Docker data root (`/var/lib/docker` or the pool mount). The cache shares the node's disk with the Docker data root, and with disk quotas, with the pool image, which grows as sandboxes write. The cache keeps 5% of the disk free, but cannot see what the pool has yet to grow into, so size the node's disk for both volumes' limits.
 
 ## Existing Auth Secret
 

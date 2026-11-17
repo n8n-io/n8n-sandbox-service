@@ -15,13 +15,13 @@ func TestTarCountsValidate(t *testing.T) {
 		valid  bool
 	}{
 		"one directory":                  {TarCounts{Entries: 1, DecompressedBytes: 1024}, true},
-		"at the bounds":                  {TarCounts{Entries: maxTarEntries, ContentBytes: maxTarContentBytes, DecompressedBytes: maxTarDecompressedBytes}, true},
+		"at the bounds":                  {TarCounts{Entries: MaxTarEntries, ContentBytes: MaxTarBytes, DecompressedBytes: MaxTarDecompressedBytes}, true},
 		"no entries":                     {TarCounts{DecompressedBytes: 1024}, false},
-		"too many entries":               {TarCounts{Entries: maxTarEntries + 1, DecompressedBytes: 1024}, false},
+		"too many entries":               {TarCounts{Entries: MaxTarEntries + 1, DecompressedBytes: 1024}, false},
 		"negative content":               {TarCounts{Entries: 1, ContentBytes: -1, DecompressedBytes: 1024}, false},
-		"too much content":               {TarCounts{Entries: 1, ContentBytes: maxTarContentBytes + 1, DecompressedBytes: maxTarDecompressedBytes}, false},
+		"too much content":               {TarCounts{Entries: 1, ContentBytes: MaxTarBytes + 1, DecompressedBytes: MaxTarDecompressedBytes}, false},
 		"nothing decompressed":           {TarCounts{Entries: 1}, false},
-		"too much decompressed":          {TarCounts{Entries: 1, DecompressedBytes: maxTarDecompressedBytes + 1}, false},
+		"too much decompressed":          {TarCounts{Entries: 1, DecompressedBytes: MaxTarDecompressedBytes + 1}, false},
 		"content above the decompressed": {TarCounts{Entries: 1, ContentBytes: 2048, DecompressedBytes: 1024}, false},
 	} {
 		if err := tt.counts.Validate(); (err == nil) != tt.valid {

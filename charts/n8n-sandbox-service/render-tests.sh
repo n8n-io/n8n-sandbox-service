@@ -242,6 +242,31 @@ for unclean in /var/lib//docker /var/lib/./docker/cache /var//lib /var/cache/../
 done
 must_fail "must be an absolute path" \
 	--set runner.config.volumeCacheDir=volume-cache
+must_fail "must be an absolute path" \
+	--set runner.config.dataDir=sandboxes \
+	--set runner.volumeCache.emptyDir.enabled=true \
+	--set runner.volumeCache.emptyDir.sizeLimit=21Gi
+# A relative data dir, which the runner resolves itself, still renders.
+render --set runner.config.dataDir=sandboxes >/dev/null
+# An empty data dir is the runner's default.
+render --set runner.config.dataDir= \
+	--set runner.volumeCache.emptyDir.enabled=true \
+	--set runner.volumeCache.emptyDir.sizeLimit=21Gi \
+	--show-only templates/runner-statefulset.yaml |
+	grep 'mountPath: "/var/sandboxes/volume-cache"' >/dev/null
+# Whatever the runner refuses to wipe fails here too.
+must_fail "must not be /" \
+	--set runner.config.volumeCacheDir=/
+must_fail "must not be the data dir" \
+	--set runner.config.volumeCacheDir=/var/sandboxes/
+must_fail "must not be the data dir" \
+	--set runner.config.volumeCacheDir=/var
+# Surrounding space is trimmed, as the runner trims it.
+render --set 'runner.config.volumeCacheDir= /var/cache/volumes ' \
+	--set runner.volumeCache.emptyDir.enabled=true \
+	--set runner.volumeCache.emptyDir.sizeLimit=21Gi \
+	--show-only templates/runner-statefulset.yaml |
+	grep 'mountPath: "/var/cache/volumes"' >/dev/null
 must_fail "at most 16 digits" \
 	--set runner.config.volumeCacheMaxBytes=500000000000000000 \
 	--set runner.volumeCache.emptyDir.enabled=true \

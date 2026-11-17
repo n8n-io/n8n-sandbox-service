@@ -71,10 +71,11 @@ An idle stop loses memory the same way (`docker stop` then `docker start` re-run
 
 ## Volumes
 
-The create options name the volumes, `tar` only; a create naming another kind,
-or made while the volume cache can't be made `nosuid,nodev`, fails with
-`FailedPrecondition` before anything is created. A sandbox without volumes
-takes none of these steps.
+The create options name the volumes, `tar` only. A create naming another kind
+fails with `FailedPrecondition` before anything is acquired or created; one
+that would bind a volume while the volume cache can't be made `nosuid,nodev`
+fails the same way, after the acquire and before the container exists. A
+sandbox without volumes takes none of these steps.
 
 - **Cache:** the volume cache (`internal/runner/volumecache`) downloads a tar,
   checks its size and sha256, and unpacks it once, holding it to the counts the
@@ -86,9 +87,9 @@ takes none of these steps.
   run at once; the wait for one and the unpack share the fetch timeout with the
   download. A failed or cut-off unpack leaves nothing; the tar is deleted either
   way. Measuring, eviction and the startup wipe never follow a link.
-- **Create:** the cache pins by sandbox ID, so a create with volumes is
-  refused while another create of the ID is in progress or a container of the
-  ID exists. Every volume is acquired at once, pinned for the sandbox, before
+- **Create:** the cache pins by sandbox ID, so a create with volumes holds a
+  lock on the ID, which refuses a second create of the ID and makes a delete
+  of it wait, and is refused while a container of the ID exists. Every volume is acquired at once, pinned for the sandbox, before
   the container exists, waiting until a minute before the create's deadline
   (half the time left if that is more). A required volume that fails fails the
   create; a capacity refusal from the cache stays one. An optional one is left
@@ -105,7 +106,7 @@ takes none of these steps.
 - **Stop, wake, restart after a crash:** the container keeps its mounts and the
   sandbox its pins; Docker binds the same trees again.
 - **Delete, failed create:** the pins are released once the container is gone,
-  also by a delete that finds none, unless a create of the ID is in progress.
+  also by a delete that finds none.
   A container a failed cleanup left behind keeps them until a delete removes
   it. Errors that can reach the client name the cache dir only as
   `<volume cache>`.

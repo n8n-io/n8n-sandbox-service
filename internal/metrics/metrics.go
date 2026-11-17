@@ -396,6 +396,11 @@ var volumeBuildBuckets = []float64{1, 2, 5, 10, 20, 30, 60, 120, 300, 600}
 // is the default fetch timeout; 600 is for a raised one.
 var volumeDownloadBuckets = []float64{0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600}
 
+// volumeUnpackBuckets covers unpacks from small tars, done in milliseconds, to
+// several gigabytes. 300 is the default fetch timeout, which the unpack shares;
+// 600 is for a raised one.
+var volumeUnpackBuckets = []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600}
+
 // RunnerRecorder owns the metric instruments emitted by the runner binary.
 type RunnerRecorder struct {
 	reg                  *prometheus.Registry
@@ -550,7 +555,7 @@ func NewRunnerRecorder(enabled bool) *RunnerRecorder {
 			Namespace:   Namespace,
 			Name:        "volume_cache_unpack_duration_seconds",
 			Help:        "Duration of successful volume tar unpacks in seconds, from the unpack slot to the tree in place.",
-			Buckets:     volumeDownloadBuckets,
+			Buckets:     volumeUnpackBuckets,
 			ConstLabels: prometheus.Labels{"role": RoleRunner},
 		},
 	)

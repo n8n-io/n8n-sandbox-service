@@ -449,6 +449,35 @@ func TestEvictedBytesCountUntilRemoved(t *testing.T) {
 	}
 }
 
+// An evicted tree its fetch could not remove stays counted: it is still on
+// disk until the startup wipe.
+func TestEvictedBytesStayCountedWhenRemovalFails(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root removes the read-only directory anyway")
+	}
+	cache, rec := newTestCache(t, 1<<30)
+	stuck := serve(t, buildTar(t, false, tarEntry{name: "locked/file", content: strings.Repeat("x", 8192)}), false)
+	stuckPath := stuck.acquireTar(t, cache, "sandbox-a")
+	cache.Release(tarKey(stuck.data), "sandbox-a")
+	locked := filepath.Join(stuckPath, "locked")
+	if err := os.Chmod(locked, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+	stuckBytes := cache.usedBytes()
+
+	next := serve(t, buildTar(t, false, tarEntry{name: "a", content: "x"}), false)
+	cache.setMaxBytes(stuckBytes + roomFor(tarKey(next.data), next.tarSource(t)).bytes - 1)
+	nextPath := next.acquireTar(t, cache, "sandbox-b")
+	wantEvictions(t, rec, 1)
+	if _, err := os.Stat(filepath.Join(locked, "file")); err != nil {
+		t.Fatalf("the locked file is gone, so the removal did not fail: %v", err)
+	}
+	if used, want := cache.usedBytes(), stuckBytes+treeSize(t, nextPath).bytes; used != want {
+		t.Errorf("budget counts %d bytes, want the %d of both trees on disk", used, want)
+	}
+}
+
 // outsideTarget is a file and a directory outside the cache that links in a
 // tree point at.
 func outsideTarget(t *testing.T) (dir, file string) {

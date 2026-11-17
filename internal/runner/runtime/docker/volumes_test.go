@@ -339,18 +339,39 @@ func TestCreateWithVolumesRefusesAnIDThatHasAContainer(t *testing.T) {
 	}
 }
 
-// A second create of an ID while the first acquires is refused, and a delete
-// that finds no container leaves the first one's pins alone.
-func TestCreateWithVolumesInProgressKeepsItsPins(t *testing.T) {
+// A refused duplicate create leaves the existing sandbox's pins to its delete.
+func TestRefusedCreateLeavesThePinsToTheDelete(t *testing.T) {
+	runtime := newVolumeRuntime(t)
+	if _, err := runtime.create(tarVolume("a", "/mnt/a", false)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.create(tarVolume("b", "/mnt/b", false)); err == nil {
+		t.Fatal("duplicate CreateSandbox() succeeded")
+	}
+	if pins := runtime.cache.pins(volumeSandbox); len(pins) != 1 {
+		t.Fatalf("pins = %v after the refused create, want the first create's", pins)
+	}
+	if err := runtime.DeleteSandbox(context.Background(), volumeSandbox); err != nil {
+		t.Fatal(err)
+	}
+	if pins := runtime.cache.pins(volumeSandbox); len(pins) != 0 {
+		t.Errorf("pins = %v after the delete, want none", pins)
+	}
+}
+
+// While a create with volumes runs, a second create of the ID is refused and a
+// delete of it waits: it then removes the new container and releases its
+// pins, never pins of a create in progress.
+func TestCreateWithVolumesHoldsTheSandboxLock(t *testing.T) {
 	runtime := newVolumeRuntime(t)
 	slow := tarVolume("b", "/mnt/b", true)
 	runtime.cache.block[slow.SHA256] = true
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	done := make(chan error, 1)
+	created := make(chan error, 1)
 	go func() {
 		_, err := runtime.CreateSandbox(ctx, volumeSandbox, &runnerruntime.CreateOptions{Volumes: []runnerruntime.Volume{tarVolume("a", "/mnt/a", false), slow}})
-		done <- err
+		created <- err
 	}()
 	deadline := time.Now().Add(5 * time.Second)
 	for len(runtime.cache.pins(volumeSandbox)) == 0 {
@@ -360,17 +381,43 @@ func TestCreateWithVolumesInProgressKeepsItsPins(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 
-	if _, err := runtime.create(tarVolume("c", "/mnt/c", false)); err == nil || !strings.Contains(err.Error(), "being created") {
+	if _, err := runtime.create(tarVolume("c", "/mnt/c", false)); err == nil || !strings.Contains(err.Error(), "being created or deleted") {
 		t.Errorf("second CreateSandbox() = %v, want a refusal", err)
 	}
-	if err := runtime.DeleteSandbox(context.Background(), volumeSandbox); !errors.Is(err, ErrSandboxNotFound) {
-		t.Errorf("DeleteSandbox() = %v, want %v", err, ErrSandboxNotFound)
+	deleted := make(chan error, 1)
+	go func() { deleted <- runtime.DeleteSandbox(context.Background(), volumeSandbox) }()
+	if err := <-created; err != nil {
+		t.Fatalf("CreateSandbox() failed: %v", err)
 	}
-	if pins := runtime.cache.pins(volumeSandbox); len(pins) != 1 {
-		t.Errorf("pins = %v after a delete during the create, want the create's", pins)
+	if err := <-deleted; err != nil {
+		t.Fatalf("DeleteSandbox() after the create = %v", err)
 	}
-	if err := <-done; err != nil {
-		t.Fatalf("first CreateSandbox() failed: %v", err)
+	if pins := runtime.cache.pins(volumeSandbox); len(pins) != 0 {
+		t.Errorf("pins = %v after the delete, want none", pins)
+	}
+	if runtime.backend.isCreated() {
+		t.Error("the delete left the container the create made")
+	}
+	runtime.mu.Lock()
+	locks := len(runtime.sandboxLocks)
+	runtime.mu.Unlock()
+	if locks != 0 {
+		t.Errorf("%d sandbox locks left, want none", locks)
+	}
+}
+
+// A delete gives up waiting for the lock when its context ends.
+func TestDeleteWaitsForTheLockOnlyUntilItsDeadline(t *testing.T) {
+	runtime := newVolumeRuntime(t)
+	unlock, err := runtime.lockSandbox(context.Background(), volumeSandbox, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := runtime.lockSandbox(ctx, volumeSandbox, true); !errors.Is(err, context.Canceled) {
+		t.Fatalf("lockSandbox() = %v, want %v", err, context.Canceled)
 	}
 }
 
@@ -392,33 +439,6 @@ func TestCreateWithVolumesErrorsLeaveOutTheCacheDir(t *testing.T) {
 	}
 	if got := (withoutCachePaths{err: errors.New("a.b"), dir: ""}).Error(); got != "a.b" {
 		t.Errorf("without a dir, Error() = %q, want the error unchanged", got)
-	}
-}
-
-// A delete that started before a create of the same ID, and finds no
-// container only because it removed the old one first, leaves the new
-// create's pins alone.
-func TestDeleteLeavesPinsOfACreateThatRanMeanwhile(t *testing.T) {
-	runtime := newVolumeRuntime(t)
-	before := runtime.volumeGeneration(volumeSandbox)
-	if _, err := runtime.create(tarVolume("a", "/mnt/a", false)); err != nil {
-		t.Fatal(err)
-	}
-	runtime.releaseVolumesAfterDelete(volumeSandbox, before)
-	if pins := runtime.cache.pins(volumeSandbox); len(pins) != 1 {
-		t.Fatalf("pins = %v, want the new create's kept", pins)
-	}
-	if err := runtime.DeleteSandbox(context.Background(), volumeSandbox); err != nil {
-		t.Fatal(err)
-	}
-	if pins := runtime.cache.pins(volumeSandbox); len(pins) != 0 {
-		t.Fatalf("pins = %v after its own delete, want none", pins)
-	}
-	runtime.mu.Lock()
-	left := len(runtime.volumeCreates)
-	runtime.mu.Unlock()
-	if left != 0 {
-		t.Errorf("%d create states left after the delete, want none", left)
 	}
 }
 

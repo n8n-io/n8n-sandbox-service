@@ -82,10 +82,9 @@ type Runtime struct {
 	watchBackoff    time.Duration
 
 	volumeCache runnerruntime.VolumeCache
-	// volumeCreates tracks creates with volumes by sandbox ID, under mu: the
-	// cache pins by sandbox ID.
-	volumeCreates   map[string]volumeCreate
-	volumeCreateSeq uint64
+	// sandboxLocks serializes, per sandbox ID, a create with volumes and the
+	// deletes of the ID, under mu: the cache pins by sandbox ID.
+	sandboxLocks map[string]*sandboxLock
 	// volumeDirMu serializes setNoSuidNoDev on the volume cache dir.
 	volumeDirMu     sync.Mutex
 	setNoSuidNoDev  func(dir string) error
@@ -184,7 +183,7 @@ func newRuntime(runnerConfig *config.Config, cfg Config, docker dockerBackend) *
 		watchBackoff:    2 * time.Second,
 		expectedStops:   make(map[string]expectedStop),
 		restarted:       make(map[string]struct{}),
-		volumeCreates:   make(map[string]volumeCreate),
+		sandboxLocks:    make(map[string]*sandboxLock),
 		setNoSuidNoDev:  setNoSuidNoDev,
 		checkVolumeTree: checkVolumeTree,
 	}
@@ -294,10 +293,16 @@ func (m *Runtime) GetSandboxInfo(ctx context.Context, sandboxID string) (*runner
 func (m *Runtime) DeleteSandbox(ctx context.Context, sandboxID string) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), runnerruntime.TransitionBudget)
 	defer cancel()
-	generation := m.volumeGeneration(sandboxID)
+	// A create with volumes of the ID finishes first, so the pins released
+	// here are never that create's.
+	unlock, err := m.lockSandbox(ctx, sandboxID, true)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	containerID, err := m.FindContainerIDByLabel(ctx, sandboxID)
 	if errors.Is(err, ErrSandboxNotFound) {
-		m.releaseVolumesAfterDelete(sandboxID, generation)
+		m.releaseVolumes(sandboxID)
 	}
 	if err != nil {
 		return err
@@ -306,7 +311,7 @@ func (m *Runtime) DeleteSandbox(ctx context.Context, sandboxID string) error {
 		return err
 	}
 	m.clearRestarted(sandboxID)
-	m.releaseVolumesAfterDelete(sandboxID, generation)
+	m.releaseVolumes(sandboxID)
 	return nil
 }
 

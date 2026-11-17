@@ -139,11 +139,19 @@ filesystem, where no volume limit bounds it.
 {{- end }}
 
 {{/*
+The runner's data dir: runner.config.dataDir, or the runner's default when it
+is empty.
+*/}}
+{{- define "n8n-sandbox-service.runnerDataDir" -}}
+{{- default "/var/sandboxes" .Values.runner.config.dataDir -}}
+{{- end }}
+
+{{/*
 The runner's volume cache dir: runner.config.volumeCacheDir, or the runner's
 default under its data dir.
 */}}
 {{- define "n8n-sandbox-service.runnerVolumeCacheDir" -}}
-{{- .Values.runner.config.volumeCacheDir | default (printf "%s/volume-cache" .Values.runner.config.dataDir) | clean -}}
+{{- default "" .Values.runner.config.volumeCacheDir | toString | trim | default (printf "%s/volume-cache" (include "n8n-sandbox-service.runnerDataDir" .)) | clean -}}
 {{- end }}
 
 {{/*

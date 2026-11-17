@@ -9,6 +9,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// mountinfoEscaper writes a path as /proc/self/mountinfo does.
+var mountinfoEscaper = strings.NewReplacer(`\`, `\134`, " ", `\040`, "\t", `\011`, "\n", `\012`)
+
 // mountsAt counts the mounts at path in this process's mount table.
 func mountsAt(t *testing.T, path string) int {
 	t.Helper()
@@ -16,9 +19,10 @@ func mountsAt(t *testing.T, path string) int {
 	if err != nil {
 		t.Fatal(err)
 	}
+	escaped := mountinfoEscaper.Replace(path)
 	count := 0
 	for line := range strings.SplitSeq(string(mountinfo), "\n") {
-		if fields := strings.Fields(line); len(fields) > 4 && fields[4] == path {
+		if fields := strings.Fields(line); len(fields) > 4 && fields[4] == escaped {
 			count++
 		}
 	}
@@ -28,7 +32,11 @@ func mountsAt(t *testing.T, path string) int {
 // The cache dir becomes nosuid,nodev and keeps the flags it had; a second
 // call, as from a runner restarted in the same container, mounts nothing.
 func TestSetNoSuidNoDevKeepsTheMountsFlags(t *testing.T) {
-	dir := t.TempDir()
+	// A space and a backslash, which mountinfo escapes.
+	dir := filepath.Join(t.TempDir(), `cache dir\x`)
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := unix.Mount("tmpfs", dir, "tmpfs", unix.MS_NOEXEC|unix.MS_NOATIME, "size=1m"); err != nil {
 		t.Skipf("needs root that may mount: %v", err)
 	}
@@ -61,6 +69,9 @@ func TestSetNoSuidNoDevKeepsTheMountsFlags(t *testing.T) {
 		t.Errorf("content gone after the bind: %v", err)
 	}
 	mounts := mountsAt(t, dir)
+	if mounts < 2 {
+		t.Fatalf("found %d mounts at the dir, want the tmpfs and the bind", mounts)
+	}
 	if err := setNoSuidNoDev(dir); err != nil {
 		t.Fatal(err)
 	}

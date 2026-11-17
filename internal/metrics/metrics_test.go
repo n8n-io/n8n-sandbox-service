@@ -300,6 +300,7 @@ func TestRunnerRecorderVolumeCache(t *testing.T) {
 	rec.ObserveVolumeCacheUnpack(VolumeUnpackSuccess)
 	rec.ObserveVolumeCacheUnpack(VolumeUnpackInvalid)
 	rec.ObserveVolumeCacheUnpackDuration(4 * time.Second)
+	rec.ObserveVolumeCacheUnpackDuration(20 * time.Millisecond)
 	rec.SetVolumeCache(func() float64 { return 4096 }, func() float64 { return 3 }, func() float64 { return 2 })
 
 	if got := rec.VolumeCacheFetchCount(VolumeFetchHit); got != 2 {
@@ -315,8 +316,10 @@ func TestRunnerRecorderVolumeCache(t *testing.T) {
 		`sandbox_volume_cache_evictions_total{role="runner"} 1`,
 		`sandbox_volume_cache_unpacks_total{result="invalid",role="runner"} 1`,
 		`sandbox_volume_cache_unpacks_total{result="success",role="runner"} 1`,
-		`sandbox_volume_cache_unpack_duration_seconds_bucket{role="runner",le="5"} 1`,
-		`sandbox_volume_cache_unpack_duration_seconds_bucket{role="runner",le="2.5"} 0`,
+		`sandbox_volume_cache_unpack_duration_seconds_bucket{role="runner",le="0.01"} 0`,
+		`sandbox_volume_cache_unpack_duration_seconds_bucket{role="runner",le="0.05"} 1`,
+		`sandbox_volume_cache_unpack_duration_seconds_bucket{role="runner",le="2.5"} 1`,
+		`sandbox_volume_cache_unpack_duration_seconds_bucket{role="runner",le="5"} 2`,
 		`sandbox_volume_cache_bytes{role="runner"} 4096`,
 		`sandbox_volume_cache_entries{role="runner"} 3`,
 		`sandbox_volume_cache_pinned_entries{role="runner"} 2`,

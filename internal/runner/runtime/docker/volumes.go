@@ -60,10 +60,10 @@ func (m *Runtime) prepareVolumeCacheDir() error {
 
 // createWithVolumes acquires every volume before the container exists, then
 // creates it with one read-only bind mount per tree it got. The cache pins by
-// sandbox ID, so it refuses while another create of the ID is in progress or
-// a container of the ID exists, whose pins a failure here would release.
-// Every pin is released if the create fails and its container is gone;
-// delete releases them otherwise.
+// sandbox ID, so it holds the ID's lock throughout, and refuses while a
+// container of the ID exists, whose pins a failure here would release. Every
+// pin is released if the create fails and its container is gone; delete
+// releases them otherwise.
 func (m *Runtime) createWithVolumes(ctx context.Context, sandboxID string, opts *CreateOptions) (*ContainerInfo, error) {
 	if err := m.checkCreate(sandboxID); err != nil {
 		return nil, err
@@ -76,11 +76,11 @@ func (m *Runtime) createWithVolumes(ctx context.Context, sandboxID string, opts 
 			return nil, fmt.Errorf("volume %d: Docker attaches %s volumes, not %s: %w", index, volume.KindTar, vol.Kind, runnerruntime.ErrVolumesUnsupported)
 		}
 	}
-	if !m.startVolumeCreate(sandboxID) {
-		return nil, fmt.Errorf("sandbox %s is being created already", sandboxID)
+	unlock, err := m.lockSandbox(ctx, sandboxID, false)
+	if err != nil {
+		return nil, err
 	}
-	pinsKept := false
-	defer func() { m.endVolumeCreate(sandboxID, pinsKept) }()
+	defer unlock()
 	if _, err := m.FindContainerIDByLabel(ctx, sandboxID); !errors.Is(err, ErrSandboxNotFound) {
 		if err == nil {
 			err = fmt.Errorf("sandbox %s has a container already", sandboxID)
@@ -99,56 +99,60 @@ func (m *Runtime) createWithVolumes(ctx context.Context, sandboxID string, opts 
 			// Unpinned, its trees could be evicted under it. A delete of the
 			// sandbox removes it and releases them.
 			slog.Warn("docker volumes stay pinned for a container a failed create left behind", "sandbox_id", sandboxID)
-			pinsKept = true
 		} else {
 			m.volumeCache.ReleaseAll(sandboxID)
 		}
 		slog.Warn("docker create with volumes failed", "sandbox_id", sandboxID, "err", err)
 		return nil, withoutCachePaths{err: err, dir: m.runnerConfig.VolumeCacheDir}
 	}
-	pinsKept = true
 	info.VolumesLeftOut = m.reportVolumes(sandboxID, opts.Volumes, leftOut)
 	return info, nil
 }
 
-// volumeCreate is the state of the creates with volumes of one sandbox ID:
-// whether one is in progress, and the generation of the last one, so that a
-// delete can tell whether a create ran while it did.
-type volumeCreate struct {
-	inProgress bool
-	generation uint64
+// sandboxLock is held by the create with volumes or the delete of one
+// sandbox ID that runs; users counts those holding or waiting for it.
+type sandboxLock struct {
+	held  chan struct{}
+	users int
 }
 
-func (m *Runtime) startVolumeCreate(sandboxID string) bool {
+// lockSandbox takes the lock of sandboxID: waiting for it until ctx ends, or
+// refusing at once if it is held.
+func (m *Runtime) lockSandbox(ctx context.Context, sandboxID string, wait bool) (func(), error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.volumeCreates[sandboxID].inProgress {
-		return false
+	lock := m.sandboxLocks[sandboxID]
+	if lock == nil {
+		lock = &sandboxLock{held: make(chan struct{}, 1)}
+		m.sandboxLocks[sandboxID] = lock
 	}
-	m.volumeCreateSeq++
-	m.volumeCreates[sandboxID] = volumeCreate{inProgress: true, generation: m.volumeCreateSeq}
-	return true
-}
-
-// endVolumeCreate ends a create. Its state stays while it keeps pins, for the
-// delete that releases them.
-func (m *Runtime) endVolumeCreate(sandboxID string, pinsKept bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if !pinsKept {
-		delete(m.volumeCreates, sandboxID)
-		return
+	lock.users++
+	m.mu.Unlock()
+	leave := func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if lock.users--; lock.users == 0 {
+			delete(m.sandboxLocks, sandboxID)
+		}
 	}
-	state := m.volumeCreates[sandboxID]
-	state.inProgress = false
-	m.volumeCreates[sandboxID] = state
-}
-
-// volumeGeneration is what a delete reads before it looks for the container.
-func (m *Runtime) volumeGeneration(sandboxID string) uint64 {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.volumeCreates[sandboxID].generation
+	if wait {
+		select {
+		case lock.held <- struct{}{}:
+		case <-ctx.Done():
+			leave()
+			return nil, ctx.Err()
+		}
+	} else {
+		select {
+		case lock.held <- struct{}{}:
+		default:
+			leave()
+			return nil, fmt.Errorf("sandbox %s is being created or deleted", sandboxID)
+		}
+	}
+	return func() {
+		<-lock.held
+		leave()
+	}, nil
 }
 
 // withoutCachePaths is an error from Docker, which quotes its command line and
@@ -277,21 +281,12 @@ func (m *Runtime) reportVolumes(sandboxID string, volumes []runnerruntime.Volume
 	return reasons
 }
 
-// releaseVolumesAfterDelete unpins the sandbox's trees once a delete found
-// its container gone, unless a create of the ID started since the delete
-// read generation: the pins are that create's then.
-func (m *Runtime) releaseVolumesAfterDelete(sandboxID string, generation uint64) {
-	if m.volumeCache == nil {
-		return
+// releaseVolumes unpins the sandbox's trees once a delete, holding the ID's
+// lock, found its container gone.
+func (m *Runtime) releaseVolumes(sandboxID string) {
+	if m.volumeCache != nil {
+		m.volumeCache.ReleaseAll(sandboxID)
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	state := m.volumeCreates[sandboxID]
-	if state.inProgress || state.generation != generation {
-		return
-	}
-	m.volumeCache.ReleaseAll(sandboxID)
-	delete(m.volumeCreates, sandboxID)
 }
 
 // checkVolumeTree refuses a cached tree a sandbox could write, or whose bind
