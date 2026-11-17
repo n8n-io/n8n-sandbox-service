@@ -228,8 +228,8 @@ func (s *PostgresStore) GetAnyKind(id string) (*SandboxRecord, error) {
 	return s.getSandbox(id, AllKinds()...)
 }
 
-func (s *PostgresStore) GetDefaultSandbox(id string) (*SandboxRecord, error) {
-	return s.getSandbox(id, KindDefault)
+func (s *PostgresStore) GetGeneralSandbox(id string) (*SandboxRecord, error) {
+	return s.getSandbox(id, KindGeneral)
 }
 
 func (s *PostgresStore) GetCodeSandbox(id string) (*SandboxRecord, error) {

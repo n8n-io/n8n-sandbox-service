@@ -14,9 +14,9 @@ func TestSandboxFilterWhere(t *testing.T) {
 		wantArgs []any
 	}{
 		{KindFilter(KindCode), "id = $1 AND kind IN ($2)", []any{"id", "code"}},
-		{KindFilter(KindDefault, KindDefault), "id = $1 AND kind IN ($2, $3)", []any{"id", "default", "default"}},
+		{KindFilter(KindGeneral, KindGeneral), "id = $1 AND kind IN ($2, $3)", []any{"id", "general", "general"}},
 		{KindFilter(AllKinds()...), "id = $1", []any{"id"}},
-		{KindFilter(KindCode, KindDefault), "id = $1", []any{"id"}},
+		{KindFilter(KindCode, KindGeneral), "id = $1", []any{"id"}},
 		{SandboxFilter{Kinds: AllKinds(), TenantID: "t"}, "id = $1 AND tenant_id = $2", []any{"id", "t"}},
 		{SandboxFilter{Kinds: []Kind{KindCode}, TenantID: "t"}, "id = $1 AND kind IN ($2) AND tenant_id = $3", []any{"id", "code", "t"}},
 	} {
@@ -30,7 +30,7 @@ func TestSandboxFilterWhere(t *testing.T) {
 	if cond, args, err := KindFilter(AllKinds()...).where(nil, nil, pg); err != nil || cond != "" || len(args) != 0 {
 		t.Errorf("where(all kinds) = %q %v err=%v, want no condition", cond, args, err)
 	}
-	for _, f := range []SandboxFilter{{}, KindFilter(KindDefault, "x"), KindFilter(KindDefault, KindCode, "")} {
+	for _, f := range []SandboxFilter{{}, KindFilter(KindGeneral, "x"), KindFilter(KindGeneral, KindCode, "")} {
 		if _, _, err := f.where(nil, nil, pg); err == nil {
 			t.Errorf("where(%+v): got nil error", f)
 		}
@@ -66,7 +66,7 @@ func testKindScoping(t *testing.T, s SandboxStore, tenantA, tenantB string) {
 		t.Cleanup(func() { _ = s.DeleteTenant(tc.tenantID) })
 		*tc.def, *tc.code = "default-"+tc.tenantID, "code-"+tc.tenantID
 		for _, rec := range []*SandboxRecord{
-			{ID: *tc.def, Kind: KindDefault},
+			{ID: *tc.def, Kind: KindGeneral},
 			{ID: *tc.code, Kind: KindCode, Name: "n"},
 		} {
 			rec.Status, rec.CreatedAt, rec.LastActiveAt, rec.TenantID = tc.status, 1, 100, tc.tenantID
@@ -115,8 +115,8 @@ func testKindScoping(t *testing.T, s SandboxStore, tenantA, tenantB string) {
 	}{
 		{"GetAnyKind(defA)", s.GetAnyKind, defA, true},
 		{"GetAnyKind(codeA)", s.GetAnyKind, codeA, true},
-		{"GetDefaultSandbox(defA)", s.GetDefaultSandbox, defA, true},
-		{"GetDefaultSandbox(codeA)", s.GetDefaultSandbox, codeA, false},
+		{"GetGeneralSandbox(defA)", s.GetGeneralSandbox, defA, true},
+		{"GetGeneralSandbox(codeA)", s.GetGeneralSandbox, codeA, false},
 		{"GetCodeSandbox(codeA)", s.GetCodeSandbox, codeA, true},
 		{"GetCodeSandbox(defA)", s.GetCodeSandbox, defA, false},
 	} {
@@ -126,7 +126,7 @@ func testKindScoping(t *testing.T, s SandboxStore, tenantA, tenantB string) {
 		}
 	}
 
-	recs, err := s.List(KindFilter(KindDefault))
+	recs, err := s.List(KindFilter(KindGeneral))
 	wantIDs("List(default)", recs, err, defA, defB)
 	recs, err = s.List(KindFilter(AllKinds()...))
 	wantIDs("List(all)", recs, err, defA, codeA, defB, codeB)
@@ -134,7 +134,7 @@ func testKindScoping(t *testing.T, s SandboxStore, tenantA, tenantB string) {
 	wantIDs("List(tenantA, code)", recs, err, codeA)
 	recs, err = s.List(ofTenant(tenantB, AllKinds()...))
 	wantIDs("List(tenantB, all)", recs, err, defB, codeB)
-	wantCount("Count(tenantA, default)", ofTenant(tenantA, KindDefault), 1)
+	wantCount("Count(tenantA, default)", ofTenant(tenantA, KindGeneral), 1)
 	wantCount("Count(tenantA, all)", ofTenant(tenantA, AllKinds()...), 2)
 	wantCount("Count(tenantB, code)", ofTenant(tenantB, KindCode), 1)
 

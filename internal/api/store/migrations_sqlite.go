@@ -32,7 +32,7 @@ const sqliteAddEphemeralCol = `ALTER TABLE sandboxes ADD COLUMN ephemeral INTEGE
 const sqliteAddEgressCol = `ALTER TABLE sandboxes ADD COLUMN egress TEXT NOT NULL DEFAULT 'public'`
 
 // SQLite ignores VARCHAR lengths, so CHECKs hold the same limits as Postgres.
-const sqliteAddKindCol = `ALTER TABLE sandboxes ADD COLUMN kind TEXT NOT NULL DEFAULT 'default' CHECK (kind IN ('default', 'code'))`
+const sqliteAddKindCol = `ALTER TABLE sandboxes ADD COLUMN kind TEXT NOT NULL DEFAULT 'general' CHECK (kind IN ('general', 'code'))`
 
 const sqliteAddNameCol = `ALTER TABLE sandboxes ADD COLUMN name TEXT NOT NULL DEFAULT '' CHECK (length(name) <= 128)`
 

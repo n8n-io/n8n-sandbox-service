@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS sandboxes (
 	tenant_id                 TEXT NOT NULL DEFAULT '__admin__',
 	ephemeral                 BOOLEAN NOT NULL DEFAULT false,
 	egress                    TEXT NOT NULL DEFAULT 'public',
-	kind                      VARCHAR(32) NOT NULL DEFAULT 'default' CONSTRAINT sandboxes_kind_check CHECK (kind IN ('default', 'code')),
+	kind                      VARCHAR(32) NOT NULL DEFAULT 'general' CONSTRAINT sandboxes_kind_check CHECK (kind IN ('general', 'code')),
 	name                      VARCHAR(128) NOT NULL DEFAULT '',
 	options_hash              VARCHAR(512) NOT NULL DEFAULT '',
 	idle_timeout_ms           BIGINT NOT NULL DEFAULT 0,
@@ -73,7 +73,7 @@ const postgresAddEgressCol = `ALTER TABLE sandboxes ADD COLUMN IF NOT EXISTS egr
 
 // One statement, so the ACCESS EXCLUSIVE lock is taken once per startup.
 const postgresAddCodeSandboxCols = `ALTER TABLE sandboxes
-	ADD COLUMN IF NOT EXISTS kind VARCHAR(32) NOT NULL DEFAULT 'default' CONSTRAINT sandboxes_kind_check CHECK (kind IN ('default', 'code')),
+	ADD COLUMN IF NOT EXISTS kind VARCHAR(32) NOT NULL DEFAULT 'general' CONSTRAINT sandboxes_kind_check CHECK (kind IN ('general', 'code')),
 	ADD COLUMN IF NOT EXISTS name VARCHAR(128) NOT NULL DEFAULT '',
 	ADD COLUMN IF NOT EXISTS options_hash VARCHAR(512) NOT NULL DEFAULT '',
 	ADD COLUMN IF NOT EXISTS idle_timeout_ms BIGINT NOT NULL DEFAULT 0,
@@ -82,7 +82,7 @@ const postgresAddCodeSandboxCols = `ALTER TABLE sandboxes
 
 // Runs after postgresAddCodeSandboxCols, so existing tables get the comments too.
 const postgresCommentCodeSandboxCols = `
-COMMENT ON COLUMN sandboxes.kind IS 'Sandbox kind: default or code';
+COMMENT ON COLUMN sandboxes.kind IS 'Sandbox kind: general or code';
 COMMENT ON COLUMN sandboxes.name IS 'Code sandboxes: name chosen by the client. Unique per tenant among code sandboxes that are not draining';
 COMMENT ON COLUMN sandboxes.options_hash IS 'Code sandboxes: hash of the options the sandbox was created with';
 COMMENT ON COLUMN sandboxes.idle_timeout_ms IS 'Code sandboxes: delete after this many milliseconds without activity. 0 = not set';

@@ -98,7 +98,7 @@ func TestProvisionerDeletesEmptyTenantOnly(t *testing.T) {
 	sandboxID := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 	if err := s.Create(&store.SandboxRecord{
 		ID: sandboxID, Status: "running", CreatedAt: 1, LastActiveAt: 1, TenantID: created.Tenant.ID,
-		Kind: store.KindDefault,
+		Kind: store.KindGeneral,
 	}); err != nil {
 		t.Fatalf("create sandbox: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestProvisionerDeniedRoutes(t *testing.T) {
 	if err := s.Create(&store.SandboxRecord{
 		ID: sandboxID, Status: "running", CreatedAt: 1, LastActiveAt: 1,
 		TenantID: tenantID, RunnerHTTPBase: "https://runner.invalid",
-		Kind: store.KindDefault,
+		Kind: store.KindGeneral,
 	}); err != nil {
 		t.Fatalf("create sandbox: %v", err)
 	}

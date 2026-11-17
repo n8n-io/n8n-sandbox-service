@@ -89,7 +89,7 @@ func wantBatches(t *testing.T, s *fakeActivityStore, want ...map[string]int64) {
 }
 
 func row(id, status string, lastActiveAt int64) *store.SandboxRecord {
-	return &store.SandboxRecord{Kind: store.KindDefault, ID: id, Status: status, LastActiveAt: lastActiveAt}
+	return &store.SandboxRecord{Kind: store.KindGeneral, ID: id, Status: status, LastActiveAt: lastActiveAt}
 }
 
 func (a *ActivityRecorder) tracked(id string) bool {
@@ -131,7 +131,7 @@ func TestActivityRecorderWritesEveryKind(t *testing.T) {
 	}
 	defer s.Close()
 	recs := []*store.SandboxRecord{
-		{ID: "d", Kind: store.KindDefault, Status: "running", LastActiveAt: t0},
+		{ID: "d", Kind: store.KindGeneral, Status: "running", LastActiveAt: t0},
 		{ID: "c", Kind: store.KindCode, Name: "n", Status: "running", LastActiveAt: t0},
 	}
 	for _, rec := range recs {
