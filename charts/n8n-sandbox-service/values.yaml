@@ -152,6 +152,8 @@ api:
     type: ClusterIP
     httpPort: 8080
     grpcPort: 9090
+    # Rendered only with api.config.volumeStore=local.
+    volumeObjectsPort: 8443
     annotations: {}
 
   ingress:
@@ -175,6 +177,18 @@ api:
     # See the chart README section 'Prometheus Metrics'.
     metricsListenAddr: ""
     store: sqlite
+    # local keeps volume objects on the API's data volume and serves them to
+    # runners on a mutual TLS listener of its own, with the registration
+    # certificates. Needs api.persistence.enabled and one API pod. Empty turns
+    # volumes off; set remote through api.extraEnv instead. See the chart
+    # README section 'Volume Store'.
+    volumeStore: ""
+    # The volume-objects listener, with volumeStore=local.
+    volumeLocalListenAddr: ":8443"
+    # Where runners reach that listener. Empty means
+    # https://<API Service name>:<api.service.volumeObjectsPort>, the host
+    # in-cluster runners register with. Required with dataPlane.mode=external.
+    volumeLocalUrl: ""
     dataDir: /tmp/sandbox-api
     maxFileBytes: "10485760"
     defaultMaxSandboxes: "50"

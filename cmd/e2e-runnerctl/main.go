@@ -160,8 +160,9 @@ type createOutcome struct {
 	Result string `json:"result"`
 	// Applied is applied_create_options_json.
 	Applied json.RawMessage `json:"applied,omitempty"`
-	// Code is the gRPC status code of an error.
-	Code string `json:"code,omitempty"`
+	// Code and Message are the gRPC status of an error.
+	Code    string `json:"code,omitempty"`
+	Message string `json:"message,omitempty"`
 }
 
 func create(sandboxID, createOptions string) {
@@ -177,7 +178,7 @@ func create(sandboxID, createOptions string) {
 	case runnerctl.IsCapacityRefusal(err):
 		outcome = createOutcome{Result: "refused"}
 	default:
-		outcome = createOutcome{Result: "error", Code: status.Code(err).String()}
+		outcome = createOutcome{Result: "error", Code: status.Code(err).String(), Message: status.Convert(err).Message()}
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "create sandbox: %v\n", err)
@@ -216,23 +217,23 @@ func execute(sandboxID, command string) {
 		os.Exit(2)
 	}
 	tlsConfig, err := grpctls.NewClientTLSConfig(to.tls.CAFile, to.tls.CertFile, to.tls.KeyFile, to.tls.ServerName)
-	exitOn("runner TLS", err)
+	fatal("runner TLS", err)
 	client := &http.Client{
 		Transport:     &http.Transport{TLSClientConfig: tlsConfig},
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	body, err := json.Marshal(map[string]any{"command": command, "timeout_ms": 60_000})
-	exitOn("encode exec", err)
+	fatal("encode exec", err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	execURL := "https://" + httpAddr + "/sandboxes/" + url.PathEscape(sandboxID) + "/executions"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, execURL, bytes.NewReader(body))
-	exitOn("build exec request", err)
+	fatal("build exec request", err)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Api-Key", to.apiKey)
 	resp, err := client.Do(req)
-	exitOn("exec", err)
+	fatal("exec", err)
 	defer resp.Body.Close()
 
 	outcome := execOutcome{Status: resp.StatusCode, ExitCode: -1}
@@ -248,7 +249,7 @@ func execute(sandboxID, command string) {
 	scanner.Buffer(make([]byte, 0, 64<<10), 4<<20)
 	for scanner.Scan() {
 		var event daemon.Response
-		exitOn("decode exec event", json.Unmarshal(scanner.Bytes(), &event))
+		fatal("decode exec event", json.Unmarshal(scanner.Bytes(), &event))
 		switch event.Type {
 		case daemon.ResponseTypeStdout:
 			stdout.WriteString(event.Data)
@@ -261,7 +262,7 @@ func execute(sandboxID, command string) {
 			outcome.Body = event.Error
 		}
 	}
-	exitOn("read exec stream", scanner.Err())
+	fatal("read exec stream", scanner.Err())
 	outcome.Stdout, outcome.Stderr = stdout.String(), stderr.String()
 	printJSON(outcome)
 	if !exited {
@@ -294,25 +295,25 @@ func buildVolume(args []string) {
 	to := runner()
 
 	tar, err := os.Open(tarPath)
-	exitBuildOn("open tar", err)
+	exitOn("open tar", err)
 	defer tar.Close()
 	info, err := tar.Stat()
-	exitBuildOn("stat tar", err)
+	exitOn("stat tar", err)
 	header := &pb.BuildVolumeHeader{TarBytes: info.Size(), Entries: *entries, ContentBytes: *contentBytes, DecompressedBytes: *decompressedBytes}
 	if counted {
 		stats, err := safetar.Validate(tar, volume.TarPolicy(math.MaxInt32, 0, 0))
-		exitBuildOn("validate tar", err)
+		exitOn("validate tar", err)
 		header.Entries, header.ContentBytes, header.DecompressedBytes = int64(stats.Entries), stats.Bytes, stats.DecompressedBytes
 		_, err = tar.Seek(0, io.SeekStart)
-		exitBuildOn("rewind tar", err)
+		exitOn("rewind tar", err)
 	}
 
 	// Creating the image truncates it.
 	if existing, err := os.Stat(imagePath); err == nil && os.SameFile(info, existing) {
-		exitBuildOn("create image", errors.New("the image path names the tar"))
+		exitOn("create image", errors.New("the image path names the tar"))
 	}
 	image, err := os.OpenFile(imagePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-	exitBuildOn("create image", err)
+	exitOn("create image", err)
 	defer image.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
@@ -341,10 +342,10 @@ func buildVolume(args []string) {
 
 func tarCounts(path string) {
 	tar, err := os.Open(path)
-	exitOn("open tar", err)
+	fatal("open tar", err)
 	defer tar.Close()
 	stats, err := safetar.Validate(tar, volume.TarPolicy(math.MaxInt32, 0, 0))
-	exitOn("validate tar", err)
+	fatal("validate tar", err)
 	printJSON(volume.TarCounts{Entries: int64(stats.Entries), ContentBytes: stats.Bytes, DecompressedBytes: stats.DecompressedBytes})
 }
 
@@ -380,23 +381,24 @@ func serveFiles(args []string) {
 		_, _ = io.Copy(writer, file)
 	})
 	listener, err := net.Listen("tcp", *addr)
-	exitOn("listen", err)
+	fatal("listen", err)
 	fmt.Println("listening")
 	server := &http.Server{
 		Handler:           handler,
 		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS13},
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	exitOn("serve", server.ServeTLS(listener, *certFile, *keyFile))
+	fatal("serve", server.ServeTLS(listener, *certFile, *keyFile))
 }
 
 func printJSON(value any) {
 	line, err := json.Marshal(value)
-	exitOn("encode outcome", err)
+	fatal("encode outcome", err)
 	fmt.Println(string(line))
 }
 
-func exitOn(action string, err error) {
+// fatal ends a sandbox command that failed: the error on stderr.
+func fatal(action string, err error) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%s: %v\n", action, err)
 		os.Exit(1)
@@ -417,9 +419,9 @@ func (h *heldReader) Read(buf []byte) (int, error) {
 	return h.reader.Read(buf)
 }
 
-// exitBuildOn ends build-volume as a call that failed ends: the error on
-// stderr, the outcome "error" on stdout.
-func exitBuildOn(action string, err error) {
+// exitOn ends build-volume as a call that failed ends: the error on stderr,
+// the outcome "error" on stdout.
+func exitOn(action string, err error) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%s: %v\n", action, err)
 		line, _ := json.Marshal(buildOutcome{Result: "error"})

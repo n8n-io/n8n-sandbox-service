@@ -29,6 +29,8 @@ make daemon              # In-container HTTP daemon (static, CGO_ENABLED=0)
 
 Binaries are written to `bin/`.
 
+`make proto-volumestore` regenerates the volume store helper's gRPC code in `internal/api/volumestore/storepb` (protoc 35.1, protoc-gen-go v1.36.11, protoc-gen-go-grpc v1.6.2 on `PATH`).
+
 The Go version is the `go` line in `go.mod`. GitHub workflows and the e2e VM setup scripts install exactly that version, so it also builds the golden-build `sandbox-daemon`; an older local Go fetches it automatically. The Dockerfiles use the same minor (`golang:1.27-bookworm`), so a minor bump changes them too.
 
 ## Building Docker images
