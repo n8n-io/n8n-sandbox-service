@@ -3,6 +3,7 @@
 package codedaemon
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -50,59 +51,45 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer x.close()
+	finished := make(chan executionOutcome, 1)
+	go func() { finished <- x.watch() }()
 	if stream.emit(newAcceptedEvent(spec.TaskID)) != nil {
-		x.waitDetached()
+		<-finished
 		return
 	}
-	if event, ok := d.waitForTask(r, spec, stream, x, root); ok {
-		_ = stream.emit(event)
+	outcome, ok := waitForTask(r.Context(), spec, stream, finished)
+	if !ok {
+		return
 	}
+	if outcome.code != "" {
+		_ = stream.emit(newErrorEvent(spec.TaskID, outcome.code, outcome.message))
+		return
+	}
+	_ = stream.emit(d.resultEvent(spec, root, outcome.result))
 }
 
-// waitForTask sends heartbeats while awaiting a terminal event. If a heartbeat
-// write fails, it waits for execution to end and returns no event to write.
-func (d *Daemon) waitForTask(r *http.Request, spec taskSpec, stream taskStream, x *execution, root *os.Root) (taskEvent, bool) {
+// waitForTask sends heartbeats while awaiting the execution outcome. If a
+// heartbeat write fails, it waits for execution to end and returns no outcome.
+func waitForTask(ctx context.Context, spec taskSpec, stream taskStream, finished <-chan executionOutcome) (executionOutcome, bool) {
 	heartbeat := time.NewTicker(heartbeatInterval)
 	defer heartbeat.Stop()
-	timer := time.NewTimer(time.Until(x.deadline))
-	defer timer.Stop()
 	for {
 		select {
-		case msg, ok := <-x.result:
-			return d.terminalEvent(spec, root, msg, ok), true
-		case <-timer.C:
-			return x.timeoutEvent(spec), true
+		case outcome := <-finished:
+			return outcome, true
 		case <-heartbeat.C:
 			if stream.emit(newHeartbeatEvent(spec.TaskID)) == nil {
 				continue
 			}
-			x.waitDetached()
-			return nil, false
-		case <-r.Context().Done():
+			// Until the runtime supports per-task cancellation, retain the lane
+			// and files until the task ends or its deadline stops the process.
+			<-finished
+			return executionOutcome{}, false
+		case <-ctx.Done():
 			// Daemon shutdown also cancels the request while the stream is
 			// still open. Wait for the task so the stream gets a terminal event.
 			// After a client disconnect, writing that event fails harmlessly.
-			select {
-			case msg, ok := <-x.result:
-				return d.terminalEvent(spec, root, msg, ok), true
-			case <-timer.C:
-				return x.timeoutEvent(spec), true
-			}
+			return <-finished, true
 		}
 	}
-}
-
-// terminalEvent maps a receive from execution.result to the last stream event.
-func (d *Daemon) terminalEvent(spec taskSpec, root *os.Root, msg workerMessage, ok bool) taskEvent {
-	if !ok {
-		return newErrorEvent(spec.TaskID, "crashed", "runtime exited")
-	}
-	return d.resultEvent(spec, root, msg)
-}
-
-// timeoutEvent stops the worker after the task deadline passes.
-func (x *execution) timeoutEvent(spec taskSpec) any {
-	x.worker.kill()
-	<-x.worker.done
-	return newErrorEvent(spec.TaskID, "timeout", "task execution deadline exceeded")
 }
