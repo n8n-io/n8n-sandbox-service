@@ -1,0 +1,26 @@
+docs/API.md
+  h_8fb27e0cdf6d1e 859-860
+internal/codedaemon/cancel.go
+  h_8fb27e0cdf6d1e 1-89
+internal/codedaemon/cancel_test.go
+  h_8fb27e0cdf6d1e 1-62
+internal/codedaemon/daemon.go
+  h_8fb27e0cdf6d1e 91
+internal/codedaemon/events.go
+  h_8fb27e0cdf6d1e 4,91-94,96-97,100-110,113,118-119,124,126-128
+internal/codedaemon/worker.go
+  h_8fb27e0cdf6d1e 40,44,82,130,135-139,157-168,217-223,234-237,239-242,246,257-261
+internal/codedaemon/worker_test.go
+  h_8fb27e0cdf6d1e 43-48,58-60
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f3b48aed9169965b9beb55de8d240339ff784d49",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
