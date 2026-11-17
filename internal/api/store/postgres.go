@@ -238,11 +238,11 @@ func (s *PostgresStore) GetCodeSandbox(id string) (*SandboxRecord, error) {
 
 // getSandbox returns the sandbox id when it is of one of kinds, or nil.
 func (s *PostgresStore) getSandbox(id string, kinds ...Kind) (*SandboxRecord, error) {
-	cond, args, err := KindFilter(kinds...).where([]any{id}, pgPlaceholder)
+	cond, args, err := KindFilter(kinds...).where([]string{"id = $1"}, []any{id}, pgPlaceholder)
 	if err != nil {
 		return nil, err
 	}
-	q := `SELECT ` + pgSandboxCols + ` FROM sandboxes WHERE id = $1 AND ` + cond
+	q := `SELECT ` + pgSandboxCols + ` FROM sandboxes WHERE ` + cond
 	rec, err := scanRecord(s.db.QueryRow(q, args...))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -376,23 +376,31 @@ func (s *PostgresStore) querySandboxRecords(q string, args ...any) ([]*SandboxRe
 }
 
 func (s *PostgresStore) Count(f SandboxFilter) (int64, error) {
-	cond, args, err := f.where(nil, pgPlaceholder)
+	cond, args, err := f.where(nil, nil, pgPlaceholder)
 	if err != nil {
 		return 0, err
 	}
+	q := `SELECT COUNT(*) FROM sandboxes`
+	if cond != "" {
+		q += ` WHERE ` + cond
+	}
 	var n int64
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sandboxes WHERE `+cond, args...).Scan(&n); err != nil {
+	if err := s.db.QueryRow(q, args...).Scan(&n); err != nil {
 		return 0, fmt.Errorf("store: count sandboxes: %w", err)
 	}
 	return n, nil
 }
 
 func (s *PostgresStore) List(f SandboxFilter) ([]*SandboxRecord, error) {
-	cond, args, err := f.where(nil, pgPlaceholder)
+	cond, args, err := f.where(nil, nil, pgPlaceholder)
 	if err != nil {
 		return nil, err
 	}
-	q := `SELECT ` + pgSandboxCols + ` FROM sandboxes WHERE ` + cond + ` ORDER BY created_at DESC`
+	q := `SELECT ` + pgSandboxCols + ` FROM sandboxes`
+	if cond != "" {
+		q += ` WHERE ` + cond
+	}
+	q += ` ORDER BY created_at DESC`
 	return s.querySandboxRecords(q, args...)
 }
 

@@ -13,20 +13,25 @@ func TestSandboxFilterWhere(t *testing.T) {
 		wantCond string
 		wantArgs []any
 	}{
-		{KindFilter(KindCode), "kind IN ($2)", []any{"id", "code"}},
-		{KindFilter(KindDefault, KindDefault), "kind IN ($2, $3)", []any{"id", "default", "default"}},
-		{KindFilter(AllKinds()...), "TRUE", []any{"id"}},
-		{KindFilter(KindCode, KindDefault), "TRUE", []any{"id"}},
-		{SandboxFilter{Kinds: AllKinds(), TenantID: "t"}, "tenant_id = $2", []any{"id", "t"}},
-		{SandboxFilter{Kinds: []Kind{KindCode}, TenantID: "t"}, "kind IN ($2) AND tenant_id = $3", []any{"id", "code", "t"}},
+		{KindFilter(KindCode), "id = $1 AND kind IN ($2)", []any{"id", "code"}},
+		{KindFilter(KindDefault, KindDefault), "id = $1 AND kind IN ($2, $3)", []any{"id", "default", "default"}},
+		{KindFilter(AllKinds()...), "id = $1", []any{"id"}},
+		{KindFilter(KindCode, KindDefault), "id = $1", []any{"id"}},
+		{SandboxFilter{Kinds: AllKinds(), TenantID: "t"}, "id = $1 AND tenant_id = $2", []any{"id", "t"}},
+		{SandboxFilter{Kinds: []Kind{KindCode}, TenantID: "t"}, "id = $1 AND kind IN ($2) AND tenant_id = $3", []any{"id", "code", "t"}},
 	} {
-		cond, args, err := tc.f.where([]any{"id"}, pg)
+		cond, args, err := tc.f.where([]string{"id = $1"}, []any{"id"}, pg)
 		if err != nil || cond != tc.wantCond || !slices.Equal(args, tc.wantArgs) {
 			t.Errorf("where(%+v) = %q %v err=%v, want %q %v", tc.f, cond, args, err, tc.wantCond, tc.wantArgs)
 		}
 	}
+	// No condition at all is "", so callers leave out WHERE and SQLite counts
+	// without a scan.
+	if cond, args, err := KindFilter(AllKinds()...).where(nil, nil, pg); err != nil || cond != "" || len(args) != 0 {
+		t.Errorf("where(all kinds) = %q %v err=%v, want no condition", cond, args, err)
+	}
 	for _, f := range []SandboxFilter{{}, KindFilter(KindDefault, "x"), KindFilter(KindDefault, KindCode, "")} {
-		if _, _, err := f.where(nil, pg); err == nil {
+		if _, _, err := f.where(nil, nil, pg); err == nil {
 			t.Errorf("where(%+v): got nil error", f)
 		}
 	}

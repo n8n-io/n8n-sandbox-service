@@ -288,11 +288,11 @@ func (s *SQLiteStore) GetCodeSandbox(id string) (*SandboxRecord, error) {
 
 // getSandbox returns the sandbox id when it is of one of kinds, or nil.
 func (s *SQLiteStore) getSandbox(id string, kinds ...Kind) (*SandboxRecord, error) {
-	cond, args, err := KindFilter(kinds...).where([]any{id}, sqlitePlaceholder)
+	cond, args, err := KindFilter(kinds...).where([]string{"id = ?"}, []any{id}, sqlitePlaceholder)
 	if err != nil {
 		return nil, err
 	}
-	q := `SELECT ` + sqliteSandboxCols + ` FROM sandboxes WHERE id = ? AND ` + cond
+	q := `SELECT ` + sqliteSandboxCols + ` FROM sandboxes WHERE ` + cond
 	rec, err := scanRecord(s.db.QueryRow(q, args...))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -403,23 +403,31 @@ func (s *SQLiteStore) querySandboxRecords(q string, args ...any) ([]*SandboxReco
 }
 
 func (s *SQLiteStore) Count(f SandboxFilter) (int64, error) {
-	cond, args, err := f.where(nil, sqlitePlaceholder)
+	cond, args, err := f.where(nil, nil, sqlitePlaceholder)
 	if err != nil {
 		return 0, err
 	}
+	q := `SELECT COUNT(*) FROM sandboxes`
+	if cond != "" {
+		q += ` WHERE ` + cond
+	}
 	var n int64
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sandboxes WHERE `+cond, args...).Scan(&n); err != nil {
+	if err := s.db.QueryRow(q, args...).Scan(&n); err != nil {
 		return 0, fmt.Errorf("store: count sandboxes: %w", err)
 	}
 	return n, nil
 }
 
 func (s *SQLiteStore) List(f SandboxFilter) ([]*SandboxRecord, error) {
-	cond, args, err := f.where(nil, sqlitePlaceholder)
+	cond, args, err := f.where(nil, nil, sqlitePlaceholder)
 	if err != nil {
 		return nil, err
 	}
-	q := `SELECT ` + sqliteSandboxCols + ` FROM sandboxes WHERE ` + cond + ` ORDER BY created_at DESC`
+	q := `SELECT ` + sqliteSandboxCols + ` FROM sandboxes`
+	if cond != "" {
+		q += ` WHERE ` + cond
+	}
+	q += ` ORDER BY created_at DESC`
 	return s.querySandboxRecords(q, args...)
 }
 

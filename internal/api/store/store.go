@@ -61,11 +61,12 @@ type SandboxFilter struct {
 // KindFilter selects the sandboxes of kinds, whatever their tenant.
 func KindFilter(kinds ...Kind) SandboxFilter { return SandboxFilter{Kinds: kinds} }
 
-// where returns the condition of f and the query arguments: args followed by
-// those of the condition. placeholder returns the placeholder of the nth
-// argument. Kinds that include every kind add no condition, and a filter
-// without any condition is TRUE.
-func (f SandboxFilter) where(args []any, placeholder func(n int) string) (string, []any, error) {
+// where returns the condition of conds and f and the query arguments: args,
+// those of conds, followed by those of f. placeholder returns the placeholder
+// of the nth argument. Kinds that include every kind add no condition, and
+// without any condition it returns "": callers then leave out WHERE, so
+// SQLite keeps its fast COUNT(*) path.
+func (f SandboxFilter) where(conds []string, args []any, placeholder func(n int) string) (string, []any, error) {
 	if len(f.Kinds) == 0 {
 		return "", nil, errors.New("store: no sandbox kinds given")
 	}
@@ -74,8 +75,8 @@ func (f SandboxFilter) where(args []any, placeholder func(n int) string) (string
 			return "", nil, err
 		}
 	}
+	conds = slices.Clip(conds)
 	args = slices.Clip(args)
-	var conds []string
 	if !includesAllKinds(f.Kinds) {
 		marks := make([]string, len(f.Kinds))
 		for i, kind := range f.Kinds {
@@ -87,9 +88,6 @@ func (f SandboxFilter) where(args []any, placeholder func(n int) string) (string
 	if f.TenantID != "" {
 		args = append(args, f.TenantID)
 		conds = append(conds, "tenant_id = "+placeholder(len(args)))
-	}
-	if len(conds) == 0 {
-		return "TRUE", args, nil
 	}
 	return strings.Join(conds, " AND "), args, nil
 }
