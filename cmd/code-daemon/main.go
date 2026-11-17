@@ -1,4 +1,4 @@
-// Command code-daemon serves the runner inside a code sandbox.
+// Command code-daemon configures logging and starts the runner-facing daemon inside a code sandbox.
 package main
 
 import (
@@ -13,6 +13,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/logging"
 )
 
+// main runs the daemon until it exits or receives SIGTERM or SIGINT.
 func main() {
 	level := slog.LevelInfo
 	if v := envvar.Get("CODE_DAEMON_LOG_LEVEL"); v != "" {
