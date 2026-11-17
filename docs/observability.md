@@ -178,6 +178,16 @@ Related series:
 - `sandbox_volumes_left_out_total{reason}` — optional volumes a Firecracker
   create that succeeded left out: `cache_full`, `timeout`, `download`,
   `drive`, `mount_point` or `mount`.
+- `sandbox_volume_builds_total{result}` — volume image builds asked of a
+  Firecracker runner. `result` is `success`; a failed build's reason: `tar`,
+  `too_large` or `no_space` (the tar's fault), `format`, `mount`, `fsck` or
+  `internal` (the runner's or its builder's), `timeout`; or why none ran:
+  `busy` (the runner's one build was running), `refused` (cordoned, not ready
+  or short of disk), `invalid_request`, `canceled`.
+  `sandbox_volume_build_duration_seconds` times the builds the runner
+  accepted, from the tar's first byte to the end of the call. Each build logs
+  `firecracker volume build finished` or `firecracker volume build failed`
+  with its sizes and step timings.
 - `sandbox_container_operation_duration_seconds{operation}` — the totals the
   steps add up to, a recovery's under `operation="recover"` like its steps.
 - `sandbox_http_request_duration_seconds{role,route,method}` — end-to-end per

@@ -29,6 +29,7 @@ const (
 	defaultSocketWaitInterval = 20 * time.Millisecond
 	defaultDaemonWaitTimeout  = 60 * time.Second
 	defaultDaemonBin          = "/srv/firecracker/bin/sandbox-daemon"
+	defaultVolumeBuildTimeout = 5 * time.Minute
 )
 
 // Config holds configuration for the Firecracker runtime backend.
@@ -110,6 +111,10 @@ type Config struct {
 	// DaemonBin is the host path to sandbox-daemon used when creating a golden snapshot.
 	// Parsed from SANDBOX_RUNNER_FIRECRACKER_DAEMON_BIN.
 	DaemonBin string
+
+	// VolumeBuildTimeout is how long a volume builder microVM may run, from its
+	// start to its exit. Parsed from SANDBOX_RUNNER_FIRECRACKER_VOLUME_BUILD_TIMEOUT.
+	VolumeBuildTimeout time.Duration
 }
 
 func defaultConfig() Config {
@@ -130,6 +135,7 @@ func defaultConfig() Config {
 		SocketWaitInterval: defaultSocketWaitInterval,
 		DaemonWaitTimeout:  defaultDaemonWaitTimeout,
 		DaemonBin:          defaultDaemonBin,
+		VolumeBuildTimeout: defaultVolumeBuildTimeout,
 	}
 }
 
@@ -203,6 +209,11 @@ func LoadConfig(capacityTotal int32) (Config, error) {
 	}
 	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_DAEMON_BIN")); v != "" {
 		cfg.DaemonBin = v
+	}
+	if timeout, ok, err := parseDurationEnv("SANDBOX_RUNNER_FIRECRACKER_VOLUME_BUILD_TIMEOUT"); err != nil {
+		return Config{}, err
+	} else if ok {
+		cfg.VolumeBuildTimeout = timeout
 	}
 
 	if err := validateConfig(cfg, capacityTotal); err != nil {
