@@ -146,6 +146,8 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// runTask streams updates while the execution watcher runs. It releases the
+// execution before returning a terminal event, or returns false if the stream breaks.
 func (d *Daemon) runTask(ctx context.Context, spec taskSpec, stream taskStream, x *execution, root *os.Root) (any, bool) {
 	defer d.releaseExecution(x)
 	ctx, stop := context.WithCancel(ctx)
@@ -184,6 +186,7 @@ func waitForTask(ctx context.Context, spec taskSpec, stream taskStream, stop con
 			}
 		case <-ctx.Done():
 		}
+		// Wait for the watcher to finish before releasing the lane and task files.
 		stop()
 		<-finished
 		return executionOutcome{}, false

@@ -52,11 +52,11 @@ type worker struct {
 	stopped   chan struct{} // closed when shutdown begins; no new executions can register
 	done      chan struct{} // closed after the worker process is reaped
 	stopOnce  sync.Once
-	writeGate chan struct{}
+	writeGate chan struct{} // holds one token while a control command is being written
 
 	mu                 sync.Mutex // guards execution registration, delivery, and cleanup
 	executionsByTaskID map[string]*execution
-	retiring           bool // protected by mu; a retiring worker cannot take new tasks
+	retiring           bool // rejects new tasks while existing ones drain; protected by mu
 }
 
 // startWorker launches the runtime in its own process group and gives it the
@@ -231,7 +231,7 @@ func (w *worker) isStopped() bool {
 	}
 }
 
-// send serializes writes so concurrent tasks cannot interleave control messages.
+// send serializes control writes. The deadline covers both waiting and writing.
 func (w *worker) send(msg workerMessage, deadline time.Time) error {
 	timer := time.NewTimer(time.Until(deadline))
 	defer timer.Stop()
@@ -300,8 +300,8 @@ type execution struct {
 	id              string
 	result          chan workerMessage // closed on worker failure; any buffered result is still readable
 	deadline        time.Time          // Set at dispatch, after the worker is ready.
-	cancelRequested chan struct{}
-	cancelAck       chan struct{}
+	cancelRequested chan struct{}      // closed when an explicit cancel is requested
+	cancelAck       chan struct{}      // buffers the runtime's acknowledgement without blocking the reader
 }
 
 // dispatch registers a result receiver before sending the start command to the shared runtime.
@@ -337,6 +337,8 @@ func (d *Daemon) dispatch(ctx context.Context, id, dir string, timeout time.Dura
 	return x, nil
 }
 
+// releaseExecution removes a task from the worker and stops a retired runtime
+// after its last task leaves.
 func (d *Daemon) releaseExecution(x *execution) {
 	w := x.worker
 	w.mu.Lock()

@@ -1,3 +1,5 @@
+// This file handles cancellation requests and the runtime's cancellation handshake.
+
 package codedaemon
 
 import (
@@ -6,8 +8,10 @@ import (
 	"time"
 )
 
+// cancelGrace covers sending the cancel command and waiting for the runtime's reply.
 const cancelGrace = time.Second
 
+// handleCancel reports whether a cancellation was requested, not whether it succeeded.
 func (d *Daemon) handleCancel(w http.ResponseWriter, r *http.Request) {
 	if !d.requestCancel(r.PathValue("taskId")) {
 		http.NotFound(w, r)
@@ -16,6 +20,8 @@ func (d *Daemon) handleCancel(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
+// requestCancel signals a dispatched task once and retires its worker before
+// another task can join it.
 func (d *Daemon) requestCancel(id string) bool {
 	d.workerMu.Lock()
 	w := d.worker
@@ -38,6 +44,8 @@ func (d *Daemon) requestCancel(id string) bool {
 	return true
 }
 
+// stop sends a cancel command to the retiring worker. If the runtime neither
+// acknowledges it nor finishes the task in time, stop kills the shared worker.
 func (x *execution) stop() {
 	w := x.worker
 	w.mu.Lock()
