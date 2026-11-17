@@ -1,0 +1,20 @@
+internal/codedaemon/daemon.go
+  h_8fb27e0cdf6d1e 22
+internal/codedaemon/limits.go
+  h_8fb27e0cdf6d1e 1,18-19,24,27,30,41,49-50,64,81,117,123-124
+internal/codedaemon/task.go
+  h_8fb27e0cdf6d1e 56,102
+internal/codedaemon/worker.go
+  h_8fb27e0cdf6d1e 30-33,46,76,108,111-112,115-116,243
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ad55ce2d71bbf6ec0262fbccfc553b0a3eeef382",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
