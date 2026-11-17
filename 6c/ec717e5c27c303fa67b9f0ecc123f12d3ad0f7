@@ -1,0 +1,18 @@
+internal/codedaemon/events.go
+  h_8fb27e0cdf6d1e 97-98
+internal/codedaemon/timeout.go
+  h_8fb27e0cdf6d1e 1,12,15,24-25,41,52-53,56-57
+internal/codedaemon/worker.go
+  h_8fb27e0cdf6d1e 280
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6cec717e5c27c303fa67b9f0ecc123f12d3ad0f7",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
