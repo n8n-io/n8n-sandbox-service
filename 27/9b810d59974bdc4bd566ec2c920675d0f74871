@@ -1,0 +1,46 @@
+internal/api/store/migrations_postgres.go
+  h_8fb27e0cdf6d1e 18,20-24,82-96
+internal/api/store/migrations_sqlite.go
+  h_8fb27e0cdf6d1e 36,38,40-51
+internal/api/store/postgres.go
+  h_8fb27e0cdf6d1e 12,19-21,67-75,122,131,133,151-155,157-160,239-251
+internal/api/store/postgres_integration_test.go
+  h_8fb27e0cdf6d1e 242-245
+internal/api/store/sqlite.go
+  h_8fb27e0cdf6d1e 14-15,77-82,94-98,145,154,156,174-178,180-182,189-197,289-301
+internal/api/store/store.go
+  h_8fb27e0cdf6d1e 30-33,37-38,41-42,88-90,127-131,171-173,241-246
+internal/api/store/store_test.go
+  h_8fb27e0cdf6d1e 81-109,112-118,121-132,134-149,151-165,167-174,178-186,188-189,191-225,247,249-255
+docs/API.md
+  h_8fb27e0cdf6d1e 851-852,853,855-856,856-865,866,867-877,878-879,880-898,899,900-906,907,908-911
+internal/api/gateway.go
+  h_8fb27e0cdf6d1e 9-10,60
+internal/api/handlers_code.go
+  h_8fb27e0cdf6d1e 1-27,28-37,38-59,60,61-73,74-75,76-91,92,93-103,104,105-155,156,157-191,193-212,213,214-234,235-242,243,244-246,247,248-256,257,258-325,326,327-329,330,331-338,339,340,341,342,343,344,345,346-370,371-377,378-381,382-383,384,385-388,389,390-392,393-394,395-401
+internal/api/handlers_code_test.go
+  h_8fb27e0cdf6d1e 1-5,6,7-14,15,16,17,18-19,20,21-54,56-84,85,86-119,120-133,134-153,155-209,211-214,215-229,230-231,232-241,242,243-252,253-263,266-282,284-287,288,289,290-307,308,309-313,314,315-316,317-319,320-324,325-326,327,328-330,331-332,333,334,335,336-341,342-343,344-383,385-417
+sdk/README.md
+  h_8fb27e0cdf6d1e 71-79,80,81-85
+sdk/src/client.ts
+  h_8fb27e0cdf6d1e 14,18,20,70-79
+sdk/src/code-sandboxes.ts
+  h_8fb27e0cdf6d1e 1-13,14,15-22
+sdk/src/index.ts
+  h_8fb27e0cdf6d1e 6-8
+sdk/src/types.ts
+  h_8fb27e0cdf6d1e 39-51,52-53,54-68
+sdk/test/code-sandboxes.test.ts
+  h_8fb27e0cdf6d1e 1-10,11,12-83
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "279b810d59974bdc4bd566ec2c920675d0f74871",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
