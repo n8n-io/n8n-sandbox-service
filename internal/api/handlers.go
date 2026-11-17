@@ -13,6 +13,9 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/google/uuid"
 	"github.com/n8n-io/sandbox-service/internal/api/config"
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
@@ -807,7 +810,10 @@ func deleteStoppedOnCordonedRunner(writer http.ResponseWriter, req *http.Request
 	defer cancel()
 	reason := "cordoned_runner"
 	err = runnerctl.DeleteSandbox(ctx, resolveControlAddr(rec, reg), cfg.RunnerAPIKey, runnerControlTLS(cfg), id)
-	if runnerUnreachable(&runnerCallError{err: err}) || (silent && err != nil && ctx.Err() != nil) {
+	// The runner enforces the deadline too, so its DeadlineExceeded can arrive
+	// before ctx's own timer fires.
+	timedOut := ctx.Err() != nil || status.Code(err) == codes.DeadlineExceeded
+	if runnerUnreachable(&runnerCallError{err: err}) || (silent && err != nil && timedOut) {
 		slog.WarnContext(req.Context(), "cordoned runner unreachable, deleting the sandbox row only", "sandbox_id", id, "runner_id", rec.RunnerID, "silent", silent, "err", err)
 		reason, err = "cordoned_runner_unreachable", nil
 	}
