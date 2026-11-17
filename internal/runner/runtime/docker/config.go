@@ -3,10 +3,9 @@ package docker
 import (
 	"fmt"
 	"net"
-	"os"
-	"strconv"
 	"strings"
 
+	"github.com/n8n-io/sandbox-service/internal/envvar"
 	"github.com/n8n-io/sandbox-service/internal/runner/runtime/netpolicy"
 )
 
@@ -85,77 +84,41 @@ func defaultConfig() Config {
 func LoadConfig() (Config, error) {
 	cfg := defaultConfig()
 
-	if v := os.Getenv("SANDBOX_RUNNER_DOCKER_HOST"); v != "" {
-		cfg.Host = v
-	}
+	envvar.String("SANDBOX_RUNNER_DOCKER_HOST", &cfg.Host)
 
-	cfg.SandboxImage = os.Getenv("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE")
+	cfg.SandboxImage = envvar.Get("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE")
 	if cfg.SandboxImage == "" {
 		return Config{}, fmt.Errorf("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE must be set")
 	}
 
-	if v := os.Getenv("SANDBOX_RUNNER_DEFAULT_MEMORY_MB"); v != "" {
-		n, err := strconv.ParseInt(v, 10, 64)
-		if err != nil || n <= 0 {
-			return Config{}, fmt.Errorf("SANDBOX_RUNNER_DEFAULT_MEMORY_MB must be a positive integer, got %q", v)
-		}
-		cfg.DefaultMemoryMB = n
+	if err := envvar.PositiveInt("SANDBOX_RUNNER_DEFAULT_MEMORY_MB", &cfg.DefaultMemoryMB); err != nil {
+		return Config{}, err
+	}
+	if err := envvar.PositiveInt("SANDBOX_RUNNER_DEFAULT_CPU_PERCENT", &cfg.DefaultCPUPercent); err != nil {
+		return Config{}, err
+	}
+	if err := envvar.PositiveInt("SANDBOX_RUNNER_DEFAULT_PIDS_MAX", &cfg.DefaultPidsMax); err != nil {
+		return Config{}, err
+	}
+	if err := envvar.NonNegativeInt("SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB", &cfg.DefaultDiskQuotaMB); err != nil {
+		return Config{}, err
+	}
+	if err := envvar.Bool("SANDBOX_RUNNER_DISK_QUOTA_ACTIVE", &cfg.DiskQuotaActive); err != nil {
+		return Config{}, err
+	}
+	if err := envvar.Bool("SANDBOX_RUNNER_ENABLE_CGROUPS", &cfg.EnableCgroups); err != nil {
+		return Config{}, err
+	}
+	if err := envvar.Bool(envAckBridgeNetfilter, &cfg.AckBridgeNetfilterLoaded); err != nil {
+		return Config{}, err
 	}
 
-	if v := os.Getenv("SANDBOX_RUNNER_DEFAULT_CPU_PERCENT"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n <= 0 {
-			return Config{}, fmt.Errorf("SANDBOX_RUNNER_DEFAULT_CPU_PERCENT must be a positive integer, got %q", v)
-		}
-		cfg.DefaultCPUPercent = n
-	}
-
-	if v := os.Getenv("SANDBOX_RUNNER_DEFAULT_PIDS_MAX"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n <= 0 {
-			return Config{}, fmt.Errorf("SANDBOX_RUNNER_DEFAULT_PIDS_MAX must be a positive integer, got %q", v)
-		}
-		cfg.DefaultPidsMax = n
-	}
-
-	if v := os.Getenv("SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB"); v != "" {
-		n, err := strconv.ParseInt(v, 10, 64)
-		if err != nil || n < 0 {
-			return Config{}, fmt.Errorf("SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB must be a non-negative integer, got %q", v)
-		}
-		cfg.DefaultDiskQuotaMB = n
-	}
-
-	if v := os.Getenv("SANDBOX_RUNNER_DISK_QUOTA_ACTIVE"); v != "" {
-		active, err := strconv.ParseBool(v)
-		if err != nil {
-			return Config{}, fmt.Errorf("SANDBOX_RUNNER_DISK_QUOTA_ACTIVE must be a boolean, got %q", v)
-		}
-		cfg.DiskQuotaActive = active
-	}
-
-	if v := os.Getenv("SANDBOX_RUNNER_ENABLE_CGROUPS"); v != "" {
-		enabled, err := strconv.ParseBool(v)
-		if err != nil {
-			return Config{}, fmt.Errorf("SANDBOX_RUNNER_ENABLE_CGROUPS must be a boolean, got %q", v)
-		}
-		cfg.EnableCgroups = enabled
-	}
-
-	if v := os.Getenv("SANDBOX_RUNNER_DOCKER_DNS_SERVERS"); v != "" {
+	if v := envvar.Get("SANDBOX_RUNNER_DOCKER_DNS_SERVERS"); v != "" {
 		servers, err := parseDNSServers(v)
 		if err != nil {
 			return Config{}, fmt.Errorf("SANDBOX_RUNNER_DOCKER_DNS_SERVERS: %w", err)
 		}
 		cfg.DNSServers = servers
-	}
-
-	if v := os.Getenv(envAckBridgeNetfilter); v != "" {
-		ack, err := strconv.ParseBool(v)
-		if err != nil {
-			return Config{}, fmt.Errorf("%s must be a boolean, got %q", envAckBridgeNetfilter, v)
-		}
-		cfg.AckBridgeNetfilterLoaded = ack
 	}
 
 	return cfg, nil

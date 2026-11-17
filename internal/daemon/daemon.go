@@ -105,8 +105,8 @@ func (h *Handler) Close() {
 }
 
 // Run serves the daemon HTTP API until SIGTERM/SIGINT is received.
-func Run(listenAddr string) error {
-	h := NewHandler()
+func Run(listenAddr string, cfg ExecConfig) error {
+	h := NewHandler(cfg)
 	defer h.Close()
 
 	srv := &http.Server{
@@ -137,8 +137,8 @@ func Run(listenAddr string) error {
 }
 
 // NewHandler exposes the in-sandbox HTTP API used by the service.
-func NewHandler() *Handler {
-	em := NewExecManager()
+func NewHandler(cfg ExecConfig) *Handler {
+	em := NewExecManager(cfg)
 	mux := http.NewServeMux()
 	h := &Handler{mux: mux, em: em, euid: os.Geteuid, dropRoot: PrepareSandboxUser, exit: os.Exit}
 

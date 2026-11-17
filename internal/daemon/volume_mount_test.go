@@ -66,7 +66,7 @@ func requireCalls(t *testing.T, sys *fakeSys, want ...string) {
 func newRootHandler(t *testing.T, sys *fakeSys) *Handler {
 	t.Helper()
 	var euid atomic.Int32
-	h := NewHandler()
+	h := NewHandler(DefaultExecConfig())
 	h.euid = func() int { return int(euid.Load()) }
 	h.volumes = volumedrives.NewMounter(sys)
 	h.dropRoot = func() error {
@@ -307,7 +307,7 @@ func TestRootDaemonServesOnlyTheVolumeMountRequestUntilItDropsRoot(t *testing.T)
 
 // The Docker daemon starts as uid 1000, and so does any test.
 func TestVolumeMountEndpointWithoutRoot(t *testing.T) {
-	handler := NewHandler()
+	handler := NewHandler(DefaultExecConfig())
 	defer handler.Close()
 
 	for range 2 {
@@ -319,7 +319,7 @@ func TestVolumeMountEndpointWithoutRoot(t *testing.T) {
 
 // The gate follows the real euid, not whether there is a volume mounter.
 func TestRootDaemonWithoutAVolumeMounterServesNothingElse(t *testing.T) {
-	handler := NewHandler()
+	handler := NewHandler(DefaultExecConfig())
 	defer handler.Close()
 	handler.euid = func() int { return 0 }
 
