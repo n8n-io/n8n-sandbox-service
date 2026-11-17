@@ -138,6 +138,24 @@ filesystem, where no volume limit bounds it.
 {{- end -}}
 {{- end }}
 
+{{/*
+The runner's volume cache dir: runner.config.volumeCacheDir, or the runner's
+default under its data dir.
+*/}}
+{{- define "n8n-sandbox-service.runnerVolumeCacheDir" -}}
+{{- .Values.runner.config.volumeCacheDir | default (printf "%s/volume-cache" .Values.runner.config.dataDir) | clean -}}
+{{- end }}
+
+{{/*
+runner.config.volumeCacheMaxBytes as a string, or "" when unset.
+*/}}
+{{- define "n8n-sandbox-service.runnerVolumeCacheMaxBytes" -}}
+{{- $maxBytes := .Values.runner.config.volumeCacheMaxBytes -}}
+{{- if not (kindIs "invalid" $maxBytes) -}}
+{{- include "n8n-sandbox-service.scalarString" $maxBytes | trim -}}
+{{- end -}}
+{{- end }}
+
 {{- define "n8n-sandbox-service.authSecretName" -}}
 {{- default (printf "%s-auth" (include "n8n-sandbox-service.fullname" .)) .Values.auth.existingSecret | trunc 63 | trimSuffix "-" }}
 {{- end }}

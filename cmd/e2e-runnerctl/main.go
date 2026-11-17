@@ -5,20 +5,30 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
+	"errors"
+	"flag"
 	"fmt"
 	"io"
+	"math"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"google.golang.org/grpc/status"
 
+	"github.com/n8n-io/sandbox-service/internal/api/grpc/pb"
 	"github.com/n8n-io/sandbox-service/internal/api/runnerctl"
 	"github.com/n8n-io/sandbox-service/internal/daemon"
 	"github.com/n8n-io/sandbox-service/internal/grpctls"
+	"github.com/n8n-io/sandbox-service/internal/safetar"
+	"github.com/n8n-io/sandbox-service/internal/volume"
 )
 
 func usage() {
@@ -27,11 +37,25 @@ func usage() {
   %[1]s create <sandbox-id> [create-options-json]
   %[1]s delete <sandbox-id>
   %[1]s exec <sandbox-id> <command>
+  %[1]s build-volume [-entries N -content-bytes N -decompressed-bytes N] [-hold DURATION] <tar> <image>
+  %[1]s tar-counts <tar>
+  %[1]s serve-files -cert FILE -key FILE -dir DIR -token QUERY [-addr ADDR]
 
 create and exec print their outcome as one line of JSON. create exits 1 when
 the create fails, exec when the runner answers other than 200 or the command's
 exit never arrives. exec goes to the runner's HTTP listener at
 E2E_RUNNER_HTTP_ADDR, with the control mTLS identity.
+
+build-volume has the runner build an ext4 image from the tar and prints the
+outcome as one line of JSON. It counts the tar's entries, content and
+decompressed length with the volume tar policy, unless all three counts are
+given. -hold waits that long between the header and the tar.
+
+tar-counts prints a tar's counts under the volume tar policy, as the tar
+counts of a volume in create-options-json.
+
+serve-files serves the files directly in DIR over https, TLS 1.3, to requests
+whose query is QUERY, and prints "listening" once it accepts connections.
 `, os.Args[0])
 	os.Exit(2)
 }
@@ -71,6 +95,15 @@ func main() {
 			usage()
 		}
 		execute(sandboxID(os.Args[2]), os.Args[3])
+	case "build-volume":
+		buildVolume(os.Args[2:])
+	case "tar-counts":
+		if len(os.Args) != 3 {
+			usage()
+		}
+		tarCounts(os.Args[2])
+	case "serve-files":
+		serveFiles(os.Args[2:])
 	default:
 		usage()
 	}
@@ -236,6 +269,127 @@ func execute(sandboxID, command string) {
 	}
 }
 
+// buildOutcome is what build-volume prints.
+type buildOutcome struct {
+	// Result is "ok", "failed" (the build ran and failed, see Reason),
+	// "refused" (a capacity refusal) or "error".
+	Result     string `json:"result"`
+	Reason     string `json:"reason,omitempty"`
+	ImageBytes int64  `json:"image_bytes,omitempty"`
+	SHA256     string `json:"sha256,omitempty"`
+}
+
+func buildVolume(args []string) {
+	flags := flag.NewFlagSet("build-volume", flag.ExitOnError)
+	entries := flags.Int64("entries", -1, "entry count for the header, instead of counting the tar's")
+	contentBytes := flags.Int64("content-bytes", -1, "content bytes for the header, instead of counting the tar's")
+	decompressedBytes := flags.Int64("decompressed-bytes", -1, "decompressed length for the header, instead of counting the tar's")
+	hold := flags.Duration("hold", 0, "wait between the header and the tar")
+	_ = flags.Parse(args)
+	counted := *entries < 0
+	if flags.NArg() != 2 || (*contentBytes < 0) != counted || (*decompressedBytes < 0) != counted {
+		usage()
+	}
+	tarPath, imagePath := flags.Arg(0), flags.Arg(1)
+	to := runner()
+
+	tar, err := os.Open(tarPath)
+	exitBuildOn("open tar", err)
+	defer tar.Close()
+	info, err := tar.Stat()
+	exitBuildOn("stat tar", err)
+	header := &pb.BuildVolumeHeader{TarBytes: info.Size(), Entries: *entries, ContentBytes: *contentBytes, DecompressedBytes: *decompressedBytes}
+	if counted {
+		stats, err := safetar.Validate(tar, volume.TarPolicy(math.MaxInt32, 0, 0))
+		exitBuildOn("validate tar", err)
+		header.Entries, header.ContentBytes, header.DecompressedBytes = int64(stats.Entries), stats.Bytes, stats.DecompressedBytes
+		_, err = tar.Seek(0, io.SeekStart)
+		exitBuildOn("rewind tar", err)
+	}
+
+	// Creating the image truncates it.
+	if existing, err := os.Stat(imagePath); err == nil && os.SameFile(info, existing) {
+		exitBuildOn("create image", errors.New("the image path names the tar"))
+	}
+	image, err := os.OpenFile(imagePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	exitBuildOn("create image", err)
+	defer image.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	built, err := runnerctl.BuildVolume(ctx, to.addr, to.apiKey, to.tls, header, &heldReader{reader: tar, hold: *hold}, image)
+	if err == nil {
+		err = image.Close()
+	}
+
+	outcome := buildOutcome{Result: "ok", ImageBytes: built.Bytes, SHA256: built.SHA256}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "build volume: %v\n", err)
+		outcome = buildOutcome{Result: "error"}
+		if reason, failed := runnerctl.BuildFailureReason(err); failed {
+			outcome = buildOutcome{Result: "failed", Reason: reason}
+		} else if runnerctl.IsCapacityRefusal(err) {
+			outcome = buildOutcome{Result: "refused"}
+		}
+	}
+	line, _ := json.Marshal(outcome)
+	fmt.Println(string(line))
+	if err != nil {
+		os.Exit(1)
+	}
+}
+
+func tarCounts(path string) {
+	tar, err := os.Open(path)
+	exitOn("open tar", err)
+	defer tar.Close()
+	stats, err := safetar.Validate(tar, volume.TarPolicy(math.MaxInt32, 0, 0))
+	exitOn("validate tar", err)
+	printJSON(volume.TarCounts{Entries: int64(stats.Entries), ContentBytes: stats.Bytes, DecompressedBytes: stats.DecompressedBytes})
+}
+
+func serveFiles(args []string) {
+	flags := flag.NewFlagSet("serve-files", flag.ExitOnError)
+	addr := flags.String("addr", ":9444", "listen address")
+	certFile := flags.String("cert", "", "TLS certificate")
+	keyFile := flags.String("key", "", "TLS key")
+	dir := flags.String("dir", "", "directory to serve")
+	token := flags.String("token", "", "query every request must carry")
+	_ = flags.Parse(args)
+	if *certFile == "" || *keyFile == "" || *dir == "" || *token == "" || flags.NArg() != 0 {
+		usage()
+	}
+	handler := http.HandlerFunc(func(writer http.ResponseWriter, req *http.Request) {
+		name := strings.TrimPrefix(req.URL.Path, "/")
+		if req.URL.RawQuery != *token || !filepath.IsLocal(name) || strings.ContainsRune(name, '/') {
+			http.NotFound(writer, req)
+			return
+		}
+		file, err := os.Open(filepath.Join(*dir, name))
+		if err != nil {
+			http.NotFound(writer, req)
+			return
+		}
+		defer file.Close()
+		info, err := file.Stat()
+		if err != nil || !info.Mode().IsRegular() {
+			http.NotFound(writer, req)
+			return
+		}
+		writer.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
+		_, _ = io.Copy(writer, file)
+	})
+	listener, err := net.Listen("tcp", *addr)
+	exitOn("listen", err)
+	fmt.Println("listening")
+	server := &http.Server{
+		Handler:           handler,
+		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS13},
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	exitOn("serve", server.ServeTLS(listener, *certFile, *keyFile))
+}
+
 func printJSON(value any) {
 	line, err := json.Marshal(value)
 	exitOn("encode outcome", err)
@@ -245,6 +399,31 @@ func printJSON(value any) {
 func exitOn(action string, err error) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%s: %v\n", action, err)
+		os.Exit(1)
+	}
+}
+
+// heldReader waits before its first read: the header is sent by then.
+type heldReader struct {
+	reader io.Reader
+	hold   time.Duration
+}
+
+func (h *heldReader) Read(buf []byte) (int, error) {
+	if h.hold > 0 {
+		time.Sleep(h.hold)
+		h.hold = 0
+	}
+	return h.reader.Read(buf)
+}
+
+// exitBuildOn ends build-volume as a call that failed ends: the error on
+// stderr, the outcome "error" on stdout.
+func exitBuildOn(action string, err error) {
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", action, err)
+		line, _ := json.Marshal(buildOutcome{Result: "error"})
+		fmt.Println(string(line))
 		os.Exit(1)
 	}
 }

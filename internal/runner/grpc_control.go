@@ -30,6 +30,16 @@ type SandboxControlGRPC struct {
 	Cfg     *config.Config
 	Rec     *metrics.RunnerRecorder
 	Cordon  *cordon.State
+
+	// now is time.Now unless a test sets it.
+	now func() time.Time
+}
+
+func (s *SandboxControlGRPC) clock() func() time.Time {
+	if s.now != nil {
+		return s.now
+	}
+	return time.Now
 }
 
 var _ pb.SandboxControlServer = (*SandboxControlGRPC)(nil)

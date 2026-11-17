@@ -52,14 +52,19 @@ type Runtime struct {
 	hostNATMu   sync.Mutex
 	hostNATOK   bool
 
-	// diskReserved reports data volume space that creates must leave free; nil
-	// means none. Set once at startup.
+	// diskReserved reports data volume space that creates and volume builds
+	// must leave free; nil means none. Set once at startup.
 	diskReserved func() int64
 
 	// wireCh wakes the slot wirer (network_wirer.go). Buffered by one and written with a
 	// non-blocking send, so a release never waits on it and a burst of releases
 	// collapses into one pass over the slots.
 	wireCh chan struct{}
+
+	// volumeBuild is the one volume build the runner runs at a time, if any
+	// (volume_build.go).
+	volumeBuildMu sync.Mutex
+	volumeBuild   *volumeBuild
 }
 
 var (
@@ -331,6 +336,7 @@ type dependencies struct {
 	patchVolumeDrive    func(ctx context.Context, socketPath string, drive volumeDrive) error
 	mountVolumeDrives   func(ctx context.Context, baseURL string, drives []volumedrives.Volume) (map[int]string, error)
 	volumeSpace         func(path string) (volumeSpace, error)
+	bootVolumeBuilder   func(ctx context.Context, socketPath string, boot volumeBuilderBoot) error
 }
 
 func defaultDependencies(fc Config) dependencies {
@@ -358,6 +364,7 @@ func defaultDependencies(fc Config) dependencies {
 		patchVolumeDrive:  patchVolumeDrive,
 		mountVolumeDrives: mountVolumeDrives,
 		volumeSpace:       statVolume,
+		bootVolumeBuilder: bootVolumeBuilder,
 	}
 }
 
@@ -575,9 +582,14 @@ func (r *Runtime) DaemonURL(_ context.Context, sandboxID string) (string, error)
 	return state.daemonURL, nil
 }
 
-// Shutdown best-effort deletes every sandbox currently tracked by this runtime,
-// then, equally best-effort, clears the namespaces of the slots left free.
+// Shutdown ends a running volume build, best-effort deletes every sandbox
+// currently tracked by this runtime, then, equally best-effort, clears the
+// namespaces of the slots left free. The build cleans up next to the
+// sandboxes and is waited for last, so it takes nothing from their budget.
 func (r *Runtime) Shutdown(ctx context.Context) {
+	waitForVolumeBuild := r.stopVolumeBuild()
+	defer waitForVolumeBuild(ctx)
+
 	r.mu.Lock()
 	states := make([]*sandboxState, 0, len(r.sandboxes))
 	for _, state := range r.sandboxes {

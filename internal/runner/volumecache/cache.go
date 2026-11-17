@@ -2,10 +2,12 @@
 // objects sandboxes attach: ext4 images for Firecracker, tars for Docker. Each
 // object is downloaded once, verified against the size and sha256 the API
 // recorded, and kept while any sandbox on the runner holds it, running or
-// stopped.
+// stopped. A tar is unpacked once and only its tree is kept.
 //
-// Files are owned by the runner (root in production), mode 0444, in a 0700
-// directory, so no other uid can write them or reach them by path.
+// Everything is owned by the runner (root in production), in a 0700
+// directory, so no other uid can write it or reach it by path: images mode
+// 0444, trees of 0755 directories, 0644 or 0755 files and symbolic links,
+// which the cache never follows.
 //
 // The budget is the cache's share of its disk. Sandbox creates leave the part
 // not downloaded yet free (DataDirReservation), and a download starts only if
@@ -45,10 +47,11 @@ var errTooLarge = errors.New("volume object is larger than the volume cache")
 
 // Key identifies a cached object. Scope is volume.SharedScope or a tenant ID.
 // The same digest in two scopes is two entries, so content is never shared
-// across tenants by digest.
+// across tenants by digest. An image and a tree are two entries too.
 type Key struct {
 	Scope  string
 	SHA256 string
+	Kind   volume.Kind
 }
 
 func (k Key) validate() error {
@@ -58,14 +61,19 @@ func (k Key) validate() error {
 	if !volume.ValidDigest(k.SHA256) {
 		return fmt.Errorf("invalid volume object sha256 %q: want 64 lowercase hex characters", k.SHA256)
 	}
+	if !k.Kind.Valid() {
+		return fmt.Errorf("invalid volume object kind %q", k.Kind)
+	}
 	return nil
 }
 
 // Source is where to download an object, an https URL, and the size the API
-// recorded for it. The URL's query carries a token, so it is never logged.
+// recorded for it. The URL's query carries a token, so it is never logged. A
+// tar's Source also has the counts the API recorded, which bound its unpack.
 type Source struct {
 	URL  string
 	Size int64
+	Tar  volume.TarCounts
 }
 
 // Config configures a Cache.
@@ -75,7 +83,8 @@ type Config struct {
 	Dir      string
 	DataDir  string
 	MaxBytes int64
-	// FetchTimeout bounds one download, however many callers wait for it.
+	// FetchTimeout bounds one download, and a tar's unpack after it, however
+	// many callers wait for it.
 	FetchTimeout time.Duration
 	Metrics      *metrics.RunnerRecorder
 	// APIHost is the host the runner registers with, and APITLS its
@@ -95,15 +104,19 @@ type Cache struct {
 	transport    *http.Transport
 	apiTransport *http.Transport
 	diskSpace    func(path string) (diskSpace, error)
+	// unpackSlots holds one token per unpack running.
+	unpackSlots chan struct{}
 
 	mu       sync.Mutex
 	dirReady bool
 	entries  map[Key]*entry
 	fetches  map[Key]*fetch
-	// The budget counts both: the bytes the entries take on disk, and the
-	// declared size of the downloads in progress.
-	allocatedBytes   int64
-	downloadingBytes int64
+	// The budget counts the bytes the entries take on disk, the room the
+	// fetches in progress set aside, and the bytes of evicted entries until
+	// they are removed.
+	allocatedBytes int64
+	downloading    room
+	removingBytes  int64
 	// lruClock is a logical clock that stamps an entry's lastUse; eviction
 	// takes the lowest first.
 	lruClock uint64
@@ -111,11 +124,14 @@ type Cache struct {
 	downloadSeq uint64
 }
 
-// diskSpace is the free and total space, in bytes, of a filesystem. free is
-// what an unprivileged writer can still use.
+// diskSpace is the free and total space, in bytes, of a filesystem, and its
+// free and total inodes. free is what an unprivileged writer can still use.
+// totalInodes is 0 when the filesystem reports none.
 type diskSpace struct {
-	free  int64
-	total int64
+	free        int64
+	total       int64
+	freeInodes  int64
+	totalInodes int64
 }
 
 func statDisk(path string) (diskSpace, error) {
@@ -123,20 +139,51 @@ func statDisk(path string) (diskSpace, error) {
 	if err := syscall.Statfs(path, &st); err != nil {
 		return diskSpace{}, fmt.Errorf("read free space of the volume cache dir: %w", err)
 	}
-	return diskSpace{free: int64(st.Bavail) * int64(st.Bsize), total: int64(st.Blocks) * int64(st.Bsize)}, nil
+	return diskSpace{
+		free:        int64(st.Bavail) * int64(st.Bsize),
+		total:       int64(st.Blocks) * int64(st.Bsize),
+		freeInodes:  int64(st.Ffree),
+		totalInodes: int64(st.Files),
+	}, nil
+}
+
+// room is disk space in bytes and inodes.
+type room struct {
+	bytes  int64
+	inodes int64
+}
+
+// roomFor is what fetching an object sets aside until it ends: its size, and
+// for a tar the most its tree can take, since the tar stays on disk until the
+// tree is complete.
+func roomFor(key Key, src Source) room {
+	if key.Kind != volume.KindTar {
+		return room{bytes: src.Size, inodes: 1}
+	}
+	tree := treeRoom(src.Tar)
+	return room{bytes: src.Size + tree.bytes, inodes: 1 + tree.inodes}
 }
 
 type entry struct {
+	// path is an image file or the root of an unpacked tree.
 	path string
-	// allocatedBytes is what the file takes on disk, less than its size when
-	// it has holes.
+	// allocatedBytes is what the entry takes on disk: less than an image's
+	// size when it has holes.
 	allocatedBytes int64
+	inodes         int64
 	// holders is the set of holder names that pin the entry, as given to
 	// Acquire.
 	holders map[string]struct{}
 	// lastUse is the lruClock value from when the entry was downloaded, last
 	// acquired, or released by its last holder.
 	lastUse uint64
+}
+
+// evictedEntry is an entry makeRoomLocked took out of the index, whose files
+// its fetch removes.
+type evictedEntry struct {
+	path  string
+	bytes int64
 }
 
 // fetch is one download in progress. waitersByHolder counts the Acquires
@@ -168,11 +215,12 @@ func New(cfg Config) (*Cache, error) {
 	}
 	cfg.Dir = dir
 	cache := &Cache{
-		config:    cfg,
-		transport: newTransport(nil, http.ProxyFromEnvironment),
-		diskSpace: statDisk,
-		entries:   make(map[Key]*entry),
-		fetches:   make(map[Key]*fetch),
+		config:      cfg,
+		transport:   newTransport(nil, http.ProxyFromEnvironment),
+		diskSpace:   statDisk,
+		unpackSlots: make(chan struct{}, maxConcurrentUnpacks),
+		entries:     make(map[Key]*entry),
+		fetches:     make(map[Key]*fetch),
 	}
 	if cfg.APIHost != "" {
 		// Cloned: the transport adds its protocols to the config it is given.
@@ -270,11 +318,12 @@ func (c *Cache) prepareDirLocked() error {
 	return nil
 }
 
-// Acquire returns the path of a verified copy of key's object and pins it for
-// holder until Release or ReleaseAll; the file stays in place while pinned.
-// Pins are per holder, so a retried Acquire pins once. Concurrent Acquires of
-// one key share one download, which runs under the cache's fetch timeout: ctx
-// only bounds this caller's wait.
+// Acquire returns the path of a verified copy of key's object, the image or
+// the root of the tar's unpacked tree, and pins it for holder until Release or
+// ReleaseAll; it stays in place while pinned. Pins are per holder, so a
+// retried Acquire pins once. Concurrent Acquires of one key share one fetch,
+// which runs under the cache's fetch timeout: ctx only bounds this caller's
+// wait.
 func (c *Cache) Acquire(ctx context.Context, key Key, src Source, holder string) (string, error) {
 	if err := key.validate(); err != nil {
 		return "", err
@@ -285,6 +334,13 @@ func (c *Cache) Acquire(ctx context.Context, key Key, src Source, holder string)
 	sourceURL, err := parseSource(src)
 	if err != nil {
 		return "", err
+	}
+	if key.Kind == volume.KindTar {
+		if err := src.Tar.Validate(); err != nil {
+			return "", fmt.Errorf("volume tar counts: %w", err)
+		}
+	} else if src.Tar != (volume.TarCounts{}) {
+		return "", errors.New("only a tar volume object has tar counts")
 	}
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -299,9 +355,8 @@ func (c *Cache) Acquire(ctx context.Context, key Key, src Source, holder string)
 		return cached.path, nil
 	}
 	pending, started := c.fetches[key], false
-	var evicted []string
 	if pending == nil {
-		pending, evicted, err = c.startLocked(ctx, key, src, sourceURL, holder)
+		pending, err = c.startLocked(ctx, key, src, sourceURL, holder)
 		if err != nil {
 			c.mu.Unlock()
 			result := metrics.VolumeFetchIO
@@ -316,14 +371,6 @@ func (c *Cache) Acquire(ctx context.Context, key Key, src Source, holder string)
 	pending.waitersByHolder[holder]++
 	c.mu.Unlock()
 
-	// Their entries are gone from the index, and every download gets a new
-	// file name, so nothing can reach these paths any more.
-	for _, path := range evicted {
-		if err := os.Remove(path); err != nil {
-			slog.Warn("volume cache: remove evicted object", "path", path, "err", err)
-		}
-	}
-
 	path, err := c.wait(ctx, pending, holder)
 	if err == nil && !started {
 		c.config.Metrics.ObserveVolumeCacheFetch(metrics.VolumeFetchHit)
@@ -331,50 +378,61 @@ func (c *Cache) Acquire(ctx context.Context, key Key, src Source, holder string)
 	return path, err
 }
 
-// startLocked makes room for src and starts its download. On error it has
+// startLocked makes room for src and starts its fetch. On error it has
 // evicted nothing and reserved nothing.
-func (c *Cache) startLocked(ctx context.Context, key Key, src Source, sourceURL *url.URL, holder string) (*fetch, []string, error) {
+func (c *Cache) startLocked(ctx context.Context, key Key, src Source, sourceURL *url.URL, holder string) (*fetch, error) {
+	// Size first: the sum with a tree's room could overflow.
 	if src.Size > c.config.MaxBytes {
-		return nil, nil, fmt.Errorf("%w: %d bytes, cache holds %d", errTooLarge, src.Size, c.config.MaxBytes)
+		return nil, fmt.Errorf("%w: %d bytes, cache holds %d", errTooLarge, src.Size, c.config.MaxBytes)
+	}
+	need := roomFor(key, src)
+	if need.bytes > c.config.MaxBytes {
+		return nil, fmt.Errorf("%w: it needs %d bytes, cache holds %d", errTooLarge, need.bytes, c.config.MaxBytes)
 	}
 	if !c.dirReady {
 		// Again: symlinks in a parent that did not exist at startup were not
 		// resolved then.
 		if _, err := checkDir(c.config.Dir, c.config.DataDir); err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		if err := c.prepareDirLocked(); err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 	}
-	evicted, err := c.makeRoomLocked(src.Size)
+	evicted, err := c.makeRoomLocked(need)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	c.downloadingBytes += src.Size
+	c.downloading.bytes += need.bytes
+	c.downloading.inodes += need.inodes
 	c.downloadSeq++
 	dest := filepath.Join(c.config.Dir, fmt.Sprintf("%s.%s.%d", key.Scope, key.SHA256, c.downloadSeq))
 	pending := &fetch{done: make(chan struct{}), waitersByHolder: make(map[string]int)}
 	c.fetches[key] = pending
 	slog.InfoContext(ctx, "volume cache download started",
-		"scope", key.Scope, "sha256", key.SHA256, "size", src.Size, "source", redact(sourceURL), "holder", holder)
-	go c.run(context.WithoutCancel(ctx), key, src, sourceURL, dest, pending)
-	return pending, evicted, nil
+		"scope", key.Scope, "sha256", key.SHA256, "kind", key.Kind, "size", src.Size, "source", redact(sourceURL), "holder", holder)
+	go c.run(context.WithoutCancel(ctx), key, src, sourceURL, dest, pending, need, evicted)
+	return pending, nil
 }
 
 // makeRoomLocked evicts unpinned entries, least recently used first, until need
-// more bytes fit both the budget and the disk, which keeps its floor free for
-// the sandboxes on it. It evicts nothing if they cannot fit.
-func (c *Cache) makeRoomLocked(need int64) ([]string, error) {
+// fits both the budget and the disk, which keeps its floor of bytes and inodes
+// free for the sandboxes on it. It evicts nothing if need cannot fit, and
+// returns what it evicted, which the budget counts until it is removed.
+func (c *Cache) makeRoomLocked(need room) ([]evictedEntry, error) {
 	space, err := c.diskSpace(c.config.Dir)
 	if err != nil {
 		return nil, err
 	}
-	budgetFree := c.config.MaxBytes - c.allocatedBytes - c.downloadingBytes
-	// Downloads in progress count as if they had written nothing yet.
-	diskFree := space.free - c.downloadingBytes - space.total*runnerruntime.DiskFloorPercent/100
-	fits := func(freed int64) bool { return need <= budgetFree+freed && need <= diskFree+freed }
-	if fits(0) {
+	budgetFree := c.config.MaxBytes - c.allocatedBytes - c.downloading.bytes - c.removingBytes
+	// Fetches in progress count as if they had written nothing yet.
+	diskFree := space.free - c.downloading.bytes - space.total*runnerruntime.DiskFloorPercent/100
+	inodesFree := space.freeInodes - c.downloading.inodes - space.totalInodes*runnerruntime.DiskFloorPercent/100
+	fitsInodes := func(freed room) bool { return space.totalInodes == 0 || need.inodes <= inodesFree+freed.inodes }
+	fits := func(freed room) bool {
+		return need.bytes <= budgetFree+freed.bytes && need.bytes <= diskFree+freed.bytes && fitsInodes(freed)
+	}
+	if fits(room{}) {
 		return nil, nil
 	}
 	type candidate struct {
@@ -390,63 +448,64 @@ func (c *Cache) makeRoomLocked(need int64) ([]string, error) {
 	sort.Slice(candidates, func(left, right int) bool {
 		return candidates[left].cached.lastUse < candidates[right].cached.lastUse
 	})
-	var freed int64
+	var freed room
 	evictCount := 0
 	for ; evictCount < len(candidates) && !fits(freed); evictCount++ {
-		freed += candidates[evictCount].cached.allocatedBytes
+		freed.bytes += candidates[evictCount].cached.allocatedBytes
+		freed.inodes += candidates[evictCount].cached.inodes
 	}
-	if need > budgetFree+freed {
+	if need.bytes > budgetFree+freed.bytes {
 		return nil, fmt.Errorf("%w: objects in use fill its %d MiB budget", ErrCacheFull, c.config.MaxBytes>>20)
 	}
-	if need > diskFree+freed {
-		return nil, fmt.Errorf("%w: the disk has %d MiB free above its floor, %d MiB needed", ErrCacheFull, max(0, diskFree+freed)>>20, need>>20)
+	if need.bytes > diskFree+freed.bytes {
+		return nil, fmt.Errorf("%w: the disk has %d MiB free above its floor, %d MiB needed", ErrCacheFull, max(0, diskFree+freed.bytes)>>20, need.bytes>>20)
 	}
-	paths := make([]string, 0, evictCount)
+	if !fitsInodes(freed) {
+		return nil, fmt.Errorf("%w: the disk has %d inodes free above its floor, %d needed", ErrCacheFull, max(0, inodesFree+freed.inodes), need.inodes)
+	}
+	evicted := make([]evictedEntry, 0, evictCount)
 	for _, cand := range candidates[:evictCount] {
 		delete(c.entries, cand.key)
 		c.allocatedBytes -= cand.cached.allocatedBytes
-		paths = append(paths, cand.cached.path)
+		c.removingBytes += cand.cached.allocatedBytes
+		evicted = append(evicted, evictedEntry{path: cand.cached.path, bytes: cand.cached.allocatedBytes})
 		c.config.Metrics.ObserveVolumeCacheEviction()
 		slog.Info("volume cache evicted", "scope", cand.key.Scope, "sha256", cand.key.SHA256, "allocated_bytes", cand.cached.allocatedBytes)
 	}
-	return paths, nil
+	return evicted, nil
 }
 
-func (c *Cache) run(ctx context.Context, key Key, src Source, sourceURL *url.URL, dest string, pending *fetch) {
+// run removes what startLocked evicted for the fetch, then fetches. The
+// evicted entries are gone from the index, and every fetch gets a new name, so
+// nothing can reach those paths any more; removing them here keeps a large
+// tree out of the lock and frees the room before the download writes into it.
+func (c *Cache) run(ctx context.Context, key Key, src Source, sourceURL *url.URL, dest string, pending *fetch, reserved room, evicted []evictedEntry) {
+	for _, gone := range evicted {
+		if err := os.RemoveAll(gone.path); err != nil {
+			slog.Warn("volume cache: remove evicted object", "path", gone.path, "err", withoutPath(err))
+		}
+		c.mu.Lock()
+		c.removingBytes -= gone.bytes
+		c.mu.Unlock()
+	}
 	ctx, cancel := context.WithTimeout(ctx, c.config.FetchTimeout)
 	defer cancel()
-	start := time.Now()
-	alloc, err := c.download(ctx, sourceURL, src.Size, key.SHA256, dest)
-	dur := time.Since(start)
-
-	// Recorded before the waiters are released, so whoever sees the result
-	// finds it counted and logged.
-	if err != nil {
-		result := resultOf(err)
-		c.config.Metrics.ObserveVolumeCacheFetch(result)
-		attrs := []any{"scope", key.Scope, "sha256", key.SHA256, "source", redact(sourceURL), "result", result, "duration_ms", dur.Milliseconds(), "err", err}
-		if cause := causeOf(err); cause != nil {
-			attrs = append(attrs, "cause", cause)
-		}
-		slog.WarnContext(ctx, "volume cache download failed", attrs...)
-	} else {
-		c.config.Metrics.ObserveVolumeCacheFetch(metrics.VolumeFetchDownloaded)
-		c.config.Metrics.ObserveVolumeCacheDownload(dur)
-		slog.InfoContext(ctx, "volume cache download finished",
-			"scope", key.Scope, "sha256", key.SHA256, "size", src.Size, "allocated_bytes", alloc, "duration_ms", dur.Milliseconds())
-	}
+	// Counted and logged before the waiters are released, so whoever sees the
+	// result finds it there.
+	stored, err := c.fetchObject(ctx, key, src, sourceURL, dest)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.fetches, key)
-	c.downloadingBytes -= src.Size
+	c.downloading.bytes -= reserved.bytes
+	c.downloading.inodes -= reserved.inodes
 	if err == nil {
 		holders := make(map[string]struct{}, len(pending.waitersByHolder))
 		for holder := range pending.waitersByHolder {
 			holders[holder] = struct{}{}
 		}
-		c.entries[key] = &entry{path: dest, allocatedBytes: alloc, holders: holders, lastUse: c.tickLocked()}
-		c.allocatedBytes += alloc
+		c.entries[key] = &entry{path: dest, allocatedBytes: stored.bytes, inodes: stored.inodes, holders: holders, lastUse: c.tickLocked()}
+		c.allocatedBytes += stored.bytes
 		pending.path = dest
 	}
 	pending.err = err
@@ -516,7 +575,7 @@ func (c *Cache) stats() (bytes int64, entries, pinned int) {
 			pinned++
 		}
 	}
-	return c.allocatedBytes + c.downloadingBytes, len(c.entries), pinned
+	return c.allocatedBytes + c.downloading.bytes + c.removingBytes, len(c.entries), pinned
 }
 
 // DataDirReservation is the part of the budget not on disk yet, which sandbox
@@ -528,7 +587,7 @@ func (c *Cache) DataDirReservation() int64 {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return max(0, c.config.MaxBytes-c.allocatedBytes)
+	return max(0, c.config.MaxBytes-c.allocatedBytes-c.removingBytes)
 }
 
 // sameFilesystem reports whether a and b are on one filesystem, or a missing

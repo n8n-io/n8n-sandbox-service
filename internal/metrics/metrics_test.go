@@ -227,6 +227,36 @@ func TestRunnerRecorderVolumeMounts(t *testing.T) {
 	}
 }
 
+func TestRunnerRecorderVolumeBuilds(t *testing.T) {
+	recorder := NewRunnerRecorder(true)
+
+	recorder.ObserveVolumeBuild("success")
+	recorder.ObserveVolumeBuild("success")
+	recorder.ObserveVolumeBuild("tar")
+	recorder.ObserveVolumeBuildDuration(3 * time.Second)
+
+	if got := recorder.VolumeBuildCount("success"); got != 2 {
+		t.Errorf("volume_builds_total{result=success} = %v, want 2", got)
+	}
+	body := scrape(t, recorder.Registry())
+	for _, want := range []string{
+		`sandbox_volume_builds_total{result="tar",role="runner"} 1`,
+		`sandbox_volume_build_duration_seconds_bucket{role="runner",le="5"} 1`,
+		`sandbox_volume_build_duration_seconds_bucket{role="runner",le="2"} 0`,
+		`sandbox_volume_build_duration_seconds_count{role="runner"} 1`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("scrape body missing %q", want)
+		}
+	}
+
+	var disabled *RunnerRecorder
+	disabled.ObserveVolumeBuild("success")
+	disabled.ObserveVolumeBuildDuration(time.Second)
+	NewRunnerRecorder(false).ObserveVolumeBuild("success")
+	NewRunnerRecorder(false).ObserveVolumeBuildDuration(time.Second)
+}
+
 func TestRunnerRecorderDisabled(t *testing.T) {
 	r := NewRunnerRecorder(false)
 	if r.Enabled() {
@@ -244,12 +274,19 @@ func TestRunnerRecorderDisabled(t *testing.T) {
 	r.ObserveVolumeCacheFetch(VolumeFetchHit)
 	r.ObserveVolumeCacheDownload(time.Second)
 	r.ObserveVolumeCacheEviction()
+	r.ObserveVolumeCacheUnpack(VolumeUnpackSuccess)
+	r.ObserveVolumeCacheUnpackDuration(time.Second)
 	r.SetVolumeCache(func() float64 { return 1 }, func() float64 { return 1 }, func() float64 { return 1 })
 	if got := r.VolumeCacheFetchCount(VolumeFetchHit); got != 0 {
 		t.Errorf("VolumeCacheFetchCount on a disabled recorder = %v, want 0", got)
 	}
+	if got := r.VolumeCacheUnpackCount(VolumeUnpackSuccess); got != 0 {
+		t.Errorf("VolumeCacheUnpackCount on a disabled recorder = %v, want 0", got)
+	}
 	var nilRecorder *RunnerRecorder
 	nilRecorder.ObserveVolumeCacheFetch(VolumeFetchHit)
+	nilRecorder.ObserveVolumeCacheUnpack(VolumeUnpackSuccess)
+	nilRecorder.ObserveVolumeCacheUnpackDuration(time.Second)
 	nilRecorder.SetVolumeCache(nil, nil, nil)
 }
 
@@ -260,6 +297,9 @@ func TestRunnerRecorderVolumeCache(t *testing.T) {
 	rec.ObserveVolumeCacheFetch(VolumeFetchDigest)
 	rec.ObserveVolumeCacheDownload(3 * time.Second)
 	rec.ObserveVolumeCacheEviction()
+	rec.ObserveVolumeCacheUnpack(VolumeUnpackSuccess)
+	rec.ObserveVolumeCacheUnpack(VolumeUnpackInvalid)
+	rec.ObserveVolumeCacheUnpackDuration(4 * time.Second)
 	rec.SetVolumeCache(func() float64 { return 4096 }, func() float64 { return 3 }, func() float64 { return 2 })
 
 	if got := rec.VolumeCacheFetchCount(VolumeFetchHit); got != 2 {
@@ -273,6 +313,10 @@ func TestRunnerRecorderVolumeCache(t *testing.T) {
 		`sandbox_volume_cache_fetches_total{result="digest",role="runner"} 1`,
 		`sandbox_volume_cache_download_duration_seconds_count{role="runner"} 1`,
 		`sandbox_volume_cache_evictions_total{role="runner"} 1`,
+		`sandbox_volume_cache_unpacks_total{result="invalid",role="runner"} 1`,
+		`sandbox_volume_cache_unpacks_total{result="success",role="runner"} 1`,
+		`sandbox_volume_cache_unpack_duration_seconds_bucket{role="runner",le="5"} 1`,
+		`sandbox_volume_cache_unpack_duration_seconds_bucket{role="runner",le="2.5"} 0`,
 		`sandbox_volume_cache_bytes{role="runner"} 4096`,
 		`sandbox_volume_cache_entries{role="runner"} 3`,
 		`sandbox_volume_cache_pinned_entries{role="runner"} 2`,

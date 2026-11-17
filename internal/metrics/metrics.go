@@ -85,6 +85,23 @@ const (
 	VolumeFetchIO = "io"
 )
 
+// Volume cache unpack results used with ObserveVolumeCacheUnpack.
+const (
+	// VolumeUnpackSuccess is a tar unpacked into the cache.
+	VolumeUnpackSuccess = "success"
+	// VolumeUnpackInvalid is a tar that breaks the volume tar rules or holds
+	// more than the API counted.
+	VolumeUnpackInvalid = "invalid"
+	// VolumeUnpackFull is an unpack the disk filled up under.
+	VolumeUnpackFull = "full"
+	// VolumeUnpackTimeout is an unpack, or its wait for a slot, that ran out
+	// of the fetch's time.
+	VolumeUnpackTimeout = "timeout"
+	// VolumeUnpackIO is an unpack that failed reading or writing the local
+	// disk.
+	VolumeUnpackIO = "io"
+)
+
 // Handler returns the http.Handler that serves the registry's metrics in
 // Prometheus exposition format.
 func Handler(reg *prometheus.Registry) http.Handler {
@@ -371,6 +388,10 @@ var containerOpBuckets = []float64{0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60, 12
 // (snapshot load on a cold page cache), far below the container-op range.
 var lifecycleStepBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5}
 
+// volumeBuildBuckets covers a volume build from the tar's first byte to the
+// image's last: seconds for small volumes, minutes for large ones.
+var volumeBuildBuckets = []float64{1, 2, 5, 10, 20, 30, 60, 120, 300, 600}
+
 // volumeDownloadBuckets covers objects from megabytes to several gigabytes. 300
 // is the default fetch timeout; 600 is for a raised one.
 var volumeDownloadBuckets = []float64{0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600}
@@ -388,9 +409,13 @@ type RunnerRecorder struct {
 	guestDeaths          prometheus.Counter
 	recoveries           *prometheus.CounterVec
 	volumeMounts         *prometheus.CounterVec
+	volumeBuilds         *prometheus.CounterVec
+	volumeBuildDuration  prometheus.Histogram
 	volumeCacheFetches   *prometheus.CounterVec
 	volumeCacheDownloads prometheus.Histogram
 	volumeCacheEvictions prometheus.Counter
+	volumeCacheUnpacks   *prometheus.CounterVec
+	volumeUnpackDuration prometheus.Histogram
 	volumesLeftOut       *prometheus.CounterVec
 }
 
@@ -467,6 +492,15 @@ func NewRunnerRecorder(enabled bool) *RunnerRecorder {
 		},
 		[]string{"result"},
 	)
+	volumeBuilds := prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   Namespace,
+			Name:        "volume_builds_total",
+			Help:        "Volume image builds requested from the runner, labeled by result.",
+			ConstLabels: prometheus.Labels{"role": RoleRunner},
+		},
+		[]string{"result"},
+	)
 	volumeCacheFetches := prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace:   Namespace,
@@ -475,6 +509,15 @@ func NewRunnerRecorder(enabled bool) *RunnerRecorder {
 			ConstLabels: prometheus.Labels{"role": RoleRunner},
 		},
 		[]string{"result"},
+	)
+	volumeBuildDuration := prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace:   Namespace,
+			Name:        "volume_build_duration_seconds",
+			Help:        "Duration of the volume image builds the runner accepted, from the tar's first byte to the end of the call.",
+			Buckets:     volumeBuildBuckets,
+			ConstLabels: prometheus.Labels{"role": RoleRunner},
+		},
 	)
 	volumeCacheDownloads := prometheus.NewHistogram(
 		prometheus.HistogramOpts{
@@ -493,8 +536,26 @@ func NewRunnerRecorder(enabled bool) *RunnerRecorder {
 			ConstLabels: prometheus.Labels{"role": RoleRunner},
 		},
 	)
-	reg.MustRegister(containerOps, containerOpDuration, lifecycleSteps, guestDeaths, recoveries, volumeMounts,
-		volumeCacheFetches, volumeCacheDownloads, volumeCacheEvictions)
+	volumeCacheUnpacks := prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   Namespace,
+			Name:        "volume_cache_unpacks_total",
+			Help:        "Volume tars the cache unpacked, by result: success, or why the unpack failed (invalid, full, timeout, io).",
+			ConstLabels: prometheus.Labels{"role": RoleRunner},
+		},
+		[]string{"result"},
+	)
+	volumeUnpackDuration := prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace:   Namespace,
+			Name:        "volume_cache_unpack_duration_seconds",
+			Help:        "Duration of successful volume tar unpacks in seconds, from the unpack slot to the tree in place.",
+			Buckets:     volumeDownloadBuckets,
+			ConstLabels: prometheus.Labels{"role": RoleRunner},
+		},
+	)
+	reg.MustRegister(containerOps, containerOpDuration, lifecycleSteps, guestDeaths, recoveries, volumeMounts, volumeBuilds, volumeBuildDuration,
+		volumeCacheFetches, volumeCacheDownloads, volumeCacheEvictions, volumeCacheUnpacks, volumeUnpackDuration)
 	return &RunnerRecorder{
 		reg:                  reg,
 		httpRequests:         httpReq,
@@ -507,9 +568,13 @@ func NewRunnerRecorder(enabled bool) *RunnerRecorder {
 		guestDeaths:          guestDeaths,
 		recoveries:           recoveries,
 		volumeMounts:         volumeMounts,
+		volumeBuilds:         volumeBuilds,
+		volumeBuildDuration:  volumeBuildDuration,
 		volumeCacheFetches:   volumeCacheFetches,
 		volumeCacheDownloads: volumeCacheDownloads,
 		volumeCacheEvictions: volumeCacheEvictions,
+		volumeCacheUnpacks:   volumeCacheUnpacks,
+		volumeUnpackDuration: volumeUnpackDuration,
 		volumesLeftOut:       volumesLeftOut,
 	}
 }
@@ -605,6 +670,26 @@ func (r *RunnerRecorder) ObserveVolumeMount(result string) {
 	r.volumeMounts.WithLabelValues(result).Inc()
 }
 
+// ObserveVolumeBuild records the result of a volume build request: "success",
+// a failure reason, or why the runner did not build. The caller passes fixed
+// values only.
+func (r *RunnerRecorder) ObserveVolumeBuild(result string) {
+	if r == nil || r.reg == nil {
+		return
+	}
+	r.volumeBuilds.WithLabelValues(result).Inc()
+}
+
+// ObserveVolumeBuildDuration records how long a volume build the runner
+// accepted took, whatever its result, from the tar's first byte to the end of
+// the call.
+func (r *RunnerRecorder) ObserveVolumeBuildDuration(dur time.Duration) {
+	if r == nil || r.reg == nil {
+		return
+	}
+	r.volumeBuildDuration.Observe(dur.Seconds())
+}
+
 // ObserveVolumeCacheFetch records the result of a volume cache fetch (one of
 // the VolumeFetch* values).
 func (r *RunnerRecorder) ObserveVolumeCacheFetch(result string) {
@@ -628,6 +713,23 @@ func (r *RunnerRecorder) ObserveVolumeCacheEviction() {
 		return
 	}
 	r.volumeCacheEvictions.Inc()
+}
+
+// ObserveVolumeCacheUnpack records the result of a volume tar unpack (one of
+// the VolumeUnpack* values).
+func (r *RunnerRecorder) ObserveVolumeCacheUnpack(result string) {
+	if r == nil || r.reg == nil {
+		return
+	}
+	r.volumeCacheUnpacks.WithLabelValues(result).Inc()
+}
+
+// ObserveVolumeCacheUnpackDuration records how long a successful unpack took.
+func (r *RunnerRecorder) ObserveVolumeCacheUnpackDuration(dur time.Duration) {
+	if r == nil || r.reg == nil {
+		return
+	}
+	r.volumeUnpackDuration.Observe(dur.Seconds())
 }
 
 // ObserveVolumeLeftOut records an optional volume a create left out, with one
@@ -779,6 +881,15 @@ func (r *RunnerRecorder) VolumeMountCount(result string) float64 {
 	return testutil.ToFloat64(r.volumeMounts.WithLabelValues(result))
 }
 
+// VolumeBuildCount returns the counter value for volume build requests with
+// the given result. Intended for tests in other packages.
+func (r *RunnerRecorder) VolumeBuildCount(result string) float64 {
+	if r == nil || r.reg == nil {
+		return 0
+	}
+	return testutil.ToFloat64(r.volumeBuilds.WithLabelValues(result))
+}
+
 // VolumeCacheFetchCount returns the counter value for volume cache fetches with
 // the given result. Intended for tests in other packages.
 func (r *RunnerRecorder) VolumeCacheFetchCount(result string) float64 {
@@ -795,6 +906,15 @@ func (r *RunnerRecorder) VolumeCacheEvictionCount() float64 {
 		return 0
 	}
 	return testutil.ToFloat64(r.volumeCacheEvictions)
+}
+
+// VolumeCacheUnpackCount returns the counter value for volume tar unpacks with
+// the given result. Intended for tests in other packages.
+func (r *RunnerRecorder) VolumeCacheUnpackCount(result string) float64 {
+	if r == nil || r.reg == nil {
+		return 0
+	}
+	return testutil.ToFloat64(r.volumeCacheUnpacks.WithLabelValues(result))
 }
 
 // VolumeLeftOutCount returns the counter value for optional volumes left out

@@ -96,7 +96,7 @@ func randomBytes(t *testing.T, size int) []byte {
 
 func keyFor(data []byte) Key {
 	sum := sha256.Sum256(data)
-	return Key{Scope: "11111111-2222-4333-8444-555555555555", SHA256: hex.EncodeToString(sum[:])}
+	return Key{Scope: "11111111-2222-4333-8444-555555555555", SHA256: hex.EncodeToString(sum[:]), Kind: volume.KindExt4}
 }
 
 // server serves data with a Content-Length, counting requests. With a gate,
@@ -294,7 +294,7 @@ func TestAcquireDownloadsVerifiesAndPins(t *testing.T) {
 func TestAcquireKeepsScopesApart(t *testing.T) {
 	cache, _ := newTestCache(t, 1<<30)
 	srv := serve(t, randomBytes(t, 4096), false)
-	shared := Key{Scope: volume.SharedScope, SHA256: keyFor(srv.data).SHA256}
+	shared := Key{Scope: volume.SharedScope, SHA256: keyFor(srv.data).SHA256, Kind: volume.KindExt4}
 
 	tenantPath := srv.acquire(t, cache, "sandbox-a")
 	sharedPath, err := cache.Acquire(context.Background(), shared, srv.source(), "sandbox-a")
@@ -441,9 +441,13 @@ func TestAcquireRefusesSourceAndKey(t *testing.T) {
 		{"port without a host", good, Source{URL: "https://:" + port + "/a", Size: 4096}},
 		{"unparsable", good, Source{URL: "https://h/%zz?" + token, Size: 4096}},
 		{"zero size", good, Source{URL: srv.URL, Size: 0}},
-		{"scope traversal", Key{Scope: "../../etc", SHA256: good.SHA256}, srv.source()},
-		{"scope that is no tenant ID", Key{Scope: "__admin__", SHA256: good.SHA256}, srv.source()},
-		{"uppercase digest", Key{Scope: volume.SharedScope, SHA256: strings.ToUpper(good.SHA256)}, srv.source()},
+		{"scope traversal", Key{Scope: "../../etc", SHA256: good.SHA256, Kind: volume.KindExt4}, srv.source()},
+		{"scope that is no tenant ID", Key{Scope: "__admin__", SHA256: good.SHA256, Kind: volume.KindExt4}, srv.source()},
+		{"uppercase digest", Key{Scope: volume.SharedScope, SHA256: strings.ToUpper(good.SHA256), Kind: volume.KindExt4}, srv.source()},
+		{"no kind", Key{Scope: volume.SharedScope, SHA256: good.SHA256}, srv.source()},
+		{"unknown kind", Key{Scope: volume.SharedScope, SHA256: good.SHA256, Kind: "squashfs"}, srv.source()},
+		{"ext4 with tar counts", good, Source{URL: srv.source().URL, Size: 4096, Tar: volume.TarCounts{Entries: 1, DecompressedBytes: 4096}}},
+		{"tar without counts", Key{Scope: good.Scope, SHA256: good.SHA256, Kind: volume.KindTar}, srv.source()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := cache.Acquire(context.Background(), tc.key, tc.src, "sandbox-a")
