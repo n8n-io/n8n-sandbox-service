@@ -90,7 +90,7 @@ func TestSandboxProxyDoesNotCountServerErrorsAsActivity(t *testing.T) {
 		}
 		activity.write()
 
-		rec, err := s.Get(sid)
+		rec, err := s.GetAnyKind(sid)
 		if err != nil {
 			t.Fatalf("get sandbox: %v", err)
 		}
@@ -109,7 +109,7 @@ func TestSandboxProxyDoesNotCountServerErrorsAsActivity(t *testing.T) {
 		t.Fatalf("upstream 200: proxy returned %d", rr.Code)
 	}
 	activity.write()
-	rec, err := s.Get(sid)
+	rec, err := s.GetAnyKind(sid)
 	if err != nil {
 		t.Fatalf("get sandbox: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestSandboxProxyCountsClientErrorsAsActivity(t *testing.T) {
 	}
 	activity.write()
 
-	rec, err := s.Get(sid)
+	rec, err := s.GetAnyKind(sid)
 	if err != nil {
 		t.Fatalf("get sandbox: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestSandboxProxyDoesNotCountUnreachableRunnerAsActivity(t *testing.T) {
 	}
 	activity.write()
 
-	rec, err := s.Get(sid)
+	rec, err := s.GetAnyKind(sid)
 	if err != nil {
 		t.Fatalf("get sandbox: %v", err)
 	}

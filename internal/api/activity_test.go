@@ -149,7 +149,7 @@ func TestActivityRecorderWritesEveryKind(t *testing.T) {
 		t.Fatal("write failed")
 	}
 	for _, rec := range recs {
-		got, err := s.Get(rec.ID)
+		got, err := s.GetAnyKind(rec.ID)
 		if err != nil || got == nil || got.LastActiveAt != t0+5 {
 			t.Fatalf("%s sandbox after write: %+v err=%v, want last_active_at %d", rec.Kind, got, err, t0+5)
 		}

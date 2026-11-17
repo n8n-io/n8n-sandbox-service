@@ -224,9 +224,26 @@ func (s *PostgresStore) Create(record *SandboxRecord) error {
 // pgPlaceholder returns the placeholder of the nth query argument.
 func pgPlaceholder(n int) string { return "$" + strconv.Itoa(n) }
 
-func (s *PostgresStore) Get(id string) (*SandboxRecord, error) {
-	q := `SELECT ` + pgSandboxCols + ` FROM sandboxes WHERE id = $1`
-	rec, err := scanRecord(s.db.QueryRow(q, id))
+func (s *PostgresStore) GetAnyKind(id string) (*SandboxRecord, error) {
+	return s.getSandbox(id, AllKinds()...)
+}
+
+func (s *PostgresStore) GetDefaultSandbox(id string) (*SandboxRecord, error) {
+	return s.getSandbox(id, KindDefault)
+}
+
+func (s *PostgresStore) GetCodeSandbox(id string) (*SandboxRecord, error) {
+	return s.getSandbox(id, KindCode)
+}
+
+// getSandbox returns the sandbox id when it is of one of kinds, or nil.
+func (s *PostgresStore) getSandbox(id string, kinds ...Kind) (*SandboxRecord, error) {
+	cond, args, err := KindFilter(kinds...).where([]any{id}, pgPlaceholder)
+	if err != nil {
+		return nil, err
+	}
+	q := `SELECT ` + pgSandboxCols + ` FROM sandboxes WHERE id = $1 AND ` + cond
+	rec, err := scanRecord(s.db.QueryRow(q, args...))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil

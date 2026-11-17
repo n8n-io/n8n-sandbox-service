@@ -83,7 +83,7 @@ func logSandboxDeleted(sandboxID, runnerID, reason string) {
 type sweeperStore interface {
 	ListForIdleReapDelete(cutoff int64) ([]*store.SandboxRecord, error)
 	ListForIdleReapStop(cutoff int64, ephemeral bool) ([]*store.SandboxRecord, error)
-	Get(id string) (*store.SandboxRecord, error)
+	GetAnyKind(id string) (*store.SandboxRecord, error)
 	UpdateStatus(id, status string) error
 	Delete(id string) error
 	LockSandbox(ctx context.Context, id string) (unlock func(), err error)
@@ -193,7 +193,7 @@ func withLockedSandbox(ctx context.Context, s sweeperStore, id string, fn func(*
 	}
 	defer unlock()
 
-	rec, err := s.Get(id)
+	rec, err := s.GetAnyKind(id)
 	if err != nil {
 		return err
 	}

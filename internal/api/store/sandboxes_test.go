@@ -15,7 +15,7 @@ func TestKindScoping(t *testing.T) {
 }
 
 // testKindScoping runs against both backends; tenantA and tenantB must not
-// exist yet. Methods on many sandboxes see only the rows their filter selects.
+// exist yet. Each getter and filter sees only the kinds and tenants it names.
 func testKindScoping(t *testing.T, s SandboxStore, tenantA, tenantB string) {
 	t.Helper()
 	// Each tenant has a sandbox of each kind: tenantA's are running, tenantB's
@@ -74,9 +74,24 @@ func testKindScoping(t *testing.T, s SandboxStore, tenantA, tenantB string) {
 		}
 	}
 
-	// One sandbox is found by its id, whatever its kind.
-	if got, err := s.Get(codeA); err != nil || got == nil || got.Kind != KindCode {
-		t.Fatalf("Get(codeA): %+v err=%v", got, err)
+	// GetAnyKind finds a sandbox of any kind; the other getters only their own.
+	for _, tc := range []struct {
+		name string
+		get  func(string) (*SandboxRecord, error)
+		id   string
+		want bool
+	}{
+		{"GetAnyKind(defA)", s.GetAnyKind, defA, true},
+		{"GetAnyKind(codeA)", s.GetAnyKind, codeA, true},
+		{"GetDefaultSandbox(defA)", s.GetDefaultSandbox, defA, true},
+		{"GetDefaultSandbox(codeA)", s.GetDefaultSandbox, codeA, false},
+		{"GetCodeSandbox(codeA)", s.GetCodeSandbox, codeA, true},
+		{"GetCodeSandbox(defA)", s.GetCodeSandbox, defA, false},
+	} {
+		got, err := tc.get(tc.id)
+		if err != nil || (got != nil) != tc.want || (got != nil && got.ID != tc.id) {
+			t.Fatalf("%s: %+v err=%v, want found=%v", tc.name, got, err, tc.want)
+		}
 	}
 
 	recs, err := s.List(KindFilter(KindDefault))

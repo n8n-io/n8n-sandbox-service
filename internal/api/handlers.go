@@ -25,11 +25,11 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/sandboxproxy"
 )
 
-// sandboxStore is the store of the default sandbox routes. Get finds a
-// sandbox of any kind: the routes check its kind with canAccessSandbox.
+// sandboxStore is the store of the default sandbox routes.
 type sandboxStore interface {
 	Create(record *store.SandboxRecord) error
-	Get(id string) (*store.SandboxRecord, error)
+	GetAnyKind(id string) (*store.SandboxRecord, error)
+	GetDefaultSandbox(id string) (*store.SandboxRecord, error)
 	List(f store.SandboxFilter) ([]*store.SandboxRecord, error)
 	Delete(id string) error
 	LockSandbox(ctx context.Context, id string) (unlock func(), err error)
@@ -102,12 +102,12 @@ func sandboxProxyHandler(s sandboxStore, reg registry.RunnerRegistry, cfg *confi
 				return
 			}
 
-			rec, err := s.Get(id)
+			rec, err := s.GetDefaultSandbox(id)
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
-			if rec == nil || !canAccessSandbox(r, rec, store.KindDefault) {
+			if rec == nil || !canAccessSandbox(r, rec) {
 				writeError(w, http.StatusNotFound, "sandbox not found")
 				return
 			}
@@ -281,12 +281,12 @@ func handleGetSandbox(s sandboxStore, cfg *config.APIConfig) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "invalid sandbox id")
 			return
 		}
-		rec, err := s.Get(id)
+		rec, err := s.GetDefaultSandbox(id)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		if rec == nil || !canAccessSandbox(r, rec, store.KindDefault) {
+		if rec == nil || !canAccessSandbox(r, rec) {
 			writeError(w, http.StatusNotFound, "sandbox not found")
 			return
 		}
@@ -381,13 +381,14 @@ func handleCreateSandbox(s sandboxStore, tenants tenantGetter, reg registry.Runn
 			}
 			defer unlock()
 
-			existing, err := s.Get(sandboxID)
+			// Any kind: the id of a sandbox of another kind is not free.
+			existing, err := s.GetAnyKind(sandboxID)
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
 			if existing != nil {
-				if !canAccessSandbox(r, existing, store.KindDefault) {
+				if existing.Kind != store.KindDefault || !canAccessSandbox(r, existing) {
 					writeError(w, http.StatusConflict, "sandbox id unavailable")
 					return
 				}
@@ -510,8 +511,8 @@ func handleCreateSandbox(s sandboxStore, tenants tenantGetter, reg registry.Runn
 			// Unless the store refused the row, it may have been saved anyway,
 			// say when a commit's reply was lost: count it as saved, the safe side.
 			releaseQuota(!errors.Is(err, store.ErrTenantQuotaExceeded) && !errors.Is(err, store.ErrTenantNotFound))
-			if existing, getErr := s.Get(sandboxID); getErr == nil && existing != nil {
-				if !canAccessSandbox(r, existing, store.KindDefault) {
+			if existing, getErr := s.GetAnyKind(sandboxID); getErr == nil && existing != nil {
+				if existing.Kind != store.KindDefault || !canAccessSandbox(r, existing) {
 					writeError(w, http.StatusConflict, "sandbox id unavailable")
 					return
 				}
@@ -605,12 +606,12 @@ func handleDeleteSandbox(s sandboxStore, cfg *config.APIConfig, mrec *metrics.AP
 		}
 		defer unlock()
 
-		rec, err := s.Get(id)
+		rec, err := s.GetDefaultSandbox(id)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		if rec == nil || !canAccessSandbox(r, rec, store.KindDefault) {
+		if rec == nil || !canAccessSandbox(r, rec) {
 			// Same 404 as GET for missing and inaccessible — do not leak
 			// cross-tenant existence via 204 vs 404.
 			writeError(w, http.StatusNotFound, "sandbox not found")
@@ -778,12 +779,12 @@ func deleteStoppedOnCordonedRunner(writer http.ResponseWriter, req *http.Request
 	}
 	defer unlock()
 
-	rec, err := s.Get(id)
+	rec, err := s.GetDefaultSandbox(id)
 	if err != nil {
 		writeError(writer, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if rec == nil || !canAccessSandbox(req, rec, store.KindDefault) {
+	if rec == nil || !canAccessSandbox(req, rec) {
 		writeError(writer, http.StatusNotFound, "sandbox not found")
 		return
 	}

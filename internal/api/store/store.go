@@ -150,10 +150,11 @@ type APIKey struct {
 	RevokedAt int64 // 0 = active
 }
 
-// SandboxStore is a SQLite or Postgres store. A method on one sandbox takes
-// its id, which is unique across kinds, and works on a sandbox of any kind and
-// tenant: callers check both on the row they read. List and Count take a
-// SandboxFilter; the idle reap lists cover every kind.
+// SandboxStore is a SQLite or Postgres store. Sandbox ids are unique across
+// kinds. The Get methods name the kinds they find; the other methods on one
+// sandbox work on a sandbox of any kind. None checks the tenant: callers do,
+// on the row they read. List and Count take a SandboxFilter; the idle reap
+// lists cover every kind.
 type SandboxStore interface {
 	io.Closer
 	Backend() Backend
@@ -166,8 +167,14 @@ type SandboxStore interface {
 	// its quota. It returns ErrSandboxNameTaken when a code sandbox of the
 	// tenant that is not draining already has the name.
 	Create(record *SandboxRecord) error
-	// Get returns the sandbox id, or nil when there is none.
-	Get(id string) (*SandboxRecord, error)
+	// GetAnyKind returns the sandbox id whatever its kind, or nil when there
+	// is none.
+	GetAnyKind(id string) (*SandboxRecord, error)
+	// GetDefaultSandbox returns the sandbox id when it is a default sandbox,
+	// or nil.
+	GetDefaultSandbox(id string) (*SandboxRecord, error)
+	// GetCodeSandbox returns the sandbox id when it is a code sandbox, or nil.
+	GetCodeSandbox(id string) (*SandboxRecord, error)
 	// GetCodeSandboxByName returns the code sandbox of the tenant that has the
 	// name and is not draining, or nil when there is none.
 	GetCodeSandboxByName(tenantID, name string) (*SandboxRecord, error)

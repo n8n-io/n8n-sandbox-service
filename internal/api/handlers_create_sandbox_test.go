@@ -103,7 +103,7 @@ func TestCreateSandboxClientIDCrossTenantConflict(t *testing.T) {
 	}
 
 	// Owner still has the sandbox; foreign claim must not delete it.
-	got, err := s.Get(sid)
+	got, err := s.GetAnyKind(sid)
 	if err != nil || got == nil || got.TenantID != a.Tenant.ID {
 		t.Fatalf("owner sandbox altered: got=%+v err=%v", got, err)
 	}
@@ -557,7 +557,7 @@ func TestCreateSandboxClientDisconnectStillStoresRow(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if rec, err := s.Get(resp.ID); err != nil || rec == nil {
+	if rec, err := s.GetAnyKind(resp.ID); err != nil || rec == nil {
 		t.Fatalf("stored row = %+v err=%v, want the created sandbox", rec, err)
 	}
 	if _, deleted := fake.calls(); len(deleted) != 0 {
@@ -645,7 +645,7 @@ func TestCreateSandboxPersistsEphemeral(t *testing.T) {
 	if !resp.Ephemeral {
 		t.Fatalf("create response ephemeral = false, want true: %s", rr.Body.String())
 	}
-	rec, err := s.Get(resp.ID)
+	rec, err := s.GetAnyKind(resp.ID)
 	if err != nil || rec == nil || !rec.Ephemeral {
 		t.Fatalf("stored row = %+v err=%v, want ephemeral", rec, err)
 	}
@@ -679,7 +679,7 @@ func TestCreateSandboxEgress(t *testing.T) {
 	if resp.Egress != "none" {
 		t.Fatalf("create response egress = %q, want none: %s", resp.Egress, rr.Body.String())
 	}
-	if rec, err := s.Get(sid); err != nil || rec == nil || rec.Egress != "none" {
+	if rec, err := s.GetAnyKind(sid); err != nil || rec == nil || rec.Egress != "none" {
 		t.Fatalf("stored row = %+v err=%v, want egress none", rec, err)
 	}
 	ctl.mu.Lock()

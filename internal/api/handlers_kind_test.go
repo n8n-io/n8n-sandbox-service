@@ -11,8 +11,8 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/store"
 )
 
-// The /sandboxes routes serve default sandboxes only: canAccessSandbox refuses
-// a code sandbox, even to its owner, and nothing reaches its runner.
+// The /sandboxes routes serve default sandboxes only: a code sandbox is not
+// found, even by its owner, and nothing reaches its runner.
 func TestDefaultRoutesDoNotServeCodeSandboxes(t *testing.T) {
 	var upstreamHits atomic.Int64
 	runner := newTestRunnerServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -58,7 +58,7 @@ func TestDefaultRoutesDoNotServeCodeSandboxes(t *testing.T) {
 	if hits := upstreamHits.Load(); hits != 0 {
 		t.Fatalf("%d requests for a code sandbox reached its runner", hits)
 	}
-	if got, err := s.Get(codeID); err != nil || got == nil {
+	if got, err := s.GetCodeSandbox(codeID); err != nil || got == nil {
 		t.Fatalf("code sandbox after DELETE /sandboxes/{id}: %+v err=%v, want kept", got, err)
 	}
 
@@ -79,20 +79,5 @@ func TestDefaultRoutesDoNotServeCodeSandboxes(t *testing.T) {
 	// The routes still serve default sandboxes.
 	if rr := call(http.MethodGet, "/sandboxes/"+defaultID+"/files", ""); rr.Code != http.StatusOK || upstreamHits.Load() != 1 {
 		t.Fatalf("default sandbox proxy: got %d, %d upstream hits", rr.Code, upstreamHits.Load())
-	}
-}
-
-func TestCanAccessSandboxChecksKind(t *testing.T) {
-	const tenantID = "11111111-1111-1111-1111-111111111111"
-	rec := &store.SandboxRecord{ID: "s", Kind: store.KindCode, TenantID: tenantID}
-	for _, id := range []authIdentity{{Role: roleAdmin}, {Role: roleTenant, TenantID: tenantID}} {
-		r := httptest.NewRequest(http.MethodGet, "/", nil)
-		r = r.WithContext(withAuthIdentity(r.Context(), id))
-		if canAccessSandbox(r, rec, store.KindDefault) {
-			t.Errorf("%s may access a code sandbox on a default route", id.Role)
-		}
-		if !canAccessSandbox(r, rec, store.KindCode) {
-			t.Errorf("%s may not access its code sandbox on a code route", id.Role)
-		}
 	}
 }

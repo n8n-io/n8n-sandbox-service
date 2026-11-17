@@ -65,7 +65,7 @@ func TestSandboxProxyReapsStoreOnRunnerSandboxGone(t *testing.T) {
 		t.Fatalf("exec status = %d, want 404", rr.Code)
 	}
 
-	rec, err := s.Get(sandboxID)
+	rec, err := s.GetAnyKind(sandboxID)
 	if err != nil {
 		t.Fatalf("Get() failed: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestSandboxProxyDoesNotMarkActiveWhenReapDeleteFails(t *testing.T) {
 	}
 	activity.write()
 
-	rec, err := s.Get(sandboxID)
+	rec, err := s.GetAnyKind(sandboxID)
 	if err != nil {
 		t.Fatalf("Get() failed: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestSandboxProxyKeepsStoreOnRunnerExecutionNotFound(t *testing.T) {
 		t.Fatalf("exec status = %d, want 404", rr.Code)
 	}
 
-	rec, err := s.Get(sandboxID)
+	rec, err := s.GetAnyKind(sandboxID)
 	if err != nil {
 		t.Fatalf("Get() failed: %v", err)
 	}
@@ -263,7 +263,7 @@ func TestSandboxProxyKeepsStoreOnDaemonForgedSandboxGone(t *testing.T) {
 		if rr.Code != http.StatusNotFound {
 			t.Fatalf("%s %s: status = %d, want the daemon's 404: %s", route.method, route.path, rr.Code, rr.Body.String())
 		}
-		rec, err := s.Get(sandboxID)
+		rec, err := s.GetAnyKind(sandboxID)
 		if err != nil {
 			t.Fatalf("Get() failed: %v", err)
 		}

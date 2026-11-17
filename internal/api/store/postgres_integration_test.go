@@ -104,7 +104,7 @@ func TestPostgresCodeSandboxColumnsMigrationBackfillsDefaults(t *testing.T) {
 		t.Fatalf("reopen store: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	got, err := s.Get("legacy")
+	got, err := s.GetAnyKind("legacy")
 	if err != nil || got == nil {
 		t.Fatalf("get legacy row: got=%v err=%v", got, err)
 	}
@@ -136,7 +136,7 @@ func TestPostgresStoreCRUD(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = s.Delete(rec.ID) })
 
-	got, err := s.Get(rec.ID)
+	got, err := s.GetAnyKind(rec.ID)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestPostgresStoreCRUD(t *testing.T) {
 	if err := s.UpdateStatus(rec.ID, "stopped"); err != nil {
 		t.Fatalf("update status: %v", err)
 	}
-	got, err = s.Get(rec.ID)
+	got, err = s.GetAnyKind(rec.ID)
 	if err != nil || got == nil || got.Status != "stopped" {
 		t.Fatalf("after stop: %+v err=%v, want stopped", got, err)
 	}
@@ -233,7 +233,7 @@ func TestPostgresRecordActivityConcurrentBatches(t *testing.T) {
 	}
 	const newest = 1000 + (rounds-1)*pods + pods - 1
 	for _, id := range ids {
-		if got, err := s.Get(id); err != nil || got == nil || got.LastActiveAt != newest {
+		if got, err := s.GetAnyKind(id); err != nil || got == nil || got.LastActiveAt != newest {
 			t.Fatalf("%s: %+v err=%v, want last_active_at %d", id, got, err, newest)
 		}
 	}

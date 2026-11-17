@@ -349,7 +349,7 @@ func TestLoweredTenantLimitBlocksCreatesAndKeepsSandboxes(t *testing.T) {
 		t.Fatalf("create above lowered limit: expected %d quota exceeded, got %d body=%s", http.StatusForbidden, rr.Code, rr.Body.String())
 	}
 	for _, id := range sandboxIDs {
-		rec, err := s.Get(id)
+		rec, err := s.GetAnyKind(id)
 		if err != nil || rec == nil || rec.Status != "running" {
 			t.Fatalf("sandbox %s after lowering the limit: %+v err=%v", id, rec, err)
 		}

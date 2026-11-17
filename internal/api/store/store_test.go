@@ -33,7 +33,7 @@ func TestStorePersistsDockerMetadata(t *testing.T) {
 		t.Fatalf("create record: %v", err)
 	}
 
-	got, err := s.Get(rec.ID)
+	got, err := s.GetAnyKind(rec.ID)
 	if err != nil {
 		t.Fatalf("get record: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestEgressMigrationBackfillsPublic(t *testing.T) {
 		t.Fatalf("reopen store: %v", err)
 	}
 	defer s.Close()
-	got, err := s.Get("legacy")
+	got, err := s.GetAnyKind("legacy")
 	if err != nil || got == nil {
 		t.Fatalf("get legacy row: got=%v err=%v", got, err)
 	}
@@ -108,7 +108,7 @@ func TestCodeSandboxColumnsMigrationBackfillsDefaults(t *testing.T) {
 		t.Fatalf("reopen store: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	got, err := s.Get("legacy")
+	got, err := s.GetAnyKind("legacy")
 	if err != nil || got == nil {
 		t.Fatalf("get legacy row: got=%v err=%v", got, err)
 	}
@@ -163,7 +163,7 @@ func testCodeSandboxNames(t *testing.T, s SandboxStore, tenantA, tenantB string)
 	if err != nil {
 		t.Fatalf("create code sandbox: %v", err)
 	}
-	got, err := s.Get(first.ID)
+	got, err := s.GetAnyKind(first.ID)
 	if err != nil || got == nil || *got != *first {
 		t.Fatalf("Get: %+v err=%v, want %+v", got, err, first)
 	}
@@ -365,7 +365,7 @@ func TestSQLiteDisablesWALAfterReopen(t *testing.T) {
 	if sync != 2 {
 		t.Errorf("synchronous = %d, want 2 (FULL)", sync)
 	}
-	got, err := s.Get(rec.ID)
+	got, err := s.GetAnyKind(rec.ID)
 	if err != nil || got == nil {
 		t.Fatalf("get persisted record: got=%v err=%v", got, err)
 	}
@@ -559,7 +559,7 @@ func testRecordActivity(t *testing.T, s SandboxStore, prefix string) {
 			t.Fatalf("%s: record activity: %v", step, err)
 		}
 		for id, w := range want {
-			got, err := s.Get(id)
+			got, err := s.GetAnyKind(id)
 			if err != nil || got == nil {
 				t.Fatalf("%s: get %s: %+v err=%v", step, id, got, err)
 			}

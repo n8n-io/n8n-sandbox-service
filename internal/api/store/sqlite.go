@@ -274,9 +274,26 @@ func (s *SQLiteStore) Create(record *SandboxRecord) error {
 // sqlitePlaceholder returns the placeholder of a query argument.
 func sqlitePlaceholder(int) string { return "?" }
 
-func (s *SQLiteStore) Get(id string) (*SandboxRecord, error) {
-	q := `SELECT ` + sqliteSandboxCols + ` FROM sandboxes WHERE id = ?`
-	rec, err := scanRecord(s.db.QueryRow(q, id))
+func (s *SQLiteStore) GetAnyKind(id string) (*SandboxRecord, error) {
+	return s.getSandbox(id, AllKinds()...)
+}
+
+func (s *SQLiteStore) GetDefaultSandbox(id string) (*SandboxRecord, error) {
+	return s.getSandbox(id, KindDefault)
+}
+
+func (s *SQLiteStore) GetCodeSandbox(id string) (*SandboxRecord, error) {
+	return s.getSandbox(id, KindCode)
+}
+
+// getSandbox returns the sandbox id when it is of one of kinds, or nil.
+func (s *SQLiteStore) getSandbox(id string, kinds ...Kind) (*SandboxRecord, error) {
+	cond, args, err := KindFilter(kinds...).where([]any{id}, sqlitePlaceholder)
+	if err != nil {
+		return nil, err
+	}
+	q := `SELECT ` + sqliteSandboxCols + ` FROM sandboxes WHERE id = ? AND ` + cond
+	rec, err := scanRecord(s.db.QueryRow(q, args...))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
