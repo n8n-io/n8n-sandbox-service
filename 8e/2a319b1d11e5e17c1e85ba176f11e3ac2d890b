@@ -1,0 +1,22 @@
+docs/API.md
+  h_8fb27e0cdf6d1e 861
+internal/codedaemon/events.go
+  h_8fb27e0cdf6d1e 64-65
+internal/codedaemon/events_test.go
+  h_8fb27e0cdf6d1e 4,65-121
+internal/codedaemon/recycle_test.go
+  h_8fb27e0cdf6d1e 5-6,22-24
+internal/codedaemon/worker.go
+  h_8fb27e0cdf6d1e 302,309-312
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8e2a319b1d11e5e17c1e85ba176f11e3ac2d890b",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
