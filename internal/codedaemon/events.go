@@ -63,8 +63,9 @@ type errorEvent struct {
 	Code      string          `json:"code"`
 	Message   string          `json:"message"`
 	UserError json.RawMessage `json:"userError,omitempty"`
-	// Result is the inline result.json of a user_error or output_limit task,
-	// when it has a valid one within the inline limit.
+	// Result is the inline result.json of a task that ended with user_error,
+	// or that finished but whose outputs could not be kept, when it has a
+	// valid one within the inline limit.
 	Result json.RawMessage `json:"result,omitempty"`
 }
 
@@ -171,14 +172,22 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 	if done, isDone := event.(doneEvent); isDone {
 		if err := taskRoot.RemoveAll("in"); err != nil {
 			event = newErrorEvent(spec.TaskID, "crashed", "could not clean up task inputs")
-		} else if expiresAt, ok := d.outputs.add(spec.TaskID, dir, root, done.Outputs, d.cfg.OutputTTL); ok {
-			retained = true
-			done.OutputExpiresAt = &expiresAt
-			event = done
 		} else {
-			e := newErrorEvent(spec.TaskID, "output_limit", "output retention capacity exceeded")
-			e.Result = inlinedResult(done.Result)
-			event = e
+			expiresAt, err := d.outputs.add(spec.TaskID, dir, root, done.Outputs, d.cfg.OutputTTL)
+			switch err {
+			case nil:
+				retained = true
+				done.OutputExpiresAt = &expiresAt
+				event = done
+			case errOutputRetentionLimit:
+				e := newErrorEvent(spec.TaskID, "output_limit", err.Error())
+				e.Result = inlinedResult(done.Result)
+				event = e
+			default:
+				e := newErrorEvent(spec.TaskID, "crashed", err.Error())
+				e.Result = inlinedResult(done.Result)
+				event = e
+			}
 		}
 	}
 	// Publish outputs before marking execution inactive for DELETE handling.
