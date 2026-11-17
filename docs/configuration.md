@@ -212,6 +212,8 @@ The `code-daemon` runs inside a code sandbox and is reached only by the runner. 
 | `CODE_DAEMON_MAX_OUTPUT_BYTES` | `67108864` | Max total bytes of the output files a task returns (64 MiB; up to 1 GiB) |
 | `CODE_DAEMON_MAX_FILES` | `256` | Max input files and max output files a task returns (up to `4096`) |
 
+An execution timeout stops the shared runtime and interrupts the other tasks that run on it.
+
 Input and output file paths are at most 1024 bytes. A task's input files can create up to 4096 directories. The output limits apply to the files a task returns, found in up to 4096 directories; writes to the output directory are not capped. A task fails if its output directory holds a symlink or another entry that is not a regular file or a directory.
 
 The runtime registry is a JSON object keyed by runtime name. Each entry has a `command`: the executable followed by its arguments. A missing file, invalid JSON, or a missing or empty `command` for the selected runtime prevents startup. For example:

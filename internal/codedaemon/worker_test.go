@@ -36,6 +36,15 @@ func testDaemon(t *testing.T, cfg Config) *Daemon {
 }
 
 func TestRuntimeFixture(t *testing.T) {
+	if os.Args[len(os.Args)-1] == "runtime-child" {
+		conn, err := net.Dial("tcp4", os.Args[len(os.Args)-2])
+		if err != nil {
+			os.Exit(2)
+		}
+		defer conn.Close()
+		_, _ = io.Copy(io.Discard, conn)
+		return
+	}
 	if os.Args[len(os.Args)-1] != "runtime-fixture" {
 		return
 	}
@@ -88,6 +97,12 @@ func TestRuntimeFixture(t *testing.T) {
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			os.Exit(2)
 		}
+		if m.TaskID == "hang-with-child" {
+			child := exec.Command(os.Args[0], "-test.run=^TestRuntimeFixture$", "--", string(input), "runtime-child")
+			child.ExtraFiles = []*os.File{f}
+			_ = child.Run()
+			os.Exit(2)
+		}
 		result, _ := json.Marshal([]string{strconv.Itoa(os.Getpid()), m.TaskID, string(input)})
 		if os.WriteFile(filepath.Join(m.Dir, "out", "result.json"), result, 0o600) != nil ||
 			enc.Encode(workerMessage{Type: "done", TaskID: m.TaskID}) != nil {
@@ -128,9 +143,9 @@ func TestWorkerExitPreservesResult(t *testing.T) {
 		t.Fatal("runtime did not exit")
 	}
 	// The buffered terminal result is still readable after process cleanup.
-	event, ok := d.waitForTask(req, spec, taskStream{}, x, root)
-	if _, done := event.(doneEvent); !ok || !done {
-		t.Fatalf("terminal event = %+v, %v", event, ok)
+	outcome := x.watch()
+	if _, done := d.resultEvent(spec, root, outcome.result).(doneEvent); outcome.code != "" || !done {
+		t.Fatalf("terminal outcome = %+v", outcome)
 	}
 }
 

@@ -2,6 +2,7 @@
 package codedaemon
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -141,41 +142,42 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer x.close()
+	finished := make(chan executionOutcome, 1)
+	go func() { finished <- x.watch() }()
 	if stream.emit(newAcceptedEvent(spec.TaskID)) != nil {
-		x.waitDetached()
+		<-finished
 		return
 	}
-	if event, ok := d.waitForTask(r, spec, stream, x, root); ok {
-		_ = stream.emit(event)
+	outcome, ok := waitForTask(r.Context(), spec, stream, finished)
+	if !ok {
+		return
 	}
+	if outcome.code != "" {
+		_ = stream.emit(newErrorEvent(spec.TaskID, outcome.code, outcome.message))
+		return
+	}
+	_ = stream.emit(d.resultEvent(spec, root, outcome.result))
 }
 
 // waitForTask sends heartbeats while awaiting a terminal event. If the stream
 // closes first, it waits for execution to end and returns no event to write.
-func (d *Daemon) waitForTask(r *http.Request, spec taskSpec, stream taskStream, x *execution, root *os.Root) (any, bool) {
+func waitForTask(ctx context.Context, spec taskSpec, stream taskStream, finished <-chan executionOutcome) (executionOutcome, bool) {
 	heartbeat := time.NewTicker(heartbeatInterval)
 	defer heartbeat.Stop()
-	timer := time.NewTimer(time.Until(x.deadline))
-	defer timer.Stop()
 	for {
 		select {
-		case msg, ok := <-x.result:
-			if !ok {
-				return newErrorEvent(spec.TaskID, "crashed", "runtime exited"), true
-			}
-			return d.resultEvent(spec, root, msg), true
-		case <-timer.C:
-			x.worker.kill()
-			<-x.worker.done
-			return newErrorEvent(spec.TaskID, "timeout", "task execution deadline exceeded"), true
+		case outcome := <-finished:
+			return outcome, true
 		case <-heartbeat.C:
 			if stream.emit(newHeartbeatEvent(spec.TaskID)) == nil {
 				continue
 			}
-		case <-r.Context().Done():
+		case <-ctx.Done():
 		}
-		x.waitDetached()
-		return nil, false
+		// Until the runtime supports per-task cancellation, retain the lane
+		// and files until the task ends or its deadline stops the process.
+		<-finished
+		return executionOutcome{}, false
 	}
 }
 

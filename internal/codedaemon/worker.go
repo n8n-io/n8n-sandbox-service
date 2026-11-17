@@ -320,12 +320,3 @@ func (x *execution) close() {
 	defer x.worker.mu.Unlock()
 	delete(x.worker.executionsByTaskID, x.id)
 }
-
-// The runtime has no per-task cancel. Keep the lane and task directory until
-// execution ends without interrupting the other tasks sharing this worker.
-func (x *execution) waitDetached() {
-	select {
-	case <-x.result:
-	case <-x.worker.done:
-	}
-}

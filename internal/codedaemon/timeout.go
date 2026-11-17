@@ -35,3 +35,26 @@ func (d *Daemon) taskTimeout(requestMillis int64) time.Duration {
 	}
 	return limit
 }
+
+type executionOutcome struct {
+	result        workerMessage
+	code, message string
+}
+
+// Watch execution separately from the HTTP writer so a blocked client cannot
+// postpone a timeout or let a disconnected task hold its lane indefinitely.
+func (x *execution) watch() executionOutcome {
+	timer := time.NewTimer(time.Until(x.deadline))
+	defer timer.Stop()
+	select {
+	case msg, ok := <-x.result:
+		if !ok {
+			return executionOutcome{code: "crashed", message: "runtime exited"}
+		}
+		return executionOutcome{result: msg}
+	case <-timer.C:
+		x.worker.kill()
+		<-x.worker.done
+		return executionOutcome{code: "timeout", message: "task execution deadline exceeded"}
+	}
+}
