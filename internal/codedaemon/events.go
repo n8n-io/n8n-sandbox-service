@@ -141,8 +141,14 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 		_ = stream.emit(newErrorEvent(spec.TaskID, "crashed", "runtime unavailable"))
 		return
 	}
-	defer x.close()
-	ctx, stop := context.WithCancel(r.Context())
+	if event, ok := d.runTask(r.Context(), spec, stream, x, root); ok {
+		_ = stream.emit(event)
+	}
+}
+
+func (d *Daemon) runTask(ctx context.Context, spec taskSpec, stream taskStream, x *execution, root *os.Root) (any, bool) {
+	defer d.releaseExecution(x)
+	ctx, stop := context.WithCancel(ctx)
 	defer stop()
 	// Start monitoring before the first HTTP write. The buffered result lets the
 	// watcher finish even when the response is blocked.
@@ -151,19 +157,16 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 	if stream.emit(newAcceptedEvent(spec.TaskID)) != nil {
 		stop()
 		<-finished
-		return
+		return nil, false
 	}
 	outcome, ok := waitForTask(ctx, spec, stream, stop, finished)
 	if !ok {
-		return
+		return nil, false
 	}
-	var event any
 	if outcome.code != "" {
-		event = newErrorEvent(spec.TaskID, outcome.code, outcome.message)
-	} else {
-		event = d.resultEvent(spec, root, outcome.result)
+		return newErrorEvent(spec.TaskID, outcome.code, outcome.message), true
 	}
-	_ = stream.emit(event)
+	return d.resultEvent(spec, root, outcome.result), true
 }
 
 // waitForTask sends heartbeats while awaiting a terminal event. If the stream

@@ -145,7 +145,7 @@ func TestWorkerExitPreservesResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer x.close()
+	defer d.releaseExecution(x)
 	select {
 	case <-x.worker.done:
 	case <-time.After(3 * time.Second):
@@ -181,7 +181,7 @@ func TestStageAndDispatchSharedRuntime(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer x.close()
+		defer d.releaseExecution(x)
 		tasks = append(tasks, pending{x, dir})
 	}
 	if tasks[0].x.worker != tasks[1].x.worker {
@@ -221,7 +221,7 @@ func TestDispatchRejectsActiveTaskID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer x.close()
+	defer d.releaseExecution(x)
 	if _, err := d.dispatch(t.Context(), "same", dir, d.taskTimeout(0)); !errors.Is(err, errDuplicateTask) {
 		t.Fatalf("duplicate dispatch: %v", err)
 	}
@@ -262,7 +262,7 @@ func TestControlMessageLimit(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer x.close()
+		defer d.releaseExecution(x)
 		select {
 		case msg, ok := <-x.result:
 			return msg, ok
@@ -374,7 +374,7 @@ func TestStoppedWorkerFailsPendingTasksAndCleansUpDescendants(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer pending.close()
+			defer d.releaseExecution(pending)
 			if err := listener.SetDeadline(time.Now().Add(timeout)); err != nil {
 				t.Fatal(err)
 			}
@@ -389,7 +389,7 @@ func TestStoppedWorkerFailsPendingTasksAndCleansUpDescendants(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer crash.close()
+				defer d.releaseExecution(crash)
 			} else {
 				go d.Close()
 			}

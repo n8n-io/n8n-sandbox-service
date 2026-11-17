@@ -331,19 +331,19 @@ func (d *Daemon) dispatch(ctx context.Context, id, dir string, timeout time.Dura
 	d.markDispatched(id)
 	if err := w.send(workerMessage{Type: "start", TaskID: id, Dir: dir, Deadline: x.deadline.UnixMilli()}, time.Now().Add(time.Second)); err != nil {
 		w.kill() // a partial command leaves the shared protocol unusable
-		x.close()
+		d.releaseExecution(x)
 		return nil, err
 	}
 	return x, nil
 }
 
-// close unregisters the result receiver without stopping the shared runtime.
-func (x *execution) close() {
-	x.worker.mu.Lock()
-	delete(x.worker.executionsByTaskID, x.id)
-	retired := x.worker.retiring && len(x.worker.executionsByTaskID) == 0
-	x.worker.mu.Unlock()
-	if retired {
-		x.worker.kill()
+func (d *Daemon) releaseExecution(x *execution) {
+	w := x.worker
+	w.mu.Lock()
+	delete(w.executionsByTaskID, x.id)
+	drained := w.retiring && len(w.executionsByTaskID) == 0
+	w.mu.Unlock()
+	if drained {
+		w.kill()
 	}
 }

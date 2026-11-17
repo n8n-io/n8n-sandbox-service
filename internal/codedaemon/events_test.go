@@ -86,7 +86,7 @@ func TestRejectedUploadKeepsReadDeadline(t *testing.T) {
 	}
 }
 
-func TestDisconnectLeavesSharedRuntimeRunning(t *testing.T) {
+func TestCooperativeDisconnectDoesNotCancelSibling(t *testing.T) {
 	d := testDaemon(t, Config{MaxConcurrency: 2})
 	srv := httptest.NewServer(d.Handler())
 	// On a test failure, unblock any detached handler before closing the server.
@@ -116,7 +116,7 @@ func TestDisconnectLeavesSharedRuntimeRunning(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	start(ctx, "quiet")
+	start(ctx, "cooperative")
 	other := start(t.Context(), "other")
 	cancel()
 	for {

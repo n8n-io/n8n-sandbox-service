@@ -2,6 +2,8 @@ package codedaemon
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -56,6 +58,12 @@ func TestCancelRunningTask(t *testing.T) {
 				if err := sibling.Decode(&event); err != nil || event.Type != "error" || event.Code != "crashed" {
 					t.Fatalf("sibling event = %+v, %v", event, err)
 				}
+				if err := sibling.Decode(&event); !errors.Is(err, io.EOF) {
+					t.Fatalf("sibling stream did not finish: %v", err)
+				}
+			}
+			if err := dec.Decode(&event); !errors.Is(err, io.EOF) {
+				t.Fatalf("cancelled stream did not finish: %v", err)
 			}
 		})
 	}
