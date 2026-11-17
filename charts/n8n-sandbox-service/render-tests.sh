@@ -11,7 +11,8 @@ CHART_DIR=$(cd "$(dirname "$0")" && pwd)
 
 render() {
 	helm template n8n-sandbox-service "$CHART_DIR" \
-		--set auth.existingSecret=n8n-sandbox-auth "$@"
+		--set auth.existingSecret=n8n-sandbox-auth \
+		--set runner.config.capacityTotal=1000 "$@"
 }
 
 must_fail() {
@@ -47,6 +48,20 @@ render --set networkPolicy.enabled=true >/dev/null
 render --set dataPlane.mode=external --set networkPolicy.enabled=true >/dev/null
 render "${privileged[@]}" >/dev/null
 render "${privileged[@]}" --set networkPolicy.enabled=true >/dev/null
+
+echo "==> runner capacity has no default"
+for bad in '' 0 -5 abc 1.5; do
+	must_fail "runner.config.capacityTotal must be a positive whole number" --set "runner.config.capacityTotal=$bad"
+done
+must_fail "runner.config.capacityTotal must be a positive whole number" --set-string "runner.config.capacityTotal="
+# Without the helper's pinned value, the empty default fails.
+if helm template n8n-sandbox-service "$CHART_DIR" --set auth.existingSecret=n8n-sandbox-auth >/dev/null 2>&1; then
+	echo "expected the render to fail without runner.config.capacityTotal" >&2
+	exit 1
+fi
+# An external data plane renders no runner.
+helm template n8n-sandbox-service "$CHART_DIR" --set auth.existingSecret=n8n-sandbox-auth \
+	--set dataPlane.mode=external >/dev/null
 
 echo "==> default values render the golden manifests"
 # Existing installs must not change: the default render is pinned byte for
@@ -200,7 +215,8 @@ statefulset_name() {
 	local release_name=$1
 	shift
 	helm template "$release_name" "$CHART_DIR" \
-		--set auth.existingSecret=n8n-sandbox-auth "$@" \
+		--set auth.existingSecret=n8n-sandbox-auth \
+		--set runner.config.capacityTotal=1000 "$@" \
 		--show-only templates/runner-statefulset.yaml |
 		awk '/^  name:/{print $2; exit}'
 }

@@ -79,7 +79,7 @@ The idle sweeper waits `SANDBOX_API_ORPHAN_REAP_BUFFER` (default `5m`) after a r
 | `SANDBOX_RUNNER_REGISTRATION_TOKEN` | *(required)* | Must match `SANDBOX_API_RUNNER_REGISTRATION_TOKEN` on the API |
 | `SANDBOX_RUNNER_HTTP_BASE_URL` | *(required)* | Base URL the API uses to reach this runner; its host must match a SAN on the runner's control cert (e.g. `https://runner:8080`). An `http://` value is upgraded to `https://` with a warning, since the listener only serves TLS; the API rejects any registration whose base URL is not `https://` |
 | `SANDBOX_RUNNER_ID` | hostname | Stable runner id sent to the API |
-| `SANDBOX_RUNNER_CAPACITY_TOTAL` | `1000` | Reported capacity for placement (`0` = unlimited) |
+| `SANDBOX_RUNNER_CAPACITY_TOTAL` | Docker `1000`; Firecracker derived | Reported capacity for placement (`0` = unlimited on Docker; Firecracker needs a positive value). Docker does not derive it: size it from the host's memory and each sandbox's memory limit. On Firecracker a set value may only lower the derived count ([slots](#firecracker-slots)) |
 | `SANDBOX_RUNNER_DATA_DIR` | `/var/sandboxes` | Per-sandbox data directory (Firecracker: see [Data volume](../internal/runner/runtime/firecracker.ee/README.md#data-volume)) |
 | `SANDBOX_RUNNER_VOLUME_CACHE_DIR` | `<data dir>/volume-cache` | Where the runner caches downloaded volume objects. Wiped at startup. Must be an absolute path, and not `/`, the data dir or a directory that contains it. The runner creates it, but not its parent |
 | `SANDBOX_RUNNER_VOLUME_CACHE_MAX_BYTES` | `21474836480` | Volume cache budget (20 GiB): allocated bytes of cached objects plus the size of downloads in progress. On the data volume, Firecracker creates count the budget less the objects it has finished downloading as taken ([data volume](../internal/runner/runtime/firecracker.ee/README.md#data-volume)). A download starts only if it fits the budget and leaves 5% of the disk free, evicting unused objects least recently used first. If objects in use and downloads in progress still leave no room, or the disk fills during the download, it is refused like a full runner; an object larger than the whole budget fails outright. 20 GiB holds several multi-GB images and leaves most of a data volume of a few hundred GiB to sandboxes; lower it on small disks |
@@ -123,7 +123,15 @@ These variables are parsed by the Firecracker runner entrypoint.
 
 #### Firecracker slots
 
-A Firecracker slot is one schedulable VM position on a runner. The runner creates slots from `SANDBOX_RUNNER_CAPACITY_TOTAL`; if capacity is `100`, the runner has slots `0` through `99`. A sandbox occupies one slot from create until stop/delete.
+A Firecracker slot is one schedulable VM position on a runner. The runner creates one slot per unit of capacity; if capacity is `100`, the runner has slots `0` through `99`. A sandbox occupies one slot from create until stop/delete.
+
+With `SANDBOX_RUNNER_CAPACITY_TOTAL` unset, the runner derives capacity at startup from host memory and the golden snapshot's `mem_size_mib` (`boot.json`, which must exist when the runner starts; with the variable unset, a configured create-snapshot script does not supply it in time and the runner exits):
+
+```text
+slots = min(floor((budget - 4 GiB) * ratio / (mem_size_mib + 64 MiB)), proxy ports, 16384)
+```
+
+`budget` is `MemTotal`, or the tightest finite `memory.max` from the runner's cgroup v2 up to the cgroup root (the `0::` line in `/proc/self/cgroup`). A leaf value of `max` does not hide a limit on a parent. cgroup v1 is not read. 4 GiB covers the runner, the OS and the shared snapshot file; 64 MiB is per-VM overhead. `ratio` is `SANDBOX_RUNNER_FIRECRACKER_MEMORY_RATIO` (default `1.0`). A set `SANDBOX_RUNNER_CAPACITY_TOTAL` may only lower the result: a higher value, or a budget that fits no guest, stops the runner at startup. If `boot.json` does not exist yet, a set value is used as is so the snapshot can be created. Admission then compares the allocated slot count with the `boot.json` it pinned, whether that count was set or derived at startup, and stays unhealthy, naming both numbers, when the count is higher. The slot array is not resized; a derived count that no longer fits needs a restart. When the proxy port range or the uplink limit binds, the runner logs it.
 
 Slots give the host-side Firecracker resources stable names without exposing those details to the API or clients. For slot `n`, the runtime derives:
 
@@ -153,6 +161,7 @@ Slots give the host-side Firecracker resources stable names without exposing tho
 | `SANDBOX_RUNNER_FIRECRACKER_EXPECTED_GIT_SHA` | _(empty)_ | When set, must match `git_sha` in the manifest (requires `MANIFEST_PATH`) |
 | `SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT` | _(empty)_ | Absolute path to `create-golden-snapshot.sh`. When set and any of `snapshot_mem`, `snapshot_state` or `boot.json` is missing, Prepare runs it (mem/state paths must share a directory). Production Firecracker hosts set this so the runner owns host-local snapshot creation. Empty = do not auto-create |
 | `SANDBOX_RUNNER_FIRECRACKER_DAEMON_BIN` | `/srv/firecracker/bin/sandbox-daemon` | Host path to `sandbox-daemon` used for golden snapshot create and optional manifest checksum |
+| `SANDBOX_RUNNER_FIRECRACKER_MEMORY_RATIO` | `1.0` | Multiplier on the memory-derived slot count; a finite number above 0. Above `1.0` admits more guest RAM than the host holds, and nothing watches memory pressure |
 
 The runner reports healthy only after `Prepare` has verified these assets, created the snapshot if needed, and passed an admission canary — see [the runtime README](../internal/runner/runtime/firecracker.ee/README.md#admission-prepare--ready).
 
@@ -221,7 +230,8 @@ Series exposed today:
 - API: `sandbox_sandbox_operations_total{operation,result}` (`operation="cordon_delete"` counts attempts to delete a stopped sandbox on a cordoned runner instead of waking it), `sandbox_sandboxes_active`, `sandbox_runners_registered`, and `sandbox_create_placements_total{result}`, how each create found a runner (`first_choice`, `retried`, `exhausted`, `no_runner`). `retried` grows while the fleet is full but creates still succeed, so watch it alongside the failures.
 - Runner: `sandbox_container_operations_total{operation,result}`, `sandbox_container_operation_duration_seconds{operation}`, `sandbox_containers_active`, plus `sandbox_guest_deaths_total`, sandbox guests that died on their own, `sandbox_recoveries_total{result}`, attempts to bring one back, and `sandbox_runner_cordoned`, `1` while the runner is cordoned.
 - `sandbox_tls_certificate_expiry_timestamp_seconds{path}`, the expiry of each TLS certificate the process presents, by file (both binaries). See [observability.md](observability.md#tls-certificates).
-- Firecracker runner: `sandbox_lifecycle_step_duration_seconds{operation,step}`, the per-step breakdown of a create, wake or recovery, `sandbox_slots_unwired`, slots whose network namespace is not yet built (zero in steady state), and `sandbox_volume_mount_requests_total{result}`, guest volume mount requests by result. See [observability.md](observability.md).
+- Firecracker runner: `sandbox_lifecycle_step_duration_seconds{operation,step}`, the per-step breakdown of a create, wake or recovery, `sandbox_slots_unwired`, slots whose network namespace is not yet built (zero in steady state), `sandbox_volume_mount_requests_total{result}`, guest volume mount requests by result. See [observability.md](observability.md).
+- Both runners, set once at startup: `sandbox_host_memory_bytes`, `sandbox_data_volume_bytes` (size of the filesystem holding the data dir) and `sandbox_capacity_slots` (the effective capacity).
 - Runner volume cache: `sandbox_volume_cache_bytes` (what the budget counts), `sandbox_volume_cache_entries`, `sandbox_volume_cache_pinned_entries` (held by a sandbox, never evicted), `sandbox_volume_cache_fetches_total{result}` (`hit`, `downloaded`, or the failure: `http`, `size`, `digest`, `timeout`, `full`, `io`), `sandbox_volume_cache_download_duration_seconds` (successful downloads) and `sandbox_volume_cache_evictions_total`.
 - Plus the standard `go_*` and `process_*` collectors.
 

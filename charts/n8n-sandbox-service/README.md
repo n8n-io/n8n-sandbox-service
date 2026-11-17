@@ -8,13 +8,19 @@ Create or provide:
 
 - An auth Secret with API keys and runner registration tokens, or set `auth.*` values and let the chart create one.
 - TLS Secrets for the API registration server, API control client, runner registration client, and runner control server, or set `tls.mode=certManager`.
+- A `runner.config.capacityTotal` (see [Runner Capacity](#runner-capacity)).
 - A Sysbox-ready node pool for `runner.isolation=sysbox` (the default). Use `runner.isolation=privileged` on clusters that cannot install sysbox.
 
 ```sh
 helm upgrade --install n8n-sandbox-service ./charts/n8n-sandbox-service \
   --namespace n8n-sandbox \
-  --create-namespace
+  --create-namespace \
+  --set runner.config.capacityTotal=100
 ```
+
+## Runner Capacity
+
+`runner.config.capacityTotal` is the number of sandboxes the Docker runner admits. It has no default, and the render fails when it is empty, `0` or not a whole number with `dataPlane.mode=in-cluster`. The Docker runner does not derive it from memory: size it from the node's memory and each sandbox's memory limit. The Firecracker runner derives its own count from host memory when `SANDBOX_RUNNER_CAPACITY_TOTAL` is unset ([Firecracker slots](../../docs/configuration.md#firecracker-slots)).
 
 ## Data Plane Mode
 
@@ -174,7 +180,7 @@ runner:
 
 The render fails in two cases:
 
-- `runner.config.diskQuotaPoolSizeGb` is not a positive whole number of GB. The chart never falls back to the derived pool size, because that size scales with `runner.config.capacityTotal`. A 2048 MB per-sandbox quota and the default `capacityTotal` of 1000 derive a 2400 GB pool.
+- `runner.config.diskQuotaPoolSizeGb` is not a positive whole number of GB. The chart never falls back to the derived pool size, because that size scales with `runner.config.capacityTotal`. A 2048 MB per-sandbox quota and a `capacityTotal` of 1000 derive a 2400 GB pool.
 - `runner.config.diskQuotaPoolSizeGb` is larger than the chart-owned volume.
 
 If the node kernel lacks xfs quota support, the pool mount fails. The runner then logs `disk quota enforcement: DISABLED`, the inner Docker daemon uses the container filesystem, and the volume stays unused. Watch that log line after you enable quotas.

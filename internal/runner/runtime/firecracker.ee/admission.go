@@ -151,6 +151,9 @@ func (r *Runtime) pinSnapshotAssets() error {
 	if err := params.matchesConfig(r.config); err != nil {
 		return err
 	}
+	if err := r.checkCapacityAtAdmission(params); err != nil {
+		return err
+	}
 	slog.Info("firecracker golden snapshot boot parameters",
 		"vcpu_count", params.VCPUCount,
 		"mem_size_mib", params.MemSizeMiB,

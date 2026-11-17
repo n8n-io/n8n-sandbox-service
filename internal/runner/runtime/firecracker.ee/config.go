@@ -135,6 +135,18 @@ func defaultConfig() Config {
 
 // LoadConfig reads Firecracker runtime configuration from environment variables.
 func LoadConfig(capacityTotal int32) (Config, error) {
+	cfg, err := parseConfig()
+	if err != nil {
+		return Config{}, err
+	}
+	if err := validateConfig(cfg, capacityTotal); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+// parseConfig reads the environment without validating it.
+func parseConfig() (Config, error) {
 	cfg := defaultConfig()
 
 	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_JAILER_BIN")); v != "" {
@@ -205,9 +217,6 @@ func LoadConfig(capacityTotal int32) (Config, error) {
 		cfg.DaemonBin = v
 	}
 
-	if err := validateConfig(cfg, capacityTotal); err != nil {
-		return Config{}, err
-	}
 	return cfg, nil
 }
 

@@ -303,6 +303,29 @@ func TestRunnerRecorderStoppedGaugeScrape(t *testing.T) {
 	}
 }
 
+func TestRunnerRecorderStartupGauges(t *testing.T) {
+	r := NewRunnerRecorder(true)
+	r.SetHostMemoryBytes(68719476736)
+	r.SetDataVolumeBytes(1073741824)
+	r.SetCapacitySlots(106)
+
+	body := scrape(t, r.Registry())
+	for _, want := range []string{
+		`sandbox_host_memory_bytes{role="runner"} 6.8719476736e+10`,
+		`sandbox_data_volume_bytes{role="runner"} 1.073741824e+09`,
+		`sandbox_capacity_slots{role="runner"} 106`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("scrape body missing %q", want)
+		}
+	}
+
+	off := NewRunnerRecorder(false)
+	off.SetHostMemoryBytes(1)
+	off.SetDataVolumeBytes(1)
+	off.SetCapacitySlots(1)
+}
+
 func TestRouteFromPattern(t *testing.T) {
 	cases := map[string]string{
 		"":                                "unmatched",

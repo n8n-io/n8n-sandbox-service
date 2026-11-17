@@ -713,6 +713,37 @@ func (r *RunnerRecorder) SetUnwiredSlots(f func() float64) {
 	))
 }
 
+// SetHostMemoryBytes registers a gauge for the host's total memory, set once at startup.
+func (r *RunnerRecorder) SetHostMemoryBytes(v int64) {
+	r.setStartupGauge("host_memory_bytes", "Total memory of the host the runner is on, in bytes.", float64(v))
+}
+
+// SetDataVolumeBytes registers a gauge for the total size of the filesystem
+// holding the runner data dir, set once at startup.
+func (r *RunnerRecorder) SetDataVolumeBytes(v int64) {
+	r.setStartupGauge("data_volume_bytes", "Total size of the filesystem holding the runner data dir, in bytes.", float64(v))
+}
+
+// SetCapacitySlots registers a gauge for the runner's effective capacity, set once at startup.
+func (r *RunnerRecorder) SetCapacitySlots(v int32) {
+	r.setStartupGauge("capacity_slots", "Sandboxes this runner admits: the effective capacity it reports to the API (0 is unlimited).", float64(v))
+}
+
+func (r *RunnerRecorder) setStartupGauge(name, help string, v float64) {
+	if r == nil || r.reg == nil {
+		return
+	}
+	r.reg.MustRegister(prometheus.NewGaugeFunc(
+		prometheus.GaugeOpts{
+			Namespace:   Namespace,
+			Name:        name,
+			Help:        help,
+			ConstLabels: prometheus.Labels{"role": RoleRunner},
+		},
+		func() float64 { return v },
+	))
+}
+
 // SetTLSCertificateExpiry registers a scrape-time gauge that calls read for the
 // expiry of each TLS certificate file the runner presents.
 func (r *RunnerRecorder) SetTLSCertificateExpiry(read func() map[string]time.Time) {

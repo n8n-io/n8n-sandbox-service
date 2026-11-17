@@ -22,6 +22,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/runner"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 	"github.com/n8n-io/sandbox-service/internal/runner/cordon"
+	"github.com/n8n-io/sandbox-service/internal/runner/hostinfo"
 	"github.com/n8n-io/sandbox-service/internal/runner/register"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 	"github.com/n8n-io/sandbox-service/internal/runner/volumecache"
@@ -87,6 +88,17 @@ func Run(cfg *config.Config, rt runnerruntime.Runtime) {
 			}
 			return 0
 		})
+		mrec.SetCapacitySlots(cfg.CapacityTotal)
+		if n, err := hostinfo.MemTotal(hostinfo.MeminfoPath); err != nil {
+			slog.Warn("metrics: host memory unavailable", "error", err)
+		} else {
+			mrec.SetHostMemoryBytes(n)
+		}
+		if n, err := hostinfo.VolumeTotal(cfg.DataDir); err != nil {
+			slog.Warn("metrics: data volume size unavailable", "error", err)
+		} else {
+			mrec.SetDataVolumeBytes(n)
+		}
 		mrec.SetTLSCertificateExpiry(grpctls.CertificateExpiryByCertPath)
 		slog.Info("metrics endpoint enabled", "path", "/metrics")
 	}

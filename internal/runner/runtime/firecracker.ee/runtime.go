@@ -52,6 +52,9 @@ type Runtime struct {
 	// means none. Set once at startup.
 	diskReserved func() int64
 
+	// hostPaths locates the host memory files; zero means the real ones. Tests set it.
+	hostPaths hostPaths
+
 	// wireCh wakes the slot wirer (network_wirer.go). Buffered by one and written with a
 	// non-blocking send, so a release never waits on it and a burst of releases
 	// collapses into one pass over the slots.

@@ -69,8 +69,13 @@ type Config struct {
 	RunnerHTTPBaseURL string
 
 	// CapacityTotal is reported to the API for placement (0 means unlimited;
-	// the Firecracker runtime requires > 0). Parsed from SANDBOX_RUNNER_CAPACITY_TOTAL (default 1000).
+	// the Firecracker runtime requires > 0 and derives it from host memory when
+	// the variable is unset). Parsed from SANDBOX_RUNNER_CAPACITY_TOTAL (default 1000).
 	CapacityTotal int32
+
+	// CapacityTotalSet records that SANDBOX_RUNNER_CAPACITY_TOTAL was set, so
+	// the Firecracker runner can tell an explicit cap from the default.
+	CapacityTotalSet bool
 
 	// mTLS for registration gRPC client (required).
 	GRPCServerCAFile   string
@@ -297,6 +302,7 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("SANDBOX_RUNNER_CAPACITY_TOTAL must be a non-negative integer, got %q", v)
 		}
 		cfg.CapacityTotal = int32(n)
+		cfg.CapacityTotalSet = true
 	}
 
 	cfg.GRPCServerCAFile = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE"))
