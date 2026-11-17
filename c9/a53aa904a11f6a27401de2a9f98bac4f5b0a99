@@ -1,0 +1,26 @@
+docs/API.md
+  h_8fb27e0cdf6d1e 855-856
+internal/codedaemon/admission.go
+  h_8fb27e0cdf6d1e 16-17,45-48,53-54,60-65
+internal/codedaemon/daemon.go
+  h_8fb27e0cdf6d1e 79,120-123
+internal/codedaemon/events.go
+  h_8fb27e0cdf6d1e 1-170
+internal/codedaemon/events_test.go
+  h_8fb27e0cdf6d1e 1-63
+internal/codedaemon/limits_test.go
+  h_8fb27e0cdf6d1e 23,28
+internal/codedaemon/worker_test.go
+  h_8fb27e0cdf6d1e 46-50,82
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c9a53aa904a11f6a27401de2a9f98bac4f5b0a99",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
