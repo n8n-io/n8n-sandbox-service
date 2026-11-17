@@ -27,7 +27,8 @@ const (
 
 var (
 	errWorkerUnavailable = errors.New("runtime unavailable")
-	errBeforeDispatch    = errors.New("runtime unavailable before dispatch")
+	// Only this error guarantees that no start message was sent for the task.
+	errBeforeDispatch = errors.New("runtime unavailable before dispatch")
 )
 
 // workerMessage is any message between the daemon and the runtime, in either
@@ -36,6 +37,10 @@ var (
 //   - "ready" (runtime → daemon): the runtime accepts start commands. Sent once after startup.
 //   - "start" (daemon → runtime): run the task staged in Dir, with TaskID set.
 //   - "done" or "error" (runtime → daemon): the task with TaskID finished; "error" carries Error.
+//   - "failed" (runtime → daemon): the runtime could not run the task with TaskID; Outcome gives the reason.
+//   - "cancel" (daemon → runtime): stop the task with TaskID.
+//   - "cancelled" (runtime → daemon): the task with TaskID stopped after a cancel.
+//   - "heap" (runtime → daemon): HeapUsedBytes reports heap use. "done" and "error" can carry it too.
 //
 // Every message must fit in maxControlMessage. The runtime cuts error details
 // to fit. The daemon ignores unknown types, and stops the runtime on invalid
@@ -48,8 +53,8 @@ type workerMessage struct {
 	// Deadline is the execution deadline in a start message, in Unix milliseconds.
 	Deadline int64 `json:"deadline,omitempty"`
 
-	HeapUsedBytes int64  `json:"heapUsedBytes,omitempty"`
-	Outcome       string `json:"outcome,omitempty"`
+	HeapUsedBytes int64  `json:"heapUsedBytes,omitempty"` // Process heap usage reported by the runtime.
+	Outcome       string `json:"outcome,omitempty"`       // Runtime-reported reason for a failed task.
 }
 
 type worker struct {
@@ -63,12 +68,12 @@ type worker struct {
 
 	mu                 sync.Mutex // guards execution registration, delivery, and cleanup
 	executionsByTaskID map[string]*execution
-	startedAt          time.Time
-	heapLimit          int64
-	served             int // protected by mu
-	killed             atomic.Bool
-	exitCode           string // published by closing done
-	retiring           bool   // rejects new tasks while existing ones drain; protected by mu
+	startedAt          time.Time   // Used to limit restarts after early startup failures.
+	heapLimit          int64       // Heap usage above this value triggers retirement.
+	served             int         // Counts start attempts, not completions; protected by mu.
+	killed             atomic.Bool // Whether an explicit daemon kill initiated the stop.
+	exitCode           string      // Task error code for a process exit, published by closing done.
+	retiring           bool        // rejects new tasks while existing ones drain; protected by mu
 }
 
 // startWorker launches the runtime in its own process group and gives it the
@@ -127,6 +132,8 @@ func startWorker(cfg Config, startupTimeout time.Duration) (*worker, error) {
 		// either signals it first or waits for this call via stopOnce.
 		w.stop(false)
 		_ = cmd.Wait()
+		// OOM detection is best effort: stderr can report a heap failure, and a
+		// cgroup counter increase after SIGKILL can also reflect another process.
 		w.exitCode = "crashed"
 		if state := cmd.ProcessState; state != nil && !state.Success() {
 			status, _ := state.Sys().(syscall.WaitStatus)
@@ -207,6 +214,7 @@ func (w *worker) readControl() {
 			w.mu.Unlock()
 		case "heap", "done", "error", "failed":
 			w.mu.Lock()
+			// A heap report retires the worker without interrupting active tasks.
 			if msg.HeapUsedBytes > w.heapLimit {
 				w.retiring = true
 			}
@@ -240,6 +248,8 @@ func (w *worker) kill() {
 	w.stop(true)
 }
 
+// stop shuts down the process group once. For an explicit kill, the cgroup
+// counter is not used to infer OOM from SIGKILL.
 func (w *worker) stop(intentional bool) {
 	w.stopOnce.Do(func() {
 		w.killed.Store(intentional)
@@ -284,13 +294,14 @@ func (w *worker) send(msg workerMessage, deadline time.Time) error {
 	return json.NewEncoder(w.conn).Encode(msg)
 }
 
-// getWorker starts the shared runtime on demand and waits until it is ready to accept commands.
+// getWorker starts a runtime on demand and replaces an exited one after it has
+// been reaped. A retiring runtime stays in place while its tasks drain.
 func (d *Daemon) getWorker(ctx context.Context) (*worker, error) {
 	d.workerMu.Lock()
 	for d.worker != nil && d.worker.isStopped() && !d.closed {
 		select {
 		case <-d.worker.done:
-			// Replace the exited worker on this dispatch, not during shutdown.
+			// Return unavailable briefly instead of restarting a failing runtime on every request.
 			if !d.worker.wasReady() && time.Since(d.worker.startedAt) < time.Second {
 				d.workerMu.Unlock()
 				return nil, errWorkerUnavailable
@@ -338,6 +349,7 @@ func (d *Daemon) getWorker(ctx context.Context) (*worker, error) {
 	}
 }
 
+// wasReady distinguishes a startup failure from an exit after the ready handshake.
 func (w *worker) wasReady() bool {
 	select {
 	case <-w.ready:
@@ -395,6 +407,7 @@ func (d *Daemon) dispatch(ctx context.Context, id, dir string, timeout time.Dura
 	}
 	w.executionsByTaskID[id] = x
 	w.served++
+	// This task may proceed, but once the limit is reached later ones cannot join.
 	w.retiring = w.served >= d.cfg.RecycleAfterTasks
 	w.mu.Unlock()
 	d.markDispatched(id)

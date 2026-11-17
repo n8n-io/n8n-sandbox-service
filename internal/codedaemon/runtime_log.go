@@ -48,9 +48,9 @@ type runtimeLogWriter struct {
 	stream    string // "stdout" or "stderr"
 	queue     chan<- runtimeLogLine
 	maxWrites int
-	writes    int // counts writes that use the budget, even if the queue is full
-	oom       bool
-	tail      []byte
+	writes    int    // counts writes that use the budget, even if the queue is full
+	oom       bool   // whether stderr contained the heap OOM marker, even beyond the log budget
+	tail      []byte // recent stderr bytes kept to match a marker split across writes
 }
 
 // Write samples at most the first maxWrites writes and 1 KiB per write,

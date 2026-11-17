@@ -137,6 +137,7 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 	defer root.Close()
 	x, err := d.dispatch(r.Context(), spec.TaskID, dir, d.taskTimeout(spec.TimeoutMs))
 	if err != nil {
+		// Only a failure before the start message was attempted can be retried safely.
 		if errors.Is(err, errBeforeDispatch) {
 			writeTaskRejection(w, http.StatusServiceUnavailable, "runtime_unavailable", "runtime unavailable before dispatch")
 			return
@@ -218,6 +219,7 @@ func (d *Daemon) resultEvent(spec taskSpec, root *os.Root, msg workerMessage) an
 		}
 		return e
 	}
+	// A task can fail inside a live runtime, without a process exit to classify.
 	if msg.Type == "failed" {
 		code := "crashed"
 		if msg.Outcome == "oom" {

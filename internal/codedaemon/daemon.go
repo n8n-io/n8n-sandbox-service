@@ -28,9 +28,9 @@ type Config struct {
 	RuntimeLogWrites  int
 	DefaultTimeout    time.Duration // Execution budget when the request does not shorten it.
 	MaxTimeout        time.Duration // Service cap on the execution budget.
-	RecycleAfterTasks int
-	RecycleHeapBytes  int
-	CgroupDir         string
+	RecycleAfterTasks int           // Dispatches allowed before the runtime stops taking new tasks.
+	RecycleHeapBytes  int           // Heap usage reported by the runtime, above which it stops taking new tasks.
+	CgroupDir         string        // Directory containing the cgroup v2 memory.events file used for OOM detection.
 }
 
 func LoadConfig() (Config, error) {
@@ -59,6 +59,7 @@ func LoadConfig() (Config, error) {
 	if err := envvar.IntBetween("CODE_DAEMON_RECYCLE_AFTER_TASKS", &cfg.RecycleAfterTasks, 1, 1_000_000); err != nil {
 		return Config{}, err
 	}
+	// Default to 256 MiB (256 << 20), with an upper bound of 1 TiB (1 << 40).
 	if err := envvar.IntBetween("CODE_DAEMON_RECYCLE_HEAP_BYTES", &cfg.RecycleHeapBytes, 1, 1<<40); err != nil {
 		return Config{}, err
 	}
@@ -96,7 +97,7 @@ func New(cfg Config) *Daemon {
 		cfg.RecycleAfterTasks = 1000
 	}
 	if cfg.RecycleHeapBytes <= 0 {
-		cfg.RecycleHeapBytes = 256 << 20
+		cfg.RecycleHeapBytes = 256 << 20 // 256 MiB
 	}
 	return &Daemon{
 		cfg: cfg, lanes: make(chan struct{}, max(1, cfg.MaxConcurrency)), dispatchedByTaskID: make(map[string]bool),

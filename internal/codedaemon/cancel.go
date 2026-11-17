@@ -82,6 +82,7 @@ func (x *execution) watch(ctx context.Context) executionOutcome {
 	select {
 	case msg, ok := <-x.result:
 		if !ok {
+			// The worker classifies the process exit once for all unfinished tasks.
 			return executionOutcome{code: x.worker.exitCode, message: "runtime exited"}
 		}
 		return executionOutcome{result: msg}

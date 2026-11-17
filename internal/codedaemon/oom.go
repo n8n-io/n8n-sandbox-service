@@ -1,3 +1,4 @@
+// This file reads the Linux cgroup v2 OOM kill counter for runtime exit classification.
 package codedaemon
 
 import (
@@ -8,6 +9,7 @@ import (
 	"strings"
 )
 
+// oomKillCount returns the cgroup-wide count, or -1 if the counter is unavailable.
 func oomKillCount(dir string) int64 {
 	if dir == "" {
 		return -1
