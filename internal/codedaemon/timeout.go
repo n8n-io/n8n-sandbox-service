@@ -1,3 +1,4 @@
+// This file loads execution limits and enforces task deadlines.
 package codedaemon
 
 import (
@@ -9,9 +10,11 @@ import (
 
 const (
 	defaultTaskTimeout = 5 * time.Minute
-	maxTaskTimeout     = 24 * time.Hour
+	maxTaskTimeout     = 24 * time.Hour // Hard cap on configured execution limits.
 )
 
+// loadTaskTimeouts returns the default and maximum execution durations. A lower
+// configured maximum also lowers the default unless the default is set explicitly.
 func loadTaskTimeouts() (time.Duration, time.Duration, error) {
 	upper := maxTaskTimeout
 	if err := envvar.DurationBetween("CODE_DAEMON_MAX_TASK_TIMEOUT", &upper, time.Millisecond, maxTaskTimeout); err != nil {
@@ -27,6 +30,7 @@ func loadTaskTimeouts() (time.Duration, time.Duration, error) {
 	return value, upper, nil
 }
 
+// taskTimeout lets a request shorten, but never extend, the service limit.
 func (d *Daemon) taskTimeout(requestMillis int64) time.Duration {
 	limit := min(d.cfg.DefaultTimeout, d.cfg.MaxTimeout)
 	// Compare before converting, since the request value may overflow a duration.
@@ -37,12 +41,12 @@ func (d *Daemon) taskTimeout(requestMillis int64) time.Duration {
 }
 
 type executionOutcome struct {
-	result        workerMessage
-	code, message string
+	result        workerMessage // Terminal runtime reply, including a possible user error.
+	code, message string        // Daemon error details; when code is set, result is unused.
 }
 
-// Watch execution separately from the HTTP writer so a blocked client cannot
-// postpone a timeout or let a disconnected task hold its lane indefinitely.
+// watch waits for the runtime reply or stops the shared worker at the deadline.
+// It runs independently of HTTP writes, so a blocked client cannot delay enforcement.
 func (x *execution) watch() executionOutcome {
 	timer := time.NewTimer(time.Until(x.deadline))
 	defer timer.Stop()

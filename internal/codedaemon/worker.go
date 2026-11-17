@@ -281,7 +281,7 @@ type execution struct {
 	worker   *worker
 	id       string
 	result   chan workerMessage // closed on worker failure; any buffered result is still readable
-	deadline time.Time
+	deadline time.Time          // Set at dispatch, after the worker is ready.
 }
 
 // dispatch registers a result receiver before sending the start command to the shared runtime.

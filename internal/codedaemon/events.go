@@ -142,6 +142,8 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer x.close()
+	// Start monitoring before the first HTTP write. The buffered result lets the
+	// watcher finish even when the response is blocked.
 	finished := make(chan executionOutcome, 1)
 	go func() { finished <- x.watch() }()
 	if stream.emit(newAcceptedEvent(spec.TaskID)) != nil {
