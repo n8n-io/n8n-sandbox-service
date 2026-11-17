@@ -179,6 +179,24 @@ The render fails in two cases:
 
 If the node kernel lacks xfs quota support, the pool mount fails. The runner then logs `disk quota enforcement: DISABLED`, the inner Docker daemon uses the container filesystem, and the volume stays unused. Watch that log line after you enable quotas.
 
+## Volume Cache
+
+The runner keeps the read-only volumes sandboxes attach in its volume cache, at `runner.config.volumeCacheDir` (default `<runner.config.dataDir>/volume-cache`), within `runner.config.volumeCacheMaxBytes` (default 20 GiB). Unpacking a volume takes room for the tar and its files at once. By default the cache uses the runner container's own filesystem.
+
+Give it an `emptyDir` of its own when sandboxes use volumes:
+
+```yaml
+runner:
+  config:
+    volumeCacheMaxBytes: "21474836480"
+  volumeCache:
+    emptyDir:
+      enabled: true
+      sizeLimit: 24Gi
+```
+
+The render fails unless `sizeLimit` is a whole number of Gi that holds the budget and 5% more: the kubelet evicts a pod whose `emptyDir` outgrows its limit. It also fails for a cache dir the runner would refuse or whose startup wipe would delete something else: `/`, the data dir or a dir containing it, or a dir inside or containing the Docker data root (`/var/lib/docker` or the pool mount). The cache shares the node's disk with the Docker data root, and with disk quotas, with the pool image, which grows as sandboxes write. The cache keeps 5% of the disk free, but cannot see what the pool has yet to grow into, so size the node's disk for both volumes' limits.
+
 ## Existing Auth Secret
 
 For production, prefer creating the auth Secret outside Helm and referencing it:

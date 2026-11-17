@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -14,6 +15,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,6 +37,8 @@ func usage() {
   %[1]s delete <sandbox-id>
   %[1]s exec <sandbox-id> <command>
   %[1]s build-volume [-entries N -content-bytes N -decompressed-bytes N] [-hold DURATION] <tar> <image>
+  %[1]s tar-counts <tar>
+  %[1]s serve-files -cert FILE -key FILE -client-ca FILE -dir DIR -token QUERY [-addr ADDR]
 
 create and exec print their outcome as one line of JSON. create exits 1 when
 the create fails, exec when the runner answers other than 200 or the command's
@@ -44,6 +49,13 @@ build-volume has the runner build an ext4 image from the tar and prints the
 outcome as one line of JSON. It counts the tar's entries, content and
 decompressed length with the volume tar policy, unless all three counts are
 given. -hold waits that long between the header and the tar.
+
+tar-counts prints a tar's counts under the volume tar policy, as the tar
+counts of a volume in create-options-json.
+
+serve-files serves the files directly in DIR over https, TLS 1.3, to clients
+with a certificate the client CA signed and requests whose query is QUERY,
+and prints "listening" once it accepts connections.
 `, os.Args[0])
 	os.Exit(2)
 }
@@ -85,6 +97,13 @@ func main() {
 		execute(sandboxID(os.Args[2]), os.Args[3])
 	case "build-volume":
 		buildVolume(os.Args[2:])
+	case "tar-counts":
+		if len(os.Args) != 3 {
+			usage()
+		}
+		tarCounts(os.Args[2])
+	case "serve-files":
+		serveFiles(os.Args[2:])
 	default:
 		usage()
 	}
@@ -319,6 +338,62 @@ func buildVolume(args []string) {
 	if err != nil {
 		os.Exit(1)
 	}
+}
+
+func tarCounts(path string) {
+	tar, err := os.Open(path)
+	fatal("open tar", err)
+	defer tar.Close()
+	stats, err := safetar.Validate(tar, volume.TarPolicy(math.MaxInt32, 0, 0))
+	fatal("validate tar", err)
+	printJSON(volume.TarCounts{Entries: int64(stats.Entries), ContentBytes: stats.Bytes, DecompressedBytes: stats.DecompressedBytes})
+}
+
+func serveFiles(args []string) {
+	flags := flag.NewFlagSet("serve-files", flag.ExitOnError)
+	addr := flags.String("addr", ":9444", "listen address")
+	certFile := flags.String("cert", "", "TLS certificate")
+	keyFile := flags.String("key", "", "TLS key")
+	clientCAFile := flags.String("client-ca", "", "CA that must have signed the client certificate")
+	dir := flags.String("dir", "", "directory to serve")
+	token := flags.String("token", "", "query every request must carry")
+	_ = flags.Parse(args)
+	if *certFile == "" || *keyFile == "" || *clientCAFile == "" || *dir == "" || *token == "" || flags.NArg() != 0 {
+		usage()
+	}
+	// Everything that can fail before it serves, before it says it listens.
+	tlsConfig, err := grpctls.NewServerTLSConfig(*certFile, *keyFile, *clientCAFile, tls.RequireAndVerifyClientCert)
+	fatal("TLS", err)
+	tlsConfig.MinVersion = tls.VersionTLS13
+	root, err := os.OpenRoot(*dir)
+	fatal("open dir", err)
+	defer root.Close()
+	handler := http.HandlerFunc(func(writer http.ResponseWriter, req *http.Request) {
+		name := strings.TrimPrefix(req.URL.Path, "/")
+		if req.URL.RawQuery != *token || !filepath.IsLocal(name) || strings.ContainsRune(name, '/') {
+			http.NotFound(writer, req)
+			return
+		}
+		// Through the root, so a link in the dir can't serve what is outside.
+		file, err := root.Open(name)
+		if err != nil {
+			http.NotFound(writer, req)
+			return
+		}
+		defer file.Close()
+		info, err := file.Stat()
+		if err != nil || !info.Mode().IsRegular() {
+			http.NotFound(writer, req)
+			return
+		}
+		writer.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
+		_, _ = io.Copy(writer, file)
+	})
+	listener, err := tls.Listen("tcp", *addr, tlsConfig)
+	fatal("listen", err)
+	fmt.Println("listening")
+	server := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	fatal("serve", server.Serve(listener))
 }
 
 func printJSON(value any) {

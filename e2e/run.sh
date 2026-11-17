@@ -141,6 +141,7 @@ docker run "${API_DOCKER_RUN[@]}"
 e2e_wait_for_api_http "$PORT" "$API_CONTAINER_NAME"
 
 RUNNER_CONTROL_HOST_PORT="${RUNNER_CONTROL_HOST_PORT:-19091}"
+RUNNER_HTTP_HOST_PORT="${RUNNER_HTTP_HOST_PORT:-18080}"
 
 echo "Starting runner service..."
 docker run -d \
@@ -148,6 +149,7 @@ docker run -d \
 	--network "$NETWORK_NAME" \
 	--network-alias "$RUNNER_CONTROL_ALIAS" \
 	-p "${RUNNER_CONTROL_HOST_PORT}:9091" \
+	-p "127.0.0.1:${RUNNER_HTTP_HOST_PORT}:8080" \
 	-v "$TLS_DIR/runner:/grpc-tls:ro" \
 	-e "SANDBOX_RUNNER_API_KEYS=$RUNNER_INTERNAL_API_KEY" \
 	-e "SANDBOX_RUNNER_METRICS_ENABLED=true" \
@@ -202,6 +204,10 @@ export E2E_RUNNER_CONTROL_TLS_CA="$TLS_DIR/api/ca.crt"
 export E2E_RUNNER_CONTROL_TLS_CERT="$TLS_DIR/api/control-grpc-api-client.crt"
 export E2E_RUNNER_CONTROL_TLS_KEY="$TLS_DIR/api/control-grpc-api-client.key"
 export E2E_RUNNER_CONTROL_TLS_SERVER_NAME="$RUNNER_CONTROL_ALIAS"
+# Not E2E_RUNNER_HTTP_ADDR, which makes other specs reach the runner from the
+# host; specs that exec in a sandbox through e2e-runnerctl pass it on.
+export E2E_RUNNER_PUBLISHED_HTTP_ADDR="127.0.0.1:${RUNNER_HTTP_HOST_PORT}"
+export E2E_TLS_DIR="$TLS_DIR"
 
 echo "Running e2e tests (excluding topology-only + resilience; API restart runs last)..."
 MAIN_SPECS=()

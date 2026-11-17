@@ -195,6 +195,93 @@ manifests=$(render \
 echo "$manifests" | grep -q 'SANDBOX_RUNNER_DISK_QUOTA_POOL_PATH: "/mnt/pool/docker.img"'
 echo "$manifests" | grep -q 'SANDBOX_RUNNER_DISK_QUOTA_POOL_SIZE_GB: "60"'
 
+echo "==> volume cache"
+# Defaults leave the runner's cache settings alone and add no volume.
+manifests=$(render)
+if echo "$manifests" | grep -e SANDBOX_RUNNER_VOLUME_CACHE -e 'name: volume-cache' >/dev/null; then
+	echo "expected no volume cache settings or volume by default" >&2
+	exit 1
+fi
+
+manifests=$(render \
+	--set runner.config.volumeCacheDir=/var/cache/volumes \
+	--set runner.config.volumeCacheMaxBytes=10737418240 \
+	--set runner.volumeCache.emptyDir.enabled=true \
+	--set runner.volumeCache.emptyDir.sizeLimit=12Gi)
+echo "$manifests" | grep 'SANDBOX_RUNNER_VOLUME_CACHE_DIR: "/var/cache/volumes"' >/dev/null
+echo "$manifests" | grep 'SANDBOX_RUNNER_VOLUME_CACHE_MAX_BYTES: "10737418240"' >/dev/null
+echo "$manifests" | grep 'mountPath: "/var/cache/volumes"' >/dev/null
+echo "$manifests" | grep 'sizeLimit: 12Gi' >/dev/null
+
+# Without a dir of its own, the emptyDir mounts at the runner's default under
+# the data dir, and must hold the default 20 GiB budget and 5% more.
+manifests=$(render "${privileged[@]}" \
+	--set runner.config.dataDir=/data/ \
+	--set runner.volumeCache.emptyDir.enabled=true \
+	--set runner.volumeCache.emptyDir.sizeLimit=21Gi)
+echo "$manifests" | grep 'mountPath: "/data/volume-cache"' >/dev/null
+must_fail "and 5% more" \
+	--set runner.volumeCache.emptyDir.enabled=true \
+	--set runner.volumeCache.emptyDir.sizeLimit=20Gi
+must_fail "and 5% more" \
+	--set runner.config.volumeCacheMaxBytes=10737418240 \
+	--set runner.volumeCache.emptyDir.enabled=true \
+	--set runner.volumeCache.emptyDir.sizeLimit=10Gi
+# The runner empties its cache dir at startup: never Docker's data root.
+must_fail "the runner empties the cache dir at startup" \
+	--set runner.config.volumeCacheDir=/var/lib/docker/volume-cache
+must_fail "the runner empties the cache dir at startup" \
+	--set runner.config.volumeCacheDir=/var/lib
+must_fail "the runner empties the cache dir at startup" \
+	--set runner.config.defaultDiskQuotaMb=2048 \
+	--set runner.config.diskQuotaPoolSizeGb=60 \
+	--set runner.config.volumeCacheDir=/var/lib/docker-pool/
+for unclean in /var/lib//docker /var/lib/./docker/cache /var//lib /var/cache/../lib/docker; do
+	must_fail "the runner empties the cache dir at startup" \
+		--set "runner.config.volumeCacheDir=$unclean"
+done
+must_fail "must be an absolute path" \
+	--set runner.config.volumeCacheDir=volume-cache
+must_fail "must be an absolute path" \
+	--set runner.config.dataDir=sandboxes \
+	--set runner.volumeCache.emptyDir.enabled=true \
+	--set runner.volumeCache.emptyDir.sizeLimit=21Gi
+# A relative data dir, which the runner resolves itself, still renders.
+render --set runner.config.dataDir=sandboxes >/dev/null
+# An empty data dir is the runner's default.
+render --set runner.config.dataDir= \
+	--set runner.volumeCache.emptyDir.enabled=true \
+	--set runner.volumeCache.emptyDir.sizeLimit=21Gi \
+	--show-only templates/runner-statefulset.yaml |
+	grep 'mountPath: "/var/sandboxes/volume-cache"' >/dev/null
+# Whatever the runner refuses to wipe fails here too.
+must_fail "must not be /" \
+	--set runner.config.volumeCacheDir=/
+must_fail "must not be the data dir" \
+	--set runner.config.volumeCacheDir=/var/sandboxes/
+must_fail "must not be the data dir" \
+	--set runner.config.volumeCacheDir=/var
+# Surrounding space is trimmed, as the runner trims it.
+render --set 'runner.config.volumeCacheDir= /var/cache/volumes ' \
+	--set runner.volumeCache.emptyDir.enabled=true \
+	--set runner.volumeCache.emptyDir.sizeLimit=21Gi \
+	--show-only templates/runner-statefulset.yaml |
+	grep 'mountPath: "/var/cache/volumes"' >/dev/null
+must_fail "at most 16 digits" \
+	--set runner.config.volumeCacheMaxBytes=500000000000000000 \
+	--set runner.volumeCache.emptyDir.enabled=true \
+	--set runner.volumeCache.emptyDir.sizeLimit=1Gi
+must_fail "whole number of Gi" \
+	--set runner.volumeCache.emptyDir.enabled=true
+must_fail "whole number of Gi" \
+	--set runner.volumeCache.emptyDir.enabled=true \
+	--set runner.volumeCache.emptyDir.sizeLimit=20G
+must_fail "positive whole number of bytes" \
+	--set runner.config.volumeCacheMaxBytes=20GiB
+# --set-json reads numbers as float64, as values files do.
+render --set-json 'runner.config.volumeCacheMaxBytes=10737418240' |
+	grep 'SANDBOX_RUNNER_VOLUME_CACHE_MAX_BYTES: "10737418240"' >/dev/null
+
 echo "==> long runner names stay isolation-specific and unique"
 statefulset_name() {
 	local release_name=$1

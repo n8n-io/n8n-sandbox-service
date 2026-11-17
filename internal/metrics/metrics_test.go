@@ -274,12 +274,19 @@ func TestRunnerRecorderDisabled(t *testing.T) {
 	r.ObserveVolumeCacheFetch(VolumeFetchHit)
 	r.ObserveVolumeCacheDownload(time.Second)
 	r.ObserveVolumeCacheEviction()
+	r.ObserveVolumeCacheUnpack(VolumeUnpackSuccess)
+	r.ObserveVolumeCacheUnpackDuration(time.Second)
 	r.SetVolumeCache(func() float64 { return 1 }, func() float64 { return 1 }, func() float64 { return 1 })
 	if got := r.VolumeCacheFetchCount(VolumeFetchHit); got != 0 {
 		t.Errorf("VolumeCacheFetchCount on a disabled recorder = %v, want 0", got)
 	}
+	if got := r.VolumeCacheUnpackCount(VolumeUnpackSuccess); got != 0 {
+		t.Errorf("VolumeCacheUnpackCount on a disabled recorder = %v, want 0", got)
+	}
 	var nilRecorder *RunnerRecorder
 	nilRecorder.ObserveVolumeCacheFetch(VolumeFetchHit)
+	nilRecorder.ObserveVolumeCacheUnpack(VolumeUnpackSuccess)
+	nilRecorder.ObserveVolumeCacheUnpackDuration(time.Second)
 	nilRecorder.SetVolumeCache(nil, nil, nil)
 }
 
@@ -290,6 +297,10 @@ func TestRunnerRecorderVolumeCache(t *testing.T) {
 	rec.ObserveVolumeCacheFetch(VolumeFetchDigest)
 	rec.ObserveVolumeCacheDownload(3 * time.Second)
 	rec.ObserveVolumeCacheEviction()
+	rec.ObserveVolumeCacheUnpack(VolumeUnpackSuccess)
+	rec.ObserveVolumeCacheUnpack(VolumeUnpackInvalid)
+	rec.ObserveVolumeCacheUnpackDuration(4 * time.Second)
+	rec.ObserveVolumeCacheUnpackDuration(20 * time.Millisecond)
 	rec.SetVolumeCache(func() float64 { return 4096 }, func() float64 { return 3 }, func() float64 { return 2 })
 
 	if got := rec.VolumeCacheFetchCount(VolumeFetchHit); got != 2 {
@@ -303,6 +314,12 @@ func TestRunnerRecorderVolumeCache(t *testing.T) {
 		`sandbox_volume_cache_fetches_total{result="digest",role="runner"} 1`,
 		`sandbox_volume_cache_download_duration_seconds_count{role="runner"} 1`,
 		`sandbox_volume_cache_evictions_total{role="runner"} 1`,
+		`sandbox_volume_cache_unpacks_total{result="invalid",role="runner"} 1`,
+		`sandbox_volume_cache_unpacks_total{result="success",role="runner"} 1`,
+		`sandbox_volume_cache_unpack_duration_seconds_bucket{role="runner",le="0.01"} 0`,
+		`sandbox_volume_cache_unpack_duration_seconds_bucket{role="runner",le="0.05"} 1`,
+		`sandbox_volume_cache_unpack_duration_seconds_bucket{role="runner",le="2.5"} 1`,
+		`sandbox_volume_cache_unpack_duration_seconds_bucket{role="runner",le="5"} 2`,
 		`sandbox_volume_cache_bytes{role="runner"} 4096`,
 		`sandbox_volume_cache_entries{role="runner"} 3`,
 		`sandbox_volume_cache_pinned_entries{role="runner"} 2`,

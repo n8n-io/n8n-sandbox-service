@@ -35,7 +35,10 @@ type volumeCache struct {
 }
 
 func (v volumeCache) Acquire(ctx context.Context, vol runnerruntime.Volume, holder string) (string, error) {
-	return v.cache.Acquire(ctx, volumecache.Key{Scope: vol.Scope, SHA256: vol.SHA256}, volumecache.Source{URL: vol.URL, Size: vol.Size}, holder)
+	return v.cache.Acquire(ctx,
+		volumecache.Key{Scope: vol.Scope, SHA256: vol.SHA256, Kind: vol.Kind},
+		volumecache.Source{URL: vol.URL, Size: vol.Size, Tar: vol.Tar},
+		holder)
 }
 
 func (v volumeCache) ReleaseAll(holder string) {
