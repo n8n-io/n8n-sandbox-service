@@ -46,6 +46,10 @@ var ErrSandboxNotRunning = errors.New("sandbox not running")
 // the API place the same sandbox on another runner.
 var ErrCapacityExhausted = errors.New("runner capacity exhausted")
 
+// ErrVolumesUnsupported is returned when CreateSandbox refuses volumes this
+// runner can't attach, before anything is created.
+var ErrVolumesUnsupported = errors.New("runner can't attach these volumes")
+
 // Egress is a sandbox's outbound network policy.
 type Egress string
 
@@ -69,14 +73,16 @@ func ParseEgress(s string) (Egress, error) {
 }
 
 // CreateOptions holds optional parameters for sandbox creation. It is also the
-// JSON shape of the create RPC's create_options_json and
-// applied_create_options_json fields.
+// JSON shape of the create RPC's create_options_json field; the echo in
+// applied_create_options_json is an AppliedCreateOptions.
 type CreateOptions struct {
-	Egress Egress `json:"egress,omitempty"`
+	Egress  Egress  `json:"egress,omitempty"`
+	Volumes Volumes `json:"volumes,omitempty"`
 }
 
 // ParseCreateOptions decodes the wire form of CreateOptions. Empty means the
-// defaults; otherwise it must be an object with a valid Egress.
+// defaults; otherwise it must be an object with a valid Egress and valid
+// volumes.
 func ParseCreateOptions(s string) (*CreateOptions, error) {
 	opts := &CreateOptions{}
 	if strings.TrimSpace(s) != "" {
@@ -93,6 +99,12 @@ func ParseCreateOptions(s string) (*CreateOptions, error) {
 		return nil, err
 	}
 	opts.Egress = egress
+	if err := validateVolumes(opts.Volumes); err != nil {
+		return nil, err
+	}
+	if len(opts.Volumes) == 0 {
+		opts.Volumes = nil
+	}
 	return opts, nil
 }
 
@@ -116,6 +128,11 @@ type SandboxInfo struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 	IP   string `json:"ip"`
+
+	// VolumesLeftOut maps the index in CreateOptions.Volumes of each optional
+	// volume the sandbox did not get to why, a VolumeLeftOut value. Only
+	// CreateSandbox sets it.
+	VolumesLeftOut map[int]string `json:"-"`
 }
 
 // WakeResult reports how a sandbox came back.
@@ -147,6 +164,23 @@ type Capacity struct {
 // budget.
 type DiskReserver interface {
 	SetDiskReservation(reserved func() int64)
+}
+
+// VolumeCache keeps the volume objects a runtime attaches on the runner's
+// disk: the volume cache.
+type VolumeCache interface {
+	// Acquire returns the path of a verified copy of vol's object and pins it
+	// for holder. ctx bounds only the wait. An error wrapping
+	// ErrCapacityExhausted is a refusal for want of room.
+	Acquire(ctx context.Context, vol Volume, holder string) (string, error)
+	// ReleaseAll unpins every object holder holds.
+	ReleaseAll(holder string)
+}
+
+// VolumeAttacher is a runtime that attaches volumes to the sandboxes it
+// creates. A runtime that isn't refuses a create that names any.
+type VolumeAttacher interface {
+	SetVolumeCache(cache VolumeCache)
 }
 
 // Runtime is the sandbox backend contract used by the shared runner process.

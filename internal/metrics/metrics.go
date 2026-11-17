@@ -397,6 +397,7 @@ type RunnerRecorder struct {
 	volumeCacheFetches   *prometheus.CounterVec
 	volumeCacheDownloads prometheus.Histogram
 	volumeCacheEvictions prometheus.Counter
+	volumesLeftOut       *prometheus.CounterVec
 }
 
 // NewRunnerRecorder builds the runner recorder. If enabled is false, the
@@ -453,6 +454,16 @@ func NewRunnerRecorder(enabled bool) *RunnerRecorder {
 		},
 		[]string{"result"},
 	)
+	volumesLeftOut := prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   Namespace,
+			Name:        "volumes_left_out_total",
+			Help:        "Optional volumes a create left out of the sandbox, labeled by reason.",
+			ConstLabels: prometheus.Labels{"role": RoleRunner},
+		},
+		[]string{"reason"},
+	)
+	reg.MustRegister(volumesLeftOut)
 	volumeMounts := prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace:   Namespace,
@@ -525,6 +536,7 @@ func NewRunnerRecorder(enabled bool) *RunnerRecorder {
 		volumeCacheFetches:   volumeCacheFetches,
 		volumeCacheDownloads: volumeCacheDownloads,
 		volumeCacheEvictions: volumeCacheEvictions,
+		volumesLeftOut:       volumesLeftOut,
 	}
 }
 
@@ -662,6 +674,15 @@ func (r *RunnerRecorder) ObserveVolumeCacheEviction() {
 		return
 	}
 	r.volumeCacheEvictions.Inc()
+}
+
+// ObserveVolumeLeftOut records an optional volume a create left out, with one
+// of the runtime's VolumeLeftOut reasons.
+func (r *RunnerRecorder) ObserveVolumeLeftOut(reason string) {
+	if r == nil || r.reg == nil {
+		return
+	}
+	r.volumesLeftOut.WithLabelValues(reason).Inc()
 }
 
 // SetVolumeCache registers scrape-time gauges for the volume cache: the bytes
@@ -829,6 +850,15 @@ func (r *RunnerRecorder) VolumeCacheEvictionCount() float64 {
 		return 0
 	}
 	return testutil.ToFloat64(r.volumeCacheEvictions)
+}
+
+// VolumeLeftOutCount returns the counter value for optional volumes left out
+// with the given reason. Intended for tests in other packages.
+func (r *RunnerRecorder) VolumeLeftOutCount(reason string) float64 {
+	if r == nil || r.reg == nil {
+		return 0
+	}
+	return testutil.ToFloat64(r.volumesLeftOut.WithLabelValues(reason))
 }
 
 func resultLabel(success bool) string {

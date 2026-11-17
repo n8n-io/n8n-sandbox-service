@@ -92,6 +92,7 @@ Steps, in order:
 
 | Step | Operation | What it covers |
 | --- | --- | --- |
+| `acquire_volumes` | create, with volumes | Get every volume image from the runner's cache, waiting for downloads |
 | `clone_rootfs` | create | Copy the template rootfs for the new sandbox |
 | `clone_snapshot` | create | Copy the golden memory and state snapshot |
 | `prepare_jail` | create, wake, recover | Jailer directory and device setup |
@@ -99,6 +100,7 @@ Steps, in order:
 | `start_jailer` | create, wake, recover | Launch the jailer and Firecracker process |
 | `wait_socket` | create, wake, recover | Wait for the Firecracker API socket |
 | `load_snapshot` | create, wake | Restore the VM from the snapshot |
+| `patch_volumes` | create, with volumes | Tell the guest each volume drive's size |
 | `cold_boot` | recover | Boot the sandbox's own rootfs, replacing the restore |
 | `start_proxy` | create, wake, recover | Start the host-side daemon proxy |
 | `probe_daemon` | create, wake, recover | First successful call to the in-guest daemon |
@@ -107,7 +109,22 @@ Steps, in order:
 A wake skips the two clone steps, since the sandbox's disk already exists, and
 `mount_volumes`. A recovery skips the clone steps too and swaps `load_snapshot`
 for `cold_boot` — the field to compare when reading recovery latency against an
-ordinary wake.
+ordinary wake. `acquire_volumes` and `patch_volumes` appear only for sandboxes
+with volumes. In `sandbox_lifecycle_step_duration_seconds`, an
+`acquire_volumes` that waited for a download longer than 5 s lands above the
+top bucket; the event has its time, and
+`sandbox_volume_cache_download_duration_seconds` (buckets up to 600 s) the
+download's.
+
+### Runner: volumes
+
+Each line names `sandbox_id`, `drive` and `sha256`, never the read URL.
+
+| Event | Level | Notes |
+| --- | --- | --- |
+| `firecracker volume attached` | info | At the end of a create that succeeded, per volume the sandbox has |
+| `firecracker volume left out` | warn | At the end of a create that succeeded, per optional volume it left out; `reason` as in the echo, and for one left out before the guest started the cache's `err` |
+| `firecracker volume not mounted after cold boot` | warn | A cold boot's guest did not mount an optional volume the create had mounted; `reason` |
 
 ### Runner: guest deaths
 
@@ -149,12 +166,18 @@ Related series:
   refused for want of capacity before any boot was attempted. `result` carries
   `success` or `error`, the same pair as every other `result` label here.
 - `sandbox_volume_mount_requests_total{result}` — the guest volume mount request
-  of each Firecracker create and cold boot. `result` is `success` or why it
-  failed: `no_response`, `invalid_request`, `already_mounted`, `unsupported`
-  (the daemon has no endpoint or no root; a failure only when volumes were
-  named), `drive` (a drive could not be read or flushed, or never showed its
-  expected size), `mount_point`, `mount`, or `error`. Every failure fails the
-  create or wake.
+  of each Firecracker create and cold boot, once per request. `result` is
+  `success` when every drive mounted. A request where some did not counts
+  under the reason of the first in request order: `drive` (a drive could not
+  be read or flushed, or never showed its expected size), `mount_point` or
+  `mount`; whether that fails the create depends on the volume. A request
+  that failed as a whole fails the create or wake: `no_response`,
+  `invalid_request`, `invalid_answer` (an answer that doesn't fit the
+  request), `already_mounted`, `unsupported` (the daemon has no endpoint or no
+  root; a failure only when volumes were named), or `error`.
+- `sandbox_volumes_left_out_total{reason}` — optional volumes a Firecracker
+  create that succeeded left out: `cache_full`, `timeout`, `download`,
+  `drive`, `mount_point` or `mount`.
 - `sandbox_volume_builds_total{result}` — volume image builds asked of a
   Firecracker runner. `result` is `success`; a failed build's reason: `tar`,
   `too_large` or `no_space` (the tar's fault), `format`, `mount`, `fsck` or

@@ -560,6 +560,20 @@ func TestCreateAndWakeApplyTheNetworkPolicyOfTheSandboxEgress(t *testing.T) {
 	}
 }
 
+func TestCreateSandboxRefusesVolumes(t *testing.T) {
+	events := []string{}
+	m := newRuntime(&config.Config{}, Config{}, &fakeDockerBackend{events: &events, containerID: "container-1"})
+	m.imageReady.Store(true)
+
+	opts := &runnerruntime.CreateOptions{Volumes: []runnerruntime.Volume{{MountPath: "/mnt/a"}}}
+	if _, err := m.CreateSandbox(context.Background(), "sandbox-id-1234", opts); !errors.Is(err, runnerruntime.ErrVolumesUnsupported) {
+		t.Fatalf("CreateSandbox() error = %v, want a refusal", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("docker calls = %q, want none", events)
+	}
+}
+
 func TestEnsureSandboxRunningFailedWakeAfterNetworkDetachStopsContainerAndRemovesRules(t *testing.T) {
 	events := []string{}
 	const containerID = "container-1"

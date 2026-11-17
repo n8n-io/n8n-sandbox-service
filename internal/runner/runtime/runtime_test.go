@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 )
 
@@ -37,6 +38,8 @@ func FuzzParseCreateOptions(fuzz *testing.F) {
 	fuzz.Add(`{"egress":"none"}`)
 	fuzz.Add(`{"egress":"allow-all"}`)
 	fuzz.Add(`{"egress":`)
+	fuzz.Add(`{"volumes":[]}`)
+	fuzz.Add(`{"volumes":[` + testVolumeJSON + `]}`)
 	fuzz.Fuzz(func(t *testing.T, input string) {
 		opts, err := ParseCreateOptions(input)
 		if err != nil {
@@ -50,7 +53,7 @@ func FuzzParseCreateOptions(fuzz *testing.F) {
 			t.Fatalf("marshal %+v: %v", opts, err)
 		}
 		again, err := ParseCreateOptions(string(encoded))
-		if err != nil || *again != *opts {
+		if err != nil || !reflect.DeepEqual(again, opts) {
 			t.Fatalf("ParseCreateOptions(%q) = %+v, %v; want %+v", encoded, again, err, opts)
 		}
 	})

@@ -33,6 +33,8 @@ grpcurl \
 
 `create_options_json` is a JSON `CreateOptions` (`internal/runner/runtime`): `{}` for the defaults, `{"egress":"none"}` for no egress. Unknown values are `InvalidArgument`. The response echoes what was applied in `applied_create_options_json`; the API refuses a sandbox whose echo does not match.
 
+`volumes` lists read-only volumes, Firecracker only: `{"volumes":[{"scope":"shared","sha256":"<hex>","size":<bytes>,"kind":"ext4","url":"https://…","mount_path":"/mnt/data","optional":true}]}`. Invalid volumes are `InvalidArgument`, an `ext4` size that isn't whole 512-byte sectors among them (rules: `ParseCreateOptions`). A runner that can't attach them refuses with `FailedPrecondition`, for example a Docker runner, or a Firecracker runner asked for more volumes than its golden snapshot has drives or for a kind other than `ext4`. The echo repeats each volume without its `url`, with `"attached"`, and a `"reason"` for an optional volume left out. The API sends no volumes and checks only the echo's egress.
+
 Cordon a runner: it takes no new creates, and the API deletes its stopped sandboxes instead of waking them ([API.md](API.md#put-adminrunnersidcordon--delete-adminrunnersidcordon)), until it is uncordoned (`{"cordoned": false}`) or restarts. `runner_id` is optional; when set, a runner with another id refuses. `GetCordon` with `-d '{}'` reads the state.
 
 ```bash
