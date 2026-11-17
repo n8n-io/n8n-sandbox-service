@@ -1,0 +1,200 @@
+Dockerfile.ee.runner-firecracker
+  h_8fb27e0cdf6d1e 40-41,45
+Dockerfile.sandbox
+  h_8fb27e0cdf6d1e 31-33,41
+charts/n8n-sandbox-service/Chart.yaml
+  h_8fb27e0cdf6d1e 5
+charts/n8n-sandbox-service/README.md
+  h_8fb27e0cdf6d1e 182-199
+charts/n8n-sandbox-service/render-tests.sh
+  h_8fb27e0cdf6d1e 198-284
+charts/n8n-sandbox-service/templates/_helpers.tpl
+  h_8fb27e0cdf6d1e 141-166
+charts/n8n-sandbox-service/templates/configmap.yaml
+  h_8fb27e0cdf6d1e 70-75
+charts/n8n-sandbox-service/templates/runner-statefulset.yaml
+  h_8fb27e0cdf6d1e 148-151,184-188
+charts/n8n-sandbox-service/templates/validation.yaml
+  h_8fb27e0cdf6d1e 74-107
+charts/n8n-sandbox-service/values.yaml
+  h_8fb27e0cdf6d1e 363-376
+cmd/daemon/main.go
+  h_8fb27e0cdf6d1e 2-4,8,14,27-30,51-65
+cmd/daemon/main_test.go
+  h_8fb27e0cdf6d1e 1-60
+cmd/e2e-runnerctl/main.go
+  h_8fb27e0cdf6d1e 5-6,8-11,13-16,18-19,23-25,27-30,33-68,70-71,73-114,118-119,121-122,124,139-147,151,156-436
+docs/architecture.md
+  h_8fb27e0cdf6d1e 175
+docs/configuration.md
+  h_8fb27e0cdf6d1e 85-86,156,225-227
+docs/grpcurl-debug.md
+  h_8fb27e0cdf6d1e 36-37,52-53
+docs/limits.md
+  h_8fb27e0cdf6d1e 26
+docs/observability.md
+  h_8fb27e0cdf6d1e 95,103,112-131,173-202
+docs/quickstart-firecracker-linux.md
+  h_8fb27e0cdf6d1e 160-161
+docs/security-model.md
+  h_8fb27e0cdf6d1e 149-150,260-279,339-351,380-461,629-631
+e2e/run-firecracker.sh
+  h_8fb27e0cdf6d1e 227-230
+e2e/run.sh
+  h_8fb27e0cdf6d1e 144,152,207-210
+e2e/tests/helpers.ts
+  h_8fb27e0cdf6d1e 551
+e2e/tests/volume-attach-docker.spec.ts
+  h_8fb27e0cdf6d1e 1-381
+e2e/tests/volume-attach.spec.ts
+  h_8fb27e0cdf6d1e 1-392
+e2e/tests/volume-build.spec.ts
+  h_8fb27e0cdf6d1e 1-136
+internal/api/grpc/pb/runner.pb.go
+  h_8fb27e0cdf6d1e 623-881,922-938,940,946-947,961,975-977,980-999,1007-1015,1022
+internal/api/grpc/pb/runner_grpc.pb.go
+  h_8fb27e0cdf6d1e 123,138-140,201-213,226-228,254-256,368-374,403-410
+internal/api/handlers.go
+  h_8fb27e0cdf6d1e 478
+internal/api/handlers_code.go
+  h_8fb27e0cdf6d1e 298
+internal/api/runnerctl/build.go
+  h_8fb27e0cdf6d1e 1-200
+internal/api/runnerctl/build_test.go
+  h_8fb27e0cdf6d1e 1-57
+internal/daemon/volume_mount.go
+  h_8fb27e0cdf6d1e 13-19,47-49,51-53,57,62-64,67-82
+internal/daemon/volume_mount_test.go
+  h_8fb27e0cdf6d1e 112-113,144,166-208,271-272
+internal/daemon/volumebuild/build.go
+  h_8fb27e0cdf6d1e 1-238
+internal/daemon/volumebuild/build_linux_test.go
+  h_8fb27e0cdf6d1e 1-516
+internal/daemon/volumebuild/build_test.go
+  h_8fb27e0cdf6d1e 1-481
+internal/daemon/volumebuild/contract.go
+  h_8fb27e0cdf6d1e 1-160
+internal/daemon/volumebuild/contract_test.go
+  h_8fb27e0cdf6d1e 1-274
+internal/daemon/volumebuild/size.go
+  h_8fb27e0cdf6d1e 1-77
+internal/daemon/volumebuild/status.go
+  h_8fb27e0cdf6d1e 1-99
+internal/daemon/volumebuild/sys_linux.go
+  h_8fb27e0cdf6d1e 1-165
+internal/daemon/volumebuild/sys_unsupported.go
+  h_8fb27e0cdf6d1e 1-30
+internal/daemon/volumedrives/volumedrives.go
+  h_8fb27e0cdf6d1e 35,42-46,106-153,175-185,187,189,192-196,199,201-202,204-205,207
+internal/daemon/volumedrives/volumedrives_test.go
+  h_8fb27e0cdf6d1e 175,180,185-188,196,201-202,209,216,221-224,229,234-235,239-242,247,253,256,261-262,264-266,269-272,278,282-283,285,289-293,297,299-301,306-374
+internal/metrics/metrics.go
+  h_8fb27e0cdf6d1e 88-104,391-394,399-403,417-418,422-424,481-490,500-508,518-526,544-563,576-577,581-583,678-697,723-748,889-897,916-933
+internal/metrics/metrics_test.go
+  h_8fb27e0cdf6d1e 230-259,277-278,283-285,288-289,300-303,317-322,333-350
+internal/runner/app/app.go
+  h_8fb27e0cdf6d1e 32-47,111-113,142-144
+internal/runner/grpc_control.go
+  h_8fb27e0cdf6d1e 33-42,62-64,133-139
+internal/runner/grpc_control_test.go
+  h_8fb27e0cdf6d1e 7,134-192,215
+internal/runner/grpc_volume_build.go
+  h_8fb27e0cdf6d1e 1-226
+internal/runner/grpc_volume_build_test.go
+  h_8fb27e0cdf6d1e 1-567
+internal/runner/mtls_test.go
+  h_8fb27e0cdf6d1e 31,264-268,280
+internal/runner/runtime/docker/README.md
+  h_8fb27e0cdf6d1e 61-62,64,71-120
+internal/runner/runtime/docker/crash_test.go
+  h_8fb27e0cdf6d1e 84
+internal/runner/runtime/docker/docker_client.go
+  h_8fb27e0cdf6d1e 32-34,39,101,182-183,192,217
+internal/runner/runtime/docker/runtime.go
+  h_8fb27e0cdf6d1e 8,84-92,119-121,186-188,273,275-277,292,296-302,304-306,314,325-330,332,334-339,341-346,355,357,360,363,367,372,376,381,391
+internal/runner/runtime/docker/runtime_test.go
+  h_8fb27e0cdf6d1e 13,30-53,60-63,65-69,74,79,87-93,97,105,123-127,170,217,227,299
+internal/runner/runtime/docker/volumes.go
+  h_8fb27e0cdf6d1e 1-356
+internal/runner/runtime/docker/volumes_linux.go
+  h_8fb27e0cdf6d1e 1-71
+internal/runner/runtime/docker/volumes_linux_test.go
+  h_8fb27e0cdf6d1e 1-115
+internal/runner/runtime/docker/volumes_other.go
+  h_8fb27e0cdf6d1e 1-11
+internal/runner/runtime/docker/volumes_test.go
+  h_8fb27e0cdf6d1e 1-654
+internal/runner/runtime/firecracker.ee/README.md
+  h_8fb27e0cdf6d1e 52,66-93,115
+internal/runner/runtime/firecracker.ee/config.go
+  h_8fb27e0cdf6d1e 32,114-117,138,213-217
+internal/runner/runtime/firecracker.ee/config_test.go
+  h_8fb27e0cdf6d1e 6,76-97
+internal/runner/runtime/firecracker.ee/disk.go
+  h_8fb27e0cdf6d1e 37-39
+internal/runner/runtime/firecracker.ee/reconcile.go
+  h_8fb27e0cdf6d1e 23-26
+internal/runner/runtime/firecracker.ee/runtime.go
+  h_8fb27e0cdf6d1e 18,41-43,55-56,63-67,215-221,335-337,339,363-364,367,485-498,524,526-528,585-588,590-592,764,860,927-928
+internal/runner/runtime/firecracker.ee/runtime_test.go
+  h_8fb27e0cdf6d1e 138-140
+internal/runner/runtime/firecracker.ee/steps.go
+  h_8fb27e0cdf6d1e 28-33
+internal/runner/runtime/firecracker.ee/stop_wake.go
+  h_8fb27e0cdf6d1e 304-310,334
+internal/runner/runtime/firecracker.ee/volume_attach.go
+  h_8fb27e0cdf6d1e 1-359
+internal/runner/runtime/firecracker.ee/volume_attach_test.go
+  h_8fb27e0cdf6d1e 1-874
+internal/runner/runtime/firecracker.ee/volume_build.go
+  h_8fb27e0cdf6d1e 1-558
+internal/runner/runtime/firecracker.ee/volume_build_test.go
+  h_8fb27e0cdf6d1e 1-847
+internal/runner/runtime/firecracker.ee/volume_mount.go
+  h_8fb27e0cdf6d1e 22-30,38,42,53-57,63,65-81,87-88,90-97,100-101,104-106,110-117,120-124,128-132,136-137,144
+internal/runner/runtime/firecracker.ee/volume_mount_test.go
+  h_8fb27e0cdf6d1e 4,8,36,44,131,188,190-196,198-225,247,254-269,280,289-321,327-328
+internal/runner/runtime/runtime.go
+  h_8fb27e0cdf6d1e 10,13-14,29,49-52,76-77,79-80,84-85,102-107,131-135,162-164,169-185,204-253
+internal/runner/runtime/runtime_test.go
+  h_8fb27e0cdf6d1e 5,41-42,56
+internal/runner/runtime/volume.go
+  h_8fb27e0cdf6d1e 1-188
+internal/runner/runtime/volume_test.go
+  h_8fb27e0cdf6d1e 1-169
+internal/runner/volumecache/cache.go
+  h_8fb27e0cdf6d1e 5,7-10,50,54,64-66,71-72,76,86-87,107-108,114-119,127-129,131-134,142-164,168,170-171,173,182-188,218-223,321-326,338-344,359,381,383-384,386-390,396,399,402,404,406-407,413-415,419-422,427-435,451,454-455,457,460-464,466,470-471,475,478-487,489-491,493-497,502-503,509-510,580,592
+internal/runner/volumecache/cache_test.go
+  h_8fb27e0cdf6d1e 99,297,444-450
+internal/runner/volumecache/fetch.go
+  h_8fb27e0cdf6d1e 14,23,184-223,226,230,234,237,242,244,247,259,262,265,269,272,275,279,281-282
+internal/runner/volumecache/unpack.go
+  h_8fb27e0cdf6d1e 1-290
+internal/runner/volumecache/unpack_test.go
+  h_8fb27e0cdf6d1e 1-712
+internal/safetar/safetar.go
+  h_8fb27e0cdf6d1e 17,56,64-71,74,76-78,81-82,110,116-118,123,126-127,140,146,154-162,185,194-196,282-331,365-366,370,380,384-385,389
+internal/safetar/safetar_test.go
+  h_8fb27e0cdf6d1e 10,211,219,221,228,582,731-735,737-742,765,767,771-774,778-783,800-837,839-840,843-907,916,927-935,951
+internal/volume/tar.go
+  h_8fb27e0cdf6d1e 1-24
+internal/volume/tar_test.go
+  h_8fb27e0cdf6d1e 1-121
+internal/volume/tarcounts.go
+  h_8fb27e0cdf6d1e 1-54
+internal/volume/tarcounts_test.go
+  h_8fb27e0cdf6d1e 1-51
+proto/runner/v1/runner.proto
+  h_8fb27e0cdf6d1e 19-21,83-115
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "808ece1704368cffa0a1c91119b7ffc0b3448175",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
