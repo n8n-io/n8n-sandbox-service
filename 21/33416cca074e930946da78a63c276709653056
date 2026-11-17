@@ -1,0 +1,30 @@
+internal/api/store/postgres_apikeys.go
+  h_8fb27e0cdf6d1e 1-59
+internal/api/store/postgres_sandboxes.go
+  h_8fb27e0cdf6d1e 1-7,9-40,42-58,62-101,126-256,266,268-272,277,284
+internal/api/store/postgres_tenants.go
+  h_8fb27e0cdf6d1e 1-135
+internal/api/store/sqlite.go
+  h_8fb27e0cdf6d1e 10
+internal/api/store/sqlite_apikeys.go
+  h_8fb27e0cdf6d1e 1-74
+internal/api/store/sqlite_sandboxes.go
+  h_8fb27e0cdf6d1e 1-43,45-69,73-116,141-248,258,260-264,269,276
+internal/api/store/sqlite_tenants.go
+  h_8fb27e0cdf6d1e 1-130
+internal/api/store/sqlite_test.go
+  h_8fb27e0cdf6d1e 1-92,94-120,122-155
+internal/api/store/tenants_test.go
+  h_8fb27e0cdf6d1e 1-34,36-39,41-43,45,47-82,84-103,105-134,136-142,144-211,213-230,232-255,257-288,290-297,299-324,326-416
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2133416cca074e930946da78a63c276709653056",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
