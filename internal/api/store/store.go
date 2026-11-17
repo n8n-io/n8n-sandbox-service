@@ -63,26 +63,44 @@ func KindFilter(kinds ...Kind) SandboxFilter { return SandboxFilter{Kinds: kinds
 
 // where returns the condition of f and the query arguments: args followed by
 // those of the condition. placeholder returns the placeholder of the nth
-// argument.
+// argument. Kinds that include every kind add no condition, and a filter
+// without any condition is TRUE.
 func (f SandboxFilter) where(args []any, placeholder func(n int) string) (string, []any, error) {
 	if len(f.Kinds) == 0 {
 		return "", nil, errors.New("store: no sandbox kinds given")
 	}
-	args = slices.Clip(args)
-	marks := make([]string, len(f.Kinds))
-	for i, kind := range f.Kinds {
+	for _, kind := range f.Kinds {
 		if err := checkKind(kind); err != nil {
 			return "", nil, err
 		}
-		args = append(args, string(kind))
-		marks[i] = placeholder(len(args))
 	}
-	cond := "kind IN (" + strings.Join(marks, ", ") + ")"
+	args = slices.Clip(args)
+	var conds []string
+	if !includesAllKinds(f.Kinds) {
+		marks := make([]string, len(f.Kinds))
+		for i, kind := range f.Kinds {
+			args = append(args, string(kind))
+			marks[i] = placeholder(len(args))
+		}
+		conds = append(conds, "kind IN ("+strings.Join(marks, ", ")+")")
+	}
 	if f.TenantID != "" {
 		args = append(args, f.TenantID)
-		cond += " AND tenant_id = " + placeholder(len(args))
+		conds = append(conds, "tenant_id = "+placeholder(len(args)))
 	}
-	return cond, args, nil
+	if len(conds) == 0 {
+		return "TRUE", args, nil
+	}
+	return strings.Join(conds, " AND "), args, nil
+}
+
+func includesAllKinds(kinds []Kind) bool {
+	for _, kind := range AllKinds() {
+		if !slices.Contains(kinds, kind) {
+			return false
+		}
+	}
+	return true
 }
 
 // codeNameIndex is the unique index on the names of code sandboxes.

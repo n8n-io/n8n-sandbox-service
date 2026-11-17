@@ -1,9 +1,36 @@
 package store
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 )
+
+func TestSandboxFilterWhere(t *testing.T) {
+	pg := func(n int) string { return fmt.Sprintf("$%d", n) }
+	for _, tc := range []struct {
+		f        SandboxFilter
+		wantCond string
+		wantArgs []any
+	}{
+		{KindFilter(KindCode), "kind IN ($2)", []any{"id", "code"}},
+		{KindFilter(KindDefault, KindDefault), "kind IN ($2, $3)", []any{"id", "default", "default"}},
+		{KindFilter(AllKinds()...), "TRUE", []any{"id"}},
+		{KindFilter(KindCode, KindDefault), "TRUE", []any{"id"}},
+		{SandboxFilter{Kinds: AllKinds(), TenantID: "t"}, "tenant_id = $2", []any{"id", "t"}},
+		{SandboxFilter{Kinds: []Kind{KindCode}, TenantID: "t"}, "kind IN ($2) AND tenant_id = $3", []any{"id", "code", "t"}},
+	} {
+		cond, args, err := tc.f.where([]any{"id"}, pg)
+		if err != nil || cond != tc.wantCond || !slices.Equal(args, tc.wantArgs) {
+			t.Errorf("where(%+v) = %q %v err=%v, want %q %v", tc.f, cond, args, err, tc.wantCond, tc.wantArgs)
+		}
+	}
+	for _, f := range []SandboxFilter{{}, KindFilter(KindDefault, "x"), KindFilter(KindDefault, KindCode, "")} {
+		if _, _, err := f.where(nil, pg); err == nil {
+			t.Errorf("where(%+v): got nil error", f)
+		}
+	}
+}
 
 func TestKindScoping(t *testing.T) {
 	s, err := New(":memory:")
