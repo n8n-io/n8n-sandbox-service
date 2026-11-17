@@ -1,0 +1,58 @@
+internal/api/activity_test.go
+  h_8fb27e0cdf6d1e 92,134
+internal/api/gateway_test.go
+  h_8fb27e0cdf6d1e 66,97
+internal/api/handlers.go
+  h_8fb27e0cdf6d1e 28-29,32,96,105,232,253,277,284,331,391,507,515,579,591,609,715,774,782
+internal/api/handlers_cordon_test.go
+  h_8fb27e0cdf6d1e 69
+internal/api/handlers_create_sandbox_test.go
+  h_8fb27e0cdf6d1e 92,120,140,167,186,309,360,380,777
+internal/api/handlers_kind_test.go
+  h_8fb27e0cdf6d1e 14,16,25,28,70-71,74,79-81
+internal/api/handlers_list_test.go
+  h_8fb27e0cdf6d1e 25,104,109,124
+internal/api/handlers_provisioner_test.go
+  h_8fb27e0cdf6d1e 101,255
+internal/api/handlers_proxy_activity_test.go
+  h_8fb27e0cdf6d1e 72,140,180,223,252,291,358
+internal/api/handlers_proxy_redirect_test.go
+  h_8fb27e0cdf6d1e 45
+internal/api/handlers_proxy_tenant_test.go
+  h_8fb27e0cdf6d1e 35
+internal/api/handlers_reap_test.go
+  h_8fb27e0cdf6d1e 44,118,180,249
+internal/api/handlers_tenants_test.go
+  h_8fb27e0cdf6d1e 156,338,384
+internal/api/middleware_limits_test.go
+  h_8fb27e0cdf6d1e 107
+internal/api/store/migrations_postgres.go
+  h_8fb27e0cdf6d1e 19,76,85
+internal/api/store/migrations_sqlite.go
+  h_8fb27e0cdf6d1e 35
+internal/api/store/postgres.go
+  h_8fb27e0cdf6d1e 231-232
+internal/api/store/postgres_integration_test.go
+  h_8fb27e0cdf6d1e 68,111,113,132,206
+internal/api/store/sandboxes_test.go
+  h_8fb27e0cdf6d1e 17,19,33,69,118-119,129,137
+internal/api/store/sqlite.go
+  h_8fb27e0cdf6d1e 281-282
+internal/api/store/store.go
+  h_8fb27e0cdf6d1e 39,44,47,189-191
+internal/api/store/store_test.go
+  h_8fb27e0cdf6d1e 30,81,115,117,186-188,190-191,194,340,424,429,434,439,503,512,546,612,664,741,785,818,827,854
+internal/api/ttl_test.go
+  h_8fb27e0cdf6d1e 186,424,482
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cb73f706373f6be3ce3ab57760e50447cab14aca",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
