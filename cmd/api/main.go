@@ -273,14 +273,23 @@ func main() {
 func newVolumeStore(cfg *config.APIConfig) (volumestore.Store, error) {
 	switch cfg.VolumeStore {
 	case config.VolumeStoreLocal:
-		vs, err := volumestore.NewLocal(cfg.DataDir, cfg.VolumeLocalURL)
+		vs, err := volumestore.NewLocal(cfg.VolumeLocalDir, cfg.VolumeLocalURL, volumestore.LocalOptions{
+			SigningKey:         cfg.VolumeLocalSigningKey,
+			PreviousSigningKey: cfg.VolumeLocalPreviousSigningKey,
+		})
 		if err != nil {
 			return nil, err
 		}
+		signingKey := "random per process"
+		if cfg.VolumeLocalSigningKey != nil {
+			signingKey = "configured"
+		}
 		slog.Info("using local volume store",
-			"dir", filepath.Join(cfg.DataDir, "volumes"),
+			"dir", cfg.VolumeLocalDir,
 			"url", cfg.VolumeLocalURL,
-			"listen_addr", cfg.VolumeLocalListenAddr)
+			"listen_addr", cfg.VolumeLocalListenAddr,
+			"signing_key", signingKey,
+			"previous_signing_key", cfg.VolumeLocalPreviousSigningKey != nil)
 		return vs, nil
 	case config.VolumeStoreRemote:
 		vs, err := volumestore.NewRemote(cfg.VolumeRemoteSocket)

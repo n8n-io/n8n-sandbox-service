@@ -220,6 +220,32 @@ chart keys off this; validation.yaml checks the address first.
 {{- end }}
 
 {{/*
+api.volumeLocal.existingClaim and existingSecret with api.config.volumeStore=local,
+normalized, or "" without local. The store directory, its mount and the
+signing key settings key off these.
+*/}}
+{{- define "n8n-sandbox-service.apiVolumeLocalClaim" -}}
+{{- if include "n8n-sandbox-service.apiVolumeObjectsPort" . -}}
+{{- .Values.api.volumeLocal.existingClaim | default "" | toString | trim -}}
+{{- end -}}
+{{- end }}
+
+{{- define "n8n-sandbox-service.apiVolumeLocalSecret" -}}
+{{- if include "n8n-sandbox-service.apiVolumeObjectsPort" . -}}
+{{- .Values.api.volumeLocal.existingSecret | default "" | toString | trim -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Where api.volumeLocal.existingClaim is mounted. The store directory is a
+subdirectory the API creates, so it can tighten its mode whoever owns the
+volume's root.
+*/}}
+{{- define "n8n-sandbox-service.apiVolumeLocalMountPath" -}}
+/var/lib/n8n-sandbox-volumes
+{{- end }}
+
+{{/*
 Where runners reach the volume-objects listener: api.config.volumeLocalUrl, or
 the API Service name and port, the host in-cluster runners register with.
 */}}

@@ -154,7 +154,7 @@ The runner's HTTP listener uses the same certificate and the same client CA, so 
 
 ### Runner → API Volume Objects (HTTPS + mTLS)
 
-With `SANDBOX_API_VOLUME_STORE=local`, the API serves volume objects on a listener of its own (`SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR`, default `:8443`), at URLs it signs for one object each. The listener presents the registration listener's certificate and requires a client certificate from the same CA. The public listener has no such route.
+With `SANDBOX_API_VOLUME_STORE=local`, the API serves volume objects on a listener of its own (`SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR`, default `:8443`), at URLs it signs for one object each. The listener presents the registration listener's certificate and requires a client certificate from the same CA. The public listener has no such route. Several API instances can share the store and serve each other's URLs ([configuration.md](configuration.md#sharing-the-local-volume-store)).
 
 ### API/Runner → Daemon (HTTP Reverse Proxy)
 

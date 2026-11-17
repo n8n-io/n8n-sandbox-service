@@ -145,15 +145,26 @@ a loopback API fails its readiness probe long before metrics matter.
 {{- end -}}
 {{- end -}}
 {{- if eq $volumeStore "local" -}}
-{{/* Several API pods need a shared store directory and signing key, which the API does not support yet. */}}
+{{/* Several API pods need a shared store directory and a shared signing key. */}}
+{{- $volumeLocalClaim := include "n8n-sandbox-service.apiVolumeLocalClaim" . -}}
+{{- if not (and $volumeLocalClaim (include "n8n-sandbox-service.apiVolumeLocalSecret" .)) -}}
 {{- if .Values.api.autoscaling.enabled -}}
-{{- fail "api.config.volumeStore=local requires api.autoscaling.enabled=false: the store keeps volume objects on one API pod's volume and signs read URLs with a key of that pod's own. See the chart README section 'Volume Store'" -}}
+{{- fail "api.config.volumeStore=local requires api.autoscaling.enabled=false unless api.volumeLocal.existingClaim and api.volumeLocal.existingSecret are both set: without them the store keeps volume objects on one API pod's volume and signs read URLs with a key of that pod's own. See the chart README section 'Sharing the Volume Store'" -}}
 {{- end -}}
 {{- if ne (int .Values.api.replicaCount) 1 -}}
-{{- fail (printf "api.config.volumeStore=local requires api.replicaCount=1 (got %v): the store keeps volume objects on one API pod's volume and signs read URLs with a key of that pod's own. See the chart README section 'Volume Store'" .Values.api.replicaCount) -}}
+{{- fail (printf "api.config.volumeStore=local requires api.replicaCount=1 (got %v) unless api.volumeLocal.existingClaim and api.volumeLocal.existingSecret are both set: without them the store keeps volume objects on one API pod's volume and signs read URLs with a key of that pod's own. See the chart README section 'Sharing the Volume Store'" .Values.api.replicaCount) -}}
 {{- end -}}
-{{- if not .Values.api.persistence.enabled -}}
-{{- fail "api.config.volumeStore=local requires api.persistence.enabled: the store keeps volume objects in api.config.dataDir, which is otherwise lost with the pod. See the chart README section 'Volume Store'" -}}
+{{- end -}}
+{{- if not (or .Values.api.persistence.enabled $volumeLocalClaim) -}}
+{{- fail "api.config.volumeStore=local requires api.persistence.enabled or api.volumeLocal.existingClaim: the store keeps volume objects in api.config.dataDir, which is otherwise lost with the pod. See the chart README section 'Volume Store'" -}}
+{{- end -}}
+{{- if $volumeLocalClaim -}}
+{{/* The data volume would cover the claim, or the store directory on it, and give each pod a store of its own. */}}
+{{- $dataDir := .Values.api.config.dataDir | default "" | toString | trim | trimSuffix "/" -}}
+{{- $volumeLocalMountPath := include "n8n-sandbox-service.apiVolumeLocalMountPath" . -}}
+{{- if or (eq $dataDir $volumeLocalMountPath) (hasPrefix (printf "%s/" $volumeLocalMountPath) $dataDir) -}}
+{{- fail (printf "api.config.dataDir (%q) must lie outside %s, where api.volumeLocal.existingClaim is mounted" $dataDir $volumeLocalMountPath) -}}
+{{- end -}}
 {{- end -}}
 {{- $volumeAddr := .Values.api.config.volumeLocalListenAddr | default "" | toString | trim -}}
 {{- if not (regexMatch `^(\[[^]]*\]|[^:]*):[0-9]{1,5}$` $volumeAddr) -}}
@@ -210,8 +221,8 @@ a loopback API fails its readiness probe long before metrics matter.
 {{- end -}}
 {{/* An env entry overrides the chart's, so the API would no longer serve where the chart opened ports. */}}
 {{- range .Values.api.extraEnv -}}
-{{- if and (kindIs "map" .) (has (toString .name) (list "SANDBOX_API_VOLUME_STORE" "SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR" "SANDBOX_API_VOLUME_LOCAL_URL")) -}}
-{{- fail (printf "api.extraEnv sets %s, which the chart sets with api.config.volumeStore=local: set api.config.volumeLocalListenAddr or api.config.volumeLocalUrl instead" .name) -}}
+{{- if and (kindIs "map" .) (has (toString .name) (list "SANDBOX_API_VOLUME_STORE" "SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR" "SANDBOX_API_VOLUME_LOCAL_URL" "SANDBOX_API_VOLUME_LOCAL_DIR" "SANDBOX_API_VOLUME_LOCAL_SIGNING_KEY" "SANDBOX_API_VOLUME_LOCAL_PREVIOUS_SIGNING_KEY")) -}}
+{{- fail (printf "api.extraEnv sets %s, which the chart sets with api.config.volumeStore=local: set api.config.volumeLocalListenAddr, api.config.volumeLocalUrl or api.volumeLocal instead, so the chart checks the setup" .name) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

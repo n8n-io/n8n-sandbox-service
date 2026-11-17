@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -27,10 +28,11 @@ var (
 	tenantKey = Key{Scope: testTenant, ID: "deps", Kind: volume.KindTar}
 )
 
+// newTestLocal returns a store with a random key and its directory.
 func newTestLocal(t *testing.T) (*Local, string) {
 	t.Helper()
-	dir := t.TempDir()
-	local, err := NewLocal(dir, "https://api.test:8443/")
+	dir, _ := sharedStoreDirs(t)
+	local, err := NewLocal(dir, "https://api.test:8443/", LocalOptions{})
 	if err != nil {
 		t.Fatalf("NewLocal: %v", err)
 	}
@@ -92,7 +94,7 @@ func TestLocalPutStatOpenDelete(t *testing.T) {
 			t.Fatalf("second Delete = %v, want nil", err)
 		}
 	}
-	assertNoFiles(t, filepath.Join(dir, "volumes"))
+	assertNoFiles(t, dir)
 }
 
 func TestLocalPermissions(t *testing.T) {
@@ -100,8 +102,7 @@ func TestLocalPermissions(t *testing.T) {
 	if _, err := local.Put(context.Background(), tenantKey, strings.NewReader("x"), PutOptions{MaxBytes: 1}); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	root := filepath.Join(dir, "volumes")
-	for _, directory := range []string{root, filepath.Join(root, "tenants"), filepath.Join(root, "tenants", testTenant)} {
+	for _, directory := range []string{dir, filepath.Join(dir, "tenants"), filepath.Join(dir, "tenants", testTenant)} {
 		if info, err := os.Stat(directory); err != nil || info.Mode().Perm() != 0o700 {
 			t.Errorf("%s: mode %v, %v; want 0700", directory, info.Mode().Perm(), err)
 		}
@@ -111,9 +112,10 @@ func TestLocalPermissions(t *testing.T) {
 	}
 }
 
-func TestNewLocalTightensRootAndRemovesTempFiles(t *testing.T) {
-	dir := t.TempDir()
-	root := filepath.Join(dir, "volumes")
+// Another API instance on a shared directory may be writing a fresh temp
+// file, so startup removes only those older than a day.
+func TestNewLocalTightensRootAndRemovesStaleTempFiles(t *testing.T) {
+	root, _ := sharedStoreDirs(t)
 	if err := os.MkdirAll(filepath.Join(root, "shared"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -121,10 +123,21 @@ func TestNewLocalTightensRootAndRemovesTempFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	stale := filepath.Join(root, "shared", tempPrefix+"123")
-	if err := os.WriteFile(stale, []byte("partial"), 0o600); err != nil {
+	fresh := filepath.Join(root, "shared", tempPrefix+"456")
+	for _, path := range []string{stale, fresh} {
+		if err := os.WriteFile(path, []byte("partial"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := time.Now().Add(-staleTempAge - time.Minute)
+	if err := os.Chtimes(stale, old, old); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewLocal(dir, "https://api.test"); err != nil {
+	young := time.Now().Add(-staleTempAge + time.Minute)
+	if err := os.Chtimes(fresh, young, young); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewLocal(root, "https://api.test", LocalOptions{}); err != nil {
 		t.Fatalf("NewLocal: %v", err)
 	}
 	if info, _ := os.Stat(root); info.Mode().Perm() != 0o700 {
@@ -133,12 +146,54 @@ func TestNewLocalTightensRootAndRemovesTempFiles(t *testing.T) {
 	if _, err := os.Stat(stale); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("stale temp file still there: %v", err)
 	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Errorf("fresh temp file removed: %v", err)
+	}
+	// The hard link check leaves nothing behind.
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "shared" {
+		t.Errorf("root holds %v, want only shared", entries)
+	}
 }
 
-func TestNewLocalNeedsTheDataDir(t *testing.T) {
-	if _, err := NewLocal(filepath.Join(t.TempDir(), "missing"), "https://api.test"); err == nil {
-		t.Fatal("NewLocal with a missing data dir succeeded")
+func TestNewLocalNeedsTheParentDir(t *testing.T) {
+	if _, err := NewLocal(filepath.Join(t.TempDir(), "missing", "volumes"), "https://api.test", LocalOptions{}); err == nil {
+		t.Fatal("NewLocal with a missing parent dir succeeded")
 	}
+}
+
+func TestCheckHardLinksRefusesAFileSystemWithout(t *testing.T) {
+	dir := t.TempDir()
+	noLinks := func(string, string) error { return syscall.EOPNOTSUPP }
+	err := checkHardLinks(dir, noLinks)
+	if err == nil || !strings.Contains(err.Error(), "hard links") || !errors.Is(err, syscall.EOPNOTSUPP) {
+		t.Fatalf("checkHardLinks = %v, want an error about hard links that wraps EOPNOTSUPP", err)
+	}
+	// A copy is not a link either.
+	copyFile := func(oldname, newname string) error {
+		content, err := os.ReadFile(oldname)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(newname, content, 0o600)
+	}
+	if err := checkHardLinks(dir, copyFile); err == nil || !strings.Contains(err.Error(), "hard links") {
+		t.Fatalf("checkHardLinks with a copy = %v, want an error about hard links", err)
+	}
+	// Over NFS a link can fail though it was made.
+	linkedButFailed := func(oldname, newname string) error {
+		if err := os.Link(oldname, newname); err != nil {
+			return err
+		}
+		return &os.LinkError{Op: "link", Old: oldname, New: newname, Err: syscall.EEXIST}
+	}
+	if err := checkHardLinks(dir, linkedButFailed); err != nil {
+		t.Fatalf("checkHardLinks with a link that reports EEXIST = %v, want nil", err)
+	}
+	assertNoFiles(t, dir)
 }
 
 func TestLocalPutErrorsLeaveNothingVisible(t *testing.T) {
@@ -163,7 +218,7 @@ func TestLocalPutErrorsLeaveNothingVisible(t *testing.T) {
 			if _, err := local.Stat(context.Background(), sharedKey); !errors.Is(err, ErrNotFound) {
 				t.Fatalf("Stat after failed Put = %v, want ErrNotFound", err)
 			}
-			assertNoFiles(t, filepath.Join(dir, "volumes"))
+			assertNoFiles(t, dir)
 			// The key is still free.
 			if _, err := local.Put(context.Background(), sharedKey, bytes.NewReader(data), PutOptions{MaxBytes: 10}); err != nil {
 				t.Fatalf("Put after failed Put: %v", err)
@@ -185,7 +240,7 @@ func TestLocalPutStopsWhenContextEnds(t *testing.T) {
 	if _, err := local.Put(ctx, sharedKey, strings.NewReader("x"), PutOptions{MaxBytes: 1}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Put = %v, want context.Canceled", err)
 	}
-	assertNoFiles(t, filepath.Join(dir, "volumes"))
+	assertNoFiles(t, dir)
 }
 
 func TestLocalPutRejectsBadArguments(t *testing.T) {
@@ -271,7 +326,7 @@ func TestLocalConcurrentPutsCommitOnce(t *testing.T) {
 		t.Fatalf("stored digest %s does not match stored content %q", obj.SHA256, content)
 	}
 	var files int
-	_ = filepath.WalkDir(filepath.Join(dir, "volumes"), func(_ string, entry fs.DirEntry, _ error) error {
+	_ = filepath.WalkDir(dir, func(_ string, entry fs.DirEntry, _ error) error {
 		if !entry.IsDir() {
 			files++
 		}
@@ -365,7 +420,7 @@ func TestLocalVerifyRequest(t *testing.T) {
 		t.Fatalf("VerifyRequest = %+v, %v; want %+v", key, err, tenantKey)
 	}
 
-	other, err := NewLocal(t.TempDir(), "https://api.test:8443")
+	other, err := NewLocal(t.TempDir(), "https://api.test:8443", LocalOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -446,5 +501,299 @@ func TestLocalServeObject(t *testing.T) {
 	}
 	if rr.Body.Len() != 0 {
 		t.Fatalf("missing object: wrote %q", rr.Body.String())
+	}
+}
+
+var (
+	testSigningKey  = bytes.Repeat([]byte{0x5a}, MinSigningKeyBytes)
+	otherSigningKey = bytes.Repeat([]byte{0xa5}, MinSigningKeyBytes)
+)
+
+// sharedStoreDirs returns one store directory under two paths, for two
+// stores that stand for two API instances. With SANDBOX_TEST_VOLUME_LOCAL_DIRS,
+// two mounts of one NFS export separated by a comma (mounted with
+// nosharecache, so each keeps caches of its own), the paths reach it through
+// those mounts; otherwise both are the same local directory.
+func sharedStoreDirs(t *testing.T) (string, string) {
+	t.Helper()
+	mounts := os.Getenv("SANDBOX_TEST_VOLUME_LOCAL_DIRS")
+	if mounts == "" {
+		dir := filepath.Join(t.TempDir(), "volumes")
+		return dir, dir
+	}
+	first, second, ok := strings.Cut(mounts, ",")
+	if !ok {
+		t.Fatalf("SANDBOX_TEST_VOLUME_LOCAL_DIRS must be two paths separated by a comma, got %q", mounts)
+	}
+	parent, err := os.MkdirTemp(first, "test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(parent) })
+	name := filepath.Base(parent)
+	return filepath.Join(first, name, "volumes"), filepath.Join(second, name, "volumes")
+}
+
+func newSharedTestLocal(t *testing.T, dir string, opts LocalOptions) *Local {
+	t.Helper()
+	local, err := NewLocal(dir, "https://api.test:8443", opts)
+	if err != nil {
+		t.Fatalf("NewLocal(%s): %v", dir, err)
+	}
+	return local
+}
+
+// serve fetches readURL from local the way the volume-objects listener does.
+func serve(t *testing.T, local *Local, readURL string) (int, string, error) {
+	t.Helper()
+	req := requestFor(t, http.MethodGet, readURL)
+	key, err := local.VerifyRequest(req)
+	if err != nil {
+		return 0, "", err
+	}
+	recorder := httptest.NewRecorder()
+	if err := local.ServeObject(recorder, req, key); err != nil {
+		return 0, "", err
+	}
+	return recorder.Code, recorder.Body.String(), nil
+}
+
+// Several API instances share one directory and one key: a URL any of them
+// signs, every one of them verifies and serves.
+func TestLocalSharedDirectoryAndKey(t *testing.T) {
+	firstDir, secondDir := sharedStoreDirs(t)
+	first := newSharedTestLocal(t, firstDir, LocalOptions{SigningKey: testSigningKey})
+	second := newSharedTestLocal(t, secondDir, LocalOptions{SigningKey: testSigningKey})
+	ctx := context.Background()
+	for _, key := range []Key{sharedKey, tenantKey} {
+		if _, err := first.Put(ctx, key, strings.NewReader("image bytes"), PutOptions{MaxBytes: 100}); err != nil {
+			t.Fatalf("Put(%+v): %v", key, err)
+		}
+		for _, signer := range []*Local{first, second} {
+			readURL, err := signer.ReadURL(ctx, key, time.Minute)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for name, server := range map[string]*Local{"first": first, "second": second} {
+				status, body, err := serve(t, server, readURL)
+				if err != nil || status != http.StatusOK || body != "image bytes" {
+					t.Errorf("%+v from the %s store: %d %q %v, want 200 \"image bytes\"", key, name, status, body, err)
+				}
+			}
+		}
+	}
+
+	readURL, err := first.ReadURL(ctx, sharedKey, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, opts := range map[string]LocalOptions{
+		"another key":  {SigningKey: otherSigningKey},
+		"a random key": {},
+	} {
+		stranger := newSharedTestLocal(t, secondDir, opts)
+		if _, _, err := serve(t, stranger, readURL); !errors.Is(err, errBadSignature) {
+			t.Errorf("a store with %s: %v, want errBadSignature", name, err)
+		}
+	}
+}
+
+// During a rotation the previous key verifies the URLs it signed, while new
+// URLs carry the new key only.
+func TestLocalPreviousSigningKey(t *testing.T) {
+	firstDir, secondDir := sharedStoreDirs(t)
+	before := newSharedTestLocal(t, firstDir, LocalOptions{SigningKey: testSigningKey})
+	rotated := newSharedTestLocal(t, secondDir, LocalOptions{SigningKey: otherSigningKey, PreviousSigningKey: testSigningKey})
+	after := newSharedTestLocal(t, secondDir, LocalOptions{SigningKey: otherSigningKey})
+	ctx := context.Background()
+	if _, err := before.Put(ctx, sharedKey, strings.NewReader("image bytes"), PutOptions{MaxBytes: 100}); err != nil {
+		t.Fatal(err)
+	}
+
+	oldURL, err := before.ReadURL(ctx, sharedKey, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status, body, err := serve(t, rotated, oldURL); err != nil || status != http.StatusOK || body != "image bytes" {
+		t.Errorf("an old URL during the rotation: %d %q %v, want 200", status, body, err)
+	}
+	if _, _, err := serve(t, after, oldURL); !errors.Is(err, errBadSignature) {
+		t.Errorf("an old URL after the rotation: %v, want errBadSignature", err)
+	}
+
+	newURL, err := rotated.ReadURL(ctx, sharedKey, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := serve(t, after, newURL); err != nil {
+		t.Errorf("a new URL after the rotation: %v", err)
+	}
+	if _, _, err := serve(t, before, newURL); !errors.Is(err, errBadSignature) {
+		t.Errorf("a new URL with the old key alone: %v, want errBadSignature; it must be signed with the new key", err)
+	}
+}
+
+func TestNewLocalRefusesBadSigningKeys(t *testing.T) {
+	short := bytes.Repeat([]byte{0x33}, MinSigningKeyBytes-1)
+	for name, opts := range map[string]LocalOptions{
+		"a short key":                  {SigningKey: short},
+		"a short previous key":         {SigningKey: testSigningKey, PreviousSigningKey: short},
+		"a previous key without a key": {PreviousSigningKey: testSigningKey},
+	} {
+		dir := filepath.Join(t.TempDir(), "volumes")
+		_, err := NewLocal(dir, "https://api.test", opts)
+		if err == nil {
+			t.Errorf("%s: NewLocal succeeded", name)
+			continue
+		}
+		for _, key := range [][]byte{short, testSigningKey} {
+			if strings.Contains(err.Error(), string(key)) || strings.Contains(err.Error(), hex.EncodeToString(key)) {
+				t.Errorf("%s: the error shows a key: %v", name, err)
+			}
+		}
+		// Refused before it touches the directory.
+		if _, err := os.Stat(dir); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("%s: NewLocal created %s: %v", name, dir, err)
+		}
+	}
+}
+
+// Two API instances put the same key at once: one commits, the other gets
+// ErrExists, and the object is one writer's, whole.
+func TestLocalConcurrentPutsFromTwoStoresCommitOnce(t *testing.T) {
+	firstDir, secondDir := sharedStoreDirs(t)
+	stores := []*Local{
+		newSharedTestLocal(t, firstDir, LocalOptions{SigningKey: testSigningKey}),
+		newSharedTestLocal(t, secondDir, LocalOptions{SigningKey: testSigningKey}),
+	}
+	ctx := context.Background()
+	const writers = 8
+	const size = 1 << 20
+	payloads := make([][]byte, writers)
+	for index := range payloads {
+		payloads[index] = bytes.Repeat([]byte{byte('a' + index)}, size)
+	}
+	for round := range 3 {
+		key := Key{Scope: volume.SharedScope, ID: "race-" + strconv.Itoa(round), Kind: volume.KindTar}
+		release := make(chan struct{})
+		var wg sync.WaitGroup
+		errs := make([]error, writers)
+		for index := range writers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				reader := io.MultiReader(gateReader{release}, bytes.NewReader(payloads[index]))
+				_, errs[index] = stores[index%2].Put(ctx, key, reader, PutOptions{MaxBytes: size})
+			}()
+		}
+		time.Sleep(50 * time.Millisecond)
+		close(release)
+		wg.Wait()
+
+		winner := -1
+		for index, err := range errs {
+			switch {
+			case err == nil && winner >= 0:
+				t.Fatalf("round %d: writers %d and %d both committed", round, winner, index)
+			case err == nil:
+				winner = index
+			case !errors.Is(err, ErrExists):
+				t.Errorf("round %d: Put = %v, want nil or ErrExists", round, err)
+			}
+		}
+		if winner < 0 {
+			t.Fatalf("round %d: no Put committed", round)
+		}
+		for name, store := range map[string]*Local{"first": stores[0], "second": stores[1]} {
+			rc, obj, err := store.Open(ctx, key)
+			if err != nil {
+				t.Fatalf("round %d: Open from the %s store: %v", round, name, err)
+			}
+			content, err := io.ReadAll(rc)
+			rc.Close()
+			if err != nil || !bytes.Equal(content, payloads[winner]) || obj.SHA256 != digest(payloads[winner]) {
+				t.Fatalf("round %d: the %s store reads %d bytes, digest %s, %v; want writer %d's object, whole", round, name, len(content), obj.SHA256, err, winner)
+			}
+		}
+	}
+	var temps []string
+	_ = filepath.WalkDir(firstDir, func(path string, entry fs.DirEntry, _ error) error {
+		if entry != nil && strings.HasPrefix(entry.Name(), tempPrefix) {
+			temps = append(temps, path)
+		}
+		return nil
+	})
+	if len(temps) > 0 {
+		t.Errorf("temp files left: %v", temps)
+	}
+}
+
+// Over NFS a link that was made can report an error, such as EEXIST for its
+// own retried request. The object is committed all the same.
+func TestLocalPutCommitsWhenTheLinkReportsAnErrorButWasMade(t *testing.T) {
+	local, dir := newTestLocal(t)
+	local.link = func(oldname, newname string) error {
+		if err := os.Link(oldname, newname); err != nil {
+			return err
+		}
+		return &os.LinkError{Op: "link", Old: oldname, New: newname, Err: syscall.EEXIST}
+	}
+	ctx := context.Background()
+	obj, err := local.Put(ctx, sharedKey, strings.NewReader("data"), PutOptions{MaxBytes: 10})
+	if err != nil {
+		t.Fatalf("Put = %v, want the object committed", err)
+	}
+	if got, err := local.Stat(ctx, sharedKey); err != nil || got != obj {
+		t.Fatalf("Stat = %+v, %v; want %+v", got, err, obj)
+	}
+	var files int
+	_ = filepath.WalkDir(dir, func(_ string, entry fs.DirEntry, _ error) error {
+		if !entry.IsDir() {
+			files++
+		}
+		return nil
+	})
+	if files != 1 {
+		t.Fatalf("%d files left, want 1", files)
+	}
+	// A link that failed and was not made stays an error.
+	local.link = func(string, string) error { return syscall.EIO }
+	if _, err := local.Put(ctx, tenantKey, strings.NewReader("data"), PutOptions{MaxBytes: 10}); !errors.Is(err, syscall.EIO) {
+		t.Fatalf("Put with a failed link = %v, want EIO", err)
+	}
+	if _, err := local.Stat(ctx, tenantKey); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Stat after a failed link = %v, want ErrNotFound", err)
+	}
+}
+
+func TestCachesMissingNames(t *testing.T) {
+	const mountinfo = `22 1 0:21 / / rw,relatime - overlay overlay rw,lowerdir=/l,upperdir=/u
+40 22 0:45 / /var/lib/n8n-sandbox-volumes rw,relatime shared:12 - nfs4 fs.example:/ rw,vers=4.1,rsize=1048576,hard,proto=tcp,sec=sys
+41 22 0:46 / /mnt/positive rw,relatime - nfs4 fs.example:/ rw,vers=4.2,lookupcache=pos,sec=sys
+42 22 0:47 / /mnt/none rw,relatime - nfs fs.example:/export rw,vers=3,lookupcache=none
+43 40 8:1 / /var/lib/n8n-sandbox-volumes/local rw,relatime - ext4 /dev/sda1 rw
+44 22 0:48 / /mnt/with\040space rw,relatime - nfs fs.example:/export rw,vers=3
+45 22 0:49 / /mnt/stacked rw,relatime - nfs4 fs.example:/ rw,vers=4.2
+46 22 0:50 / /mnt/stacked rw,relatime - nfs4 fs.example:/ rw,vers=4.2,lookupcache=positive
+47 22 0:51 / /mnt/ceph rw,relatime - ceph 10.0.0.1:/ rw,name=api
+`
+	for dir, want := range map[string]bool{
+		"/var/lib/n8n-sandbox-volumes/volumes":       true,
+		"/var/lib/n8n-sandbox-volumes":               true,
+		"/var/lib/n8n-sandbox-volumes-other":         false,
+		"/var/lib/n8n-sandbox-volumes/local/volumes": false,
+		"/mnt/positive/volumes":                      false,
+		"/mnt/none/volumes":                          false,
+		"/mnt/with space/volumes":                    true,
+		"/mnt/stacked/volumes":                       false,
+		"/mnt/ceph/volumes":                          false,
+		"/var/lib/n8n-sandbox-api/volumes":           false,
+	} {
+		if got := cachesMissingNames(mountinfo, dir); got != want {
+			t.Errorf("cachesMissingNames(%s) = %v, want %v", dir, got, want)
+		}
+	}
+	if cachesMissingNames("garbage\n\n1 2 3", "/var/lib/n8n-sandbox-volumes") {
+		t.Error("unreadable mountinfo reported an NFS mount")
 	}
 }

@@ -111,6 +111,20 @@ spec:
             - name: SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_SERVER_NAME
               value: {{ $apiControlClient.serverName | quote }}
             {{- end }}
+            {{- with include "n8n-sandbox-service.apiVolumeLocalSecret" . }}
+            - name: SANDBOX_API_VOLUME_LOCAL_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . | quote }}
+                  key: {{ $.Values.api.volumeLocal.secretKeys.signingKey | quote }}
+            # optional: the Secret holds a previous key only during a rotation.
+            - name: SANDBOX_API_VOLUME_LOCAL_PREVIOUS_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . | quote }}
+                  key: {{ $.Values.api.volumeLocal.secretKeys.previousSigningKey | quote }}
+                  optional: true
+            {{- end }}
             {{- with .Values.api.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -135,6 +149,10 @@ spec:
               readOnly: true
             - name: api-data
               mountPath: {{ .Values.api.config.dataDir | quote }}
+            {{- if include "n8n-sandbox-service.apiVolumeLocalClaim" . }}
+            - name: local-volume-store
+              mountPath: {{ include "n8n-sandbox-service.apiVolumeLocalMountPath" . | quote }}
+            {{- end }}
             {{- with .Values.api.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -156,6 +174,11 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
+        {{- with include "n8n-sandbox-service.apiVolumeLocalClaim" . }}
+        - name: local-volume-store
+          persistentVolumeClaim:
+            claimName: {{ . | quote }}
+        {{- end }}
         {{- with .Values.api.extraVolumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

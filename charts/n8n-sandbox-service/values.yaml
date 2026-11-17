@@ -177,11 +177,12 @@ api:
     # See the chart README section 'Prometheus Metrics'.
     metricsListenAddr: ""
     store: sqlite
-    # local keeps volume objects on the API's data volume and serves them to
-    # runners on a mutual TLS listener of its own, with the registration
-    # certificates. Needs api.persistence.enabled and one API pod. Empty turns
-    # volumes off; set remote through api.extraEnv instead. See the chart
-    # README section 'Volume Store'.
+    # local keeps volume objects on the API's data volume, or on
+    # api.volumeLocal.existingClaim, and serves them to runners on a mutual TLS
+    # listener of its own, with the registration certificates. Needs
+    # api.persistence.enabled or that claim, and one API pod unless
+    # api.volumeLocal shares the store. Empty turns volumes off; set remote
+    # through api.extraEnv instead. See the chart README section 'Volume Store'.
     volumeStore: ""
     # The volume-objects listener, with volumeStore=local.
     volumeLocalListenAddr: ":8443"
@@ -207,6 +208,24 @@ api:
     storageClass: ""
     accessModes:
       - ReadWriteOnce
+
+  # Shares the local volume store (api.config.volumeStore=local) between API
+  # pods. With both existingClaim and existingSecret set, local allows several
+  # API pods and autoscaling. See the chart README section 'Sharing the
+  # Volume Store'.
+  volumeLocal:
+    # An existing ReadWriteMany claim that holds the store instead of
+    # api.config.dataDir. Its file system must support hard links: NFS does,
+    # SMB does not.
+    existingClaim: ""
+    # An existing Secret with the key that signs read URLs, so that every API
+    # pod accepts the URLs any of them signs, and URLs survive restarts.
+    existingSecret: ""
+    secretKeys:
+      # At least 32 bytes in base64, such as `openssl rand -base64 32` prints.
+      signingKey: signing-key
+      # Optional: a key the API accepts but never signs with, for rotation.
+      previousSigningKey: previous-signing-key
 
   # The API pods' ServiceAccount, for example for Azure Workload Identity. See
   # the chart README section 'API ServiceAccount'.

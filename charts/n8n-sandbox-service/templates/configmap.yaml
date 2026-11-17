@@ -25,6 +25,9 @@ data:
   SANDBOX_API_VOLUME_STORE: "local"
   SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR: {{ .Values.api.config.volumeLocalListenAddr | toString | trim | quote }}
   SANDBOX_API_VOLUME_LOCAL_URL: {{ include "n8n-sandbox-service.apiVolumeLocalUrl" . | quote }}
+  {{- if include "n8n-sandbox-service.apiVolumeLocalClaim" . }}
+  SANDBOX_API_VOLUME_LOCAL_DIR: {{ printf "%s/volumes" (include "n8n-sandbox-service.apiVolumeLocalMountPath" .) | quote }}
+  {{- end }}
   {{- end }}
 {{- $runner := .Values.runner }}
 {{- if eq .Values.dataPlane.mode "in-cluster" }}
