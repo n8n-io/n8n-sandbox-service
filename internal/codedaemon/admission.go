@@ -18,7 +18,7 @@ var taskIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,128}$`)
 type taskSpec struct {
 	TaskID               string `json:"taskId"`
 	InlineResultMaxBytes int64  `json:"inlineResultMaxBytes"` // Requested inline limit; defaults to the daemon cap if unset or out of range.
-	TimeoutMs            int64  `json:"timeoutMs"`
+	TimeoutMs            int64  `json:"timeoutMs"`            // Optional shorter limit; zero uses the service limit.
 }
 
 // admit validates the first multipart part and tries to reserve a lane without

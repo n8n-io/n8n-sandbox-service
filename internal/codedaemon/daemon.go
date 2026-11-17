@@ -26,8 +26,8 @@ type Config struct {
 	// RuntimeLogWrites caps the writes to each of the runtime's stdout and
 	// stderr that reach the daemon log. Non-positive uses the default of 16.
 	RuntimeLogWrites int
-	DefaultTimeout   time.Duration
-	MaxTimeout       time.Duration
+	DefaultTimeout   time.Duration // Execution budget when the request does not shorten it.
+	MaxTimeout       time.Duration // Service cap on the execution budget.
 }
 
 func LoadConfig() (Config, error) {
