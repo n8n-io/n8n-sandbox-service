@@ -18,6 +18,7 @@ var taskIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,128}$`)
 type taskSpec struct {
 	TaskID               string `json:"taskId"`
 	InlineResultMaxBytes int64  `json:"inlineResultMaxBytes"` // Requested inline limit; defaults to the daemon cap if unset or out of range.
+	TimeoutMs            int64  `json:"timeoutMs"`
 }
 
 // admit validates the first multipart part and tries to reserve a lane without
@@ -44,7 +45,7 @@ func (d *Daemon) admit(w http.ResponseWriter, r *http.Request) (taskSpec, *multi
 	var spec taskSpec
 	// Read one extra byte to distinguish an oversized spec from one at the limit.
 	data, err := io.ReadAll(io.LimitReader(part, maxSpecBytes+1))
-	if err != nil || len(data) > maxSpecBytes || json.Unmarshal(data, &spec) != nil || !taskIDPattern.MatchString(spec.TaskID) {
+	if err != nil || len(data) > maxSpecBytes || json.Unmarshal(data, &spec) != nil || !taskIDPattern.MatchString(spec.TaskID) || spec.TimeoutMs < 0 {
 		rejectAdmission(w, r, "invalid task spec", http.StatusBadRequest)
 		return taskSpec{}, nil
 	}

@@ -41,6 +41,8 @@ type workerMessage struct {
 	TaskID string          `json:"taskId,omitempty"`
 	Dir    string          `json:"dir,omitempty"`
 	Error  json.RawMessage `json:"error,omitempty"`
+	// Deadline is the execution deadline in a start message, in Unix milliseconds.
+	Deadline int64 `json:"deadline,omitempty"`
 }
 
 type worker struct {
@@ -276,13 +278,14 @@ func (d *Daemon) Close() {
 // execution is one task dispatched to the shared runtime. It receives the
 // task's "done" or "error" message until close unregisters it.
 type execution struct {
-	worker *worker
-	id     string
-	result chan workerMessage // closed on worker failure; any buffered result is still readable
+	worker   *worker
+	id       string
+	result   chan workerMessage // closed on worker failure; any buffered result is still readable
+	deadline time.Time
 }
 
 // dispatch registers a result receiver before sending the start command to the shared runtime.
-func (d *Daemon) dispatch(ctx context.Context, id, dir string) (*execution, error) {
+func (d *Daemon) dispatch(ctx context.Context, id, dir string, timeout time.Duration) (*execution, error) {
 	w, err := d.getWorker(ctx)
 	if err != nil {
 		return nil, err
@@ -290,7 +293,7 @@ func (d *Daemon) dispatch(ctx context.Context, id, dir string) (*execution, erro
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	x := &execution{worker: w, id: id, result: make(chan workerMessage, 1)}
+	x := &execution{worker: w, id: id, result: make(chan workerMessage, 1), deadline: time.Now().Add(timeout)}
 	w.mu.Lock()
 	if w.isStopped() {
 		w.mu.Unlock()
@@ -303,7 +306,7 @@ func (d *Daemon) dispatch(ctx context.Context, id, dir string) (*execution, erro
 	w.executionsByTaskID[id] = x
 	w.mu.Unlock()
 	d.markDispatched(id)
-	if err := w.send(workerMessage{Type: "start", TaskID: id, Dir: dir}); err != nil {
+	if err := w.send(workerMessage{Type: "start", TaskID: id, Dir: dir, Deadline: x.deadline.UnixMilli()}); err != nil {
 		w.kill() // a partial command leaves the shared protocol unusable
 		x.close()
 		return nil, err

@@ -134,7 +134,7 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 	}
 	defer root.Close()
 	stream := newTaskStream(w)
-	x, err := d.dispatch(r.Context(), spec.TaskID, dir)
+	x, err := d.dispatch(r.Context(), spec.TaskID, dir, d.taskTimeout(spec.TimeoutMs))
 	if err != nil {
 		slog.Warn("dispatch code task", "task_id", spec.TaskID, "error", err)
 		_ = stream.emit(newErrorEvent(spec.TaskID, "crashed", "runtime unavailable"))
@@ -155,6 +155,8 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 func (d *Daemon) waitForTask(r *http.Request, spec taskSpec, stream taskStream, x *execution, root *os.Root) (any, bool) {
 	heartbeat := time.NewTicker(heartbeatInterval)
 	defer heartbeat.Stop()
+	timer := time.NewTimer(time.Until(x.deadline))
+	defer timer.Stop()
 	for {
 		select {
 		case msg, ok := <-x.result:
@@ -162,6 +164,10 @@ func (d *Daemon) waitForTask(r *http.Request, spec taskSpec, stream taskStream, 
 				return newErrorEvent(spec.TaskID, "crashed", "runtime exited"), true
 			}
 			return d.resultEvent(spec, root, msg), true
+		case <-timer.C:
+			x.worker.kill()
+			<-x.worker.done
+			return newErrorEvent(spec.TaskID, "timeout", "task execution deadline exceeded"), true
 		case <-heartbeat.C:
 			if stream.emit(newHeartbeatEvent(spec.TaskID)) == nil {
 				continue
