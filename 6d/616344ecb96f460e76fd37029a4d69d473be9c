@@ -1,0 +1,20 @@
+internal/api/store/postgres.go
+  h_8fb27e0cdf6d1e 241,245,379,383-386,388,395,399-403
+internal/api/store/sandboxes_test.go
+  h_8fb27e0cdf6d1e 16-21,23,28-32,34
+internal/api/store/sqlite.go
+  h_8fb27e0cdf6d1e 291,295,406,410-413,415,422,426-430
+internal/api/store/store.go
+  h_8fb27e0cdf6d1e 64-69,78
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6d616344ecb96f460e76fd37029a4d69d473be9c",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
