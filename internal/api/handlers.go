@@ -25,6 +25,21 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/sandboxproxy"
 )
 
+// sandboxStore is the store of the default sandbox routes. Get finds a
+// sandbox of any kind: the routes check its kind with canAccessSandbox.
+type sandboxStore interface {
+	Create(record *store.SandboxRecord) error
+	Get(id string) (*store.SandboxRecord, error)
+	List(f store.SandboxFilter) ([]*store.SandboxRecord, error)
+	Delete(id string) error
+	LockSandbox(ctx context.Context, id string) (unlock func(), err error)
+}
+
+// tenantGetter reads tenants.
+type tenantGetter interface {
+	GetTenant(id string) (*store.Tenant, error)
+}
+
 // newRunnerTransport builds the transport the API uses to reach runner HTTP
 // listeners, presenting the same client certificate it uses for control gRPC.
 //
@@ -312,21 +327,6 @@ func runnerControlTLS(cfg *config.APIConfig) *runnerctl.TLS {
 // with no store row, would hold a slot that quota and the idle sweeper cannot
 // see. The runtime's own create budget plus a margin for the round trip.
 const runnerCreateBudget = runnerruntime.CreateBudget + time.Minute
-
-// sandboxStore is the store of the default sandbox routes. Get finds a
-// sandbox of any kind: the routes check its kind with canAccessSandbox.
-type sandboxStore interface {
-	Create(record *store.SandboxRecord) error
-	Get(id string) (*store.SandboxRecord, error)
-	List(f store.SandboxFilter) ([]*store.SandboxRecord, error)
-	Delete(id string) error
-	LockSandbox(ctx context.Context, id string) (unlock func(), err error)
-}
-
-// tenantGetter reads tenants.
-type tenantGetter interface {
-	GetTenant(id string) (*store.Tenant, error)
-}
 
 func handleCreateSandbox(s sandboxStore, tenants tenantGetter, reg registry.RunnerRegistry, cfg *config.APIConfig, rec *metrics.APIRecorder, quota *tenantQuota) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
