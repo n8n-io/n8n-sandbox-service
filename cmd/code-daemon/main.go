@@ -30,6 +30,10 @@ func main() {
 		slog.Error("load code daemon config", "error", err)
 		os.Exit(1)
 	}
+	if err := cfg.LoadRuntime(); err != nil {
+		slog.Error("load code runtime", "error", err)
+		os.Exit(1)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	if err := codedaemon.New(cfg).Run(ctx); err != nil {

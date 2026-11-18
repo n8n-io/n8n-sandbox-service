@@ -193,7 +193,7 @@ These variables are set inside each sandbox container and are typically baked in
 
 ## Code daemon
 
-The `code-daemon` runs inside a code sandbox and is reached only by the runner. It refuses peers from its own network namespace. Its `GET /healthz` probe does not use a lane. Invalid values prevent startup.
+The `code-daemon` runs inside a code sandbox and is reached only by the runner. It refuses peers from its own network namespace. Its `GET /healthz` probe does not use a lane. Invalid values prevent startup. The probe returns `503` once the shared runtime fails to start, stops, or the daemon closes; the daemon does not restart the runtime, since that would discard shared state.
 
 | Variable | Default | Description |
 | --- | --- | --- |
@@ -201,6 +201,19 @@ The `code-daemon` runs inside a code sandbox and is reached only by the runner. 
 | `CODE_DAEMON_LISTEN_ADDR` | `:8081` | Listen address |
 | `CODE_DAEMON_MAX_CONCURRENCY` | `1` | Number of lanes (`1`–`32`). A lane runs one task, from upload to completion |
 | `CODE_DAEMON_ALLOW_LOCAL_CLIENTS` | `false` | Accept peers from inside the sandbox. Local development only |
+| `CODE_DAEMON_WORK_DIR` | `/work` | Parent of the task directories and working directory of the runtime. Created with mode `0700` if missing |
+| `CODE_DAEMON_RUNTIMES_FILE` | `/etc/code-runtime/runtimes.json` | Runtime registry, shipped in the sandbox image |
+| `CODE_DAEMON_RUNTIME` | `n8n-js` | Registry entry to run |
+
+The runtime registry is a JSON object keyed by runtime name. Each entry has a `command`: the executable followed by its arguments. A missing file, invalid JSON, or a missing or empty `command` for the selected runtime prevents startup. For example:
+
+```json
+{
+  "n8n-js": { "command": ["/usr/local/bin/node", "/opt/runtime/index.js"] }
+}
+```
+
+The daemon starts that command once, as the shared runtime process, when it dispatches the first task. The runtime must report ready within 15 seconds. A command that cannot be run, such as a wrong executable path, is only detected then: it fails that task and the health probe.
 
 ## Metrics
 
