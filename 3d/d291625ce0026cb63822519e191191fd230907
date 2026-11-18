@@ -1,0 +1,30 @@
+docs/configuration.md
+  h_8fb27e0cdf6d1e 207-212
+internal/codedaemon/daemon.go
+  h_8fb27e0cdf6d1e 27-29,42-45,88-90
+internal/codedaemon/limits.go
+  h_8fb27e0cdf6d1e 1,18,20,35-38,54-55
+internal/codedaemon/limits_test.go
+  h_8fb27e0cdf6d1e 38
+internal/codedaemon/runtime_log.go
+  h_8fb27e0cdf6d1e 1-65
+internal/codedaemon/runtime_log_test.go
+  h_8fb27e0cdf6d1e 1-16
+internal/codedaemon/task_console.go
+  h_8fb27e0cdf6d1e 1-67
+internal/codedaemon/task_console_test.go
+  h_8fb27e0cdf6d1e 1-61
+internal/codedaemon/worker.go
+  h_8fb27e0cdf6d1e 39-40,56,76-78,80,86,95,145-151,154-156,255
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3dd291625ce0026cb63822519e191191fd230907",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
