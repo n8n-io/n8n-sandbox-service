@@ -1,0 +1,22 @@
+docs/configuration.md
+  h_8fb27e0cdf6d1e 3
+internal/daemon/config_test.go
+  h_8fb27e0cdf6d1e 32-40
+internal/daemon/exec_manager.go
+  h_8fb27e0cdf6d1e 33-35
+internal/runner/runtime/firecracker.ee/config.go
+  h_8fb27e0cdf6d1e 5,170,172
+internal/runner/runtime/firecracker.ee/config_test.go
+  h_8fb27e0cdf6d1e 98-106
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4a0b200dcfd2fa1b733432bd5d36c15f5aa61a09",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
