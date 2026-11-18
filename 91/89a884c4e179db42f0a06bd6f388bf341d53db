@@ -1,0 +1,38 @@
+internal/codedaemon/worker_darwin.go
+  h_8fb27e0cdf6d1e 1-28
+internal/codedaemon/worker_linux.go
+  h_8fb27e0cdf6d1e 1-13
+docs/configuration.md
+  h_8fb27e0cdf6d1e 196,204-214
+  h_8fb27e0cdf6d1e 215-216
+internal/codedaemon/daemon.go
+  h_8fb27e0cdf6d1e 13,23-25,65-70,72,76,83-86,103-111,141
+  h_8fb27e0cdf6d1e 71
+internal/codedaemon/task.go
+  h_8fb27e0cdf6d1e 1-101
+internal/codedaemon/worker_test.go
+  h_8fb27e0cdf6d1e 1-139,155-247
+  h_8fb27e0cdf6d1e 140-154
+cmd/code-daemon/main.go
+  h_8fb27e0cdf6d1e 32-35
+internal/codedaemon/runtime_config.go
+  h_8fb27e0cdf6d1e 1-45
+internal/codedaemon/worker.go
+  h_8fb27e0cdf6d1e 1-189,192-272
+  h_8fb27e0cdf6d1e 190-191
+internal/codedaemon/runtime_config_test.go
+  h_8fb27e0cdf6d1e 1-59
+internal/codedaemon/task_test.go
+  h_8fb27e0cdf6d1e 1-88
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9189a884c4e179db42f0a06bd6f388bf341d53db",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
