@@ -1,0 +1,14 @@
+docs/code-daemon.md
+  h_8fb27e0cdf6d1e 146-150,158,183-186,192
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1a6322c2dfe473282380fd4bad58059dea043cd0",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
