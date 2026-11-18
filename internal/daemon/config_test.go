@@ -29,6 +29,15 @@ func TestLoadExecConfigFromEnv(t *testing.T) {
 	}
 }
 
+func TestNewExecManagerRefusesZeroConfig(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("NewExecManager accepted a zero ExecConfig")
+		}
+	}()
+	NewExecManager(ExecConfig{})
+}
+
 func TestLoadExecConfigRefusesBadValues(t *testing.T) {
 	for _, tc := range []struct{ name, value string }{
 		{"SANDBOX_EXEC_MAX_EVENT_BYTES", "lots"},

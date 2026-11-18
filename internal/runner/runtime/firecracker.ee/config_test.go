@@ -95,6 +95,15 @@ func TestLoadConfigVolumeBuildTimeout(t *testing.T) {
 	}
 }
 
+func TestLoadConfigRejectsSocketWaitIntervalOverflow(t *testing.T) {
+	// One past the largest millisecond count a time.Duration holds.
+	t.Setenv("SANDBOX_RUNNER_FIRECRACKER_SOCKET_WAIT_INTERVAL_MS", "9223372036855")
+
+	if _, err := LoadConfig(1); err == nil || !strings.Contains(err.Error(), "SANDBOX_RUNNER_FIRECRACKER_SOCKET_WAIT_INTERVAL_MS") {
+		t.Fatalf("LoadConfig() error = %v, want the variable refused", err)
+	}
+}
+
 func TestLoadConfigRejectsProxyRangeOverflow(t *testing.T) {
 	t.Setenv("SANDBOX_RUNNER_FIRECRACKER_PROXY_PORT_START", "65535")
 

@@ -2,6 +2,7 @@ package firecracker
 
 import (
 	"fmt"
+	"math"
 	"net"
 	"path/filepath"
 	"strings"
@@ -166,8 +167,9 @@ func LoadConfig(capacityTotal int32) (Config, error) {
 	if err := envvar.PositiveInt("SANDBOX_RUNNER_FIRECRACKER_SOCKET_WAIT_ATTEMPTS", &cfg.SocketWaitAttempts); err != nil {
 		return Config{}, err
 	}
+	// Capped so the conversion below cannot overflow into a negative interval.
 	socketWaitMs := cfg.SocketWaitInterval.Milliseconds()
-	if err := envvar.PositiveInt("SANDBOX_RUNNER_FIRECRACKER_SOCKET_WAIT_INTERVAL_MS", &socketWaitMs); err != nil {
+	if err := envvar.IntBetween("SANDBOX_RUNNER_FIRECRACKER_SOCKET_WAIT_INTERVAL_MS", &socketWaitMs, 1, math.MaxInt64/int64(time.Millisecond)); err != nil {
 		return Config{}, err
 	}
 	cfg.SocketWaitInterval = time.Duration(socketWaitMs) * time.Millisecond

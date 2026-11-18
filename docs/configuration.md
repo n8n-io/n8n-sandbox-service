@@ -1,6 +1,6 @@
 # Configuration
 
-All services are configured via environment variables. Surrounding whitespace is ignored in every value except `SANDBOX_API_POSTGRES_PASSWORD`, an empty value counts as unset, and a value that does not parse stops the service at startup. [limits.md](limits.md) lists the limits clients and operators run into.
+All services are configured via environment variables. In the variables the API, runner and daemon binaries read, surrounding whitespace is ignored (except in `SANDBOX_API_POSTGRES_PASSWORD`), an empty value counts as unset, and a value that does not parse stops the service at startup. This does not cover the variables `scripts/start-runner.sh` reads. [limits.md](limits.md) lists the limits clients and operators run into.
 
 ## Contents
 

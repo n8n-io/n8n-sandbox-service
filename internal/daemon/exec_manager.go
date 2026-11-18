@@ -30,6 +30,9 @@ type ExecManager struct {
 
 // NewExecManager creates an ExecManager and starts its cleanup goroutine.
 func NewExecManager(cfg ExecConfig) *ExecManager {
+	if cfg.MaxEventBytes <= 0 || cfg.RetainPeriod <= 0 {
+		panic(fmt.Sprintf("daemon: NewExecManager needs a positive MaxEventBytes and RetainPeriod, got %+v", cfg))
+	}
 	em := &ExecManager{
 		executions:       make(map[string]*Execution),
 		maxEventBytes:    cfg.MaxEventBytes,
