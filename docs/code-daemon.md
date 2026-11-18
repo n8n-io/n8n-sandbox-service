@@ -68,17 +68,18 @@ flowchart LR
     X -->|stream closed| S
     S -->|cancel, wait 1s for ack| E[error: timeout / cancelled]
     S -.->|no ack| K[kill runtime] --> E
+    K -.->|other running tasks| CR
     C -->|ok| K2[keep outputs] --> DONE[done]
     C -->|too big / bad| INV[error: invalid / output_limit]
 ```
 
-Timeout: `spec.timeoutMs` can only shorten `CODE_DAEMON_DEFAULT_TASK_TIMEOUT`.
+Timeout: `spec.timeoutMs` can only shorten `CODE_DAEMON_DEFAULT_TASK_TIMEOUT`. `CODE_DAEMON_MAX_TASK_TIMEOUT` only caps the configured default.
 
 ### Terminal events
 
 | `type` | `code` | Meaning |
 | --- | --- | --- |
-| `done` | — | Success. Has `result`, `outputs`, `console`, `outputExpiresAt`. |
+| `done` | — | Success. Has `result`, `outputs`, `console`, `outputExpiresAt`. `console` holds only `output` messages from the runtime, not raw process stdout/stderr. |
 | `error` | `user_error` | User code threw. `userError` has runtime details. |
 | `error` | `crashed` | Runtime failed or exited. |
 | `error` | `oom` | Runtime ran out of memory (best effort). |
@@ -109,7 +110,8 @@ stateDiagram-v2
 
 ### Outputs
 
-- `result.json` is inlined into `result` if it is valid JSON and ≤ `inlineResultMaxBytes` (max 1 MiB). Otherwise `result` is `null`.
+- `result.json` ≤ `inlineResultMaxBytes` (max 1 MiB) is inlined into `result`. Invalid JSON → `error invalid`.
+- Missing or larger `result.json` → `result` is `null`.
 - `in/` is removed. `out/` is kept for `CODE_DAEMON_OUTPUT_TTL` (default 5 min).
 - Kept outputs: max 256 tasks, `CODE_DAEMON_MAX_RETAINED_OUTPUT_BYTES` total. Unexpired outputs are never evicted.
 
@@ -132,7 +134,7 @@ stateDiagram-v2
 ```
 
 - `retiring`: running tasks continue, new tasks do not join.
-- Stop = `SIGKILL` to the whole process group. All running tasks fail with `crashed` or `oom`.
+- Stop = `SIGKILL` to the whole process group. Running tasks fail with `crashed` or `oom`. The task being cancelled or timed out keeps `cancelled` or `timeout`.
 - If a runtime dies before `ready`, dispatches return `503` for 1 s.
 
 ## 2. Task input over HTTP
