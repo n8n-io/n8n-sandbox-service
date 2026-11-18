@@ -9,12 +9,12 @@ docs/configuration.md
 internal/codedaemon/runtime_config.go
   h_8fb27e0cdf6d1e 1-45
 internal/codedaemon/worker_test.go
-  h_8fb27e0cdf6d1e 1-117,140-232
+  h_8fb27e0cdf6d1e 1-117,118-139,140-232
   h_8fb27e0cdf6d1e 118-139
 internal/codedaemon/worker_darwin.go
   h_8fb27e0cdf6d1e 1-28
 internal/codedaemon/worker.go
-  h_8fb27e0cdf6d1e 1-24,31-84,95-100,106-108,113-226,229-248,253-270
+  h_8fb27e0cdf6d1e 1-24,25-30,31-84,85-94,95-100,101-105,106-108,109-112,113-226,227-228,229-248,249-252,253-270
   h_8fb27e0cdf6d1e 25-30,85-94,101-105,109-112,227-228,249-252
 cmd/code-daemon/main.go
   h_8fb27e0cdf6d1e 32-35
