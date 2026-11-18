@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/n8n-io/sandbox-service/internal/envvar"
@@ -18,6 +19,9 @@ type Config struct {
 	// the sandbox. Only for debugging and local development.
 	AllowLocalClients bool
 	MaxConcurrency    int // Number of lanes. Each running or uploading task holds one.
+
+	WorkDir        string   // root for task directories and the runtime's working directory
+	RuntimeCommand []string // executable followed by its arguments, from the runtime registry
 }
 
 func LoadConfig() (Config, error) {
@@ -36,16 +40,28 @@ func LoadConfig() (Config, error) {
 type Daemon struct {
 	cfg   Config
 	lanes chan struct{} // One token per occupied lane; capacity is the lane limit.
+
+	tasksMu            sync.Mutex
+	dispatchedByTaskID map[string]bool // false before dispatch, true once dispatch is attempted
+
+	workerMu    sync.Mutex
+	worker      *worker // started lazily and never replaced once set
+	startFailed bool    // set when the worker could not be started; it is not retried
+	closed      bool    // prevents starting a worker after Close
 }
 
 func New(cfg Config) *Daemon {
-	return &Daemon{cfg: cfg, lanes: make(chan struct{}, max(1, cfg.MaxConcurrency))}
+	return &Daemon{cfg: cfg, lanes: make(chan struct{}, max(1, cfg.MaxConcurrency)), dispatchedByTaskID: make(map[string]bool)}
 }
 
 // Handler registers the runner's routes and applies the client source guard by default.
 func (d *Daemon) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		if !d.isHealthy() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 	})
 	if d.cfg.AllowLocalClients {
@@ -60,6 +76,15 @@ func (d *Daemon) Handler() http.Handler {
 		}
 		mux.ServeHTTP(w, r)
 	})
+}
+
+// isHealthy reports whether the daemon can still serve tasks. It is healthy
+// before its worker starts, and unhealthy once closed, the worker fails to
+// start, or the worker stops.
+func (d *Daemon) isHealthy() bool {
+	d.workerMu.Lock()
+	defer d.workerMu.Unlock()
+	return !d.closed && !d.startFailed && (d.worker == nil || !d.worker.isStopped())
 }
 
 // isLocalAddress identifies loopback and sandbox interface addresses. If the
@@ -91,6 +116,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 // serve runs the HTTP server on an open listener and forces it closed if graceful shutdown fails.
 func (d *Daemon) serve(ctx context.Context, listener net.Listener) error {
+	defer d.Close()
 	srv := &http.Server{Handler: d.Handler(), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: time.Minute}
 	stopped := make(chan error, 1)
 	go func() { stopped <- srv.Serve(listener) }()
