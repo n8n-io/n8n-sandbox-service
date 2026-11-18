@@ -1,0 +1,16 @@
+internal/codedaemon/admission.go
+  h_8fb27e0cdf6d1e 1-2,14,22-25,41,56,68
+internal/codedaemon/daemon.go
+  h_8fb27e0cdf6d1e 21,43-44,60
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d929b9e6dadbc946ffe1db2954ad4ff3b8a3cf2f",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
