@@ -1,4 +1,4 @@
-// Command code-daemon configures logging and starts the runner-facing daemon inside a code sandbox.
+// Entrypoint for the code daemon.
 package main
 
 import (

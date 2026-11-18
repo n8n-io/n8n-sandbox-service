@@ -12,14 +12,13 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/envvar"
 )
 
-// Config controls where the daemon listens and which clients can reach it.
 type Config struct {
 	ListenAddr string
-	// AllowLocalClients disables the check that rejects requests from inside the sandbox.
+	// AllowLocalClients disables the check that rejects requests from inside
+	// the sandbox. Only for debugging and local development.
 	AllowLocalClients bool
 }
 
-// LoadConfig applies environment overrides to the default daemon settings.
 func LoadConfig() (Config, error) {
 	cfg := Config{ListenAddr: ":8081"}
 	envvar.String("CODE_DAEMON_LISTEN_ADDR", &cfg.ListenAddr)
@@ -34,13 +33,11 @@ type Daemon struct {
 	cfg Config
 }
 
-// New creates a daemon without opening its listener.
 func New(cfg Config) *Daemon { return &Daemon{cfg: cfg} }
 
 // Handler registers the runner's routes and applies the client source guard by default.
 func (d *Daemon) Handler() http.Handler {
 	mux := http.NewServeMux()
-	// The probe confirms that the runner can reach the daemon over HTTP.
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})

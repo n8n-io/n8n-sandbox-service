@@ -850,8 +850,6 @@ curl "http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000/stat?
 
 ## Code sandboxes
 
-The in-sandbox `code-daemon` has a runner-only `GET /healthz` probe. It is not a public API route. The daemon defaults to `:8081` (`CODE_DAEMON_LISTEN_ADDR`) and refuses peers from its own network namespace. `CODE_DAEMON_ALLOW_LOCAL_CLIENTS` is for local development only.
-
 Sandboxes for the code execution. Admin and tenant keys; provisioner and scaler keys get `403`, and a missing or unknown key gets `401`. With an admin key the sandbox is owned by `__admin__`, a single tenant for all admin keys.
 
 The `/sandboxes` routes do not serve code sandboxes: they answer `404` for a code sandbox's id, leave code sandboxes out of `GET /sandboxes`, and `POST /sandboxes` answers `409` for an id a code sandbox has.
