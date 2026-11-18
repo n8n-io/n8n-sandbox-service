@@ -1,0 +1,75 @@
+// This file validates task specs and reserves execution lanes before reading input files.
+
+package codedaemon
+
+import (
+	"encoding/json"
+	"io"
+	"mime/multipart"
+	"net/http"
+	"regexp"
+	"time"
+)
+
+const maxSpecBytes = 64 << 10 // 64 KiB
+
+var taskIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,128}$`)
+
+type taskSpec struct {
+	TaskID string `json:"taskId"`
+}
+
+// admit validates the first multipart part and tries to reserve a lane without
+// waiting. On success, the caller holds the lane through upload and execution.
+// On rejection, do not advance the multipart reader or close a part: either
+// can consume data from the upload being refused.
+func (d *Daemon) admit(w http.ResponseWriter, r *http.Request) (taskSpec, *multipart.Reader) {
+	// For HTTP/1, net/http by default reads any unread request body before it
+	// writes the response. A rejection would then wait for the whole upload it
+	// refuses. Full duplex lets the error go out while the client is still sending.
+	if r.ProtoMajor == 1 {
+		_ = http.NewResponseController(w).EnableFullDuplex()
+	}
+	mr, err := r.MultipartReader()
+	if err != nil {
+		rejectAdmission(w, r, "expected multipart/form-data", http.StatusBadRequest)
+		return taskSpec{}, nil
+	}
+	part, err := mr.NextPart()
+	if err != nil || part.FormName() != "spec" {
+		rejectAdmission(w, r, "first part must be spec", http.StatusBadRequest)
+		return taskSpec{}, nil
+	}
+	var spec taskSpec
+	// Read one extra byte to distinguish an oversized spec from one at the limit.
+	data, err := io.ReadAll(io.LimitReader(part, maxSpecBytes+1))
+	if err != nil || len(data) > maxSpecBytes || json.Unmarshal(data, &spec) != nil || !taskIDPattern.MatchString(spec.TaskID) {
+		rejectAdmission(w, r, "invalid task spec", http.StatusBadRequest)
+		return taskSpec{}, nil
+	}
+	// d.lanes is a semaphore: its capacity is the lane count and each token in it
+	// is a taken lane. The send succeeds only if a lane is free. With a default
+	// case it never blocks, so a full sandbox answers 429 instead of queueing.
+	select {
+	case d.lanes <- struct{}{}:
+		return spec, mr
+	default:
+		rejectAdmission(w, r, "no free lane", http.StatusTooManyRequests)
+		return taskSpec{}, nil
+	}
+}
+
+// rejectAdmission writes the error without waiting for an unfinished HTTP/1 upload.
+func rejectAdmission(w http.ResponseWriter, r *http.Request, message string, status int) {
+	if r.ProtoMajor == 1 {
+		// Do not drain an unread upload to reuse the connection. net/http can
+		// still read during body cleanup after sending the response, so also
+		// give those reads an expired deadline.
+		w.Header().Set("Connection", "close")
+		_ = http.NewResponseController(w).SetReadDeadline(time.Now())
+	}
+	http.Error(w, message, status)
+}
+
+// releaseLane frees one slot and must be called once per successful admission.
+func (d *Daemon) releaseLane() { <-d.lanes }

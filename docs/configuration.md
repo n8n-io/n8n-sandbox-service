@@ -1,12 +1,13 @@
 # Configuration
 
-All services are configured via environment variables. In the variables the API, runner and daemon binaries read, surrounding whitespace is ignored (except in `SANDBOX_API_POSTGRES_PASSWORD`), an empty value counts as unset, and a value that does not parse stops the service at startup. This does not cover the variables `scripts/start-runner.sh` reads. [limits.md](limits.md) lists the limits clients and operators run into.
+All services are configured via environment variables. In the variables the API, runner, daemon and code daemon binaries read, surrounding whitespace is ignored (except in `SANDBOX_API_POSTGRES_PASSWORD`), an empty value counts as unset, and a value that does not parse stops the service at startup. This does not cover the variables `scripts/start-runner.sh` reads. [limits.md](limits.md) lists the limits clients and operators run into.
 
 ## Contents
 
 - [API](#api)
 - [Runner](#runner)
 - [Sandbox daemon](#sandbox-daemon)
+- [Code daemon](#code-daemon)
 - [Metrics](#metrics)
 - [Disk quotas](#disk-quotas)
 
@@ -189,6 +190,17 @@ These variables are set inside each sandbox container and are typically baked in
 | `SANDBOX_DAEMON_LOG_LEVEL` | `info` | Minimum log severity (`debug`, `info`, `warn`, `error`; case-insensitive) |
 | `SANDBOX_EXEC_MAX_EVENT_BYTES` | `16777216` | Max bytes of event history retained per execution (16 MiB); must be positive |
 | `SANDBOX_EXEC_RETAIN` | `10m` | Duration to retain completed executions (Go [`time.ParseDuration`](https://pkg.go.dev/time#ParseDuration) syntax, e.g. `10m`, `1h`); must be positive |
+
+## Code daemon
+
+The `code-daemon` runs inside a code sandbox and is reached only by the runner. It refuses peers from its own network namespace. Its `GET /healthz` probe does not use a lane. Invalid values prevent startup.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `CODE_DAEMON_LOG_LEVEL` | `info` | Minimum log severity (`debug`, `info`, `warn`, `error`; case-insensitive) |
+| `CODE_DAEMON_LISTEN_ADDR` | `:8081` | Listen address |
+| `CODE_DAEMON_MAX_CONCURRENCY` | `1` | Number of lanes (`1`–`32`). A lane runs one task, from upload to completion |
+| `CODE_DAEMON_ALLOW_LOCAL_CLIENTS` | `false` | Accept peers from inside the sandbox. Local development only |
 
 ## Metrics
 
