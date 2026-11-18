@@ -143,8 +143,11 @@ stateDiagram-v2
 ┌─────────────────────────────────────────┐
 │ part 1: name="spec"  JSON               │  required, first
 ├─────────────────────────────────────────┤
-│ part 2: name="input" filename="a.csv"   │  0..N files
-│ part 3: name="input" filename="d/b.txt" │
+│ part 2: name="input"                    │  task.json, the task itself
+│         filename="task.json"            │
+├─────────────────────────────────────────┤
+│ part 3: name="input" filename="a.csv"   │  0..N more files
+│ part 4: name="input" filename="d/b.txt" │
 │ ...                                     │
 └─────────────────────────────────────────┘
 ```
@@ -152,7 +155,7 @@ stateDiagram-v2
 ```sh
 curl -N http://sandbox:8081/tasks \
   -F 'spec={"taskId":"t1","timeoutMs":30000};type=application/json' \
-  -F 'input=@items.json;filename=items.json' \
+  -F 'input=@task.json;filename=task.json' \
   -F 'input=@b.txt;filename=data/b.txt'
 ```
 
@@ -177,11 +180,16 @@ The spec is read before any file. So `409` and `429` cost no upload.
 | Total bytes | `CODE_DAEMON_MAX_INPUT_BYTES` (default 64 MiB) |
 | Whole upload | 2 min |
 
+### `task.json`
+
+Send `task.json` as an `input` part on every task. The runtime reads it from `in/task.json`. It holds the task input and any runtime data the task needs. The daemon stages it like any other input file and does not check its content.
+
 ### Task directory
 
 ```text
 $CODE_DAEMON_WORK_DIR/task-XXXX/     (0700, per task)
 ├── in/          input files, as uploaded (0600)
+│   └── task.json     task input and runtime data
 └── out/         runtime writes here
     ├── bin/
     └── result.json   optional, inlined into "result"
