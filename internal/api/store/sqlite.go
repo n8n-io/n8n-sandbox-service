@@ -106,6 +106,11 @@ func NewSQLite(dbPath string, useWal bool) (*SQLiteStore, error) {
 		return nil, fmt.Errorf("store: tenants schema: %w", err)
 	}
 
+	if _, err := db.Exec(sqliteSharedVolumesSchema); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: shared volumes schema: %w", err)
+	}
+
 	slog.Debug("store: opened sqlite database", "path", dbPath)
 	store := &SQLiteStore{db: db}
 	for i := range store.sandboxLocks {

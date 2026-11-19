@@ -24,13 +24,15 @@ Everything trusts the layer above it. Sandboxes trust nothing.
 The API is the only component that knows about tenants. Every other component
 trusts it to have made the decision correctly.
 
-Requests carry an `X-Api-Key` header. There are four key classes:
+Requests carry an `X-Api-Key` header. There are five key classes:
 
 - Admin keys, listed in `SANDBOX_API_KEYS`: full access.
 - Provisioner keys, listed in `SANDBOX_API_PROVISIONER_KEYS`: tenant create,
   limit update and delete only, see below.
 - Scaler keys, listed in `SANDBOX_API_SCALER_KEYS`: runner capacity listing
   and cordoning only, see below.
+- Publisher keys, listed in `SANDBOX_API_PUBLISHER_KEYS`: shared volumes only,
+  see below.
 - Tenant keys, minted by an admin or returned on tenant create, stored only as
   a SHA-256 hash alongside an 8-character lookup prefix, so a database read
   does not yield usable credentials. Revocation sets `revoked_at`, which the
@@ -88,7 +90,7 @@ Authorization runs on every sandbox request through `canAccessSandbox` in
   fall through to the admin pseudo-tenant.
 - Sandboxes owned by the admin pseudo-tenant are not visible to tenant keys.
 - Admin routes under `/admin` require an admin key, except the three
-  provisioner routes above and the scaler route below.
+  provisioner routes above and the scaler routes below.
 
 Cross-tenant and non-existent sandboxes both return `404`, so a tenant cannot
 use the status code to learn whether an ID exists.
@@ -106,6 +108,40 @@ key can therefore cordon every runner and stop new creates fleet-wide, and
 through that get stopped sandboxes deleted: the API deletes a stopped sandbox
 on a cordoned runner instead of waking it. Startup fails if a scaler key is
 also an admin or provisioner key.
+
+### Publisher keys
+
+The class exists for the job that publishes
+[shared volumes](API.md#shared-volumes): content every tenant may mount, so
+publishing it must not take an admin key, and no tenant key may do it. A
+publisher key reaches the `/shared-volumes` routes, on a clean path, and
+nothing else: sandboxes, tenants, keys and runners all answer `403`, and it
+can read no tenant data. Admin keys may do the same; tenant, provisioner and
+scaler keys get `403` on every shared volume route, reads included. Startup
+fails if a publisher key is also an admin, provisioner or scaler key.
+
+What a leaked publisher key can do:
+
+- Publish a tar, which the API stores only if it holds directories, regular
+  files and symbolic links within the limits, under relative paths without
+  `..`. It does not unpack it: it reads it once, through the tar reader the
+  runners use, in a stream it hands to the store only up to its last byte,
+  and ends the stream with an error instead if the tar breaks a rule, so the
+  store never commits it. Messages and logs carry no name from a tar.
+- Delete shared volumes.
+- Fill the volume store with up to 1,000 volumes of 4 GiB.
+
+Names never move silently: publishing another digest under a taken name is
+refused, so repointing a name takes a visible `DELETE` and then a publish. The
+API logs every publish and delete with the key's role, the digest, the name
+and the sizes, records the role on the volume, and counts publishes in
+`sandbox_shared_volume_publishes_total`. To contain a leaked key, remove it
+from `SANDBOX_API_PUBLISHER_KEYS` and restart the API (env keys are not
+cached), then delete what it published since the leak.
+
+A publish holds one of two slots on its API instance and counts against no
+tenant's requests in progress. It is read with a stall timeout of a minute and
+an overall one of an hour instead of the server's 30 s `ReadTimeout`.
 
 ### Concurrency limits
 

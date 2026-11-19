@@ -89,6 +89,10 @@ func NewPostgres(cfg config.PostgresConfig) (*PostgresStore, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: run tenants schema: %w", err)
 	}
+	if _, err := db.Exec(postgresSharedVolumesSchema); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: run shared volumes schema: %w", err)
+	}
 
 	lockDB, err := sql.Open("pgx", cfg.DSN())
 	if err != nil {

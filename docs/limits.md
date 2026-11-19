@@ -65,12 +65,31 @@ Output arrives in pieces of at most 64 KiB; there is no limit on total output.
 | Body of a tenant create or update | 4 KiB | fixed | `400` |
 | Body of an exec, copy or move | 1 MiB | fixed | `400` |
 
+## Shared volumes
+
+All fixed. [API.md](API.md#shared-volumes) has the routes.
+
+| Limit | Value | When reached |
+| --- | --- | --- |
+| Tar as published, plain or gzip | 4 GiB | `413` `too_large`, before the body is read |
+| Entries of the tar, counting every directory it leaves out | 1,000,000 | `413` `too_large` |
+| File content in the tar | 4 GiB | `413` `too_large` |
+| Tar once decompressed, headers and padding included | 8 GiB | `413` `too_large` |
+| Path or link target of an entry | 4,095 bytes | `422` `invalid_tar` |
+| Name | 1–128 bytes of `a-z`, `0-9`, `.`, `_`, `-`; starts and ends with a letter or digit; one per volume | `400` |
+| Shared volumes, ready or being published | 1,000 | `409` `shared_volume_limit` |
+| Publishes in progress, per API replica | 2 | `429` `publish_limit`, `Retry-After: 30` |
+| A publish of a digest another request is publishing | | `409` `publish_in_progress`, `Retry-After: 30` |
+| `GET /shared-volumes` | no paging | |
+
+The tar's size keeps a runner's download within `SANDBOX_RUNNER_VOLUME_FETCH_TIMEOUT`, and the entries the memory the [volume builder](../internal/runner/runtime/firecracker.ee/README.md#volume-builder) spends on them. Publishes count against no tenant's requests in progress.
+
 ## Time limits on requests
 
 | What | Limit |
 | --- | --- |
 | Sending the request headers (API, runner and daemon) | 10 s |
-| Sending the whole request, so also an upload | 30 s |
+| Sending the whole request, so also an upload | 30 s; a shared volume publish instead: 1 min without a byte, 1 h in all |
 | An idle keep-alive connection | 120 s |
 | A response, including a stream | no limit; 30 s on the API's dedicated metrics listener |
 | Creating a sandbox | 3 min on the runner; the API waits up to 4 min and finishes the create even if the client has gone |
