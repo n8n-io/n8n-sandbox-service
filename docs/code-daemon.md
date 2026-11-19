@@ -79,7 +79,7 @@ Timeout: `spec.timeoutMs` can only shorten `CODE_DAEMON_DEFAULT_TASK_TIMEOUT`. `
 
 | `type` | `code` | Meaning |
 | --- | --- | --- |
-| `done` | — | Success. Has `result`, `outputs`, `console`, `outputExpiresAt`. `console` holds only `output` messages from the runtime, not raw process stdout/stderr. |
+| `done` | — | Success. Has `result`, `outputs`, `console`, `outputExpiresAt`. `console` holds only `console` messages from the runtime, not raw process stdout/stderr. |
 | `error` | `user_error` | User code threw. `userError` has runtime details. |
 | `error` | `crashed` | Runtime failed or exited. |
 | `error` | `oom` | Runtime ran out of memory (best effort). |
@@ -235,7 +235,7 @@ sequenceDiagram
     participant W as Runtime
     W->>D: ready
     D->>W: start {taskId, dir, shared, deadline}
-    W->>D: output {taskId, stream, text}
+    W->>D: console {taskId, stream, text}
     W->>D: heap {heapUsedBytes}
     W->>D: done {taskId, heapUsedBytes}
     Note over D,W: cancel path
@@ -255,7 +255,7 @@ Runtime → daemon:
 | `type` | Fields | Meaning |
 | --- | --- | --- |
 | `ready` | — | Accepting tasks. First message. |
-| `output` | `taskId`, `stream` (`stdout`/`stderr`), `text` | Task console line. |
+| `console` | `taskId`, `stream` (`stdout`/`stderr`), `text` | Task console line. |
 | `heap` | `heapUsedBytes` | Memory sample. |
 | `done` | `taskId`, `heapUsedBytes?` | Success. Outputs are in `dir/out`. |
 | `error` | `taskId`, `error`, `heapUsedBytes?` | User code failed. `error` is passed to the client as `userError`. |
@@ -269,7 +269,7 @@ Runtime → daemon:
 | Trigger | Daemon action |
 | --- | --- |
 | `heapUsedBytes` > `CODE_DAEMON_RECYCLE_HEAP_BYTES` | Retire runtime |
-| `output` | Keep max `CODE_DAEMON_MAX_CONSOLE_ENTRIES`, 4 KiB each. Overflow replaces the last entry with `Console output truncated`. |
+| `console` | Keep max `CODE_DAEMON_MAX_CONSOLE_ENTRIES`, 4 KiB each. Overflow replaces the last entry with `Console output truncated`. |
 | `cancel` sent | Retire runtime, even after ack |
 | No `cancelled` or terminal in 1 s | Kill runtime |
 | Process exits | Fail running tasks: `oom` if stderr marker or cgroup `oom_kill` grew after `SIGKILL`, else `crashed` |
