@@ -159,6 +159,7 @@ func idleSweepConfig() *config.APIConfig {
 		IdleStopAfter:          time.Hour,
 		IdleDeleteAfter:        24 * time.Hour,
 		IdleDeleteSafetyBuffer: time.Minute,
+		CodeSandboxesEnabled:   true,
 	})
 }
 
