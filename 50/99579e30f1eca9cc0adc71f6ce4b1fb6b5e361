@@ -1,0 +1,14 @@
+internal/api/config/config_test.go
+  h_8fb27e0cdf6d1e 792
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5099579e30f1eca9cc0adc71f6ce4b1fb6b5e361",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
