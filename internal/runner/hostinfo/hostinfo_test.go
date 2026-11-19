@@ -62,6 +62,11 @@ func TestCgroupMemoryLimit(t *testing.T) {
 	if n, ok, err := CgroupMemoryLimit(write(t, "0::/tight.slice/runner.service\n"), root); err != nil || !ok || n != 2<<30 {
 		t.Fatalf("tighter leaf: got %d %v %v", n, ok, err)
 	}
+	// ".." inside a name is not a parent reference, so the limit still applies.
+	mk("system.slice/foo..bar.service", strconv.FormatInt(3<<30, 10))
+	if n, ok, err := CgroupMemoryLimit(write(t, "0::/system.slice/foo..bar.service\n"), root); err != nil || !ok || n != 3<<30 {
+		t.Fatalf("dots in a name: got %d %v %v", n, ok, err)
+	}
 	// 0::/ is the root file, here "max".
 	if _, ok, err := CgroupMemoryLimit(write(t, "0::/\n"), root); err != nil || ok {
 		t.Fatalf("root max: ok=%v err=%v", ok, err)

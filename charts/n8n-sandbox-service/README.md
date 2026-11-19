@@ -81,6 +81,10 @@ Two hardening options:
 
 Do not set `runner.privileged.runtime.runtimeClassName: sysbox-runc`; the chart fails the render and points you to `runner.isolation: sysbox`.
 
+## Upgrading to 0.15.0
+
+`runner.config.capacityTotal` no longer defaults to `1000`. With `dataPlane.mode=in-cluster`, an upgrade that does not set it fails to render. Set it before upgrading; to keep the old behaviour exactly, set `1000`, or size it as described in [Runner Capacity](#runner-capacity).
+
 ## Migrating from 0.3.x
 
 Chart 0.4.0 restructured the data-plane values. The render fails with a message that names the new key if you still set an old key. Existing `sysbox` releases upgrade without workload changes: the runner resource names and labels are unchanged, so the StatefulSet is untouched.

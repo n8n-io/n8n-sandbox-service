@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -71,7 +72,7 @@ func CgroupMemoryLimit(selfCgroup, root string) (limit int64, ok bool, err error
 	}
 	root = filepath.Clean(root)
 	dir := filepath.Clean(filepath.Join(root, rel))
-	if !found || !strings.HasPrefix(rel, "/") || strings.Contains(rel, "..") || !withinDir(root, dir) {
+	if !found || !strings.HasPrefix(rel, "/") || slices.Contains(strings.Split(rel, "/"), "..") || !withinDir(root, dir) {
 		return 0, false, nil
 	}
 	var tightest int64
