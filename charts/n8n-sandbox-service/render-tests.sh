@@ -693,6 +693,15 @@ render --set-json 'api.terminationGracePeriodSeconds=1000000' \
 	grep -q '^      terminationGracePeriodSeconds: 1000000$'
 must_fail "api.terminationGracePeriodSeconds must be a whole number of seconds" \
 	--set-json 'api.terminationGracePeriodSeconds=2.5'
+helm template n8n-sandbox-service "$CHART_DIR" --set auth.existingSecret=n8n-sandbox-auth \
+	--set-json 'runner.config.capacityTotal=1000000' --show-only templates/configmap.yaml |
+	grep -q 'SANDBOX_RUNNER_CAPACITY_TOTAL: "1000000"'
+if out=$(helm template n8n-sandbox-service "$CHART_DIR" --set auth.existingSecret=n8n-sandbox-auth \
+	--set-json 'runner.config.capacityTotal=2.5' 2>&1); then
+	echo "expected runner.config.capacityTotal=2.5 to fail the render" >&2
+	exit 1
+fi
+grep -q "runner.config.capacityTotal must be a positive whole number" <<<"$out"
 render --set-json 'api.podLabels.build=20240101' \
 	--show-only templates/api-deployment.yaml | grep -q '^        build: "20240101"$'
 

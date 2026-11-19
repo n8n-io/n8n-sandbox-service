@@ -852,9 +852,9 @@ func (r *RunnerRecorder) SetDataVolumeBytes(v int64) {
 	r.setStartupGauge("data_volume_bytes", "Total size of the filesystem holding the runner data dir, in bytes.", float64(v))
 }
 
-// SetCapacitySlots registers a gauge for the runner's effective capacity, set once at startup.
-func (r *RunnerRecorder) SetCapacitySlots(v int32) {
-	r.setStartupGauge("capacity_slots", "Sandboxes this runner admits: the effective capacity it reports to the API (0 is unlimited).", float64(v))
+// SetCapacityTotal registers a gauge for the runner's effective capacity, set once at startup.
+func (r *RunnerRecorder) SetCapacityTotal(v int32) {
+	r.setStartupGauge("capacity_total", "Sandboxes this runner admits: the effective capacity it reports to the API (0 is unlimited).", float64(v))
 }
 
 func (r *RunnerRecorder) setStartupGauge(name, help string, v float64) {

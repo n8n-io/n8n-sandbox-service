@@ -18,9 +18,9 @@ import (
 const (
 	// fixedReserve is host memory kept from guests: the runner, the OS, and the
 	// one golden-snapshot file every guest shares. It is not scaled by slots.
-	fixedReserve int64 = 4 << 30
+	fixedReserve int64 = 4 << 30 // 4 GiB
 	// perVMOverhead is host memory each microVM needs on top of its guest RAM.
-	perVMOverhead int64 = 64 << 20
+	perVMOverhead int64 = 64 << 20 // 64 MiB
 
 	memoryRatioEnv = "SANDBOX_RUNNER_FIRECRACKER_MEMORY_RATIO"
 )
@@ -93,7 +93,26 @@ func memoryRatio() (float64, error) {
 	return ratio, nil
 }
 
-// memorySlotCount is floor((budget - fixedReserve) * ratio / (memSizeMiB + perVMOverhead)).
+// memorySlotCount is how many sandboxes (slots) host memory holds. Every
+// microVM is assumed to use all of its guest RAM:
+//
+//		floor((budget - fixedReserve) * ratio / (memSizeMiB + perVMOverhead))
+//
+//	  - budget: the host's MemTotal, or the memory limit of the runner's cgroup
+//	    when that is lower, in bytes (memorySlotsFor).
+//	  - fixedReserve: 4 GiB kept for the runner, the OS, and the shared golden
+//	    snapshot. It does not grow with the slot count.
+//	  - ratio: SANDBOX_RUNNER_FIRECRACKER_MEMORY_RATIO (default 1.0). Above 1.0
+//	    overcommits host memory.
+//	  - memSizeMiB: guest RAM from the golden snapshot's boot.json, in MiB,
+//	    converted to bytes before it is added to perVMOverhead.
+//	  - perVMOverhead: 64 MiB of Firecracker host memory on top of each guest.
+//
+// The division rounds down. Example: a 64 GiB host with 512 MiB guests gets
+// (64 GiB - 4 GiB) / 576 MiB = 106 slots.
+//
+// It returns an error when budget is not above fixedReserve, and when the
+// floored count is below one slot.
 func memorySlotCount(budget, memSizeMiB int64, ratio float64) (int64, error) {
 	if budget <= fixedReserve {
 		return 0, fmt.Errorf("host memory budget %d MiB is not above the %d MiB reserved for the runner and OS", budget>>20, fixedReserve>>20)

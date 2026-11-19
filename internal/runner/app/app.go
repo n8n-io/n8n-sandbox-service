@@ -104,7 +104,7 @@ func Run(cfg *config.Config, rt runnerruntime.Runtime) {
 			}
 			return 0
 		})
-		mrec.SetCapacitySlots(cfg.CapacityTotal)
+		mrec.SetCapacityTotal(cfg.CapacityTotal)
 		if n, err := hostinfo.MemTotal(hostinfo.MeminfoPath); err != nil {
 			slog.Warn("metrics: host memory unavailable", "error", err)
 		} else {
