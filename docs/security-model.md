@@ -133,7 +133,8 @@ What a leaked publisher key can do:
 - Keep up to 1,000 volumes of up to 4 GiB each, ready or being published.
   What a failed cleanup leaves in the store does not count against that
   limit. With `SANDBOX_API_VOLUME_STORE=local`, the store is in the API's data
-  directory, which also holds the SQLite database.
+  directory, which with `SANDBOX_API_STORE=sqlite` (the default) also holds
+  the database.
 
 Names never move silently: publishing another digest under a taken name is
 refused, so repointing a name takes a visible `DELETE` and then a publish. The

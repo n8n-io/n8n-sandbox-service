@@ -77,6 +77,32 @@ func TestSharedVolumesConcurrentDeletes(t *testing.T) {
 	testConcurrentSharedVolumeDeletes(t, []SharedVolumes{sqlite, sqlite})
 }
 
+// A reservation stops waiting for SQLite's one connection when its context
+// ends.
+func TestSQLiteSharedVolumeReserveGivesUpWithItsContext(t *testing.T) {
+	sqlite := newSQLiteSharedVolumes(t)
+	held, err := sqlite.beginImmediate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rollbackConn(held)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := sqlite.ReserveSharedVolume(ctx, publishingRow(randomSHA256(), "", 100, 220), testMaxLive)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("ReserveSharedVolume() = %v, want the context's deadline", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ReserveSharedVolume() kept waiting for the connection")
+	}
+}
+
 func TestSharedVolumesLimit(t *testing.T) {
 	s := newSQLiteSharedVolumes(t)
 	ctx := context.Background()

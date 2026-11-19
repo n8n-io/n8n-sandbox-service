@@ -269,18 +269,23 @@ func (env *testEnv) assertNothingLeft(t *testing.T) {
 	}
 }
 
-// memoryHelper is a store helper that keeps objects in memory. Of the proto,
-// it has only the rules these tests rely on: it stores only a half-closed
-// upload of at most max_bytes with the given sha256. volumestore's own tests
-// hold the client to the rest.
+// memoryHelper is a store helper that keeps objects in memory and holds the
+// client to the proto: a valid key and header first, then only data. It
+// stores only a half-closed upload of at most max_bytes with the given sha256.
 type memoryHelper struct {
 	storepb.UnimplementedVolumeStoreServer
 	mutex   sync.Mutex
 	objects map[string][]byte
 }
 
-func helperObjectName(key *storepb.ObjectKey) string {
-	return key.GetScope() + "/" + key.GetId() + "." + key.GetKind().String()
+// helperObjectName names the object of key, and refuses an invalid key.
+func helperObjectName(key *storepb.ObjectKey) (string, error) {
+	kinds := map[storepb.Kind]volume.Kind{storepb.Kind_KIND_EXT4: volume.KindExt4, storepb.Kind_KIND_TAR: volume.KindTar}
+	parsed := volumestore.Key{Scope: key.GetScope(), ID: key.GetId(), Kind: kinds[key.GetKind()]}
+	if err := parsed.Validate(); err != nil {
+		return "", status.Error(codes.InvalidArgument, "invalid key")
+	}
+	return key.GetScope() + "/" + key.GetId() + "." + key.GetKind().String(), nil
 }
 
 func (helper *memoryHelper) Put(stream storepb.VolumeStore_PutServer) error {
@@ -292,6 +297,13 @@ func (helper *memoryHelper) Put(stream storepb.VolumeStore_PutServer) error {
 	if header == nil {
 		return status.Error(codes.InvalidArgument, "no header")
 	}
+	name, err := helperObjectName(header.GetKey())
+	if err != nil {
+		return err
+	}
+	if header.GetMaxBytes() <= 0 || (header.GetSha256() != "" && !volume.ValidDigest(header.GetSha256())) {
+		return status.Error(codes.InvalidArgument, "invalid header")
+	}
 	var data []byte
 	for {
 		message, err := stream.Recv()
@@ -301,7 +313,11 @@ func (helper *memoryHelper) Put(stream storepb.VolumeStore_PutServer) error {
 		if err != nil {
 			return err
 		}
-		data = append(data, message.GetData()...)
+		piece, ok := message.GetPart().(*storepb.PutRequest_Data)
+		if !ok {
+			return status.Error(codes.InvalidArgument, "only the first message may carry the header")
+		}
+		data = append(data, piece.Data...)
 		if int64(len(data)) > header.GetMaxBytes() {
 			return status.Error(codes.OutOfRange, "too large")
 		}
@@ -311,7 +327,6 @@ func (helper *memoryHelper) Put(stream storepb.VolumeStore_PutServer) error {
 	}
 	helper.mutex.Lock()
 	defer helper.mutex.Unlock()
-	name := helperObjectName(header.GetKey())
 	if _, exists := helper.objects[name]; exists {
 		return status.Error(codes.AlreadyExists, "exists")
 	}
@@ -320,9 +335,13 @@ func (helper *memoryHelper) Put(stream storepb.VolumeStore_PutServer) error {
 }
 
 func (helper *memoryHelper) Stat(_ context.Context, request *storepb.StatRequest) (*storepb.Object, error) {
+	name, err := helperObjectName(request.GetKey())
+	if err != nil {
+		return nil, err
+	}
 	helper.mutex.Lock()
 	defer helper.mutex.Unlock()
-	data, ok := helper.objects[helperObjectName(request.GetKey())]
+	data, ok := helper.objects[name]
 	if !ok {
 		return nil, status.Error(codes.NotFound, "not found")
 	}
@@ -330,9 +349,13 @@ func (helper *memoryHelper) Stat(_ context.Context, request *storepb.StatRequest
 }
 
 func (helper *memoryHelper) Delete(_ context.Context, request *storepb.DeleteRequest) (*storepb.DeleteResponse, error) {
+	name, err := helperObjectName(request.GetKey())
+	if err != nil {
+		return nil, err
+	}
 	helper.mutex.Lock()
 	defer helper.mutex.Unlock()
-	delete(helper.objects, helperObjectName(request.GetKey()))
+	delete(helper.objects, name)
 	return &storepb.DeleteResponse{}, nil
 }
 

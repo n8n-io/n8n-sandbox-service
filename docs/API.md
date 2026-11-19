@@ -1113,7 +1113,7 @@ A name never moves to another digest. To publish other content under a name, `DE
 | `501` | `volume_store_disabled` | No volume store |
 | `503` | `publish_interrupted` | The API instance is shutting down, or the publish lost its lease. Publish again: the retry answers `200` if the volume got published after all |
 
-A failed publish removes what it stored. If that removal fails, the API logs a warning, and what is left stays in the store; the volume is never published.
+A failed publish removes what it stored. If that removal fails, the API logs a warning, and what is left stays in the store. A volume that became ready although its publish failed, as when the database's answer was lost, stays published: a retry answers `200`.
 
 **Example:**
 

@@ -499,7 +499,8 @@ if grep 'SANDBOX_API_PUBLISHER_KEYS' >/dev/null <<<"$api"; then
 	echo "the default render must not pass publisher keys" >&2
 	exit 1
 fi
-if render --set auth.secretKeys.publisherKeys=null --show-only templates/api-deployment.yaml | grep 'SANDBOX_API_PUBLISHER_KEYS' >/dev/null; then
+null_publisher_api=$(render --set auth.secretKeys.publisherKeys=null --show-only templates/api-deployment.yaml)
+if grep 'SANDBOX_API_PUBLISHER_KEYS' >/dev/null <<<"$null_publisher_api"; then
 	echo "a null auth.secretKeys.publisherKeys must not pass publisher keys" >&2
 	exit 1
 fi

@@ -145,7 +145,15 @@ func (s *SQLiteStore) Close() error { return s.db.Close() }
 // beginImmediate starts a transaction with a RESERVED write lock (BEGIN IMMEDIATE).
 // Caller must Commit or Rollback, then Close the conn.
 func (s *SQLiteStore) beginImmediate() (*sql.Conn, error) {
-	conn, err := s.db.Conn(context.Background())
+	return s.beginImmediateContext(context.Background())
+}
+
+// beginImmediateContext is beginImmediate that stops waiting for the pool's
+// connection when ctx ends. BEGIN itself ignores ctx: the driver can report a
+// cancellation after the transaction began, and the connection would go back
+// to the pool with it open.
+func (s *SQLiteStore) beginImmediateContext(ctx context.Context) (*sql.Conn, error) {
+	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return nil, err
 	}

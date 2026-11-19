@@ -36,8 +36,8 @@ CREATE INDEX IF NOT EXISTS shared_volumes_state_idx ON shared_volumes (state, up
 func (s *SQLiteStore) sharedVolumes() sharedVolumeSQL {
 	return sharedVolumeSQL{
 		db: s.db,
-		begin: func(context.Context) (*sqlTx, error) {
-			conn, err := s.beginImmediate()
+		begin: func(ctx context.Context) (*sqlTx, error) {
+			conn, err := s.beginImmediateContext(ctx)
 			if err != nil {
 				return nil, err
 			}
