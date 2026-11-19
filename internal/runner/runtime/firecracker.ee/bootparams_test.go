@@ -218,14 +218,14 @@ func TestPinSnapshotAssetsRequiresBootParams(t *testing.T) {
 	rt.deps.pathExists = func(string) bool { return true }
 	dir := useTestGoldenSnapshotDir(t, rt)
 
-	if err := rt.pinSnapshotAssets(); err != nil {
+	if _, err := rt.pinSnapshotAssets(); err != nil {
 		t.Fatalf("pinSnapshotAssets() with a valid sidecar: %v", err)
 	}
 
 	if err := os.Remove(filepath.Join(dir, bootParamsFileName)); err != nil {
 		t.Fatal(err)
 	}
-	if err := rt.pinSnapshotAssets(); err == nil || !strings.Contains(err.Error(), "boot parameters") {
+	if _, err := rt.pinSnapshotAssets(); err == nil || !strings.Contains(err.Error(), "boot parameters") {
 		t.Fatalf("pinSnapshotAssets() without a sidecar error = %v", err)
 	}
 }
@@ -239,7 +239,7 @@ func TestPinSnapshotAssetsRejectsSnapshotBuiltForAnotherGuestIP(t *testing.T) {
 	p.GuestIP = "10.9.9.9"
 	writeBootParams(t, bootParamsPath(rt.config), p)
 
-	err := rt.pinSnapshotAssets()
+	_, err := rt.pinSnapshotAssets()
 	if err == nil || !strings.Contains(err.Error(), "guest_ip") {
 		t.Fatalf("pinSnapshotAssets() error = %v, want a guest_ip mismatch", err)
 	}

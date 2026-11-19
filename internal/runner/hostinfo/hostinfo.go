@@ -132,3 +132,19 @@ func VolumeTotal(path string) (int64, error) {
 	}
 	return int64(stat.Blocks) * int64(stat.Bsize), nil
 }
+
+// MemoryBudget is MemTotal, or the cgroup limit when that is lower.
+func MemoryBudget(meminfo, selfCgroup, cgroupRoot string) (int64, error) {
+	budget, err := MemTotal(meminfo)
+	if err != nil {
+		return 0, err
+	}
+	limit, ok, err := CgroupMemoryLimit(selfCgroup, cgroupRoot)
+	if err != nil {
+		return 0, err
+	}
+	if ok && limit < budget {
+		budget = limit
+	}
+	return budget, nil
+}

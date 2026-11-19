@@ -6,10 +6,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
-	fcnetwork "github.com/n8n-io/sandbox-service/internal/runner/runtime/firecracker.ee/network"
 	"github.com/n8n-io/sandbox-service/internal/shellquote"
 )
 
@@ -69,19 +67,18 @@ func (r *Runtime) reconcileJailerState(ctx context.Context) error {
 }
 
 func (r *Runtime) reconcileNetworkNamespaces(ctx context.Context) error {
-	script := startupNetworkCleanupScript(len(r.slots))
+	script := startupNetworkCleanupScript()
 	return r.deps.run(ctx, "sudo", "/bin/sh", "-c", script)
 }
 
-func startupNetworkCleanupScript(capacity int) string {
-	var b strings.Builder
-	b.WriteString("set -eu\n")
-	for slot := range capacity {
-		b.WriteString(strings.TrimSpace(fcnetwork.CleanupScript(slot)))
-		b.WriteByte('\n')
-	}
-	b.WriteString("ip netns list | awk '{print $1}' | grep '^fc-sb-' | xargs -r -n1 ip netns delete 2>/dev/null || true\n")
-	return b.String()
+// startupNetworkCleanupScript deletes every slot netns and host veth by name.
+// It runs before admission sizes the slots, so it cannot count them; deleting a
+// netns removes its veth pair, and the veth line catches a host end left by a
+// build that died before moving its peer into the namespace.
+func startupNetworkCleanupScript() string {
+	return "set -eu\n" +
+		"ip netns list | awk '{print $1}' | grep '^fc-sb-' | xargs -r -n1 ip netns delete 2>/dev/null || true\n" +
+		"ip -o link show | awk -F': ' '{print $2}' | cut -d@ -f1 | grep '^fc-veth-' | xargs -r -n1 ip link delete 2>/dev/null || true\n"
 }
 
 func reconcileContext() (context.Context, context.CancelFunc) {

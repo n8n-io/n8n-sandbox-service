@@ -88,3 +88,17 @@ func TestVolumeTotal(t *testing.T) {
 		t.Fatalf("got %d, %v", n, err)
 	}
 }
+
+func TestMemoryBudget(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "memory.max"), []byte("4294967296\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	meminfo := write(t, "MemTotal: 67108864 kB\n") // 64 GiB
+	if got, err := MemoryBudget(meminfo, write(t, "0::/\n"), root); err != nil || got != 4<<30 {
+		t.Fatalf("lower cgroup limit: got %d, %v", got, err)
+	}
+	if got, err := MemoryBudget(meminfo, filepath.Join(t.TempDir(), "missing"), root); err != nil || got != 64<<30 {
+		t.Fatalf("no cgroup: got %d, %v", got, err)
+	}
+}

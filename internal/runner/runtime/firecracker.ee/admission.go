@@ -46,10 +46,10 @@ type releaseManifest struct {
 // and runs an admission canary before marking the runtime ready. Failures
 // (including transient host NAT) retry with backoff via runAdmissionLoop.
 //
-// It also starts the slot wirer (network_wirer.go), which builds free slots' network
-// namespaces in the background. Admission does not wait for it.
+// Admission also sizes the slots from the golden snapshot it pins, then starts
+// the slot wirer (network_wirer.go), which builds free slots' network namespaces
+// in the background. Admission does not wait for it.
 func (r *Runtime) Prepare(ctx context.Context) {
-	go r.wireSlots(ctx)
 	r.runAdmissionLoop(ctx)
 }
 
@@ -101,7 +101,11 @@ func (r *Runtime) admitOnce(ctx context.Context) error {
 	if err := r.deps.checkTemplateKernel(templateKernelPath(r.config)); err != nil {
 		return err
 	}
-	if err := r.pinSnapshotAssets(); err != nil {
+	params, err := r.pinSnapshotAssets()
+	if err != nil {
+		return err
+	}
+	if err := r.sizeSlots(ctx, params); err != nil {
 		return err
 	}
 	return r.runAdmissionCanary(ctx)
@@ -133,26 +137,23 @@ func (r *Runtime) pinBaseAssets() error {
 	return r.verifyManifestPin()
 }
 
-func (r *Runtime) pinSnapshotAssets() error {
+func (r *Runtime) pinSnapshotAssets() (*bootParams, error) {
 	required := map[string]string{
 		"snapshot memory": r.config.SnapshotMemPath,
 		"snapshot state":  r.config.SnapshotStatePath,
 	}
 	for label, path := range required {
 		if !r.deps.pathExists(path) {
-			return fmt.Errorf("firecracker %s path does not exist: %s", label, path)
+			return nil, fmt.Errorf("firecracker %s path does not exist: %s", label, path)
 		}
 	}
 
 	params, err := loadBootParams(bootParamsPath(r.config))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := params.matchesConfig(r.config); err != nil {
-		return err
-	}
-	if err := r.checkCapacityAtAdmission(params); err != nil {
-		return err
+		return nil, err
 	}
 	slog.Info("firecracker golden snapshot boot parameters",
 		"vcpu_count", params.VCPUCount,
@@ -161,7 +162,7 @@ func (r *Runtime) pinSnapshotAssets() error {
 		"boot_args", params.BootArgs,
 		"guest_ip", params.GuestIP,
 	)
-	return nil
+	return params, nil
 }
 
 func (r *Runtime) verifyManifestPin() error {

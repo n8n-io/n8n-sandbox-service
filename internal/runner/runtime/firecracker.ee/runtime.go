@@ -64,6 +64,9 @@ type Runtime struct {
 	// collapses into one pass over the slots.
 	wireCh chan struct{}
 
+	// wireOnce starts the slot wirer once admission has allocated the slots.
+	wireOnce sync.Once
+
 	// volumeBuild is the one volume build the runner runs at a time, if any
 	// (volume_build.go).
 	volumeBuildMu sync.Mutex
@@ -87,7 +90,6 @@ func New(runnerConfig *config.Config, cfg Config) *Runtime {
 		runnerConfig: runnerConfig,
 		config:       cfg,
 		deps:         defaultDependencies(cfg),
-		slots:        make([]slotState, maxInt32(runnerConfig.CapacityTotal, 0)),
 		sandboxes:    make(map[string]*sandboxState),
 		readyCh:      make(chan struct{}),
 		wireCh:       make(chan struct{}, 1),
@@ -404,11 +406,11 @@ func (r *Runtime) Ready(context.Context) error {
 			return fmt.Errorf("firecracker %s path does not exist: %s", label, path)
 		}
 	}
-	if len(r.slots) == 0 {
-		return fmt.Errorf("firecracker runtime has no capacity")
-	}
 	if !r.admissionOK.Load() {
 		return fmt.Errorf("firecracker admission canary has not passed")
+	}
+	if len(r.slotList()) == 0 {
+		return fmt.Errorf("firecracker runtime has no capacity")
 	}
 	return nil
 }
@@ -614,7 +616,7 @@ func (r *Runtime) Shutdown(ctx context.Context) {
 	}
 	// A slot still held here belongs to a delete that failed or is in flight and
 	// is that delete's to clean; startup reconcile backstops the rest.
-	for slot := range r.slots {
+	for slot := range r.slotList() {
 		if err := r.clearSlotNetwork(ctx, slot, nil); err != nil {
 			slog.Warn("firecracker free slot cleanup failed on shutdown", "slot", slot, "err", err)
 		}
@@ -765,6 +767,14 @@ func (r *Runtime) untrackSandbox(state *sandboxState) {
 		r.releaseSlotLocked(state.slot)
 	}
 	r.releaseVolumesLocked(state)
+}
+
+// slotList returns the slot array. Admission allocates it once, under r.mu, so a
+// reader not already holding r.mu takes it here; the elements are never replaced.
+func (r *Runtime) slotList() []slotState {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.slots
 }
 
 // reserveSlotLocked marks the first free Firecracker slot as occupied. r.mu
@@ -977,13 +987,6 @@ func pathExists(path string) bool {
 
 func commandString(name string, args []string) string {
 	return strings.TrimSpace(name + " " + strings.Join(args, " "))
-}
-
-func maxInt32(n int32, min int) int {
-	if n < int32(min) {
-		return min
-	}
-	return int(n)
 }
 
 func shortID(id string) string {

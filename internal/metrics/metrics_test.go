@@ -372,7 +372,7 @@ func TestRunnerRecorderStartupGauges(t *testing.T) {
 	r := NewRunnerRecorder(true)
 	r.SetHostMemoryBytes(68719476736)
 	r.SetDataVolumeBytes(1073741824)
-	r.SetCapacityTotal(106)
+	r.SetCapacityTotal(func() float64 { return 106 })
 
 	body := scrape(t, r.Registry())
 	for _, want := range []string{
@@ -388,7 +388,7 @@ func TestRunnerRecorderStartupGauges(t *testing.T) {
 	off := NewRunnerRecorder(false)
 	off.SetHostMemoryBytes(1)
 	off.SetDataVolumeBytes(1)
-	off.SetCapacityTotal(1)
+	off.SetCapacityTotal(func() float64 { return 1 })
 }
 
 func TestRouteFromPattern(t *testing.T) {

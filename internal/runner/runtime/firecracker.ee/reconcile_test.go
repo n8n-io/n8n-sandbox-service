@@ -9,11 +9,11 @@ import (
 )
 
 func TestStartupNetworkCleanupScript(t *testing.T) {
-	script := startupNetworkCleanupScript(2)
-	if !strings.Contains(script, "fc-sb-0") || !strings.Contains(script, "fc-sb-1") {
+	script := startupNetworkCleanupScript()
+	if !strings.Contains(script, "grep '^fc-sb-' | xargs -r -n1 ip netns delete") {
 		t.Fatalf("script = %q, want slot netns cleanup", script)
 	}
-	if !strings.Contains(script, "fc-veth-0") || !strings.Contains(script, "fc-veth-1") {
+	if !strings.Contains(script, "grep '^fc-veth-' | xargs -r -n1 ip link delete") {
 		t.Fatalf("script = %q, want host veth cleanup", script)
 	}
 }

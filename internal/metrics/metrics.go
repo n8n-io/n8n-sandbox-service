@@ -852,9 +852,21 @@ func (r *RunnerRecorder) SetDataVolumeBytes(v int64) {
 	r.setStartupGauge("data_volume_bytes", "Total size of the filesystem holding the runner data dir, in bytes.", float64(v))
 }
 
-// SetCapacityTotal registers a gauge for the runner's effective capacity, set once at startup.
-func (r *RunnerRecorder) SetCapacityTotal(v int32) {
-	r.setStartupGauge("capacity_total", "Sandboxes this runner admits: the effective capacity it reports to the API (0 is unlimited).", float64(v))
+// SetCapacityTotal registers a scrape-time gauge for the capacity the runner
+// reports to the API. A Firecracker runner reports 0 until admission sizes its slots.
+func (r *RunnerRecorder) SetCapacityTotal(f func() float64) {
+	if r == nil || r.reg == nil {
+		return
+	}
+	r.reg.MustRegister(prometheus.NewGaugeFunc(
+		prometheus.GaugeOpts{
+			Namespace:   Namespace,
+			Name:        "capacity_total",
+			Help:        "Sandboxes this runner admits: the capacity it reports to the API (0 is unlimited on Docker, and on Firecracker before admission).",
+			ConstLabels: prometheus.Labels{"role": RoleRunner},
+		},
+		f,
+	))
 }
 
 func (r *RunnerRecorder) setStartupGauge(name, help string, v float64) {

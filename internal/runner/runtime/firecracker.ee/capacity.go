@@ -1,6 +1,7 @@
 package firecracker
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -32,53 +33,68 @@ type hostPaths struct {
 
 var defaultHostPaths = hostPaths{hostinfo.MeminfoPath, hostinfo.SelfCgroupPath, hostinfo.CgroupRoot}
 
-// ResolveCapacity sets runnerCfg.CapacityTotal: derived from host memory when
-// SANDBOX_RUNNER_CAPACITY_TOTAL is unset, otherwise the set value, which may
-// only lower the derived count. Call it before LoadConfig and New.
-func ResolveCapacity(runnerCfg *config.Config) error {
-	return resolveCapacity(runnerCfg, defaultHostPaths)
+// ResolveConfig loads the Firecracker configuration for main. A set
+// SANDBOX_RUNNER_CAPACITY_TOTAL is validated like any other setting. When
+// boot.json already exists, the memory inputs are checked too, so a bad ratio,
+// an unreadable meminfo or a set count above what memory holds stops the runner
+// before it listens. The slot count itself is worked out in admission
+// (sizeSlots), after Prepare has made sure boot.json exists: on a new VM the
+// snapshot, and with it the guest size, does not exist until then.
+func ResolveConfig(runnerCfg *config.Config) (Config, error) {
+	return resolveConfig(runnerCfg, defaultHostPaths)
 }
 
-func resolveCapacity(runnerCfg *config.Config, host hostPaths) error {
+func resolveConfig(runnerCfg *config.Config, host hostPaths) (Config, error) {
 	if _, err := memoryRatio(); err != nil {
-		return err
+		return Config{}, err
 	}
-	cfg, err := parseConfig()
+	var cfg Config
+	var err error
+	if runnerCfg.CapacityTotalSet {
+		cfg, err = LoadConfig(runnerCfg.CapacityTotal)
+	} else {
+		cfg, err = loadConfigWithoutCapacity()
+	}
 	if err != nil {
-		return err
+		return Config{}, err
 	}
 	boot, err := loadBootParams(bootParamsPath(cfg))
-	if err != nil {
-		if runnerCfg.CapacityTotalSet && errors.Is(err, fs.ErrNotExist) {
-			// Prepare builds the snapshot; admission checks the count then.
-			slog.Info("boot.json not found; starting at the explicit slot count", "slots", runnerCfg.CapacityTotal)
-			return nil
-		}
-		return fmt.Errorf("derive slot count from guest memory: %w", err)
+	if errors.Is(err, fs.ErrNotExist) {
+		slog.Info("firecracker boot.json not found; admission works out the slot count once the golden snapshot exists")
+		return cfg, nil
 	}
+	if err != nil {
+		return Config{}, err
+	}
+	if _, _, err := slotCount(cfg, runnerCfg, boot, host); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+// slotCount is the set SANDBOX_RUNNER_CAPACITY_TOTAL, which may not exceed what
+// memory holds, or else the memory-derived count capped by the proxy port range
+// and the uplink addressing. limit names what bound a derived count.
+func slotCount(cfg Config, runnerCfg *config.Config, boot *bootParams, host hostPaths) (slots int64, limit string, err error) {
 	memorySlots, budget, ratio, err := memorySlotsFor(boot, host)
 	if err != nil {
-		return err
+		return 0, "", err
 	}
-
 	if runnerCfg.CapacityTotalSet {
-		return slotCountError(runnerCfg.CapacityTotal, memorySlots, budget, boot, ratio, true)
-	}
-	slots, binding := memorySlots, "memory"
-	if cfg.ProxyPortStart > 0 && cfg.ProxyPortStart <= 65535 {
-		if ports := int64(65535 - cfg.ProxyPortStart + 1); ports < slots {
-			slots, binding = ports, "proxy port range"
+		if int64(runnerCfg.CapacityTotal) > memorySlots {
+			return 0, "", fmt.Errorf("SANDBOX_RUNNER_CAPACITY_TOTAL %d exceeds the %d slots host memory holds (%d MiB budget, %d MiB per guest plus %d MiB overhead, %d MiB reserved, ratio %g); lower it or leave it unset to derive it",
+				runnerCfg.CapacityTotal, memorySlots, budget>>20, boot.MemSizeMiB, perVMOverhead>>20, fixedReserve>>20, ratio)
 		}
+		return int64(runnerCfg.CapacityTotal), "SANDBOX_RUNNER_CAPACITY_TOTAL", nil
+	}
+	slots, limit = memorySlots, "memory"
+	if ports := int64(65535 - cfg.ProxyPortStart + 1); ports < slots {
+		slots, limit = ports, "proxy port range"
 	}
 	if fcnetwork.MaxSlots < slots {
-		slots, binding = fcnetwork.MaxSlots, "uplink addressing"
+		slots, limit = fcnetwork.MaxSlots, "uplink addressing"
 	}
-	if binding != "memory" {
-		slog.Info("firecracker slot count limited below what host memory holds", "slots", slots, "memory_slots", memorySlots, "limit", binding)
-	}
-	runnerCfg.CapacityTotal = int32(slots)
-	slog.Info("firecracker slot count derived", "slots", slots, "memory_budget_bytes", budget, "mem_size_mib", boot.MemSizeMiB, "ratio", ratio)
-	return nil
+	return slots, limit, nil
 }
 
 func memoryRatio() (float64, error) {
@@ -132,44 +148,40 @@ func memorySlotsFor(boot *bootParams, host hostPaths) (slots, budget int64, rati
 	if err != nil {
 		return 0, 0, 0, err
 	}
-	budget, err = hostinfo.MemTotal(host.meminfo)
+	budget, err = hostinfo.MemoryBudget(host.meminfo, host.selfCgroup, host.cgroupRoot)
 	if err != nil {
 		return 0, 0, 0, err
-	}
-	limit, ok, err := hostinfo.CgroupMemoryLimit(host.selfCgroup, host.cgroupRoot)
-	if err != nil {
-		return 0, 0, 0, err
-	}
-	if ok && limit < budget {
-		budget = limit
 	}
 	slots, err = memorySlotCount(budget, int64(boot.MemSizeMiB), ratio)
 	return slots, budget, ratio, err
 }
 
-func slotCountError(slots int32, memorySlots, budget int64, boot *bootParams, ratio float64, explicit bool) error {
-	if int64(slots) <= memorySlots {
-		return nil
-	}
-	detail := fmt.Sprintf("%d exceeds the %d slots host memory holds (%d MiB budget, %d MiB per guest plus %d MiB overhead, %d MiB reserved, ratio %g)",
-		slots, memorySlots, budget>>20, boot.MemSizeMiB, perVMOverhead>>20, fixedReserve>>20, ratio)
-	if explicit {
-		return fmt.Errorf("SANDBOX_RUNNER_CAPACITY_TOTAL %s; lower it or leave it unset to derive it", detail)
-	}
-	return fmt.Errorf("firecracker slot count %s; it was fixed at startup from an older boot.json, so restart the runner", detail)
-}
-
-// checkCapacityAtAdmission compares the allocated slot count with the boot.json
-// admission pinned. Prepare may have just created it, and a derived count is
-// never revised in place.
-func (r *Runtime) checkCapacityAtAdmission(boot *bootParams) error {
+// sizeSlots allocates the slot array from the boot.json admission pinned and
+// starts the slot wirer. Slots back proxy ports, netns and TAP devices, so the
+// first admission to get here fixes the count for the life of the process. A
+// later one keeps that count when it still fits, and fails when a rebuilt
+// snapshot fits fewer slots than the ones already allocated.
+func (r *Runtime) sizeSlots(ctx context.Context, boot *bootParams) error {
 	host := r.hostPaths
 	if host == (hostPaths{}) {
 		host = defaultHostPaths
 	}
-	memorySlots, budget, ratio, err := memorySlotsFor(boot, host)
+	want, limit, err := slotCount(r.config, r.runnerConfig, boot, host)
 	if err != nil {
 		return err
 	}
-	return slotCountError(r.runnerConfig.CapacityTotal, memorySlots, budget, boot, ratio, r.runnerConfig.CapacityTotalSet)
+	r.mu.Lock()
+	have := len(r.slots)
+	if have == 0 {
+		r.slots = make([]slotState, want)
+	}
+	r.mu.Unlock()
+	if have > 0 && int64(have) > want {
+		return fmt.Errorf("firecracker has %d slots, but the golden snapshot rebuilt since then holds %d; restart the runner", have, want)
+	}
+	if have == 0 {
+		slog.Info("firecracker slot count set", "slots", want, "limit", limit, "mem_size_mib", boot.MemSizeMiB)
+	}
+	r.wireOnce.Do(func() { go r.wireSlots(ctx) })
+	return nil
 }

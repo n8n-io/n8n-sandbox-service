@@ -1,6 +1,7 @@
 package firecracker
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -85,13 +86,23 @@ func writeHostMemory(dir string, memTotalBytes int64, cgroupLimit string) (hostP
 	return h, nil
 }
 
+// resolve runs the startup checks, then works out the slot count the way
+// admission does from the boot.json that exists.
 func resolve(h capacityHost, set bool, total int32) (int32, error) {
-	cfg := &config.Config{CapacityTotal: total, CapacityTotalSet: set}
+	rc := &config.Config{CapacityTotal: total, CapacityTotalSet: set}
 	if !set {
-		cfg.CapacityTotal = 1000
+		rc.CapacityTotal = 1000
 	}
-	err := resolveCapacity(cfg, h)
-	return cfg.CapacityTotal, err
+	cfg, err := resolveConfig(rc, h)
+	if err != nil {
+		return 0, err
+	}
+	boot, err := loadBootParams(bootParamsPath(cfg))
+	if err != nil {
+		return 0, err
+	}
+	slots, _, err := slotCount(cfg, rc, boot, h)
+	return int32(slots), err
 }
 
 const gib = int64(1) << 30
@@ -134,7 +145,6 @@ func TestResolveCapacityNamesMissingInputs(t *testing.T) {
 		ratio   string
 		wantErr string
 	}{
-		{"no boot.json", 64 * gib, 0, "", "boot parameters"},
 		{"zero mem_size_mib", 64 * gib, -1, "", "mem_size_mib"},
 		{"zero ratio", 64 * gib, 512, "0", memoryRatioEnv},
 		{"negative ratio", 64 * gib, 512, "-1", memoryRatioEnv},
@@ -188,36 +198,52 @@ func TestResolveCapacityRatioScalesMemorySlots(t *testing.T) {
 	}
 }
 
-func TestResolveCapacityWithoutBootParams(t *testing.T) {
+// A new VM has no boot.json until Prepare builds the snapshot, so startup must
+// not need it, whether or not a count is set.
+func TestResolveConfigWithoutBootParams(t *testing.T) {
 	h := setupCapacityHost(t, 64*gib, "", 0)
-	// Unset: there is no count to allocate, so startup fails naming boot.json.
-	if _, err := resolve(h, false, 0); err == nil || !strings.Contains(err.Error(), bootParamsFileName) {
-		t.Fatalf("unset: want error naming %s, got %v", bootParamsFileName, err)
+	for _, set := range []bool{false, true} {
+		rc := &config.Config{CapacityTotal: 500, CapacityTotalSet: set}
+		if _, err := resolveConfig(rc, h); err != nil {
+			t.Fatalf("set=%v: startup without boot.json failed: %v", set, err)
+		}
 	}
-	// Set: starts at the explicit count, even one the host could not hold.
-	if got, err := resolve(h, true, 500); err != nil || got != 500 {
-		t.Fatalf("set: got %d, %v; want 500", got, err)
+	// A bad ratio still fails at startup.
+	t.Setenv(memoryRatioEnv, "0")
+	if _, err := resolveConfig(&config.Config{}, h); err == nil || !strings.Contains(err.Error(), memoryRatioEnv) {
+		t.Fatalf("want ratio error, got %v", err)
 	}
 }
 
-func TestAdmissionChecksCapacityAgainstPinnedSnapshot(t *testing.T) {
-	h := setupCapacityHost(t, 64*gib, "", 512)
+func TestSizeSlotsAtAdmission(t *testing.T) {
+	h := fakeHostMemory(t, 64*gib, "")
 	boot := testBootParams(defaultConfig())
 	boot.MemSizeMiB = 512
 	for _, tt := range []struct {
-		name    string
-		set     bool
-		total   int32
-		wantErr string
+		name      string
+		set       bool
+		total     int32
+		allocated int32
+		want      int
+		wantErr   string
 	}{
-		{"explicit within memory", true, 100, ""},
-		{"explicit above memory", true, 200, "200"},
-		{"derived count still fits", false, 106, ""},
-		{"derived count from an older smaller guest", false, 1000, "1000"},
+		{"derived on a new runtime", false, 1000, 0, 106, ""},
+		{"explicit within memory", true, 100, 0, 100, ""},
+		{"explicit above memory", true, 200, 0, 0, "200"},
+		{"already sized and still fits", false, 1000, 50, 50, ""},
+		{"already sized for a larger snapshot's guests", false, 1000, 200, 200, "restart"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			rt := &Runtime{runnerConfig: &config.Config{CapacityTotal: tt.total, CapacityTotalSet: tt.set}, hostPaths: h}
-			err := rt.checkCapacityAtAdmission(&boot)
+			rt := newTestRuntime(tt.allocated)
+			rt.runnerConfig = &config.Config{CapacityTotal: tt.total, CapacityTotalSet: tt.set}
+			rt.hostPaths = h
+			// A cancelled context makes the wirer sizeSlots starts return at once.
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			err := rt.sizeSlots(ctx, &boot)
+			if got := len(rt.slotList()); got != tt.want {
+				t.Fatalf("slots = %d, want %d", got, tt.want)
+			}
 			if tt.wantErr == "" {
 				if err != nil {
 					t.Fatalf("err = %v", err)
