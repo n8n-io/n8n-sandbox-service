@@ -1,0 +1,20 @@
+internal/codedaemon/cancel_test.go
+  h_8fb27e0cdf6d1e 5-6,61-70
+internal/codedaemon/events.go
+  h_8fb27e0cdf6d1e 143-147,149-150,168
+internal/codedaemon/worker.go
+  h_8fb27e0cdf6d1e 370,376-378,381-383,385-393
+internal/codedaemon/worker_test.go
+  h_8fb27e0cdf6d1e 194
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "293ebc3b7d94cf62b5109bf533dc7c3e344d0b04",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
