@@ -789,6 +789,7 @@ func TestLoadAPIRejectsInvalidSQLiteWAL(t *testing.T) {
 
 func TestLoadAPICodeSandboxesEnabled(t *testing.T) {
 	setRequiredAPIEnv(t)
+	t.Setenv("SANDBOX_API_CODE_SANDBOXES_ENABLED", "")
 
 	cfg, err := LoadAPI()
 	if err != nil {
