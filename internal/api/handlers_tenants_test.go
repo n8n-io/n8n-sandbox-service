@@ -25,10 +25,11 @@ func newTestGateway(t *testing.T, adminKey string) (http.Handler, store.SandboxS
 	t.Cleanup(func() { _ = s.Close() })
 
 	router, err := NewGatewayRouter(s, withRunnerTLS(&config.APIConfig{
-		APIKeys:             map[string]struct{}{adminKey: {}},
-		RunnerAPIKey:        "runner-key",
-		MaxFileBytes:        1024,
-		DefaultMaxSandboxes: 50,
+		APIKeys:              map[string]struct{}{adminKey: {}},
+		RunnerAPIKey:         "runner-key",
+		MaxFileBytes:         1024,
+		DefaultMaxSandboxes:  50,
+		CodeSandboxesEnabled: true,
 	}), registry.New(45*time.Second), metrics.NewAPIRecorder(false), NewActivityRecorder(s, nil))
 	if err != nil {
 		t.Fatalf("create gateway router: %v", err)

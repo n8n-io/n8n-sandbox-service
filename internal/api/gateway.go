@@ -57,7 +57,9 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	// A create holds its slot until the runner is done, even after the client
 	// has gone, so a burst of creates is bounded like any other request.
 	mux.HandleFunc("POST /sandboxes", limitTenant(handleCreateSandbox(s, s, reg, cfg, rec, quota)))
-	mux.HandleFunc("POST /code/sandboxes", limitTenant(handleCreateCodeSandbox(s, s, reg, cfg, rec, quota, &singleflight.Group{})))
+	if cfg.CodeSandboxesEnabled {
+		mux.HandleFunc("POST /code/sandboxes", limitTenant(handleCreateCodeSandbox(s, s, reg, cfg, rec, quota, &singleflight.Group{})))
+	}
 	mux.HandleFunc("GET /sandboxes/{id}", handleGetSandbox(s, cfg))
 	mux.HandleFunc("DELETE /sandboxes/{id}", handleDeleteSandbox(s, cfg, rec))
 
