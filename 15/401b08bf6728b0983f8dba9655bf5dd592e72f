@@ -1,0 +1,43 @@
+cmd/code-daemon/main.go
+  h_8fb27e0cdf6d1e 1,2-11,13-15,16,17-18,20-32,33-36,37-43
+internal/codedaemon/daemon.go
+  h_8fb27e0cdf6d1e 1,2,3-7,8-9,10,11,14-16,17,18-19,20,21,22-24,25-27,31-32,32,35-38,39,40,41-42,43-48,49,50,51-52,53,54,55,56,57,58-60,61-64,65-80,81-89,90-91,92-107,108,109-116,117,118,119,120-138
+internal/codedaemon/daemon_test.go
+  h_8fb27e0cdf6d1e 1-44
+internal/codedaemon/admission.go
+  h_8fb27e0cdf6d1e 1-75
+internal/codedaemon/admission_test.go
+  h_8fb27e0cdf6d1e 1-124
+docs/configuration.md
+  h_8fb27e0cdf6d1e 10,194-195,196,197-199,200,201-203,204-214,215-216,217
+  h_8fb27e0cdf6d1e 200
+internal/codedaemon/worker_darwin.go
+  h_8fb27e0cdf6d1e 1-28
+internal/codedaemon/worker_linux.go
+  h_8fb27e0cdf6d1e 1-13
+internal/codedaemon/task.go
+  h_8fb27e0cdf6d1e 1-101
+internal/codedaemon/worker_test.go
+  h_8fb27e0cdf6d1e 1-139,155-247
+  h_8fb27e0cdf6d1e 140-154
+internal/codedaemon/runtime_config.go
+  h_8fb27e0cdf6d1e 1-9,12-14,16-47
+internal/codedaemon/worker.go
+  h_8fb27e0cdf6d1e 1-189,192-272
+  h_8fb27e0cdf6d1e 190-191
+internal/codedaemon/runtime_config_test.go
+  h_8fb27e0cdf6d1e 1-59
+internal/codedaemon/task_test.go
+  h_8fb27e0cdf6d1e 1-88
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "15401b08bf6728b0983f8dba9655bf5dd592e72f",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
