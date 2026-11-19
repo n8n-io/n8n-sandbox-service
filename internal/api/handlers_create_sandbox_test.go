@@ -89,6 +89,7 @@ func TestCreateSandboxClientIDCrossTenantConflict(t *testing.T) {
 	if err := s.Create(&store.SandboxRecord{
 		ID: sid, Status: "running", CreatedAt: 1, LastActiveAt: time.Now().Unix(),
 		TenantID: a.Tenant.ID, RunnerHTTPBase: "http://127.0.0.1:9",
+		Kind: store.KindGeneral,
 	}); err != nil {
 		t.Fatalf("seed sandbox: %v", err)
 	}
@@ -102,7 +103,7 @@ func TestCreateSandboxClientIDCrossTenantConflict(t *testing.T) {
 	}
 
 	// Owner still has the sandbox; foreign claim must not delete it.
-	got, err := s.Get(sid)
+	got, err := s.GetAnyKind(sid)
 	if err != nil || got == nil || got.TenantID != a.Tenant.ID {
 		t.Fatalf("owner sandbox altered: got=%+v err=%v", got, err)
 	}
@@ -116,6 +117,7 @@ func TestCreateSandboxClientIDAdminOwnedUnavailableToTenant(t *testing.T) {
 	if err := s.Create(&store.SandboxRecord{
 		ID: sid, Status: "running", CreatedAt: 1, LastActiveAt: time.Now().Unix(),
 		TenantID: store.AdminTenantID, RunnerHTTPBase: "http://127.0.0.1:9",
+		Kind: store.KindGeneral,
 	}); err != nil {
 		t.Fatalf("seed sandbox: %v", err)
 	}
@@ -135,6 +137,7 @@ func TestCreateSandboxClientIDReuseOwn(t *testing.T) {
 	if err := s.Create(&store.SandboxRecord{
 		ID: sid, Status: "running", CreatedAt: now, LastActiveAt: now,
 		TenantID: tenant.Tenant.ID, RunnerHTTPBase: "http://127.0.0.1:9",
+		Kind: store.KindGeneral,
 	}); err != nil {
 		t.Fatalf("seed sandbox: %v", err)
 	}
@@ -161,6 +164,7 @@ func TestCreateSandboxClientIDReuseAtQuota(t *testing.T) {
 	if err := s.Create(&store.SandboxRecord{
 		ID: sid, Status: "running", CreatedAt: now, LastActiveAt: now,
 		TenantID: tenant.Tenant.ID, RunnerHTTPBase: "http://127.0.0.1:9",
+		Kind: store.KindGeneral,
 	}); err != nil {
 		t.Fatalf("seed sandbox: %v", err)
 	}
@@ -179,6 +183,7 @@ func TestCreateSandboxQuotaExceeded(t *testing.T) {
 	if err := s.Create(&store.SandboxRecord{
 		ID: "55555555-5555-4555-8555-555555555555", Status: "running",
 		CreatedAt: 1, LastActiveAt: 1, TenantID: tenant.Tenant.ID,
+		Kind: store.KindGeneral,
 	}); err != nil {
 		t.Fatalf("seed sandbox: %v", err)
 	}
@@ -301,7 +306,7 @@ func TestCreateSandboxQuotaHoldsUnderConcurrentCreates(t *testing.T) {
 				t.Fatalf("%d of %d creates succeeded, want exactly the quota %d", len(created), creates, quota)
 			}
 
-			stored, err := s.ListByTenant(tenant.Tenant.ID)
+			stored, err := s.List(store.SandboxFilter{TenantID: tenant.Tenant.ID, Kinds: []store.Kind{store.KindGeneral}})
 			if err != nil || len(stored) != quota {
 				t.Fatalf("stored %d sandboxes err=%v, want %d", len(stored), err, quota)
 			}
@@ -352,7 +357,7 @@ func TestCreateSandboxFreesQuotaSlotWhenCreateEnds(t *testing.T) {
 			// Saved meanwhile, as by another API pod.
 			const other = "12121212-1212-4212-8212-121212121212"
 			f.createHook = func(context.Context) {
-				if err := s.Create(&store.SandboxRecord{ID: other, Status: "running", TenantID: tenantID}); err != nil {
+				if err := s.Create(&store.SandboxRecord{Kind: store.KindGeneral, ID: other, Status: "running", TenantID: tenantID}); err != nil {
 					t.Errorf("plant other pod's sandbox: %v", err)
 				}
 			}
@@ -372,7 +377,7 @@ func TestCreateSandboxFreesQuotaSlotWhenCreateEnds(t *testing.T) {
 				t.Fatalf("first create: got %d body=%s, want %d", rr.Code, rr.Body.String(), tc.want)
 			}
 			undo()
-			stored, err := s.ListByTenant(tenant.Tenant.ID)
+			stored, err := s.List(store.SandboxFilter{TenantID: tenant.Tenant.ID, Kinds: []store.Kind{store.KindGeneral}})
 			if err != nil {
 				t.Fatalf("list: %v", err)
 			}
@@ -429,12 +434,12 @@ func TestCreateSandboxCountsUnclearSaveAsSaved(t *testing.T) {
 			}
 			reg := registry.New(45 * time.Second)
 			reg.Upsert("runner-1", "https://127.0.0.1:9", startFakeRunnerControl(t, &fakeSandboxControl{}), true, false, 10, 0, 0)
-			q := newTenantQuota(s.CountByTenant)
+			q := newTenantQuota(countTenantSandboxes(s))
 			// Keeps the tenant's entry, and so its counts, after the create.
 			hold, _, _ := q.reserve(tenantID, 2)
 			defer hold(false)
 
-			h := handleCreateSandbox(createErrStore{SandboxStore: s, save: tc.save, err: tc.err}, reg, idleSweepConfig(), metrics.NewAPIRecorder(false), q)
+			h := handleCreateSandbox(createErrStore{SandboxStore: s, save: tc.save, err: tc.err}, s, reg, idleSweepConfig(), metrics.NewAPIRecorder(false), q)
 			req := httptest.NewRequest(http.MethodPost, "/sandboxes", nil)
 			req = req.WithContext(withAuthIdentity(req.Context(), authIdentity{Role: roleTenant, TenantID: tenantID}))
 			rr := httptest.NewRecorder()
@@ -552,7 +557,7 @@ func TestCreateSandboxClientDisconnectStillStoresRow(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if rec, err := s.Get(resp.ID); err != nil || rec == nil {
+	if rec, err := s.GetAnyKind(resp.ID); err != nil || rec == nil {
 		t.Fatalf("stored row = %+v err=%v, want the created sandbox", rec, err)
 	}
 	if _, deleted := fake.calls(); len(deleted) != 0 {
@@ -640,7 +645,7 @@ func TestCreateSandboxPersistsEphemeral(t *testing.T) {
 	if !resp.Ephemeral {
 		t.Fatalf("create response ephemeral = false, want true: %s", rr.Body.String())
 	}
-	rec, err := s.Get(resp.ID)
+	rec, err := s.GetAnyKind(resp.ID)
 	if err != nil || rec == nil || !rec.Ephemeral {
 		t.Fatalf("stored row = %+v err=%v, want ephemeral", rec, err)
 	}
@@ -674,7 +679,7 @@ func TestCreateSandboxEgress(t *testing.T) {
 	if resp.Egress != "none" {
 		t.Fatalf("create response egress = %q, want none: %s", resp.Egress, rr.Body.String())
 	}
-	if rec, err := s.Get(sid); err != nil || rec == nil || rec.Egress != "none" {
+	if rec, err := s.GetAnyKind(sid); err != nil || rec == nil || rec.Egress != "none" {
 		t.Fatalf("stored row = %+v err=%v, want egress none", rec, err)
 	}
 	ctl.mu.Lock()
@@ -702,12 +707,12 @@ func TestCreateSandboxEgress(t *testing.T) {
 		t.Fatalf("default create_options_json = %q, want {\"egress\":\"public\"}", last)
 	}
 
-	before, _ := s.Count()
+	before, _ := s.Count(store.KindFilter(store.AllKinds()...))
 	rr = postCreateSandbox(t, router, "admin-key", `{"egress":"allow-all"}`)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("invalid egress: expected %d, got %d body=%s", http.StatusBadRequest, rr.Code, rr.Body.String())
 	}
-	if after, _ := s.Count(); after != before {
+	if after, _ := s.Count(store.KindFilter(store.AllKinds()...)); after != before {
 		t.Fatalf("invalid egress created a sandbox: count %d -> %d", before, after)
 	}
 }
@@ -722,7 +727,7 @@ func TestCreateSandboxRejectsUnknownField(t *testing.T) {
 	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "invalid request body") {
 		t.Fatalf("unknown field: got %d body=%s, want %d invalid request body", rr.Code, rr.Body.String(), http.StatusBadRequest)
 	}
-	if stored, _ := sandboxStore.Count(); stored != 0 || ctl.creates() != 0 {
+	if stored, _ := sandboxStore.Count(store.KindFilter(store.AllKinds()...)); stored != 0 || ctl.creates() != 0 {
 		t.Fatalf("unknown field created a sandbox: stored %d, runner creates %d", stored, ctl.creates())
 	}
 }
@@ -769,7 +774,7 @@ func TestCreateSandboxReconnectRefusesOtherEgress(t *testing.T) {
 			router, s, _ := newIdleTestGateway(t, "admin-key", ctl)
 			// A concurrent create of the same id wins while this one is at the runner.
 			ctl.createHook = func(context.Context) {
-				if err := s.Create(&store.SandboxRecord{ID: sid, Status: "running", TenantID: store.AdminTenantID, Egress: tc.existing}); err != nil {
+				if err := s.Create(&store.SandboxRecord{Kind: store.KindGeneral, ID: sid, Status: "running", TenantID: store.AdminTenantID, Egress: tc.existing}); err != nil {
 					t.Errorf("plant existing row: %v", err)
 				}
 			}
@@ -806,7 +811,7 @@ func TestCreateSandboxRefusesUnconfirmedEgress(t *testing.T) {
 			if rr.Code != tc.want {
 				t.Fatalf("expected %d, got %d body=%s", tc.want, rr.Code, rr.Body.String())
 			}
-			n, _ := s.Count()
+			n, _ := s.Count(store.KindFilter(store.AllKinds()...))
 			_, deleted := ctl.calls()
 			if tc.want == http.StatusCreated {
 				if n != 1 || len(deleted) != 0 {

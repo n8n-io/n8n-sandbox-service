@@ -69,6 +69,7 @@ func TestSandboxProxyDoesNotCountServerErrorsAsActivity(t *testing.T) {
 	if err := s.Create(&store.SandboxRecord{
 		ID: sid, Status: "stopped", CreatedAt: 1, LastActiveAt: staleActive,
 		TenantID: store.AdminTenantID, RunnerHTTPBase: runner.URL,
+		Kind: store.KindGeneral,
 	}); err != nil {
 		t.Fatalf("create sandbox: %v", err)
 	}
@@ -89,7 +90,7 @@ func TestSandboxProxyDoesNotCountServerErrorsAsActivity(t *testing.T) {
 		}
 		activity.write()
 
-		rec, err := s.Get(sid)
+		rec, err := s.GetAnyKind(sid)
 		if err != nil {
 			t.Fatalf("get sandbox: %v", err)
 		}
@@ -108,7 +109,7 @@ func TestSandboxProxyDoesNotCountServerErrorsAsActivity(t *testing.T) {
 		t.Fatalf("upstream 200: proxy returned %d", rr.Code)
 	}
 	activity.write()
-	rec, err := s.Get(sid)
+	rec, err := s.GetAnyKind(sid)
 	if err != nil {
 		t.Fatalf("get sandbox: %v", err)
 	}
@@ -136,6 +137,7 @@ func TestSandboxProxyCountsClientErrorsAsActivity(t *testing.T) {
 	if err := s.Create(&store.SandboxRecord{
 		ID: sid, Status: "stopped", CreatedAt: 1, LastActiveAt: 1,
 		TenantID: store.AdminTenantID, RunnerHTTPBase: runner.URL,
+		Kind: store.KindGeneral,
 	}); err != nil {
 		t.Fatalf("create sandbox: %v", err)
 	}
@@ -149,7 +151,7 @@ func TestSandboxProxyCountsClientErrorsAsActivity(t *testing.T) {
 	}
 	activity.write()
 
-	rec, err := s.Get(sid)
+	rec, err := s.GetAnyKind(sid)
 	if err != nil {
 		t.Fatalf("get sandbox: %v", err)
 	}
@@ -175,6 +177,7 @@ func TestSandboxProxyDoesNotCountUnreachableRunnerAsActivity(t *testing.T) {
 	if err := s.Create(&store.SandboxRecord{
 		ID: sid, Status: "stopped", CreatedAt: 1, LastActiveAt: staleActive,
 		TenantID: store.AdminTenantID, RunnerHTTPBase: runnerURL,
+		Kind: store.KindGeneral,
 	}); err != nil {
 		t.Fatalf("create sandbox: %v", err)
 	}
@@ -188,7 +191,7 @@ func TestSandboxProxyDoesNotCountUnreachableRunnerAsActivity(t *testing.T) {
 	}
 	activity.write()
 
-	rec, err := s.Get(sid)
+	rec, err := s.GetAnyKind(sid)
 	if err != nil {
 		t.Fatalf("get sandbox: %v", err)
 	}
@@ -217,6 +220,7 @@ func TestSandboxProxyRefusesPlaintextRunnerBase(t *testing.T) {
 	if err := s.Create(&store.SandboxRecord{
 		ID: sid, Status: "running", CreatedAt: 1, LastActiveAt: 1,
 		TenantID: store.AdminTenantID, RunnerHTTPBase: runner.URL,
+		Kind: store.KindGeneral,
 	}); err != nil {
 		t.Fatalf("create sandbox: %v", err)
 	}
@@ -245,6 +249,7 @@ func TestSandboxProxyFencesExpiredSandboxWithoutRunnerBase(t *testing.T) {
 	if err := s.Create(&store.SandboxRecord{
 		ID: sid, Status: "running", CreatedAt: stale, LastActiveAt: stale,
 		TenantID: store.AdminTenantID, Ephemeral: true,
+		Kind: store.KindGeneral,
 	}); err != nil {
 		t.Fatalf("create sandbox: %v", err)
 	}
@@ -283,6 +288,7 @@ func TestSandboxProxyCountsStreamingResponseUntilItEnds(t *testing.T) {
 	if err := s.Create(&store.SandboxRecord{
 		ID: sid, Status: "running", CreatedAt: 1, LastActiveAt: 1,
 		TenantID: store.AdminTenantID, RunnerHTTPBase: runner.URL,
+		Kind: store.KindGeneral,
 	}); err != nil {
 		t.Fatalf("create sandbox: %v", err)
 	}
@@ -349,6 +355,7 @@ func TestSandboxProxyWritesWakeAndReturnAfterQuietAtOnce(t *testing.T) {
 		if err := s.Create(&store.SandboxRecord{
 			ID: tc.sid, Status: tc.status, CreatedAt: 1, LastActiveAt: 1,
 			TenantID: store.AdminTenantID, RunnerHTTPBase: runner.URL,
+			Kind: store.KindGeneral,
 		}); err != nil {
 			t.Fatalf("create sandbox: %v", err)
 		}

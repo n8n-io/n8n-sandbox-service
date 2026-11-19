@@ -72,11 +72,15 @@ Authorization runs on every sandbox request through `canAccessSandbox` in
 [internal/api/middleware_auth.go](../internal/api/middleware_auth.go):
 
 - Read, delete and all proxied routes (exec and files) load the sandbox record
-  and compare its `tenant_id` against the caller's. An admin key passes this
-  check for every sandbox, whoever owns it.
-- List is scoped at the query level with `ListByTenant`. The `tenant_id` query
-  parameter that narrows an admin's listing is refused with `403` for tenant
-  keys, so it cannot be used to probe other tenants' ids. Every sandbox
+  of the route's kind only, so a sandbox of another kind is not found, and
+  compare its `tenant_id` against the caller's. An admin key passes this check
+  for every sandbox, whoever owns it. A create whose id belongs to a sandbox
+  of another kind gets `409`.
+- List is scoped at the query level. It always filters by the route's kind.
+  A tenant key lists only its own sandboxes; an admin key lists every tenant's
+  unless it narrows the listing with the `tenant_id` query parameter. That
+  parameter is refused with `403` for tenant keys, so it cannot be used to
+  probe other tenants' ids. Every sandbox
   response names its owner in `tenant_id`; for a tenant that is always its own.
 - Create sets `tenant_id` from the authenticated identity. A caller cannot
   assign a sandbox to another tenant. Create and list switch on the role
@@ -142,7 +146,8 @@ storage, gets the system's CAs, the proxy from the environment and no client
 certificate, so the registration identity goes to the API's host alone. The
 host is compared by name: a URL that names the API by an address or another
 name gets no certificate. Every object is checked against the size and sha256
-the API recorded before the runner keeps it.
+the API recorded before the runner keeps it, or, on Docker, unpacks it
+([Docker volumes](#docker-volumes)).
 
 Exec and file traffic is proxied over the runner's HTTP listener, which requires
 the same two things. It serves TLS using the certificate configured for the
@@ -435,6 +440,49 @@ read-only. The runner ends a builder at
 runs one at a time, and removes the jail, its binds and the build's files on
 every way out and at startup.
 
+### Docker volumes
+
+A Docker runner has no builder: it unpacks a volume's tar itself, once per
+runner, into its volume cache, and binds the tree into each sandbox that
+attaches it. It unpacks only bytes it downloaded by the sha256 the API
+recorded, and the same reader as the builder ([internal/safetar](../internal/safetar/safetar.go))
+holds the tar to the same rules again, through an `os.Root` in the cache's
+`0700` directory, and to the entry count, content bytes and decompressed
+length the API counted and sent with the volume. What else bounds the work:
+
+- The cache sets room aside for the tar and the most its tree can take before
+  it downloads, in its budget and above a floor of 5% of the disk's bytes and
+  inodes, and refuses the fetch like a full runner otherwise.
+- At most two unpacks run at once, and the download, the wait for an unpack
+  slot and the unpack share `SANDBOX_RUNNER_VOLUME_FETCH_TIMEOUT`.
+- A tar that breaks a rule or its counts fails that volume. A failed or cut-off
+  unpack leaves nothing on disk, and the tar is deleted either way.
+
+The tar is parsed by the runner process, root in its container: a flaw in the
+reader would be the runner's. Unpacking in a container of its own, so that the
+runner never reads a tenant tar, was considered and not chosen.
+
+The cache never follows a link in a tree, whatever its target: measuring a
+tree, evicting it and the startup wipe work on the links themselves, and
+neither errors nor log lines carry a name from a tar. A tree's directories are
+`0755`, its files `0644` or `0755`, without setuid, setgid or sticky bits, all
+owned by the runner. Before the first bind, the runner bind-mounts the cache
+dir onto itself and remounts it `nosuid,nodev`, keeping its other flags,
+because Docker can't set either flag on a bind mount but a bind copies those of
+the mount its source is on; it refuses to bind a tree that isn't a
+runner-owned `0755` directory on such a mount. Each tree is bound with
+`--mount type=bind,readonly`, never `noexec`, below `/mnt/`, where the image's
+`/mnt` and every mount target Docker creates are root-owned, so a sandbox can
+read and run its volumes, write nothing in them, and put no link on a mount
+path before a wake. Cache entries are keyed by scope and digest, so a sandbox
+sees only trees of its own tenant or `shared`. `no-new-privileges`, the
+dropped capabilities and Docker's device rules would stand in for `nosuid` and
+`nodev` if a bind lost them.
+
+A sandbox pins its trees until its container is gone, through stops and wakes.
+At startup the runner removes every sandbox container before the cache wipes
+its dir, and refuses to start while a container with volumes survives.
+
 ### Sandbox DNS
 
 | Runtime | Lookups go to | A sandbox can resolve |
@@ -603,6 +651,7 @@ The boundaries above are covered by tests rather than asserted on paper.
 | Docker capability policy, absence of a root path, and denied network administration; no user namespaces on either runtime | [e2e/tests/sandbox-capabilities.spec.ts](../e2e/tests/sandbox-capabilities.spec.ts) |
 | Firecracker daemon root: only the volume mount request is served while it holds root, dropped after that request, sent on every create and cold boot, never proxied | [internal/daemon/volume_mount_test.go](../internal/daemon/volume_mount_test.go), [internal/runner/runtime/firecracker.ee/volume_mount_test.go](../internal/runner/runtime/firecracker.ee/volume_mount_test.go), [internal/runner/server_test.go](../internal/runner/server_test.go), [internal/api/gateway_test.go](../internal/api/gateway_test.go), [e2e/tests/sandbox-capabilities.spec.ts](../e2e/tests/sandbox-capabilities.spec.ts), [e2e/tests/sandbox-crash-recovery.spec.ts](../e2e/tests/sandbox-crash-recovery.spec.ts) |
 | Firecracker volumes: images bound read-only before jailer starts, never chowned, unwritable by the jailed Firecracker as uid 1000 and as root, drive paths not replaceable; mounted `ro,nodev,nosuid`; unmounted and unpinned on every path that ends a sandbox; the daemon's answer trusted only for its shape; read URLs in no error, log line or echo | [internal/runner/runtime/firecracker.ee/volume_attach_test.go](../internal/runner/runtime/firecracker.ee/volume_attach_test.go), [internal/runner/runtime/firecracker.ee/volume_mount_test.go](../internal/runner/runtime/firecracker.ee/volume_mount_test.go), [internal/daemon/volume_mount_test.go](../internal/daemon/volume_mount_test.go), [internal/daemon/volumedrives/volumedrives_test.go](../internal/daemon/volumedrives/volumedrives_test.go), [internal/runner/runtime/volume_test.go](../internal/runner/runtime/volume_test.go), [internal/runner/grpc_control_test.go](../internal/runner/grpc_control_test.go), [e2e/tests/volume-attach.spec.ts](../e2e/tests/volume-attach.spec.ts) |
+| Docker volumes: unpack held to the API's counts and the tar rules, nothing left after a failure, no link followed by measuring, eviction or the wipe, trees runner-owned and readable but not writable by the sandbox, bound `ro,nosuid,nodev` without `noexec`, the cache dir remount keeping its flags, pins released only once the container is gone, startup refused while a container with volumes survives, no read URL or tar name in an error or log | [internal/runner/volumecache/unpack_test.go](../internal/runner/volumecache/unpack_test.go), [internal/volume/tarcounts_test.go](../internal/volume/tarcounts_test.go), [internal/runner/runtime/docker/volumes_test.go](../internal/runner/runtime/docker/volumes_test.go), [internal/runner/runtime/docker/volumes_linux_test.go](../internal/runner/runtime/docker/volumes_linux_test.go), [e2e/tests/volume-attach-docker.spec.ts](../e2e/tests/volume-attach-docker.spec.ts) |
 | Volume builder: build mode only as PID 1 and root, the tar policy, the status record against hostile input, read-only tar and rootfs, cleanup on every way out | [internal/daemon/volumebuild/build_test.go](../internal/daemon/volumebuild/build_test.go), [internal/daemon/volumebuild/build_linux_test.go](../internal/daemon/volumebuild/build_linux_test.go), [internal/daemon/volumebuild/contract_test.go](../internal/daemon/volumebuild/contract_test.go), [cmd/daemon/main_test.go](../cmd/daemon/main_test.go), [internal/runner/runtime/firecracker.ee/volume_build_test.go](../internal/runner/runtime/firecracker.ee/volume_build_test.go), [internal/runner/grpc_volume_build_test.go](../internal/runner/grpc_volume_build_test.go), [e2e/tests/volume-build.spec.ts](../e2e/tests/volume-build.spec.ts) |
 | Unprivileged npm and PyPI installation, and the build toolchain | [e2e/tests/sandbox-packages.spec.ts](../e2e/tests/sandbox-packages.spec.ts) |
 | Blocked list and egress rule generation | [internal/runner/runtime/netpolicy/private_ranges_test.go](../internal/runner/runtime/netpolicy/private_ranges_test.go), [internal/runner/runtime/docker/netrules/netrules_test.go](../internal/runner/runtime/docker/netrules/netrules_test.go), [internal/runner/runtime/firecracker.ee/network/egress_test.go](../internal/runner/runtime/firecracker.ee/network/egress_test.go) |

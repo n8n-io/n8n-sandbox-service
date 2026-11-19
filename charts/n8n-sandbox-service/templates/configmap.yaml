@@ -70,4 +70,10 @@ data:
   {{- if $runner.config.dockerInsecureRegistries }}
   SANDBOX_RUNNER_DOCKER_INSECURE_REGISTRIES: {{ $runner.config.dockerInsecureRegistries | quote }}
   {{- end }}
+  {{- if $runner.config.volumeCacheDir }}
+  SANDBOX_RUNNER_VOLUME_CACHE_DIR: {{ $runner.config.volumeCacheDir | quote }}
+  {{- end }}
+  {{- with include "n8n-sandbox-service.runnerVolumeCacheMaxBytes" . }}
+  SANDBOX_RUNNER_VOLUME_CACHE_MAX_BYTES: {{ . | quote }}
+  {{- end }}
 {{- end }}

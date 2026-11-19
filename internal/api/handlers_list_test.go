@@ -22,6 +22,7 @@ func newListFixture(t *testing.T) (router http.Handler, tenantA, tenantB, keyA, 
 		if err := s.Create(&store.SandboxRecord{
 			ID: id, Status: "running", CreatedAt: createdAt, LastActiveAt: createdAt,
 			TenantID: tenantID, Egress: "public", RunnerHTTPBase: "http://127.0.0.1:9",
+			Kind: store.KindGeneral,
 		}); err != nil {
 			t.Fatalf("create sandbox %s: %v", id, err)
 		}
@@ -100,12 +101,12 @@ func TestListSandboxesReportsTenantID(t *testing.T) {
 // response must still report the canonical admin marker, never "".
 func TestSandboxResponseCanonicalisesAdminTenantID(t *testing.T) {
 	for _, stored := range []string{"", store.AdminTenantID} {
-		resp := sandboxResponse(&store.SandboxRecord{ID: sidAdmin, TenantID: stored})
+		resp := sandboxResponse(&store.SandboxRecord{Kind: store.KindGeneral, ID: sidAdmin, TenantID: stored})
 		if resp.TenantID != store.AdminTenantID {
 			t.Errorf("stored %q: got %q, want %q", stored, resp.TenantID, store.AdminTenantID)
 		}
 	}
-	resp := sandboxResponse(&store.SandboxRecord{ID: sidA, TenantID: "some-tenant"})
+	resp := sandboxResponse(&store.SandboxRecord{Kind: store.KindGeneral, ID: sidA, TenantID: "some-tenant"})
 	if resp.TenantID != "some-tenant" {
 		t.Errorf("tenant row: got %q", resp.TenantID)
 	}
@@ -120,6 +121,7 @@ func TestListAndGetSandboxCanonicaliseLegacyTenantID(t *testing.T) {
 	if err := s.Create(&store.SandboxRecord{
 		ID: legacy, Status: "running", CreatedAt: 1, LastActiveAt: 1,
 		TenantID: "", Egress: "public", RunnerHTTPBase: "http://127.0.0.1:9",
+		Kind: store.KindGeneral,
 	}); err != nil {
 		t.Fatalf("create legacy sandbox: %v", err)
 	}

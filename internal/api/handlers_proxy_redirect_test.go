@@ -42,6 +42,7 @@ func TestSandboxProxyRefusesRunnerRedirect(t *testing.T) {
 	sid := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 	if err := s.Create(&store.SandboxRecord{
 		ID: sid, Status: "running", CreatedAt: 1, LastActiveAt: 1, RunnerHTTPBase: runner.URL,
+		Kind: store.KindGeneral,
 	}); err != nil {
 		t.Fatalf("create sandbox: %v", err)
 	}
@@ -71,7 +72,7 @@ func TestSandboxProxyRefusesRunnerRedirect(t *testing.T) {
 	// The refusal must not count as activity, or a retrying client would keep
 	// the idle sweeper from ever reclaiming a sandbox on a misbehaving runner.
 	activity.write()
-	rec, err := s.Get(sid)
+	rec, err := s.GetAnyKind(sid)
 	if err != nil || rec == nil {
 		t.Fatalf("get sandbox: rec=%v err=%v", rec, err)
 	}

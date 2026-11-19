@@ -11,6 +11,7 @@ import (
 	"hash"
 	"io"
 	"io/fs"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/n8n-io/sandbox-service/internal/metrics"
+	"github.com/n8n-io/sandbox-service/internal/volume"
 )
 
 const (
@@ -179,36 +181,70 @@ func networkFailure(ctx context.Context, err error) error {
 	return &fetchError{result: metrics.VolumeFetchHTTP, err: errors.New("request failed"), cause: err}
 }
 
-// download fetches sourceURL into dest, refusing anything but exactly size
-// bytes with the given sha256, and returns the allocated bytes of the file.
-// dest is only ever written by renaming a verified, read-only file onto it.
-func (c *Cache) download(ctx context.Context, sourceURL *url.URL, size int64, digest, dest string) (int64, error) {
+// fetchObject downloads key's object and puts it at dest: the verified image,
+// or the tree unpacked from the verified tar. It returns what dest takes on
+// disk, and counts and logs the download and the unpack.
+func (c *Cache) fetchObject(ctx context.Context, key Key, src Source, sourceURL *url.URL, dest string) (room, error) {
+	start := time.Now()
+	downloaded, alloc, err := c.download(ctx, sourceURL, src.Size, key.SHA256)
+	if err == nil && key.Kind != volume.KindTar {
+		// dest is only ever written by renaming a verified, read-only file
+		// onto it.
+		if renameErr := os.Rename(downloaded, dest); renameErr != nil {
+			_ = os.Remove(downloaded)
+			err = diskFailure("rename file", renameErr)
+		}
+	}
+	dur := time.Since(start)
+	if err != nil {
+		result := resultOf(err)
+		c.config.Metrics.ObserveVolumeCacheFetch(result)
+		attrs := []any{"scope", key.Scope, "sha256", key.SHA256, "source", redact(sourceURL), "result", result, "duration_ms", dur.Milliseconds(), "err", err}
+		if cause := causeOf(err); cause != nil {
+			attrs = append(attrs, "cause", cause)
+		}
+		slog.WarnContext(ctx, "volume cache download failed", attrs...)
+		return room{}, err
+	}
+	c.config.Metrics.ObserveVolumeCacheFetch(metrics.VolumeFetchDownloaded)
+	c.config.Metrics.ObserveVolumeCacheDownload(dur)
+	slog.InfoContext(ctx, "volume cache download finished",
+		"scope", key.Scope, "sha256", key.SHA256, "size", src.Size, "allocated_bytes", alloc, "duration_ms", dur.Milliseconds())
+	if key.Kind != volume.KindTar {
+		return room{bytes: alloc, inodes: 1}, nil
+	}
+	return c.unpack(ctx, key, src.Tar, downloaded, dest)
+}
+
+// download fetches sourceURL into a new file in the cache dir, refusing
+// anything but exactly size bytes with the given sha256, and returns the
+// file's path and allocated bytes. The file is closed and read-only, and on
+// error it is gone.
+func (c *Cache) download(ctx context.Context, sourceURL *url.URL, size int64, digest string) (string, int64, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sourceURL.String(), nil)
 	if err != nil {
-		return 0, failed(metrics.VolumeFetchHTTP, "build request")
+		return "", 0, failed(metrics.VolumeFetchHTTP, "build request")
 	}
 	resp, err := c.transportFor(sourceURL).RoundTrip(req)
 	if err != nil {
-		return 0, networkFailure(ctx, err)
+		return "", 0, networkFailure(ctx, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return 0, failed(metrics.VolumeFetchHTTP, "status %d", resp.StatusCode)
+		return "", 0, failed(metrics.VolumeFetchHTTP, "status %d", resp.StatusCode)
 	}
 	if resp.ContentLength >= 0 && resp.ContentLength != size {
-		return 0, failed(metrics.VolumeFetchSize, "content length %d, want %d", resp.ContentLength, size)
+		return "", 0, failed(metrics.VolumeFetchSize, "content length %d, want %d", resp.ContentLength, size)
 	}
 
 	tmp, err := os.CreateTemp(c.config.Dir, ".download-*")
 	if err != nil {
-		return 0, diskFailure("create file", err)
+		return "", 0, diskFailure("create file", err)
 	}
-	renamed := false
+	verified := false
 	defer func() {
 		_ = tmp.Close()
-		// After the rename the name is free again for another download's
-		// temp file.
-		if !renamed {
+		if !verified {
 			_ = os.Remove(tmp.Name())
 		}
 	}()
@@ -220,33 +256,30 @@ func (c *Cache) download(ctx context.Context, sourceURL *url.URL, size int64, di
 		if !errors.As(err, &fe) {
 			err = networkFailure(ctx, err)
 		}
-		return 0, err
+		return "", 0, err
 	}
 	if written != size {
-		return 0, failed(metrics.VolumeFetchSize, "body is %s than the recorded %d bytes", longerOrShorter(written, size), size)
+		return "", 0, failed(metrics.VolumeFetchSize, "body is %s than the recorded %d bytes", longerOrShorter(written, size), size)
 	}
 	if got := hex.EncodeToString(sum.Sum(nil)); got != digest {
-		return 0, failed(metrics.VolumeFetchDigest, "sha256 %s, want %s", got, digest)
+		return "", 0, failed(metrics.VolumeFetchDigest, "sha256 %s, want %s", got, digest)
 	}
 	// Extends the file over trailing zeros, which were never written.
 	if err := tmp.Truncate(size); err != nil {
-		return 0, diskFailure("truncate file", err)
+		return "", 0, diskFailure("truncate file", err)
 	}
 	if err := tmp.Chmod(0o444); err != nil {
-		return 0, diskFailure("chmod file", err)
+		return "", 0, diskFailure("chmod file", err)
 	}
 	if err := tmp.Close(); err != nil {
-		return 0, diskFailure("close file", err)
+		return "", 0, diskFailure("close file", err)
 	}
 	info, err := os.Stat(tmp.Name())
 	if err != nil {
-		return 0, diskFailure("stat file", err)
+		return "", 0, diskFailure("stat file", err)
 	}
-	if err := os.Rename(tmp.Name(), dest); err != nil {
-		return 0, diskFailure("rename file", err)
-	}
-	renamed = true
-	return allocatedBytes(info), nil
+	verified = true
+	return tmp.Name(), allocatedBytes(info), nil
 }
 
 func longerOrShorter(got, size int64) string {

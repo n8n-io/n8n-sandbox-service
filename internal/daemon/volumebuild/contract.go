@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/n8n-io/sandbox-service/internal/volume"
 )
 
 // The builder's drives, in attach order.
@@ -47,13 +49,11 @@ const (
 	envDecompressedBytes = "SANDBOX_VOLUME_BUILD_DECOMPRESSED_BYTES"
 )
 
-// Bounds on Params that keep the sizing arithmetic from overflowing. Product
-// limits are the caller's and far lower.
+// Bounds on Params that keep the sizing arithmetic from overflowing, shared
+// with every volume tar.
 const (
-	maxBytes   = 1 << 40
-	maxEntries = 1 << 28
-	// Room for the most content with its headers and padding.
-	maxDecompressedBytes = 4 * maxBytes
+	maxBytes   = volume.MaxTarBytes
+	maxEntries = volume.MaxTarEntries
 )
 
 // Params is what the runner tells the guest about the tar. Entries,
@@ -76,20 +76,7 @@ func (p Params) Validate() error {
 	if p.TarBytes < 1 || p.TarBytes > maxBytes {
 		return fmt.Errorf("tar bytes must be 1 to %d, got %d", int64(maxBytes), p.TarBytes)
 	}
-	if p.Entries < 1 || p.Entries > maxEntries {
-		return fmt.Errorf("entries must be 1 to %d, got %d", int64(maxEntries), p.Entries)
-	}
-	if p.ContentBytes < 0 || p.ContentBytes > maxBytes {
-		return fmt.Errorf("content bytes must be 0 to %d, got %d", int64(maxBytes), p.ContentBytes)
-	}
-	if p.DecompressedBytes < 1 || p.DecompressedBytes > maxDecompressedBytes {
-		return fmt.Errorf("decompressed bytes must be 1 to %d, got %d", int64(maxDecompressedBytes), p.DecompressedBytes)
-	}
-	// The files' content is part of the decompressed tar.
-	if p.ContentBytes > p.DecompressedBytes {
-		return fmt.Errorf("content bytes %d exceed the decompressed bytes %d", p.ContentBytes, p.DecompressedBytes)
-	}
-	return nil
+	return volume.TarCounts{Entries: p.Entries, ContentBytes: p.ContentBytes, DecompressedBytes: p.DecompressedBytes}.Validate()
 }
 
 // KernelArgs is what the runner appends to the builder's kernel command line.

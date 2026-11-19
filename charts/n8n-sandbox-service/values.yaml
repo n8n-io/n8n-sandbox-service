@@ -379,6 +379,20 @@ runner:
     enableCgroups: "true"
     dockerStorageDriver: ""
     dockerInsecureRegistries: ""
+    # The volume cache holds the read-only volumes sandboxes attach. Empty
+    # keeps the runner's defaults: <dataDir>/volume-cache and 20 GiB. See the
+    # chart README section 'Volume Cache'.
+    volumeCacheDir: ""
+    volumeCacheMaxBytes: ""
+
+  # An emptyDir for the volume cache, mounted at its dir. Off: the cache uses
+  # the runner container's own filesystem. sizeLimit is a whole number of Gi
+  # and must hold the cache's budget and 5% more. See the chart README section
+  # 'Volume Cache'.
+  volumeCache:
+    emptyDir:
+      enabled: false
+      sizeLimit: ""
 
   resources: {}
   podAnnotations: {}

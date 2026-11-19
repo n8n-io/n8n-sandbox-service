@@ -13,6 +13,9 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/google/uuid"
 	"github.com/n8n-io/sandbox-service/internal/api/config"
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
@@ -24,6 +27,21 @@ import (
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 	"github.com/n8n-io/sandbox-service/internal/sandboxproxy"
 )
+
+// generalSandboxStore is the store of the general sandbox routes.
+type generalSandboxStore interface {
+	Create(record *store.SandboxRecord) error
+	GetAnyKind(id string) (*store.SandboxRecord, error)
+	GetGeneralSandbox(id string) (*store.SandboxRecord, error)
+	List(f store.SandboxFilter) ([]*store.SandboxRecord, error)
+	Delete(id string) error
+	LockSandbox(ctx context.Context, id string) (unlock func(), err error)
+}
+
+// tenantGetter reads tenants.
+type tenantGetter interface {
+	GetTenant(id string) (*store.Tenant, error)
+}
 
 // newRunnerTransport builds the transport the API uses to reach runner HTTP
 // listeners, presenting the same client certificate it uses for control gRPC.
@@ -78,7 +96,7 @@ type proxyRoute struct {
 }
 
 // sandboxProxyHandler proxies sandbox routes to the sandbox's runner.
-func sandboxProxyHandler(s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, transport http.RoundTripper, activity *ActivityRecorder, mrec *metrics.APIRecorder) func(proxyRoute) http.HandlerFunc {
+func sandboxProxyHandler(s generalSandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, transport http.RoundTripper, activity *ActivityRecorder, mrec *metrics.APIRecorder) func(proxyRoute) http.HandlerFunc {
 	return func(route proxyRoute) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			id := r.PathValue("id")
@@ -87,7 +105,7 @@ func sandboxProxyHandler(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 				return
 			}
 
-			rec, err := s.Get(id)
+			rec, err := s.GetGeneralSandbox(id)
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, err.Error())
 				return
@@ -214,7 +232,7 @@ func listTenantFilter(w http.ResponseWriter, r *http.Request, role authRole) (te
 	return tenantID, true
 }
 
-func handleListSandboxes(s store.SandboxStore) http.HandlerFunc {
+func handleListSandboxes(s generalSandboxStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, ok := authFromContext(r.Context())
 		if !ok {
@@ -235,14 +253,18 @@ func handleListSandboxes(s store.SandboxStore) http.HandlerFunc {
 			records []*store.SandboxRecord
 			err     error
 		)
+		f := store.KindFilter(store.KindGeneral)
 		switch {
 		case id.Role == roleTenant:
-			records, err = s.ListByTenant(id.TenantID)
+			f.TenantID = id.TenantID
 		case filter != "":
-			records, err = s.ListByTenant(filter)
-		default:
-			records, err = s.List()
+			f.TenantID = filter
 		}
+		if id.Role == roleTenant && f.TenantID == "" {
+			writeError(w, http.StatusForbidden, "tenant API key without a tenant")
+			return
+		}
+		records, err = s.List(f)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -255,14 +277,14 @@ func handleListSandboxes(s store.SandboxStore) http.HandlerFunc {
 	}
 }
 
-func handleGetSandbox(s store.SandboxStore, cfg *config.APIConfig) http.HandlerFunc {
+func handleGetSandbox(s generalSandboxStore, cfg *config.APIConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if !isValidUUID(id) {
 			writeError(w, http.StatusBadRequest, "invalid sandbox id")
 			return
 		}
-		rec, err := s.Get(id)
+		rec, err := s.GetGeneralSandbox(id)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -309,7 +331,7 @@ func runnerControlTLS(cfg *config.APIConfig) *runnerctl.TLS {
 // see. The runtime's own create budget plus a margin for the round trip.
 const runnerCreateBudget = runnerruntime.CreateBudget + time.Minute
 
-func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, rec *metrics.APIRecorder, quota *tenantQuota) http.HandlerFunc {
+func handleCreateSandbox(s generalSandboxStore, tenants tenantGetter, reg registry.RunnerRegistry, cfg *config.APIConfig, rec *metrics.APIRecorder, quota *tenantQuota) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		success := false
 		defer func() { rec.ObserveSandboxOp(metrics.OpCreate, success) }()
@@ -362,13 +384,14 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 			}
 			defer unlock()
 
-			existing, err := s.Get(sandboxID)
+			// Any kind: the id of a sandbox of another kind is not free.
+			existing, err := s.GetAnyKind(sandboxID)
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
 			if existing != nil {
-				if !canAccessSandbox(r, existing) {
+				if existing.Kind != store.KindGeneral || !canAccessSandbox(r, existing) {
 					writeError(w, http.StatusConflict, "sandbox id unavailable")
 					return
 				}
@@ -386,7 +409,7 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 		releaseQuota := func(bool) {}
 		if authID.Role == roleTenant {
 			tenantID = authID.TenantID
-			tenant, err := s.GetTenant(tenantID)
+			tenant, err := tenants.GetTenant(tenantID)
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, err.Error())
 				return
@@ -484,14 +507,15 @@ func handleCreateSandbox(s store.SandboxStore, reg registry.RunnerRegistry, cfg 
 			TenantID:              tenantID,
 			Ephemeral:             req.Ephemeral,
 			Egress:                string(egress),
+			Kind:                  store.KindGeneral,
 		}
 		if err := s.Create(record); err != nil {
 			rollbackRunnerCreate()
 			// Unless the store refused the row, it may have been saved anyway,
 			// say when a commit's reply was lost: count it as saved, the safe side.
 			releaseQuota(!errors.Is(err, store.ErrTenantQuotaExceeded) && !errors.Is(err, store.ErrTenantNotFound))
-			if existing, getErr := s.Get(sandboxID); getErr == nil && existing != nil {
-				if !canAccessSandbox(r, existing) {
+			if existing, getErr := s.GetAnyKind(sandboxID); getErr == nil && existing != nil {
+				if existing.Kind != store.KindGeneral || !canAccessSandbox(r, existing) {
 					writeError(w, http.StatusConflict, "sandbox id unavailable")
 					return
 				}
@@ -555,7 +579,7 @@ func writeExistingSandbox(w http.ResponseWriter, existing *store.SandboxRecord, 
 	return true
 }
 
-func deleteSandboxRecord(w http.ResponseWriter, r *http.Request, s store.SandboxStore, cfg *config.APIConfig, rec *store.SandboxRecord) bool {
+func deleteSandboxRecord(w http.ResponseWriter, r *http.Request, s generalSandboxStore, cfg *config.APIConfig, rec *store.SandboxRecord) bool {
 	if err := runnerctl.DeleteSandbox(r.Context(), rec.RunnerControlGRPCAddr, cfg.RunnerAPIKey, runnerControlTLS(cfg), rec.ID); err != nil {
 		writeError(w, http.StatusBadGateway, "failed to delete container: "+err.Error())
 		return false
@@ -567,7 +591,7 @@ func deleteSandboxRecord(w http.ResponseWriter, r *http.Request, s store.Sandbox
 	return true
 }
 
-func handleDeleteSandbox(s store.SandboxStore, cfg *config.APIConfig, mrec *metrics.APIRecorder) http.HandlerFunc {
+func handleDeleteSandbox(s generalSandboxStore, cfg *config.APIConfig, mrec *metrics.APIRecorder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		success := false
 		defer func() { mrec.ObserveSandboxOp(metrics.OpDelete, success) }()
@@ -585,7 +609,7 @@ func handleDeleteSandbox(s store.SandboxStore, cfg *config.APIConfig, mrec *metr
 		}
 		defer unlock()
 
-		rec, err := s.Get(id)
+		rec, err := s.GetGeneralSandbox(id)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -691,7 +715,7 @@ func newRunnerReverseProxy(runnerURL *url.URL, runnerAPIKey string, transport ht
 // never evidence of a working sandbox — counting it as activity would let a
 // retrying client refresh last_active_at and keep the idle sweeper from ever
 // reclaiming the row left behind.
-func reapSandboxIfRunnerGone(s store.SandboxStore, sandboxID string, resp *http.Response) bool {
+func reapSandboxIfRunnerGone(s generalSandboxStore, sandboxID string, resp *http.Response) bool {
 	if !sandboxproxy.RunnerReportsSandboxGone(resp) {
 		return false
 	}
@@ -750,7 +774,7 @@ func runnerCordoned(reg registry.RunnerRegistry, runnerID string) bool {
 // sandbox no longer stopped on a cordoned runner gets a 503, and its retry is
 // proxied as usual. A delete that the runner fails keeps the row and answers
 // 503 too, so the retry tries again.
-func deleteStoppedOnCordonedRunner(writer http.ResponseWriter, req *http.Request, s store.SandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, mrec *metrics.APIRecorder, id string) {
+func deleteStoppedOnCordonedRunner(writer http.ResponseWriter, req *http.Request, s generalSandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, mrec *metrics.APIRecorder, id string) {
 	unlock, err := s.LockSandbox(req.Context(), id)
 	if err != nil {
 		writeError(writer, http.StatusInternalServerError, err.Error())
@@ -758,7 +782,7 @@ func deleteStoppedOnCordonedRunner(writer http.ResponseWriter, req *http.Request
 	}
 	defer unlock()
 
-	rec, err := s.Get(id)
+	rec, err := s.GetGeneralSandbox(id)
 	if err != nil {
 		writeError(writer, http.StatusInternalServerError, err.Error())
 		return
@@ -786,7 +810,10 @@ func deleteStoppedOnCordonedRunner(writer http.ResponseWriter, req *http.Request
 	defer cancel()
 	reason := "cordoned_runner"
 	err = runnerctl.DeleteSandbox(ctx, resolveControlAddr(rec, reg), cfg.RunnerAPIKey, runnerControlTLS(cfg), id)
-	if runnerUnreachable(&runnerCallError{err: err}) || (silent && err != nil && ctx.Err() != nil) {
+	// The runner enforces the deadline too, so its DeadlineExceeded can arrive
+	// before ctx's own timer fires.
+	timedOut := ctx.Err() != nil || status.Code(err) == codes.DeadlineExceeded
+	if runnerUnreachable(&runnerCallError{err: err}) || (silent && err != nil && timedOut) {
 		slog.WarnContext(req.Context(), "cordoned runner unreachable, deleting the sandbox row only", "sandbox_id", id, "runner_id", rec.RunnerID, "silent", silent, "err", err)
 		reason, err = "cordoned_runner_unreachable", nil
 	}

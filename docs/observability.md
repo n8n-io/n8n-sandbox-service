@@ -118,13 +118,17 @@ download's.
 
 ### Runner: volumes
 
-Each line names `sandbox_id`, `drive` and `sha256`, never the read URL.
+The attach and left-out events name `sandbox_id`, the volume's `drive`
+(Firecracker) or `index` (Docker) and `sha256`; the unpack events name the
+object's `scope` and `sha256`. None names the read URL or a path from inside
+a tar.
 
 | Event | Level | Notes |
 | --- | --- | --- |
-| `firecracker volume attached` | info | At the end of a create that succeeded, per volume the sandbox has |
-| `firecracker volume left out` | warn | At the end of a create that succeeded, per optional volume it left out; `reason` as in the echo, and for one left out before the guest started the cache's `err` |
+| `firecracker volume attached`, `docker volume attached` | info | At the end of a create that succeeded, per volume the sandbox has |
+| `firecracker volume left out`, `docker volume left out` | warn | At the end of a create that succeeded, per optional volume it left out; `reason` as in the echo, and for one left out by the cache its `err` |
 | `firecracker volume not mounted after cold boot` | warn | A cold boot's guest did not mount an optional volume the create had mounted; `reason` |
+| `volume cache unpack finished`, `volume cache unpack failed` | info, warn | Per `tar` the cache unpacked, after its download: `scope`, `sha256`, `duration_ms`, and the tree's `inodes` and `allocated_bytes`, or the `result` and `err` |
 
 ### Runner: guest deaths
 
@@ -175,9 +179,17 @@ Related series:
   `invalid_request`, `invalid_answer` (an answer that doesn't fit the
   request), `already_mounted`, `unsupported` (the daemon has no endpoint or no
   root; a failure only when volumes were named), or `error`.
-- `sandbox_volumes_left_out_total{reason}` — optional volumes a Firecracker
-  create that succeeded left out: `cache_full`, `timeout`, `download`,
-  `drive`, `mount_point` or `mount`.
+- `sandbox_volumes_left_out_total{reason}` — optional volumes a create that
+  succeeded left out: `cache_full`, `timeout`, `download`, `unpack` (a `tar`
+  that breaks the volume tar rules or holds more than its counts, Docker),
+  or the guest's `drive`, `mount_point` or `mount` (Firecracker).
+- `sandbox_volume_cache_unpacks_total{result}` — `tar` objects the volume
+  cache unpacked after their download: `success`, `invalid` (the tar breaks
+  the volume tar rules or holds more than its counts), `full` (the disk filled
+  up), `timeout` (the fetch timeout ended the unpack or its wait for one of
+  the two unpack slots), `io`. A failed unpack fails the fetch and leaves
+  nothing on disk. `sandbox_volume_cache_unpack_duration_seconds` times the
+  unpacks that succeeded.
 - `sandbox_volume_builds_total{result}` — volume image builds asked of a
   Firecracker runner. `result` is `success`; a failed build's reason: `tar`,
   `too_large` or `no_space` (the tar's fault), `format`, `mount`, `fsck` or

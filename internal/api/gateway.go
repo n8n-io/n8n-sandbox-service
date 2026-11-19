@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/http"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/n8n-io/sandbox-service/internal/api/config"
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
@@ -26,6 +28,7 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	if err != nil {
 		return nil, err
 	}
+	quota := newTenantQuota(countTenantSandboxes(s))
 	sandboxProxy := sandboxProxyHandler(s, reg, cfg, runnerTransport, activity, rec)
 	keyCache := newAPIKeyCache(cfg.APIKeyCacheTTL)
 
@@ -53,7 +56,8 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	mux.HandleFunc("GET /sandboxes", handleListSandboxes(s))
 	// A create holds its slot until the runner is done, even after the client
 	// has gone, so a burst of creates is bounded like any other request.
-	mux.HandleFunc("POST /sandboxes", limitTenant(handleCreateSandbox(s, reg, cfg, rec, newTenantQuota(s.CountByTenant))))
+	mux.HandleFunc("POST /sandboxes", limitTenant(handleCreateSandbox(s, s, reg, cfg, rec, quota)))
+	mux.HandleFunc("POST /code/sandboxes", limitTenant(handleCreateCodeSandbox(s, s, reg, cfg, rec, quota, &singleflight.Group{})))
 	mux.HandleFunc("GET /sandboxes/{id}", handleGetSandbox(s, cfg))
 	mux.HandleFunc("DELETE /sandboxes/{id}", handleDeleteSandbox(s, cfg, rec))
 

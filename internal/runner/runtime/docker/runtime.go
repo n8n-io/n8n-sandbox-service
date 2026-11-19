@@ -5,6 +5,7 @@ package docker
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -80,6 +81,15 @@ type Runtime struct {
 	metrics         *metrics.RunnerRecorder
 	watchBackoff    time.Duration
 
+	volumeCache runnerruntime.VolumeCache
+	// sandboxLocks serializes, per sandbox ID, a create with volumes and the
+	// deletes of the ID, under mu: the cache pins by sandbox ID.
+	sandboxLocks map[string]*sandboxLock
+	// volumeDirMu serializes setNoSuidNoDev on the volume cache dir.
+	volumeDirMu     sync.Mutex
+	setNoSuidNoDev  func(dir string) error
+	checkVolumeTree func(path string) error
+
 	// mu guards what the event watcher and request-serving goroutines share: which
 	// containers the runner is stopping on purpose, and which sandboxes Docker
 	// restarted under it. Everything else about a sandbox is read back from Docker.
@@ -104,6 +114,9 @@ func New(runnerConfig *config.Config, cfg Config) (*Runtime, error) {
 	defer cancel()
 
 	if err := m.reconcileContainers(ctx); err != nil {
+		return nil, fmt.Errorf("reconcile managed containers: %w", err)
+	}
+	if err := m.removeVolumeContainersLeft(ctx); err != nil {
 		return nil, fmt.Errorf("reconcile managed containers: %w", err)
 	}
 
@@ -170,6 +183,9 @@ func newRuntime(runnerConfig *config.Config, cfg Config, docker dockerBackend) *
 		watchBackoff:    2 * time.Second,
 		expectedStops:   make(map[string]expectedStop),
 		restarted:       make(map[string]struct{}),
+		sandboxLocks:    make(map[string]*sandboxLock),
+		setNoSuidNoDev:  setNoSuidNoDev,
+		checkVolumeTree: checkVolumeTree,
 	}
 }
 
@@ -254,11 +270,10 @@ func (m *Runtime) Capacity(ctx context.Context) (runnerruntime.Capacity, error) 
 	return runnerruntime.Capacity{Used: int32(n), Total: m.runnerConfig.CapacityTotal}, nil
 }
 
-// CreateSandbox creates and starts a new sandbox.
-// It refuses volumes rather than start the sandbox without them.
+// CreateSandbox creates and starts a new sandbox, with the volumes it names.
 func (m *Runtime) CreateSandbox(ctx context.Context, sandboxID string, opts *runnerruntime.CreateOptions) (*runnerruntime.SandboxInfo, error) {
 	if opts != nil && len(opts.Volumes) > 0 {
-		return nil, fmt.Errorf("the Docker runtime attaches no volumes: %w", runnerruntime.ErrVolumesUnsupported)
+		return m.createWithVolumes(ctx, sandboxID, opts)
 	}
 	return m.CreateContainer(ctx, sandboxID, opts)
 }
@@ -274,11 +289,21 @@ func (m *Runtime) GetSandboxInfo(ctx context.Context, sandboxID string) (*runner
 
 // DeleteSandbox removes a sandbox by its sandbox ID, within TransitionBudget
 // and without the caller's cancellation, so a caller that hangs up cannot leave
-// it half done.
+// it half done. Its volumes stay pinned until its container is gone.
 func (m *Runtime) DeleteSandbox(ctx context.Context, sandboxID string) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), runnerruntime.TransitionBudget)
 	defer cancel()
+	// A create with volumes of the ID finishes first, so the pins released
+	// here are never that create's.
+	unlock, err := m.lockSandbox(ctx, sandboxID, true)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	containerID, err := m.FindContainerIDByLabel(ctx, sandboxID)
+	if errors.Is(err, ErrSandboxNotFound) {
+		m.releaseVolumes(sandboxID)
+	}
 	if err != nil {
 		return err
 	}
@@ -286,6 +311,7 @@ func (m *Runtime) DeleteSandbox(ctx context.Context, sandboxID string) error {
 		return err
 	}
 	m.clearRestarted(sandboxID)
+	m.releaseVolumes(sandboxID)
 	return nil
 }
 
@@ -296,54 +322,63 @@ func (m *Runtime) StopSandbox(ctx context.Context, sandboxID string) error {
 
 // CreateContainer creates and starts a new container.
 func (m *Runtime) CreateContainer(ctx context.Context, sandboxID string, opts *CreateOptions) (*ContainerInfo, error) {
+	info, _, err := m.createContainer(ctx, sandboxID, opts, nil)
+	return info, err
+}
+
+// checkCreate refuses a create before anything is acquired or created.
+func (m *Runtime) checkCreate(sandboxID string) error {
 	if !m.imageReady.Load() {
-		return nil, fmt.Errorf("sandbox image not yet available")
+		return fmt.Errorf("sandbox image not yet available")
 	}
-
-	if opts == nil {
-		opts = &CreateOptions{}
-	}
-
 	// Validate sandboxID length before slicing to prevent panic
 	if len(sandboxID) < 12 {
-		return nil, fmt.Errorf("sandbox ID must be at least 12 characters, got %d", len(sandboxID))
+		return fmt.Errorf("sandbox ID must be at least 12 characters, got %d", len(sandboxID))
+	}
+	return nil
+}
+
+// createContainer creates and starts a container with mounts bound in. On
+// error, leftBehind reports a container its cleanup could not remove.
+func (m *Runtime) createContainer(ctx context.Context, sandboxID string, opts *CreateOptions, mounts []volumeMount) (info *ContainerInfo, leftBehind bool, err error) {
+	if err := m.checkCreate(sandboxID); err != nil {
+		return nil, false, err
+	}
+	if opts == nil {
+		opts = &CreateOptions{}
 	}
 
 	containerName := "sandbox-" + sandboxID[:12]
 	limits := m.defaultLimits()
 	n := m.networkFor(opts.BlockEgress())
 
-	containerID, err := m.docker.createContainer(ctx, sandboxID, containerName, m.config.SandboxImage, n.networkName, limits, m.config.EnableCgroups)
+	containerID, err := m.docker.createContainer(ctx, sandboxID, containerName, m.config.SandboxImage, n.networkName, limits, m.config.EnableCgroups, mounts)
 	if err != nil {
-		return nil, fmt.Errorf("create container: %w", err)
+		return nil, false, fmt.Errorf("create container: %w", err)
 	}
 
-	cleanupOnError := func() {
+	cleanupOnError := func() bool {
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupBudget)
 		defer cancel()
-		_ = m.removeContainerAndTeardownRules(cleanupCtx, containerID)
+		return m.removeContainerAndTeardownRules(cleanupCtx, containerID) != nil
 	}
 
 	if err := m.docker.startContainer(ctx, containerID); err != nil {
-		cleanupOnError()
-		return nil, fmt.Errorf("start container: %w", err)
+		return nil, cleanupOnError(), fmt.Errorf("start container: %w", err)
 	}
 
 	containerIP, err := m.docker.containerIP(ctx, containerID)
 	if err != nil {
-		cleanupOnError()
-		return nil, fmt.Errorf("inspect container ip: %w", err)
+		return nil, cleanupOnError(), fmt.Errorf("inspect container ip: %w", err)
 	}
 
 	if err := m.applyNetworkPolicy(n, containerID, containerIP); err != nil {
-		cleanupOnError()
-		return nil, fmt.Errorf("apply network rules: %w", err)
+		return nil, cleanupOnError(), fmt.Errorf("apply network rules: %w", err)
 	}
 
 	baseURL := fmt.Sprintf("http://%s:%d", containerIP, daemonPort)
 	if err := m.waitForDaemon(ctx, baseURL); err != nil {
-		cleanupOnError()
-		return nil, fmt.Errorf("connect to daemon: %w", err)
+		return nil, cleanupOnError(), fmt.Errorf("connect to daemon: %w", err)
 	}
 
 	containerInfo := &ContainerInfo{
@@ -353,7 +388,7 @@ func (m *Runtime) CreateContainer(ctx context.Context, sandboxID string, opts *C
 	}
 
 	slog.Info("container created", "sandbox_id", sandboxID, "container_id", containerID, "ip", containerIP, "network", n.networkName)
-	return containerInfo, nil
+	return containerInfo, false, nil
 }
 
 // DockerHealthy checks whether the inner Docker daemon is reachable.

@@ -38,6 +38,7 @@ func TestParseCreateOptionsVolumes(t *testing.T) {
 	second.Optional = true
 	second.Kind = volume.KindTar
 	second.Size = 1
+	second.Tar = volume.TarCounts{Entries: 3, ContentBytes: 10, DecompressedBytes: 2048}
 
 	opts, err := ParseCreateOptions(optionsJSON(t, testVolume(), second))
 	if err != nil {
@@ -81,6 +82,12 @@ func TestParseCreateOptionsRefusesInvalidVolumes(t *testing.T) {
 		{"unknown kind", []Volume{with(func(v *Volume) { v.Kind = "squashfs" })}, `volume 0: unknown kind "squashfs"`},
 		{"no kind", []Volume{with(func(v *Volume) { v.Kind = "" })}, `volume 0: unknown kind ""`},
 		{"ext4 not whole sectors", []Volume{with(func(v *Volume) { v.Size = 4097 })}, "whole 512-byte sectors"},
+		{"ext4 with tar counts", []Volume{with(func(v *Volume) { v.Tar = volume.TarCounts{Entries: 1, DecompressedBytes: 1024} })}, "volume 0: only a tar volume has tar counts"},
+		{"tar without counts", []Volume{with(func(v *Volume) { v.Kind = volume.KindTar })}, "volume 0: tar counts: entries must be"},
+		{"tar with invalid counts", []Volume{with(func(v *Volume) {
+			v.Kind = volume.KindTar
+			v.Tar = volume.TarCounts{Entries: 1, ContentBytes: 4096, DecompressedBytes: 1024}
+		})}, "volume 0: tar counts: content bytes 4096 exceed"},
 		{"no url", []Volume{with(func(v *Volume) { v.URL = "" })}, "volume 0: url must be an https URL"},
 		{"http url", []Volume{with(func(v *Volume) { v.URL = "http://objects.example/x?" + testToken })}, "url must be an https URL"},
 		{"url without host", []Volume{with(func(v *Volume) { v.URL = "https:///x?" + testToken })}, "url must be an https URL"},

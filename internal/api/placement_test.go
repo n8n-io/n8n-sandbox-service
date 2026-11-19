@@ -74,7 +74,7 @@ func assertNoCapacity(t *testing.T, rr *httptest.ResponseRecorder) {
 
 func assertNothingStored(t *testing.T, s store.SandboxStore) {
 	t.Helper()
-	if n, err := s.Count(); err != nil || n != 0 {
+	if n, err := s.Count(store.KindFilter(store.AllKinds()...)); err != nil || n != 0 {
 		t.Fatalf("stored %d sandboxes (err=%v), want none", n, err)
 	}
 }
@@ -95,7 +95,7 @@ func TestCreateSandboxRetriesRefusedCreateOnNextRunner(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if stored, err := s.Get(resp.ID); err != nil || stored == nil || stored.RunnerID != "runner-2" {
+	if stored, err := s.GetAnyKind(resp.ID); err != nil || stored == nil || stored.RunnerID != "runner-2" {
 		t.Fatalf("stored row = %+v err=%v, want it on runner-2", stored, err)
 	}
 	if full.creates() != 1 || free.creates() != 1 {

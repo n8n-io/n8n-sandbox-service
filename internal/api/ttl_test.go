@@ -183,6 +183,7 @@ func seedRunningSandbox(t *testing.T, s store.SandboxStore, id, controlAddr stri
 		RunnerControlGRPCAddr: controlAddr,
 		TenantID:              store.AdminTenantID,
 		Ephemeral:             ephemeral,
+		Kind:                  store.KindGeneral,
 	}); err != nil {
 		t.Fatalf("seed sandbox %s: %v", id, err)
 	}
@@ -190,7 +191,7 @@ func seedRunningSandbox(t *testing.T, s store.SandboxStore, id, controlAddr stri
 
 func mustGet(t *testing.T, s store.SandboxStore, id string) *store.SandboxRecord {
 	t.Helper()
-	rec, err := s.Get(id)
+	rec, err := s.GetAnyKind(id)
 	if err != nil {
 		t.Fatalf("get %s: %v", id, err)
 	}
@@ -420,6 +421,7 @@ func TestIdleSweepsWaitOutTheActivityLag(t *testing.T) {
 				ID: id, Status: tc.status, CreatedAt: lastActive, LastActiveAt: lastActive,
 				RunnerHTTPBase: "https://127.0.0.1:9", RunnerControlGRPCAddr: addr,
 				TenantID: store.AdminTenantID, Ephemeral: tc.ephemeral,
+				Kind: store.KindGeneral,
 			}); err != nil {
 				t.Fatalf("seed sandbox: %v", err)
 			}
@@ -477,7 +479,7 @@ func TestIsPastIdleDeleteWindow(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			rec := &store.SandboxRecord{LastActiveAt: tc.lastActiveAt, Ephemeral: tc.ephemeral}
+			rec := &store.SandboxRecord{Kind: store.KindGeneral, LastActiveAt: tc.lastActiveAt, Ephemeral: tc.ephemeral}
 			if got := isPastIdleDeleteWindow(rec, tc.cfg, now); got != tc.want {
 				t.Fatalf("isPastIdleDeleteWindow = %v, want %v", got, tc.want)
 			}

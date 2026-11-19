@@ -26,6 +26,9 @@ type Volume struct {
 	// Optional lets the sandbox start without the volume when the volume
 	// itself fails; a required volume that fails fails the create.
 	Optional bool `json:"optional,omitempty"`
+	// Tar is what the API counted in a tar volume; only tar volumes have it.
+	// The runner unpacks the tar within these counts.
+	Tar volume.TarCounts `json:"tar,omitzero"`
 }
 
 // String leaves out the URL.
@@ -77,6 +80,13 @@ func (v Volume) validate() error {
 	if v.Kind == volume.KindExt4 && v.Size%sectorBytes != 0 {
 		return fmt.Errorf("an ext4 image is whole %d-byte sectors, got %d bytes", sectorBytes, v.Size)
 	}
+	if v.Kind == volume.KindTar {
+		if err := v.Tar.Validate(); err != nil {
+			return fmt.Errorf("tar counts: %w", err)
+		}
+	} else if v.Tar != (volume.TarCounts{}) {
+		return errors.New("only a tar volume has tar counts")
+	}
 	// Never quoted: the URL carries a token, and url.Parse's error quotes it.
 	parsed, err := url.Parse(v.URL)
 	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" {
@@ -119,6 +129,9 @@ const (
 	// VolumeLeftOutDownload: it could not be downloaded, or did not match its
 	// size or sha256.
 	VolumeLeftOutDownload = "download"
+	// VolumeLeftOutUnpack: its tar breaks the volume tar rules or holds more
+	// than its counts.
+	VolumeLeftOutUnpack = "unpack"
 	// VolumeLeftOutDrive: the guest did not see its drive at its size.
 	VolumeLeftOutDrive = "drive"
 	// VolumeLeftOutMountPoint: the guest could not create its mount point.
@@ -129,7 +142,7 @@ const (
 
 // VolumeLeftOutReasons lists the VolumeLeftOut values.
 var VolumeLeftOutReasons = []string{
-	VolumeLeftOutCacheFull, VolumeLeftOutTimeout, VolumeLeftOutDownload,
+	VolumeLeftOutCacheFull, VolumeLeftOutTimeout, VolumeLeftOutDownload, VolumeLeftOutUnpack,
 	VolumeLeftOutDrive, VolumeLeftOutMountPoint, VolumeLeftOutMount,
 }
 

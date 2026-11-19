@@ -11,10 +11,13 @@ import {
   listFiles,
   stat,
 } from "./files";
+import { createCodeSandbox } from "./code-sandboxes";
 import { HttpClient } from "./http";
 import { createSandbox, getSandbox, deleteSandbox } from "./sandboxes";
 import type {
+  CodeSandbox,
   CopyFileRequest,
+  CreateCodeSandboxOptions,
   CreateSandboxOptions,
   DeleteFileOptions,
   ExecRequest,
@@ -62,6 +65,16 @@ export class SandboxClient {
    */
   async deleteSandbox(id: string): Promise<void> {
     return deleteSandbox(this.http, id);
+  }
+
+  // #endregion
+  // #region Code sandboxes
+
+  /**
+   * Returns the current code sandbox of `options.name`, or creates one.
+   */
+  async createCodeSandbox(options: CreateCodeSandboxOptions): Promise<CodeSandbox> {
+    return createCodeSandbox(this.http, options);
   }
 
   // #endregion

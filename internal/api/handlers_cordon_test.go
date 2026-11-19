@@ -66,6 +66,7 @@ func newCordonTestEnv(t *testing.T, sandboxStatus string, cordoned bool) *cordon
 		RunnerHTTPBase:        runner.URL,
 		RunnerControlGRPCAddr: controlAddr,
 		TenantID:              store.AdminTenantID,
+		Kind:                  store.KindGeneral,
 	}); err != nil {
 		t.Fatalf("Create() failed: %v", err)
 	}
