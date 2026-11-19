@@ -68,6 +68,19 @@ func TestRuntimeFixture(t *testing.T) {
 			}
 			continue
 		}
+		if m.TaskID == "user-error" {
+			// A runtime keeps console output in result.json, also on a user error.
+			if os.WriteFile(filepath.Join(m.Dir, "out", "result.json"), []byte(`{"console":["before throw"]}`), 0o600) != nil ||
+				enc.Encode(workerMessage{Type: "error", TaskID: m.TaskID, Error: json.RawMessage(`{"message":"boom"}`)}) != nil {
+				os.Exit(2)
+			}
+			continue
+		}
+		if m.TaskID == "quiet" {
+			time.Sleep(heartbeatInterval + 250*time.Millisecond)
+		}
+		_, _ = os.Stdout.WriteString("raw-runtime-stdout\n")
+		_, _ = os.Stderr.WriteString("raw-runtime-stderr\n")
 		input, err := os.ReadFile(filepath.Join(m.Dir, "in", "bin", "0"))
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			os.Exit(2)
@@ -77,6 +90,44 @@ func TestRuntimeFixture(t *testing.T) {
 			enc.Encode(workerMessage{Type: "done", TaskID: m.TaskID}) != nil {
 			os.Exit(2)
 		}
+		if m.TaskID == "exit-after-result" {
+			os.Exit(3)
+		}
+	}
+}
+
+func TestWorkerExitPreservesResult(t *testing.T) {
+	d := testDaemon(t, Config{})
+	req := taskRequest(t, `{"taskId":"exit-after-result"}`, nil)
+	spec, mr := d.admit(httptest.NewRecorder(), req)
+	if mr == nil {
+		t.Fatal("request was not admitted")
+	}
+	defer d.releaseLane()
+	defer d.releaseTask(spec.TaskID)
+	dir, err := d.stageInputs(mr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(filepath.Join(dir, "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	x, err := d.dispatch(t.Context(), spec.TaskID, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer x.close()
+	select {
+	case <-x.worker.done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("runtime did not exit")
+	}
+	// The buffered terminal result is still readable after process cleanup.
+	event, ok := d.waitForTask(req, spec, taskStream{}, x, root)
+	if _, done := event.(doneEvent); !ok || !done {
+		t.Fatalf("terminal event = %+v, %v", event, ok)
 	}
 }
 
@@ -95,14 +146,11 @@ func TestStageAndDispatchSharedRuntime(t *testing.T) {
 			t.Fatal("request was not admitted")
 		}
 		defer d.releaseLane()
-		if err := d.reserveTask(spec.TaskID); err != nil {
-			t.Fatal(err)
-		}
 		dir, err := d.stageInputs(mr)
 		if err != nil {
 			t.Fatal(err)
 		}
-		x, err := d.dispatch(ctx, id, dir)
+		x, err := d.dispatch(ctx, spec.TaskID, dir)
 		if err != nil {
 			t.Fatal(err)
 		}
