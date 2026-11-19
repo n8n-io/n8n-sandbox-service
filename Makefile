@@ -177,6 +177,6 @@ up:
 down:
 	bash scripts/docker-compose-local.sh down
 
-## smoke: Core API smoke test against local compose (create, exec, DNS, HTTPS, files, egress public/none).
+## smoke: Core API smoke test against local compose (create, exec, clock, DNS, HTTPS, files, bulk upload, egress public/none).
 smoke:
 	sh scripts/smoke-local-sandbox.sh
