@@ -21,7 +21,7 @@ func parseEvents(raw [][]byte) []Response {
 }
 
 func TestExecutionFirstEventIsStarted(t *testing.T) {
-	handler := NewHandler()
+	handler := NewHandler(DefaultExecConfig())
 	t.Cleanup(handler.Close)
 
 	body := `{"command":"echo hello"}`
@@ -52,7 +52,7 @@ func TestExecutionFirstEventIsStarted(t *testing.T) {
 }
 
 func TestExecutionAllEventsHaveSeq(t *testing.T) {
-	handler := NewHandler()
+	handler := NewHandler(DefaultExecConfig())
 	t.Cleanup(handler.Close)
 
 	body := `{"command":"echo hello"}`
@@ -84,7 +84,7 @@ func TestExecutionAllEventsHaveSeq(t *testing.T) {
 }
 
 func TestExecutionSameExecIDReturnsSameExecution(t *testing.T) {
-	em := NewExecManager()
+	em := NewExecManager(DefaultExecConfig())
 	defer em.Close()
 
 	ex1 := em.GetOrCreate("exec-1", "echo hello", nil, "", 5*time.Second)
@@ -96,7 +96,7 @@ func TestExecutionSameExecIDReturnsSameExecution(t *testing.T) {
 }
 
 func TestExecutionEmptyExecIDGeneratesUnique(t *testing.T) {
-	em := NewExecManager()
+	em := NewExecManager(DefaultExecConfig())
 	defer em.Close()
 
 	ex1 := em.GetOrCreate("", "echo hello", nil, "", 5*time.Second)
@@ -108,7 +108,7 @@ func TestExecutionEmptyExecIDGeneratesUnique(t *testing.T) {
 }
 
 func TestExecutionDelete(t *testing.T) {
-	em := NewExecManager()
+	em := NewExecManager(DefaultExecConfig())
 	defer em.Close()
 
 	ex := em.GetOrCreate("", "sleep 30", nil, "", 30*time.Second)
@@ -125,7 +125,7 @@ func TestExecutionDelete(t *testing.T) {
 }
 
 func TestExecutionDeleteNotFound(t *testing.T) {
-	em := NewExecManager()
+	em := NewExecManager(DefaultExecConfig())
 	defer em.Close()
 
 	if em.Delete("nonexistent") {
@@ -134,7 +134,7 @@ func TestExecutionDeleteNotFound(t *testing.T) {
 }
 
 func TestExecutionResumeReturnsNoDuplicates(t *testing.T) {
-	handler := NewHandler()
+	handler := NewHandler(DefaultExecConfig())
 	t.Cleanup(handler.Close)
 
 	body := `{"command":"echo hello","exec_id":"test-exec-id"}`
@@ -195,7 +195,7 @@ func TestExecutionResumeReturnsNoDuplicates(t *testing.T) {
 }
 
 func TestExecutionResumePartial(t *testing.T) {
-	em := NewExecManager()
+	em := NewExecManager(DefaultExecConfig())
 	defer em.Close()
 
 	ex := em.GetOrCreate("", "echo hello", nil, "", 5*time.Second)
@@ -230,7 +230,7 @@ func TestExecutionResumePartial(t *testing.T) {
 }
 
 func TestExecutionNonexistentReturns404(t *testing.T) {
-	handler := NewHandler()
+	handler := NewHandler(DefaultExecConfig())
 	t.Cleanup(handler.Close)
 
 	body := `{"command":"echo hello"}`
@@ -263,7 +263,7 @@ func TestExecutionNonexistentReturns404(t *testing.T) {
 }
 
 func TestDeleteExecEndpoint(t *testing.T) {
-	handler := NewHandler()
+	handler := NewHandler(DefaultExecConfig())
 	t.Cleanup(handler.Close)
 
 	body := `{"command":"sleep 30"}`
@@ -315,7 +315,7 @@ func TestDeleteExecEndpoint(t *testing.T) {
 }
 
 func TestDisconnectDoesNotKillCommand(t *testing.T) {
-	em := NewExecManager()
+	em := NewExecManager(DefaultExecConfig())
 	defer em.Close()
 
 	ex := em.GetOrCreate("", "echo alive", nil, "", 5*time.Second)
