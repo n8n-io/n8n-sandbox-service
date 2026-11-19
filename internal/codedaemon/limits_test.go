@@ -37,6 +37,38 @@ func TestInputLimits(t *testing.T) {
 	}
 }
 
+func TestInputDirectoryLimit(t *testing.T) {
+	d := testDaemon(t, Config{Limits: Limits{InputBytes: 1, Files: 10}})
+	// Each file creates its own chain of 501 directories, so 8 files fit
+	// within maxDirs and 9 files do not.
+	deepFiles := func(n int) map[string]string {
+		files := make(map[string]string, n)
+		for i := range n {
+			files[strconv.Itoa(i)+"/"+strings.Repeat("d/", 500)+"f"] = ""
+		}
+		return files
+	}
+	for _, tc := range []struct {
+		files int
+		want  error
+	}{{8, nil}, {9, errInputLimit}} {
+		t.Run(strconv.Itoa(tc.files), func(t *testing.T) {
+			_, mr := d.admit(httptest.NewRecorder(), taskRequest(t, `{"taskId":"test"}`, deepFiles(tc.files)))
+			if mr == nil {
+				t.Fatal("request not admitted")
+			}
+			defer d.releaseLane()
+			dir, err := d.stageInputs(mr)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("stage error = %v, want %v", err, tc.want)
+			}
+			if err == nil {
+				_ = os.RemoveAll(dir)
+			}
+		})
+	}
+}
+
 func TestOutputDirectoriesDontUseFileLimit(t *testing.T) {
 	dir := t.TempDir()
 	nested := filepath.Join(dir, "a", "b", "c", "d", "e", "f")
@@ -58,7 +90,7 @@ func TestOutputDirectoriesDontUseFileLimit(t *testing.T) {
 
 func TestOutputDirectoryLimit(t *testing.T) {
 	dir := t.TempDir()
-	for i := range maxOutputDirs + 1 {
+	for i := range maxDirs + 1 {
 		if err := os.Mkdir(filepath.Join(dir, strconv.Itoa(i)), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -99,7 +131,7 @@ func TestOutputLimits(t *testing.T) {
 	if err := os.Symlink("result.json", filepath.Join(dir, "alias")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := collectOutputs(root, Limits{OutputBytes: 100, Files: 10}); !errors.Is(err, errOutputLimit) {
-		t.Fatalf("accepted symlink output: %v", err)
+	if _, err := collectOutputs(root, Limits{OutputBytes: 100, Files: 10}); !errors.Is(err, errInvalidOutput) {
+		t.Fatalf("symlink output error = %v, want %v", err, errInvalidOutput)
 	}
 }

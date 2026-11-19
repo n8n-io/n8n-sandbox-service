@@ -14,6 +14,9 @@ import (
 var (
 	errInputLimit  = errors.New("input limit exceeded")
 	errOutputLimit = errors.New("output limit exceeded")
+	// errInvalidOutput rejects an output entry that is not a regular file or
+	// a directory, such as a symlink, or that has an invalid path.
+	errInvalidOutput = errors.New("invalid output file")
 )
 
 // Limits caps aggregate input and output bytes and file counts in each direction.
@@ -54,9 +57,22 @@ func loadLimits() (Limits, error) {
 	return l, nil
 }
 
-// maxOutputDirs bounds the directories walked to list a task's outputs,
-// separately from the file limit so nested output paths don't use it up.
-const maxOutputDirs = 4096
+// maxDirs bounds the directories that a task's inputs create and that are
+// walked to list its outputs, separately from the file limit so nested paths
+// don't use it up.
+const maxDirs = 4096
+
+// addParentDirs records the parent directories of rel in dirs and reports
+// whether dirs is still within maxDirs.
+func addParentDirs(dirs map[string]struct{}, rel string) bool {
+	for dir := path.Dir(rel); dir != "."; dir = path.Dir(dir) {
+		if _, ok := dirs[dir]; ok {
+			break // its parents are already recorded
+		}
+		dirs[dir] = struct{}{}
+	}
+	return len(dirs) <= maxDirs
+}
 
 type outputEntry struct {
 	Path string `json:"path"` // relative to the task's output directory
@@ -78,7 +94,7 @@ func collectOutputs(root *os.Root, limits Limits) ([]outputEntry, error) {
 		}
 		// Every entry uses up a file or a directory, so reading one more than
 		// both remaining budgets is enough to detect overflow.
-		children, err := f.ReadDir(limits.Files - len(entries) + maxOutputDirs - seenDirs + 1)
+		children, err := f.ReadDir(limits.Files - len(entries) + maxDirs - seenDirs + 1)
 		_ = f.Close()
 		if err != nil && err != io.EOF {
 			return nil, err
@@ -86,23 +102,29 @@ func collectOutputs(root *os.Root, limits Limits) ([]outputEntry, error) {
 		for _, entry := range children {
 			rel := path.Join(dir, entry.Name())
 			if !validFilePath(rel) {
-				return nil, errOutputLimit
+				return nil, errInvalidOutput
 			}
 			if entry.IsDir() {
-				if seenDirs++; seenDirs > maxOutputDirs {
+				if seenDirs++; seenDirs > maxDirs {
 					return nil, errOutputLimit
 				}
 				dirs = append(dirs, rel)
 				continue
 			}
-			if !entry.Type().IsRegular() || len(entries) == limits.Files {
+			if !entry.Type().IsRegular() {
+				return nil, errInvalidOutput
+			}
+			if len(entries) == limits.Files {
 				return nil, errOutputLimit
 			}
 			info, err := entry.Info()
 			if err != nil {
 				return nil, err
 			}
-			if !info.Mode().IsRegular() || info.Size() > int64(limits.OutputBytes)-bytes {
+			if !info.Mode().IsRegular() {
+				return nil, errInvalidOutput
+			}
+			if info.Size() > int64(limits.OutputBytes)-bytes {
 				return nil, errOutputLimit
 			}
 			bytes += info.Size()

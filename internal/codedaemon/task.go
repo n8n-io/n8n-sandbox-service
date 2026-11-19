@@ -59,7 +59,7 @@ func (d *Daemon) stageInputs(mr *multipart.Reader) (string, error) {
 	return dir, nil
 }
 
-// writeInputs stages files within the task's byte and file limits, without overwriting files.
+// writeInputs stages files within the task's byte, file and directory limits, without overwriting files.
 func writeInputs(dir string, mr *multipart.Reader, limits Limits) error {
 	in := filepath.Join(dir, "in")
 	for _, path := range []string{in, filepath.Join(dir, "out", "bin")} {
@@ -74,6 +74,7 @@ func writeInputs(dir string, mr *multipart.Reader, limits Limits) error {
 	defer root.Close()
 	remaining := int64(limits.InputBytes)
 	files := 0
+	dirs := make(map[string]struct{})
 	for {
 		part, err := mr.NextPart()
 		if err == io.EOF {
@@ -89,7 +90,7 @@ func writeInputs(dir string, mr *multipart.Reader, limits Limits) error {
 			return errors.New("invalid input part")
 		}
 		files++
-		if files > limits.Files {
+		if files > limits.Files || !addParentDirs(dirs, rel) {
 			return errInputLimit
 		}
 		if err := root.MkdirAll(filepath.Dir(rel), 0o700); err != nil {
