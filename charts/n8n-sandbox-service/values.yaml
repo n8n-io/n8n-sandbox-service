@@ -337,7 +337,8 @@ runner:
     controlGrpcListenAddr: ":9091"
     dockerHost: unix:///var/run/docker.sock
     dataDir: /var/sandboxes
-    # Required in-cluster. Placement hint; the Docker runner does not enforce it.
+    # Required in-cluster. The API stops sending new sandboxes to the runner once
+    # it reports this many. Size it as node memory / defaultMemoryMb.
     capacityTotal: ""
     maxFileBytes: "10485760"
     # See SANDBOX_RUNNER_MAX_INFLIGHT_PER_SANDBOX and _MAX_EXEC_TIMEOUT in
