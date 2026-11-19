@@ -1,6 +1,6 @@
 # Configuration
 
-All services are configured via environment variables. [limits.md](limits.md) lists the limits clients and operators run into.
+All services are configured via environment variables. In the variables the API, runner and daemon binaries read, surrounding whitespace is ignored (except in `SANDBOX_API_POSTGRES_PASSWORD`), an empty value counts as unset, and a value that does not parse stops the service at startup. This does not cover the variables `scripts/start-runner.sh` reads. [limits.md](limits.md) lists the limits clients and operators run into.
 
 ## Contents
 
@@ -187,8 +187,8 @@ These variables are set inside each sandbox container and are typically baked in
 | Variable | Default | Description |
 | --- | --- | --- |
 | `SANDBOX_DAEMON_LOG_LEVEL` | `info` | Minimum log severity (`debug`, `info`, `warn`, `error`; case-insensitive) |
-| `SANDBOX_EXEC_MAX_EVENT_BYTES` | `16777216` | Max bytes of event history retained per execution (16 MiB) |
-| `SANDBOX_EXEC_RETAIN` | `10m` | Duration to retain completed executions (Go [`time.ParseDuration`](https://pkg.go.dev/time#ParseDuration) syntax, e.g. `10m`, `1h`) |
+| `SANDBOX_EXEC_MAX_EVENT_BYTES` | `16777216` | Max bytes of event history retained per execution (16 MiB); must be positive |
+| `SANDBOX_EXEC_RETAIN` | `10m` | Duration to retain completed executions (Go [`time.ParseDuration`](https://pkg.go.dev/time#ParseDuration) syntax, e.g. `10m`, `1h`); must be positive |
 
 ## Metrics
 

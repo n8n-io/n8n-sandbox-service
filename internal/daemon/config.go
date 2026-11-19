@@ -1,38 +1,35 @@
 package daemon
 
 import (
-	"log/slog"
-	"os"
-	"strconv"
 	"time"
+
+	"github.com/n8n-io/sandbox-service/internal/envvar"
 )
 
-// envInt64 reads an int64 from the named environment variable.
-// Returns fallback if the variable is unset or cannot be parsed.
-func envInt64(key string, fallback int64) int64 {
-	v := os.Getenv(key)
-	if v == "" {
-		return fallback
-	}
-	n, err := strconv.ParseInt(v, 10, 64)
-	if err != nil {
-		slog.Warn("invalid env var, using default", "key", key, "value", v, "default", fallback)
-		return fallback
-	}
-	return n
+// ExecConfig holds the execution settings read from SANDBOX_EXEC_* variables.
+type ExecConfig struct {
+	// MaxEventBytes is the event history kept per execution.
+	MaxEventBytes int64
+	// RetainPeriod is how long a completed execution is kept.
+	RetainPeriod time.Duration
 }
 
-// envDuration reads a time.Duration from the named environment variable
-// (e.g. "10m", "30s"). Returns fallback if the variable is unset or cannot be parsed.
-func envDuration(key string, fallback time.Duration) time.Duration {
-	v := os.Getenv(key)
-	if v == "" {
-		return fallback
+// DefaultExecConfig returns the settings used when no variable is set.
+func DefaultExecConfig() ExecConfig {
+	return ExecConfig{
+		MaxEventBytes: defaultMaxEventBytes,
+		RetainPeriod:  defaultExecRetainPeriod,
 	}
-	d, err := time.ParseDuration(v)
-	if err != nil {
-		slog.Warn("invalid env var, using default", "key", key, "value", v, "default", fallback)
-		return fallback
+}
+
+// LoadExecConfig reads SANDBOX_EXEC_MAX_EVENT_BYTES and SANDBOX_EXEC_RETAIN.
+func LoadExecConfig() (ExecConfig, error) {
+	cfg := DefaultExecConfig()
+	if err := envvar.PositiveInt("SANDBOX_EXEC_MAX_EVENT_BYTES", &cfg.MaxEventBytes); err != nil {
+		return ExecConfig{}, err
 	}
-	return d
+	if err := envvar.PositiveDuration("SANDBOX_EXEC_RETAIN", &cfg.RetainPeriod); err != nil {
+		return ExecConfig{}, err
+	}
+	return cfg, nil
 }

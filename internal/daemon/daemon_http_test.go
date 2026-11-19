@@ -16,7 +16,7 @@ import (
 )
 
 func TestExecEndpointStreamsResponses(t *testing.T) {
-	handler := NewHandler()
+	handler := NewHandler(DefaultExecConfig())
 
 	req := httptest.NewRequest(http.MethodPost, "/executions", bytes.NewReader([]byte(`{"command":"echo hello","env":{"FOO":"bar"}}`)))
 	req.Header.Set("Content-Type", "application/json")
@@ -67,7 +67,7 @@ func TestExecEndpointKeepsMultibyteCharactersInLongLinesIntact(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
-	NewHandler().ServeHTTP(rr, req)
+	NewHandler(DefaultExecConfig()).ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
@@ -91,7 +91,7 @@ func TestExecEndpointKeepsMultibyteCharactersInLongLinesIntact(t *testing.T) {
 }
 
 func TestExecEndpointRejectsArrayEnv(t *testing.T) {
-	handler := NewHandler()
+	handler := NewHandler(DefaultExecConfig())
 
 	req := httptest.NewRequest(http.MethodPost, "/executions", bytes.NewReader([]byte(`{"command":"echo hello","env":["FOO=bar"]}`)))
 	req.Header.Set("Content-Type", "application/json")
@@ -108,7 +108,7 @@ func TestExecEndpointRejectsArrayEnv(t *testing.T) {
 }
 
 func TestFileCopyRejectsOversizedJSONBody(t *testing.T) {
-	handler := NewHandler()
+	handler := NewHandler(DefaultExecConfig())
 
 	body := `{"src":"` + strings.Repeat("x", maxJSONBodyBytes) + `","dest":"/tmp/out"}`
 	req := httptest.NewRequest(http.MethodPost, "/files/copy", strings.NewReader(body))
@@ -123,7 +123,7 @@ func TestFileCopyRejectsOversizedJSONBody(t *testing.T) {
 }
 
 func TestFileArchiveEndpoint(t *testing.T) {
-	handler := NewHandler()
+	handler := NewHandler(DefaultExecConfig())
 	target := tempBaseDir(t)
 
 	post := func(query string, body []byte) *httptest.ResponseRecorder {
@@ -155,7 +155,7 @@ func TestFileArchiveEndpoint(t *testing.T) {
 func TestFileContentEndpoint(t *testing.T) {
 	// A real server: the directory case relies on net/http not sending the 200
 	// before the first byte is read.
-	handler := NewHandler()
+	handler := NewHandler(DefaultExecConfig())
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 	dir := tempBaseDir(t)
@@ -221,7 +221,7 @@ func (fw *failingWriter) Write(data []byte) (int, error) {
 }
 
 func TestFileContentEndpointCutsAFailedDownload(t *testing.T) {
-	handler := NewHandler()
+	handler := NewHandler(DefaultExecConfig())
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		handler.ServeHTTP(&failingWriter{ResponseWriter: writer, limit: 1 << 16}, request)
 	}))
@@ -250,7 +250,7 @@ func TestExecEndpointAppliesDefaultTimeout(t *testing.T) {
 		defaultExecTimeout = oldTimeout
 	})
 
-	handler := NewHandler()
+	handler := NewHandler(DefaultExecConfig())
 	req := httptest.NewRequest(http.MethodPost, "/executions", bytes.NewReader([]byte(`{"command":"sleep 1"}`)))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
