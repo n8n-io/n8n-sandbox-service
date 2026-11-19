@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/n8n-io/sandbox-service/internal/daemon"
+	"github.com/n8n-io/sandbox-service/internal/envvar"
 	"github.com/n8n-io/sandbox-service/internal/logging"
 )
 
@@ -191,7 +192,7 @@ func Load() (*Config, error) {
 	}
 
 	// SANDBOX_RUNNER_LOG_LEVEL (optional)
-	if v := os.Getenv("SANDBOX_RUNNER_LOG_LEVEL"); v != "" {
+	if v := envvar.Get("SANDBOX_RUNNER_LOG_LEVEL"); v != "" {
 		lvl, err := logging.ParseLevel(v)
 		if err != nil {
 			return nil, fmt.Errorf("SANDBOX_RUNNER_LOG_LEVEL: %w", err)
@@ -200,7 +201,7 @@ func Load() (*Config, error) {
 	}
 
 	// SANDBOX_RUNNER_API_KEYS (required)
-	rawKeys := os.Getenv("SANDBOX_RUNNER_API_KEYS")
+	rawKeys := envvar.Get("SANDBOX_RUNNER_API_KEYS")
 	if rawKeys == "" {
 		return nil, fmt.Errorf("SANDBOX_RUNNER_API_KEYS must be set")
 	}
@@ -215,19 +216,11 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("SANDBOX_RUNNER_API_KEYS contains no valid keys")
 	}
 
-	// SANDBOX_RUNNER_MAX_FILE_BYTES (optional)
-	if v := os.Getenv("SANDBOX_RUNNER_MAX_FILE_BYTES"); v != "" {
-		n, err := strconv.ParseInt(v, 10, 64)
-		if err != nil || n <= 0 {
-			return nil, fmt.Errorf("SANDBOX_RUNNER_MAX_FILE_BYTES must be a positive integer, got %q", v)
-		}
-		cfg.MaxFileBytes = n
+	if err := envvar.PositiveInt("SANDBOX_RUNNER_MAX_FILE_BYTES", &cfg.MaxFileBytes); err != nil {
+		return nil, err
 	}
 
-	// SANDBOX_RUNNER_DATA_DIR (optional)
-	if v := os.Getenv("SANDBOX_RUNNER_DATA_DIR"); v != "" {
-		cfg.DataDir = v
-	}
+	envvar.String("SANDBOX_RUNNER_DATA_DIR", &cfg.DataDir)
 
 	// The volume cache checks the dir itself before wiping it, and refuses a
 	// relative one, so a relative data dir is resolved here.
@@ -236,49 +229,27 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("SANDBOX_RUNNER_DATA_DIR: %w", err)
 	}
 	cfg.VolumeCacheDir = cacheDir
-	if raw := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_VOLUME_CACHE_DIR")); raw != "" {
-		cfg.VolumeCacheDir = raw
+	envvar.String("SANDBOX_RUNNER_VOLUME_CACHE_DIR", &cfg.VolumeCacheDir)
+	if err := envvar.PositiveInt("SANDBOX_RUNNER_VOLUME_CACHE_MAX_BYTES", &cfg.VolumeCacheMaxBytes); err != nil {
+		return nil, err
 	}
-	if raw := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_VOLUME_CACHE_MAX_BYTES")); raw != "" {
-		maxBytes, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil || maxBytes <= 0 {
-			return nil, fmt.Errorf("SANDBOX_RUNNER_VOLUME_CACHE_MAX_BYTES must be a positive integer, got %q", raw)
-		}
-		cfg.VolumeCacheMaxBytes = maxBytes
-	}
-	if raw := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_VOLUME_FETCH_TIMEOUT")); raw != "" {
-		timeout, err := time.ParseDuration(raw)
-		if err != nil || timeout <= 0 {
-			return nil, fmt.Errorf("SANDBOX_RUNNER_VOLUME_FETCH_TIMEOUT must be a positive duration, got %q", raw)
-		}
-		cfg.VolumeFetchTimeout = timeout
+	if err := envvar.PositiveDuration("SANDBOX_RUNNER_VOLUME_FETCH_TIMEOUT", &cfg.VolumeFetchTimeout); err != nil {
+		return nil, err
 	}
 
-	// SANDBOX_RUNNER_LISTEN_ADDR (optional)
-	if v := os.Getenv("SANDBOX_RUNNER_LISTEN_ADDR"); v != "" {
-		cfg.ListenAddr = v
+	envvar.String("SANDBOX_RUNNER_LISTEN_ADDR", &cfg.ListenAddr)
+
+	if err := envvar.Bool("SANDBOX_RUNNER_METRICS_ENABLED", &cfg.MetricsEnabled); err != nil {
+		return nil, err
 	}
 
-	// SANDBOX_RUNNER_METRICS_ENABLED (optional)
-	if v := os.Getenv("SANDBOX_RUNNER_METRICS_ENABLED"); v != "" {
-		enabled, err := strconv.ParseBool(v)
-		if err != nil {
-			return nil, fmt.Errorf("SANDBOX_RUNNER_METRICS_ENABLED must be a boolean, got %q", v)
-		}
-		cfg.MetricsEnabled = enabled
-	}
-
-	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_MAX_INFLIGHT_PER_SANDBOX")); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n < 0 || n > math.MaxInt32 {
-			return nil, fmt.Errorf("SANDBOX_RUNNER_MAX_INFLIGHT_PER_SANDBOX must be an integer between 0 and %d, got %q", math.MaxInt32, v)
-		}
-		cfg.MaxInflightPerSandbox = n
+	if err := envvar.IntBetween("SANDBOX_RUNNER_MAX_INFLIGHT_PER_SANDBOX", &cfg.MaxInflightPerSandbox, 0, math.MaxInt32); err != nil {
+		return nil, err
 	}
 
 	// A request that leaves timeout_ms out runs for the daemon's default, so a
 	// cap below that default would not hold for it.
-	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_MAX_EXEC_TIMEOUT")); v != "" {
+	if v := envvar.Get("SANDBOX_RUNNER_MAX_EXEC_TIMEOUT"); v != "" {
 		d, err := time.ParseDuration(v)
 		// A value that rounds down to zero, such as 0.5ns, is not a request for no limit.
 		roundedToZero := d == 0 && strings.ContainsAny(v, "123456789")
@@ -288,27 +259,20 @@ func Load() (*Config, error) {
 		cfg.MaxExecTimeout = d
 	}
 
-	cfg.APIGRPCAddr = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_API_GRPC_ADDR"))
-	cfg.RegistrationToken = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_REGISTRATION_TOKEN"))
-	cfg.RunnerHTTPBaseURL = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_HTTP_BASE_URL"))
+	cfg.APIGRPCAddr = envvar.Get("SANDBOX_RUNNER_API_GRPC_ADDR")
+	cfg.RegistrationToken = envvar.Get("SANDBOX_RUNNER_REGISTRATION_TOKEN")
+	cfg.RunnerHTTPBaseURL = envvar.Get("SANDBOX_RUNNER_HTTP_BASE_URL")
+	envvar.String("SANDBOX_RUNNER_ID", &cfg.RunnerID)
 
-	if v := os.Getenv("SANDBOX_RUNNER_ID"); strings.TrimSpace(v) != "" {
-		cfg.RunnerID = strings.TrimSpace(v)
+	if err := envvar.NonNegativeInt("SANDBOX_RUNNER_CAPACITY_TOTAL", &cfg.CapacityTotal); err != nil {
+		return nil, err
 	}
+	cfg.CapacityTotalSet = envvar.Get("SANDBOX_RUNNER_CAPACITY_TOTAL") != ""
 
-	if v := os.Getenv("SANDBOX_RUNNER_CAPACITY_TOTAL"); v != "" {
-		n, err := strconv.ParseInt(v, 10, 32)
-		if err != nil || n < 0 {
-			return nil, fmt.Errorf("SANDBOX_RUNNER_CAPACITY_TOTAL must be a non-negative integer, got %q", v)
-		}
-		cfg.CapacityTotal = int32(n)
-		cfg.CapacityTotalSet = true
-	}
-
-	cfg.GRPCServerCAFile = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE"))
-	cfg.GRPCClientCertFile = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE"))
-	cfg.GRPCClientKeyFile = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE"))
-	cfg.GRPCServerName = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_REGISTRATION_GRPC_SERVER_NAME"))
+	cfg.GRPCServerCAFile = envvar.Get("SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE")
+	cfg.GRPCClientCertFile = envvar.Get("SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE")
+	cfg.GRPCClientKeyFile = envvar.Get("SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE")
+	cfg.GRPCServerName = envvar.Get("SANDBOX_RUNNER_REGISTRATION_GRPC_SERVER_NAME")
 
 	tlsN := 0
 	if cfg.GRPCServerCAFile != "" {
@@ -361,13 +325,11 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("SANDBOX_RUNNER_HTTP_BASE_URL must be an https:// URL with a host, got %q", cfg.RunnerHTTPBaseURL)
 	}
 
-	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR")); v != "" {
-		cfg.ControlGRPCListenAddr = v
-	}
-	cfg.ControlGRPCAdvertiseAddr = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR"))
-	cfg.ControlGRPCServerCertFile = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE"))
-	cfg.ControlGRPCServerKeyFile = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE"))
-	cfg.ControlGRPCClientCAFile = strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE"))
+	envvar.String("SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR", &cfg.ControlGRPCListenAddr)
+	cfg.ControlGRPCAdvertiseAddr = envvar.Get("SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR")
+	cfg.ControlGRPCServerCertFile = envvar.Get("SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE")
+	cfg.ControlGRPCServerKeyFile = envvar.Get("SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE")
+	cfg.ControlGRPCClientCAFile = envvar.Get("SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE")
 	if err := validateListenAddr(cfg.ControlGRPCListenAddr); err != nil {
 		return nil, fmt.Errorf("SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR must be host:port (e.g. :9091), got %q: %w", cfg.ControlGRPCListenAddr, err)
 	}

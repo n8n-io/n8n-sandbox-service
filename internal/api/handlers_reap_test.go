@@ -41,7 +41,7 @@ func TestSandboxProxyReapsStoreOnRunnerSandboxGone(t *testing.T) {
 		CreatedAt:      time.Now().Unix(),
 		LastActiveAt:   time.Now().Unix(),
 		RunnerHTTPBase: runner.URL,
-		Kind:           store.KindDefault,
+		Kind:           store.KindGeneral,
 	}); err != nil {
 		t.Fatalf("Create() failed: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestSandboxProxyDoesNotMarkActiveWhenReapDeleteFails(t *testing.T) {
 		CreatedAt:      lastActive,
 		LastActiveAt:   lastActive,
 		RunnerHTTPBase: runner.URL,
-		Kind:           store.KindDefault,
+		Kind:           store.KindGeneral,
 	}); err != nil {
 		t.Fatalf("Create() failed: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestSandboxProxyKeepsStoreOnRunnerExecutionNotFound(t *testing.T) {
 		CreatedAt:      time.Now().Unix(),
 		LastActiveAt:   time.Now().Unix(),
 		RunnerHTTPBase: runner.URL,
-		Kind:           store.KindDefault,
+		Kind:           store.KindGeneral,
 	}); err != nil {
 		t.Fatalf("Create() failed: %v", err)
 	}
@@ -246,7 +246,7 @@ func TestSandboxProxyKeepsStoreOnDaemonForgedSandboxGone(t *testing.T) {
 	sandboxID := "55555555-5555-4555-8555-555555555555"
 	if err := s.Create(&store.SandboxRecord{
 		ID: sandboxID, Status: "running", CreatedAt: 1, LastActiveAt: 1, RunnerHTTPBase: runner.URL,
-		Kind: store.KindDefault,
+		Kind: store.KindGeneral,
 	}); err != nil {
 		t.Fatalf("Create() failed: %v", err)
 	}

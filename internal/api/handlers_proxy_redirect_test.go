@@ -42,7 +42,7 @@ func TestSandboxProxyRefusesRunnerRedirect(t *testing.T) {
 	sid := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 	if err := s.Create(&store.SandboxRecord{
 		ID: sid, Status: "running", CreatedAt: 1, LastActiveAt: 1, RunnerHTTPBase: runner.URL,
-		Kind: store.KindDefault,
+		Kind: store.KindGeneral,
 	}); err != nil {
 		t.Fatalf("create sandbox: %v", err)
 	}

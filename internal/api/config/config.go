@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/n8n-io/sandbox-service/internal/envvar"
 	"github.com/n8n-io/sandbox-service/internal/logging"
 )
 
@@ -251,7 +252,7 @@ func LoadAPI() (*APIConfig, error) {
 	}
 
 	// SANDBOX_API_LOG_LEVEL (optional)
-	if v := os.Getenv("SANDBOX_API_LOG_LEVEL"); v != "" {
+	if v := envvar.Get("SANDBOX_API_LOG_LEVEL"); v != "" {
 		lvl, err := logging.ParseLevel(v)
 		if err != nil {
 			return nil, fmt.Errorf("SANDBOX_API_LOG_LEVEL: %w", err)
@@ -259,7 +260,7 @@ func LoadAPI() (*APIConfig, error) {
 		cfg.LogLevel = lvl
 	}
 
-	rawKeys := os.Getenv("SANDBOX_API_KEYS")
+	rawKeys := envvar.Get("SANDBOX_API_KEYS")
 	if rawKeys == "" {
 		return nil, fmt.Errorf("SANDBOX_API_KEYS must be set")
 	}
@@ -270,13 +271,13 @@ func LoadAPI() (*APIConfig, error) {
 
 	// A key in two sets would silently get the role checked first: admin,
 	// then provisioner, then scaler.
-	cfg.ProvisionerKeys = parseKeySet(os.Getenv("SANDBOX_API_PROVISIONER_KEYS"))
+	cfg.ProvisionerKeys = parseKeySet(envvar.Get("SANDBOX_API_PROVISIONER_KEYS"))
 	for k := range cfg.ProvisionerKeys {
 		if _, isAdmin := cfg.APIKeys[k]; isAdmin {
 			return nil, fmt.Errorf("SANDBOX_API_PROVISIONER_KEYS must not share a key with SANDBOX_API_KEYS")
 		}
 	}
-	cfg.ScalerKeys = parseKeySet(os.Getenv("SANDBOX_API_SCALER_KEYS"))
+	cfg.ScalerKeys = parseKeySet(envvar.Get("SANDBOX_API_SCALER_KEYS"))
 	for k := range cfg.ScalerKeys {
 		if _, isAdmin := cfg.APIKeys[k]; isAdmin {
 			return nil, fmt.Errorf("SANDBOX_API_SCALER_KEYS must not share a key with SANDBOX_API_KEYS")
@@ -286,15 +287,10 @@ func LoadAPI() (*APIConfig, error) {
 		}
 	}
 
-	if v := os.Getenv("SANDBOX_API_LISTEN_ADDR"); v != "" {
-		cfg.ListenAddr = v
-	}
+	envvar.String("SANDBOX_API_LISTEN_ADDR", &cfg.ListenAddr)
+	envvar.String("SANDBOX_API_GRPC_LISTEN_ADDR", &cfg.GRPCListenAddr)
 
-	if v := os.Getenv("SANDBOX_API_GRPC_LISTEN_ADDR"); v != "" {
-		cfg.GRPCListenAddr = v
-	}
-
-	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_METRICS_LISTEN_ADDR")); v != "" {
+	if v := envvar.Get("SANDBOX_API_METRICS_LISTEN_ADDR"); v != "" {
 		if err := validateListenAddr(v); err != nil {
 			return nil, fmt.Errorf("SANDBOX_API_METRICS_LISTEN_ADDR must be host:port (e.g. :9100), got %q: %w", v, err)
 		}
@@ -312,26 +308,18 @@ func LoadAPI() (*APIConfig, error) {
 		}
 	}
 
-	cfg.RegistrationToken = os.Getenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN")
+	cfg.RegistrationToken = envvar.Get("SANDBOX_API_RUNNER_REGISTRATION_TOKEN")
 	if cfg.RegistrationToken == "" {
 		return nil, fmt.Errorf("SANDBOX_API_RUNNER_REGISTRATION_TOKEN must be set")
 	}
 
-	if v := os.Getenv("SANDBOX_API_MAX_FILE_BYTES"); v != "" {
-		n, err := strconv.ParseInt(v, 10, 64)
-		if err != nil || n <= 0 {
-			return nil, fmt.Errorf("SANDBOX_API_MAX_FILE_BYTES must be a positive integer, got %q", v)
-		}
-		cfg.MaxFileBytes = n
+	if err := envvar.PositiveInt("SANDBOX_API_MAX_FILE_BYTES", &cfg.MaxFileBytes); err != nil {
+		return nil, err
 	}
 
-	if v := os.Getenv("SANDBOX_API_DEFAULT_MAX_SANDBOXES"); v != "" {
-		n, err := strconv.Atoi(v)
-		// tenants.max_sandboxes is INTEGER (signed 32-bit) in SQLite/Postgres.
-		if err != nil || n < 0 || n > math.MaxInt32 {
-			return nil, fmt.Errorf("SANDBOX_API_DEFAULT_MAX_SANDBOXES must be an integer between 0 and %d, got %q", math.MaxInt32, v)
-		}
-		cfg.DefaultMaxSandboxes = n
+	// tenants.max_sandboxes is INTEGER (signed 32-bit) in SQLite/Postgres.
+	if err := envvar.IntBetween("SANDBOX_API_DEFAULT_MAX_SANDBOXES", &cfg.DefaultMaxSandboxes, 0, math.MaxInt32); err != nil {
+		return nil, err
 	}
 	// Provisioner tenants are bounded to 1..DefaultMaxSandboxes; with 0
 	// (unlimited) an omitted max_sandboxes would yield an unlimited tenant.
@@ -339,51 +327,30 @@ func LoadAPI() (*APIConfig, error) {
 		return nil, fmt.Errorf("SANDBOX_API_PROVISIONER_KEYS requires SANDBOX_API_DEFAULT_MAX_SANDBOXES to be at least 1")
 	}
 
-	if err := parseLimit("SANDBOX_API_MAX_INFLIGHT_PER_TENANT", &cfg.MaxInflightPerTenant); err != nil {
+	if err := envvar.IntBetween("SANDBOX_API_MAX_INFLIGHT_PER_TENANT", &cfg.MaxInflightPerTenant, 0, math.MaxInt32); err != nil {
 		return nil, err
 	}
 
-	cfg.RunnerAPIKey = os.Getenv("SANDBOX_API_RUNNER_API_KEY")
+	cfg.RunnerAPIKey = envvar.Get("SANDBOX_API_RUNNER_API_KEY")
+	envvar.String("SANDBOX_API_DATA_DIR", &cfg.DataDir)
 
-	if v := os.Getenv("SANDBOX_API_DATA_DIR"); v != "" {
-		cfg.DataDir = v
+	if err := envvar.Bool("SANDBOX_API_SQLITE_WAL", &cfg.SQLiteWAL); err != nil {
+		return nil, err
+	}
+	if err := envvar.Bool("SANDBOX_API_METRICS_ENABLED", &cfg.MetricsEnabled); err != nil {
+		return nil, err
+	}
+	if err := envvar.Bool("SANDBOX_API_ENABLE_CORS", &cfg.EnableCORS); err != nil {
+		return nil, err
 	}
 
-	if v := os.Getenv("SANDBOX_API_SQLITE_WAL"); v != "" {
-		b, err := strconv.ParseBool(v)
-		if err != nil {
-			return nil, fmt.Errorf("SANDBOX_API_SQLITE_WAL must be a boolean, got %q", v)
-		}
-		cfg.SQLiteWAL = b
+	if err := envvar.PositiveDuration("SANDBOX_API_RUNNER_HEARTBEAT_GRACE", &cfg.HeartbeatGrace); err != nil {
+		return nil, err
 	}
 
-	if v := os.Getenv("SANDBOX_API_METRICS_ENABLED"); v != "" {
-		b, err := strconv.ParseBool(v)
-		if err != nil {
-			return nil, fmt.Errorf("SANDBOX_API_METRICS_ENABLED must be a boolean, got %q", v)
-		}
-		cfg.MetricsEnabled = b
-	}
-
-	if v := os.Getenv("SANDBOX_API_ENABLE_CORS"); v != "" {
-		b, err := strconv.ParseBool(v)
-		if err != nil {
-			return nil, fmt.Errorf("SANDBOX_API_ENABLE_CORS must be a boolean, got %q", v)
-		}
-		cfg.EnableCORS = b
-	}
-
-	if v := os.Getenv("SANDBOX_API_RUNNER_HEARTBEAT_GRACE"); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil || d <= 0 {
-			return nil, fmt.Errorf("SANDBOX_API_RUNNER_HEARTBEAT_GRACE must be a positive duration (e.g. 45s, 2m), got %q", v)
-		}
-		cfg.HeartbeatGrace = d
-	}
-
-	cfg.GRPCServerCertFile = strings.TrimSpace(os.Getenv("SANDBOX_API_GRPC_TLS_CERT_FILE"))
-	cfg.GRPCServerKeyFile = strings.TrimSpace(os.Getenv("SANDBOX_API_GRPC_TLS_KEY_FILE"))
-	cfg.GRPCClientCAFile = strings.TrimSpace(os.Getenv("SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE"))
+	cfg.GRPCServerCertFile = envvar.Get("SANDBOX_API_GRPC_TLS_CERT_FILE")
+	cfg.GRPCServerKeyFile = envvar.Get("SANDBOX_API_GRPC_TLS_KEY_FILE")
+	cfg.GRPCClientCAFile = envvar.Get("SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE")
 
 	tlsN := 0
 	if cfg.GRPCServerCertFile != "" {
@@ -399,10 +366,10 @@ func LoadAPI() (*APIConfig, error) {
 		return nil, fmt.Errorf("SANDBOX_API_GRPC_TLS_CERT_FILE, SANDBOX_API_GRPC_TLS_KEY_FILE, and SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE are required for runner-registry mTLS")
 	}
 
-	cfg.RunnerControlGRPCClientCAFile = strings.TrimSpace(os.Getenv("SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE"))
-	cfg.RunnerControlGRPCClientCertFile = strings.TrimSpace(os.Getenv("SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE"))
-	cfg.RunnerControlGRPCClientKeyFile = strings.TrimSpace(os.Getenv("SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE"))
-	cfg.RunnerControlGRPCClientServerName = strings.TrimSpace(os.Getenv("SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_SERVER_NAME"))
+	cfg.RunnerControlGRPCClientCAFile = envvar.Get("SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE")
+	cfg.RunnerControlGRPCClientCertFile = envvar.Get("SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE")
+	cfg.RunnerControlGRPCClientKeyFile = envvar.Get("SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE")
+	cfg.RunnerControlGRPCClientServerName = envvar.Get("SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_SERVER_NAME")
 
 	ctlN := 0
 	if cfg.RunnerControlGRPCClientCAFile != "" {
@@ -418,67 +385,39 @@ func LoadAPI() (*APIConfig, error) {
 		return nil, fmt.Errorf("SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE, SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE, and SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE are required for control-plane mTLS")
 	}
 
-	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_IDLE_STOP_AFTER")); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil || d < 0 {
-			return nil, fmt.Errorf("SANDBOX_API_IDLE_STOP_AFTER must be unset, 0, or a positive duration, got %q", v)
-		}
-		cfg.IdleStopAfter = d
+	if err := envvar.NonNegativeDuration("SANDBOX_API_IDLE_STOP_AFTER", &cfg.IdleStopAfter); err != nil {
+		return nil, err
 	}
-	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_IDLE_DELETE_AFTER")); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil || d < 0 {
-			return nil, fmt.Errorf("SANDBOX_API_IDLE_DELETE_AFTER must be unset, 0, or a positive duration, got %q", v)
-		}
-		cfg.IdleDeleteAfter = d
+	if err := envvar.NonNegativeDuration("SANDBOX_API_IDLE_DELETE_AFTER", &cfg.IdleDeleteAfter); err != nil {
+		return nil, err
 	}
-	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_IDLE_DELETE_SAFETY_BUFFER")); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil || d < 0 {
-			return nil, fmt.Errorf("SANDBOX_API_IDLE_DELETE_SAFETY_BUFFER must be a non-negative duration, got %q", v)
-		}
-		cfg.IdleDeleteSafetyBuffer = d
+	if err := envvar.NonNegativeDuration("SANDBOX_API_IDLE_DELETE_SAFETY_BUFFER", &cfg.IdleDeleteSafetyBuffer); err != nil {
+		return nil, err
 	}
 	if (cfg.IdleDeleteAfter > 0 || cfg.IdleStopAfter > 0) && cfg.IdleDeleteSafetyBuffer <= 0 {
 		cfg.IdleDeleteSafetyBuffer = time.Minute
 	}
 
 	cfg.IdleSweepInterval = time.Minute
-	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_IDLE_SWEEP_INTERVAL")); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil || d <= 0 {
-			return nil, fmt.Errorf("SANDBOX_API_IDLE_SWEEP_INTERVAL must be a positive duration, got %q", v)
-		}
-		cfg.IdleSweepInterval = d
+	if err := envvar.PositiveDuration("SANDBOX_API_IDLE_SWEEP_INTERVAL", &cfg.IdleSweepInterval); err != nil {
+		return nil, err
 	}
 
 	cfg.IdleSweepConcurrency = defaultIdleSweepConcurrency
-	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_IDLE_SWEEP_CONCURRENCY")); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n < 1 || n > maxIdleSweepConcurrency {
-			return nil, fmt.Errorf("SANDBOX_API_IDLE_SWEEP_CONCURRENCY must be an integer between 1 and %d, got %q", maxIdleSweepConcurrency, v)
-		}
-		cfg.IdleSweepConcurrency = n
+	if err := envvar.IntBetween("SANDBOX_API_IDLE_SWEEP_CONCURRENCY", &cfg.IdleSweepConcurrency, 1, maxIdleSweepConcurrency); err != nil {
+		return nil, err
 	}
 	cfg.Postgres.LockPoolSize = cfg.IdleSweepConcurrency + sandboxLockRequestHeadroom
 
-	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_ORPHAN_REAP_BUFFER")); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil || d <= 0 {
-			return nil, fmt.Errorf("SANDBOX_API_ORPHAN_REAP_BUFFER must be a positive duration, got %q", v)
-		}
-		cfg.OrphanReapBuffer = d
+	if err := envvar.PositiveDuration("SANDBOX_API_ORPHAN_REAP_BUFFER", &cfg.OrphanReapBuffer); err != nil {
+		return nil, err
 	}
 
-	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_ACTIVITY_WRITE_INTERVAL")); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil || d < time.Second || d > maxActivityWriteInterval {
-			return nil, fmt.Errorf("SANDBOX_API_ACTIVITY_WRITE_INTERVAL must be a duration between 1s and %s, got %q", maxActivityWriteInterval, v)
-		}
-		cfg.ActivityWriteInterval = d
+	if err := envvar.DurationBetween("SANDBOX_API_ACTIVITY_WRITE_INTERVAL", &cfg.ActivityWriteInterval, time.Second, maxActivityWriteInterval); err != nil {
+		return nil, err
 	}
 
-	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_MAX_RESPONSE_ACTIVITY")); v != "" {
+	if v := envvar.Get("SANDBOX_API_MAX_RESPONSE_ACTIVITY"); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil || d < minMaxResponseActivity {
 			return nil, fmt.Errorf("SANDBOX_API_MAX_RESPONSE_ACTIVITY must be a duration of at least %s, got %q", minMaxResponseActivity, v)
@@ -486,15 +425,11 @@ func LoadAPI() (*APIConfig, error) {
 		cfg.MaxResponseActivity = d
 	}
 
-	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_KEY_CACHE_TTL")); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil || d < 0 || d > maxAPIKeyCacheTTL {
-			return nil, fmt.Errorf("SANDBOX_API_KEY_CACHE_TTL must be 0 or a duration up to %s, got %q", maxAPIKeyCacheTTL, v)
-		}
-		cfg.APIKeyCacheTTL = d
+	if err := envvar.DurationBetween("SANDBOX_API_KEY_CACHE_TTL", &cfg.APIKeyCacheTTL, 0, maxAPIKeyCacheTTL); err != nil {
+		return nil, err
 	}
 
-	if v := strings.TrimSpace(os.Getenv("SANDBOX_API_STORE")); v != "" {
+	if v := envvar.Get("SANDBOX_API_STORE"); v != "" {
 		switch StoreBackend(strings.ToLower(v)) {
 		case StoreSQLite, StorePostgres:
 			cfg.Store = StoreBackend(strings.ToLower(v))
@@ -504,20 +439,15 @@ func LoadAPI() (*APIConfig, error) {
 	}
 
 	if cfg.Store == StorePostgres {
-		cfg.Postgres.Host = strings.TrimSpace(os.Getenv("SANDBOX_API_POSTGRES_HOST"))
-		cfg.Postgres.User = strings.TrimSpace(os.Getenv("SANDBOX_API_POSTGRES_USER"))
+		cfg.Postgres.Host = envvar.Get("SANDBOX_API_POSTGRES_HOST")
+		cfg.Postgres.User = envvar.Get("SANDBOX_API_POSTGRES_USER")
+		// Untrimmed: a password may start or end with a space.
 		cfg.Postgres.Password = os.Getenv("SANDBOX_API_POSTGRES_PASSWORD")
-		cfg.Postgres.Database = strings.TrimSpace(os.Getenv("SANDBOX_API_POSTGRES_DB"))
-		if v := strings.TrimSpace(os.Getenv("SANDBOX_API_POSTGRES_PORT")); v != "" {
-			port, err := strconv.Atoi(v)
-			if err != nil || port <= 0 {
-				return nil, fmt.Errorf("SANDBOX_API_POSTGRES_PORT must be a positive integer, got %q", v)
-			}
-			cfg.Postgres.Port = port
+		cfg.Postgres.Database = envvar.Get("SANDBOX_API_POSTGRES_DB")
+		if err := envvar.PositiveInt("SANDBOX_API_POSTGRES_PORT", &cfg.Postgres.Port); err != nil {
+			return nil, err
 		}
-		if v := strings.TrimSpace(os.Getenv("SANDBOX_API_POSTGRES_SSLMODE")); v != "" {
-			cfg.Postgres.SSLMode = v
-		}
+		envvar.String("SANDBOX_API_POSTGRES_SSLMODE", &cfg.Postgres.SSLMode)
 		if cfg.Postgres.Host == "" {
 			return nil, fmt.Errorf("SANDBOX_API_POSTGRES_HOST must be set when SANDBOX_API_STORE=postgres")
 		}
@@ -532,7 +462,7 @@ func LoadAPI() (*APIConfig, error) {
 		}
 	}
 
-	cfg.ScalerURL = strings.TrimRight(strings.TrimSpace(os.Getenv("SANDBOX_API_SCALER_URL")), "/")
+	cfg.ScalerURL = strings.TrimRight(envvar.Get("SANDBOX_API_SCALER_URL"), "/")
 
 	if err := loadVolumeStore(cfg); err != nil {
 		return nil, err
@@ -542,7 +472,7 @@ func LoadAPI() (*APIConfig, error) {
 }
 
 func loadVolumeStore(cfg *APIConfig) error {
-	backend := strings.TrimSpace(os.Getenv("SANDBOX_API_VOLUME_STORE"))
+	backend := envvar.Get("SANDBOX_API_VOLUME_STORE")
 	switch VolumeStoreBackend(strings.ToLower(backend)) {
 	case VolumeStoreNone:
 		return nil
@@ -560,7 +490,7 @@ func loadVolumeStore(cfg *APIConfig) error {
 		cfg.VolumeLocalListenAddr = listenAddr
 	case VolumeStoreRemote:
 		cfg.VolumeStore = VolumeStoreRemote
-		socket := strings.TrimSpace(os.Getenv("SANDBOX_API_VOLUME_REMOTE_SOCKET"))
+		socket := envvar.Get("SANDBOX_API_VOLUME_REMOTE_SOCKET")
 		// 107 bytes is the most a Unix socket address holds on Linux.
 		if !filepath.IsAbs(socket) || len(socket) > 107 {
 			return fmt.Errorf("SANDBOX_API_VOLUME_REMOTE_SOCKET must be an absolute path of at most 107 bytes when SANDBOX_API_VOLUME_STORE=remote, got %q", socket)
@@ -576,7 +506,7 @@ func loadVolumeStore(cfg *APIConfig) error {
 // slash. It takes no path: the object route is served at the root. Errors
 // leave the value out, since a rejected one may hold a secret.
 func parseLocalURL() (string, error) {
-	raw := strings.TrimSpace(os.Getenv("SANDBOX_API_VOLUME_LOCAL_URL"))
+	raw := envvar.Get("SANDBOX_API_VOLUME_LOCAL_URL")
 	if raw == "" {
 		return "", fmt.Errorf("SANDBOX_API_VOLUME_LOCAL_URL must be set when SANDBOX_API_VOLUME_STORE=local")
 	}
@@ -597,7 +527,7 @@ func parseLocalURL() (string, error) {
 func parseVolumeLocalListenAddr(cfg *APIConfig) (string, error) {
 	const name = "SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR"
 	addr := defaultVolumeLocalAddr
-	if v := strings.TrimSpace(os.Getenv(name)); v != "" {
+	if v := envvar.Get(name); v != "" {
 		addr = v
 	}
 	if err := validateListenAddr(addr); err != nil {
@@ -684,21 +614,6 @@ func isWildcardHost(host string) bool {
 		return true
 	}
 	return false
-}
-
-// parseLimit reads a concurrency limit from the environment into dst, leaving
-// the default when the variable is unset. 0 means no limit.
-func parseLimit(name string, dst *int) error {
-	v := strings.TrimSpace(os.Getenv(name))
-	if v == "" {
-		return nil
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil || n < 0 || n > math.MaxInt32 {
-		return fmt.Errorf("%s must be an integer between 0 and %d, got %q", name, math.MaxInt32, v)
-	}
-	*dst = n
-	return nil
 }
 
 // parseKeySet splits a comma-separated list of API keys, dropping blanks.

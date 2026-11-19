@@ -36,15 +36,15 @@ type Kind string
 
 // Sandbox kinds.
 const (
-	KindDefault Kind = "default"
+	KindGeneral Kind = "general"
 	KindCode    Kind = "code"
 )
 
 // AllKinds returns every sandbox kind.
-func AllKinds() []Kind { return []Kind{KindDefault, KindCode} }
+func AllKinds() []Kind { return []Kind{KindGeneral, KindCode} }
 
 func checkKind(kind Kind) error {
-	if kind != KindDefault && kind != KindCode {
+	if kind != KindGeneral && kind != KindCode {
 		return fmt.Errorf("store: invalid sandbox kind %q", kind)
 	}
 	return nil
@@ -186,9 +186,9 @@ type SandboxStore interface {
 	// GetAnyKind returns the record of the sandbox with the given id, whatever
 	// its kind, or nil when there is none.
 	GetAnyKind(id string) (*SandboxRecord, error)
-	// GetDefaultSandbox returns the record of the sandbox with the given id
-	// when it is a default sandbox, or nil.
-	GetDefaultSandbox(id string) (*SandboxRecord, error)
+	// GetGeneralSandbox returns the record of the sandbox with the given id
+	// when it is a general sandbox, or nil.
+	GetGeneralSandbox(id string) (*SandboxRecord, error)
 	// GetCodeSandbox returns the record of the sandbox with the given id when
 	// it is a code sandbox, or nil.
 	GetCodeSandbox(id string) (*SandboxRecord, error)

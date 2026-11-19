@@ -2,13 +2,13 @@ package firecracker
 
 import (
 	"fmt"
+	"math"
 	"net"
-	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
+	"github.com/n8n-io/sandbox-service/internal/envvar"
 	fcnetwork "github.com/n8n-io/sandbox-service/internal/runner/runtime/firecracker.ee/network"
 )
 
@@ -167,116 +167,44 @@ func loadConfigWithoutCapacity() (Config, error) {
 func parseConfig() (Config, error) {
 	cfg := defaultConfig()
 
-	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_JAILER_BIN")); v != "" {
-		cfg.JailerBin = v
-	}
-	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_BIN")); v != "" {
-		cfg.FirecrackerBin = v
-	}
-	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_JAILER_BASE_DIR")); v != "" {
-		cfg.JailerBaseDir = v
-	}
-	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_TEMPLATE_DIR")); v != "" {
-		cfg.TemplateDir = v
-	}
-	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_MEM_PATH")); v != "" {
-		cfg.SnapshotMemPath = v
-	}
-	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_STATE_PATH")); v != "" {
-		cfg.SnapshotStatePath = v
-	}
-	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_GUEST_IP")); v != "" {
-		cfg.GuestIP = v
-	}
-	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_HOST_TAP_DEVICE_NAME")); v != "" {
-		cfg.HostTapDeviceName = v
-	}
-	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_HOST_TAP_IP_CIDR")); v != "" {
-		cfg.HostTapIPCIDR = v
-	}
-	if n, ok, err := parsePositiveIntEnv("SANDBOX_RUNNER_FIRECRACKER_DAEMON_PORT"); err != nil {
+	envvar.String("SANDBOX_RUNNER_FIRECRACKER_JAILER_BIN", &cfg.JailerBin)
+	envvar.String("SANDBOX_RUNNER_FIRECRACKER_BIN", &cfg.FirecrackerBin)
+	envvar.String("SANDBOX_RUNNER_FIRECRACKER_JAILER_BASE_DIR", &cfg.JailerBaseDir)
+	envvar.String("SANDBOX_RUNNER_FIRECRACKER_TEMPLATE_DIR", &cfg.TemplateDir)
+	envvar.String("SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_MEM_PATH", &cfg.SnapshotMemPath)
+	envvar.String("SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_STATE_PATH", &cfg.SnapshotStatePath)
+	envvar.String("SANDBOX_RUNNER_FIRECRACKER_GUEST_IP", &cfg.GuestIP)
+	envvar.String("SANDBOX_RUNNER_FIRECRACKER_HOST_TAP_DEVICE_NAME", &cfg.HostTapDeviceName)
+	envvar.String("SANDBOX_RUNNER_FIRECRACKER_HOST_TAP_IP_CIDR", &cfg.HostTapIPCIDR)
+	envvar.String("SANDBOX_RUNNER_FIRECRACKER_PROXY_LISTEN_IP", &cfg.ProxyListenIP)
+	envvar.String("SANDBOX_RUNNER_FIRECRACKER_MANIFEST_PATH", &cfg.ManifestPath)
+	envvar.String("SANDBOX_RUNNER_FIRECRACKER_EXPECTED_GIT_SHA", &cfg.ExpectedGitSHA)
+	envvar.String("SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT", &cfg.CreateSnapshotScript)
+	envvar.String("SANDBOX_RUNNER_FIRECRACKER_DAEMON_BIN", &cfg.DaemonBin)
+
+	if err := envvar.PositiveInt("SANDBOX_RUNNER_FIRECRACKER_DAEMON_PORT", &cfg.DaemonPort); err != nil {
 		return Config{}, err
-	} else if ok {
-		cfg.DaemonPort = n
 	}
-	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_PROXY_LISTEN_IP")); v != "" {
-		cfg.ProxyListenIP = v
-	}
-	if n, ok, err := parsePositiveIntEnv("SANDBOX_RUNNER_FIRECRACKER_PROXY_PORT_START"); err != nil {
+	if err := envvar.PositiveInt("SANDBOX_RUNNER_FIRECRACKER_PROXY_PORT_START", &cfg.ProxyPortStart); err != nil {
 		return Config{}, err
-	} else if ok {
-		cfg.ProxyPortStart = n
 	}
-	if n, ok, err := parsePositiveIntEnv("SANDBOX_RUNNER_FIRECRACKER_SOCKET_WAIT_ATTEMPTS"); err != nil {
+	if err := envvar.PositiveInt("SANDBOX_RUNNER_FIRECRACKER_SOCKET_WAIT_ATTEMPTS", &cfg.SocketWaitAttempts); err != nil {
 		return Config{}, err
-	} else if ok {
-		cfg.SocketWaitAttempts = n
 	}
-	if d, ok, err := parseMillisecondsEnv("SANDBOX_RUNNER_FIRECRACKER_SOCKET_WAIT_INTERVAL_MS"); err != nil {
+	// Capped so the conversion below cannot overflow into a negative interval.
+	socketWaitMs := cfg.SocketWaitInterval.Milliseconds()
+	if err := envvar.IntBetween("SANDBOX_RUNNER_FIRECRACKER_SOCKET_WAIT_INTERVAL_MS", &socketWaitMs, 1, math.MaxInt64/int64(time.Millisecond)); err != nil {
 		return Config{}, err
-	} else if ok {
-		cfg.SocketWaitInterval = d
 	}
-	if d, ok, err := parseDurationEnv("SANDBOX_RUNNER_FIRECRACKER_DAEMON_WAIT_TIMEOUT"); err != nil {
+	cfg.SocketWaitInterval = time.Duration(socketWaitMs) * time.Millisecond
+	if err := envvar.PositiveDuration("SANDBOX_RUNNER_FIRECRACKER_DAEMON_WAIT_TIMEOUT", &cfg.DaemonWaitTimeout); err != nil {
 		return Config{}, err
-	} else if ok {
-		cfg.DaemonWaitTimeout = d
 	}
-	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_MANIFEST_PATH")); v != "" {
-		cfg.ManifestPath = v
-	}
-	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_EXPECTED_GIT_SHA")); v != "" {
-		cfg.ExpectedGitSHA = v
-	}
-	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT")); v != "" {
-		cfg.CreateSnapshotScript = v
-	}
-	if v := strings.TrimSpace(os.Getenv("SANDBOX_RUNNER_FIRECRACKER_DAEMON_BIN")); v != "" {
-		cfg.DaemonBin = v
-	}
-	if timeout, ok, err := parseDurationEnv("SANDBOX_RUNNER_FIRECRACKER_VOLUME_BUILD_TIMEOUT"); err != nil {
+	if err := envvar.PositiveDuration("SANDBOX_RUNNER_FIRECRACKER_VOLUME_BUILD_TIMEOUT", &cfg.VolumeBuildTimeout); err != nil {
 		return Config{}, err
-	} else if ok {
-		cfg.VolumeBuildTimeout = timeout
 	}
 
 	return cfg, nil
-}
-
-func parsePositiveIntEnv(name string) (int, bool, error) {
-	raw := strings.TrimSpace(os.Getenv(name))
-	if raw == "" {
-		return 0, false, nil
-	}
-	n, err := strconv.Atoi(raw)
-	if err != nil || n <= 0 {
-		return 0, true, fmt.Errorf("%s must be a positive integer, got %q", name, raw)
-	}
-	return n, true, nil
-}
-
-func parseDurationEnv(name string) (time.Duration, bool, error) {
-	raw := strings.TrimSpace(os.Getenv(name))
-	if raw == "" {
-		return 0, false, nil
-	}
-	d, err := time.ParseDuration(raw)
-	if err != nil || d <= 0 {
-		return 0, true, fmt.Errorf("%s must be a positive duration, got %q", name, raw)
-	}
-	return d, true, nil
-}
-
-func parseMillisecondsEnv(name string) (time.Duration, bool, error) {
-	raw := strings.TrimSpace(os.Getenv(name))
-	if raw == "" {
-		return 0, false, nil
-	}
-	n, err := strconv.Atoi(raw)
-	if err != nil || n <= 0 {
-		return 0, true, fmt.Errorf("%s must be a positive integer number of milliseconds, got %q", name, raw)
-	}
-	return time.Duration(n) * time.Millisecond, true, nil
 }
 
 func validateConfig(cfg Config) error {
