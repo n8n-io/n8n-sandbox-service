@@ -22,15 +22,27 @@ type Config struct {
 
 	WorkDir        string   // root for task directories and the runtime's working directory
 	RuntimeCommand []string // executable followed by its arguments, from the runtime registry
+	Limits         Limits   // per-task budgets; non-positive values use defaults
+	// RuntimeLogWrites caps the writes to each of the runtime's stdout and
+	// stderr that reach the daemon log. Non-positive uses the default of 16.
+	RuntimeLogWrites int
 }
 
 func LoadConfig() (Config, error) {
-	cfg := Config{ListenAddr: ":8081", MaxConcurrency: 1}
+	cfg := Config{ListenAddr: ":8081", MaxConcurrency: 1, RuntimeLogWrites: defaultRuntimeLogWrites}
 	envvar.String("CODE_DAEMON_LISTEN_ADDR", &cfg.ListenAddr)
 	if err := envvar.Bool("CODE_DAEMON_ALLOW_LOCAL_CLIENTS", &cfg.AllowLocalClients); err != nil {
 		return Config{}, err
 	}
 	if err := envvar.IntBetween("CODE_DAEMON_MAX_CONCURRENCY", &cfg.MaxConcurrency, 1, 32); err != nil {
+		return Config{}, err
+	}
+	limits, err := loadLimits()
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.Limits = limits
+	if err := envvar.IntBetween("CODE_DAEMON_RUNTIME_LOG_WRITES", &cfg.RuntimeLogWrites, 1, 10_000); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
@@ -44,14 +56,22 @@ type Daemon struct {
 	tasksMu            sync.Mutex
 	dispatchedByTaskID map[string]bool // false before dispatch, true once dispatch is attempted
 
-	workerMu    sync.Mutex
-	worker      *worker // started lazily and never replaced once set
-	startFailed bool    // set when the worker could not be started; it is not retried
-	closed      bool    // prevents starting a worker after Close
+	workerMu       sync.Mutex
+	startupTimeout time.Duration // how long a started worker has to report ready
+	worker         *worker       // started lazily and never replaced once set
+	startFailed    bool          // set when the worker could not be started; it is not retried
+	closed         bool          // prevents starting a worker after Close
 }
 
 func New(cfg Config) *Daemon {
-	return &Daemon{cfg: cfg, lanes: make(chan struct{}, max(1, cfg.MaxConcurrency)), dispatchedByTaskID: make(map[string]bool)}
+	cfg.Limits = cfg.Limits.withDefaults()
+	if cfg.RuntimeLogWrites <= 0 {
+		cfg.RuntimeLogWrites = defaultRuntimeLogWrites
+	}
+	return &Daemon{
+		cfg: cfg, lanes: make(chan struct{}, max(1, cfg.MaxConcurrency)), dispatchedByTaskID: make(map[string]bool),
+		startupTimeout: workerStartupTimeout,
+	}
 }
 
 // Handler registers the runner's routes and applies the client source guard by default.

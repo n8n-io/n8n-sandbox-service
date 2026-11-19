@@ -43,7 +43,7 @@ func (d *Daemon) markDispatched(id string) {
 }
 
 func validFilePath(path string) bool {
-	return path != "." && fs.ValidPath(path) && !strings.ContainsAny(path, "\\\x00")
+	return len(path) <= 1024 && path != "." && fs.ValidPath(path) && !strings.ContainsAny(path, "\\\x00")
 }
 
 // stageInputs creates a private task directory and removes it if staging fails.
@@ -52,15 +52,15 @@ func (d *Daemon) stageInputs(mr *multipart.Reader) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := writeInputs(dir, mr); err != nil {
+	if err := writeInputs(dir, mr, d.cfg.Limits); err != nil {
 		_ = os.RemoveAll(dir)
 		return "", err
 	}
 	return dir, nil
 }
 
-// writeInputs confines multipart uploads to the task's input directory and rejects duplicate paths.
-func writeInputs(dir string, mr *multipart.Reader) error {
+// writeInputs stages files within the task's byte and file limits, without overwriting files.
+func writeInputs(dir string, mr *multipart.Reader, limits Limits) error {
 	in := filepath.Join(dir, "in")
 	for _, path := range []string{in, filepath.Join(dir, "out", "bin")} {
 		if err := os.MkdirAll(path, 0o700); err != nil {
@@ -72,6 +72,8 @@ func writeInputs(dir string, mr *multipart.Reader) error {
 		return err
 	}
 	defer root.Close()
+	remaining := int64(limits.InputBytes)
+	files := 0
 	for {
 		part, err := mr.NextPart()
 		if err == io.EOF {
@@ -86,6 +88,10 @@ func writeInputs(dir string, mr *multipart.Reader) error {
 		if err != nil || part.FormName() != "input" || !validFilePath(rel) {
 			return errors.New("invalid input part")
 		}
+		files++
+		if files > limits.Files {
+			return errInputLimit
+		}
 		if err := root.MkdirAll(filepath.Dir(rel), 0o700); err != nil {
 			return err
 		}
@@ -93,9 +99,20 @@ func writeInputs(dir string, mr *multipart.Reader) error {
 		if err != nil {
 			return err
 		}
-		_, err = io.Copy(f, part)
+		n, err := io.Copy(f, io.LimitReader(part, remaining))
 		if err := errors.Join(err, f.Close()); err != nil {
 			return err
+		}
+		remaining -= n
+		if remaining == 0 {
+			// A limited copy cannot tell whether the part ends exactly at the limit.
+			var probe [1]byte
+			if _, err := io.ReadFull(part, probe[:]); err != io.EOF {
+				if err != nil {
+					return err
+				}
+				return errInputLimit
+			}
 		}
 	}
 }

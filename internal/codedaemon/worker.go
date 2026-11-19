@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
@@ -16,7 +17,14 @@ import (
 	"time"
 )
 
-const workerStartupTimeout = 15 * time.Second
+const (
+	workerStartupTimeout = 15 * time.Second
+	// maxControlMessage bounds every control message, including its newline.
+	maxControlMessage = 512 << 10 // 512 KiB
+	// maxConsoleText bounds the text of one console message. JSON escaping
+	// expands a byte to at most 6, so such a message fits maxControlMessage.
+	maxConsoleText = 64 << 10 // 64 KiB
+)
 
 var errWorkerUnavailable = errors.New("runtime unavailable")
 
@@ -25,15 +33,23 @@ var errWorkerUnavailable = errors.New("runtime unavailable")
 // stderr are not part of the protocol. Type selects the message:
 //   - "ready" (runtime → daemon): the runtime accepts start commands. Sent once after startup.
 //   - "start" (daemon → runtime): run the task staged in Dir, with TaskID and Shared set.
+//   - "console" (runtime → daemon): one console call of the task with TaskID, in Stream and Text.
 //   - "done" or "error" (runtime → daemon): the task with TaskID finished; "error" carries Error.
 //
-// The daemon ignores unknown types and stops the runtime on invalid JSON.
+// Every message must fit in maxControlMessage. The runtime cuts each console
+// call's text to maxConsoleText bytes and cuts error details to fit. The daemon
+// ignores unknown types, and stops the runtime on invalid JSON or a larger message.
 type workerMessage struct {
 	Type   string          `json:"type"`
 	TaskID string          `json:"taskId,omitempty"`
 	Dir    string          `json:"dir,omitempty"`
 	Shared bool            `json:"shared,omitempty"`
 	Error  json.RawMessage `json:"error,omitempty"`
+
+	// Console messages only: Stream names the console stream ("stdout" or
+	// "stderr") and Text is the content written to it.
+	Stream string `json:"stream,omitempty"`
+	Text   string `json:"text,omitempty"`
 }
 
 type worker struct {
@@ -46,11 +62,13 @@ type worker struct {
 	writeMu  sync.Mutex
 
 	mu                 sync.Mutex // guards execution registration, delivery, and cleanup
-	executionsByTaskID map[string]chan workerMessage
+	executionsByTaskID map[string]*execution
 }
 
-// startWorker launches the runtime in its own process group and gives it the control socket on fd 3.
-func startWorker(cfg Config) (*worker, error) {
+// startWorker launches the runtime in its own process group and gives it the
+// control socket on fd 3. It stops the runtime if it is not ready within
+// startupTimeout, whether or not a caller is still waiting.
+func startWorker(cfg Config, startupTimeout time.Duration) (*worker, error) {
 	if len(cfg.RuntimeCommand) == 0 {
 		return nil, errWorkerUnavailable
 	}
@@ -64,21 +82,38 @@ func startWorker(cfg Config) (*worker, error) {
 	cmd.Env = []string{"PATH=" + envOr("PATH", "/usr/bin:/bin"), "HOME=" + envOr("HOME", "/home/node"), "NODE_ENV=production"}
 	cmd.ExtraFiles = []*os.File{child}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// Don't wait indefinitely for inherited log pipes to close after exit.
+	cmd.WaitDelay = time.Second
+	logs := newRuntimeLogger(cfg.RuntimeLogWrites)
+	cmd.Stdout = logs.writer("stdout")
+	cmd.Stderr = logs.writer("stderr")
 	if err := cmd.Start(); err != nil {
+		logs.close()
 		_ = conn.Close()
 		return nil, err
 	}
 	w := &worker{
 		cmd: cmd, conn: conn, ready: make(chan struct{}), stopped: make(chan struct{}),
-		done: make(chan struct{}), executionsByTaskID: make(map[string]chan workerMessage),
+		done: make(chan struct{}), executionsByTaskID: make(map[string]*execution),
 	}
 	go w.readControl()
+	go func() {
+		timer := time.NewTimer(startupTimeout)
+		defer timer.Stop()
+		select {
+		case <-w.ready:
+		case <-w.stopped:
+		case <-timer.C:
+			w.kill()
+		}
+	}()
 	go func() {
 		waitWorkerExit(cmd.Process.Pid)
 		// The unreaped leader reserves the group ID. Any other caller of kill
 		// either signals it first or waits for this call via stopOnce.
 		w.kill()
 		_ = cmd.Wait()
+		logs.close()
 		close(w.done)
 	}()
 	return w, nil
@@ -115,11 +150,13 @@ func newControlSocket() (net.Conn, *os.File, error) {
 // readControl receives readiness and task results until the control connection fails or closes.
 func (w *worker) readControl() {
 	scanner := bufio.NewScanner(w.conn)
-	scanner.Buffer(make([]byte, 4096), 1<<20) // 1 MiB control message limit
+	scanner.Buffer(make([]byte, 4096), maxControlMessage)
 	ready := false
+	var stopErr error
 	for scanner.Scan() {
 		var msg workerMessage
-		if json.Unmarshal(scanner.Bytes(), &msg) != nil {
+		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
+			stopErr = fmt.Errorf("invalid control message: %w", err)
 			break
 		}
 		switch msg.Type {
@@ -128,16 +165,31 @@ func (w *worker) readControl() {
 				ready = true
 				close(w.ready)
 			}
+		case "console":
+			w.mu.Lock()
+			if task := w.executionsByTaskID[msg.TaskID]; task != nil {
+				task.console.add(msg.Stream, msg.Text)
+			}
+			w.mu.Unlock()
 		case "done", "error":
 			w.mu.Lock()
-			if ch := w.executionsByTaskID[msg.TaskID]; ch != nil {
+			if task := w.executionsByTaskID[msg.TaskID]; task != nil {
 				select {
-				case ch <- msg:
+				case task.result <- msg:
 				default:
 				}
 			}
 			w.mu.Unlock()
 		}
+	}
+	if err := scanner.Err(); errors.Is(err, bufio.ErrTooLong) {
+		stopErr = fmt.Errorf("control message over %d bytes", maxControlMessage)
+	} else if err != nil {
+		stopErr = err
+	}
+	// A read error after kill comes from closing the connection ourselves.
+	if stopErr != nil && !w.isStopped() {
+		slog.Warn("stopping code runtime", "error", stopErr)
 	}
 	w.kill()
 }
@@ -147,8 +199,8 @@ func (w *worker) kill() {
 	w.stopOnce.Do(func() {
 		w.mu.Lock()
 		close(w.stopped)
-		for _, ch := range w.executionsByTaskID {
-			close(ch)
+		for _, task := range w.executionsByTaskID {
+			close(task.result)
 		}
 		clear(w.executionsByTaskID)
 		w.mu.Unlock()
@@ -185,7 +237,7 @@ func (d *Daemon) getWorker(ctx context.Context) (*worker, error) {
 		return nil, errWorkerUnavailable
 	}
 	if d.worker == nil {
-		w, err := startWorker(d.cfg)
+		w, err := startWorker(d.cfg, d.startupTimeout)
 		if err != nil {
 			// Like a runtime that stops, a failed start is not retried.
 			d.startFailed = true
@@ -196,16 +248,11 @@ func (d *Daemon) getWorker(ctx context.Context) (*worker, error) {
 	}
 	w := d.worker
 	d.workerMu.Unlock()
-	startup, cancel := context.WithTimeout(ctx, workerStartupTimeout)
-	defer cancel()
 	select {
 	case <-w.stopped:
 		return nil, errWorkerUnavailable
-	case <-startup.Done():
-		if ctx.Err() == nil {
-			w.kill()
-		}
-		return nil, startup.Err()
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	case <-w.ready:
 		if w.isStopped() {
 			return nil, errWorkerUnavailable
@@ -229,9 +276,10 @@ func (d *Daemon) Close() {
 // execution is one task dispatched to the shared runtime. It receives the
 // task's "done" or "error" message until close unregisters it.
 type execution struct {
-	worker *worker
-	id     string
-	result chan workerMessage // closed on worker failure; any buffered result is still readable
+	worker  *worker
+	id      string
+	result  chan workerMessage // closed on worker failure; any buffered result is still readable
+	console *taskConsole       // bounded output from this task's control messages; protected by worker.mu
 }
 
 // dispatch registers a result receiver before sending the start command to the shared runtime.
@@ -243,7 +291,10 @@ func (d *Daemon) dispatch(ctx context.Context, id, dir string) (*execution, erro
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	x := &execution{worker: w, id: id, result: make(chan workerMessage, 1)}
+	x := &execution{
+		worker: w, id: id, result: make(chan workerMessage, 1),
+		console: newTaskConsole(d.cfg.Limits.ConsoleEntries, d.cfg.Limits.ConsoleBytes),
+	}
 	w.mu.Lock()
 	if w.isStopped() {
 		w.mu.Unlock()
@@ -253,7 +304,7 @@ func (d *Daemon) dispatch(ctx context.Context, id, dir string) (*execution, erro
 		w.mu.Unlock()
 		return nil, errDuplicateTask
 	}
-	w.executionsByTaskID[id] = x.result
+	w.executionsByTaskID[id] = x
 	w.mu.Unlock()
 	d.markDispatched(id)
 	if err := w.send(workerMessage{Type: "start", TaskID: id, Dir: dir, Shared: true}); err != nil {

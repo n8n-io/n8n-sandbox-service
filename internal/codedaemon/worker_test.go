@@ -1,16 +1,23 @@
 package codedaemon
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -45,6 +52,16 @@ func TestRuntimeFixture(t *testing.T) {
 			return
 		}
 		if m.Type != "start" || !m.Shared {
+			os.Exit(2)
+		}
+		text := "hello " + m.TaskID
+		switch m.TaskID {
+		case "max-console":
+			text = strings.Repeat("\x1f", maxConsoleText) // escapes to the longest frame
+		case "oversized":
+			text = strings.Repeat("x", maxControlMessage)
+		}
+		if enc.Encode(workerMessage{Type: "console", TaskID: m.TaskID, Stream: "stdout", Text: text}) != nil {
 			os.Exit(2)
 		}
 		input, err := os.ReadFile(filepath.Join(m.Dir, "in", "bin", "0"))
@@ -100,6 +117,12 @@ func TestStageAndDispatchSharedRuntime(t *testing.T) {
 		case <-time.After(3 * time.Second):
 			t.Fatal("missing runtime result")
 		}
+		task.x.worker.mu.Lock()
+		console := task.x.console.entries
+		task.x.worker.mu.Unlock()
+		if want := []consoleEntry{{Stream: "stdout", Text: "hello " + task.x.id}}; !slices.Equal(console, want) {
+			t.Fatalf("console = %+v, want %+v", console, want)
+		}
 		b, err := os.ReadFile(filepath.Join(task.dir, "out", "result.json"))
 		var result []string
 		if err != nil || json.Unmarshal(b, &result) != nil || len(result) != 3 || result[1] != task.x.id || result[2] != task.x.id {
@@ -132,8 +155,78 @@ func TestDispatchRejectsActiveTaskID(t *testing.T) {
 	x.worker.mu.Lock()
 	registered := x.worker.executionsByTaskID["same"]
 	x.worker.mu.Unlock()
-	if registered != x.result {
+	if registered != x {
 		t.Fatal("duplicate dispatch replaced the active receiver")
+	}
+}
+
+func TestLongestConsoleFitsControlMessage(t *testing.T) {
+	b, err := json.Marshal(workerMessage{
+		Type: "console", TaskID: strings.Repeat("x", 128), Stream: "stderr",
+		Text: strings.Repeat("\x1f", maxConsoleText),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b)+1 > maxControlMessage {
+		t.Fatalf("longest console message is %d bytes, over the %d byte limit", len(b)+1, maxControlMessage)
+	}
+}
+
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func TestControlMessageLimit(t *testing.T) {
+	var logs syncBuffer
+	defaultLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(defaultLogger) })
+	d := testDaemon(t, Config{})
+	if err := os.MkdirAll(filepath.Join(d.cfg.WorkDir, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	result := func(id string) (workerMessage, bool) {
+		t.Helper()
+		x, err := d.dispatch(t.Context(), id, d.cfg.WorkDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer x.close()
+		select {
+		case msg, ok := <-x.result:
+			return msg, ok
+		case <-time.After(5 * time.Second):
+			t.Fatal("missing runtime result")
+			return workerMessage{}, false
+		}
+	}
+	if msg, ok := result("max-console"); !ok || msg.Type != "done" {
+		t.Fatalf("runtime did not survive the longest console message: %+v", msg)
+	}
+	if _, ok := result("oversized"); ok {
+		t.Fatal("runtime survived a message over the limit")
+	}
+	if want := fmt.Sprintf("control message over %d bytes", maxControlMessage); !strings.Contains(logs.String(), want) {
+		t.Fatalf("log does not say why the runtime stopped: %q", logs.String())
+	}
+	probe := httptest.NewRecorder()
+	d.Handler().ServeHTTP(probe, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if probe.Code != http.StatusServiceUnavailable {
+		t.Fatalf("runtime stopped but health probe returned %d", probe.Code)
 	}
 }
 
@@ -149,6 +242,29 @@ func TestFailedWorkerStartIsUnhealthyAndNotRetried(t *testing.T) {
 	}
 	if _, err := d.dispatch(t.Context(), "second", d.cfg.WorkDir); !errors.Is(err, errWorkerUnavailable) {
 		t.Fatalf("unexpected dispatch error: %v", err)
+	}
+}
+
+func TestUnreadyWorkerIsStoppedAfterCallerGivesUp(t *testing.T) {
+	d := testDaemon(t, Config{RuntimeCommand: []string{"/bin/sleep", "60"}})
+	d.startupTimeout = 200 * time.Millisecond
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := d.dispatch(ctx, "first", d.cfg.WorkDir); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("unexpected dispatch error: %v", err)
+	}
+	d.workerMu.Lock()
+	w := d.worker
+	d.workerMu.Unlock()
+	select {
+	case <-w.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("unready runtime was not stopped")
+	}
+	probe := httptest.NewRecorder()
+	d.Handler().ServeHTTP(probe, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if probe.Code != http.StatusServiceUnavailable {
+		t.Fatalf("runtime never became ready but health probe returned %d", probe.Code)
 	}
 }
 
