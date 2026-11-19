@@ -499,6 +499,10 @@ if grep 'SANDBOX_API_PUBLISHER_KEYS' >/dev/null <<<"$api"; then
 	echo "the default render must not pass publisher keys" >&2
 	exit 1
 fi
+if render --set auth.secretKeys.publisherKeys=null --show-only templates/api-deployment.yaml | grep 'SANDBOX_API_PUBLISHER_KEYS' >/dev/null; then
+	echo "a null auth.secretKeys.publisherKeys must not pass publisher keys" >&2
+	exit 1
+fi
 publisher_api=$(render --set auth.secretKeys.publisherKeys=publisher-api-keys --show-only templates/api-deployment.yaml)
 publisher_env=$(awk '/name: SANDBOX_API_PUBLISHER_KEYS/{f=1; next} f && /- name:/{exit} f' <<<"$publisher_api")
 grep 'key: publisher-api-keys' >/dev/null <<<"$publisher_env"
@@ -518,6 +522,10 @@ must_fail "auth.generated.publisherKeys must not be a placeholder" \
 	"${generated[@]}" --set auth.secretKeys.publisherKeys=publisher-api-keys --set auth.generated.publisherKeys=changeme
 must_fail "auth.generated.publisherKeys needs auth.secretKeys.publisherKeys" \
 	"${generated[@]}" --set auth.generated.publisherKeys=publisher-secret
+must_fail "auth.secretKeys.publisherKeys must not name the Secret key auth.secretKeys.runnerApiKey names" \
+	--set auth.secretKeys.publisherKeys=runner-api-key
+must_fail "auth.secretKeys.publisherKeys must not name the Secret key auth.secretKeys.apiKeys names" \
+	"${generated[@]}" --set auth.secretKeys.publisherKeys=api-keys --set auth.generated.publisherKeys=publisher-secret
 
 echo "==> API autoscaling is off by default"
 default_api=$(render --show-only templates/api-deployment.yaml)

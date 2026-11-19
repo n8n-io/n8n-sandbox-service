@@ -72,6 +72,11 @@ func TestSharedVolumesConcurrentReserves(t *testing.T) {
 	testConcurrentSharedVolumeReserves(t, []SharedVolumes{s, s})
 }
 
+func TestSharedVolumesConcurrentDeletes(t *testing.T) {
+	sqlite := newSQLiteSharedVolumes(t)
+	testConcurrentSharedVolumeDeletes(t, []SharedVolumes{sqlite, sqlite})
+}
+
 func TestSharedVolumesLimit(t *testing.T) {
 	s := newSQLiteSharedVolumes(t)
 	ctx := context.Background()
@@ -312,9 +317,12 @@ func testConcurrentSharedVolumeReserves(t *testing.T, stores []SharedVolumes) {
 		won    int
 		others int
 	)
+	// Holds every reservation back until all of them are started.
+	start := make(chan struct{})
 	for _, s := range stores {
 		for range perStore {
 			wait.Go(func() {
+				<-start
 				_, err := s.ReserveSharedVolume(ctx, publishingRow(sha, "", 100, 220), testMaxLive)
 				mutex.Lock()
 				defer mutex.Unlock()
@@ -329,8 +337,48 @@ func testConcurrentSharedVolumeReserves(t *testing.T, stores []SharedVolumes) {
 			})
 		}
 	}
+	close(start)
 	wait.Wait()
 	if won != 1 || others != len(stores)*perStore-1 {
 		t.Fatalf("won %d, refused %d; want 1 and the rest", won, others)
+	}
+}
+
+// testConcurrentSharedVolumeDeletes deletes one ready volume from every store
+// at once: exactly one delete gets the row, the others find none.
+func testConcurrentSharedVolumeDeletes(t *testing.T, stores []SharedVolumes) {
+	ctx := context.Background()
+	sha := randomSHA256()
+	reserveReady(t, stores[0], sha, "", 100)
+	const perStore = 4
+	var (
+		wait    sync.WaitGroup
+		mutex   sync.Mutex
+		deleted int
+	)
+	start := make(chan struct{})
+	for _, records := range stores {
+		for range perStore {
+			wait.Go(func() {
+				<-start
+				row, err := records.DeleteSharedVolume(ctx, sha, 200)
+				mutex.Lock()
+				defer mutex.Unlock()
+				switch {
+				case err != nil:
+					t.Errorf("delete: %v", err)
+				case row == nil:
+				case row.State == SharedVolumeDeleted:
+					deleted++
+				default:
+					t.Errorf("delete returned a %s row", row.State)
+				}
+			})
+		}
+	}
+	close(start)
+	wait.Wait()
+	if deleted != 1 {
+		t.Fatalf("%d deletes got the row, want 1", deleted)
 	}
 }

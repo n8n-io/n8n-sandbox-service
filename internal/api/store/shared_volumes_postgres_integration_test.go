@@ -13,6 +13,10 @@ func TestPostgresSharedVolumesConcurrentReserves(t *testing.T) {
 	testConcurrentSharedVolumeReserves(t, []SharedVolumes{openTestPostgresStore(t), openTestPostgresStore(t)})
 }
 
+func TestPostgresSharedVolumesConcurrentDeletes(t *testing.T) {
+	testConcurrentSharedVolumeDeletes(t, []SharedVolumes{openTestPostgresStore(t), openTestPostgresStore(t)})
+}
+
 // The schema runs on every start.
 func TestPostgresSharedVolumesSchemaRunsTwice(t *testing.T) {
 	first := openTestPostgresStore(t)

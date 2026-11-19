@@ -112,8 +112,9 @@ also an admin or provisioner key.
 ### Publisher keys
 
 The class exists for the job that publishes
-[shared volumes](API.md#shared-volumes): content every tenant may mount, so
-publishing it must not take an admin key, and no tenant key may do it. A
+[shared volumes](API.md#shared-volumes), which are meant for every tenant to
+mount, so publishing them must not take an admin key, and no tenant key may do
+it. No route attaches them to a sandbox yet. A
 publisher key reaches the `/shared-volumes` routes, on a clean path, and
 nothing else: sandboxes, tenants, keys and runners all answer `403`, and it
 can read no tenant data. Admin keys may do the same; tenant, provisioner and
@@ -129,13 +130,17 @@ What a leaked publisher key can do:
   and ends the stream with an error instead if the tar breaks a rule, so the
   store never commits it. Messages and logs carry no name from a tar.
 - Delete shared volumes.
-- Fill the volume store with up to 1,000 volumes of 4 GiB.
+- Keep up to 1,000 volumes of up to 4 GiB each, ready or being published.
+  What a failed cleanup leaves in the store does not count against that
+  limit. With `SANDBOX_API_VOLUME_STORE=local`, the store is in the API's data
+  directory, which also holds the SQLite database.
 
 Names never move silently: publishing another digest under a taken name is
 refused, so repointing a name takes a visible `DELETE` and then a publish. The
-API logs every publish and delete with the key's role, the digest, the name
-and the sizes, records the role on the volume, and counts publishes in
-`sandbox_shared_volume_publishes_total`. To contain a leaked key, remove it
+API logs each publish that stores a volume with the key's role, the digest,
+the name and the sizes, and each naming of a volume and each delete with the
+role, the digest and the name. It records the role on the volume and counts
+publishes in `sandbox_shared_volume_publishes_total`. To contain a leaked key, remove it
 from `SANDBOX_API_PUBLISHER_KEYS` and restart the API (env keys are not
 cached), then delete what it published since the leak.
 

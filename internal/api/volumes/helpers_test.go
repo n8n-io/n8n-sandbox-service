@@ -106,6 +106,27 @@ type trackingRecords struct {
 	// finishLosesReply commits a finish but reports an error, as a lost
 	// database reply would.
 	finishLosesReply bool
+	// renewHangs makes lease renewals wait until their context ends.
+	renewHangs bool
+	renewals   int
+}
+
+func (records *trackingRecords) RenewSharedVolumeLease(ctx context.Context, id string, leaseUntil int64) (bool, error) {
+	records.mutex.Lock()
+	records.renewals++
+	hangs := records.renewHangs
+	records.mutex.Unlock()
+	if hangs {
+		<-ctx.Done()
+		return false, ctx.Err()
+	}
+	return records.SharedVolumes.RenewSharedVolumeLease(ctx, id, leaseUntil)
+}
+
+func (records *trackingRecords) renewalCount() int {
+	records.mutex.Lock()
+	defer records.mutex.Unlock()
+	return records.renewals
 }
 
 func (records *trackingRecords) ReserveSharedVolume(ctx context.Context, volume *store.SharedVolume, maxLive int) (*store.SharedVolume, error) {
@@ -248,9 +269,10 @@ func (env *testEnv) assertNothingLeft(t *testing.T) {
 	}
 }
 
-// memoryHelper is a store helper that keeps objects in memory and follows the
-// proto: it stores only a half-closed upload of at most max_bytes with the
-// given sha256.
+// memoryHelper is a store helper that keeps objects in memory. Of the proto,
+// it has only the rules these tests rely on: it stores only a half-closed
+// upload of at most max_bytes with the given sha256. volumestore's own tests
+// hold the client to the rest.
 type memoryHelper struct {
 	storepb.UnimplementedVolumeStoreServer
 	mutex   sync.Mutex
@@ -347,11 +369,13 @@ func newMemoryHelper(t *testing.T) (*memoryHelper, *volumestore.Remote) {
 }
 
 // chunkedReader hands out data in pieces, waiting for each piece's turn on
-// next, then fails with failAt bytes read if failAt is set.
+// next, then fails with failAt bytes read if failAt is set. A wait ends like
+// a read past its deadline once stop is closed.
 type chunkedReader struct {
 	data   []byte
 	piece  int
 	next   chan struct{}
+	stop   chan struct{}
 	failAt int
 	read   int
 }
@@ -364,7 +388,11 @@ func (reader *chunkedReader) Read(buf []byte) (int, error) {
 		return 0, io.EOF
 	}
 	if reader.next != nil {
-		<-reader.next
+		select {
+		case <-reader.next:
+		case <-reader.stop:
+			return 0, os.ErrDeadlineExceeded
+		}
 	}
 	end := min(reader.read+reader.piece, len(reader.data), reader.read+len(buf))
 	copied := copy(buf, reader.data[reader.read:end])

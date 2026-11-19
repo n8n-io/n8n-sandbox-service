@@ -302,11 +302,19 @@ a loopback API fails its readiness probe long before metrics matter.
 {{- if eq (lower (trim (toString .Values.auth.generated.scalerKeys))) "changeme" -}}
 {{- fail "auth.generated.scalerKeys must not be a placeholder value; leave it empty to run without scaler keys" -}}
 {{- end -}}
-{{- $publisherKeys := trim (toString .Values.auth.generated.publisherKeys) -}}
+{{- $publisherKeys := trim (toString (default "" .Values.auth.generated.publisherKeys)) -}}
 {{- if eq (lower $publisherKeys) "changeme" -}}
 {{- fail "auth.generated.publisherKeys must not be a placeholder value; leave it empty to run without publisher keys" -}}
 {{- end -}}
-{{- if and $publisherKeys (not (trim (toString .Values.auth.secretKeys.publisherKeys))) -}}
+{{- if and $publisherKeys (not (trim (toString (default "" .Values.auth.secretKeys.publisherKeys)))) -}}
 {{- fail "auth.generated.publisherKeys needs auth.secretKeys.publisherKeys, the Secret key to keep them under (for example publisher-api-keys)" -}}
+{{- end -}}
+{{- end -}}
+{{- $publisherSecretKey := trim (toString (default "" .Values.auth.secretKeys.publisherKeys)) -}}
+{{- if $publisherSecretKey -}}
+{{- range $name, $secretKey := .Values.auth.secretKeys -}}
+{{- if and (ne $name "publisherKeys") (eq (trim (toString $secretKey)) $publisherSecretKey) -}}
+{{- fail (printf "auth.secretKeys.publisherKeys must not name the Secret key auth.secretKeys.%s names (%q): that key's value would become publisher keys" $name $publisherSecretKey) -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}

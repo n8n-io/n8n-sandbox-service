@@ -281,7 +281,10 @@ func (q sharedVolumeSQL) reserve(ctx context.Context, volume *SharedVolume, maxL
 	}, isSQLError)
 	if errors.Is(err, ErrSharedVolumeDigestLive) && existing == nil {
 		// Another pod inserted it after this one looked.
-		existing, _ = q.get(ctx, volume.SHA256)
+		var getErr error
+		if existing, getErr = q.get(ctx, volume.SHA256); getErr != nil {
+			return nil, getErr
+		}
 	}
 	return existing, unwrapSQLError(err)
 }
@@ -379,8 +382,13 @@ func (q sharedVolumeSQL) delete(ctx context.Context, sha256 string, now int64) (
 			found = live
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, q.bind(`UPDATE shared_volumes SET state = 'deleted', updated_at = ? WHERE id = ? AND state = 'ready'`), now, live.ID); err != nil {
+		deleted, err := q.changed(ctx, tx, `UPDATE shared_volumes SET state = 'deleted', updated_at = ? WHERE id = ? AND state = 'ready'`, now, live.ID)
+		if err != nil {
 			return fmt.Errorf("store: delete shared volume: %w", err)
+		}
+		if !deleted {
+			// A concurrent delete got there first.
+			return nil
 		}
 		live.State, live.UpdatedAt = SharedVolumeDeleted, now
 		found = live

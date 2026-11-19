@@ -28,6 +28,10 @@ type PublishRequest struct {
 	Role string
 	// UploadDone, if set, is called once Body has been read to its end.
 	UploadDone func()
+	// Interrupt, if set, ends a read of Body that waits for the client. It is
+	// called when the upload must stop early: at shutdown, when the lease is
+	// lost, or when the request ends.
+	Interrupt func()
 }
 
 // Published is the result of a publish.
@@ -67,7 +71,7 @@ func (s *Service) Publish(ctx context.Context, req PublishRequest) (published Pu
 		return Published{}, err
 	}
 	if current != nil && (current.State == store.SharedVolumeReady || current.LeaseUntil >= s.now().Unix()) {
-		return s.republish(ctx, current, req.Name)
+		return s.republish(ctx, current, req.Name, req.Role)
 	}
 
 	select {
@@ -91,7 +95,7 @@ func (s *Service) Publish(ctx context.Context, req PublishRequest) (published Pu
 	live, err := s.records.ReserveSharedVolume(ctx, row, s.limits.maxVolumes)
 	switch {
 	case errors.Is(err, store.ErrSharedVolumeDigestLive) && live != nil:
-		return s.republish(ctx, live, req.Name)
+		return s.republish(ctx, live, req.Name, req.Role)
 	case errors.Is(err, store.ErrSharedVolumeDigestLive):
 		return Published{}, ErrPublishInProgress
 	case errors.Is(err, store.ErrSharedVolumeNameTaken):
@@ -113,7 +117,8 @@ func (s *Service) Publish(ctx context.Context, req PublishRequest) (published Pu
 	err = s.publish(ctx, publishCtx, row, req)
 	stopLease()
 	if err != nil {
-		if cause := context.Cause(publishCtx); cause != nil && !errors.Is(err, ErrUpload) {
+		// An interrupted upload fails as an upload; the cause is what ended it.
+		if cause := context.Cause(publishCtx); cause != nil {
 			err = fmt.Errorf("%w: %w", ErrInterrupted, cause)
 		}
 		s.discard(ctx, row, err)
@@ -131,7 +136,12 @@ func (s *Service) Publish(ctx context.Context, req PublishRequest) (published Pu
 func (s *Service) publish(requestCtx, publishCtx context.Context, row *store.SharedVolume, req PublishRequest) error {
 	uploadCtx, cancelUpload := context.WithCancel(publishCtx)
 	stopRequestWatch := context.AfterFunc(requestCtx, cancelUpload)
+	stopInterrupt := func() bool { return true }
+	if req.Interrupt != nil {
+		stopInterrupt = context.AfterFunc(uploadCtx, req.Interrupt)
+	}
 	counts, object, err := s.upload(uploadCtx, row.ID, req)
+	stopInterrupt()
 	stopRequestWatch()
 	cancelUpload()
 	if err != nil {
@@ -186,7 +196,7 @@ func (s *Service) upload(ctx context.Context, id string, req PublishRequest) (vo
 
 // republish answers a publish of a digest that has a row already. A ready
 // row gets the name if it has none.
-func (s *Service) republish(ctx context.Context, row *store.SharedVolume, name string) (Published, error) {
+func (s *Service) republish(ctx context.Context, row *store.SharedVolume, name, role string) (Published, error) {
 	if row.State != store.SharedVolumeReady {
 		return Published{}, ErrPublishInProgress
 	}
@@ -217,16 +227,17 @@ func (s *Service) republish(ctx context.Context, row *store.SharedVolume, name s
 		}
 		return Published{Volume: current}, nil
 	}
-	slog.InfoContext(ctx, "shared volume named", "version_id", row.ID, "sha256", row.SHA256, "name", name)
+	slog.InfoContext(ctx, "shared volume named", "version_id", row.ID, "sha256", row.SHA256, "name", name, "role", role)
 	row.Name = name
 	return Published{Volume: row}, nil
 }
 
 // keepLease renews the lease of row id until stop is called, and ends the
 // publish through cancel when the row was taken over or no renewal worked for
-// timing.giveUp, which is before the lease runs out.
+// timing.giveUp, which is before the lease runs out. A renewal that hangs
+// ends at that point too, and stop ends one in progress.
 func (s *Service) keepLease(ctx context.Context, id string, cancel context.CancelCauseFunc) (stop func()) {
-	done := make(chan struct{})
+	leaseCtx, stopRenewing := context.WithCancel(ctx)
 	finished := make(chan struct{})
 	go func() {
 		defer close(finished)
@@ -235,21 +246,23 @@ func (s *Service) keepLease(ctx context.Context, id string, cancel context.Cance
 		renewed := s.now()
 		for {
 			select {
-			case <-done:
-				return
-			case <-ctx.Done():
+			case <-leaseCtx.Done():
 				return
 			case <-ticker.C:
 			}
 			now := s.now()
-			kept, err := s.records.RenewSharedVolumeLease(ctx, id, now.Add(s.timing.lease).Unix())
+			renewCtx, renewDone := context.WithTimeout(leaseCtx, s.timing.giveUp-now.Sub(renewed))
+			kept, err := s.records.RenewSharedVolumeLease(renewCtx, id, now.Add(s.timing.lease).Unix())
+			renewDone()
 			switch {
+			case leaseCtx.Err() != nil:
+				return
 			case err == nil && kept:
 				renewed = now
 			case err == nil:
 				cancel(errLeaseLost)
 				return
-			case now.Sub(renewed) >= s.timing.giveUp:
+			case s.now().Sub(renewed) >= s.timing.giveUp:
 				slog.WarnContext(ctx, "shared volume publish ended: its lease could not be renewed", "version_id", id, "error", err)
 				cancel(errLeaseLost)
 				return
@@ -257,7 +270,7 @@ func (s *Service) keepLease(ctx context.Context, id string, cancel context.Cance
 		}
 	}()
 	return func() {
-		close(done)
+		stopRenewing()
 		<-finished
 	}
 }

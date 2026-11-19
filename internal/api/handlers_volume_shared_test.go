@@ -37,6 +37,9 @@ type sharedVolumeEnv struct {
 	router    http.Handler
 	tenantKey string
 	storeDir  string
+	// shutdown ends the shared volume service's context, as the API's
+	// shutdown does.
+	shutdown context.CancelFunc
 }
 
 // newSharedVolumeEnv returns a gateway with a local volume store, or none
@@ -49,13 +52,15 @@ func newSharedVolumeEnv(t *testing.T, withStore bool) *sharedVolumeEnv {
 	}
 	t.Cleanup(func() { _ = sqlite.Close() })
 	dataDir := t.TempDir()
+	serviceCtx, shutdown := context.WithCancel(context.Background())
+	t.Cleanup(shutdown)
 	var service *volumes.Service
 	if withStore {
 		local, err := volumestore.NewLocal(dataDir, "https://api.test:8443")
 		if err != nil {
 			t.Fatal(err)
 		}
-		service = volumes.NewService(context.Background(), sqlite, local, metrics.NewSharedVolumeRecorder(metrics.NewAPIRecorder(false)))
+		service = volumes.NewService(serviceCtx, sqlite, local, metrics.NewSharedVolumeRecorder(metrics.NewAPIRecorder(false)))
 	}
 	router, err := NewGatewayRouter(sqlite, withRunnerTLS(&config.APIConfig{
 		APIKeys:              map[string]struct{}{sharedAdminKey: {}},
@@ -72,6 +77,7 @@ func newSharedVolumeEnv(t *testing.T, withStore bool) *sharedVolumeEnv {
 		router:    router,
 		tenantKey: mintTenantKey(t, router, `{"name":"shared-volume-tenant"}`).Key.APIKey,
 		storeDir:  filepath.Join(dataDir, "volumes"),
+		shutdown:  shutdown,
 	}
 }
 
@@ -462,5 +468,46 @@ func TestStalledSharedVolumeUpload(t *testing.T) {
 	}
 	if files := env.storedFiles(t); len(files) != 0 {
 		t.Fatalf("store holds %v after a stalled upload", files)
+	}
+}
+
+// Shutdown ends a publish whose upload waits for the client at once, not when
+// the upload stalls.
+func TestSharedVolumeUploadEndsAtShutdown(t *testing.T) {
+	env := newSharedVolumeEnv(t, true)
+	server := newSharedVolumeServer(t, env, time.Minute, time.Minute)
+	data := sharedTar(t, "a", "b", "c", "d")
+	conn, err := net.Dial("tcp", server.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	fmt.Fprintf(conn, "PUT %s HTTP/1.1\r\nHost: api\r\nX-Api-Key: %s\r\nContent-Length: %d\r\n\r\n", sharedPath(data), sharedPublisherKey, len(data))
+	if _, err := conn.Write(data[:1024]); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for len(env.storedFiles(t)) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the upload never reached the store")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	env.shutdown()
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("read the answer: %v", err)
+	}
+	defer resp.Body.Close()
+	var answer APIError
+	if err := json.NewDecoder(resp.Body).Decode(&answer); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusServiceUnavailable || answer.Reason != reasonPublishInterrupted {
+		t.Fatalf("PUT at shutdown = %d %q, want 503 %q", resp.StatusCode, answer.Reason, reasonPublishInterrupted)
+	}
+	if files := env.storedFiles(t); len(files) != 0 {
+		t.Fatalf("store holds %v after an interrupted upload", files)
 	}
 }

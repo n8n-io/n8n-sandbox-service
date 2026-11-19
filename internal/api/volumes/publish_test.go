@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -375,6 +376,80 @@ func TestALostLeaseInterruptsAPublish(t *testing.T) {
 		t.Fatalf("Publish() = %v, want ErrInterrupted", err)
 	}
 	env.assertNothingLeft(t)
+}
+
+// startWaitingPublish publishes from a body that waits for the client until
+// the publish interrupts it.
+func startWaitingPublish(env *testEnv, data []byte) chan error {
+	stop := make(chan struct{})
+	var stopOnce sync.Once
+	done := make(chan error, 1)
+	go func() {
+		_, err := env.service.Publish(context.Background(), PublishRequest{
+			SHA256: digestOf(data), Size: int64(len(data)), Role: "publisher",
+			Body:      &chunkedReader{data: data, piece: 512, next: make(chan struct{}), stop: stop},
+			Interrupt: func() { stopOnce.Do(func() { close(stop) }) },
+		})
+		done <- err
+	}()
+	return done
+}
+
+// publishError waits for a publish to return.
+func publishError(t *testing.T, done chan error) error {
+	t.Helper()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(10 * time.Second):
+		t.Fatal("Publish() did not return")
+		return nil
+	}
+}
+
+func TestShutdownInterruptsAWaitingUpload(t *testing.T) {
+	env := newTestEnv(t)
+	done := startWaitingPublish(env, validTar(t))
+	waitFor(t, func() bool { return len(env.service.slots) == 1 })
+	env.shutdown()
+	if err := publishError(t, done); !errors.Is(err, ErrInterrupted) {
+		t.Fatalf("Publish() = %v, want ErrInterrupted", err)
+	}
+	env.assertNothingLeft(t)
+}
+
+func TestAHangingRenewalEndsThePublish(t *testing.T) {
+	env := newTestEnv(t)
+	env.records.renewHangs = true
+	env.service.timing.renewEvery = 10 * time.Millisecond
+	env.service.timing.giveUp = 100 * time.Millisecond
+	done := startWaitingPublish(env, validTar(t))
+	if err := publishError(t, done); !errors.Is(err, ErrInterrupted) {
+		t.Fatalf("Publish() = %v, want ErrInterrupted", err)
+	}
+	env.assertNothingLeft(t)
+}
+
+// A publish whose upload is done does not wait for a renewal that hangs.
+func TestAHangingRenewalDoesNotHoldUpAPublish(t *testing.T) {
+	env := newTestEnv(t)
+	env.records.renewHangs = true
+	env.service.timing.renewEvery = 10 * time.Millisecond
+	data := validTar(t)
+	next := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		_, err := env.service.Publish(context.Background(), PublishRequest{
+			SHA256: digestOf(data), Size: int64(len(data)), Role: "publisher",
+			Body: &chunkedReader{data: data, piece: 512, next: next},
+		})
+		done <- err
+	}()
+	waitFor(t, func() bool { return env.records.renewalCount() > 0 })
+	close(next)
+	if err := publishError(t, done); err != nil {
+		t.Fatalf("Publish() = %v", err)
+	}
 }
 
 func TestALapsedLeaseIsTakenOver(t *testing.T) {

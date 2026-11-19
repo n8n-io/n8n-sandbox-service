@@ -1111,9 +1111,9 @@ A name never moves to another digest. To publish other content under a name, `DE
 | `422` | `digest_mismatch` | The body does not have the sha256 in the URL |
 | `429` | `publish_limit` | Two publishes are already in progress on this API instance. `Retry-After: 30` |
 | `501` | `volume_store_disabled` | No volume store |
-| `503` | `publish_interrupted` | The API instance is shutting down. Nothing was kept; publish again |
+| `503` | `publish_interrupted` | The API instance is shutting down, or the publish lost its lease. Publish again: the retry answers `200` if the volume got published after all |
 
-A failed publish leaves nothing behind.
+A failed publish removes what it stored. If that removal fails, the API logs a warning, and what is left stays in the store; the volume is never published.
 
 **Example:**
 
@@ -1132,7 +1132,7 @@ Returns every ready volume as an array, newest first, without paging. `?name=` r
 
 ### DELETE /shared-volumes/sha256:{hex}
 
-Deletes the volume (`204`). It is hidden and its name is free at once; its stored objects are removed in the same request. If that removal fails, the API logs a warning and the objects stay. `404` if no volume with that digest is ready, `409` `publish_in_progress` while it is being published.
+Deletes the volume (`204`). It is hidden and its name is free at once; its stored objects are removed in the same request. If that removal fails, the API logs a warning and any objects not yet removed stay. `404` if no volume with that digest is ready, `409` `publish_in_progress` while it is being published.
 
 ---
 

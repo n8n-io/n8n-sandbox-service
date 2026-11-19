@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/n8n-io/sandbox-service/internal/api/store"
@@ -178,6 +179,7 @@ func handlePutSharedVolume(svc *volumes.Service) http.HandlerFunc {
 			Body:       body,
 			Role:       string(role),
 			UploadDone: body.done,
+			Interrupt:  body.interrupt,
 		})
 		if err != nil {
 			writeSharedVolumeError(w, r, err)
@@ -296,6 +298,11 @@ type uploadReader struct {
 	body       io.Reader
 	controller *http.ResponseController
 	deadline   time.Time
+	// mutex keeps extend from undoing interrupt, and interrupt from acting
+	// once done.
+	mutex       sync.Mutex
+	interrupted bool
+	finished    bool
 }
 
 func newUploadReader(w http.ResponseWriter, body io.Reader) *uploadReader {
@@ -309,6 +316,11 @@ func newUploadReader(w http.ResponseWriter, body io.Reader) *uploadReader {
 }
 
 func (upload *uploadReader) extend() {
+	upload.mutex.Lock()
+	defer upload.mutex.Unlock()
+	if upload.interrupted {
+		return
+	}
 	// ErrNotSupported only outside a real server, as in tests.
 	next := time.Now().Add(uploadStallTimeout)
 	if next.After(upload.deadline) {
@@ -322,8 +334,22 @@ func (upload *uploadReader) Read(buf []byte) (int, error) {
 	return upload.body.Read(buf)
 }
 
+// interrupt ends a read waiting for the client now, and fails every later one.
+func (upload *uploadReader) interrupt() {
+	upload.mutex.Lock()
+	defer upload.mutex.Unlock()
+	if upload.finished {
+		return
+	}
+	upload.interrupted = true
+	_ = upload.controller.SetReadDeadline(time.Now())
+}
+
 // done clears the read deadline once the body is read, so the server's own
 // read during the rest of the publish notices only a client that went away.
 func (upload *uploadReader) done() {
+	upload.mutex.Lock()
+	defer upload.mutex.Unlock()
+	upload.finished = true
 	_ = upload.controller.SetReadDeadline(time.Time{})
 }
