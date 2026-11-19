@@ -1,0 +1,30 @@
+sdk/README.md
+  h_8fb27e0cdf6d1e 86-102
+sdk/src/client.ts
+  h_8fb27e0cdf6d1e 14,19,31,82-92
+sdk/src/code-sandboxes.ts
+  h_8fb27e0cdf6d1e 1-2,4-11,32-136
+sdk/src/http.ts
+  h_8fb27e0cdf6d1e 13-17,68,100,135,154,178,186
+sdk/src/index.ts
+  h_8fb27e0cdf6d1e 2-7,13-15,17
+sdk/src/multipart.ts
+  h_8fb27e0cdf6d1e 1-90
+sdk/src/ndjson.ts
+  h_8fb27e0cdf6d1e 53-59,71,81
+sdk/src/types.ts
+  h_8fb27e0cdf6d1e 1-2,72-99
+sdk/test/code-sandboxes.test.ts
+  h_8fb27e0cdf6d1e 1-2,4-5,87-333
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d5c0a6b4e56aab15ce3e2221a00c904732fb5b13",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
