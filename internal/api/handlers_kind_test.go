@@ -11,9 +11,9 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/store"
 )
 
-// The /sandboxes routes serve default sandboxes only: a code sandbox is not
+// The /sandboxes routes serve general sandboxes only: a code sandbox is not
 // found, even by its owner, and nothing reaches its runner.
-func TestDefaultRoutesDoNotServeCodeSandboxes(t *testing.T) {
+func TestGeneralRoutesDoNotServeCodeSandboxes(t *testing.T) {
 	var upstreamHits atomic.Int64
 	runner := newTestRunnerServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		upstreamHits.Add(1)
@@ -22,10 +22,10 @@ func TestDefaultRoutesDoNotServeCodeSandboxes(t *testing.T) {
 	defer runner.Close()
 
 	router, s := newTestGateway(t, "admin-key")
-	codeID, defaultID := "c0de0000-0000-0000-0000-000000000001", "def00000-0000-0000-0000-000000000001"
+	codeID, generalID := "c0de0000-0000-0000-0000-000000000001", "def00000-0000-0000-0000-000000000001"
 	for _, rec := range []*store.SandboxRecord{
 		{ID: codeID, Kind: store.KindCode, Name: "n"},
-		{ID: defaultID, Kind: store.KindDefault},
+		{ID: generalID, Kind: store.KindGeneral},
 	} {
 		rec.Status, rec.CreatedAt, rec.LastActiveAt = "running", 1, 1
 		rec.TenantID, rec.RunnerHTTPBase = store.AdminTenantID, runner.URL
@@ -67,17 +67,17 @@ func TestDefaultRoutesDoNotServeCodeSandboxes(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &listed); err != nil || rr.Code != http.StatusOK {
 		t.Fatalf("list: %d %s err=%v", rr.Code, rr.Body.String(), err)
 	}
-	if len(listed) != 1 || listed[0].ID != defaultID {
-		t.Fatalf("list: %+v, want only the default sandbox", listed)
+	if len(listed) != 1 || listed[0].ID != generalID {
+		t.Fatalf("list: %+v, want only the general sandbox", listed)
 	}
 
-	// The id of a code sandbox cannot be taken by a default sandbox.
+	// The id of a code sandbox cannot be taken by a general sandbox.
 	if rr := call(http.MethodPost, "/sandboxes", `{"id":"`+codeID+`"}`); rr.Code != http.StatusConflict {
 		t.Fatalf("create with a code sandbox's id: got %d %s, want 409", rr.Code, rr.Body.String())
 	}
 
-	// The routes still serve default sandboxes.
-	if rr := call(http.MethodGet, "/sandboxes/"+defaultID+"/files", ""); rr.Code != http.StatusOK || upstreamHits.Load() != 1 {
-		t.Fatalf("default sandbox proxy: got %d, %d upstream hits", rr.Code, upstreamHits.Load())
+	// The routes still serve general sandboxes.
+	if rr := call(http.MethodGet, "/sandboxes/"+generalID+"/files", ""); rr.Code != http.StatusOK || upstreamHits.Load() != 1 {
+		t.Fatalf("general sandbox proxy: got %d, %d upstream hits", rr.Code, upstreamHits.Load())
 	}
 }

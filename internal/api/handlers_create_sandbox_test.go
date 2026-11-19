@@ -89,7 +89,7 @@ func TestCreateSandboxClientIDCrossTenantConflict(t *testing.T) {
 	if err := s.Create(&store.SandboxRecord{
 		ID: sid, Status: "running", CreatedAt: 1, LastActiveAt: time.Now().Unix(),
 		TenantID: a.Tenant.ID, RunnerHTTPBase: "http://127.0.0.1:9",
-		Kind: store.KindDefault,
+		Kind: store.KindGeneral,
 	}); err != nil {
 		t.Fatalf("seed sandbox: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestCreateSandboxClientIDAdminOwnedUnavailableToTenant(t *testing.T) {
 	if err := s.Create(&store.SandboxRecord{
 		ID: sid, Status: "running", CreatedAt: 1, LastActiveAt: time.Now().Unix(),
 		TenantID: store.AdminTenantID, RunnerHTTPBase: "http://127.0.0.1:9",
-		Kind: store.KindDefault,
+		Kind: store.KindGeneral,
 	}); err != nil {
 		t.Fatalf("seed sandbox: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestCreateSandboxClientIDReuseOwn(t *testing.T) {
 	if err := s.Create(&store.SandboxRecord{
 		ID: sid, Status: "running", CreatedAt: now, LastActiveAt: now,
 		TenantID: tenant.Tenant.ID, RunnerHTTPBase: "http://127.0.0.1:9",
-		Kind: store.KindDefault,
+		Kind: store.KindGeneral,
 	}); err != nil {
 		t.Fatalf("seed sandbox: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestCreateSandboxClientIDReuseAtQuota(t *testing.T) {
 	if err := s.Create(&store.SandboxRecord{
 		ID: sid, Status: "running", CreatedAt: now, LastActiveAt: now,
 		TenantID: tenant.Tenant.ID, RunnerHTTPBase: "http://127.0.0.1:9",
-		Kind: store.KindDefault,
+		Kind: store.KindGeneral,
 	}); err != nil {
 		t.Fatalf("seed sandbox: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestCreateSandboxQuotaExceeded(t *testing.T) {
 	if err := s.Create(&store.SandboxRecord{
 		ID: "55555555-5555-4555-8555-555555555555", Status: "running",
 		CreatedAt: 1, LastActiveAt: 1, TenantID: tenant.Tenant.ID,
-		Kind: store.KindDefault,
+		Kind: store.KindGeneral,
 	}); err != nil {
 		t.Fatalf("seed sandbox: %v", err)
 	}
@@ -306,7 +306,7 @@ func TestCreateSandboxQuotaHoldsUnderConcurrentCreates(t *testing.T) {
 				t.Fatalf("%d of %d creates succeeded, want exactly the quota %d", len(created), creates, quota)
 			}
 
-			stored, err := s.List(store.SandboxFilter{TenantID: tenant.Tenant.ID, Kinds: []store.Kind{store.KindDefault}})
+			stored, err := s.List(store.SandboxFilter{TenantID: tenant.Tenant.ID, Kinds: []store.Kind{store.KindGeneral}})
 			if err != nil || len(stored) != quota {
 				t.Fatalf("stored %d sandboxes err=%v, want %d", len(stored), err, quota)
 			}
@@ -357,7 +357,7 @@ func TestCreateSandboxFreesQuotaSlotWhenCreateEnds(t *testing.T) {
 			// Saved meanwhile, as by another API pod.
 			const other = "12121212-1212-4212-8212-121212121212"
 			f.createHook = func(context.Context) {
-				if err := s.Create(&store.SandboxRecord{Kind: store.KindDefault, ID: other, Status: "running", TenantID: tenantID}); err != nil {
+				if err := s.Create(&store.SandboxRecord{Kind: store.KindGeneral, ID: other, Status: "running", TenantID: tenantID}); err != nil {
 					t.Errorf("plant other pod's sandbox: %v", err)
 				}
 			}
@@ -377,7 +377,7 @@ func TestCreateSandboxFreesQuotaSlotWhenCreateEnds(t *testing.T) {
 				t.Fatalf("first create: got %d body=%s, want %d", rr.Code, rr.Body.String(), tc.want)
 			}
 			undo()
-			stored, err := s.List(store.SandboxFilter{TenantID: tenant.Tenant.ID, Kinds: []store.Kind{store.KindDefault}})
+			stored, err := s.List(store.SandboxFilter{TenantID: tenant.Tenant.ID, Kinds: []store.Kind{store.KindGeneral}})
 			if err != nil {
 				t.Fatalf("list: %v", err)
 			}
@@ -774,7 +774,7 @@ func TestCreateSandboxReconnectRefusesOtherEgress(t *testing.T) {
 			router, s, _ := newIdleTestGateway(t, "admin-key", ctl)
 			// A concurrent create of the same id wins while this one is at the runner.
 			ctl.createHook = func(context.Context) {
-				if err := s.Create(&store.SandboxRecord{Kind: store.KindDefault, ID: sid, Status: "running", TenantID: store.AdminTenantID, Egress: tc.existing}); err != nil {
+				if err := s.Create(&store.SandboxRecord{Kind: store.KindGeneral, ID: sid, Status: "running", TenantID: store.AdminTenantID, Egress: tc.existing}); err != nil {
 					t.Errorf("plant existing row: %v", err)
 				}
 			}

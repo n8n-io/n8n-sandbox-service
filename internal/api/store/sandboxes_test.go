@@ -19,9 +19,9 @@ func TestSandboxFilterWhere(t *testing.T) {
 		wantArgs []any
 	}{
 		{KindFilter(KindCode), "id = $1 AND kind IN ($2)", []any{"id", "code"}},
-		{KindFilter(KindDefault, KindDefault), "id = $1 AND kind IN ($2, $3)", []any{"id", "default", "default"}},
+		{KindFilter(KindGeneral, KindGeneral), "id = $1 AND kind IN ($2, $3)", []any{"id", "general", "general"}},
 		{KindFilter(AllKinds()...), "id = $1", []any{"id"}},
-		{KindFilter(KindCode, KindDefault), "id = $1", []any{"id"}},
+		{KindFilter(KindCode, KindGeneral), "id = $1", []any{"id"}},
 		{SandboxFilter{Kinds: AllKinds(), TenantID: "t"}, "id = $1 AND tenant_id = $2", []any{"id", "t"}},
 		{SandboxFilter{Kinds: []Kind{KindCode}, TenantID: "t"}, "id = $1 AND kind IN ($2) AND tenant_id = $3", []any{"id", "code", "t"}},
 	} {
@@ -35,7 +35,7 @@ func TestSandboxFilterWhere(t *testing.T) {
 	if cond, args, err := KindFilter(AllKinds()...).where(nil, nil, pg); err != nil || cond != "" || len(args) != 0 {
 		t.Errorf("where(all kinds) = %q %v err=%v, want no condition", cond, args, err)
 	}
-	for _, f := range []SandboxFilter{{}, KindFilter(KindDefault, "x"), KindFilter(KindDefault, KindCode, "")} {
+	for _, f := range []SandboxFilter{{}, KindFilter(KindGeneral, "x"), KindFilter(KindGeneral, KindCode, "")} {
 		if _, _, err := f.where(nil, nil, pg); err == nil {
 			t.Errorf("where(%+v): got nil error", f)
 		}
@@ -57,21 +57,21 @@ func testKindScoping(t *testing.T, s SandboxStore, tenantA, tenantB string) {
 	t.Helper()
 	// Each tenant has a sandbox of each kind: tenantA's are running, tenantB's
 	// stopped.
-	var defA, codeA, defB, codeB string
+	var genA, codeA, genB, codeB string
 	for _, tc := range []struct {
 		tenantID, status string
-		def, code        *string
+		gen, code        *string
 	}{
-		{tenantA, "running", &defA, &codeA},
-		{tenantB, "stopped", &defB, &codeB},
+		{tenantA, "running", &genA, &codeA},
+		{tenantB, "stopped", &genB, &codeB},
 	} {
 		if err := s.CreateTenant(&Tenant{ID: tc.tenantID, Name: "t", CreatedAt: 1}); err != nil {
 			t.Fatalf("create tenant: %v", err)
 		}
 		t.Cleanup(func() { _ = s.DeleteTenant(tc.tenantID) })
-		*tc.def, *tc.code = "default-"+tc.tenantID, "code-"+tc.tenantID
+		*tc.gen, *tc.code = "general-"+tc.tenantID, "code-"+tc.tenantID
 		for _, rec := range []*SandboxRecord{
-			{ID: *tc.def, Kind: KindDefault},
+			{ID: *tc.gen, Kind: KindGeneral},
 			{ID: *tc.code, Kind: KindCode, Name: "n"},
 		} {
 			rec.Status, rec.CreatedAt, rec.LastActiveAt, rec.TenantID = tc.status, 1, 100, tc.tenantID
@@ -118,12 +118,12 @@ func testKindScoping(t *testing.T, s SandboxStore, tenantA, tenantB string) {
 		id   string
 		want bool
 	}{
-		{"GetAnyKind(defA)", s.GetAnyKind, defA, true},
+		{"GetAnyKind(genA)", s.GetAnyKind, genA, true},
 		{"GetAnyKind(codeA)", s.GetAnyKind, codeA, true},
-		{"GetDefaultSandbox(defA)", s.GetDefaultSandbox, defA, true},
-		{"GetDefaultSandbox(codeA)", s.GetDefaultSandbox, codeA, false},
+		{"GetGeneralSandbox(genA)", s.GetGeneralSandbox, genA, true},
+		{"GetGeneralSandbox(codeA)", s.GetGeneralSandbox, codeA, false},
 		{"GetCodeSandbox(codeA)", s.GetCodeSandbox, codeA, true},
-		{"GetCodeSandbox(defA)", s.GetCodeSandbox, defA, false},
+		{"GetCodeSandbox(genA)", s.GetCodeSandbox, genA, false},
 	} {
 		got, err := tc.get(tc.id)
 		if err != nil || (got != nil) != tc.want || (got != nil && got.ID != tc.id) {
@@ -131,23 +131,23 @@ func testKindScoping(t *testing.T, s SandboxStore, tenantA, tenantB string) {
 		}
 	}
 
-	recs, err := s.List(KindFilter(KindDefault))
-	wantIDs("List(default)", recs, err, defA, defB)
+	recs, err := s.List(KindFilter(KindGeneral))
+	wantIDs("List(general)", recs, err, genA, genB)
 	recs, err = s.List(KindFilter(AllKinds()...))
-	wantIDs("List(all)", recs, err, defA, codeA, defB, codeB)
+	wantIDs("List(all)", recs, err, genA, codeA, genB, codeB)
 	recs, err = s.List(ofTenant(tenantA, KindCode))
 	wantIDs("List(tenantA, code)", recs, err, codeA)
 	recs, err = s.List(ofTenant(tenantB, AllKinds()...))
-	wantIDs("List(tenantB, all)", recs, err, defB, codeB)
-	wantCount("Count(tenantA, default)", ofTenant(tenantA, KindDefault), 1)
+	wantIDs("List(tenantB, all)", recs, err, genB, codeB)
+	wantCount("Count(tenantA, general)", ofTenant(tenantA, KindGeneral), 1)
 	wantCount("Count(tenantA, all)", ofTenant(tenantA, AllKinds()...), 2)
 	wantCount("Count(tenantB, code)", ofTenant(tenantB, KindCode), 1)
 
 	// The idle reap lists cover every kind.
 	recs, err = s.ListForIdleReapStop(200, false)
-	wantIDs("ListForIdleReapStop", recs, err, defA, codeA)
+	wantIDs("ListForIdleReapStop", recs, err, genA, codeA)
 	recs, err = s.ListForIdleReapDelete(200)
-	wantIDs("ListForIdleReapDelete", recs, err, defB, codeB)
+	wantIDs("ListForIdleReapDelete", recs, err, genB, codeB)
 
 	// Kinds are checked, and no kinds is an error rather than every kind.
 	if _, err := s.List(KindFilter("")); err == nil {
@@ -177,7 +177,7 @@ func TestStorePersistsDockerMetadata(t *testing.T) {
 		DaemonPort:   8081,
 		Ephemeral:    true,
 		Egress:       "none",
-		Kind:         KindDefault,
+		Kind:         KindGeneral,
 	}
 	if err := s.Create(rec); err != nil {
 		t.Fatalf("create record: %v", err)
@@ -228,7 +228,7 @@ func TestEgressMigrationBackfillsPublic(t *testing.T) {
 	}
 }
 
-// Rows from before the code sandbox columns existed read back as default-kind
+// Rows from before the code sandbox columns existed read back as general-kind
 // sandboxes without a name or lifetime settings.
 func TestCodeSandboxColumnsMigrationBackfillsDefaults(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "api.db")
@@ -262,9 +262,9 @@ func TestCodeSandboxColumnsMigrationBackfillsDefaults(t *testing.T) {
 	if err != nil || got == nil {
 		t.Fatalf("get legacy row: got=%v err=%v", got, err)
 	}
-	if got.Kind != KindDefault || got.Name != "" || got.OptionsHash != "" ||
+	if got.Kind != KindGeneral || got.Name != "" || got.OptionsHash != "" ||
 		got.IdleTimeoutMs != 0 || got.MaxAgeMs != 0 || got.DrainingSince != 0 {
-		t.Fatalf("legacy row: %+v, want default kind and zero code sandbox fields", got)
+		t.Fatalf("legacy row: %+v, want general kind and zero code sandbox fields", got)
 	}
 	// The migration also brings back the name index and the column checks.
 	testCodeSandboxNames(t, s, "16161616-1616-1616-1616-161616161616", "17171717-1717-1717-1717-171717171717")
@@ -333,15 +333,15 @@ func testCodeSandboxNames(t *testing.T, s SandboxStore, tenantA, tenantB string)
 	if _, err := create(code(tenantB, "n1")); err != nil {
 		t.Fatalf("same name, other tenant: %v", err)
 	}
-	// Default-kind sandboxes do not take code sandbox names.
-	if _, err := create(SandboxRecord{Kind: KindDefault, TenantID: tenantA, Name: "n2"}); err != nil {
-		t.Fatalf("default kind with a name: %v", err)
+	// General sandboxes do not take code sandbox names.
+	if _, err := create(SandboxRecord{Kind: KindGeneral, TenantID: tenantA, Name: "n2"}); err != nil {
+		t.Fatalf("general kind with a name: %v", err)
 	}
-	if _, err := create(SandboxRecord{Kind: KindDefault, TenantID: tenantA, Name: "n2"}); err != nil {
-		t.Fatalf("second default kind with the same name: %v", err)
+	if _, err := create(SandboxRecord{Kind: KindGeneral, TenantID: tenantA, Name: "n2"}); err != nil {
+		t.Fatalf("second general kind with the same name: %v", err)
 	}
 	if got, err := s.GetCodeSandboxByName(tenantA, "n2"); err != nil || got != nil {
-		t.Fatalf("GetCodeSandboxByName(default kind): %+v err=%v, want nil", got, err)
+		t.Fatalf("GetCodeSandboxByName(general kind): %+v err=%v, want nil", got, err)
 	}
 	if got, err := s.GetCodeSandboxByName(tenantA, "missing"); err != nil || got != nil {
 		t.Fatalf("GetCodeSandboxByName(missing): %+v err=%v, want nil", got, err)
@@ -423,22 +423,22 @@ func TestListForIdleReapDeleteAndStop(t *testing.T) {
 	must(&SandboxRecord{
 		ID: "a-run-old", Status: "running", CreatedAt: 1, LastActiveAt: old,
 		RunnerControlGRPCAddr: ctl, RunnerHTTPBase: "http://x",
-		Kind: KindDefault,
+		Kind: KindGeneral,
 	})
 	must(&SandboxRecord{
 		ID: "b-stop-old", Status: "stopped", CreatedAt: 2, LastActiveAt: old,
 		RunnerControlGRPCAddr: ctl, RunnerHTTPBase: "http://x",
-		Kind: KindDefault,
+		Kind: KindGeneral,
 	})
 	must(&SandboxRecord{
 		ID: "c-run-recent", Status: "running", CreatedAt: 3, LastActiveAt: recent,
 		RunnerControlGRPCAddr: ctl, RunnerHTTPBase: "http://x",
-		Kind: KindDefault,
+		Kind: KindGeneral,
 	})
 	must(&SandboxRecord{
 		ID: "d-eph-old", Status: "running", CreatedAt: 4, LastActiveAt: old,
 		RunnerControlGRPCAddr: ctl, RunnerHTTPBase: "http://x", Ephemeral: true,
-		Kind: KindDefault,
+		Kind: KindGeneral,
 	})
 
 	cutoff := int64(200)
@@ -494,7 +494,7 @@ func testRecordActivity(t *testing.T, s SandboxStore, prefix string) {
 	ctx := context.Background()
 	a, b := prefix+"-a", prefix+"-b"
 	for _, id := range []string{a, b} {
-		if err := s.Create(&SandboxRecord{Kind: KindDefault, ID: id, Status: "running", CreatedAt: 100, LastActiveAt: 100}); err != nil {
+		if err := s.Create(&SandboxRecord{Kind: KindGeneral, ID: id, Status: "running", CreatedAt: 100, LastActiveAt: 100}); err != nil {
 			t.Fatalf("create: %v", err)
 		}
 		t.Cleanup(func() { _ = s.Delete(id) })

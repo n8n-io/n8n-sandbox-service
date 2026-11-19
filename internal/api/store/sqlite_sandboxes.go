@@ -121,8 +121,8 @@ func (s *SQLiteStore) GetAnyKind(id string) (*SandboxRecord, error) {
 	return s.getSandbox(id, AllKinds()...)
 }
 
-func (s *SQLiteStore) GetDefaultSandbox(id string) (*SandboxRecord, error) {
-	return s.getSandbox(id, KindDefault)
+func (s *SQLiteStore) GetGeneralSandbox(id string) (*SandboxRecord, error) {
+	return s.getSandbox(id, KindGeneral)
 }
 
 func (s *SQLiteStore) GetCodeSandbox(id string) (*SandboxRecord, error) {

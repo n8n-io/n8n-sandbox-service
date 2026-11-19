@@ -32,7 +32,7 @@ func TestTenantAndAPIKeyCRUD(t *testing.T) {
 	}
 	if err := s.Create(&SandboxRecord{
 		ID: "s1", Status: "running", CreatedAt: now, LastActiveAt: now, TenantID: tenant.ID,
-		Kind: KindDefault,
+		Kind: KindGeneral,
 	}); err != nil {
 		t.Fatalf("create sandbox: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestTenantAndAPIKeyCRUD(t *testing.T) {
 	if err != nil || n != 1 {
 		t.Fatalf("CountByTenant: n=%d err=%v", n, err)
 	}
-	listed, err := s.List(SandboxFilter{TenantID: tenant.ID, Kinds: []Kind{KindDefault}})
+	listed, err := s.List(SandboxFilter{TenantID: tenant.ID, Kinds: []Kind{KindGeneral}})
 	if err != nil || len(listed) != 1 {
 		t.Fatalf("List(tenant): len=%d err=%v", len(listed), err)
 	}
@@ -80,7 +80,7 @@ func testUpdateTenantLimits(t *testing.T, s SandboxStore, tenantID string) {
 	sandboxID := "s-" + tenantID
 	if err := s.Create(&SandboxRecord{
 		ID: sandboxID, Status: "running", CreatedAt: now, LastActiveAt: now, TenantID: tenantID,
-		Kind: KindDefault,
+		Kind: KindGeneral,
 	}); err != nil {
 		t.Fatalf("create sandbox: %v", err)
 	}
@@ -132,7 +132,7 @@ func testCreateEnforcesTenantQuota(t *testing.T, s SandboxStore, tenantID string
 	create := func(owner string) error {
 		created++
 		id := fmt.Sprintf("quota-%d-%s", created, tenantID)
-		err := s.Create(&SandboxRecord{Kind: KindDefault, ID: id, Status: "running", CreatedAt: now, LastActiveAt: now, TenantID: owner})
+		err := s.Create(&SandboxRecord{Kind: KindGeneral, ID: id, Status: "running", CreatedAt: now, LastActiveAt: now, TenantID: owner})
 		if err == nil {
 			t.Cleanup(func() { _ = s.Delete(id) })
 		}
@@ -209,7 +209,7 @@ func testConcurrentCreatesStopAtTenantQuota(t *testing.T, stores []SandboxStore,
 			<-start
 			errs[i] = stores[i%len(stores)].Create(&SandboxRecord{
 				ID: id, Status: "running", CreatedAt: now, LastActiveAt: now, TenantID: tenantID,
-				Kind: KindDefault,
+				Kind: KindGeneral,
 			})
 		})
 	}
@@ -253,7 +253,7 @@ func TestDeleteTenantRejectsWhenSandboxesExist(t *testing.T) {
 	}
 	if err := s.Create(&SandboxRecord{
 		ID: "s-orphan", Status: "running", CreatedAt: now, LastActiveAt: now, TenantID: tenantID,
-		Kind: KindDefault,
+		Kind: KindGeneral,
 	}); err != nil {
 		t.Fatalf("create sandbox: %v", err)
 	}
@@ -286,7 +286,7 @@ func TestCreateSandboxRequiresExistingTenant(t *testing.T) {
 	err = s.Create(&SandboxRecord{
 		ID: "s-missing-tenant", Status: "running", CreatedAt: now, LastActiveAt: now,
 		TenantID: "99999999-9999-9999-9999-999999999999",
-		Kind:     KindDefault,
+		Kind:     KindGeneral,
 	})
 	if !errors.Is(err, ErrTenantNotFound) {
 		t.Fatalf("Create: got %v, want ErrTenantNotFound", err)
@@ -295,7 +295,7 @@ func TestCreateSandboxRequiresExistingTenant(t *testing.T) {
 	if err := s.Create(&SandboxRecord{
 		ID: "s-admin", Status: "running", CreatedAt: now, LastActiveAt: now,
 		TenantID: AdminTenantID,
-		Kind:     KindDefault,
+		Kind:     KindGeneral,
 	}); err != nil {
 		t.Fatalf("Create admin-owned: %v", err)
 	}
@@ -322,7 +322,7 @@ func TestDeleteTenantSerializesWithCreate(t *testing.T) {
 	}
 	if err := s.insertSandbox(conn, &SandboxRecord{
 		ID: "s-racing", Status: "running", CreatedAt: now, LastActiveAt: now, TenantID: tenantID,
-		Kind: KindDefault,
+		Kind: KindGeneral,
 	}); err != nil {
 		rollbackConn(conn)
 		t.Fatalf("insert in tx: %v", err)

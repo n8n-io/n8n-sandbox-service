@@ -65,7 +65,7 @@ func openTestPostgresStore(t *testing.T) *PostgresStore {
 	return s
 }
 
-// Rows from before the code sandbox columns existed read back as default-kind
+// Rows from before the code sandbox columns existed read back as general-kind
 // sandboxes without a name or lifetime settings. Runs in its own database,
 // since it changes the schema.
 func TestPostgresCodeSandboxColumnsMigrationBackfillsDefaults(t *testing.T) {
@@ -108,9 +108,9 @@ func TestPostgresCodeSandboxColumnsMigrationBackfillsDefaults(t *testing.T) {
 	if err != nil || got == nil {
 		t.Fatalf("get legacy row: got=%v err=%v", got, err)
 	}
-	if got.Kind != KindDefault || got.Name != "" || got.OptionsHash != "" ||
+	if got.Kind != KindGeneral || got.Name != "" || got.OptionsHash != "" ||
 		got.IdleTimeoutMs != 0 || got.MaxAgeMs != 0 || got.DrainingSince != 0 {
-		t.Fatalf("legacy row: %+v, want default kind and zero code sandbox fields", got)
+		t.Fatalf("legacy row: %+v, want general kind and zero code sandbox fields", got)
 	}
 	// The migration also brings back the name index and the kind check.
 	testCodeSandboxNames(t, s, uuid.New().String(), uuid.New().String())
@@ -129,7 +129,7 @@ func TestPostgresStoreCRUD(t *testing.T) {
 		RunnerID:              "r1",
 		RunnerHTTPBase:        "http://runner:8080",
 		RunnerControlGRPCAddr: "runner:9091",
-		Kind:                  KindDefault,
+		Kind:                  KindGeneral,
 	}
 	if err := s.Create(rec); err != nil {
 		t.Fatalf("create: %v", err)
@@ -203,7 +203,7 @@ func TestPostgresRecordActivityConcurrentBatches(t *testing.T) {
 	ids := make([]string, 50)
 	for i := range ids {
 		ids[i] = prefix + "-" + strconv.Itoa(i)
-		if err := s.Create(&SandboxRecord{Kind: KindDefault, ID: ids[i], Status: "running", CreatedAt: 1, LastActiveAt: 1}); err != nil {
+		if err := s.Create(&SandboxRecord{Kind: KindGeneral, ID: ids[i], Status: "running", CreatedAt: 1, LastActiveAt: 1}); err != nil {
 			t.Fatalf("create: %v", err)
 		}
 		t.Cleanup(func() { _ = s.Delete(ids[i]) })

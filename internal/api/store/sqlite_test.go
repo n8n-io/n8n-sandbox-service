@@ -90,7 +90,7 @@ func TestSQLiteDisablesWALAfterReopen(t *testing.T) {
 		t.Fatalf("new store: %v", err)
 	}
 	defer s.Close()
-	rec := &SandboxRecord{Kind: KindDefault, ID: "persisted", Status: "running", CreatedAt: 1, LastActiveAt: 2}
+	rec := &SandboxRecord{Kind: KindGeneral, ID: "persisted", Status: "running", CreatedAt: 1, LastActiveAt: 2}
 	if err := s.Create(rec); err != nil {
 		t.Fatalf("create record: %v", err)
 	}
