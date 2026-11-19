@@ -1,0 +1,16 @@
+internal/codedaemon/worker.go
+  h_8fb27e0cdf6d1e 11,20-24,35-37,125,127,130-131,151-159
+internal/codedaemon/worker_test.go
+  h_8fb27e0cdf6d1e 4,7,9,17-18,55-69,160-213
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "439ebe08b54caafd40bb31690432b4821474054f",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
