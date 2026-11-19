@@ -38,9 +38,11 @@ type tarEntry struct {
 	linkname string
 }
 
-func dir(name string) tarEntry          { return tarEntry{name: name, typeflag: tar.TypeDir} }
-func file(name, body string) tarEntry   { return tarEntry{name: name, typeflag: tar.TypeReg, body: body} }
-func link(name, target string) tarEntry { return tarEntry{name: name, typeflag: tar.TypeSymlink, linkname: target} }
+func dir(name string) tarEntry        { return tarEntry{name: name, typeflag: tar.TypeDir} }
+func file(name, body string) tarEntry { return tarEntry{name: name, typeflag: tar.TypeReg, body: body} }
+func link(name, target string) tarEntry {
+	return tarEntry{name: name, typeflag: tar.TypeSymlink, linkname: target}
+}
 
 func makeTar(t *testing.T, entries ...tarEntry) []byte {
 	t.Helper()

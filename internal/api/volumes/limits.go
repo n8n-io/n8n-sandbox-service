@@ -13,9 +13,9 @@ import (
 // their fetch timeout, sized for objects up to 5 GB, and the builder holds a
 // set of the tar's directories in memory, so the entries stay at a million.
 const (
-	MaxTarBytes          int64 = 4 << 30
-	MaxContentBytes      int64 = 4 << 30
-	MaxDecompressedBytes int64 = 8 << 30
+	MaxTarBytes          int64 = 4 << 30 // 4 GiB
+	MaxContentBytes      int64 = 4 << 30 // 4 GiB
+	MaxDecompressedBytes int64 = 8 << 30 // 8 GiB
 	MaxEntries                 = 1_000_000
 	// MaxSharedVolumes counts the publishing and ready ones.
 	MaxSharedVolumes = 1000
