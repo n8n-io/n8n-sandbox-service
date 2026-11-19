@@ -338,7 +338,10 @@ runner:
     dockerHost: unix:///var/run/docker.sock
     dataDir: /var/sandboxes
     # Required in-cluster. The API stops sending new sandboxes to the runner once
-    # it reports this many. Size it as node memory / defaultMemoryMb.
+    # it reports this many. Sandboxes run inside the runner pod, so size it as
+    # runner.resources.limits.memory / defaultMemoryMb when that limit is set,
+    # otherwise as (node memory minus room for the OS and other pods) /
+    # defaultMemoryMb. Stopped sandboxes count too.
     capacityTotal: ""
     maxFileBytes: "10485760"
     # See SANDBOX_RUNNER_MAX_INFLIGHT_PER_SANDBOX and _MAX_EXEC_TIMEOUT in

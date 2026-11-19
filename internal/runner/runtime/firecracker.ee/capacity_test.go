@@ -2,12 +2,14 @@ package firecracker
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 	fcnetwork "github.com/n8n-io/sandbox-service/internal/runner/runtime/firecracker.ee/network"
@@ -231,7 +233,7 @@ func TestSizeSlotsAtAdmission(t *testing.T) {
 		{"explicit within memory", true, 100, 0, 100, ""},
 		{"explicit above memory", true, 200, 0, 0, "200"},
 		{"already sized and still fits", false, 1000, 50, 50, ""},
-		{"already sized for a larger snapshot's guests", false, 1000, 200, 200, "restart"},
+		{"already sized for a larger snapshot's guests", false, 1000, 200, 200, "200 slots"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			rt := newTestRuntime(tt.allocated)
@@ -250,9 +252,34 @@ func TestSizeSlotsAtAdmission(t *testing.T) {
 				}
 				return
 			}
-			if err == nil || !strings.Contains(err.Error(), tt.wantErr) || !strings.Contains(err.Error(), "106") {
-				t.Fatalf("error should name %s and 106, got %v", tt.wantErr, err)
+			var sizing sizingError
+			if !errors.As(err, &sizing) || !strings.Contains(err.Error(), tt.wantErr) || !strings.Contains(err.Error(), "106") {
+				t.Fatalf("want a sizingError naming %s and 106, got %v", tt.wantErr, err)
 			}
 		})
+	}
+}
+
+// A slot count admission cannot fix stops the process, so a restart sizes the
+// slots from the current snapshot instead of the runner staying unhealthy.
+func TestPrepareExitsWhenSlotsCannotBeSized(t *testing.T) {
+	// 200 slots from an earlier, smaller guest; the snapshot now fits 106.
+	rt := testRuntimeT(t, 200)
+	stubCreateDeps(rt)
+	useTestGoldenSnapshotDir(t, rt)
+	exitCode := -1
+	rt.deps.exit = func(code int) { exitCode = code }
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	rt.Prepare(ctx)
+	if ctx.Err() != nil {
+		t.Fatal("Prepare kept retrying instead of exiting")
+	}
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1", exitCode)
+	}
+	if rt.admissionOK.Load() {
+		t.Fatal("admission passed with slots the snapshot cannot back")
 	}
 }

@@ -44,7 +44,9 @@ type releaseManifest struct {
 
 // Prepare pins guest assets, ensures a golden snapshot, configures host NAT,
 // and runs an admission canary before marking the runtime ready. Failures
-// (including transient host NAT) retry with backoff via runAdmissionLoop.
+// (including transient host NAT) retry with backoff via runAdmissionLoop,
+// except a sizingError, on which the process exits so a restart can size the
+// slots.
 //
 // Admission also sizes the slots from the golden snapshot it pins, then starts
 // the slot wirer (network_wirer.go), which builds free slots' network namespaces
@@ -60,6 +62,12 @@ func (r *Runtime) runAdmissionLoop(ctx context.Context) {
 		if err == nil {
 			r.markAdmissionOK()
 			slog.Info("firecracker admission succeeded; runner is healthy")
+			return
+		}
+		var sizing sizingError
+		if errors.As(err, &sizing) {
+			slog.Error("firecracker cannot size its slots; exiting so a restart re-reads the golden snapshot", "error", err)
+			r.deps.exit(1)
 			return
 		}
 		slog.Error("firecracker admission failed; runner stays unhealthy", "error", err)

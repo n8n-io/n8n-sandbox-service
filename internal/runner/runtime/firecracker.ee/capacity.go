@@ -156,11 +156,20 @@ func memorySlotsFor(boot *bootParams, host hostPaths) (slots, budget int64, rati
 	return slots, budget, ratio, err
 }
 
+// sizingError is an admission failure no retry can fix: the slot count and the
+// inputs behind it only change when the process restarts. Admission exits on
+// it, so the restart either sizes the slots from the current snapshot or stops
+// at the startup check with the same error.
+type sizingError struct{ error }
+
+func (e sizingError) Unwrap() error { return e.error }
+
 // sizeSlots allocates the slot array from the boot.json admission pinned and
 // starts the slot wirer. Slots back proxy ports, netns and TAP devices, so the
 // first admission to get here fixes the count for the life of the process. A
 // later one keeps that count when it still fits, and fails when a rebuilt
-// snapshot fits fewer slots than the ones already allocated.
+// snapshot fits fewer slots than the ones already allocated. Every failure is a
+// sizingError.
 func (r *Runtime) sizeSlots(ctx context.Context, boot *bootParams) error {
 	host := r.hostPaths
 	if host == (hostPaths{}) {
@@ -168,7 +177,7 @@ func (r *Runtime) sizeSlots(ctx context.Context, boot *bootParams) error {
 	}
 	want, limit, err := slotCount(r.config, r.runnerConfig, boot, host)
 	if err != nil {
-		return err
+		return sizingError{err}
 	}
 	r.mu.Lock()
 	have := len(r.slots)
@@ -177,7 +186,7 @@ func (r *Runtime) sizeSlots(ctx context.Context, boot *bootParams) error {
 	}
 	r.mu.Unlock()
 	if have > 0 && int64(have) > want {
-		return fmt.Errorf("firecracker has %d slots, but the golden snapshot rebuilt since then holds %d; restart the runner", have, want)
+		return sizingError{fmt.Errorf("firecracker has %d slots, but the golden snapshot rebuilt since then holds %d", have, want)}
 	}
 	if have == 0 {
 		slog.Info("firecracker slot count set", "slots", want, "limit", limit, "mem_size_mib", boot.MemSizeMiB)

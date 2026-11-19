@@ -106,4 +106,12 @@ func TestMemoryBudget(t *testing.T) {
 	if got, err := MemoryBudget(meminfo, filepath.Join(t.TempDir(), "missing"), root); err != nil || got != 64<<30 {
 		t.Fatalf("no cgroup: got %d, %v", got, err)
 	}
+	// A finite limit above MemTotal does not raise the budget.
+	high := t.TempDir()
+	if err := os.WriteFile(filepath.Join(high, "memory.max"), []byte("137438953472\n"), 0o600); err != nil { // 128 GiB
+		t.Fatal(err)
+	}
+	if got, err := MemoryBudget(meminfo, write(t, "0::/\n"), high); err != nil || got != 64<<30 {
+		t.Fatalf("higher cgroup limit: got %d, %v", got, err)
+	}
 }

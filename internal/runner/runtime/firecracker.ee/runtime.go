@@ -342,6 +342,7 @@ type dependencies struct {
 	mountVolumeDrives   func(ctx context.Context, baseURL string, drives []volumedrives.Volume) (map[int]string, error)
 	volumeSpace         func(path string) (volumeSpace, error)
 	bootVolumeBuilder   func(ctx context.Context, socketPath string, boot volumeBuilderBoot) error
+	exit                func(code int)
 }
 
 func defaultDependencies(fc Config) dependencies {
@@ -370,6 +371,7 @@ func defaultDependencies(fc Config) dependencies {
 		mountVolumeDrives: mountVolumeDrives,
 		volumeSpace:       statVolume,
 		bootVolumeBuilder: bootVolumeBuilder,
+		exit:              os.Exit,
 	}
 }
 

@@ -4,7 +4,7 @@ Each sandbox is a Firecracker microVM restored from a golden snapshot built on t
 
 ## Admission (`Prepare` / `Ready`)
 
-The runner reports `Healthy=false`, fails `/readyz` and `Ready()` until all of these pass, retrying with backoff:
+The runner reports `Healthy=false`, fails `/readyz` and `Ready()` until all of these pass, retrying with backoff. The exception is step 4's slot count: if it cannot be set, the process exits, and the restart sets it from the current snapshot or stops at the startup check:
 
 1. Host NAT — IPv4 forwarding plus idempotent MASQUERADE/FORWARD rules.
 2. Guest assets — jailer, firecracker, `template/rootfs.ext4`, `template/vmlinux`, and optionally `MANIFEST.json` / expected `git_sha` / daemon checksum. `vmlinux` must be owned by root, readable by all and writable by no other user, as `build-rootfs-template.sh` installs it. That is checked here, again after step 3 and before every cold boot.

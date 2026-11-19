@@ -72,9 +72,10 @@ func (r *Runtime) reconcileNetworkNamespaces(ctx context.Context) error {
 }
 
 // startupNetworkCleanupScript deletes every slot netns and host veth by name.
-// It runs before admission sizes the slots, so it cannot count them; deleting a
-// netns removes its veth pair, and the veth line catches a host end left by a
-// build that died before moving its peer into the namespace.
+// It runs before admission sizes the slots, so it cannot count them. Deleting a
+// netns removes its veth pair once nothing holds the namespace; the veth line
+// catches a host end whose namespace outlived `ip netns delete` because a
+// process still held it.
 func startupNetworkCleanupScript() string {
 	return "set -eu\n" +
 		"ip netns list | awk '{print $1}' | grep '^fc-sb-' | xargs -r -n1 ip netns delete 2>/dev/null || true\n" +
