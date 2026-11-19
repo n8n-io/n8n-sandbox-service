@@ -19,6 +19,7 @@ import (
 
 const (
 	workerStartupTimeout = 15 * time.Second
+	workerDrainTimeout   = time.Second // Maximum time to read pending control messages after stopping the worker.
 	// maxControlMessage bounds every control message, including its newline.
 	maxControlMessage = 512 << 10 // 512 KiB
 )
@@ -86,7 +87,11 @@ func startWorker(cfg Config, startupTimeout time.Duration) (*worker, error) {
 		cmd: cmd, conn: conn, ready: make(chan struct{}), stopped: make(chan struct{}),
 		done: make(chan struct{}), executionsByTaskID: make(map[string]*execution),
 	}
-	go w.readControl()
+	controlDone := make(chan struct{})
+	go func() {
+		defer close(controlDone)
+		w.readControl()
+	}()
 	go func() {
 		timer := time.NewTimer(startupTimeout)
 		defer timer.Stop()
@@ -104,7 +109,17 @@ func startWorker(cfg Config, startupTimeout time.Duration) (*worker, error) {
 		w.kill()
 		_ = cmd.Wait()
 		logs.close()
+		<-controlDone
+		_ = conn.Close()
 		close(w.done)
+		// Close result channels after the control reader has queued any final
+		// messages so the handler can receive them before detecting the exit.
+		w.mu.Lock()
+		for _, task := range w.executionsByTaskID {
+			close(task.result)
+		}
+		clear(w.executionsByTaskID)
+		w.mu.Unlock()
 	}()
 	return w, nil
 }
@@ -183,14 +198,15 @@ func (w *worker) kill() {
 	w.stopOnce.Do(func() {
 		w.mu.Lock()
 		close(w.stopped)
-		for _, task := range w.executionsByTaskID {
-			close(task.result)
-		}
-		clear(w.executionsByTaskID)
 		w.mu.Unlock()
 
 		_ = syscall.Kill(-w.cmd.Process.Pid, syscall.SIGKILL)
-		_ = w.conn.Close()
+		if conn, ok := w.conn.(*net.UnixConn); ok {
+			_ = conn.CloseWrite()
+		}
+		// Preserve buffered terminal messages, but bound the drain even if a
+		// descendant outside the group still holds a copy of the socket.
+		_ = w.conn.SetReadDeadline(time.Now().Add(workerDrainTimeout))
 	})
 }
 
@@ -300,4 +316,13 @@ func (x *execution) close() {
 	x.worker.mu.Lock()
 	defer x.worker.mu.Unlock()
 	delete(x.worker.executionsByTaskID, x.id)
+}
+
+// The runtime has no per-task cancel. Keep the lane and task directory until
+// execution ends without interrupting the other tasks sharing this worker.
+func (x *execution) waitDetached() {
+	select {
+	case <-x.result:
+	case <-x.worker.done:
+	}
 }
