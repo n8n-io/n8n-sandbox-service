@@ -53,11 +53,13 @@ type worker struct {
 	writeMu  sync.Mutex
 
 	mu                 sync.Mutex // guards execution registration, delivery, and cleanup
-	executionsByTaskID map[string]chan workerMessage
+	executionsByTaskID map[string]*execution
 }
 
-// startWorker launches the runtime in its own process group and gives it the control socket on fd 3.
-func startWorker(cfg Config) (*worker, error) {
+// startWorker launches the runtime in its own process group and gives it the
+// control socket on fd 3. It stops the runtime if it is not ready within
+// startupTimeout, whether or not a caller is still waiting.
+func startWorker(cfg Config, startupTimeout time.Duration) (*worker, error) {
 	if len(cfg.RuntimeCommand) == 0 {
 		return nil, errWorkerUnavailable
 	}
@@ -71,21 +73,38 @@ func startWorker(cfg Config) (*worker, error) {
 	cmd.Env = []string{"PATH=" + envOr("PATH", "/usr/bin:/bin"), "HOME=" + envOr("HOME", "/home/node"), "NODE_ENV=production"}
 	cmd.ExtraFiles = []*os.File{child}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// Don't wait indefinitely for inherited log pipes to close after exit.
+	cmd.WaitDelay = time.Second
+	logs := newRuntimeLogger(cfg.RuntimeLogWrites)
+	cmd.Stdout = logs.writer("stdout")
+	cmd.Stderr = logs.writer("stderr")
 	if err := cmd.Start(); err != nil {
+		logs.close()
 		_ = conn.Close()
 		return nil, err
 	}
 	w := &worker{
 		cmd: cmd, conn: conn, ready: make(chan struct{}), stopped: make(chan struct{}),
-		done: make(chan struct{}), executionsByTaskID: make(map[string]chan workerMessage),
+		done: make(chan struct{}), executionsByTaskID: make(map[string]*execution),
 	}
 	go w.readControl()
+	go func() {
+		timer := time.NewTimer(startupTimeout)
+		defer timer.Stop()
+		select {
+		case <-w.ready:
+		case <-w.stopped:
+		case <-timer.C:
+			w.kill()
+		}
+	}()
 	go func() {
 		waitWorkerExit(cmd.Process.Pid)
 		// The unreaped leader reserves the group ID. Any other caller of kill
 		// either signals it first or waits for this call via stopOnce.
 		w.kill()
 		_ = cmd.Wait()
+		logs.close()
 		close(w.done)
 	}()
 	return w, nil
@@ -139,9 +158,9 @@ func (w *worker) readControl() {
 			}
 		case "done", "error":
 			w.mu.Lock()
-			if ch := w.executionsByTaskID[msg.TaskID]; ch != nil {
+			if task := w.executionsByTaskID[msg.TaskID]; task != nil {
 				select {
-				case ch <- msg:
+				case task.result <- msg:
 				default:
 				}
 			}
@@ -165,8 +184,8 @@ func (w *worker) kill() {
 	w.stopOnce.Do(func() {
 		w.mu.Lock()
 		close(w.stopped)
-		for _, ch := range w.executionsByTaskID {
-			close(ch)
+		for _, task := range w.executionsByTaskID {
+			close(task.result)
 		}
 		clear(w.executionsByTaskID)
 		w.mu.Unlock()
@@ -203,7 +222,7 @@ func (d *Daemon) getWorker(ctx context.Context) (*worker, error) {
 		return nil, errWorkerUnavailable
 	}
 	if d.worker == nil {
-		w, err := startWorker(d.cfg)
+		w, err := startWorker(d.cfg, d.startupTimeout)
 		if err != nil {
 			// Like a runtime that stops, a failed start is not retried.
 			d.startFailed = true
@@ -214,16 +233,11 @@ func (d *Daemon) getWorker(ctx context.Context) (*worker, error) {
 	}
 	w := d.worker
 	d.workerMu.Unlock()
-	startup, cancel := context.WithTimeout(ctx, workerStartupTimeout)
-	defer cancel()
 	select {
 	case <-w.stopped:
 		return nil, errWorkerUnavailable
-	case <-startup.Done():
-		if ctx.Err() == nil {
-			w.kill()
-		}
-		return nil, startup.Err()
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	case <-w.ready:
 		if w.isStopped() {
 			return nil, errWorkerUnavailable
@@ -271,7 +285,7 @@ func (d *Daemon) dispatch(ctx context.Context, id, dir string) (*execution, erro
 		w.mu.Unlock()
 		return nil, errDuplicateTask
 	}
-	w.executionsByTaskID[id] = x.result
+	w.executionsByTaskID[id] = x
 	w.mu.Unlock()
 	d.markDispatched(id)
 	if err := w.send(workerMessage{Type: "start", TaskID: id, Dir: dir, Shared: true}); err != nil {

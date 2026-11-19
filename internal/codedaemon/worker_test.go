@@ -2,6 +2,7 @@ package codedaemon
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -152,7 +153,7 @@ func TestDispatchRejectsActiveTaskID(t *testing.T) {
 	x.worker.mu.Lock()
 	registered := x.worker.executionsByTaskID["same"]
 	x.worker.mu.Unlock()
-	if registered != x.result {
+	if registered != x {
 		t.Fatal("duplicate dispatch replaced the active receiver")
 	}
 }
@@ -223,6 +224,29 @@ func TestFailedWorkerStartIsUnhealthyAndNotRetried(t *testing.T) {
 	}
 	if _, err := d.dispatch(t.Context(), "second", d.cfg.WorkDir); !errors.Is(err, errWorkerUnavailable) {
 		t.Fatalf("unexpected dispatch error: %v", err)
+	}
+}
+
+func TestUnreadyWorkerIsStoppedAfterCallerGivesUp(t *testing.T) {
+	d := testDaemon(t, Config{RuntimeCommand: []string{"/bin/sleep", "60"}})
+	d.startupTimeout = 200 * time.Millisecond
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := d.dispatch(ctx, "first", d.cfg.WorkDir); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("unexpected dispatch error: %v", err)
+	}
+	d.workerMu.Lock()
+	w := d.worker
+	d.workerMu.Unlock()
+	select {
+	case <-w.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("unready runtime was not stopped")
+	}
+	probe := httptest.NewRecorder()
+	d.Handler().ServeHTTP(probe, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if probe.Code != http.StatusServiceUnavailable {
+		t.Fatalf("runtime never became ready but health probe returned %d", probe.Code)
 	}
 }
 
