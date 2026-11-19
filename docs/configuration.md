@@ -45,8 +45,11 @@ All services are configured via environment variables. In the variables the API,
 | `SANDBOX_API_RUNNER_HEARTBEAT_GRACE` | `45s` | How long after the last gRPC heartbeat a runner remains eligible for placement (Go [`time.ParseDuration`](https://pkg.go.dev/time#ParseDuration) syntax, e.g. `45s`, `2m`) |
 | `SANDBOX_API_IDLE_STOP_AFTER` | `1h` | Idle time after which the sweeper stops a sandbox (deletes it if `ephemeral`). `0` disables. Extended by twice `SANDBOX_API_ACTIVITY_WRITE_INTERVAL`, and by four times that before an ephemeral sandbox is deleted ([why](architecture.md#sandbox-activity)) |
 | `SANDBOX_API_IDLE_DELETE_AFTER` | `24h` | Idle time after which the sweeper deletes a sandbox; wakes are refused past this window. `0` disables. Wakes are refused twice `SANDBOX_API_ACTIVITY_WRITE_INTERVAL` later, deletes come four times that later ([why](architecture.md#sandbox-activity)) |
-| `SANDBOX_API_ACTIVITY_WRITE_INTERVAL` | `5s` | How often each replica writes the `last_active_at` of the sandboxes it served, in one statement (`1s`–`1m`; [how](architecture.md#sandbox-activity)). Longer means fewer database writes, and idle stops that act up to twice that later, deletes four times |
+| `SANDBOX_API_ACTIVITY_WRITE_INTERVAL` | `5s` | How often each replica writes the `last_active_at` of the sandboxes it served, in one statement (`1s`–`1m`; [how](architecture.md#sandbox-activity)). Longer means fewer database writes, and idle stops that act up to twice that later, archives and deletes four times |
 | `SANDBOX_API_MAX_RESPONSE_ACTIVITY` | `30m` | How long a response that is still open, such as an exec stream, keeps its sandbox from going idle (at least `1m`). Keep it at least `SANDBOX_RUNNER_MAX_EXEC_TIMEOUT` |
+| `SANDBOX_API_TEMPLATES` | `default` | Comma-separated template catalog creates may name; `default` is always in it. Runners list what they serve in their heartbeats, and a sandbox is placed only on one serving its template |
+| `SANDBOX_API_MAX_IDLE_WINDOW` | `24h` | Largest `idle_stop_after` / `idle_delete_after` a create or `PATCH /sandboxes/{id}` may set (at least `1m`); a tenant's `max_idle_window` can narrow it. `0` refuses both |
+| `SANDBOX_API_EGRESS_ALLOW_PUBLIC` | `false` | Lets an `egress_proxy` spec set `allow_public`: any public host on 443 or 80, uninspected. Off, such a create or `PUT …/egress-proxy` is `400` `allow_public_disabled`; turning it off leaves existing sandboxes as they are |
 | `SANDBOX_API_IDLE_DELETE_SAFETY_BUFFER` | `1m` | Added to a sandbox's idle window before deletion as a race guard (applied when either window above is > 0) |
 | `SANDBOX_API_IDLE_SWEEP_INTERVAL` | `1m` | How often the idle sweeper runs |
 | `SANDBOX_API_IDLE_SWEEP_CONCURRENCY` | `8` | Runner stop/delete calls one sweep keeps in flight (1–16), spread across runners. With Postgres the sandbox-lock pool is this plus 5 |
@@ -65,6 +68,17 @@ All services are configured via environment variables. In the variables the API,
 **Multi-pod (Postgres):** Set `SANDBOX_API_STORE=postgres` and the `SANDBOX_API_POSTGRES_*` variables when running multiple API replicas. Sandbox metadata and runner heartbeats are shared in Postgres; the idle sweeper uses a Postgres advisory lock so only one pod sweeps at a time. New sandboxes are placed on the eligible runner with the lowest reported `capacity_used`. Disable `api.persistence` in Helm when using Postgres (state lives in the database, not local disk). Each replica opens up to 25 store connections plus `SANDBOX_API_IDLE_SWEEP_CONCURRENCY + 5` lock connections; size Postgres `max_connections` for every replica and other clients.
 
 The idle sweeper waits `SANDBOX_API_ORPHAN_REAP_BUFFER` (default `5m`) after a runner's last heartbeat before removing its orphaned sandbox rows from the API store (sandboxes that are already idle stop/delete candidates). With SQLite, this is based on observing the runner stream close; with Postgres, it is based on `last_seen` in the shared registry.
+
+### Archive store
+
+Set one store to enable [archive and restore](API.md#archive-and-restore), with the master key.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `SANDBOX_API_ARCHIVE_KEY_FILE` | *(unset)* | 64 hex characters (32 bytes): wraps each archive's own key in the store; derives the key that signs directory URLs |
+| `SANDBOX_API_ARCHIVE_DIR`, `SANDBOX_API_ARCHIVE_URL` | *(unset)* | A directory the API keeps archives in, and the API's URL as runners reach it; runners `PUT` and `GET` objects at `<URL>/internal/archives/…` with URLs signed for one object and method, valid an hour; an object is written once. Shared storage is needed with several API pods |
+| `SANDBOX_API_ARCHIVE_S3_ENDPOINT`, `_BUCKET`, `_REGION`, `_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY_FILE` | *(unset)* | Or an S3-compatible bucket (path-style); runners get presigned URLs, only the API holds the credentials |
+| `SANDBOX_API_IDLE_ARCHIVE_AFTER` | `0` (off) | Idle time after which a stopped sandbox is archived, when it sets no `idle_archive_after` |
 
 ## Runner
 
@@ -86,7 +100,7 @@ The idle sweeper waits `SANDBOX_API_ORPHAN_REAP_BUFFER` (default `5m`) after a r
 | `SANDBOX_RUNNER_VOLUME_FETCH_TIMEOUT` | `5m` | Longest a volume object download may take, with a `tar`'s unpack after it ([Docker runtime](../internal/runner/runtime/docker/README.md#volumes)). Downloads are `https` only and follow no redirects. A URL on the host of `SANDBOX_RUNNER_API_GRPC_ADDR`, on any port, is fetched with the `SANDBOX_RUNNER_REGISTRATION_GRPC_*` certificate and CA and without a proxy, even where the registration stream goes through `HTTPS_PROXY`; any other URL with the system's CAs, the proxy from the environment and no client certificate |
 | `SANDBOX_RUNNER_MAX_FILE_BYTES` | `10485760` | Maximum body the runner accepts on file write/append and archive upload (10 MB); the API applies `SANDBOX_API_MAX_FILE_BYTES` first |
 | `SANDBOX_RUNNER_MAX_INFLIGHT_PER_SANDBOX` | `256` | Requests one sandbox may have in progress at once; more get `429` ([what counts](API.md#http-429--too-many-requests-in-progress)). Room for clients that write many files in parallel, while still bounding what one sandbox holds on its runner. `0` = no limit, for execution `DELETE`s too |
-| `SANDBOX_RUNNER_MAX_EXEC_TIMEOUT` | `15m` | Largest `timeout_ms` an exec may ask for; a larger one gets `400`. A first estimate: long enough for builds and test suites, and what ends a forgotten command, which keeps running after its stream closes. `0` (no limit) or at least `5m`, the timeout a command gets when it sets none. Keep the API's `SANDBOX_API_MAX_RESPONSE_ACTIVITY` at least this long |
+| `SANDBOX_RUNNER_MAX_EXEC_TIMEOUT` | `15m` | Largest `timeout_ms` an exec may ask for; a larger one gets `400`. A first estimate: long enough for builds and test suites, and what ends a forgotten command, which keeps running after its stream closes. `0` (no limit) or at least `5m`, the timeout a command gets when it sets none; there is no upper bound, so a pool for multi-hour runs sets e.g. `8h`. Running executions keep their sandbox active through runner heartbeats, so `SANDBOX_API_MAX_RESPONSE_ACTIVITY` need not cover them |
 | `SANDBOX_RUNNER_METRICS_ENABLED` | `false` | When true, expose Prometheus `/metrics` on the runner's HTTP listener (no `X-Api-Key` and no client certificate; firewall the port). See [Metrics](#metrics). |
 | `SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE` | *(required)* | CA (PEM) that signed the API registration gRPC server cert |
 | `SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE` | *(required)* | Runner client cert (PEM) for registration mTLS |
@@ -98,19 +112,35 @@ The idle sweeper waits `SANDBOX_API_ORPHAN_REAP_BUFFER` (default `5m`) after a r
 | `SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE` | *(required)* | Server private key (PEM) |
 | `SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE` | *(required)* | CA (PEM) that signed API client certificates, for SandboxControl and the HTTP listener |
 
+### Egress proxy
+
+Both runtimes serve the [egress proxy](API.md#the-egress-proxy) to `egress: "proxy"` sandboxes.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `SANDBOX_EGRESS_PROXY_PORT` | `3128` | Proxy port on each proxy sandbox's gateway |
+| `SANDBOX_EGRESS_PROXY_CA_CERT_FILE`, `SANDBOX_EGRESS_PROXY_CA_KEY_FILE` | *(unset)* | ECDSA CA the proxy signs inspected hosts' certificates with. Unset, the runner generates one in memory at startup, so its key never touches disk and a restart, which deletes every sandbox, rotates it |
+| `SANDBOX_EGRESS_PROXY_INTERNAL_HOSTS` | *(unset)* | Comma-separated host names (no ports) that may resolve into the blocked ranges, such as the in-cluster Git service. Nothing else on the runner's network is reachable, and a host is exempt only for a spec whose `allow` names it, never through `allow_public` |
+| `SANDBOX_EGRESS_PROXY_UPSTREAM_CA_FILE` | *(unset)* | PEM roots added to the system pool for verifying upstream TLS |
+| `SANDBOX_EGRESS_PROXY_SECRETS_DIR` | *(unset)* | Secret store: one file per `<tenant_id>/<secret_ref>`, each tenant's directory a root of its own; re-read at most 30 s after a change. Unset, every create naming a credential is refused (`400` `unknown_secret_ref`) |
+| `SANDBOX_EGRESS_USAGE_SINK_URL` | *(unset)* | Where usage records are posted. Unset, creates naming `model_hosts` are refused (`501`) |
+| `SANDBOX_EGRESS_USAGE_SINK_TOKEN_FILE` | *(unset)* | File holding the bearer token sent to the sink |
+
 ### Docker runner backend config
 
 These variables are parsed by the Docker/sysbox runner entrypoint.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE` | *(required)* | Docker image used for sandbox containers |
+| `SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE` | *(required)* | Docker image used for sandbox containers of the `default` template |
+| `SANDBOX_RUNNER_DOCKER_TEMPLATES` | *(unset)* | Further templates, as a JSON object of name to `{"image": …, "memory_mb", "cpu_percent", "pids_max", "disk_quota_mb"}`; a limit left out is the default one. Every image is pulled before the runner reports ready |
 | `SANDBOX_RUNNER_DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker daemon endpoint used by the runner; must be `unix://` |
 | `SANDBOX_RUNNER_ENABLE_CGROUPS` | `true` | Whether Docker resource limits are applied |
 | `SANDBOX_RUNNER_DEFAULT_MEMORY_MB` | `512` | Default Docker memory limit per sandbox in megabytes |
 | `SANDBOX_RUNNER_DEFAULT_CPU_PERCENT` | `100` | Default Docker CPU limit as a percentage of one core |
 | `SANDBOX_RUNNER_DEFAULT_PIDS_MAX` | `256` | Default Docker process count limit per sandbox |
 | `SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB` | `0` | Per-sandbox writable-layer quota in MB (`--storage-opt size=`). Effective only when the storage pool mounts successfully — see [Disk quotas](#disk-quotas). `0` means no quota. |
+| `SANDBOX_RUNNER_ALLOW_UNENFORCED_DISK_QUOTA` | `false` | Start even when a configured disk quota cannot be enforced; quotas are then not applied. Otherwise the runner refuses to start — see [Disk quotas](#disk-quotas). |
 | `SANDBOX_RUNNER_DISK_QUOTA_POOL_SIZE_GB` | *(derived)* | Size of the xfs+prjquota storage pool backing the inner dockerd. Defaults to `ceil(SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB × SANDBOX_RUNNER_CAPACITY_TOTAL × 1.2 / 1024)` (per-sandbox quota times runner capacity, plus 20% headroom for sandbox image layers). Set explicitly to override. |
 | `SANDBOX_RUNNER_DOCKER_INSECURE_REGISTRIES` | *(empty)* | Comma-separated insecure registries passed to dockerd |
 | `SANDBOX_RUNNER_DOCKER_DNS_SERVERS` | *(unset)* | Comma-separated IPv4 resolvers for sandbox DNS, e.g. `1.1.1.1,8.8.8.8`. Unset, sandboxes resolve through the runner's own resolver. See [Sandbox DNS](security-model.md#sandbox-dns). |
@@ -140,6 +170,7 @@ Slots give the host-side Firecracker resources stable names without exposing tho
 | `SANDBOX_RUNNER_FIRECRACKER_TEMPLATE_DIR` | `/srv/firecracker/template` | Directory containing the snapshot rootfs (`rootfs.ext4`) and the guest kernel (`vmlinux`). The kernel must be owned by root, readable by all and not writable by group or other, or admission fails |
 | `SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_MEM_PATH` | `/srv/firecracker/snapshots/mem` | Host path bind-mounted into the jail as `/snapshot_mem` |
 | `SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_STATE_PATH` | `/srv/firecracker/snapshots/state` | Host path bind-mounted into the jail as `/snapshot_state`. When auto-create is enabled, must share a directory with `SNAPSHOT_MEM_PATH` |
+| `SANDBOX_RUNNER_FIRECRACKER_TEMPLATES` | *(unset)* | Further templates, as a JSON object of name to `{"template_dir", "snapshot_mem_path", "snapshot_state_path"}`, each laid out like the three settings above (the default template's). Every template is admitted on its own (assets, golden snapshot, `boot.json`, canary) before the runner reports ready; no two may share a snapshot directory |
 | `SANDBOX_RUNNER_FIRECRACKER_GUEST_IP` | `172.16.0.10` | Guest IP expected by the restored snapshot |
 | `SANDBOX_RUNNER_FIRECRACKER_HOST_TAP_DEVICE_NAME` | `fc-tap-0` | TAP device name inside each sandbox netns |
 | `SANDBOX_RUNNER_FIRECRACKER_HOST_TAP_IP_CIDR` | `172.16.0.1/24` | Host-side TAP address inside each sandbox netns |
@@ -172,8 +203,9 @@ The runner reports healthy only after `Prepare` has verified these assets, creat
 
 The Firecracker runner does **not** read `SANDBOX_RUNNER_DEFAULT_MEMORY_MB`,
 `SANDBOX_RUNNER_DEFAULT_CPU_PERCENT`, or `SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB`.
-CPU and memory are fixed in the golden memory snapshot; disk capacity is fixed
-by the template `rootfs.ext4` size. Change those by rebuilding the host snapshot
+CPU and memory are fixed in each template's golden memory snapshot; disk
+capacity is fixed by the template's `rootfs.ext4` size. Admission reads them
+from `boot.json` and the rootfs, and the heartbeat reports them per template. Change those by rebuilding the host snapshot
 assets (see [`internal/runner/runtime/firecracker.ee/README.md`](../internal/runner/runtime/firecracker.ee/README.md)).
 
 #### File descriptors
@@ -229,7 +261,7 @@ Series exposed today:
 
 ## Disk quotas
 
-When `SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB > 0`, the runner emits `--storage-opt size=Nm` on each sandbox so the inner dockerd caps that sandbox's writable layer. To make the flag enforce anything, `scripts/start-runner.sh` allocates a loopback xfs image (sized from `SANDBOX_RUNNER_DISK_QUOTA_POOL_SIZE_GB` — see the table above for how the default is derived), formats it, mounts it with `prjquota` at `/var/lib/docker`, and starts the inner dockerd with `--storage-driver=overlay2` against that mount. When `SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB` is unset/`0`, the pool is not created and dockerd uses its default storage with no per-sandbox enforcement. `start-runner.sh` reports a successful mount to the runner by exporting `SANDBOX_RUNNER_DISK_QUOTA_ACTIVE=true`; it is not an operator setting.
+When `SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB > 0`, the runner emits `--storage-opt size=Nm` on each sandbox so the inner dockerd caps that sandbox's writable layer. To make the flag enforce anything, `scripts/start-runner.sh` allocates a loopback xfs image (sized from `SANDBOX_RUNNER_DISK_QUOTA_POOL_SIZE_GB` — see the table above for how the default is derived), formats it, mounts it with `prjquota` at `/var/lib/docker`, and starts the inner dockerd with `--storage-driver=overlay2` against that mount. The pool is created when `SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB` is above `0` or a template in `SANDBOX_RUNNER_DOCKER_TEMPLATES` sets `disk_quota_mb`; with only template quotas, `SANDBOX_RUNNER_DISK_QUOTA_POOL_SIZE_GB` must be set. If the pool cannot be mounted (for example, the kernel lacks xfs quota support), the runner refuses to start unless `SANDBOX_RUNNER_ALLOW_UNENFORCED_DISK_QUOTA=true`, which runs dockerd on its default storage with no quotas. When no quota is configured, the pool is not created and there is no per-sandbox enforcement. A template's `disk_quota_mb` in the runner's registration is `0` when no quota is enforced. `start-runner.sh` reports a successful mount to the runner by exporting `SANDBOX_RUNNER_DISK_QUOTA_ACTIVE=true`; it is not an operator setting.
 
 The image itself is not bounded by the mount it backs. Put it on a volume with a size limit, and keep `SANDBOX_RUNNER_DISK_QUOTA_POOL_SIZE_GB` within that limit. `SANDBOX_RUNNER_DISK_QUOTA_POOL_PATH` moves the image. The Helm chart does this for you; see the chart README section 'Disk Quotas'.
 

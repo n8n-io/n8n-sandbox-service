@@ -23,7 +23,9 @@ const proxyTestSandboxID = "550e8400-e29b-41d4-a716-446655440000"
 var wakingHandlers = map[string]func(runnerruntime.Runtime, *config.Config, *metrics.RunnerRecorder) http.HandlerFunc{
 	"proxy":        ProxyHandler,
 	"upload proxy": UploadProxyHandler,
-	"exec proxy":   ExecProxyHandler,
+	"exec proxy": func(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder) http.HandlerFunc {
+		return ExecProxyHandler(rt, cfg, rec, nil)
+	},
 }
 
 // MaxFileBytes has to be set for the upload proxy, which enforces it on every body
@@ -219,7 +221,7 @@ func TestDeleteExecutionDoesNotWakeOrSpendTheRestartReport(t *testing.T) {
 			// The report is still there for the request that has a client behind it.
 			base.daemonErr = runnerruntime.ErrSandboxNotRunning
 			exec := httptest.NewRecorder()
-			ExecProxyHandler(base, cfg, rec).ServeHTTP(exec, proxyTestRequest())
+			ExecProxyHandler(base, cfg, rec, nil).ServeHTTP(exec, proxyTestRequest())
 
 			if exec.Code != http.StatusConflict {
 				t.Fatalf("exec status = %d, want 409: the delete spent the restart report", exec.Code)

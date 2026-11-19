@@ -56,14 +56,14 @@ func TestCheckTemplateKernelRefusesAKernelOthersCanWrite(t *testing.T) {
 // admission is refused there, although its size and modification time still match.
 func TestVerifyKernelPinRefusesAKernelOthersCanWrite(t *testing.T) {
 	rt := testRuntime(1)
-	if err := rt.verifyKernelPin(testKernelPin); err != nil {
+	if err := rt.verifyKernelPin(templateKernelPath(rt.config), testKernelPin); err != nil {
 		t.Fatalf("verifyKernelPin() failed for an unchanged kernel: %v", err)
 	}
 
 	rt.deps.checkTemplateKernel = func(path string) error {
 		return checkKernelAccess(path, 1000, 0o644)
 	}
-	if err := rt.verifyKernelPin(testKernelPin); err == nil || !strings.Contains(err.Error(), "owned by uid 1000") {
+	if err := rt.verifyKernelPin(templateKernelPath(rt.config), testKernelPin); err == nil || !strings.Contains(err.Error(), "owned by uid 1000") {
 		t.Fatalf("verifyKernelPin() error = %v, want the kernel's owner refused", err)
 	}
 }

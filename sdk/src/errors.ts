@@ -50,6 +50,23 @@ export class EgressMismatchError extends Error {
 }
 
 /**
+ * Error thrown by `createSandbox` when the sandbox does not have a requested
+ * `template` or idle window, because the API predates the option and ignored it.
+ * The sandbox exists; `sandboxId` lets the caller delete it.
+ */
+export class CreateOptionMismatchError extends Error {
+  constructor(
+    readonly sandboxId: string,
+    readonly option: string,
+    readonly requested: string,
+    readonly actual: string,
+  ) {
+    super(`Sandbox ${sandboxId} has ${option} "${actual}", requested "${requested}"`);
+    this.name = "CreateOptionMismatchError";
+  }
+}
+
+/**
  * Error thrown when an invalid stream event is encountered, such as when a truncated
  * JSON record is encountered. This might indicate a transient connectivity issue with
  * the stream.

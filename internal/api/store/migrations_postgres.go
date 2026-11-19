@@ -21,7 +21,19 @@ CREATE TABLE IF NOT EXISTS sandboxes (
 	options_hash              VARCHAR(512) NOT NULL DEFAULT '',
 	idle_timeout_ms           BIGINT NOT NULL DEFAULT 0,
 	max_age_ms                BIGINT NOT NULL DEFAULT 0,
-	draining_since            BIGINT NOT NULL DEFAULT 0
+	draining_since            BIGINT NOT NULL DEFAULT 0,
+	template                  TEXT NOT NULL DEFAULT 'default',
+	idle_stop_after           BIGINT NOT NULL DEFAULT 0,
+	idle_delete_after         BIGINT NOT NULL DEFAULT 0,
+	egress_proxy              TEXT NOT NULL DEFAULT '',
+	model_blocked             BOOLEAN NOT NULL DEFAULT false,
+	idle_archive_after        BIGINT NOT NULL DEFAULT 0,
+	archive_object            TEXT NOT NULL DEFAULT '',
+	archive_key               TEXT NOT NULL DEFAULT '',
+	archive_size              BIGINT NOT NULL DEFAULT 0,
+	archive_version           TEXT NOT NULL DEFAULT '',
+	archived_at               BIGINT NOT NULL DEFAULT 0,
+	restore_started_at        BIGINT NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS sandboxes_idle_reap_idx
 	ON sandboxes (status, last_active_at);
@@ -44,6 +56,18 @@ CREATE TABLE IF NOT EXISTS runners (
 CREATE INDEX IF NOT EXISTS runners_eligible_idx
 	ON runners (healthy, last_seen, capacity_used);
 `
+
+// postgresAddRunnerStateCols adds the cordon and the served templates (a JSON
+// array of registry.Template, ” for a runner that lists none) to runner
+// heartbeats.
+const postgresAddRunnerStateCols = `
+ALTER TABLE runners
+	ADD COLUMN IF NOT EXISTS cordoned BOOLEAN NOT NULL DEFAULT false,
+	ADD COLUMN IF NOT EXISTS templates TEXT NOT NULL DEFAULT ''`
+
+// postgresAddTenantMaxIdleWindowCol caps a tenant's idle windows, in seconds;
+// 0 is the server's cap.
+const postgresAddTenantMaxIdleWindowCol = `ALTER TABLE tenants ADD COLUMN IF NOT EXISTS max_idle_window BIGINT NOT NULL DEFAULT 0`
 
 const postgresTenantsSchema = `
 CREATE TABLE IF NOT EXISTS tenants (
@@ -94,7 +118,20 @@ COMMENT ON COLUMN sandboxes.draining_since IS 'Unix seconds when the sandbox sta
 const postgresSandboxCodeNameIndex = `CREATE UNIQUE INDEX IF NOT EXISTS ` + codeNameIndex + `
 	ON sandboxes (tenant_id, name) WHERE kind = 'code' AND draining_since = 0`
 
-const postgresAddRunnerCordonedCol = `ALTER TABLE runners ADD COLUMN IF NOT EXISTS cordoned BOOLEAN NOT NULL DEFAULT false`
+// One statement so a pod on the previous schema gets all columns or none.
+const postgresAddCreateOptionCols = `ALTER TABLE sandboxes
+	ADD COLUMN IF NOT EXISTS template TEXT NOT NULL DEFAULT 'default',
+	ADD COLUMN IF NOT EXISTS idle_stop_after BIGINT NOT NULL DEFAULT 0,
+	ADD COLUMN IF NOT EXISTS idle_delete_after BIGINT NOT NULL DEFAULT 0,
+	ADD COLUMN IF NOT EXISTS egress_proxy TEXT NOT NULL DEFAULT '',
+	ADD COLUMN IF NOT EXISTS model_blocked BOOLEAN NOT NULL DEFAULT false,
+	ADD COLUMN IF NOT EXISTS idle_archive_after BIGINT NOT NULL DEFAULT 0,
+	ADD COLUMN IF NOT EXISTS archive_object TEXT NOT NULL DEFAULT '',
+	ADD COLUMN IF NOT EXISTS archive_key TEXT NOT NULL DEFAULT '',
+	ADD COLUMN IF NOT EXISTS archive_size BIGINT NOT NULL DEFAULT 0,
+	ADD COLUMN IF NOT EXISTS archive_version TEXT NOT NULL DEFAULT '',
+	ADD COLUMN IF NOT EXISTS archived_at BIGINT NOT NULL DEFAULT 0,
+	ADD COLUMN IF NOT EXISTS restore_started_at BIGINT NOT NULL DEFAULT 0`
 
 // Backfill legacy empty tenant_id to the admin sentinel.
 const postgresBackfillAdminTenantID = `UPDATE sandboxes SET tenant_id = '__admin__' WHERE tenant_id = ''`

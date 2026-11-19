@@ -93,7 +93,7 @@ func (m *Runtime) createWithVolumes(ctx context.Context, sandboxID string, opts 
 		m.volumeCache.ReleaseAll(sandboxID)
 		return nil, err
 	}
-	info, leftBehind, err := m.createContainer(ctx, sandboxID, opts, mounts)
+	info, leftBehind, err := m.createContainer(ctx, sandboxID, opts, "", mounts)
 	if err != nil {
 		if leftBehind {
 			// Unpinned, its trees could be evicted under it. A delete of the

@@ -1,7 +1,11 @@
 import { gunzipSync } from "node:zlib";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { SandboxClient } from "../src/client.js";
-import { EgressMismatchError, SandboxServiceError } from "../src/errors.js";
+import {
+  CreateOptionMismatchError,
+  EgressMismatchError,
+  SandboxServiceError,
+} from "../src/errors.js";
 import { HttpClient } from "../src/http.js";
 
 vi.mock("../src/http.js", () => {
@@ -156,6 +160,162 @@ describe("SandboxClient", () => {
     await expect(client.createSandbox({ id: "abc", egress: "public" })).rejects.toBeInstanceOf(
       EgressMismatchError,
     );
+  });
+
+  it("updateEgressProxy and model egress use their routes", async () => {
+    const mock = getMockHttp(client);
+    const spec = { allow: [{ name: "git", hosts: ["git.example.com"] }] };
+    await client.updateEgressProxy("abc", spec);
+    expect(mock.requestVoid).toHaveBeenCalledWith("PUT", "/sandboxes/abc/egress-proxy", {
+      data: spec,
+      isSafeToRetry: true,
+    });
+    mock.requestJson.mockResolvedValue({ blocked: true });
+    await expect(client.setModelEgress("abc", true)).resolves.toBe(true);
+    expect(mock.requestJson).toHaveBeenCalledWith("PUT", "/sandboxes/abc/model-egress", {
+      data: { blocked: true },
+      isSafeToRetry: true,
+    });
+    await expect(client.getModelEgress("abc")).resolves.toBe(true);
+  });
+
+  it("archiveSandbox and restoreSandbox use their routes and map archive fields", async () => {
+    const mock = getMockHttp(client);
+    mock.requestJson.mockResolvedValue({
+      id: "abc",
+      status: "archived",
+      created_at: 1,
+      last_active_at: 1,
+      ephemeral: false,
+      egress: "public",
+      template: "default",
+      idle_archive_after: 7200,
+      archived_at: 99,
+    });
+    await expect(client.archiveSandbox("abc")).resolves.toMatchObject({
+      status: "archived",
+      archivedAt: 99,
+      idleArchiveAfter: 7200,
+    });
+    expect(mock.requestJson).toHaveBeenCalledWith("POST", "/sandboxes/abc/archive", {
+      isSafeToRetry: true,
+    });
+    await client.restoreSandbox("abc");
+    expect(mock.requestJson).toHaveBeenCalledWith("POST", "/sandboxes/abc/restore", {
+      isSafeToRetry: true,
+    });
+  });
+
+  it("listTemplates maps the catalog", async () => {
+    const mock = getMockHttp(client);
+    mock.requestJson.mockResolvedValue({
+      templates: [{ name: "python", vcpus: 4, memory_mb: 8192, disk_mb: 20480, runners: 1 }],
+    });
+    await expect(client.listTemplates()).resolves.toEqual([
+      { name: "python", vcpus: 4, memoryMb: 8192, diskMb: 20480, runners: 1 },
+    ]);
+    expect(mock.requestJson).toHaveBeenCalledWith("GET", "/templates", { isSafeToRetry: true });
+  });
+
+  it("updateIdleWindows sends PATCH in wire form, null clearing a window", async () => {
+    const mock = getMockHttp(client);
+    mock.requestJson.mockResolvedValue({
+      id: "abc",
+      status: "stopped",
+      created_at: 1000,
+      last_active_at: 1000,
+      ephemeral: false,
+      egress: "public",
+      template: "default",
+      idle_delete_after: 604800,
+    });
+
+    const result = await client.updateIdleWindows("abc", {
+      idleStopAfter: null,
+      idleDeleteAfter: 604800,
+    });
+
+    expect(mock.requestJson).toHaveBeenCalledWith("PATCH", "/sandboxes/abc", {
+      data: { idle_stop_after: null, idle_delete_after: 604800 },
+      isSafeToRetry: true,
+    });
+    expect(result).toMatchObject({ id: "abc", idleDeleteAfter: 604800 });
+    expect(result.idleStopAfter).toBeUndefined();
+  });
+
+  it("createSandbox sends template, idle windows and the proxy spec in wire form", async () => {
+    const mock = getMockHttp(client);
+    mock.requestJson.mockResolvedValue({
+      id: "abc",
+      status: "running",
+      created_at: 1000,
+      last_active_at: 1000,
+      ephemeral: false,
+      egress: "proxy",
+      template: "default",
+      idle_stop_after: 1800,
+      idle_delete_after: 604800,
+    });
+    const egressProxy = {
+      allow: [{ name: "git", hosts: ["git.example.com"] }],
+      repos: [{ host: "git.example.com", path: "org/repo", access: "write" as const }],
+      push_refs: ["refs/heads/factory/i1/"],
+      hide_refs: ["refs/heads/factory/"],
+      show_refs: ["refs/heads/factory/i1/"],
+    };
+
+    const result = await client.createSandbox({
+      egress: "proxy",
+      egressProxy,
+      template: "default",
+      idleStopAfter: 1800,
+      idleDeleteAfter: 604800,
+    });
+
+    expect(mock.requestJson).toHaveBeenCalledWith("POST", "/sandboxes", {
+      data: {
+        egress: "proxy",
+        egress_proxy: egressProxy,
+        template: "default",
+        idle_stop_after: 1800,
+        idle_delete_after: 604800,
+      },
+      isSafeToRetry: false,
+    });
+    expect(result).toMatchObject({
+      template: "default",
+      idleStopAfter: 1800,
+      idleDeleteAfter: 604800,
+    });
+  });
+
+  it("createSandbox rejects a sandbox an older API created without the requested options", async () => {
+    const mock = getMockHttp(client);
+    // An API from before templates and idle windows reports neither.
+    mock.requestJson.mockResolvedValue({
+      id: "abc",
+      status: "running",
+      created_at: 1000,
+      last_active_at: 1000,
+      egress: "public",
+    });
+
+    await expect(
+      client.createSandbox({ egress: "public", template: "default" }),
+    ).resolves.toMatchObject({ id: "abc" });
+    const err = await client
+      .createSandbox({ egress: "public", template: "python" })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CreateOptionMismatchError);
+    expect(err).toMatchObject({
+      sandboxId: "abc",
+      option: "template",
+      requested: "python",
+      actual: "default",
+    });
+    await expect(
+      client.createSandbox({ egress: "public", idleDeleteAfter: 604800 }),
+    ).rejects.toBeInstanceOf(CreateOptionMismatchError);
   });
 
   it("maps missing ephemeral and egress fields to their pre-flag values", async () => {

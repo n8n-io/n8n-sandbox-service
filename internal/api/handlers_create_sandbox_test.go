@@ -225,8 +225,9 @@ func newIdleTestGatewayPods(t *testing.T, adminKey string, fake *fakeSandboxCont
 	cfg.APIKeys = map[string]struct{}{adminKey: {}}
 	cfg.MaxFileBytes = 1024
 	cfg.DefaultMaxSandboxes = 50
+	cfg.HeartbeatGrace = 45 * time.Second
 
-	reg := registry.New(45 * time.Second)
+	reg := registry.New(cfg.HeartbeatGrace)
 	reg.Upsert("runner-1", "https://127.0.0.1:9", startFakeRunnerControl(t, fake), true, false, 10, 0, 0)
 
 	routers := make([]http.Handler, pods)
@@ -439,7 +440,7 @@ func TestCreateSandboxCountsUnclearSaveAsSaved(t *testing.T) {
 			hold, _, _ := q.reserve(tenantID, 2)
 			defer hold(false)
 
-			h := handleCreateSandbox(createErrStore{SandboxStore: s, save: tc.save, err: tc.err}, s, reg, idleSweepConfig(), metrics.NewAPIRecorder(false), q)
+			h := handleCreateSandbox(createErrStore{SandboxStore: s, save: tc.save, err: tc.err}, s, reg, idleSweepConfig(), metrics.NewAPIRecorder(false), q, nil)
 			req := httptest.NewRequest(http.MethodPost, "/sandboxes", nil)
 			req = req.WithContext(withAuthIdentity(req.Context(), authIdentity{Role: roleTenant, TenantID: tenantID}))
 			rr := httptest.NewRecorder()

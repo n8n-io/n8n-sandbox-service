@@ -5,11 +5,16 @@ package docker
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -71,6 +76,7 @@ type Runtime struct {
 	config          Config
 	publicNetwork   runnerNetwork
 	noEgressNetwork runnerNetwork
+	proxyNetwork    runnerNetwork
 	wakeGroup       singleflight.Group
 	docker          dockerBackend
 	applyPolicy     func(bridgeIface, containerID, sourceIP, gatewayIP string, daemonPort int, blockEgress bool) error
@@ -97,9 +103,18 @@ type Runtime struct {
 	expectedStops map[string]expectedStop
 	stopToken     uint64
 	restarted     map[string]struct{}
+
+	// proxyMu guards which sandbox each address on the proxy network is.
+	// Sandboxes run with every capability dropped, so none can complete a TCP
+	// handshake from another's address: the source of a proxy connection is
+	// the sandbox it comes from.
+	proxyMu    sync.Mutex
+	proxyByIP  map[string]string // container IP -> sandbox ID
+	proxyBySbx map[string]string // sandbox ID -> container IP
 }
 
 var _ runnerruntime.Runtime = (*Runtime)(nil)
+var _ runnerruntime.EgressProxyHost = (*Runtime)(nil)
 
 // New creates a new Docker runtime. It reconciles any previous containers and ensures
 // the runner networks exist.
@@ -124,13 +139,16 @@ func New(runnerConfig *config.Config, cfg Config) (*Runtime, error) {
 	// starts by flushing whatever an earlier runner process left in them, which
 	// must happen while the bridges have no container on them. reconcileContainers
 	// above has just removed them all, and none can be created before New returns.
-	for _, n := range []*runnerNetwork{&m.publicNetwork, &m.noEgressNetwork} {
+	for _, n := range []*runnerNetwork{&m.publicNetwork, &m.noEgressNetwork, &m.proxyNetwork} {
 		if err := m.ensureRunnerNetwork(ctx, n); err != nil {
 			return nil, fmt.Errorf("ensure network %s: %w", n.networkName, err)
 		}
 		if err := netrules.EnsureBridgePolicy(n.iface, n.blockEgress); err != nil {
 			return nil, fmt.Errorf("ensure network %s policy: %w", n.networkName, err)
 		}
+	}
+	if err := netrules.AllowProxy(m.proxyNetwork.iface, m.proxyNetwork.gatewayIP, m.config.EgressProxyPort); err != nil {
+		return nil, fmt.Errorf("ensure network %s proxy opening: %w", m.proxyNetwork.networkName, err)
 	}
 
 	// Checked once the networks exist, since Docker may load the module and set
@@ -148,18 +166,95 @@ func New(runnerConfig *config.Config, cfg Config) (*Runtime, error) {
 }
 
 // networkFor returns the runner network for an egress mode.
-func (m *Runtime) networkFor(blockEgress bool) *runnerNetwork {
-	if blockEgress {
+func (m *Runtime) networkFor(egress runnerruntime.Egress) *runnerNetwork {
+	switch egress {
+	case "", runnerruntime.EgressPublic:
+		return &m.publicNetwork
+	case runnerruntime.EgressNone:
 		return &m.noEgressNetwork
+	case runnerruntime.EgressProxy:
+		return &m.proxyNetwork
+	default:
+		panic(fmt.Sprintf("unknown egress mode %q", egress))
+	}
+}
+
+// networkNamed returns the runner network a container is attached to. An unknown
+// name resolves to the public one; nothing managed can be on none of them, since
+// reconcile removes every container the runner did not create in this configuration.
+func (m *Runtime) networkNamed(name string) *runnerNetwork {
+	switch name {
+	case m.noEgressNetwork.networkName:
+		return &m.noEgressNetwork
+	case m.proxyNetwork.networkName:
+		return &m.proxyNetwork
 	}
 	return &m.publicNetwork
 }
 
-// networkNamed returns the runner network a container is attached to. An unknown
-// name resolves to the public one; nothing managed can be on neither, since
-// reconcile removes every container the runner did not create in this configuration.
-func (m *Runtime) networkNamed(name string) *runnerNetwork {
-	return m.networkFor(name == m.noEgressNetwork.networkName)
+// trackProxyAddr records which sandbox a proxy-network address is; any other
+// network clears the sandbox's entry.
+func (m *Runtime) trackProxyAddr(n *runnerNetwork, sandboxID, ip string) {
+	m.proxyMu.Lock()
+	defer m.proxyMu.Unlock()
+	if old, ok := m.proxyBySbx[sandboxID]; ok {
+		delete(m.proxyByIP, old)
+		delete(m.proxyBySbx, sandboxID)
+	}
+	if n == &m.proxyNetwork && ip != "" {
+		if prev, ok := m.proxyByIP[ip]; ok {
+			delete(m.proxyBySbx, prev)
+		}
+		m.proxyByIP[ip] = sandboxID
+		m.proxyBySbx[sandboxID] = ip
+	}
+}
+
+func (m *Runtime) untrackProxy(sandboxID string) { m.trackProxyAddr(nil, sandboxID, "") }
+
+// identifyProxyClient names the sandbox a proxy connection comes from.
+func (m *Runtime) identifyProxyClient(remoteAddr string) (string, bool) {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		return "", false
+	}
+	m.proxyMu.Lock()
+	defer m.proxyMu.Unlock()
+	id, ok := m.proxyByIP[host]
+	return id, ok
+}
+
+// EgressProxyURL is where sandboxID's guest reaches the proxy: the proxy
+// network's gateway.
+func (m *Runtime) EgressProxyURL(sandboxID string) (string, bool) {
+	m.proxyMu.Lock()
+	_, ok := m.proxyBySbx[sandboxID]
+	m.proxyMu.Unlock()
+	if !ok || m.proxyNetwork.gatewayIP == "" {
+		return "", false
+	}
+	return "http://" + net.JoinHostPort(m.proxyNetwork.gatewayIP, strconv.Itoa(m.config.EgressProxyPort)), true
+}
+
+// ServeEgressProxy listens on the proxy network's gateway until ctx ends.
+func (m *Runtime) ServeEgressProxy(ctx context.Context, handler func(identify func(remoteAddr string) (string, bool)) http.Handler) error {
+	if m.proxyNetwork.gatewayIP == "" {
+		return fmt.Errorf("egress proxy network %s has no gateway", m.proxyNetwork.networkName)
+	}
+	ln, err := net.Listen("tcp", net.JoinHostPort(m.proxyNetwork.gatewayIP, strconv.Itoa(m.config.EgressProxyPort)))
+	if err != nil {
+		return err
+	}
+	srv := &http.Server{Handler: handler(m.identifyProxyClient), ReadHeaderTimeout: 30 * time.Second}
+	go func() {
+		<-ctx.Done()
+		_ = srv.Close()
+	}()
+	slog.Info("egress proxy listening", "addr", ln.Addr().String())
+	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }
 
 // applyNetworkPolicy installs the per-container rules of the network it is on.
@@ -175,6 +270,9 @@ func newRuntime(runnerConfig *config.Config, cfg Config, docker dockerBackend) *
 		config:          cfg,
 		publicNetwork:   runnerNetwork{networkName: runnerBridgeNetwork, bridgeName: runnerBridgeNetwork},
 		noEgressNetwork: runnerNetwork{networkName: runnerNoEgressNetwork, bridgeName: runnerNoEgressBridge, blockEgress: true},
+		proxyNetwork:    runnerNetwork{networkName: runnerEgressProxyNetwork, bridgeName: runnerEgressProxyBridge, blockEgress: true},
+		proxyByIP:       make(map[string]string),
+		proxyBySbx:      make(map[string]string),
 		docker:          docker,
 		applyPolicy:     netrules.ApplyPolicy,
 		teardownRules:   netrules.Teardown,
@@ -195,15 +293,45 @@ func (m *Runtime) SetMetricsRecorder(rec *metrics.RunnerRecorder) {
 	m.metrics = rec
 }
 
-// EnsureSandboxImage pulls the sandbox image with retries. It is intended to
-// run in a goroutine after the HTTP server is listening.
+// EnsureSandboxImage pulls every template's image with retries, and marks the
+// runtime ready once all are present. It is intended to run in a goroutine
+// after the HTTP server is listening.
 func (m *Runtime) EnsureSandboxImage(ctx context.Context) {
-	image := m.config.SandboxImage
+	for _, image := range m.templateImages() {
+		if !m.pullWithRetry(ctx, image) {
+			return
+		}
+	}
+	m.imageReady.Store(true)
+	close(m.imageReadyCh)
+}
 
+// templateImages lists each distinct image, the default's first.
+func (m *Runtime) templateImages() []string {
+	images := []string{m.config.SandboxImage}
+	for _, name := range m.extraTemplateNames() {
+		if img := m.config.Templates[name].Image; !slices.Contains(images, img) {
+			images = append(images, img)
+		}
+	}
+	return images
+}
+
+func (m *Runtime) extraTemplateNames() []string {
+	names := make([]string, 0, len(m.config.Templates))
+	for name := range m.config.Templates {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names
+}
+
+// pullWithRetry pulls image until it succeeds, or reports false once ctx ends.
+func (m *Runtime) pullWithRetry(ctx context.Context, image string) bool {
 	for attempt := 1; ; attempt++ {
 		if err := ctx.Err(); err != nil {
 			slog.Error("image pull canceled", "image", image, "error", err)
-			return
+			return false
 		}
 
 		if err := m.docker.pullImage(ctx, image); err != nil {
@@ -212,16 +340,31 @@ func (m *Runtime) EnsureSandboxImage(ctx context.Context) {
 				"image", image, "attempt", attempt, "retry_in", backoff, "error", err)
 			select {
 			case <-ctx.Done():
-				return
+				return false
 			case <-time.After(backoff):
 				continue
 			}
 		}
-
-		m.imageReady.Store(true)
-		close(m.imageReadyCh)
 		slog.Info("sandbox image ready", "image", image)
-		return
+		return true
+	}
+}
+
+// Templates lists the default template and the configured ones, by name.
+func (m *Runtime) Templates() []runnerruntime.TemplateInfo {
+	out := []runnerruntime.TemplateInfo{templateInfo(runnerruntime.DefaultTemplate, m.limitsFor(runnerruntime.DefaultTemplate))}
+	for _, name := range m.extraTemplateNames() {
+		out = append(out, templateInfo(name, m.limitsFor(name)))
+	}
+	return out
+}
+
+func templateInfo(name string, l *ResourceLimits) runnerruntime.TemplateInfo {
+	return runnerruntime.TemplateInfo{
+		Name:     name,
+		VCPUs:    int32((l.CPUPercent + 99) / 100),
+		MemoryMB: l.MemoryMB,
+		DiskMB:   l.DiskMB,
 	}
 }
 
@@ -312,17 +455,164 @@ func (m *Runtime) DeleteSandbox(ctx context.Context, sandboxID string) error {
 	}
 	m.clearRestarted(sandboxID)
 	m.releaseVolumes(sandboxID)
+	m.untrackProxy(sandboxID)
+	// A restored sandbox has an image of its own; most have none to remove.
+	_ = m.docker.removeImage(ctx, restoredImage(sandboxID))
 	return nil
 }
 
-// StopSandbox stops a sandbox without removing it.
+// restoredImage names the image a restored sandbox runs from.
+func restoredImage(sandboxID string) string { return "sandbox-restored:" + sandboxID }
+
+// ExportSandbox streams a stopped sandbox's whole filesystem as a tar: the
+// template's files and every change since, deletions included.
+func (m *Runtime) ExportSandbox(ctx context.Context, sandboxID string, w io.Writer) error {
+	containerID, err := m.FindContainerIDByLabel(ctx, sandboxID)
+	if err != nil {
+		return err
+	}
+	inspect, err := m.docker.inspectContainer(ctx, containerID)
+	if err != nil {
+		return err
+	}
+	if inspect.State.Running {
+		return fmt.Errorf("%w: stop it before archiving", runnerruntime.ErrSandboxNotRunning)
+	}
+	limit, err := m.archiveLimit(ctx, inspect.Config.Labels[containerLabelTemplate])
+	if err != nil {
+		return err
+	}
+	if limit > 0 {
+		w = &capWriter{w: w, left: limit}
+	}
+	return m.docker.exportContainer(ctx, containerID, w)
+}
+
+// errArchiveTooLarge is an export bigger than its template's image and disk
+// quota allow: sparse files, which a quota does not count, come out of an
+// export at their full size.
+var errArchiveTooLarge = errors.New("archive is larger than the template's image and disk quota")
+
+// archiveLimit bounds an export of template, as a tar: its image and its disk
+// quota, with room for tar headers. 0 is no bound, where no quota applies.
+func (m *Runtime) archiveLimit(ctx context.Context, template string) (int64, error) {
+	if template == "" {
+		template = runnerruntime.DefaultTemplate
+	}
+	limits := m.limitsFor(template)
+	if limits.DiskMB <= 0 {
+		return 0, nil
+	}
+	image, ok := m.imageFor(template)
+	if !ok {
+		return 0, fmt.Errorf("unknown template %q", template)
+	}
+	cfg, err := m.docker.imageConfig(ctx, image)
+	if err != nil {
+		return 0, err
+	}
+	limit := cfg.Size + limits.DiskMB<<20
+	return limit + limit/10 + 64<<20, nil
+}
+
+type capWriter struct {
+	w    io.Writer
+	left int64
+}
+
+func (c *capWriter) Write(b []byte) (int, error) {
+	if int64(len(b)) > c.left {
+		return 0, errArchiveTooLarge
+	}
+	c.left -= int64(len(b))
+	return c.w.Write(b)
+}
+
+type capReader struct {
+	r    io.Reader
+	left int64
+}
+
+func (c *capReader) Read(b []byte) (int, error) {
+	n, err := c.r.Read(b)
+	if c.left -= int64(n); c.left < 0 {
+		return 0, errArchiveTooLarge
+	}
+	return n, err
+}
+
+// ImportSandbox makes an image of an export, with the run config of the
+// template's image, and creates the sandbox from it.
+func (m *Runtime) ImportSandbox(ctx context.Context, sandboxID string, opts *CreateOptions, r io.Reader) (*runnerruntime.SandboxInfo, error) {
+	if opts == nil {
+		opts = &CreateOptions{}
+	}
+	templateImage, ok := m.imageFor(opts.Template)
+	if !ok {
+		return nil, fmt.Errorf("unknown template %q", opts.Template)
+	}
+	cfg, err := m.docker.imageConfig(ctx, templateImage)
+	if err != nil {
+		return nil, err
+	}
+	limit, err := m.archiveLimit(ctx, opts.Template)
+	if err != nil {
+		return nil, err
+	}
+	if limit > 0 {
+		r = &capReader{r: r, left: limit}
+	}
+	image := restoredImage(sandboxID)
+	if err := m.docker.importImage(ctx, r, image, importChanges(cfg)); err != nil {
+		return nil, fmt.Errorf("import archive: %w", err)
+	}
+	info, _, err := m.createContainer(ctx, sandboxID, opts, image, nil)
+	if err != nil {
+		_ = m.docker.removeImage(context.WithoutCancel(ctx), image)
+		return nil, err
+	}
+	return info, nil
+}
+
+// importChanges carries the template image's run config onto an imported
+// image, which has none of its own.
+func importChanges(c *imageRunConfig) []string {
+	var out []string
+	if len(c.Entrypoint) > 0 {
+		raw, _ := json.Marshal(c.Entrypoint)
+		out = append(out, "ENTRYPOINT "+string(raw))
+	}
+	if len(c.Cmd) > 0 {
+		raw, _ := json.Marshal(c.Cmd)
+		out = append(out, "CMD "+string(raw))
+	}
+	for _, e := range c.Env {
+		if k, v, ok := strings.Cut(e, "="); ok {
+			raw, _ := json.Marshal(v)
+			out = append(out, "ENV "+k+"="+string(raw))
+		}
+	}
+	if c.User != "" {
+		out = append(out, "USER "+c.User)
+	}
+	if c.WorkingDir != "" {
+		out = append(out, "WORKDIR "+c.WorkingDir)
+	}
+	return out
+}
+
+// StopSandbox stops a sandbox without removing it. Its address goes with it.
 func (m *Runtime) StopSandbox(ctx context.Context, sandboxID string) error {
-	return m.StopSandboxContainer(ctx, sandboxID)
+	if err := m.StopSandboxContainer(ctx, sandboxID); err != nil {
+		return err
+	}
+	m.untrackProxy(sandboxID)
+	return nil
 }
 
 // CreateContainer creates and starts a new container.
 func (m *Runtime) CreateContainer(ctx context.Context, sandboxID string, opts *CreateOptions) (*ContainerInfo, error) {
-	info, _, err := m.createContainer(ctx, sandboxID, opts, nil)
+	info, _, err := m.createContainer(ctx, sandboxID, opts, "", nil)
 	return info, err
 }
 
@@ -338,9 +628,10 @@ func (m *Runtime) checkCreate(sandboxID string) error {
 	return nil
 }
 
-// createContainer creates and starts a container with mounts bound in. On
-// error, leftBehind reports a container its cleanup could not remove.
-func (m *Runtime) createContainer(ctx context.Context, sandboxID string, opts *CreateOptions, mounts []volumeMount) (info *ContainerInfo, leftBehind bool, err error) {
+// createContainer creates and starts a container from image (or the template's
+// image when image is "") with mounts bound in. On error, leftBehind reports a
+// container its cleanup could not remove.
+func (m *Runtime) createContainer(ctx context.Context, sandboxID string, opts *CreateOptions, image string, mounts []volumeMount) (info *ContainerInfo, leftBehind bool, err error) {
 	if err := m.checkCreate(sandboxID); err != nil {
 		return nil, false, err
 	}
@@ -348,11 +639,32 @@ func (m *Runtime) createContainer(ctx context.Context, sandboxID string, opts *C
 		opts = &CreateOptions{}
 	}
 
-	containerName := "sandbox-" + sandboxID[:12]
-	limits := m.defaultLimits()
-	n := m.networkFor(opts.BlockEgress())
+	// The whole id: callers choose ids, and two that share a prefix are
+	// still two sandboxes.
+	containerName := "sandbox-" + sandboxID
+	// A container from before ids named it whole keeps an older name, so the
+	// name no longer refuses a second container for the id: the label does.
+	switch _, err := m.FindContainerIDByLabel(ctx, sandboxID); {
+	case err == nil:
+		return nil, false, fmt.Errorf("sandbox %s already has a container", sandboxID)
+	case !errors.Is(err, ErrSandboxNotFound):
+		return nil, false, fmt.Errorf("find container: %w", err)
+	}
+	templateImage, ok := m.imageFor(opts.Template)
+	if !ok {
+		return nil, false, fmt.Errorf("unknown template %q", opts.Template)
+	}
+	if image == "" {
+		image = templateImage
+	}
+	limits := m.limitsFor(opts.Template)
+	n := m.networkFor(opts.Egress)
 
-	containerID, err := m.docker.createContainer(ctx, sandboxID, containerName, m.config.SandboxImage, n.networkName, limits, m.config.EnableCgroups, mounts)
+	template := opts.Template
+	if template == "" {
+		template = runnerruntime.DefaultTemplate
+	}
+	containerID, err := m.docker.createContainer(ctx, sandboxID, template, containerName, image, n.networkName, limits, m.config.EnableCgroups, mounts)
 	if err != nil {
 		return nil, false, fmt.Errorf("create container: %w", err)
 	}
@@ -375,6 +687,7 @@ func (m *Runtime) createContainer(ctx context.Context, sandboxID string, opts *C
 	if err := m.applyNetworkPolicy(n, containerID, containerIP); err != nil {
 		return nil, cleanupOnError(), fmt.Errorf("apply network rules: %w", err)
 	}
+	m.trackProxyAddr(n, sandboxID, containerIP)
 
 	baseURL := fmt.Sprintf("http://%s:%d", containerIP, daemonPort)
 	if err := m.waitForDaemon(ctx, baseURL); err != nil {
@@ -505,6 +818,7 @@ func (m *Runtime) ensureSandboxRunningOnce(ctx context.Context, sandboxID string
 		m.cleanupWakeFailure(containerID)
 		return recovering, fmt.Errorf("apply network rules: %w", err)
 	}
+	m.trackProxyAddr(m.networkNamed(network), sandboxID, containerIP)
 	baseURL := fmt.Sprintf("http://%s:%d", containerIP, daemonPort)
 	if err := m.waitForDaemon(ctx, baseURL); err != nil {
 		m.cleanupWakeFailure(containerID)
@@ -685,6 +999,38 @@ func (m *Runtime) defaultLimits() *ResourceLimits {
 		PidsMax:    m.config.DefaultPidsMax,
 		DiskMB:     diskMB,
 	}
+}
+
+// imageFor returns the image of template ("" is the default).
+func (m *Runtime) imageFor(template string) (string, bool) {
+	if template == "" || template == runnerruntime.DefaultTemplate {
+		return m.config.SandboxImage, true
+	}
+	t, ok := m.config.Templates[template]
+	return t.Image, ok
+}
+
+// limitsFor returns template's limits, each unset one the default's. A disk
+// quota applies only where the runner enforces quotas.
+func (m *Runtime) limitsFor(template string) *ResourceLimits {
+	l := m.defaultLimits()
+	t, ok := m.config.Templates[template]
+	if !ok {
+		return l
+	}
+	if t.MemoryMB > 0 {
+		l.MemoryMB = t.MemoryMB
+	}
+	if t.CPUPercent > 0 {
+		l.CPUPercent = t.CPUPercent
+	}
+	if t.PidsMax > 0 {
+		l.PidsMax = t.PidsMax
+	}
+	if t.DiskQuotaMB > 0 && m.config.DiskQuotaActive {
+		l.DiskMB = t.DiskQuotaMB
+	}
+	return l
 }
 
 func isContainerReady(state containerState) bool {

@@ -8,8 +8,8 @@ import (
 )
 
 func (s *SQLiteStore) CreateTenant(t *Tenant) error {
-	const q = `INSERT INTO tenants (id, name, external_ref, max_sandboxes, created_at) VALUES (?, ?, ?, ?, ?)`
-	_, err := s.db.Exec(q, t.ID, t.Name, t.ExternalRef, t.MaxSandboxes, t.CreatedAt)
+	const q = `INSERT INTO tenants (id, name, external_ref, max_sandboxes, created_at, max_idle_window) VALUES (?, ?, ?, ?, ?, ?)`
+	_, err := s.db.Exec(q, t.ID, t.Name, t.ExternalRef, t.MaxSandboxes, t.CreatedAt, t.MaxIdleWindow)
 	if err != nil {
 		return fmt.Errorf("store: create tenant %s: %w", t.ID, err)
 	}
@@ -26,8 +26,8 @@ func (s *SQLiteStore) CreateTenantWithAPIKey(t *Tenant, k *APIKey) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	const tenantQ = `INSERT INTO tenants (id, name, external_ref, max_sandboxes, created_at) VALUES (?, ?, ?, ?, ?)`
-	if _, err := tx.Exec(tenantQ, t.ID, t.Name, t.ExternalRef, t.MaxSandboxes, t.CreatedAt); err != nil {
+	const tenantQ = `INSERT INTO tenants (id, name, external_ref, max_sandboxes, created_at, max_idle_window) VALUES (?, ?, ?, ?, ?, ?)`
+	if _, err := tx.Exec(tenantQ, t.ID, t.Name, t.ExternalRef, t.MaxSandboxes, t.CreatedAt, t.MaxIdleWindow); err != nil {
 		return fmt.Errorf("store: create tenant %s: %w", t.ID, err)
 	}
 	var revoked any
@@ -45,7 +45,7 @@ func (s *SQLiteStore) CreateTenantWithAPIKey(t *Tenant, k *APIKey) error {
 }
 
 func (s *SQLiteStore) GetTenant(id string) (*Tenant, error) {
-	row := s.db.QueryRow(`SELECT id, name, external_ref, max_sandboxes, created_at FROM tenants WHERE id = ?`, id)
+	row := s.db.QueryRow(`SELECT id, name, external_ref, max_sandboxes, created_at, max_idle_window FROM tenants WHERE id = ?`, id)
 	t, err := scanTenant(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -57,7 +57,7 @@ func (s *SQLiteStore) GetTenant(id string) (*Tenant, error) {
 }
 
 func (s *SQLiteStore) ListTenants() ([]*Tenant, error) {
-	rows, err := s.db.Query(`SELECT id, name, external_ref, max_sandboxes, created_at FROM tenants ORDER BY created_at DESC`)
+	rows, err := s.db.Query(`SELECT id, name, external_ref, max_sandboxes, created_at, max_idle_window FROM tenants ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list tenants: %w", err)
 	}
@@ -71,6 +71,17 @@ func (s *SQLiteStore) ListTenants() ([]*Tenant, error) {
 		out = append(out, t)
 	}
 	return out, rows.Err()
+}
+
+func (s *SQLiteStore) SetTenantMaxIdleWindow(id string, seconds int64) error {
+	res, err := s.db.Exec(`UPDATE tenants SET max_idle_window = ? WHERE id = ?`, seconds, id)
+	if err != nil {
+		return fmt.Errorf("store: set tenant max_idle_window: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrTenantNotFound
+	}
+	return nil
 }
 
 func (s *SQLiteStore) UpdateTenantLimits(id string, maxSandboxes int) error {

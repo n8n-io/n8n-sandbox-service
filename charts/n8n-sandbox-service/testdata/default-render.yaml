@@ -27,6 +27,8 @@ data:
   SANDBOX_API_IDLE_DELETE_AFTER: "24h"
   SANDBOX_API_IDLE_DELETE_SAFETY_BUFFER: "1m"
   SANDBOX_API_IDLE_SWEEP_INTERVAL: "1m"
+  SANDBOX_API_MAX_IDLE_WINDOW: "24h"
+  SANDBOX_API_EGRESS_ALLOW_PUBLIC: "false"
 ---
 # Source: n8n-sandbox-service/templates/configmap.yaml
 apiVersion: v1

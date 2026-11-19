@@ -75,6 +75,13 @@ func NewSQLite(dbPath string, useWal bool) (*SQLiteStore, error) {
 		{sql: sqliteAddIdleTimeoutMsCol, name: "idle_timeout_ms"},
 		{sql: sqliteAddMaxAgeMsCol, name: "max_age_ms"},
 		{sql: sqliteAddDrainingSinceCol, name: "draining_since"},
+		{sql: sqliteAddTemplateCol, name: "template"},
+		{sql: sqliteAddIdleStopAfterCol, name: "idle_stop_after"},
+		{sql: sqliteAddIdleDeleteAfterCol, name: "idle_delete_after"},
+		{sql: sqliteAddEgressProxyCol, name: "egress_proxy"},
+		{sql: sqliteAddModelBlockedCol, name: "model_blocked"},
+		sqliteAddArchiveCols[0], sqliteAddArchiveCols[1], sqliteAddArchiveCols[2], sqliteAddArchiveCols[3],
+		sqliteAddArchiveCols[4], sqliteAddArchiveCols[5], sqliteAddArchiveCols[6],
 	} {
 		if _, err := db.Exec(stmt.sql); err != nil {
 			if strings.Contains(err.Error(), "duplicate column") ||
@@ -99,6 +106,10 @@ func NewSQLite(dbPath string, useWal bool) (*SQLiteStore, error) {
 	if _, err := db.Exec(sqliteTenantsSchema); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: tenants schema: %w", err)
+	}
+	if _, err := db.Exec(sqliteAddTenantMaxIdleWindowCol); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: migration tenants max_idle_window: %w", err)
 	}
 
 	slog.Debug("store: opened sqlite database", "path", dbPath)

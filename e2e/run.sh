@@ -7,14 +7,21 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/lib/common.sh"
 
 ARCH="$(e2e_docker_arch)"
-API_IMAGE="n8n-sandbox-service-api:latest-${ARCH}"
-RUNNER_IMAGE="n8n-sandbox-service-runner-dind:latest-${ARCH}"
-SANDBOX_IMAGE="n8n-sandbox:latest-${ARCH}"
+# E2E_IMAGE_TAG builds and runs <tag>-<arch> images, so stacks run side by
+# side need not share (and rebuild) one set.
+IMAGE_TAG="${E2E_IMAGE_TAG:-latest}"
+API_IMAGE="n8n-sandbox-service-api:${IMAGE_TAG}-${ARCH}"
+RUNNER_IMAGE="n8n-sandbox-service-runner-dind:${IMAGE_TAG}-${ARCH}"
+SANDBOX_IMAGE="n8n-sandbox:${IMAGE_TAG}-${ARCH}"
 REGISTRY_NAME="${N8N_SANDBOX_REGISTRY_NAME:-n8n-sandbox-registry}"
 REGISTRY_PORT="${REGISTRY_PORT:-5050}"
 REGISTRY_INTERNAL_ADDR="${REGISTRY_NAME}:5000"
 PUSH_SANDBOX_IMAGE="localhost:${REGISTRY_PORT}/n8n-sandbox:e2e-${ARCH}"
 REMOTE_SANDBOX_IMAGE="${REGISTRY_INTERNAL_ADDR}/n8n-sandbox:e2e-${ARCH}"
+# A second template, "small": the same image under its own tag, with its own
+# memory limit.
+PUSH_SMALL_IMAGE="localhost:${REGISTRY_PORT}/n8n-sandbox:e2e-small-${ARCH}"
+REMOTE_SMALL_IMAGE="${REGISTRY_INTERNAL_ADDR}/n8n-sandbox:e2e-small-${ARCH}"
 RUNNER_CONTAINER_NAME="sandbox-runner-e2e-$$"
 API_CONTAINER_NAME="sandbox-api-e2e-$$"
 POSTGRES_CONTAINER_NAME="sandbox-postgres-e2e-$$"
@@ -54,11 +61,12 @@ cleanup() {
 		docker network disconnect "$NETWORK_NAME" "$REGISTRY_NAME" >/dev/null 2>&1 || true
 	fi
 
-	docker network rm "$NETWORK_NAME" >/dev/null 2>&1 || true
+	# A registry this run started is still on the network: remove it first.
 	if $STARTED_REGISTRY; then
 		docker stop "$REGISTRY_NAME" >/dev/null 2>&1 || true
 		docker rm "$REGISTRY_NAME" >/dev/null 2>&1 || true
 	fi
+	docker network rm "$NETWORK_NAME" >/dev/null 2>&1 || true
 	if [[ "$TLS_DIR_OWNED" == "1" ]]; then
 		rm -rf "$TLS_DIR"
 	fi
@@ -68,7 +76,7 @@ trap cleanup EXIT
 
 if [[ "${E2E_SKIP_BUILD:-}" != "1" ]]; then
 	echo "Building service and sandbox images..."
-	make -C "$PROJECT_DIR" docker-local
+	make -C "$PROJECT_DIR" docker-local IMAGE_TAG="$IMAGE_TAG"
 fi
 
 e2e_bootstrap_mtls_maybe "$PROJECT_DIR" "$TLS_DIR_OWNED" "$TLS_DIR" "$API_TLS_DNS" "$RUNNER_CONTROL_ALIAS"
@@ -102,6 +110,15 @@ fi
 echo "Pushing sandbox image to local registry..."
 docker tag "$SANDBOX_IMAGE" "$PUSH_SANDBOX_IMAGE"
 docker push "$PUSH_SANDBOX_IMAGE"
+docker tag "$SANDBOX_IMAGE" "$PUSH_SMALL_IMAGE"
+docker push "$PUSH_SMALL_IMAGE"
+# Opt-in images for E2E_RUNNER_TEMPLATES, pushed by their last path segment:
+# my/img:tag is {registry}/img:tag there.
+read -ra PUSH_IMAGES <<<"${E2E_PUSH_IMAGES:-}"
+for img in ${PUSH_IMAGES[@]+"${PUSH_IMAGES[@]}"}; do
+	docker tag "$img" "localhost:${REGISTRY_PORT}/${img##*/}"
+	docker push "localhost:${REGISTRY_PORT}/${img##*/}"
+done
 
 RUNTIME_ARGS=()
 if [[ "${PRIVILEGED:-}" == "1" ]] || [[ "$(uname)" == "Darwin" ]]; then
@@ -120,6 +137,20 @@ if [[ "${E2E_IDLE_TTL_SUITE:-}" == "1" ]]; then
 		-e "SANDBOX_API_ACTIVITY_WRITE_INTERVAL=1s"
 	)
 fi
+# Opt-in templates replacing the e2e ones: E2E_RUNNER_TEMPLATES is the
+# runner's JSON, with {registry} for the e2e registry, and E2E_API_TEMPLATES
+# their names for the API. Keep "small" for the template specs to pass.
+RUNNER_TEMPLATES="{\"small\":{\"image\":\"$REMOTE_SMALL_IMAGE\",\"memory_mb\":256}}"
+API_TEMPLATES=small
+if [[ -n "${E2E_RUNNER_TEMPLATES:-}" ]]; then
+	RUNNER_TEMPLATES="${E2E_RUNNER_TEMPLATES//\{registry\}/$REGISTRY_INTERNAL_ADDR}"
+	API_TEMPLATES="${E2E_API_TEMPLATES:?E2E_API_TEMPLATES must name the templates in E2E_RUNNER_TEMPLATES}"
+fi
+
+# Opt-in idle window cap, e.g. the factory pool's 168h (svctest needs it).
+if [[ -n "${E2E_API_MAX_IDLE_WINDOW:-}" ]]; then
+	API_IDLE_ENV+=(-e "SANDBOX_API_MAX_IDLE_WINDOW=$E2E_API_MAX_IDLE_WINDOW")
+fi
 
 echo "Starting API service on port $PORT..."
 API_DOCKER_RUN=(-d)
@@ -135,6 +166,14 @@ API_DOCKER_RUN+=(
 )
 e2e_api_container_env_args "$API_KEY" "$REG_TOKEN" "$RUNNER_INTERNAL_API_KEY" "$TLS_DIR"
 API_DOCKER_RUN+=("${E2E_API_CONTAINER_ENV_ARGS[@]}")
+# An archive store in the API container, served to the runner by its name.
+od -An -tx1 -N32 /dev/urandom | tr -d ' \n' >"$TLS_DIR/api/archive.key"
+API_DOCKER_RUN+=(
+	-e "SANDBOX_API_ARCHIVE_DIR=/tmp/sandbox-archives"
+	-e "SANDBOX_API_ARCHIVE_URL=http://${API_CONTAINER_NAME}:8080"
+	-e "SANDBOX_API_ARCHIVE_KEY_FILE=/grpc-tls/archive.key"
+	-e "SANDBOX_API_TEMPLATES=$API_TEMPLATES"
+)
 API_DOCKER_RUN+=(--name "$API_CONTAINER_NAME" "$API_IMAGE")
 docker run "${API_DOCKER_RUN[@]}"
 
@@ -142,6 +181,31 @@ e2e_wait_for_api_http "$PORT" "$API_CONTAINER_NAME"
 
 RUNNER_CONTROL_HOST_PORT="${RUNNER_CONTROL_HOST_PORT:-19091}"
 RUNNER_HTTP_HOST_PORT="${RUNNER_HTTP_HOST_PORT:-18080}"
+
+# The egress proxy's secret store: tests write <tenant_id>/<secret_ref> here.
+EGRESS_SECRETS_DIR="$TLS_DIR/egress-secrets"
+mkdir -p "$EGRESS_SECRETS_DIR"
+
+# Opt-in runner settings: a usage sink, so model_hosts creates are served
+# (svctest needs them), and internal hosts the proxy may reach, e.g. services
+# on a network the runner container is connected to.
+RUNNER_OPT_ENV=()
+if [[ -n "${E2E_USAGE_SINK_URL:-}" ]]; then
+	RUNNER_OPT_ENV+=(-e "SANDBOX_EGRESS_USAGE_SINK_URL=$E2E_USAGE_SINK_URL")
+fi
+if [[ -n "${E2E_EGRESS_PROXY_INTERNAL_HOSTS:-}" ]]; then
+	RUNNER_OPT_ENV+=(-e "SANDBOX_EGRESS_PROXY_INTERNAL_HOSTS=$E2E_EGRESS_PROXY_INTERNAL_HOSTS")
+fi
+# Files on the host, mounted read-only: the sink's bearer token, and PEM roots
+# for upstreams on a private CA.
+if [[ -n "${E2E_USAGE_SINK_TOKEN_FILE:-}" ]]; then
+	RUNNER_OPT_ENV+=(-v "$E2E_USAGE_SINK_TOKEN_FILE:/egress-config/sink-token:ro"
+		-e "SANDBOX_EGRESS_USAGE_SINK_TOKEN_FILE=/egress-config/sink-token")
+fi
+if [[ -n "${E2E_EGRESS_PROXY_UPSTREAM_CA_FILE:-}" ]]; then
+	RUNNER_OPT_ENV+=(-v "$E2E_EGRESS_PROXY_UPSTREAM_CA_FILE:/egress-config/upstream-ca.pem:ro"
+		-e "SANDBOX_EGRESS_PROXY_UPSTREAM_CA_FILE=/egress-config/upstream-ca.pem")
+fi
 
 echo "Starting runner service..."
 docker run -d \
@@ -151,9 +215,13 @@ docker run -d \
 	-p "${RUNNER_CONTROL_HOST_PORT}:9091" \
 	-p "127.0.0.1:${RUNNER_HTTP_HOST_PORT}:8080" \
 	-v "$TLS_DIR/runner:/grpc-tls:ro" \
+	-v "$EGRESS_SECRETS_DIR:/egress-secrets:ro" \
+	${RUNNER_OPT_ENV[@]+"${RUNNER_OPT_ENV[@]}"} \
+	-e "SANDBOX_EGRESS_PROXY_SECRETS_DIR=/egress-secrets" \
 	-e "SANDBOX_RUNNER_API_KEYS=$RUNNER_INTERNAL_API_KEY" \
 	-e "SANDBOX_RUNNER_METRICS_ENABLED=true" \
 	-e "SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE=$REMOTE_SANDBOX_IMAGE" \
+	-e "SANDBOX_RUNNER_DOCKER_TEMPLATES=$RUNNER_TEMPLATES" \
 	-e "SANDBOX_RUNNER_DOCKER_INSECURE_REGISTRIES=$REGISTRY_INTERNAL_ADDR" \
 	-e "SANDBOX_RUNNER_API_GRPC_ADDR=${API_CONTAINER_NAME}:9090" \
 	-e "SANDBOX_RUNNER_REGISTRATION_TOKEN=$REG_TOKEN" \
@@ -168,21 +236,23 @@ docker run -d \
 	-e "SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE=/grpc-tls/control-grpc-server.key" \
 	-e "SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE=/grpc-tls/ca.crt" \
 	-e "SANDBOX_RUNNER_ID=e2e-runner-$$" \
-	-e "SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB=50" \
-	-e "SANDBOX_RUNNER_DISK_QUOTA_POOL_SIZE_GB=2" \
+	-e "SANDBOX_RUNNER_MAX_EXEC_TIMEOUT=${E2E_RUNNER_MAX_EXEC_TIMEOUT:-15m}" \
+	-e "SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB=${E2E_RUNNER_DISK_QUOTA_MB:-50}" \
+	-e "SANDBOX_RUNNER_DISK_QUOTA_POOL_SIZE_GB=${E2E_RUNNER_DISK_POOL_GB:-4}" \
+	-e "SANDBOX_RUNNER_ALLOW_UNENFORCED_DISK_QUOTA=$([ "${E2E_VERIFY_DISK_QUOTA:-}" = true ] && echo false || echo true)" \
 	-e "SANDBOX_RUNNER_MAX_INFLIGHT_PER_SANDBOX=16" \
 	-e "SANDBOX_RUNNER_DOCKER_DNS_SERVERS=$RUNNER_DNS_SERVERS" \
 	--name "$RUNNER_CONTAINER_NAME" \
 	"$RUNNER_IMAGE"
 
 echo "Waiting for runner service..."
-for i in $(seq 1 60); do
+for i in $(seq 1 180); do
 	if docker exec "$RUNNER_CONTAINER_NAME" wget -q -O - --no-check-certificate https://localhost:8080/readyz >/dev/null 2>&1; then
 		echo "Runner is ready."
 		break
 	fi
-	if [[ "$i" -eq 60 ]]; then
-		echo "Runner failed to start within 60s"
+	if [[ "$i" -eq 180 ]]; then
+		echo "Runner failed to start within 180s"
 		docker logs "$RUNNER_CONTAINER_NAME"
 		exit 1
 	fi
@@ -191,11 +261,32 @@ done
 
 sleep 3
 
+# Opt-in: keep the stack up for another client instead of running the tests.
+# SIGINT or SIGTERM ends the wait, and the EXIT trap cleans up.
+if [[ "${E2E_KEEP_UP:-}" == "1" ]]; then
+	cat <<EOF
+Stack is up (E2E_KEEP_UP=1). Send SIGINT or SIGTERM to this script (pid $$) to tear it down.
+  API:              http://localhost:$PORT  admin key: $API_KEY
+  Runner container: $RUNNER_CONTAINER_NAME  (control: 127.0.0.1:$RUNNER_CONTROL_HOST_PORT)
+  API container:    $API_CONTAINER_NAME
+  Network:          $NETWORK_NAME
+  Registry:         push localhost:$REGISTRY_PORT, runner pulls $REGISTRY_INTERNAL_ADDR
+  Secrets dir:      $EGRESS_SECRETS_DIR  (<tenant_id>/<secret_ref>)
+  Templates:        default,$API_TEMPLATES
+EOF
+	trap 'exit 0' INT TERM HUP
+	while :; do
+		sleep 5 &
+		wait $!
+	done
+fi
+
 e2e_build_sdk_unless_skip "$PROJECT_DIR"
 e2e_install_playwright_deps_if_needed "$SCRIPT_DIR"
 
 export E2E_API_CONTAINER_NAME="$API_CONTAINER_NAME"
 export E2E_RUNNER_CONTAINER_NAME="$RUNNER_CONTAINER_NAME"
+export E2E_EGRESS_SECRETS_DIR="$EGRESS_SECRETS_DIR"
 export E2E_RUNNER_DOCKER_DNS_SERVERS="$RUNNER_DNS_SERVERS"
 export E2E_PROJECT_DIR="$PROJECT_DIR"
 export E2E_RUNNER_API_KEY="$RUNNER_INTERNAL_API_KEY"

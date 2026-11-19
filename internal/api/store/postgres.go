@@ -71,6 +71,10 @@ func NewPostgres(cfg config.PostgresConfig) (*PostgresStore, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: sandboxes code name index: %w", err)
 	}
+	if _, err := db.Exec(postgresAddCreateOptionCols); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: add create option columns: %w", err)
+	}
 	if _, err := db.Exec(postgresSandboxTenantIndex); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: sandboxes tenant index: %w", err)
@@ -79,13 +83,17 @@ func NewPostgres(cfg config.PostgresConfig) (*PostgresStore, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: run runners schema: %w", err)
 	}
-	if _, err := db.Exec(postgresAddRunnerCordonedCol); err != nil {
+	if _, err := db.Exec(postgresAddRunnerStateCols); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("store: add runners cordoned column: %w", err)
+		return nil, fmt.Errorf("store: add runner state columns: %w", err)
 	}
 	if _, err := db.Exec(postgresTenantsSchema); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: run tenants schema: %w", err)
+	}
+	if _, err := db.Exec(postgresAddTenantMaxIdleWindowCol); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: add tenant max_idle_window: %w", err)
 	}
 
 	lockDB, err := sql.Open("pgx", cfg.DSN())

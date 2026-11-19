@@ -13,10 +13,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/google/uuid"
 	"github.com/n8n-io/sandbox-service/internal/api/config"
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
 	"github.com/n8n-io/sandbox-service/internal/api/runnerctl"
@@ -96,7 +96,7 @@ type proxyRoute struct {
 }
 
 // sandboxProxyHandler proxies sandbox routes to the sandbox's runner.
-func sandboxProxyHandler(s generalSandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, transport http.RoundTripper, activity *ActivityRecorder, mrec *metrics.APIRecorder) func(proxyRoute) http.HandlerFunc {
+func sandboxProxyHandler(s generalSandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, transport http.RoundTripper, arch *archiver, activity *ActivityRecorder, mrec *metrics.APIRecorder) func(proxyRoute) http.HandlerFunc {
 	return func(route proxyRoute) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			id := r.PathValue("id")
@@ -119,6 +119,15 @@ func sandboxProxyHandler(s generalSandboxStore, reg registry.RunnerRegistry, cfg
 			// 404 regardless of whether its row still has routing information.
 			if isPastIdleDeleteWindow(rec, cfg, time.Now().Unix()) {
 				writeError(w, http.StatusNotFound, "sandbox not found")
+				return
+			}
+			// An archived sandbox comes back on any runner; the request that
+			// finds it starts the restore and is told to come back.
+			if rec.Status == statusArchived || rec.Status == statusRestoring {
+				if arch != nil {
+					arch.startRestore(rec)
+				}
+				writeRestoring(w)
 				return
 			}
 
@@ -175,15 +184,16 @@ type SandboxResponse struct {
 	LastActiveAt int64  `json:"last_active_at"`
 	Ephemeral    bool   `json:"ephemeral"`
 	Egress       string `json:"egress"`
+	Template     string `json:"template"`
+	// Seconds; left out when the sandbox uses the API's global window.
+	IdleStopAfter    int64 `json:"idle_stop_after,omitempty"`
+	IdleDeleteAfter  int64 `json:"idle_delete_after,omitempty"`
+	IdleArchiveAfter int64 `json:"idle_archive_after,omitempty"`
+	// ArchivedAt is when the sandbox was archived; present while archived or restoring.
+	ArchivedAt int64 `json:"archived_at,omitempty"`
 	// TenantID is the owning tenant, or store.AdminTenantID for a sandbox
 	// created with an admin key. A tenant only ever sees its own id here.
 	TenantID string `json:"tenant_id"`
-}
-
-type createSandboxRequest struct {
-	ID        *string `json:"id"`
-	Ephemeral bool    `json:"ephemeral"`
-	Egress    *string `json:"egress"` // nil when left out; "" is the default, as on create
 }
 
 func sandboxResponse(rec *store.SandboxRecord) *SandboxResponse {
@@ -200,7 +210,13 @@ func sandboxResponse(rec *store.SandboxRecord) *SandboxResponse {
 		LastActiveAt: rec.LastActiveAt,
 		Ephemeral:    rec.Ephemeral,
 		Egress:       rec.Egress,
-		TenantID:     tenantID,
+		Template:     recordTemplate(rec),
+		// Not acted on yet: the sweeper uses the global windows.
+		IdleStopAfter:    rec.IdleStopAfter,
+		IdleDeleteAfter:  rec.IdleDeleteAfter,
+		IdleArchiveAfter: rec.IdleArchiveAfter,
+		ArchivedAt:       rec.ArchivedAt,
+		TenantID:         tenantID,
 	}
 }
 
@@ -305,10 +321,11 @@ func isPastIdleDeleteWindow(rec *store.SandboxRecord, cfg *config.APIConfig, now
 	if rec == nil {
 		return false
 	}
-	window := cfg.IdleDeleteAfter
+	phase := store.IdleDelete
 	if rec.Ephemeral {
-		window = ephemeralIdleWindow(cfg)
+		phase = store.IdleEphemeral
 	}
+	window := idleWindow(rec, phase, cfg)
 	return window > 0 && now > rec.LastActiveAt+idleSeconds(window)+idleSeconds(activityLag(cfg))
 }
 
@@ -331,7 +348,7 @@ func runnerControlTLS(cfg *config.APIConfig) *runnerctl.TLS {
 // see. The runtime's own create budget plus a margin for the round trip.
 const runnerCreateBudget = runnerruntime.CreateBudget + time.Minute
 
-func handleCreateSandbox(s generalSandboxStore, tenants tenantGetter, reg registry.RunnerRegistry, cfg *config.APIConfig, rec *metrics.APIRecorder, quota *tenantQuota) http.HandlerFunc {
+func handleCreateSandbox(s generalSandboxStore, tenants tenantGetter, reg registry.RunnerRegistry, cfg *config.APIConfig, rec *metrics.APIRecorder, quota *tenantQuota, arch *archiver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		success := false
 		defer func() { rec.ObserveSandboxOp(metrics.OpCreate, success) }()
@@ -349,7 +366,7 @@ func handleCreateSandbox(s generalSandboxStore, tenants tenantGetter, reg regist
 		}
 
 		var req createSandboxRequest
-		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxCreateBodyBytes))
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 			writeError(w, http.StatusBadRequest, "invalid request body")
@@ -359,15 +376,26 @@ func handleCreateSandbox(s generalSandboxStore, tenants tenantGetter, reg regist
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
-		egressField := ""
-		if req.Egress != nil {
-			egressField = *req.Egress
+		var limitErr error
+		params, err := parseCreateRequest(&req, cfg, func() (int64, error) {
+			limit, err := idleWindowLimit(tenants, cfg, authID.TenantID)
+			limitErr = err
+			return limit, err
+		})
+		if limitErr != nil {
+			writeError(w, http.StatusInternalServerError, limitErr.Error())
+			return
 		}
-		egress, err := runnerruntime.ParseEgress(egressField)
 		if err != nil {
+			var ce *createError
+			if errors.As(err, &ce) {
+				writeErrorReason(w, http.StatusBadRequest, ce.msg, ce.reason)
+				return
+			}
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		egress := params.egress
 
 		sandboxID := generateUUID()
 		if req.ID != nil {
@@ -396,10 +424,10 @@ func handleCreateSandbox(s generalSandboxStore, tenants tenantGetter, reg regist
 					return
 				}
 				if !isPastIdleDeleteWindow(existing, cfg, time.Now().Unix()) {
-					success = writeExistingSandbox(w, existing, egress, req.Egress != nil)
+					success = writeExistingSandbox(w, existing, params)
 					return
 				}
-				if !deleteSandboxRecord(w, r, s, cfg, existing) {
+				if !deleteSandboxRecord(w, r, s, cfg, existing, arch) {
 					return
 				}
 			}
@@ -433,7 +461,7 @@ func handleCreateSandbox(s generalSandboxStore, tenants tenantGetter, reg regist
 		// runner rollback; a saved one right after the save, below.
 		defer releaseQuota(false)
 
-		requested := runnerruntime.CreateOptions{Egress: egress}
+		requested := params.runnerOptions(tenantID)
 		createOptionsJSON, err := json.Marshal(requested)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
@@ -442,14 +470,33 @@ func handleCreateSandbox(s generalSandboxStore, tenants tenantGetter, reg regist
 
 		obs.FieldsFrom(r.Context()).Add("sandbox_id", sandboxID)
 		now := time.Now().Unix()
-		placed, err := placeSandbox(r, reg, cfg, rec, sandboxID, string(createOptionsJSON),
-			"tenant_id", tenantID, "ephemeral", req.Ephemeral, "egress", egress)
+		placed, err := placeSandbox(r, reg, cfg, rec, sandboxID, params.template, string(createOptionsJSON),
+			"tenant_id", tenantID, "ephemeral", req.Ephemeral, "egress", egress, "template", params.template)
 		if errors.Is(err, registry.ErrNoRunners) || errors.Is(err, errRunnersAtCapacity) {
 			writeNoCapacity(w, err)
 			return
 		}
+		// The runner refused before creating anything: it cannot serve a
+		// valid option yet (egress proxy). A fixed message: the runner's own
+		// (or an intermediary's) is logged by placeSandbox, not relayed.
+		// The runner refused a secret the tenant does not have, before creating
+		// anything.
+		if status.Code(err) == codes.FailedPrecondition {
+			writeErrorReason(w, http.StatusBadRequest, "egress_proxy names a secret_ref the tenant does not have", reasonUnknownSecretRef)
+			return
+		}
+		if status.Code(err) == codes.Unimplemented {
+			writeErrorReason(w, http.StatusNotImplemented, "the requested egress is not supported by the sandbox runners", reasonNotImplemented)
+			return
+		}
+		// The API validated the options, so a runner refusing them as invalid
+		// predates one of them: retrying the same create cannot succeed.
+		if status.Code(err) == codes.InvalidArgument {
+			writeErrorReason(w, http.StatusNotImplemented, "a sandbox runner refused these create options; it may predate one of them", reasonNotImplemented)
+			return
+		}
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			writeError(w, http.StatusInternalServerError, "runner create failed")
 			return
 		}
 		run, gresp := placed.run, placed.resp
@@ -478,15 +525,22 @@ func handleCreateSandbox(s generalSandboxStore, tenants tenantGetter, reg regist
 		// asked for would leave the record saying one thing and the network
 		// another, so the sandbox is removed rather than tracked.
 		applied, err := runnerruntime.ParseCreateOptions(gresp.GetAppliedCreateOptionsJson())
-		if err != nil || applied.Egress != requested.Egress {
+		if err != nil || !applied.Equal(&requested) {
 			rollbackRunnerCreate()
+			// Not the echoed JSON itself: an egress_proxy spec names secrets.
+			appliedEgress, appliedTemplate, appliedProxy := "", "", false
+			if applied != nil {
+				appliedEgress, appliedTemplate, appliedProxy = string(applied.Egress), applied.Template, applied.EgressProxy != nil
+			}
 			slog.ErrorContext(
 				r.Context(),
 				"create sandbox failed: runner did not apply the requested egress",
 				"sandbox_id", sandboxID,
 				"runner_id", run.ID,
 				"requested_egress", egress,
-				"applied_create_options_json", gresp.GetAppliedCreateOptionsJson(),
+				"applied_egress", appliedEgress,
+				"applied_template", appliedTemplate,
+				"applied_egress_proxy", appliedProxy,
 				"error", err,
 			)
 			writeError(w, http.StatusBadGateway, "runner did not apply the requested egress")
@@ -508,6 +562,11 @@ func handleCreateSandbox(s generalSandboxStore, tenants tenantGetter, reg regist
 			Ephemeral:             req.Ephemeral,
 			Egress:                string(egress),
 			Kind:                  store.KindGeneral,
+			Template:              params.template,
+			IdleStopAfter:         params.idleStopAfter,
+			IdleDeleteAfter:       params.idleDeleteAfter,
+			IdleArchiveAfter:      params.idleArchiveAfter,
+			EgressProxy:           params.egressProxyJSON,
 		}
 		if err := s.Create(record); err != nil {
 			rollbackRunnerCreate()
@@ -519,7 +578,7 @@ func handleCreateSandbox(s generalSandboxStore, tenants tenantGetter, reg regist
 					writeError(w, http.StatusConflict, "sandbox id unavailable")
 					return
 				}
-				success = writeExistingSandbox(w, existing, egress, req.Egress != nil)
+				success = writeExistingSandbox(w, existing, params)
 				return
 			}
 			if errors.Is(err, store.ErrTenantQuotaExceeded) {
@@ -565,21 +624,35 @@ func handleCreateSandbox(s generalSandboxStore, tenants tenantGetter, reg regist
 }
 
 // writeExistingSandbox answers a create whose id the caller already owns with
-// that sandbox. Egress is fixed at creation, so a mode the request names has to
-// be the sandbox's: a caller asking for none must not get an open sandbox back
-// and take it for sealed. egress is the request's parsed mode; egressGiven is
-// false when the request left it out, in which case whatever the sandbox has
-// is fine.
-func writeExistingSandbox(w http.ResponseWriter, existing *store.SandboxRecord, egress runnerruntime.Egress, egressGiven bool) bool {
-	if egressGiven && string(egress) != existing.Egress {
-		writeError(w, http.StatusConflict, "sandbox exists with egress "+existing.Egress)
+// that sandbox, or 409 when the request names options the sandbox was not
+// created with (createParams.conflict).
+func writeExistingSandbox(w http.ResponseWriter, existing *store.SandboxRecord, params *createParams) bool {
+	if msg, reason := params.conflict(existing); msg != "" {
+		writeErrorReason(w, http.StatusConflict, msg, reason)
 		return false
 	}
 	writeJSON(w, http.StatusOK, sandboxResponse(existing))
 	return true
 }
 
-func deleteSandboxRecord(w http.ResponseWriter, r *http.Request, s generalSandboxStore, cfg *config.APIConfig, rec *store.SandboxRecord) bool {
+func deleteSandboxRecord(w http.ResponseWriter, r *http.Request, s generalSandboxStore, cfg *config.APIConfig, rec *store.SandboxRecord, arch *archiver) bool {
+	switch rec.Status {
+	case statusRestoring:
+		// The restore would recreate it on a runner, untracked.
+		writeRestoring(w)
+		return false
+	case statusArchived:
+		if arch == nil {
+			writeError(w, http.StatusInternalServerError, "sandbox is archived but no archive store is configured")
+			return false
+		}
+		if err := arch.deleteArchived(r.Context(), rec); err != nil {
+			slog.WarnContext(r.Context(), "delete archived sandbox", "sandbox_id", rec.ID, "err", err)
+			writeError(w, http.StatusBadGateway, "failed to delete archived sandbox")
+			return false
+		}
+		return true
+	}
 	if err := runnerctl.DeleteSandbox(r.Context(), rec.RunnerControlGRPCAddr, cfg.RunnerAPIKey, runnerControlTLS(cfg), rec.ID); err != nil {
 		writeError(w, http.StatusBadGateway, "failed to delete container: "+err.Error())
 		return false
@@ -591,7 +664,7 @@ func deleteSandboxRecord(w http.ResponseWriter, r *http.Request, s generalSandbo
 	return true
 }
 
-func handleDeleteSandbox(s generalSandboxStore, cfg *config.APIConfig, mrec *metrics.APIRecorder) http.HandlerFunc {
+func handleDeleteSandbox(s generalSandboxStore, cfg *config.APIConfig, mrec *metrics.APIRecorder, arch *archiver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		success := false
 		defer func() { mrec.ObserveSandboxOp(metrics.OpDelete, success) }()
@@ -621,7 +694,7 @@ func handleDeleteSandbox(s generalSandboxStore, cfg *config.APIConfig, mrec *met
 			return
 		}
 
-		if !deleteSandboxRecord(w, r, s, cfg, rec) {
+		if !deleteSandboxRecord(w, r, s, cfg, rec, arch) {
 			return
 		}
 

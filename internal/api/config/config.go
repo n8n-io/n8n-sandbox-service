@@ -3,6 +3,8 @@
 package config
 
 import (
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -10,12 +12,14 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/n8n-io/sandbox-service/internal/envvar"
 	"github.com/n8n-io/sandbox-service/internal/logging"
+	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 )
 
 const (
@@ -27,10 +31,13 @@ const (
 	defaultOrphanReapBuffer = 5 * time.Minute
 	defaultIdleStopAfter    = time.Hour
 	defaultIdleDeleteAfter  = 24 * time.Hour
-	defaultLogLevel         = slog.LevelInfo
-	defaultPostgresPort     = 5432
-	defaultPostgresSSLMode  = "require"
-	defaultMaxSandboxes     = 50
+	defaultMaxIdleWindow    = 24 * time.Hour
+	// MinIdleWindow is the shortest per-sandbox idle window a create may ask for.
+	MinIdleWindow          = time.Minute
+	defaultLogLevel        = slog.LevelInfo
+	defaultPostgresPort    = 5432
+	defaultPostgresSSLMode = "require"
+	defaultMaxSandboxes    = 50
 
 	defaultMaxInflightPerTenant = 512
 
@@ -168,6 +175,31 @@ type APIConfig struct {
 	// IdleDeleteAfter is how long after last activity the API deletes the sandbox
 	// (0 = disabled). Wakes are refused after this window until the row is removed.
 	IdleDeleteAfter time.Duration
+	// MaxIdleWindow caps the idle_stop_after and idle_delete_after a create may
+	// set for its sandbox. 0 refuses both.
+	MaxIdleWindow time.Duration
+
+	// EgressAllowPublic lets an egress_proxy spec set allow_public. Parsed
+	// from SANDBOX_API_EGRESS_ALLOW_PUBLIC (default false).
+	EgressAllowPublic bool
+
+	// Archive store: a directory the API serves to runners at ArchiveURL,
+	// and the master key that wraps each archive's key. Archiving is on when
+	// both are set. Parsed from SANDBOX_API_ARCHIVE_DIR, SANDBOX_API_ARCHIVE_URL
+	// and SANDBOX_API_ARCHIVE_KEY_FILE (64 hex characters).
+	ArchiveDir string
+	ArchiveURL string
+	ArchiveKey []byte
+	// Or an S3-compatible bucket: SANDBOX_API_ARCHIVE_S3_ENDPOINT, _BUCKET,
+	// _REGION, _ACCESS_KEY_ID and _SECRET_ACCESS_KEY_FILE.
+	ArchiveS3Endpoint, ArchiveS3Bucket, ArchiveS3Region, ArchiveS3AccessKey, ArchiveS3SecretKey string
+	// IdleArchiveAfter archives a stopped sandbox idle this long; 0 is off.
+	// Parsed from SANDBOX_API_IDLE_ARCHIVE_AFTER.
+	IdleArchiveAfter time.Duration
+
+	// Templates is the catalog creates may name, "default" always among them.
+	// Parsed from SANDBOX_API_TEMPLATES (comma-separated).
+	Templates []string
 	// IdleDeleteSafetyBuffer is added to a sandbox's idle window before the sweeper
 	// deletes it (race guard). Ephemeral sandboxes use IdleStopAfter as their window
 	// (IdleDeleteAfter when idle stop is disabled), so when either window is > 0 and
@@ -245,6 +277,8 @@ func LoadAPI() (*APIConfig, error) {
 		OrphanReapBuffer:      defaultOrphanReapBuffer,
 		IdleStopAfter:         defaultIdleStopAfter,
 		IdleDeleteAfter:       defaultIdleDeleteAfter,
+		MaxIdleWindow:         defaultMaxIdleWindow,
+		Templates:             []string{runnerruntime.DefaultTemplate},
 		ActivityWriteInterval: DefaultActivityWriteInterval,
 		MaxResponseActivity:   DefaultMaxResponseActivity,
 		APIKeyCacheTTL:        defaultAPIKeyCacheTTL,
@@ -348,6 +382,10 @@ func LoadAPI() (*APIConfig, error) {
 		return nil, err
 	}
 
+	if err := envvar.Bool("SANDBOX_API_EGRESS_ALLOW_PUBLIC", &cfg.EgressAllowPublic); err != nil {
+		return nil, err
+	}
+
 	cfg.GRPCServerCertFile = envvar.Get("SANDBOX_API_GRPC_TLS_CERT_FILE")
 	cfg.GRPCServerKeyFile = envvar.Get("SANDBOX_API_GRPC_TLS_KEY_FILE")
 	cfg.GRPCClientCAFile = envvar.Get("SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE")
@@ -390,6 +428,57 @@ func LoadAPI() (*APIConfig, error) {
 	}
 	if err := envvar.NonNegativeDuration("SANDBOX_API_IDLE_DELETE_AFTER", &cfg.IdleDeleteAfter); err != nil {
 		return nil, err
+	}
+	if v := envvar.Get("SANDBOX_API_MAX_IDLE_WINDOW"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || (d != 0 && d < MinIdleWindow) {
+			return nil, fmt.Errorf("SANDBOX_API_MAX_IDLE_WINDOW must be 0 or a duration of at least %s, got %q", MinIdleWindow, v)
+		}
+		cfg.MaxIdleWindow = d
+	}
+	cfg.ArchiveDir = envvar.Get("SANDBOX_API_ARCHIVE_DIR")
+	cfg.ArchiveURL = envvar.Get("SANDBOX_API_ARCHIVE_URL")
+	if f := envvar.Get("SANDBOX_API_ARCHIVE_KEY_FILE"); f != "" {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			return nil, fmt.Errorf("SANDBOX_API_ARCHIVE_KEY_FILE: %w", err)
+		}
+		key, err := hex.DecodeString(strings.TrimSpace(string(raw)))
+		if err != nil || len(key) != 32 {
+			return nil, errors.New("SANDBOX_API_ARCHIVE_KEY_FILE must hold 64 hex characters (a 32-byte key)")
+		}
+		cfg.ArchiveKey = key
+	}
+	cfg.ArchiveS3Endpoint = envvar.Get("SANDBOX_API_ARCHIVE_S3_ENDPOINT")
+	cfg.ArchiveS3Bucket = envvar.Get("SANDBOX_API_ARCHIVE_S3_BUCKET")
+	cfg.ArchiveS3Region = envvar.Get("SANDBOX_API_ARCHIVE_S3_REGION")
+	cfg.ArchiveS3AccessKey = envvar.Get("SANDBOX_API_ARCHIVE_S3_ACCESS_KEY_ID")
+	if f := envvar.Get("SANDBOX_API_ARCHIVE_S3_SECRET_ACCESS_KEY_FILE"); f != "" {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			return nil, fmt.Errorf("SANDBOX_API_ARCHIVE_S3_SECRET_ACCESS_KEY_FILE: %w", err)
+		}
+		cfg.ArchiveS3SecretKey = strings.TrimSpace(string(raw))
+	}
+	if cfg.ArchiveS3Bucket != "" && cfg.ArchiveDir != "" {
+		return nil, errors.New("set SANDBOX_API_ARCHIVE_DIR or SANDBOX_API_ARCHIVE_S3_BUCKET, not both")
+	}
+	if (cfg.ArchiveDir != "") != (cfg.ArchiveURL != "") || (cfg.ArchiveEnabled() && cfg.ArchiveKey == nil) {
+		return nil, errors.New("an archive store needs SANDBOX_API_ARCHIVE_KEY_FILE, and SANDBOX_API_ARCHIVE_DIR goes with SANDBOX_API_ARCHIVE_URL")
+	}
+	if v := envvar.Get("SANDBOX_API_IDLE_ARCHIVE_AFTER"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d < 0 || (d > 0 && !cfg.ArchiveEnabled()) {
+			return nil, fmt.Errorf("SANDBOX_API_IDLE_ARCHIVE_AFTER must be a non-negative duration, with an archive store, got %q", v)
+		}
+		cfg.IdleArchiveAfter = d
+	}
+	if v := envvar.Get("SANDBOX_API_TEMPLATES"); v != "" {
+		templates, err := parseTemplateCatalog(v)
+		if err != nil {
+			return nil, fmt.Errorf("SANDBOX_API_TEMPLATES: %w", err)
+		}
+		cfg.Templates = templates
 	}
 	if err := envvar.NonNegativeDuration("SANDBOX_API_IDLE_DELETE_SAFETY_BUFFER", &cfg.IdleDeleteSafetyBuffer); err != nil {
 		return nil, err
@@ -625,4 +714,25 @@ func parseKeySet(raw string) map[string]struct{} {
 		}
 	}
 	return keys
+}
+
+// parseTemplateCatalog reads a comma-separated list of template names. The
+// default is added when missing, since a create that names none gets it.
+func parseTemplateCatalog(v string) ([]string, error) {
+	out := []string{runnerruntime.DefaultTemplate}
+	for _, name := range strings.Split(v, ",") {
+		name = strings.TrimSpace(name)
+		if err := runnerruntime.ValidateTemplateName(name); err != nil {
+			return nil, err
+		}
+		if !slices.Contains(out, name) {
+			out = append(out, name)
+		}
+	}
+	return out, nil
+}
+
+// ArchiveEnabled reports whether an archive store is configured.
+func (c *APIConfig) ArchiveEnabled() bool {
+	return c.ArchiveDir != "" || c.ArchiveS3Bucket != ""
 }

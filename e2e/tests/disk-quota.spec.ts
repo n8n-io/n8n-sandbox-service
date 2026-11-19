@@ -4,9 +4,11 @@ import { DOCKER_ONLY, FIRECRACKER_ONLY } from './tags';
 
 // Docker: per-sandbox writable-layer quota via xfs prjquota (see e2e/run.sh).
 // On hosts whose kernel lacks CONFIG_XFS_QUOTA — notably Docker Desktop's
-// linuxkit on macOS — the runner falls back to no enforcement at startup.
+// linuxkit on macOS — the runner refuses to start unless
+// SANDBOX_RUNNER_ALLOW_UNENFORCED_DISK_QUOTA=true, which e2e/run.sh sets
+// unless E2E_VERIFY_DISK_QUOTA=true.
 //
-// Set E2E_VERIFY_DISK_QUOTA=true to assert xfs quota enforcement on Docker.
+// Set E2E_VERIFY_DISK_QUOTA=true to require quotas and assert enforcement on Docker.
 test.describe('Docker disk quota enforcement', DOCKER_ONLY, () => {
   test.skip(
     process.env.E2E_VERIFY_DISK_QUOTA !== 'true',

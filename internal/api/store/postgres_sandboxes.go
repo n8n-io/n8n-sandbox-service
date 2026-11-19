@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-const pgSandboxCols = `id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral, egress, kind, name, options_hash, idle_timeout_ms, max_age_ms, draining_since`
+const pgSandboxCols = `id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral, egress, kind, name, options_hash, idle_timeout_ms, max_age_ms, draining_since, template, idle_stop_after, idle_delete_after, egress_proxy, model_blocked, idle_archive_after, archive_object, archive_key, archive_size, archive_version, archived_at, restore_started_at`
 
 type pgExecer interface {
 	Exec(query string, args ...any) (sql.Result, error)
@@ -19,9 +21,9 @@ type pgExecer interface {
 func (s *PostgresStore) insertSandbox(e pgExecer, record *SandboxRecord) error {
 	const q = `
 		INSERT INTO sandboxes
-			(` + pgSandboxCols + `)
+			(id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip, daemon_port, runner_id, runner_http_base_url, runner_control_grpc_addr, tenant_id, ephemeral, egress, kind, name, options_hash, idle_timeout_ms, max_age_ms, draining_since, template, idle_stop_after, idle_delete_after, egress_proxy, idle_archive_after)
 		VALUES
-			($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`
+			($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)`
 
 	_, err := e.Exec(q,
 		record.ID,
@@ -44,6 +46,11 @@ func (s *PostgresStore) insertSandbox(e pgExecer, record *SandboxRecord) error {
 		record.IdleTimeoutMs,
 		record.MaxAgeMs,
 		record.DrainingSince,
+		record.Template,
+		record.IdleStopAfter,
+		record.IdleDeleteAfter,
+		record.EgressProxy,
+		record.IdleArchiveAfter,
 	)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation && pgErr.ConstraintName == codeNameIndex {
@@ -172,7 +179,8 @@ func (s *PostgresStore) RecordActivity(ctx context.Context, lastActiveAt map[str
 		), locked AS (
 			SELECT s.id, b.at
 			  FROM sandboxes s JOIN batch b ON b.id = s.id
-			 WHERE s.last_active_at < b.at OR s.status <> 'running'
+			 WHERE s.status NOT IN ('archived', 'restoring')
+			   AND (s.last_active_at < b.at OR s.status <> 'running')
 			 ORDER BY s.id
 			   FOR UPDATE OF s
 		)
@@ -281,4 +289,97 @@ func (s *PostgresStore) List(f SandboxFilter) ([]*SandboxRecord, error) {
 	}
 	q += ` ORDER BY created_at DESC`
 	return s.querySandboxRecords(q, args...)
+}
+
+func (s *PostgresStore) ListIdle(phase IdlePhase, now, global int64) ([]*SandboxRecord, error) {
+	filter := idleFilter(phase)
+	for i := 1; strings.Contains(filter, "?"); i++ {
+		filter = strings.Replace(filter, "?", "$"+strconv.Itoa(i), 1)
+	}
+	q := `SELECT ` + pgSandboxCols + ` FROM sandboxes WHERE ` + filter
+	return s.querySandboxRecords(q, now, global, now, global)
+}
+
+func (s *PostgresStore) UpdateEgressProxy(id, spec string) error {
+	if _, err := s.db.Exec(`UPDATE sandboxes SET egress_proxy = $1 WHERE id = $2`, spec, id); err != nil {
+		return fmt.Errorf("store: update egress_proxy for %s: %w", id, err)
+	}
+	return nil
+}
+
+func (s *PostgresStore) SetModelBlocked(id string, blocked bool) error {
+	if _, err := s.db.Exec(`UPDATE sandboxes SET model_blocked = $1 WHERE id = $2`, blocked, id); err != nil {
+		return fmt.Errorf("store: update model_blocked for %s: %w", id, err)
+	}
+	return nil
+}
+
+func (s *PostgresStore) TouchRunnerActive(runnerID string, ids []string) error {
+	if runnerID == "" || len(ids) == 0 {
+		return nil
+	}
+	const q = `UPDATE sandboxes SET last_active_at = $1 WHERE runner_id = $2 AND status = 'running' AND id = ANY($3)`
+	if _, err := s.db.Exec(q, time.Now().Unix(), runnerID, ids); err != nil {
+		return fmt.Errorf("store: touch active sandboxes of runner %s: %w", runnerID, err)
+	}
+	return nil
+}
+
+func (s *PostgresStore) UpdateIdleWindows(id string, stopAfter, archiveAfter, deleteAfter int64) error {
+	if _, err := s.db.Exec(`UPDATE sandboxes SET idle_stop_after = $1, idle_archive_after = $2, idle_delete_after = $3 WHERE id = $4`, stopAfter, archiveAfter, deleteAfter, id); err != nil {
+		return fmt.Errorf("store: update idle windows for %s: %w", id, err)
+	}
+	return nil
+}
+
+func (s *PostgresStore) SetArchived(id, object, key, version string, size, at int64) error {
+	const q = `UPDATE sandboxes SET status = 'archived', archive_object = $1, archive_key = $2, archive_version = $3, archive_size = $4, archived_at = $5, restore_started_at = 0 WHERE id = $6`
+	if _, err := s.db.Exec(q, object, key, version, size, at, id); err != nil {
+		return fmt.Errorf("store: set archived %s: %w", id, err)
+	}
+	return nil
+}
+
+func (s *PostgresStore) ClearRunner(id string) error {
+	const q = `UPDATE sandboxes SET runner_id = '', runner_http_base_url = '', runner_control_grpc_addr = '', container_ip = '' WHERE id = $1 AND status = 'archived'`
+	if _, err := s.db.Exec(q, id); err != nil {
+		return fmt.Errorf("store: clear runner of %s: %w", id, err)
+	}
+	return nil
+}
+
+func (s *PostgresStore) BeginRestore(id, from string, fromStarted, at int64) (bool, error) {
+	res, err := s.db.Exec(`UPDATE sandboxes SET status = 'restoring', restore_started_at = $1 WHERE id = $2 AND status = $3 AND restore_started_at = $4`, at, id, from, fromStarted)
+	if err != nil {
+		return false, fmt.Errorf("store: begin restore of %s: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+func (s *PostgresStore) SetRestored(id string, started int64, runnerID, httpBase, controlAddr, containerIP string, at int64) (bool, error) {
+	const q = `UPDATE sandboxes SET status = 'running', runner_id = $1, runner_http_base_url = $2, runner_control_grpc_addr = $3, container_ip = $4,
+		last_active_at = $5, archive_object = '', archive_key = '', archive_size = 0, archive_version = '', archived_at = 0, restore_started_at = 0
+		WHERE id = $6 AND status = 'restoring' AND restore_started_at = $7`
+	res, err := s.db.Exec(q, runnerID, httpBase, controlAddr, containerIP, at, id, started)
+	if err != nil {
+		return false, fmt.Errorf("store: set restored %s: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+func (s *PostgresStore) AbortRestore(id string, started int64) error {
+	if _, err := s.db.Exec(`UPDATE sandboxes SET status = 'archived' WHERE id = $1 AND status = 'restoring' AND restore_started_at = $2`, id, started); err != nil {
+		return fmt.Errorf("store: abort restore of %s: %w", id, err)
+	}
+	return nil
+}
+
+func (s *PostgresStore) ListByRunner(runnerID string) ([]*SandboxRecord, error) {
+	return s.querySandboxRecords(`SELECT `+pgSandboxCols+` FROM sandboxes WHERE runner_id = $1`, runnerID)
+}
+
+func (s *PostgresStore) ListArchivedOnRunner() ([]*SandboxRecord, error) {
+	return s.querySandboxRecords(`SELECT ` + pgSandboxCols + ` FROM sandboxes WHERE status = 'archived' AND runner_id <> ''`)
 }

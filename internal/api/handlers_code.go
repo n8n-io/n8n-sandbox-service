@@ -277,7 +277,7 @@ func createCodeSandbox(r *http.Request, s codeSandboxStore, reg registry.RunnerR
 	}
 
 	now := time.Now().Unix()
-	placed, err := placeSandbox(r, reg, cfg, mrec, sandboxID, string(createOptionsJSON),
+	placed, err := placeSandbox(r, reg, cfg, mrec, sandboxID, runnerruntime.DefaultTemplate, string(createOptionsJSON),
 		"tenant_id", tenantID, "kind", store.KindCode)
 	if err != nil {
 		return nil, err

@@ -10,6 +10,10 @@ import (
 
 var sandboxPathRe = regexp.MustCompile(`/var/sandboxes/[0-9a-f-]+/(?:rootfs|merged|upper|work|socket)`)
 
+// reasonNotImplemented marks a 501: a valid request for something this build
+// does not serve yet. Nothing was created or changed.
+const reasonNotImplemented = "not_implemented"
+
 // APIError is the JSON body returned for error responses. Reason is set only
 // on errors a client has to tell apart from others with the same status.
 type APIError struct {

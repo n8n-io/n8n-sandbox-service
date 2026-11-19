@@ -46,6 +46,14 @@ func (r *Runtime) StopSandbox(ctx context.Context, sandboxID string) error {
 	if err := r.ensureDiskSpaceForSnapshot(state); err != nil {
 		return err
 	}
+	r.mu.Lock()
+	daemonURL := state.daemonURL
+	r.mu.Unlock()
+	unflushed := false
+	if err := r.deps.syncGuest(ctx, daemonURL); err != nil {
+		slog.Warn("firecracker guest sync before stop failed; the sandbox cannot be archived until it runs and stops again", "sandbox_id", sandboxID, "err", err)
+		unflushed = true
+	}
 	if err := r.deps.pauseVM(ctx, state.socketPath); err != nil {
 		r.resumeAfterFailedStop(ctx, state)
 		return fmt.Errorf("pause firecracker vm: %w", err)
@@ -82,6 +90,7 @@ func (r *Runtime) StopSandbox(ctx context.Context, sandboxID string) error {
 	r.mu.Lock()
 	state.running = false
 	state.stopped = true
+	state.unflushed = unflushed
 	if state.slot >= 0 && r.slotOwnedByLocked(state.slot, state.id) {
 		r.releaseSlotLocked(state.slot)
 	}
@@ -208,6 +217,7 @@ func (r *Runtime) ensureSandboxRunningOnce(ctx context.Context, sandboxID string
 		r.mu.Lock()
 		state.running = false
 		state.stopped = true
+		state.unflushed = false // the memory is gone; the rootfs is all there is
 		if state.slot >= 0 && r.slotOwnedByLocked(state.slot, state.id) {
 			r.releaseSlotLocked(state.slot)
 		}
@@ -267,6 +277,11 @@ func (r *Runtime) activateSandboxVM(ctx context.Context, state *sandboxState, t 
 	// iptables insert, on create and on every wake: the slot it wakes on is fresh.
 	if err := t.step(stepSetupNetwork, func() error { return r.setupNetwork(ctx, state.slot, state.blockEgress) }); err != nil {
 		return fmt.Errorf("setup firecracker network: %w", err)
+	}
+	if state.egressProxy {
+		if err := r.startEgressListener(state); err != nil {
+			return err
+		}
 	}
 	r.mu.Lock()
 	generation := state.generation
@@ -366,7 +381,7 @@ func (r *Runtime) startGuest(ctx context.Context, state *sandboxState, t *stepTi
 		// Checked on this branch alone: a restore boots the kernel out of its memory
 		// image and never opens the file, so a wake that has a snapshot to return to
 		// has no reason to care what the template holds now.
-		if err := r.verifyKernelPin(kernel); err != nil {
+		if err := r.verifyKernelPin(state.template.kernelPath(), kernel); err != nil {
 			return true, err
 		}
 		if err := t.step(stepColdBoot, func() error {
@@ -405,10 +420,15 @@ func (r *Runtime) teardownRunningVM(ctx context.Context, state *sandboxState) er
 	state.generation++
 	proxy, process := state.proxy, state.process
 	state.proxy, state.process = nil, nil
+	egressServer := state.egressServer
+	state.egressServer = nil
 	slot := state.slot
 	r.mu.Unlock()
 
 	var errs []error
+	if egressServer != nil {
+		_ = egressServer.Close()
+	}
 	if proxy != nil {
 		if err := proxy.Stop(); err != nil {
 			errs = append(errs, fmt.Errorf("stop daemon proxy: %w", err))

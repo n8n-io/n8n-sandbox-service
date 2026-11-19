@@ -56,6 +56,13 @@ type Runtime struct {
 	// must leave free; nil means none. Set once at startup.
 	diskReserved func() int64
 
+	// templateInfo is what each template's sandboxes get, recorded by
+	// admission from its boot parameters and rootfs; nil before the first.
+	templateInfo atomic.Pointer[[]runnerruntime.TemplateInfo]
+
+	// egressHandler is the egress proxy's handler while ServeEgressProxy runs.
+	egressHandler atomic.Pointer[egressHandlerFunc]
+
 	// wireCh wakes the slot wirer (network_wirer.go). Buffered by one and written with a
 	// non-blocking send, so a release never waits on it and a burst of releases
 	// collapses into one pass over the slots.
@@ -211,6 +218,10 @@ type sandboxState struct {
 	// blockEgress is the sandbox's egress "none" mode, fixed at creation. Every
 	// activation applies it to whatever slot the sandbox lands on.
 	blockEgress bool
+	// egressProxy marks an egress "proxy" sandbox: blocked like "none", with
+	// the egress proxy listening on its slot's gateway while it runs.
+	egressProxy  bool
+	egressServer *http.Server
 
 	// volumes are the images the sandbox has, set once by its create.
 	// pinsVolumes marks a create that may have pinned images in the volume
@@ -238,6 +249,10 @@ type sandboxState struct {
 	// current configuration every time it builds the jail.
 	kernel kernelPin
 
+	// template is the template the sandbox was created from; its kernel is
+	// what the jail binds and the pin above is checked against.
+	template templateAssets
+
 	process    process
 	proxy      daemonProxy
 	running    bool
@@ -260,6 +275,10 @@ type sandboxState struct {
 	// paused guest: anything else that ends the microVM in between — a crash, or a
 	// wake that failed after the restore — leaves the pair mismatched.
 	mustColdBoot bool
+	// unflushed is a stop whose guest did not confirm a sync before the
+	// pause: writes may be only in its memory snapshot, not on the rootfs, so
+	// the rootfs alone cannot be archived. Any end of that memory clears it.
+	unflushed bool
 }
 
 // deleting reports whether the sandbox has been claimed for teardown. r.mu must
@@ -330,8 +349,11 @@ type dependencies struct {
 	loadBootParams      func(path string) (*bootParams, error)
 	statTemplateKernel  func(path string) (kernelPin, error)
 	checkTemplateKernel func(path string) error
+	fileSize            func(path string) (int64, error)
+	listenEgress        func(netnsPath, network, address string) (net.Listener, error)
 	newProxy            func(ctx context.Context, sandboxID string, listenAddr string, netnsName string, guestAddr string) (daemonProxy, error)
 	probeDaemon         func(ctx context.Context, baseURL string) error
+	syncGuest           func(ctx context.Context, baseURL string) error
 	checkVolumeImage    func(path string) error
 	patchVolumeDrive    func(ctx context.Context, socketPath string, drive volumeDrive) error
 	mountVolumeDrives   func(ctx context.Context, baseURL string, drives []volumedrives.Volume) (map[int]string, error)
@@ -354,12 +376,21 @@ func defaultDependencies(fc Config) dependencies {
 		loadBootParams:      loadBootParams,
 		statTemplateKernel:  statTemplateKernel,
 		checkTemplateKernel: checkTemplateKernel,
+		listenEgress:        listenInNetNS,
+		fileSize: func(path string) (int64, error) {
+			info, err := os.Stat(path)
+			if err != nil {
+				return 0, err
+			}
+			return info.Size(), nil
+		},
 		newProxy: func(ctx context.Context, sandboxID string, listenAddr string, netnsName string, guestAddr string) (daemonProxy, error) {
 			return startDaemonProxy(ctx, sandboxID, listenAddr, netnsName, guestAddr)
 		},
 		probeDaemon: func(ctx context.Context, baseURL string) error {
 			return probeDaemon(ctx, baseURL, fc.DaemonWaitTimeout)
 		},
+		syncGuest:         syncGuest,
 		checkVolumeImage:  checkVolumeImage,
 		patchVolumeDrive:  patchVolumeDrive,
 		mountVolumeDrives: mountVolumeDrives,
@@ -389,16 +420,17 @@ func (r *Runtime) ensureHostNATReady(ctx context.Context) error {
 // Ready checks that pinned guest assets exist and the admission canary has passed.
 func (r *Runtime) Ready(context.Context) error {
 	requiredPaths := map[string]string{
-		"jailer":           r.config.JailerBin,
-		"firecracker":      r.config.FirecrackerBin,
-		"template rootfs":  filepath.Join(r.config.TemplateDir, "rootfs.ext4"),
-		"template vmlinux": filepath.Join(r.config.TemplateDir, "vmlinux"),
-		"snapshot memory":  r.config.SnapshotMemPath,
-		"snapshot state":   r.config.SnapshotStatePath,
+		"jailer":      r.config.JailerBin,
+		"firecracker": r.config.FirecrackerBin,
 	}
 	for label, path := range requiredPaths {
 		if !r.deps.pathExists(path) {
 			return fmt.Errorf("firecracker %s path does not exist: %s", label, path)
+		}
+	}
+	for _, a := range r.config.templateAssetsList() {
+		if err := r.templateAssetsExist(a, true); err != nil {
+			return err
 		}
 	}
 	if len(r.slots) == 0 {
@@ -408,6 +440,34 @@ func (r *Runtime) Ready(context.Context) error {
 		return fmt.Errorf("firecracker admission canary has not passed")
 	}
 	return nil
+}
+
+// templateAssetsExist checks a template's rootfs and kernel and, with
+// snapshot, its golden snapshot.
+func (r *Runtime) templateAssetsExist(a templateAssets, snapshot bool) error {
+	paths := [][2]string{{"rootfs", a.rootfsPath()}, {"vmlinux", a.kernelPath()}}
+	if snapshot {
+		paths = append(paths, [2]string{"snapshot memory", a.SnapshotMemPath}, [2]string{"snapshot state", a.SnapshotStatePath})
+	}
+	for _, p := range paths {
+		if !r.deps.pathExists(p[1]) {
+			return fmt.Errorf("firecracker template %q %s path does not exist: %s", a.Name, p[0], p[1])
+		}
+	}
+	return nil
+}
+
+// Templates lists every configured template, the default first, with the
+// sizes admission recorded; before admission the sizes are 0.
+func (r *Runtime) Templates() []runnerruntime.TemplateInfo {
+	if infos := r.templateInfo.Load(); infos != nil {
+		return *infos
+	}
+	var out []runnerruntime.TemplateInfo
+	for _, a := range r.config.templateAssetsList() {
+		out = append(out, runnerruntime.TemplateInfo{Name: a.Name})
+	}
+	return out
 }
 
 // ReadyCh is closed after Prepare completes admission successfully.
@@ -436,6 +496,13 @@ func (r *Runtime) Capacity(context.Context) (runnerruntime.Capacity, error) {
 // CreateSandbox restores one microVM snapshot into a per-slot jail and netns,
 // then exposes the guest daemon through a host-local TCP proxy.
 func (r *Runtime) CreateSandbox(ctx context.Context, sandboxID string, opts *runnerruntime.CreateOptions) (*runnerruntime.SandboxInfo, error) {
+	return r.createSandbox(ctx, sandboxID, opts, nil)
+}
+
+// createSandbox is CreateSandbox, or, with archive set, ImportSandbox: the
+// rootfs is written from the archive instead of cloned, and the guest cold
+// boots it, since no memory snapshot matches it.
+func (r *Runtime) createSandbox(ctx context.Context, sandboxID string, opts *runnerruntime.CreateOptions, archive io.Reader) (*runnerruntime.SandboxInfo, error) {
 	if len(sandboxID) < 12 {
 		return nil, fmt.Errorf("sandbox ID must be at least 12 characters, got %d", len(sandboxID))
 	}
@@ -443,10 +510,19 @@ func (r *Runtime) CreateSandbox(ctx context.Context, sandboxID string, opts *run
 	ctx, cancel := withLifecycleBudget(ctx, createBudget)
 	defer cancel()
 
-	state, err := r.reserveSandbox(sandboxID, opts.BlockEgress())
+	var template string
+	if opts != nil {
+		template = opts.Template
+	}
+	assets, ok := r.config.templateAssetsFor(template)
+	if !ok {
+		return nil, fmt.Errorf("unknown template %q", template)
+	}
+	state, err := r.reserveSandbox(sandboxID, opts.BlockEgress(), assets)
 	if err != nil {
 		return nil, err
 	}
+	state.egressProxy = opts != nil && opts.Egress == runnerruntime.EgressProxy
 	slog.Info(
 		"firecracker sandbox create started",
 		"sandbox_id", sandboxID,
@@ -455,6 +531,7 @@ func (r *Runtime) CreateSandbox(ctx context.Context, sandboxID string, opts *run
 		"netns", state.netnsName,
 		"daemon_url", state.daemonURL,
 		"block_egress", state.blockEgress,
+		"template", assets.Name,
 	)
 	cleanupOnError := func() {
 		cleanupCtx, cancelCleanup := withCleanupBudget(ctx)
@@ -496,7 +573,28 @@ func (r *Runtime) CreateSandbox(ctx context.Context, sandboxID string, opts *run
 			return nil, fmt.Errorf("acquire volumes: %w", err)
 		}
 	}
-	templateRootfs := filepath.Join(r.config.TemplateDir, "rootfs.ext4")
+	if archive != nil {
+		if err := r.restoreRootfs(state, archive); err != nil {
+			cleanupOnError()
+			return nil, err
+		}
+		if err := r.activateSandboxVM(ctx, state, timer); err != nil {
+			cleanupOnError()
+			return nil, err
+		}
+		r.mu.Lock()
+		state.running = true
+		state.transition = transitionNone
+		info := *state.info
+		volumes := slices.Clone(state.volumes)
+		r.mu.Unlock()
+		if hasVolumes {
+			info.VolumesLeftOut = r.reportVolumes(sandboxID, leftOut, volumes)
+		}
+		slog.Info("firecracker sandbox restored from archive", "sandbox_id", sandboxID, "vm_id", state.vmID, "slot", state.slot)
+		return &info, nil
+	}
+	templateRootfs := assets.rootfsPath()
 	slog.Debug("firecracker cloning rootfs", "sandbox_id", sandboxID, "template", templateRootfs, "dest", state.rootfsPath)
 	if err := timer.step(stepCloneRootfs, func() error {
 		return r.deps.cloneRootfs(ctx, templateRootfs, state.rootfsPath)
@@ -506,7 +604,7 @@ func (r *Runtime) CreateSandbox(ctx context.Context, sandboxID string, opts *run
 	}
 	slog.Debug("firecracker cloning golden snapshot", "sandbox_id", sandboxID, "data_dir", state.dataDir)
 	if err := timer.step(stepCloneSnapshot, func() error {
-		return r.deps.cloneGoldenSnapshot(ctx, r.config.SnapshotMemPath, r.config.SnapshotStatePath, state.dataDir)
+		return r.deps.cloneGoldenSnapshot(ctx, assets.SnapshotMemPath, assets.SnapshotStatePath, state.dataDir)
 	}); err != nil {
 		cleanupOnError()
 		return nil, fmt.Errorf("clone sandbox snapshot assets: %w", err)
@@ -622,7 +720,7 @@ func (r *Runtime) Shutdown(ctx context.Context) {
 // deterministic per-slot host resources used for the VM. The new sandbox starts
 // out claimed for creation so a delete arriving mid-create waits for the microVM
 // to be published instead of tearing down around it.
-func (r *Runtime) reserveSandbox(sandboxID string, blockEgress bool) (*sandboxState, error) {
+func (r *Runtime) reserveSandbox(sandboxID string, blockEgress bool, assets templateAssets) (*sandboxState, error) {
 	// Resolved here, at the one moment a sandbox is tied to a golden snapshot, and
 	// carried on the state from then on. Admission has already read and validated
 	// this file, so a failure here means it changed under a running runner — worth
@@ -632,7 +730,7 @@ func (r *Runtime) reserveSandbox(sandboxID string, blockEgress bool) (*sandboxSt
 	// This is also where a flavor resolver lands when there is more than one golden
 	// snapshot; nothing downstream needs to change for it, because boot parameters
 	// already travel per sandbox rather than per runner.
-	params, err := r.deps.loadBootParams(bootParamsPath(r.config))
+	params, err := r.deps.loadBootParams(assets.bootParamsPath())
 	if err != nil {
 		return nil, err
 	}
@@ -641,7 +739,7 @@ func (r *Runtime) reserveSandbox(sandboxID string, blockEgress bool) (*sandboxSt
 	// names the jail path this file is mounted at. Admission has already required it
 	// to exist, so a failure means the template moved under a running runner, which
 	// is worth refusing the create over on its own.
-	kernel, err := r.deps.statTemplateKernel(templateKernelPath(r.config))
+	kernel, err := r.deps.statTemplateKernel(assets.kernelPath())
 	if err != nil {
 		return nil, err
 	}
@@ -687,6 +785,7 @@ func (r *Runtime) reserveSandbox(sandboxID string, blockEgress bool) (*sandboxSt
 		blockEgress:       blockEgress,
 		bootParams:        params,
 		kernel:            kernel,
+		template:          assets,
 		transition:        transitionCreating,
 		info: &runnerruntime.SandboxInfo{
 			ID:   sandboxID,
@@ -855,7 +954,7 @@ chown 1000:1000 %[1]s/snapshot_mem %[1]s/snapshot_state %[6]s
 chmod 0664 %[1]s/snapshot_mem %[1]s/snapshot_state %[6]s
 `, shellquote.Quote(jailRoot), shellquote.Quote(state.snapshotMemPath), shellquote.Quote(state.snapshotStatePath),
 		shellquote.Quote(state.rootfsPath), shellquote.Quote(filepath.Dir(rootfsTarget)), shellquote.Quote(rootfsTarget),
-		shellquote.Quote(templateKernelPath(r.config)), shellquote.Quote(filepath.Dir(kernelTarget)), shellquote.Quote(kernelTarget))
+		shellquote.Quote(state.template.kernelPath()), shellquote.Quote(filepath.Dir(kernelTarget)), shellquote.Quote(kernelTarget))
 	script += volumeDrivePlaceholders(r.config.JailerBaseDir, jailRoot, state.bootParams.VolumeDrives)
 	script += volumeBinds(jailRoot, state.bootParams.VolumeDrives, r.volumesOf(state))
 	return r.deps.run(ctx, "sudo", "/bin/sh", "-c", script)
@@ -993,6 +1092,30 @@ func joinErrors(errs []error) error {
 		return nil
 	}
 	return fmt.Errorf("%w", errs[0])
+}
+
+// guestSyncTimeout bounds the sync before a pause; a guest that does not
+// answer is stopped anyway, and marked unflushed.
+const guestSyncTimeout = 30 * time.Second
+
+// syncGuest asks the guest daemon to flush its page cache to the rootfs.
+func syncGuest(ctx context.Context, baseURL string) error {
+	ctx, cancel := context.WithTimeout(ctx, guestSyncTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/sync", nil)
+	if err != nil {
+		return err
+	}
+	client := http.Client{CheckRedirect: runnerruntime.RefuseRedirect}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("guest sync: status %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // probeDaemon waits until the runner's host-local daemon proxy can reach the

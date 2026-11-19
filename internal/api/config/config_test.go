@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -423,6 +424,38 @@ func TestLoadAPIRejectsNegativeIdleDeleteAfter(t *testing.T) {
 	}
 }
 
+func TestLoadAPIMaxIdleWindow(t *testing.T) {
+	for _, tc := range []struct {
+		value   string
+		want    time.Duration
+		wantErr bool
+	}{
+		{value: "", want: 24 * time.Hour},
+		{value: "0", want: 0},
+		{value: "6h", want: 6 * time.Hour},
+		{value: "30s", wantErr: true},
+		{value: "-1h", wantErr: true},
+		{value: "soon", wantErr: true},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			t.Setenv("SANDBOX_API_KEYS", "test-key")
+			t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+			t.Setenv("SANDBOX_API_MAX_IDLE_WINDOW", tc.value)
+			setRequiredGRPCMTLS(t)
+			cfg, err := LoadAPI()
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("accepted SANDBOX_API_MAX_IDLE_WINDOW=%q", tc.value)
+				}
+				return
+			}
+			if err != nil || cfg.MaxIdleWindow != tc.want {
+				t.Fatalf("MaxIdleWindow = %v err=%v, want %s", cfg, err, tc.want)
+			}
+		})
+	}
+}
+
 // The lock pool follows the configured concurrency plus five connections the
 // sweeper's workers can never take from the request path.
 func TestLoadAPIIdleSweepConcurrencyKeepsLockPoolAboveIt(t *testing.T) {
@@ -787,6 +820,21 @@ func TestLoadAPIRejectsInvalidSQLiteWAL(t *testing.T) {
 	}
 }
 
+func TestLoadAPIEgressAllowPublic(t *testing.T) {
+	setRequiredAPIEnv(t)
+	if cfg, err := LoadAPI(); err != nil || cfg.EgressAllowPublic {
+		t.Fatalf("default: %v, EgressAllowPublic %v", err, cfg != nil && cfg.EgressAllowPublic)
+	}
+	t.Setenv("SANDBOX_API_EGRESS_ALLOW_PUBLIC", "true")
+	if cfg, err := LoadAPI(); err != nil || !cfg.EgressAllowPublic {
+		t.Fatalf("enabled: %v", err)
+	}
+	t.Setenv("SANDBOX_API_EGRESS_ALLOW_PUBLIC", "maybe")
+	if _, err := LoadAPI(); err == nil {
+		t.Fatal("expected error for invalid SANDBOX_API_EGRESS_ALLOW_PUBLIC")
+	}
+}
+
 func setRequiredAPIEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("SANDBOX_API_KEYS", "test-key")
@@ -1025,5 +1073,33 @@ func TestLoadAPIRejectsInvalidVolumeStoreConfig(t *testing.T) {
 				t.Errorf("error repeats a secret: %v", err)
 			}
 		})
+	}
+}
+
+func TestLoadAPIArchiveStore(t *testing.T) {
+	keyFile := filepath.Join(t.TempDir(), "key")
+	if err := os.WriteFile(keyFile, []byte(strings.Repeat("ab", 32)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	setRequiredAPIEnv(t)
+	t.Setenv("SANDBOX_API_ARCHIVE_DIR", t.TempDir())
+	t.Setenv("SANDBOX_API_ARCHIVE_URL", "http://api:8080")
+	t.Setenv("SANDBOX_API_ARCHIVE_KEY_FILE", keyFile)
+	t.Setenv("SANDBOX_API_IDLE_ARCHIVE_AFTER", "2h")
+	cfg, err := LoadAPI()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.ArchiveEnabled() || len(cfg.ArchiveKey) != 32 || cfg.IdleArchiveAfter != 2*time.Hour {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+	t.Setenv("SANDBOX_API_ARCHIVE_KEY_FILE", "")
+	if _, err := LoadAPI(); err == nil {
+		t.Fatal("archive store without a key accepted")
+	}
+	t.Setenv("SANDBOX_API_ARCHIVE_KEY_FILE", keyFile)
+	t.Setenv("SANDBOX_API_ARCHIVE_S3_BUCKET", "b")
+	if _, err := LoadAPI(); err == nil {
+		t.Fatal("dir and bucket together accepted")
 	}
 }

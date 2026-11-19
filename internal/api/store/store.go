@@ -123,6 +123,40 @@ func IsAdminTenantID(tenantID string) bool {
 	return tenantID == "" || tenantID == AdminTenantID
 }
 
+// IdlePhase is one pass of the idle sweeper.
+type IdlePhase int
+
+const (
+	// IdleStop: running regular rows, by idle_stop_after.
+	IdleStop IdlePhase = iota
+	// IdleEphemeral: running ephemeral rows, deleted by idle_stop_after.
+	IdleEphemeral
+	// IdleDelete: stopped and archived rows, by idle_delete_after.
+	IdleDelete
+	// IdleArchive: stopped regular rows, by idle_archive_after.
+	IdleArchive
+)
+
+// idleFilter is the WHERE clause of phase with ? placeholders for now,
+// global, now and global, in that order. The column names are fixed here,
+// never caller input.
+func idleFilter(phase IdlePhase) string {
+	var where, col string
+	switch phase {
+	case IdleStop:
+		where, col = `status = 'running' AND ephemeral = false`, "idle_stop_after"
+	case IdleEphemeral:
+		where, col = `status = 'running' AND ephemeral = true`, "idle_stop_after"
+	case IdleArchive:
+		where, col = `status = 'stopped' AND ephemeral = false`, "idle_archive_after"
+	default:
+		where, col = `status IN ('stopped', 'archived')`, "idle_delete_after"
+	}
+	// Casts let Postgres type the bare parameters.
+	return where + ` AND ((` + col + ` > 0 AND last_active_at <= CAST(? AS BIGINT) - ` + col + `) OR (` +
+		col + ` = 0 AND CAST(? AS BIGINT) > 0 AND last_active_at <= CAST(? AS BIGINT) - CAST(? AS BIGINT)))`
+}
+
 // SandboxRecord is the in-memory representation of a row in the sandboxes table.
 type SandboxRecord struct {
 	ID                    string
@@ -138,13 +172,28 @@ type SandboxRecord struct {
 	RunnerControlGRPCAddr string // host:port for SandboxControl gRPC
 	TenantID              string // AdminTenantID = admin-owned; otherwise a tenants.id UUID
 	Ephemeral             bool   // Deleted instead of stopped when idle; never enters "stopped"
-	Egress                string // Outbound network policy: "public" or "none"; fixed at creation
+	Egress                string // Outbound network policy: "public", "none" or "proxy"; fixed at creation
 	Kind                  Kind   // Required on create
 	Name                  string // Code sandboxes: chosen by the client, unique per tenant among those not draining
 	OptionsHash           string // Code sandboxes: hash of the options the sandbox was created with
 	IdleTimeoutMs         int64  // Code sandboxes: 0 = not set
 	MaxAgeMs              int64  // Code sandboxes: 0 = not set
 	DrainingSince         int64  // Unix seconds the sandbox started draining; 0 = not draining
+	Template              string // Image the sandbox boots; fixed at creation
+	IdleStopAfter         int64  // Seconds; 0 = the API's global window
+	IdleDeleteAfter       int64  // Seconds; 0 = the API's global window
+	EgressProxy           string // Validated EgressProxySpec as JSON when Egress is "proxy", else empty
+	ModelBlocked          bool   // New requests to the proxy sandbox's model hosts are refused
+	IdleArchiveAfter      int64  // Seconds; 0 = the API's global window
+	// The archive of an "archived" or "restoring" sandbox: its object in the
+	// archive store, its key wrapped by the API's master key, its sealed size,
+	// the template version it restores onto, and when it was made.
+	ArchiveObject    string
+	ArchiveKey       string
+	ArchiveSize      int64
+	ArchiveVersion   string
+	ArchivedAt       int64
+	RestoreStartedAt int64 // When a restore began; 0 when none runs
 }
 
 // Tenant is a provisioned consumer of the sandbox API (e.g. an n8n instance).
@@ -154,6 +203,9 @@ type Tenant struct {
 	ExternalRef  string
 	MaxSandboxes int // 0 = unlimited
 	CreatedAt    int64
+	// MaxIdleWindow caps the idle windows of the tenant's sandboxes, in
+	// seconds; 0 is the server's cap.
+	MaxIdleWindow int64
 }
 
 // APIKey is a hashed tenant credential. Plaintext is never stored.
@@ -199,10 +251,43 @@ type SandboxStore interface {
 	List(f SandboxFilter) ([]*SandboxRecord, error)
 	Count(f SandboxFilter) (int64, error)
 	UpdateStatus(id, status string) error
+	// UpdateIdleWindows sets a sandbox's own idle windows (seconds, 0 = the
+	// API's global window).
+	UpdateIdleWindows(id string, stopAfter, archiveAfter, deleteAfter int64) error
+	// SetArchived records a stopped sandbox's archive and marks it archived.
+	// Its runner fields stay until ClearRunner, once the runner's copy is gone.
+	SetArchived(id, object, key, version string, size, at int64) error
+	// ClearRunner forgets the runner an archived sandbox was on; it leaves a
+	// sandbox in any other status alone.
+	ClearRunner(id string) error
+	// BeginRestore marks a sandbox restoring at at if it is still in status
+	// from with restore_started_at fromStarted, as read, and reports whether
+	// it did: one API pod restores it, not several.
+	BeginRestore(id, from string, fromStarted, at int64) (bool, error)
+	// SetRestored records a restored sandbox on its runner, running, with its
+	// archive fields cleared, if the restore begun at started is still the
+	// sandbox's; it reports whether it was.
+	SetRestored(id string, started int64, runnerID, httpBase, controlAddr, containerIP string, at int64) (bool, error)
+	// AbortRestore puts a sandbox back to archived if the restore begun at
+	// started is still the sandbox's.
+	AbortRestore(id string, started int64) error
+	// ListByRunner returns the sandboxes stored on runnerID.
+	ListByRunner(runnerID string) ([]*SandboxRecord, error)
+	// ListArchivedOnRunner returns archived sandboxes whose runner copy is not
+	// yet confirmed deleted.
+	ListArchivedOnRunner() ([]*SandboxRecord, error)
+	// UpdateEgressProxy stores a proxy sandbox's replaced spec (canonical JSON).
+	UpdateEgressProxy(id, spec string) error
+	// SetModelBlocked records whether a proxy sandbox's model egress is blocked.
+	SetModelBlocked(id string, blocked bool) error
+	// TouchRunnerActive marks running sandboxes active now, but only those
+	// stored as placed on runnerID: a runner vouches for its own sandboxes alone.
+	TouchRunnerActive(runnerID string, ids []string) error
 	Delete(id string) error
 	// RecordActivity sets each sandbox in lastActiveAt (id to unix seconds),
 	// whatever its kind, running and moves its last_active_at forward to that
-	// time, never back, in one statement. Ids without a row are skipped.
+	// time, never back, in one statement. Ids without a row, and archived or
+	// restoring rows, are skipped.
 	RecordActivity(ctx context.Context, lastActiveAt map[string]int64) error
 	// LockSandbox locks the sandbox id, whatever its kind: it reads no row.
 	LockSandbox(ctx context.Context, id string) (unlock func(), err error)
@@ -213,6 +298,10 @@ type SandboxStore interface {
 	// idle since cutoff and have the given ephemeral flag: regular rows are
 	// stop candidates, ephemeral rows delete candidates.
 	ListForIdleReapStop(cutoff int64, ephemeral bool) ([]*SandboxRecord, error)
+	// ListIdle returns phase's sweep candidates at now (Unix seconds): rows
+	// idle for longer than their own window, or than global (seconds) when they
+	// have none. global 0 leaves rows without their own window out.
+	ListIdle(phase IdlePhase, now, global int64) ([]*SandboxRecord, error)
 
 	CreateTenant(t *Tenant) error
 	// CreateTenantWithAPIKey inserts the tenant and its first API key in one transaction.
@@ -223,6 +312,9 @@ type SandboxStore interface {
 	// UpdateTenantLimits sets the tenant's limits and leaves its sandboxes
 	// alone. Returns ErrTenantNotFound when no tenant has that id.
 	UpdateTenantLimits(id string, maxSandboxes int) error
+	// SetTenantMaxIdleWindow sets the tenant's idle window cap (seconds, 0 =
+	// the server's); existing sandboxes keep their windows.
+	SetTenantMaxIdleWindow(id string, seconds int64) error
 	// DeleteTenant returns ErrTenantHasSandboxes while the tenant owns
 	// sandboxes of any kind.
 	DeleteTenant(id string) error
@@ -268,6 +360,18 @@ func scanRecord(row scanner) (*SandboxRecord, error) {
 		&r.IdleTimeoutMs,
 		&r.MaxAgeMs,
 		&r.DrainingSince,
+		&r.Template,
+		&r.IdleStopAfter,
+		&r.IdleDeleteAfter,
+		&r.EgressProxy,
+		&r.ModelBlocked,
+		&r.IdleArchiveAfter,
+		&r.ArchiveObject,
+		&r.ArchiveKey,
+		&r.ArchiveSize,
+		&r.ArchiveVersion,
+		&r.ArchivedAt,
+		&r.RestoreStartedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -277,7 +381,7 @@ func scanRecord(row scanner) (*SandboxRecord, error) {
 
 func scanTenant(row scanner) (*Tenant, error) {
 	var t Tenant
-	err := row.Scan(&t.ID, &t.Name, &t.ExternalRef, &t.MaxSandboxes, &t.CreatedAt)
+	err := row.Scan(&t.ID, &t.Name, &t.ExternalRef, &t.MaxSandboxes, &t.CreatedAt, &t.MaxIdleWindow)
 	if err != nil {
 		return nil, err
 	}

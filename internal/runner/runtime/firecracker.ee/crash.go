@@ -59,6 +59,7 @@ func (r *Runtime) handleGuestDeath(died *sandboxState, generation uint64, waitEr
 	r.mu.Lock()
 	state.running = false
 	state.stopped = true
+	state.unflushed = false // the memory died with the guest
 	if state.slot >= 0 && r.slotOwnedByLocked(state.slot, state.id) {
 		r.releaseSlotLocked(state.slot)
 	}

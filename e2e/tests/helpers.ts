@@ -664,5 +664,5 @@ export function restartFirecrackerRunnerFromEnvFile(
 }
 
 export function innerContainerName(sandboxID: string): string {
-  return `sandbox-${sandboxID.slice(0, 12)}`;
+  return `sandbox-${sandboxID}`;
 }

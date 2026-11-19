@@ -75,6 +75,7 @@ func stubCreateDeps(rt *Runtime) {
 	rt.deps.coldBoot = func(context.Context, string, *bootParams) error { return nil }
 	rt.deps.newProxy = func(context.Context, string, string, string, string) (daemonProxy, error) { return &fakeProxy{}, nil }
 	rt.deps.probeDaemon = func(context.Context, string) error { return nil }
+	rt.deps.syncGuest = func(context.Context, string) error { return nil }
 }
 
 func testConfig() Config {

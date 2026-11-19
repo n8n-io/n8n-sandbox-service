@@ -212,6 +212,14 @@ redacts the signature. With `remote`, the
 the read URLs; it serves gRPC on its socket without TLS and authenticates
 nobody, so only the API may reach it.
 
+Heartbeats also name the sandboxes a runner is running work in, and the API
+marks them active. It only touches running sandboxes the store has on that
+runner, and takes at most 4096 well-formed ids per heartbeat, so a runner can
+hold its own sandboxes past their idle windows but no one else's. Since the
+advertised ID is taken as given, a client holding the registration credentials
+can do the same for any runner's sandboxes; that is no wider than what those
+credentials already allow, which is to take over the runner's placements.
+
 ## Guest to host and network
 
 Sandbox contents are untrusted. Both runtimes block egress to the same list of
@@ -228,6 +236,92 @@ mode is refused. The runner echoes the mode it applied; on a mismatch the API
 fails the create and asks the runner, best effort, to remove the sandbox, so a
 runner from before egress modes cannot hand out a public sandbox recorded as
 `none`.
+
+Egress `proxy` blocks the sandbox like `none` and opens one port: the runner's
+egress proxy, on a Docker bridge of its own (no route from `none` sandboxes) or
+inside the Firecracker slot's network namespace. On Docker the proxy names the
+sandbox by the connection's source address; sandboxes run with every
+capability dropped, so none can complete a TCP handshake from another's
+address. On Firecracker each sandbox has its own listener. Nothing a guest
+sends selects the policy. What the proxy then allows is in
+[API.md](API.md#the-egress-proxy); the parts that hold the boundary:
+
+- The CONNECT target alone picks the upstream, the filters and the credential;
+  SNI is ignored, every request on an inspected connection must name the same
+  host, and only HTTP/1.1 is offered, so one connection cannot carry requests
+  for another host or streams the proxy does not see. Requests are parsed by
+  Go's server and re-serialised, never forwarded as received bytes.
+- Names are resolved by the proxy, every record is checked, and the checked
+  address is dialled, so rebinding cannot reach a blocked range. The runner's
+  own interface addresses count as blocked, since the proxy dials from the
+  runner's namespace, where they reach the host's services. Only hosts the
+  operator lists in `SANDBOX_EGRESS_PROXY_INTERNAL_HOSTS` may resolve into a
+  blocked range, and that list serves every tenant: on a shared internal
+  service, per-tenant credentials are the only separation. The exemption
+  holds only for a spec whose `allow` names the host.
+- `allow_public` opens a proxy sandbox to every public host, as `public`
+  egress does, but on ports 443 and 80 only and with the proxy's address
+  checks; the hosts its spec names keep their credentials, repo filter and
+  metering. Only the operator can enable it
+  (`SANDBOX_API_EGRESS_ALLOW_PUBLIC`): a tenant cannot open its own sandbox.
+  Data can leave to any public host from such a sandbox, and metering, the
+  model block and the Git filter then bind only requests that use a
+  credential the proxy holds: a key or token of the guest's own reaches its
+  provider under any name.
+- What one guest holds on the runner is bounded: 256 proxy connections, a
+  10-minute idle limit on tunnels, 1 MiB of push command list, 16 MiB of a
+  Responses request body (read to refuse `background: true`, which would spend
+  before any usage exists), and 10 000 unsent usage records per sandbox, so
+  one sandbox cannot push the others' out.
+- On a Git host only smart HTTP for listed repositories passes, so the
+  org-wide token the proxy injects cannot reach the REST API or other
+  repositories; path forms a server could read differently are refused. A push
+  is refused whole, before any of it is forwarded, if its command list names a
+  ref outside `push_refs` or is not the plain form (no push certificate, whose
+  capability is stripped from the advertisement).
+- With `hide_refs`, a guest cannot list, fetch by name, or fetch by object id
+  what those refs hold: fetches must use protocol v2, listings are filtered,
+  and a fetch may want only ids the proxy listed to it as visible tips,
+  because the Git server sends any object it holds to a v2 want. Not covered:
+  a guest that already knows a hidden object's id can push a commit or tree
+  naming it, which the server accepts since it holds the object, and fetch it
+  back from its own ref. The proxy never discloses such an id; data that must
+  stay unreadable belongs in another repository.
+- Credentials are read per tenant from the secret store (each tenant's
+  directory its own `os.Root`, so neither `..` nor a symlink leaves it; the API
+  sets the tenant), replace whatever the guest sent, and are sent only to the
+  CONNECT target over verified TLS, or plain HTTP where the spec allows it.
+  Redirects are returned, not followed. A response that echoes the secret, or
+  the header value it was sent as, has it overwritten with `*` (same length) in
+  headers and body, as is and JSON- or percent-escaped. Credentialed requests
+  go out without `Accept-Encoding`, `Range` or `If-Range`, and a compressed or
+  `206` response to one is refused, since it cannot be scrubbed whole. A
+  partial echo (an upstream quoting the first characters of a key) is not
+  masked.
+- On a model host only the metered and token-free paths pass, so spending
+  cannot go around the meter, and the model block refuses new requests at once.
+
+The runner refuses a template it does not serve, rather than booting another
+image in its place.
+
+Archives hold whatever a tenant wrote to its sandbox's disk. Each is sealed by
+the runner with AES-256-GCM under a key made for that archive alone (chunk
+order and the final chunk authenticated), so the store alone reveals nothing
+and an altered, truncated or swapped object fails to restore, which deletes the
+sandbox rather than booting it. Only that, or the store no longer having the
+object, counts as lost: a failed or cut-off download leaves the sandbox
+archived. The key is kept in the API's database wrapped
+by `SANDBOX_API_ARCHIVE_KEY_FILE`; database and store together are needed to
+read an archive, and the master key with either. Runners hold no store
+credentials: they get a URL for one object and one method, valid an hour
+(signed by the API for its directory, presigned for S3); an upload URL writes
+its object once and never replaces it (`If-None-Match: *`), and errors drop the
+URL. Object names are
+`<tenant>/<sandbox>/<random>`. A restore boots only the template version the
+archive was made from. On Docker, where the disk quota counts allocated blocks
+and an export writes sparse files out in full, an archive is capped at the
+template's image size plus its disk quota (plus 10% and 64 MiB for tar
+headers), on export and again on import; with no quota there is no cap.
 
 Firecracker runner hosts run with nested KVM off (`nested=0` on `kvm_intel` and
 `kvm_amd`), so sandboxes cannot run a hypervisor. `install-runner-host.sh` fails
@@ -520,9 +614,17 @@ every sandbox built from it. What is verified today:
 These are known and accepted. Do not read the section above as implying any of
 them.
 
-**Egress is `public` or `none`.** A `public` sandbox can reach any address
+**`public` egress is broad.** A `public` sandbox can reach any address
 outside the blocked ranges, which are not a definition of what is internal.
-Per-sandbox allowlists are not implemented.
+
+**What `proxy` egress does not cover.** A tunnelled (uninspected) host carries
+anything inside its TLS, so allow only hosts whose whole surface is acceptable.
+A credential on a host that is neither a Git nor a model host goes with every
+request to it. A request that resolves to an internal host's address is
+allowed only by name; the proxy does not check that name's records further.
+Usage records wait in runner memory and are lost if the runner restarts before
+the sink acknowledges them. The runner's egress CA key is in its memory (or the
+configured file); a runner compromise exposes it and every secret it reads.
 
 **The runner does not enforce tenancy.** It has no tenant concept at all. Anyone
 holding a runner API key and a client certificate the CA has signed can operate
@@ -566,9 +668,10 @@ requests in its own memory, so across replicas a tenant can hold up to
 
 **Per-sandbox disk usage is not bounded by default.** On the Sysbox runtime a
 per-sandbox disk quota applies only when `SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB`
-is non-zero and the runner's entrypoint managed to mount its quota pool at
-startup; it defaults to `0`, and sandboxes then share the runner's storage with
-no per-sandbox limit. The Firecracker runtime gives each sandbox a fixed-size
+or a template's `disk_quota_mb` is non-zero; it defaults to `0`, and sandboxes
+then share the runner's storage with no per-sandbox limit. If a quota is
+configured but the entrypoint cannot mount its quota pool, the runner refuses to
+start unless `SANDBOX_RUNNER_ALLOW_UNENFORCED_DISK_QUOTA=true`. The Firecracker runtime gives each sandbox a fixed-size
 root filesystem image, but all sandboxes on a runner share its data volume, so
 one tenant's sandboxes can fill it for every sandbox on that runner
 ([details](../internal/runner/runtime/firecracker.ee/README.md#data-volume)).
@@ -631,6 +734,8 @@ The boundaries above are covered by tests rather than asserted on paper.
 | Volume builder: build mode only as PID 1 and root, the tar policy, the status record against hostile input, read-only tar and rootfs, cleanup on every way out | [internal/daemon/volumebuild/build_test.go](../internal/daemon/volumebuild/build_test.go), [internal/daemon/volumebuild/build_linux_test.go](../internal/daemon/volumebuild/build_linux_test.go), [internal/daemon/volumebuild/contract_test.go](../internal/daemon/volumebuild/contract_test.go), [cmd/daemon/main_test.go](../cmd/daemon/main_test.go), [internal/runner/runtime/firecracker.ee/volume_build_test.go](../internal/runner/runtime/firecracker.ee/volume_build_test.go), [internal/runner/grpc_volume_build_test.go](../internal/runner/grpc_volume_build_test.go), [e2e/tests/volume-build.spec.ts](../e2e/tests/volume-build.spec.ts) |
 | Unprivileged npm and PyPI installation, and the build toolchain | [e2e/tests/sandbox-packages.spec.ts](../e2e/tests/sandbox-packages.spec.ts) |
 | Blocked list and egress rule generation | [internal/runner/runtime/netpolicy/private_ranges_test.go](../internal/runner/runtime/netpolicy/private_ranges_test.go), [internal/runner/runtime/docker/netrules/netrules_test.go](../internal/runner/runtime/docker/netrules/netrules_test.go), [internal/runner/runtime/firecracker.ee/network/egress_test.go](../internal/runner/runtime/firecracker.ee/network/egress_test.go) |
+| Egress proxy: allow list, address checks and rebinding, inspection and Host binding, credential injection, tenant scoping, response scrubbing and log redaction, redirects and upgrades, model paths, block and metering | [internal/egressproxy/proxy_test.go](../internal/egressproxy/proxy_test.go), [internal/egressproxy/credentials/credentials_test.go](../internal/egressproxy/credentials/credentials_test.go), [internal/egressproxy/metering/usage_test.go](../internal/egressproxy/metering/usage_test.go), [internal/runner/egress_test.go](../internal/runner/egress_test.go) |
+| Git repository and ref filter, fuzzed, and against a real `git` client and `git http-backend` | [internal/egressproxy/gitfilter/gitfilter_test.go](../internal/egressproxy/gitfilter/gitfilter_test.go), [internal/egressproxy/git_differential_test.go](../internal/egressproxy/git_differential_test.go) |
 | Firecracker: creates refused below 5% free disk, no sandbox deleted to make room | [internal/runner/runtime/firecracker.ee/disk_test.go](../internal/runner/runtime/firecracker.ee/disk_test.go), [internal/runner/runtime/firecracker.ee/stop_wake_test.go](../internal/runner/runtime/firecracker.ee/stop_wake_test.go) |
 | Egress mode: API to runner to network and rules, refused when the runner does not confirm it | [internal/api/handlers_create_sandbox_test.go](../internal/api/handlers_create_sandbox_test.go), [internal/runner/grpc_control_test.go](../internal/runner/grpc_control_test.go), [internal/runner/runtime/docker/runtime_test.go](../internal/runner/runtime/docker/runtime_test.go), [internal/runner/runtime/firecracker.ee/network_wirer_test.go](../internal/runner/runtime/firecracker.ee/network_wirer_test.go) |
 

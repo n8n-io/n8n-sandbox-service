@@ -61,7 +61,7 @@ The system has three tiers:
 2. **Runner** — manages sandbox lifecycle (containers or microVMs); proxies exec/file operations to daemons
 3. **Daemon** — lightweight HTTP server running inside each sandbox; executes commands and manages files
 
-Multiple runners can register with a single API gateway for horizontal scaling. The API distributes sandbox creation across eligible runners using load-aware placement (lowest `capacity_used`).
+Multiple runners can register with a single API gateway for horizontal scaling. The API distributes sandbox creation across eligible runners that serve the requested template, using load-aware placement (lowest `capacity_used`).
 
 ### Multi-pod API (Postgres)
 
@@ -89,7 +89,7 @@ The API gateway is the single public-facing service. It exposes a REST API for s
 | gRPC server | `internal/api/grpc/` | `RunnerRegistry` service — accepts runner heartbeat streams |
 | Store | `internal/api/store/` | Sandbox metadata (`sqlite` default, `postgres` for multi-pod) |
 | Sweeper lock | `internal/api/store/postgres.go` | Postgres advisory lock for idle sweeper leadership |
-| Idle sweeper | `internal/api/ttl.go` | Periodic scan to stop/delete idle sandboxes (ephemeral ones are deleted, never stopped), bounded concurrency with per-call runner deadlines |
+| Idle sweeper | `internal/api/ttl.go` | Periodic scan to stop, archive or delete idle sandboxes by their own windows or the global ones (ephemeral ones are deleted, never stopped), bounded concurrency with per-call runner deadlines |
 | Activity recorder | `internal/api/activity.go` | Writes `last_active_at` in the background ([Sandbox activity](#sandbox-activity)) |
 | Key cache | `internal/api/apikey_cache.go` | Per-replica cache of tenant key lookups ([Tenant key cache](#tenant-key-cache)) |
 | Config | `internal/api/config/` | Environment variable parsing and validation |
@@ -108,8 +108,11 @@ Each runner hosts sandboxes through the shared `runtime.Runtime` contract. The D
 | Docker runtime | `internal/runner/runtime/docker/` | Create, stop, delete containers; reconcile on startup; manage Docker network |
 | Firecracker runtime | `internal/runner/runtime/firecracker.ee/` | Create, stop, delete microVM sandboxes; manage jailer, snapshot restore, and host networking |
 | Docker client | `internal/runner/runtime/docker/docker_client.go` | Thin wrapper around the `docker` CLI |
-| Registration client | `internal/runner/register/` | gRPC heartbeat stream to API; sends capacity, health and cordon state every 10s, and at once when cordon changes |
-| gRPC control server | `internal/runner/grpc_control.go` | `SandboxControl` service — accepts create/stop/delete RPCs from API, and cordon RPCs |
+| Registration client | `internal/runner/register/` | gRPC heartbeat stream to API; sends capacity, health, cordon state, templates and active sandboxes every 10s, and at once when cordon changes |
+| Archive and restore | `internal/api/archive.go`, `internal/api/archivestore/`, `internal/archive/`, `internal/runner/archive_rpc.go` | Moves stopped sandboxes' disks to a directory or S3 store sealed per archive, and restores them on any runner |
+| Egress proxy | `internal/egressproxy/` (`gitfilter/`, `credentials/`, `metering/`), `internal/runner/egress.go` | Serves `egress: "proxy"` sandboxes: allow list, TLS inspection with the runner CA, Git repo and ref filter, credential injection, model metering and block, usage sink |
+| Activity tracker | `internal/runner/activity/`, `internal/runner/activity_poll.go` | Sandboxes with a running execution or an open execution stream; the heartbeat reports them, stop refuses them, drain waits for them |
+| gRPC control server | `internal/runner/grpc_control.go` | `SandboxControl` service — accepts create/stop/delete RPCs from API, and cordon and activity RPCs |
 | HTTP proxy | `internal/runner/proxy.go` | Reverse proxy from runner HTTP to sandbox daemon |
 | Network rules | `internal/runner/runtime/docker/netrules/` | iptables rules for Docker sandbox network isolation |
 | Resource limits | `internal/runner/runtime/docker/resource_limits.go` | Memory, CPU, PID, and disk quota enforcement |
@@ -142,7 +145,7 @@ Per-tenant `max_sandboxes` is checked before the runner call and again when the 
 
 ### API ↔ Runner Registration (gRPC Bidirectional Streaming + mTLS)
 
-Runners register with the API by opening a long-lived gRPC stream (`RunnerRegistry.Connect`). The runner sends periodic heartbeats containing its ID, HTTP base URL, health status, cordon state, and capacity metrics. The API uses these to maintain a live registry and route requests. The gRPC channel is secured with mutual TLS and an additional bearer token.
+Runners register with the API by opening a long-lived gRPC stream (`RunnerRegistry.Connect`). The runner sends periodic heartbeats containing its ID, HTTP base URL, health status, cordon state, served templates, capacity metrics and the sandboxes it is running work in. The API uses these to maintain a live registry and route requests, skipping cordoned runners, and marks those sandboxes active, only where the store has them on that runner. The gRPC channel is secured with mutual TLS and an additional bearer token.
 
 **Proto definition:** `proto/runner/v1/runner.proto`
 
@@ -171,11 +174,11 @@ Each hop uses `httputil.ReverseProxy` with URL rewriting. The runner can wake a 
 ### Creating a Sandbox
 
 1. Client sends `POST /sandboxes` with API key
-2. API picks the eligible runner with the lowest reported `capacity_used`
+2. API picks the eligible (healthy, uncordoned) runner serving the requested template with the lowest reported `capacity_used`
 3. API calls `SandboxControl.CreateSandbox` on the selected runner (gRPC). A Firecracker runner with no free slot or under 5% free space on its data volume, or a runner of either kind with no room in its volume cache for a required volume, refuses before creating anything, with `ResourceExhausted` and an `ErrorInfo` detail (`sandbox-runner`/`CAPACITY_EXHAUSTED`) that tells the refusal from gRPC's own uses of that code. Only that refusal makes the API repeat steps 2–3 without the runner, up to three runners; it answers `503` when every runner tried refused or none is eligible. Any other runner error ends the create with `500`
-4. Runner creates the sandbox: a container from the sandbox image with resource limits and labels, or a microVM restored from the golden snapshot
+4. Runner creates the sandbox: a container `sandbox-<id>` from the template's image with its resource limits and labels (refused if a container already carries the id's label), or a microVM restored from the golden snapshot
 5. Runner waits for the daemon inside it to become healthy
-6. API stores the sandbox record (ID, tenant, status, runner assignment)
+6. API stores the sandbox record (ID, tenant, status, runner assignment, template, egress and create options)
 7. API returns the sandbox ID and status to the client
 
 ### Executing a Command
@@ -189,11 +192,13 @@ Each hop uses `httputil.ReverseProxy` with URL rewriting. The runner can wake a 
 
 ### File Operations
 
-File read, write, list, stat, copy, move, and delete follow the same two-hop reverse proxy path. The daemon performs all file system operations inside the container. Request body size is capped (default 10 MB).
+File read, write, list, stat, copy, move, and delete follow the same two-hop reverse proxy path. The daemon performs all file system operations inside the container as the guest user, taking every path from `/`; a path that user may not use is `403`. Request body size is capped (default 10 MB).
 
 ### Recovering a Crashed Guest
 
 A sandbox can lose its guest (daemon exit, kernel panic, OOM) without losing its files. Both backends bring it back on the next request and answer that request with `409 sandbox_restarted` instead of proxying it, because memory — running processes, execution history — is gone; the retry succeeds ([API.md](API.md#http-409-sandbox_restarted--the-sandbox-came-back-without-its-memory)). Each recovery increments `sandbox_recoveries_total`.
+
+**Zombie reaping.** The daemon is PID 1 in every sandbox (the container's command, or `init=` in a Firecracker guest), so it reaps orphaned processes itself: a `wait4(-1)` loop that also supplies the exit status of the commands it runs.
 
 **Firecracker.** The guest daemon is PID 1 with `panic=1 reboot=k`, and jailer execs Firecracker in place, so the process the runner waits on exits when the guest dies. A generation counter bumped before every deliberate kill tells that apart from a runner-initiated stop. The dead sandbox is torn down and releases its slot immediately (stopped, files intact, no usable snapshot), so an untouched crashed sandbox costs only disk. The next request wakes it by cold booting its own rootfs with the boot parameters recorded at create. Its stale snapshot is never restored: a memory image whose cached filesystem metadata predates later disk writes would corrupt the rootfs silently. A sandbox is pinned to cold boot from the moment its snapshot is restored, and only a clean stop (pause, then snapshot) lifts the pin. Cold boot keeps the files and skips the rootfs/snapshot clones that dominate a create.
 
@@ -223,11 +228,11 @@ Trust boundaries, the mechanism enforcing each, and the non-guarantees are in [s
 
 ### API store
 
-SQLite at `SANDBOX_API_DATA_DIR/api.db` (default) or Postgres. Tables: `sandboxes` (ID, tenant, status, timestamps, runner routing), `tenants`, `api_keys` (hashed), and on Postgres `runners` (heartbeats; SQLite keeps the runner registry in memory). Migrations run automatically on startup. The SQLite file uses WAL with `synchronous=NORMAL` unless `SANDBOX_API_SQLITE_WAL=false`.
+SQLite at `SANDBOX_API_DATA_DIR/api.db` (default) or Postgres. Tables: `sandboxes` (ID, tenant, status, timestamps, runner routing, template, egress and proxy spec, idle windows, archive object and wrapped key), `tenants` (quota, `max_idle_window`), `api_keys` (hashed), and on Postgres `runners` (heartbeats; SQLite keeps the runner registry in memory). Migrations run automatically on startup. The SQLite file uses WAL with `synchronous=NORMAL` unless `SANDBOX_API_SQLITE_WAL=false`.
 
 ### Runner stateless
 
-Runners hold no persistent state. On startup each runtime removes every sandbox left over from a previous run and starts empty; sandboxes do not survive a runner restart.
+Runners hold no persistent state. On startup each runtime removes every sandbox left over from a previous run and starts empty; sandboxes do not survive a runner restart, except archived ones, whose disks are in the archive store and restore onto any runner serving their template.
 
 ### Daemon In-Memory
 

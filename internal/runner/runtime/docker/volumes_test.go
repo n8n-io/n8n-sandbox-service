@@ -138,7 +138,7 @@ func TestCreateWithVolumesAcquiresBeforeTheContainer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateSandbox() failed: %v", err)
 	}
-	want := []string{"find", "acquire", "acquire", "flags /cache", "create", "start", "containerIP"}
+	want := []string{"find", "acquire", "acquire", "flags /cache", "find", "create", "start", "containerIP"}
 	if !reflect.DeepEqual(*runtime.events, want) {
 		t.Fatalf("events = %v, want %v", *runtime.events, want)
 	}
@@ -182,7 +182,7 @@ func TestDockerVolumeArgs(t *testing.T) {
 		t.Errorf("Docker would read %q, %v; want %q", fields, err, wantFields)
 	}
 
-	createArgs := dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerBridgeNetwork, nil, false, nil, true, mounts[:1])
+	createArgs := dockerContainerCreateArgs("sandbox-id", "default", "sandbox-name", "sandbox-image", runnerBridgeNetwork, nil, false, nil, true, mounts[:1])
 	if tail := createArgs[len(createArgs)-5:]; !reflect.DeepEqual(tail, append(want[:4:4], "sandbox-image")) {
 		t.Errorf("create args end in %q, want the volume args before the image", tail)
 	}
@@ -518,7 +518,7 @@ func TestCreateWithoutVolumesIsUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"create", "start", "containerIP"}; !reflect.DeepEqual(*runtime.events, want) || runtime.backend.mounts != nil {
+	if want := []string{"find", "create", "start", "containerIP"}; !reflect.DeepEqual(*runtime.events, want) || runtime.backend.mounts != nil {
 		t.Errorf("events = %v, mounts = %v; want %v and none", *runtime.events, runtime.backend.mounts, want)
 	}
 	if info.VolumesLeftOut != nil {

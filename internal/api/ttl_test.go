@@ -1,10 +1,13 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"io"
 	"math"
 	"net"
+	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -42,12 +45,90 @@ type fakeSandboxControl struct {
 	createHook func(ctx context.Context)
 	stopHook   func(ctx context.Context)
 	deleteHook func(ctx context.Context)
+	// cordoned is the drain state; executions and streams are what GetActivity
+	// reports.
+	cordoned            bool
+	executions, streams int32
+	// stopErr is returned by every stop RPC when set, after recording it.
+	stopErr error
+	// Egress changes received, and the error to answer them with.
+	egressSpecs  []string
+	modelBlocked []bool
+	egressErr    error
+	// Archives: what ArchiveSandbox uploads, the create options of each
+	// restore, and the error restores answer with.
+	archiveBody []byte
+	restored    []string
+	restoreRuns int
+	restoreErr  error
 	// Every SetCordon value, and the x-api-key and runner id it came with, in order.
 	cordonCalls []bool
 	cordonKeys  []string
 	cordonIDs   []string
 	// Returned by every SetCordon RPC when set, after recording it.
 	cordonErr error
+}
+
+// ArchiveSandbox uploads a fixed body to the signed URL, as a runner uploads
+// a sealed disk.
+func (f *fakeSandboxControl) ArchiveSandbox(ctx context.Context, req *pb.ArchiveSandboxRequest) (*pb.ArchiveSandboxResponse, error) {
+	f.mu.Lock()
+	body := append([]byte(nil), f.archiveBody...)
+	f.mu.Unlock()
+	httpReq, _ := http.NewRequestWithContext(ctx, http.MethodPut, req.GetUploadUrl(), bytes.NewReader(body))
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		return nil, status.Error(codes.Unavailable, err.Error())
+	}
+	resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return nil, status.Errorf(codes.Unavailable, "store answered %d", resp.StatusCode)
+	}
+	return &pb.ArchiveSandboxResponse{Size: int64(len(body))}, nil
+}
+
+// RestoreSandbox downloads the archive and checks it is what was uploaded.
+func (f *fakeSandboxControl) RestoreSandbox(ctx context.Context, req *pb.RestoreSandboxRequest) (*pb.CreateSandboxResponse, error) {
+	f.mu.Lock()
+	restoreErr, want := f.restoreErr, f.archiveBody
+	f.restoreRuns++
+	f.mu.Unlock()
+	if restoreErr != nil {
+		return nil, restoreErr
+	}
+	resp, err := http.Get(req.GetDownloadUrl())
+	if err != nil {
+		return nil, status.Error(codes.Unavailable, err.Error())
+	}
+	got, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !bytes.Equal(got, want) || len(req.GetKey()) != 32 {
+		return nil, status.Error(codes.DataLoss, "archive does not open")
+	}
+	f.mu.Lock()
+	f.restored = append(f.restored, req.GetCreateOptionsJson())
+	f.mu.Unlock()
+	return &pb.CreateSandboxResponse{ContainerIp: "10.0.0.7", AppliedCreateOptionsJson: req.GetCreateOptionsJson()}, nil
+}
+
+func (f *fakeSandboxControl) UpdateEgressProxy(_ context.Context, req *pb.UpdateEgressProxyRequest) (*pb.UpdateEgressProxyResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.egressErr != nil {
+		return nil, f.egressErr
+	}
+	f.egressSpecs = append(f.egressSpecs, req.GetEgressProxyJson())
+	return &pb.UpdateEgressProxyResponse{}, nil
+}
+
+func (f *fakeSandboxControl) SetModelBlocked(_ context.Context, req *pb.SetModelBlockedRequest) (*pb.SetModelBlockedResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.egressErr != nil {
+		return nil, f.egressErr
+	}
+	f.modelBlocked = append(f.modelBlocked, req.GetBlocked())
+	return &pb.SetModelBlockedResponse{}, nil
 }
 
 func (f *fakeSandboxControl) SetCordon(ctx context.Context, req *pb.SetCordonRequest) (*pb.SetCordonResponse, error) {
@@ -63,7 +144,14 @@ func (f *fakeSandboxControl) SetCordon(ctx context.Context, req *pb.SetCordonReq
 	if f.cordonErr != nil {
 		return nil, f.cordonErr
 	}
-	return &pb.SetCordonResponse{Cordoned: req.GetCordoned()}, nil
+	f.cordoned = req.GetCordoned()
+	return &pb.SetCordonResponse{Cordoned: f.cordoned}, nil
+}
+
+func (f *fakeSandboxControl) GetActivity(context.Context, *pb.GetActivityRequest) (*pb.GetActivityResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return &pb.GetActivityResponse{Cordoned: f.cordoned, ActiveExecutions: f.executions, OpenStreams: f.streams, CapacityTotal: 10, CapacityUsed: 3, CapacityStopped: 1}, nil
 }
 
 func (f *fakeSandboxControl) CreateSandbox(ctx context.Context, req *pb.CreateSandboxRequest) (*pb.CreateSandboxResponse, error) {
@@ -97,6 +185,9 @@ func (f *fakeSandboxControl) StopSandbox(ctx context.Context, req *pb.StopSandbo
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.stopped = append(f.stopped, req.GetSandboxId())
+	if f.stopErr != nil {
+		return nil, f.stopErr
+	}
 	return &pb.StopSandboxResponse{}, nil
 }
 
@@ -684,5 +775,84 @@ func TestIdleStopSweepSkipsUnreachableRunnerAfterFirstFailure(t *testing.T) {
 	}
 	if stopped, _ := healthy.calls(); len(stopped) != 1 || stopped[0] != healthyID {
 		t.Fatalf("healthy runner stops = %v, want [%s]", stopped, healthyID)
+	}
+}
+
+// A sandbox's own windows replace the global ones: a longer stop window keeps
+// it running past the global one, a shorter one stops it first, and a delete
+// window removes it while the global one would still hold it.
+func TestIdleSweepAppliesPerSandboxWindows(t *testing.T) {
+	fake := &fakeSandboxControl{}
+	addr := startFakeRunnerControl(t, fake)
+	s := newSweepStore(t)
+	cfg := idleSweepConfig() // stop 1h, delete 24h, buffer 1m
+	now := time.Now()
+
+	const longer = "a1111111-1111-4111-8111-111111111111"
+	const shorter = "a2222222-2222-4222-8222-222222222222"
+	const deleteSoon = "a3333333-3333-4333-8333-333333333333"
+	for _, rec := range []*store.SandboxRecord{
+		{ID: longer, Status: "running", LastActiveAt: now.Add(-2 * time.Hour).Unix(), IdleStopAfter: 3 * 3600},
+		{ID: shorter, Status: "running", LastActiveAt: now.Add(-10 * time.Minute).Unix(), IdleStopAfter: 300},
+		{ID: deleteSoon, Status: "stopped", LastActiveAt: now.Add(-3 * time.Hour).Unix(), IdleDeleteAfter: 2 * 3600},
+	} {
+		rec.Kind, rec.CreatedAt, rec.RunnerHTTPBase, rec.RunnerControlGRPCAddr, rec.TenantID = store.KindGeneral, rec.LastActiveAt, "https://127.0.0.1:9", addr, store.AdminTenantID
+		if err := s.Create(rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	runSweep(t, s, cfg, now)
+
+	stopped, deleted := fake.calls()
+	if len(stopped) != 1 || stopped[0] != shorter {
+		t.Fatalf("stops = %v, want [%s]", stopped, shorter)
+	}
+	if len(deleted) != 1 || deleted[0] != deleteSoon {
+		t.Fatalf("deletes = %v, want [%s]", deleted, deleteSoon)
+	}
+	if rec := mustGet(t, s, longer); rec.Status != "running" {
+		t.Fatalf("sandbox with a longer window = %+v, want running", rec)
+	}
+}
+
+// With every global window off, the sweeper still acts on sandboxes that set
+// their own.
+func TestIdleSweepRunsOwnWindowsWithGlobalOff(t *testing.T) {
+	fake := &fakeSandboxControl{}
+	addr := startFakeRunnerControl(t, fake)
+	s := newSweepStore(t)
+	cfg := idleSweepConfig()
+	cfg.IdleStopAfter, cfg.IdleDeleteAfter = 0, 0
+	now := time.Now()
+	const own = "b1111111-1111-4111-8111-111111111111"
+	const plain = "b2222222-2222-4222-8222-222222222222"
+	if err := s.Create(&store.SandboxRecord{ID: own, Kind: store.KindGeneral, Status: "running", LastActiveAt: now.Add(-time.Hour).Unix(), IdleStopAfter: 60,
+		RunnerHTTPBase: "https://127.0.0.1:9", RunnerControlGRPCAddr: addr, TenantID: store.AdminTenantID}); err != nil {
+		t.Fatal(err)
+	}
+	seedRunningSandbox(t, s, plain, addr, now.Add(-1000*time.Hour).Unix(), false)
+	runSweep(t, s, cfg, now)
+	if stopped, _ := fake.calls(); len(stopped) != 1 || stopped[0] != own {
+		t.Fatalf("stops = %v, want [%s]", stopped, own)
+	}
+}
+
+// The runner refusing a stop because a run is in progress is a skip, not a
+// failure: the sandbox stays running in the store.
+func TestIdleStopSweepSkipsActiveSandbox(t *testing.T) {
+	fake := &fakeSandboxControl{stopErr: status.Error(codes.FailedPrecondition, "sandbox is active")}
+	addr := startFakeRunnerControl(t, fake)
+	s := newSweepStore(t)
+	cfg := idleSweepConfig()
+	now := time.Now()
+	const id = "c1111111-1111-4111-8111-111111111111"
+	seedRunningSandbox(t, s, id, addr, now.Add(-2*time.Hour).Unix(), false)
+	stats := sweepIdleStopSandboxes(context.Background(), s, registry.New(45*time.Second), cfg, runnerControlTLS(cfg), now)
+	if stats.failed != 0 || stats.acted != 0 {
+		t.Fatalf("stats = %+v, want neither failed nor acted", stats)
+	}
+	if rec := mustGet(t, s, id); rec.Status != "running" {
+		t.Fatalf("row = %+v, want running", rec)
 	}
 }

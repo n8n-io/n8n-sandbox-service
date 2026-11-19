@@ -116,7 +116,7 @@ func HandleExec(ctx context.Context, command string, env []string, workdir strin
 		}
 	}()
 
-	processState, waitErr := cmd.Process.Wait()
+	exitCode, signaled, waitErr := waitProcess(cmd.Process)
 	close(processDone) // unblock the kill goroutine if ctx was not cancelled
 
 	// Reap the shell process first, then give stdout/stderr readers a brief
@@ -136,22 +136,15 @@ func HandleExec(ctx context.Context, command string, env []string, workdir strin
 	// Finalize exec.Cmd bookkeeping after reads have completed. Because the
 	// process was already reaped via Process.Wait, cmd.Wait may report ECHILD;
 	// treat that as expected rather than surfacing a spurious exec failure.
-	if err := finalizeCmdWait(cmd); err != nil {
+	if err := finalizeCmdWait(cmd); err != nil && activeReaper == nil {
 		slog.Warn("finalize command wait", "err", err)
 	}
 
 	executionTimeMs := time.Since(startTime).Milliseconds()
 
-	exitCode := 0
 	timedOut := false
-	killed := false
+	killed := signaled
 
-	if processState != nil {
-		exitCode = processState.ExitCode()
-		if status, ok := processState.Sys().(syscall.WaitStatus); ok && status.Signaled() {
-			killed = true
-		}
-	}
 	if waitErr != nil {
 		exitCode = -1
 		killed = true

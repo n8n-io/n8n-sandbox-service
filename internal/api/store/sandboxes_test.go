@@ -536,5 +536,245 @@ func testRecordActivity(t *testing.T, s SandboxStore, prefix string) {
 		map[string]int64{a: 150},
 		map[string]row{a: {200, "running"}, b: {300, "running"}})
 
+	for _, status := range []string{"archived", "restoring"} {
+		if err := s.UpdateStatus(b, status); err != nil {
+			t.Fatalf("update status: %v", err)
+		}
+		// A late write must not revive a sandbox whose runner copy may be gone.
+		check("newer time on a "+status+" row",
+			map[string]int64{b: 500},
+			map[string]row{b: {300, status}})
+	}
+
 	check("nothing", map[string]int64{}, map[string]row{a: {200, "running"}})
+}
+
+// The create options added for templates, idle windows and the egress proxy
+// round-trip, and rows from before them read back as the defaults.
+func TestCreateOptionColumns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "api.db")
+	s, err := New(path)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	rec := &SandboxRecord{
+		ID:              "with-options",
+		Kind:            KindGeneral,
+		Status:          "running",
+		Egress:          "proxy",
+		Template:        "python",
+		IdleStopAfter:   600,
+		IdleDeleteAfter: 7200,
+		EgressProxy:     `{"allow":[]}`,
+	}
+	if err := s.Create(rec); err != nil {
+		t.Fatalf("create record: %v", err)
+	}
+	got, err := s.GetAnyKind(rec.ID)
+	if err != nil || got == nil {
+		t.Fatalf("get: got=%v err=%v", got, err)
+	}
+	if got.Template != "python" || got.IdleStopAfter != 600 || got.IdleDeleteAfter != 7200 || got.EgressProxy != rec.EgressProxy {
+		t.Fatalf("round trip = %+v", got)
+	}
+
+	for _, col := range []string{"template", "idle_stop_after", "idle_delete_after", "egress_proxy"} {
+		if _, err := s.db.Exec(`ALTER TABLE sandboxes DROP COLUMN ` + col); err != nil {
+			t.Fatalf("drop %s column: %v", col, err)
+		}
+	}
+	if _, err := s.db.Exec(`INSERT INTO sandboxes (id, status, created_at, last_active_at, rootfs_path, socket_path, container_ip)
+		VALUES ('legacy', 'running', 1, 2, '', '', '')`); err != nil {
+		t.Fatalf("insert legacy row: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	s, err = New(path)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer s.Close()
+	got, err = s.GetAnyKind("legacy")
+	if err != nil || got == nil {
+		t.Fatalf("get legacy row: got=%v err=%v", got, err)
+	}
+	if got.Template != "default" || got.IdleStopAfter != 0 || got.IdleDeleteAfter != 0 || got.EgressProxy != "" {
+		t.Fatalf("legacy row = %+v, want the defaults", got)
+	}
+}
+
+// A row's own window replaces the global one in both directions, and with the
+// global window off only rows with their own window are candidates.
+func TestListIdlePerSandboxWindows(t *testing.T) {
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	testListIdlePerSandboxWindows(t, s, "")
+}
+
+func testListIdlePerSandboxWindows(t *testing.T, s SandboxStore, prefix string) {
+	t.Helper()
+	const now = int64(10_000)
+	for _, rec := range []*SandboxRecord{
+		{ID: prefix + "global", LastActiveAt: now - 150},                      // global 100: due
+		{ID: prefix + "longer", LastActiveAt: now - 150, IdleStopAfter: 3600}, // own 1h: not due
+		{ID: prefix + "shorter", LastActiveAt: now - 70, IdleStopAfter: 60},   // own 60s: due
+		{ID: prefix + "stopped", LastActiveAt: now - 150, Status: "stopped"},  // other phase
+		{ID: prefix + "del", LastActiveAt: now - 150, IdleDeleteAfter: 120, Status: "stopped"},
+	} {
+		if rec.Status == "" {
+			rec.Status = "running"
+		}
+		rec.Kind, rec.TenantID, rec.CreatedAt = KindGeneral, AdminTenantID, 1
+		if err := s.Create(rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ids := func(phase IdlePhase, global int64) map[string]bool {
+		rows, err := s.ListIdle(phase, now, global)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]bool{}
+		for _, r := range rows {
+			if strings.HasPrefix(r.ID, prefix) {
+				out[strings.TrimPrefix(r.ID, prefix)] = true
+			}
+		}
+		return out
+	}
+	if got := ids(IdleStop, 100); len(got) != 2 || !got["global"] || !got["shorter"] {
+		t.Fatalf("stop, global 100: %v", got)
+	}
+	if got := ids(IdleStop, 0); len(got) != 1 || !got["shorter"] {
+		t.Fatalf("stop, global off: %v", got)
+	}
+	if got := ids(IdleDelete, 0); len(got) != 1 || !got["del"] {
+		t.Fatalf("delete, global off: %v", got)
+	}
+	if got := ids(IdleDelete, 100); len(got) != 2 || !got["del"] || !got["stopped"] {
+		t.Fatalf("delete, global 100: %v", got)
+	}
+}
+
+// A runner vouches only for running sandboxes stored as placed on it.
+func TestTouchRunnerActive(t *testing.T) {
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	testTouchRunnerActive(t, s, "")
+}
+
+func testTouchRunnerActive(t *testing.T, s SandboxStore, prefix string) {
+	t.Helper()
+	old := time.Now().Add(-time.Hour).Unix()
+	for _, rec := range []*SandboxRecord{
+		{ID: prefix + "a", RunnerID: prefix + "r1", Status: "running"},
+		{ID: prefix + "b", RunnerID: prefix + "r2", Status: "running"},
+		{ID: prefix + "c", RunnerID: prefix + "r1", Status: "stopped"},
+	} {
+		rec.Kind, rec.TenantID, rec.CreatedAt, rec.LastActiveAt = KindGeneral, AdminTenantID, old, old
+		if err := s.Create(rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.TouchRunnerActive(prefix+"r1", []string{prefix + "a", prefix + "b", prefix + "c"}); err != nil {
+		t.Fatal(err)
+	}
+	for id, wantTouched := range map[string]bool{"a": true, "b": false, "c": false} {
+		rec, _ := s.GetAnyKind(prefix + id)
+		if touched := rec.LastActiveAt > old; touched != wantTouched {
+			t.Errorf("%s touched = %v, want %v", id, touched, wantTouched)
+		}
+	}
+	if err := s.TouchRunnerActive(prefix+"r1", nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestArchiveLifecycle(t *testing.T) {
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	testArchiveLifecycle(t, s, "")
+}
+
+// archived -> restoring (once) -> running, with the runner fields and the
+// archive fields moving as the archive's life says.
+func testArchiveLifecycle(t *testing.T, s SandboxStore, prefix string) {
+	t.Helper()
+	id := prefix + "arch"
+	if err := s.Create(&SandboxRecord{Kind: KindGeneral, ID: id, Status: "stopped", TenantID: AdminTenantID, RunnerID: prefix + "r1", RunnerControlGRPCAddr: "r1:1", IdleArchiveAfter: 600}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetArchived(id, "t/s/a", "wrapped", "v1", 123, 1000); err != nil {
+		t.Fatal(err)
+	}
+	if recs, _ := s.ListByRunner(prefix + "r1"); len(recs) != 1 {
+		t.Fatalf("by runner: %d", len(recs))
+	}
+	if recs, _ := s.ListArchivedOnRunner(); !containsID(recs, id) {
+		t.Fatal("archived copy on runner not listed")
+	}
+	if err := s.ClearRunner(id); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := s.GetAnyKind(id)
+	if rec.Status != "archived" || rec.ArchiveObject != "t/s/a" || rec.ArchiveSize != 123 || rec.ArchiveVersion != "v1" || rec.RunnerID != "" || rec.IdleArchiveAfter != 600 {
+		t.Fatalf("archived = %+v", rec)
+	}
+	if won, err := s.BeginRestore(id, "archived", 0, 2000); err != nil || !won {
+		t.Fatalf("first restore: %v %v", won, err)
+	}
+	if won, _ := s.BeginRestore(id, "archived", 0, 2000); won {
+		t.Fatal("second restore also won")
+	}
+	// Two pods taking over the same stale restore: only one wins.
+	if won, err := s.BeginRestore(id, "restoring", 2000, 2500); err != nil || !won {
+		t.Fatalf("takeover: %v %v", won, err)
+	}
+	if won, _ := s.BeginRestore(id, "restoring", 2000, 2600); won {
+		t.Fatal("second takeover also won")
+	}
+	// The restore that was taken over neither finishes nor aborts.
+	if ok, err := s.SetRestored(id, 2000, prefix+"r3", "https://r3", "r3:1", "10.0.0.3", 2700); err != nil || ok {
+		t.Fatalf("stale set restored: %v %v", ok, err)
+	}
+	if err := s.AbortRestore(id, 2000); err != nil {
+		t.Fatal(err)
+	}
+	if rec, _ := s.GetAnyKind(id); rec.Status != "restoring" {
+		t.Fatalf("stale abort applied: %s", rec.Status)
+	}
+	// ClearRunner leaves a sandbox that is not archived alone.
+	if err := s.ClearRunner(id); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.SetRestored(id, 2500, prefix+"r2", "https://r2", "r2:1", "10.0.0.2", 3000); err != nil || !ok {
+		t.Fatalf("set restored: %v %v", ok, err)
+	}
+	if err := s.ClearRunner(id); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ = s.GetAnyKind(id)
+	if rec.Status != "running" || rec.RunnerID != prefix+"r2" || rec.ArchiveObject != "" || rec.ArchiveKey != "" || rec.LastActiveAt != 3000 {
+		t.Fatalf("restored = %+v", rec)
+	}
+	_ = s.Delete(id)
+}
+
+func containsID(recs []*SandboxRecord, id string) bool {
+	for _, r := range recs {
+		if r.ID == id {
+			return true
+		}
+	}
+	return false
 }

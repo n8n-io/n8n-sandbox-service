@@ -178,8 +178,9 @@ func main() {
 		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{MinTime: runnerKeepaliveMinTime}),
 	)
 	pb.RegisterRunnerRegistryServer(grpcSrv, &grpcapi.RunnerRegistryServer{
-		Token: cfg.RegistrationToken,
-		Reg:   runnerReg,
+		Token:    cfg.RegistrationToken,
+		Reg:      runnerReg,
+		Activity: sandboxStore,
 	})
 
 	// One slot per listener, so a second failure never blocks its goroutine.

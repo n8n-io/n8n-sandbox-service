@@ -5,6 +5,7 @@ import (
 	"math"
 	"net"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,6 +31,7 @@ const (
 	defaultDaemonWaitTimeout  = 60 * time.Second
 	defaultDaemonBin          = "/srv/firecracker/bin/sandbox-daemon"
 	defaultVolumeBuildTimeout = 5 * time.Minute
+	defaultEgressProxyPort    = 3128
 )
 
 // Config holds configuration for the Firecracker runtime backend.
@@ -115,6 +117,15 @@ type Config struct {
 	// VolumeBuildTimeout is how long a volume builder microVM may run, from its
 	// start to its exit. Parsed from SANDBOX_RUNNER_FIRECRACKER_VOLUME_BUILD_TIMEOUT.
 	VolumeBuildTimeout time.Duration
+
+	// Templates are the named templates served besides the default, whose
+	// assets are the settings above. Parsed from
+	// SANDBOX_RUNNER_FIRECRACKER_TEMPLATES, a JSON object of name to assets.
+	Templates map[string]templateAssets
+
+	// EgressProxyPort is the egress proxy's port on each slot's TAP gateway.
+	// Parsed from SANDBOX_EGRESS_PROXY_PORT (default 3128).
+	EgressProxyPort int
 }
 
 func defaultConfig() Config {
@@ -136,6 +147,7 @@ func defaultConfig() Config {
 		DaemonWaitTimeout:  defaultDaemonWaitTimeout,
 		DaemonBin:          defaultDaemonBin,
 		VolumeBuildTimeout: defaultVolumeBuildTimeout,
+		EgressProxyPort:    defaultEgressProxyPort,
 	}
 }
 
@@ -157,6 +169,21 @@ func LoadConfig(capacityTotal int32) (Config, error) {
 	envvar.String("SANDBOX_RUNNER_FIRECRACKER_EXPECTED_GIT_SHA", &cfg.ExpectedGitSHA)
 	envvar.String("SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT", &cfg.CreateSnapshotScript)
 	envvar.String("SANDBOX_RUNNER_FIRECRACKER_DAEMON_BIN", &cfg.DaemonBin)
+
+	if v := envvar.Get("SANDBOX_EGRESS_PROXY_PORT"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 65535 {
+			return Config{}, fmt.Errorf("SANDBOX_EGRESS_PROXY_PORT must be a port number, got %q", v)
+		}
+		cfg.EgressProxyPort = n
+	}
+	if v := envvar.Get("SANDBOX_RUNNER_FIRECRACKER_TEMPLATES"); v != "" {
+		templates, err := parseTemplates(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("SANDBOX_RUNNER_FIRECRACKER_TEMPLATES: %w", err)
+		}
+		cfg.Templates = templates
+	}
 
 	if err := envvar.PositiveInt("SANDBOX_RUNNER_FIRECRACKER_DAEMON_PORT", &cfg.DaemonPort); err != nil {
 		return Config{}, err
@@ -233,6 +260,9 @@ func validateConfig(cfg Config, capacityTotal int32) error {
 	if cfg.CreateSnapshotScript != "" && !snapshotDirsMatch(cfg.SnapshotMemPath, cfg.SnapshotStatePath) {
 		return fmt.Errorf("SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_MEM_PATH (%q) and SANDBOX_RUNNER_FIRECRACKER_SNAPSHOT_STATE_PATH (%q) must be in the same directory when SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT is set; create-golden-snapshot.sh writes snapshot_mem, snapshot_state and boot.json into a single --out directory",
 			cfg.SnapshotMemPath, cfg.SnapshotStatePath)
+	}
+	if err := validateTemplates(cfg); err != nil {
+		return err
 	}
 	if cfg.DaemonBin != "" && !strings.HasPrefix(cfg.DaemonBin, "/") {
 		return fmt.Errorf("SANDBOX_RUNNER_FIRECRACKER_DAEMON_BIN must be an absolute path, got %q", cfg.DaemonBin)

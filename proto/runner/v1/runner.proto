@@ -19,6 +19,19 @@ service SandboxControl {
   // BuildVolume turns a tar into an ext4 volume image in a builder microVM.
   // Firecracker runners only: others answer Unimplemented.
   rpc BuildVolume(stream BuildVolumeRequest) returns (stream BuildVolumeResponse);
+  // GetActivity reports the runner's cordon and what it is still running, for
+  // drain.
+  rpc GetActivity(GetActivityRequest) returns (GetActivityResponse);
+  // UpdateEgressProxy replaces a proxy sandbox's egress spec, for requests
+  // the proxy receives afterwards.
+  rpc UpdateEgressProxy(UpdateEgressProxyRequest) returns (UpdateEgressProxyResponse);
+  // SetModelBlocked blocks or unblocks new requests to a proxy sandbox's model hosts.
+  rpc SetModelBlocked(SetModelBlockedRequest) returns (SetModelBlockedResponse);
+  // ArchiveSandbox seals a stopped sandbox's disk and uploads it. The sandbox
+  // stays on the runner until the API deletes it.
+  rpc ArchiveSandbox(ArchiveSandboxRequest) returns (ArchiveSandboxResponse);
+  // RestoreSandbox creates a sandbox from an archive, as CreateSandbox would.
+  rpc RestoreSandbox(RestoreSandboxRequest) returns (CreateSandboxResponse);
 }
 
 message RunnerHeartbeat {
@@ -33,6 +46,22 @@ message RunnerHeartbeat {
   // An operator cordoned the runner: it serves its sandboxes but takes no new
   // creates. Separate from healthy, which is the runtime's own readiness.
   bool cordoned = 8;
+  // Sandboxes with a running execution or an open execution stream. The API
+  // counts them as active, so the idle sweeper never stops one under a run.
+  repeated string active_sandbox_ids = 9;
+  // Templates the runner serves; empty from a runner that predates templates,
+  // which serves "default" alone.
+  repeated TemplateInfo templates = 10;
+}
+
+// A template a runner boots sandboxes from, with what one sandbox of it gets.
+message TemplateInfo {
+  string name = 1;
+  int32 vcpus = 2;
+  int64 memory_mb = 3;
+  int64 disk_mb = 4;
+  // The template's build; an archive restores onto the same one.
+  string version = 5;
 }
 
 message ControlMessage {
@@ -112,4 +141,54 @@ message BuildVolumeResponse {
     // SHA-256 of the image, lowercase hex.
     string image_sha256 = 3;
   }
+}
+
+message GetActivityRequest {}
+
+message GetActivityResponse {
+  bool cordoned = 1;
+  // Executions the runner started and has not seen end.
+  int32 active_executions = 2;
+  // Execution streams open through the runner.
+  int32 open_streams = 3;
+  int32 capacity_total = 4;
+  int32 capacity_used = 5;
+  int32 capacity_stopped = 6;
+}
+
+message UpdateEgressProxyRequest {
+  string sandbox_id = 1;
+  // An EgressProxySpec, encoded as in create_options_json.
+  string egress_proxy_json = 2;
+}
+
+message UpdateEgressProxyResponse {}
+
+message SetModelBlockedRequest {
+  string sandbox_id = 1;
+  bool blocked = 2;
+}
+
+message SetModelBlockedResponse {}
+
+message ArchiveSandboxRequest {
+  string sandbox_id = 1;
+  // Where to PUT the sealed archive; signed by the API, valid for one object.
+  string upload_url = 2;
+  // The archive's own key (32 bytes).
+  bytes key = 3;
+}
+
+message ArchiveSandboxResponse {
+  // Size and SHA-256 (hex) of the sealed object uploaded.
+  int64 size = 1;
+  string sha256 = 2;
+}
+
+message RestoreSandboxRequest {
+  string sandbox_id = 1;
+  string create_options_json = 2;
+  // Where to GET the sealed archive.
+  string download_url = 3;
+  bytes key = 4;
 }

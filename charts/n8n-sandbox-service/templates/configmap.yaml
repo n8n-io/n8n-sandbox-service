@@ -26,6 +26,8 @@ data:
   SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR: {{ .Values.api.config.volumeLocalListenAddr | toString | trim | quote }}
   SANDBOX_API_VOLUME_LOCAL_URL: {{ include "n8n-sandbox-service.apiVolumeLocalUrl" . | quote }}
   {{- end }}
+  SANDBOX_API_MAX_IDLE_WINDOW: {{ .Values.api.config.maxIdleWindow | quote }}
+  SANDBOX_API_EGRESS_ALLOW_PUBLIC: {{ .Values.api.config.egressAllowPublic | quote }}
 {{- $runner := .Values.runner }}
 {{- if eq .Values.dataPlane.mode "in-cluster" }}
 ---

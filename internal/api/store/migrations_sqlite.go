@@ -49,6 +49,31 @@ const sqliteAddDrainingSinceCol = `ALTER TABLE sandboxes ADD COLUMN draining_sin
 const sqliteSandboxCodeNameIndex = `CREATE UNIQUE INDEX IF NOT EXISTS ` + codeNameIndex + `
 	ON sandboxes (tenant_id, name) WHERE kind = 'code' AND draining_since = 0`
 
+const sqliteAddTemplateCol = `ALTER TABLE sandboxes ADD COLUMN template TEXT NOT NULL DEFAULT 'default'`
+
+const sqliteAddIdleStopAfterCol = `ALTER TABLE sandboxes ADD COLUMN idle_stop_after INTEGER NOT NULL DEFAULT 0`
+
+const sqliteAddIdleDeleteAfterCol = `ALTER TABLE sandboxes ADD COLUMN idle_delete_after INTEGER NOT NULL DEFAULT 0`
+
+// sqliteAddTenantMaxIdleWindowCol caps a tenant's idle windows, in seconds;
+// 0 is the server's cap.
+const sqliteAddTenantMaxIdleWindowCol = `ALTER TABLE tenants ADD COLUMN max_idle_window INTEGER NOT NULL DEFAULT 0`
+
+const sqliteAddEgressProxyCol = `ALTER TABLE sandboxes ADD COLUMN egress_proxy TEXT NOT NULL DEFAULT ''`
+
+const sqliteAddModelBlockedCol = `ALTER TABLE sandboxes ADD COLUMN model_blocked INTEGER NOT NULL DEFAULT 0`
+
+// The archive columns, one ALTER each: SQLite adds one column at a time.
+var sqliteAddArchiveCols = []struct{ sql, name string }{
+	{`ALTER TABLE sandboxes ADD COLUMN idle_archive_after INTEGER NOT NULL DEFAULT 0`, "idle_archive_after"},
+	{`ALTER TABLE sandboxes ADD COLUMN archive_object TEXT NOT NULL DEFAULT ''`, "archive_object"},
+	{`ALTER TABLE sandboxes ADD COLUMN archive_key TEXT NOT NULL DEFAULT ''`, "archive_key"},
+	{`ALTER TABLE sandboxes ADD COLUMN archive_size INTEGER NOT NULL DEFAULT 0`, "archive_size"},
+	{`ALTER TABLE sandboxes ADD COLUMN archive_version TEXT NOT NULL DEFAULT ''`, "archive_version"},
+	{`ALTER TABLE sandboxes ADD COLUMN archived_at INTEGER NOT NULL DEFAULT 0`, "archived_at"},
+	{`ALTER TABLE sandboxes ADD COLUMN restore_started_at INTEGER NOT NULL DEFAULT 0`, "restore_started_at"},
+}
+
 // Backfill legacy empty tenant_id to the admin sentinel.
 const sqliteBackfillAdminTenantID = `UPDATE sandboxes SET tenant_id = '__admin__' WHERE tenant_id = ''`
 

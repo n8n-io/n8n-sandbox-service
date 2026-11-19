@@ -106,6 +106,8 @@ func (h *Handler) Close() {
 
 // Run serves the daemon HTTP API until SIGTERM/SIGINT is received.
 func Run(listenAddr string, cfg ExecConfig) error {
+	startReaper()
+	logReaperStart()
 	h := NewHandler(cfg)
 	defer h.Close()
 
@@ -155,6 +157,13 @@ func NewHandler(cfg ExecConfig) *Handler {
 
 	// Called by the runner itself; never proxied.
 	mux.HandleFunc("POST /volumes/mount", h.mountVolumes)
+
+	// The runner calls this before pausing a microVM, so writes still in the
+	// guest's page cache reach the rootfs an archive copies.
+	mux.HandleFunc("POST /sync", func(w http.ResponseWriter, r *http.Request) {
+		syscall.Sync()
+		w.WriteHeader(http.StatusNoContent)
+	})
 
 	mux.HandleFunc("POST /executions", func(w http.ResponseWriter, r *http.Request) {
 		var req execRequest
@@ -478,6 +487,8 @@ func fileOpStatusCode(err error) int {
 	switch {
 	case errors.As(err, &opErr):
 		return opErr.status
+	case errors.Is(err, fs.ErrPermission):
+		return http.StatusForbidden
 	case errors.Is(err, fs.ErrNotExist):
 		return http.StatusNotFound
 	case errors.Is(err, syscall.EINVAL), errors.Is(err, syscall.ENOTEMPTY):

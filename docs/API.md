@@ -47,6 +47,8 @@ log events. See [observability.md](observability.md).
 The API and runner use two buckets so clients (including the SDK) can decide **when to retry the same request** vs **when to change strategy** (e.g. create a new sandbox, fix routing, surface an error to the user).
 
 - **503 Service Unavailable** — **Transient / retry**: overload, no capacity yet, network or upstream not ready, or the sandbox daemon is not reachable *for the moment* while the container is otherwise expected to be usable. Safe to back off and retry the same operation.
+Every `503` and `429` the API sends carries `Retry-After` (seconds; `1` unless the API chose another), including those relayed from a runner.
+
 - **502 Bad Gateway** — **Not retryable as “wait and retry”**: the request does not make sense to repeat unchanged; fix state first (new sandbox, repair registry/routing, or handle the reported error). Examples: stored sandbox has **no runner HTTP base URL** or **delete** failed on the runner control plane.
 
 ### HTTP 429 — too many requests in progress
@@ -168,6 +170,7 @@ Sandboxes past their idle-delete window stay listed until the sweeper removes th
     "last_active_at": 1700000000,
     "ephemeral": false,
     "egress": "public",
+    "template": "default",
     "tenant_id": "uuid"
   }
 ]
@@ -200,7 +203,7 @@ Create a sandbox. With no request body, the service generates a UUID. Callers ma
 }
 ```
 
-If that ID still belongs to the caller and is within its idle-delete window, the existing sandbox is returned, or `409` if the request names an `egress` that differs from the sandbox's. If it has passed the window, the stale sandbox is deleted before the ID is reused. If the ID belongs to another tenant (or to admin when the caller is a tenant), the request fails with `409`.
+If that ID still belongs to the caller and is within its idle-delete window, the existing sandbox is returned, or `409` if the request names an `egress`, `egress_proxy`, `template`, `idle_stop_after` or `idle_delete_after` that differs from the sandbox's, with `reason` `egress_mismatch`, `egress_proxy_mismatch`, `template_mismatch` or `idle_window_mismatch`. A field left out matches whatever the sandbox has. If it has passed the window, the stale sandbox is deleted before the ID is reused. If its runner no longer has it (a request was answered `404` with `X-Sandbox-Gone`, for example after its container was removed out of band), the create makes a new sandbox under the ID; the runner drops what it still held for the old one. If the ID belongs to another tenant (or to admin when the caller is a tenant), the request fails with `409`.
 
 Disconnecting before the response does not cancel a create a runner has accepted: if it succeeds, the sandbox is still created and tracked, and can be found by listing or by repeating the request with the same `id`. A disconnect after a runner refused it (below) ends the create with nothing created.
 
@@ -226,7 +229,45 @@ When no runner is eligible, it is the same except for `error`: `no sandbox runne
 }
 ```
 
-- `egress` (string, default `"public"`) — outbound network policy. `"public"`: the internet, minus the [blocked destinations](security-model.md#guest-to-host-and-network). `"none"`: nothing leaves the sandbox, DNS included; the API still reaches it. Fixed at creation: a reconnect to an existing `id` that names a different mode is refused with `409`, so a caller asking for `"none"` never gets an open sandbox back.
+- `egress` (string, default `"public"`) — outbound network policy. `"public"`: the internet, minus the [blocked destinations](security-model.md#guest-to-host-and-network). `"none"`: nothing leaves the sandbox, DNS included; the API still reaches it. `"proxy"`: only what `egress_proxy` allows, through the runner's [egress proxy](#the-egress-proxy); a runner that cannot serve it answers `501` `not_implemented` and nothing is created. Fixed at creation: a reconnect to an existing `id` that names a different mode is refused with `409`, so a caller asking for `"none"` never gets an open sandbox back.
+- `egress_proxy` (object) — required with `egress: "proxy"`, refused otherwise. Unknown fields are refused.
+
+```json
+{
+  "egress": "proxy",
+  "egress_proxy": {
+    "allow": [
+      { "name": "git", "hosts": ["git.example.com", "forgejo:3000"] },
+      { "name": "anthropic", "hosts": ["api.anthropic.com"] }
+    ],
+    "repos": [{ "host": "git.example.com", "path": "org/repo", "access": "write" }],
+    "push_refs": ["refs/heads/factory/i1/", "refs/heads/factory-wip/s1"],
+    "hide_refs": ["refs/heads/factory/", "refs/heads/factory-wip/"],
+    "show_refs": ["refs/heads/factory/i1/", "refs/heads/factory-wip/i1."],
+    "credentials": [
+      { "host": "git.example.com", "secret_ref": "factory/git-token", "scheme": "basic", "username": "factory-agent" },
+      { "host": "api.anthropic.com", "secret_ref": "factory/anthropic-key", "scheme": "header", "header": "x-api-key" }
+    ],
+    "model_hosts": [{ "host": "api.anthropic.com", "provider": "anthropic" }],
+    "labels": { "instance_id": "i1", "session_id": "s1" }
+  }
+}
+```
+
+  - `allow` (required, up to 64; `[]` refuses every host, a missing or `null` one is `400`): named groups of 1–16 hosts each. A host is a lowercase DNS name with an optional `:port` other than `80` or `443` (the defaults, left out); IP addresses (hex forms included) and wildcards are refused.
+  - `allow_public` (boolean): also let through any other host on port 443 (CONNECT) or 80 (plain HTTP) whose every address is public, tunnelled uninspected: no credential, repo filter or metering applies to a host `allow` does not name, and `SANDBOX_EGRESS_PROXY_INTERNAL_HOSTS` exempts only hosts `allow` names. `400` `allow_public_disabled` unless the service sets `SANDBOX_API_EGRESS_ALLOW_PUBLIC`; turning that off leaves existing sandboxes' specs as they are.
+  - `repos` (up to 64): Git repositories on an `allow` host. `path` is lowercase, without `.git`. `access` is `read` (fetch) or `write` (fetch and push to `push_refs`).
+  - `push_refs` (up to 16): refs under `refs/heads/`; one ending in `/` is a prefix, any other is one ref.
+  - `hide_refs` (up to 16): refs under `refs/` that fetches from `repos` must not see; one ending in `/` or `.` is a prefix, any other is one ref. See [hidden refs](#hidden-refs).
+  - `show_refs` (up to 16, needs `hide_refs`): exceptions to `hide_refs`, in the same form.
+  - `credentials` (up to 32): per `allow` host, a reference to the secret to inject. Only the reference is stored. `scheme` is `bearer` (default), `basic` (needs `username`) or `header` (needs `header`, a lowercase name that is not hop-by-hop, `host`, `cookie`, `content-*` or `proxy-*`); `allow_plain_http` (boolean).
+  - `model_hosts` (up to 8): `allow` hosts that are model APIs, with `provider` `anthropic` or `openai`. A host with `repos` cannot be one.
+  - `labels` (up to 16): string map; keys lowercase (`a-z0-9_.-`, at most 63), values 1–128 of `A-Za-z0-9._:@/-`. Copied into usage records and refusal logs.
+
+  Change the spec later with [`PUT /sandboxes/{id}/egress-proxy`](#put-sandboxesidegress-proxy).
+- `template` (string, default `"default"`) — image the sandbox boots, one of [`GET /templates`](#get-templates) (`SANDBOX_API_TEMPLATES`); any other name is `400` with `reason` `unknown_template`. The sandbox goes only to a runner that serves it; when none that does is eligible or has room, the answer is `503` `no_capacity` as above. Fixed at creation.
+- `idle_stop_after`, `idle_delete_after` (integer seconds) — per-sandbox idle windows that replace `SANDBOX_API_IDLE_STOP_AFTER` and `SANDBOX_API_IDLE_DELETE_AFTER` for this sandbox, even when those are `0`. From 60 up to the tenant's `max_idle_window` or, without one (and for admin keys), `SANDBOX_API_MAX_IDLE_WINDOW` (default `24h`), with `idle_stop_after` no larger than `idle_delete_after`. An ephemeral sandbox is deleted at its `idle_stop_after`. A sandbox is only deleted once stopped, so an `idle_delete_after` shorter than the stop window in force waits for the stop. Change them with [`PATCH /sandboxes/{id}`](#patch-sandboxesid).
+- `idle_archive_after` (integer seconds) — idle time after which a stopped sandbox is [archived](#archive-and-restore), replacing `SANDBOX_API_IDLE_ARCHIVE_AFTER`; bounded like the other windows, between `idle_stop_after` and `idle_delete_after` when those are set. Needs an archive store; refused with `ephemeral`.
 
 Unknown fields return `400`.
 
@@ -246,11 +287,14 @@ Resource limits (memory, CPU, process count) are configured on the runner via en
   "last_active_at": 1700000000,
   "ephemeral": false,
   "egress": "public",
+  "template": "default",
   "tenant_id": "uuid"
 }
 ```
 
-**Errors:** `400` invalid request body, supplied id or `egress` value, `403` tenant sandbox quota exceeded (when creates on other API pods filled it first, the runner create is rolled back), `409` if the supplied id is owned by another tenant/admin, exists with a different `egress` than requested, or the tenant was deleted before the sandbox row could be stored (runner create is rolled back), `429` [too many requests in progress](#http-429--too-many-requests-in-progress), `502` stale sandbox cleanup failed, or the runner did not confirm the requested `egress` (runner create is rolled back; a runner from before egress modes only serves `public`), `503` `no_capacity`: no runner is eligible or has room (see above)
+`idle_stop_after` and `idle_delete_after` are included when the create set them. `egress_proxy` is not returned.
+
+**Errors:** `400` invalid request body (over 64 KiB, or any field above out of range), supplied id, `403` tenant sandbox quota exceeded (when creates on other API pods filled it first, the runner create is rolled back), `409` if the supplied id is owned by another tenant/admin, exists with a different option than requested (see above), or the tenant was deleted before the sandbox row could be stored (runner create is rolled back), `429` [too many requests in progress](#http-429--too-many-requests-in-progress), `502` stale sandbox cleanup failed, or the runner did not confirm the requested `egress` (runner create is rolled back; a runner from before egress modes only serves `public`), `400` `unknown_secret_ref`: a credential names a secret the tenant does not have, `400` `allow_public_disabled`: `allow_public` without `SANDBOX_API_EGRESS_ALLOW_PUBLIC`, `501` `not_implemented`: `egress: "proxy"` on a runner without proxy support, `model_hosts` on one with no usage sink, or an option a runner refuses because it predates it, `503` `no_capacity`: no runner is eligible or has room (see above)
 
 **Examples:**
 
@@ -280,13 +324,69 @@ curl -X POST http://localhost:8080/sandboxes \
 
 ---
 
+### The egress proxy
+
+An `egress: "proxy"` sandbox reaches nothing but the egress proxy its runner serves: a TCP port on its network gateway (Docker: a bridge of its own; Firecracker: inside the slot's network namespace). The guest has no DNS; the proxy resolves names. Every execution gets `HTTPS_PROXY`, `HTTP_PROXY` (and lowercase forms) and `NO_PROXY=localhost,127.0.0.1,::1` unless the request sets them, and `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO` (the guest's bundle plus the runner's egress CA, at `/tmp/sandbox-egress/ca-bundle.pem`) and `NODE_EXTRA_CA_CERTS` (the CA alone, `/tmp/sandbox-egress/ca.pem`).
+
+- Destinations: CONNECT or absolute-form plain HTTP to an `allow` host exactly, port 443 or 80 when the entry has none, or with `allow_public` any host on 443 or 80. Every A/AAAA record is checked against the blocked ranges (the service's IPv4 list, `0.0.0.0/8`, IPv6 loopback, unique-local, link-local, multicast and the unspecified address, and mapped or NAT64 forms of blocked IPv4 addresses) unless the host is in `SANDBOX_EGRESS_PROXY_INTERNAL_HOSTS` and named in `allow`, and the proxy dials the address it checked.
+- Hosts named in `repos`, `credentials` or `model_hosts` are inspected: the proxy terminates TLS with a certificate from the runner's CA for the CONNECT target, whatever SNI says, offers only HTTP/1.1, and serves each request separately, re-serialised. A request whose `Host` is not the CONNECT target, an `Upgrade`, or an `Expect` other than `100-continue` is refused. Upstream TLS is verified for the target's name; redirects are returned to the guest, never followed. Other hosts are tunnelled untouched.
+- A host with `repos` forwards only Git smart HTTP for listed repositories: `info/refs?service=git-upload-pack|git-receive-pack` and `POST …/git-upload-pack|git-receive-pack`, path compared ignoring ASCII case and a `.git` suffix, with no `%`-escape, empty or dot segment, and no other query. Push needs `write`; its command list (shallow lines, then `<old> <new> <ref>` lines, then a flush; a gzip body is decoded) must name only refs matching `push_refs`, or the whole push is refused before any of it is forwarded. `push-cert` is removed from the receive-pack advertisement. With `hide_refs`, fetches are filtered too ([hidden refs](#hidden-refs)).
+- A credential replaces whatever the guest sent in its header, and is sent over plain HTTP only with `allow_plain_http`. Secrets are read from `<SANDBOX_EGRESS_PROXY_SECRETS_DIR>/<tenant_id>/<secret_ref>`, at most 30 s old; none reaches the guest or a log. A credentialed request goes upstream without `Accept-Encoding`, `Range` or `If-Range`, and a response that echoes the secret (or the header value it was sent as, as is or JSON- or percent-escaped) has it overwritten with `*` in its headers and body; a compressed or `206` response to one, which the proxy cannot scrub whole, is `502`. Blanks around a secret file's value are trimmed.
+- A sandbox may hold 256 proxy connections at once (more are `429`); a tunnel idle for 10 minutes is closed. A push command list over 1 MiB is refused.
+- A model host forwards only `POST /v1/messages`, `POST /v1/messages/count_tokens` and `GET /v1/models` (anthropic) or `POST /v1/chat/completions`, `POST /v1/responses` and `GET /v1/models` (openai). Metered requests go upstream without `Accept-Encoding`, and each yields a usage record (below). An openai `POST /v1/responses` body is read whole (at most 16 MiB) and refused with `background: true`, which would answer before any usage exists. While [model egress](#get-put-sandboxesidmodel-egress) is blocked, every request to a model host is refused.
+- A refusal is `403` (`502` for `credential_unavailable`) with `X-Sandbox-Egress-Refusal: <reason>` and `{"error": …, "reason": …}`, in the provider's error shape on a model host. Reasons: `host_not_allowed`, `address_not_allowed`, `path_not_allowed`, `repo_not_allowed`, `ref_not_allowed`, `protocol_not_allowed`, `model_blocked`, `credential_unavailable`. Each is logged on the runner with the sandbox, tenant and labels.
+
+#### Hidden refs
+
+A Git server sends any object it holds to a protocol v2 fetch that names its id, whatever refs it lists (and Forgejo allows any id in v0 too), so with `hide_refs` set the proxy filters every fetch from a `repos` repository. A ref is hidden when it matches `hide_refs` and not `show_refs`.
+
+- Fetches must use protocol v2 (`Git-Protocol: version=2`); anything else is `protocol_not_allowed`. The capability advertisement offers only `ls-refs` and `fetch`; any other command is `path_not_allowed`.
+- `ls-refs` answers leave out hidden refs, any name but `HEAD` and `refs/*`, a symref whose target is hidden, and a `HEAD` that is not a symref.
+- A `fetch` may `want` only an object id the proxy listed to this sandbox as a visible ref's value or peeled value. When a want is not one, the proxy lists the repository's refs itself (at most once a second per sandbox) and checks again, so a fetch by id that skips `ls-refs` works for a visible tip. An id below a tip is refused even when that tip is visible: the proxy has no object graph. The listed ids are forgotten when the spec changes. `want-ref` of a hidden ref, `deepen-not`, and a `filter` other than `blob:none`, `blob:limit=`, `tree:` or `object:type=` are `ref_not_allowed`; an unknown argument is `path_not_allowed`. A request body is read whole (gzip decoded, at most 4 MiB), and a sandbox has at most 8 such requests in flight; more wait.
+- The receive-pack advertisement leaves out hidden refs and `.have` lines.
+- `have` lines pass unchecked, so the server's acknowledgments confirm whether it holds an id the guest already names; they never send its content.
+- Not covered: a push may name an object it does not send, and a server that holds that object accepts it, so a guest that already knows a hidden object's id can push a commit or tree naming it and fetch it back from its own ref. Nothing the proxy forwards discloses a hidden ref's id; keep data that must stay unreadable in another repository.
+
+Usage records go to `SANDBOX_EGRESS_USAGE_SINK_URL` as `POST {"batch_id", "runner_id", "records": [...]}` with `Authorization: Bearer <SANDBOX_EGRESS_USAGE_SINK_TOKEN_FILE>`, at least every 10 s and at most 500 records a batch. A record has `record_id` (dedupe on it: delivery is at least once), `sandbox_id`, `tenant_id`, `labels`, `provider`, `host`, `path`, `model`, `provider_request_id`, `status`, `started_at`, `ended_at`, `streamed`, `complete` (false when the response ended before its final usage) and `input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`, normalised so all input is the sum of the three input fields (for openai, cached tokens are moved out of the input count). `408`, `429` and `5xx` are retried with the same `batch_id` for up to an hour, other statuses drop the batch; records wait in runner memory and are lost if it restarts.
+
+### PUT /sandboxes/{id}/egress-proxy
+
+Replace a proxy sandbox's `egress_proxy`, validated as on create. The runner applies it to every request it receives after the `204` and closes open tunnels to hosts it no longer allows; the stored spec changes once the runner has it, so a reconnect then matches the new one.
+
+**Errors:** `400` invalid spec, `unknown_secret_ref` or `allow_public_disabled`, `404` not found, `409` `egress_mismatch`: not a proxy sandbox, `501` `not_implemented`: the runner cannot serve it, or predates one of its fields, `503` the runner did not answer (with `Retry-After`)
+
+### GET, PUT /sandboxes/{id}/model-egress
+
+Whether new requests to the sandbox's model hosts are blocked (budget cut-off). `PUT {"blocked": true|false}` sets it; requests already streaming finish. Both answer `{"blocked": …}`. `false` at create; the runner holds it in memory, so it lasts until the sandbox or the runner goes.
+
+**Errors:** as for `PUT /sandboxes/{id}/egress-proxy`
+
+---
+
+### GET /templates
+
+Admin or tenant key. The template catalog, in `SANDBOX_API_TEMPLATES` order with `default` first: what one sandbox of each gets, from a runner that serves it, and how many healthy, undrained runners serve it now.
+
+```json
+{
+  "templates": [
+    { "name": "default", "vcpus": 1, "memory_mb": 512, "disk_mb": 2048, "runners": 3 },
+    { "name": "python", "vcpus": 4, "memory_mb": 8192, "disk_mb": 20480, "runners": 1 }
+  ]
+}
+```
+
+Sizes are `0` for a template no registered runner serves, and `disk_mb` is `0` on a Docker runner that enforces no disk quota. A template with `runners: 0` is valid in a create, which answers `503` `no_capacity` until a runner serving it is back.
+
+---
+
 ### GET /sandboxes/{id}
 
 Get sandbox details.
 
-This is a read-only status check: it does not update `last_active_at` or extend idle timers. Only proxied traffic (exec, files, etc.) counts as activity, and only when the sandbox actually serves it — a request that fails with **502** or **503** leaves `last_active_at` and `status` untouched, so retrying against a broken sandbox cannot hold it open past its idle timers. A **4xx** still counts, since the sandbox was reachable and rejected the request — except a runner sandbox-gone **404**, which never counts as activity even if removing the store row fails. A response counts until it ends, for at most `SANDBOX_API_MAX_RESPONSE_ACTIVITY` (default `30m`), so, while the API can write to its database, a sandbox is not stopped under an exec stream that is open for less than that, once the stream's first write has landed.
+This is a read-only status check: it does not update `last_active_at` or extend idle timers. Only proxied traffic (exec, files, etc.) counts as activity, and only when the sandbox actually serves it — a request that fails with **502** or **503** leaves `last_active_at` and `status` untouched, so retrying against a broken sandbox cannot hold it open past its idle timers. A **4xx** still counts, since the sandbox was reachable and rejected the request — except a runner sandbox-gone **404**, which never counts as activity even if removing the store row fails. A response counts until it ends, for at most `SANDBOX_API_MAX_RESPONSE_ACTIVITY` (default `30m`), so, while the API can write to its database, a sandbox is not stopped under an exec stream that is open for less than that, once the stream's first write has landed. Beyond that, while an execution is running, or an execution stream (`POST .../executions`, or `GET .../executions/{exec_id}?follow=true`) is open, the runner reports the sandbox active in every heartbeat (every 10 s), and refuses an idle stop for it, so the sweeper never stops a sandbox under a long run. An execution counts until the runner sees it exit, the daemon no longer has it, or its `timeout_ms` plus a minute passes; a runner restart forgets them.
 
-Each API replica writes `last_active_at` every `SANDBOX_API_ACTIVITY_WRITE_INTERVAL` (default `5s`), so it can trail the last request by up to twice that; the idle stop window and the `404` fence are extended by that much, deletes by twice that ([how](architecture.md#sandbox-activity)). A wake asks for a write at once rather than at the next interval, so `status` reads `running` as soon as that write lands.
+Each API replica writes `last_active_at` every `SANDBOX_API_ACTIVITY_WRITE_INTERVAL` (default `5s`), so it can trail the last request by up to twice that; the idle stop window and the `404` fence are extended by that much, archives and deletes by twice that ([how](architecture.md#sandbox-activity)). A wake asks for a write at once rather than at the next interval, so `status` reads `running` as soon as that write lands.
 
 **Path Parameters:**
 - `id` — Sandbox UUID
@@ -301,11 +401,12 @@ Each API replica writes `last_active_at` every `SANDBOX_API_ACTIVITY_WRITE_INTER
   "last_active_at": 1700000000,
   "ephemeral": false,
   "egress": "public",
+  "template": "default",
   "tenant_id": "uuid"
 }
 ```
 
-`status` is `running` or `stopped`; an ephemeral sandbox is only ever `running`. `egress` is the mode the sandbox was created with. `tenant_id` is the owner, `__admin__` for an admin-owned sandbox.
+`status` is `running`, `stopped`, `archived` or `restoring` ([archive and restore](#archive-and-restore)); an ephemeral sandbox is only ever `running`. `egress`, `template` and, when set, `idle_stop_after`, `idle_archive_after` and `idle_delete_after` are the sandbox's; `archived_at` is set while it is archived or restoring. `tenant_id` is the owner, `__admin__` for an admin-owned sandbox.
 
 **Errors:** `400` invalid id, `404` not found
 
@@ -315,6 +416,40 @@ Each API replica writes `last_active_at` every `SANDBOX_API_ACTIVITY_WRITE_INTER
 curl http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440000 \
   -H "X-Api-Key: YOUR_API_KEY"
 ```
+
+---
+
+### Archive and restore
+
+With an archive store configured ([configuration.md](configuration.md#archive-store)), a stopped sandbox's disk can leave its runner: `archived` sandboxes hold no runner capacity and survive runner restarts and host loss. What is kept is every file on the guest's disk; memory, processes and execution history are not, and a restored sandbox cold boots.
+
+- A sandbox is archived after `idle_archive_after` (or `SANDBOX_API_IDLE_ARCHIVE_AFTER`) of inactivity once stopped, on [`POST /sandboxes/{id}/archive`](#post-sandboxesidarchive), or during a [drain](#get-post-delete-adminrunnersiddrain) with `{"archive": true}`. Ephemeral sandboxes, and sandboxes with a running execution or open stream, are not archived.
+- The runner compresses the disk (Firecracker: its rootfs; Docker: the container's whole filesystem, at most the template's image size plus its disk quota where one applies) and seals it with AES-256-GCM under a key made for that archive alone, so an altered, truncated or reordered object does not open. It uploads to a URL the API signs for that object only; runners hold no store credentials. The API checks the stored size, records the archive (the key wrapped by `SANDBOX_API_ARCHIVE_KEY_FILE`), and only then deletes the runner's copy; any failure before that leaves the sandbox stopped on its runner.
+- Any exec or file request for an archived sandbox starts a restore and gets `503` `restoring` with `Retry-After: 5`, as does every request until it is `running` again. The restore goes to a healthy runner serving the sandbox's template at the version it was archived from (one that still has it), and keeps the sandbox's options, egress proxy spec included. A restore is not a crash: no `409 sandbox_restarted`. An archive the store no longer has, or that does not open, deletes the sandbox, and later requests get `404`; a failed download or no runner with room leaves it archived, and a request at least 30 s later retries.
+- On Firecracker a stop asks the guest to flush its writes to the rootfs first, waiting up to 30 s. A sandbox whose guest did not is woken and stopped again before it is archived; if the guest still does not flush, its rootfs is archived as it is, as consistent as after a crash.
+- Deleting an archived sandbox deletes its archive; `idle_delete_after` applies to archived sandboxes as to stopped ones. A restored sandbox's archive is deleted.
+
+### POST /sandboxes/{id}/archive
+
+Archive now: a running sandbox is stopped first. Answers once the archive is recorded, with the sandbox. Archiving an archived sandbox is a no-op `200`.
+
+**Errors:** `404`, `409` `ephemeral` or `sandbox_busy` (a run in progress), `501` no archive store, `503` the runner or store failed (the sandbox is left stopped on its runner) or `restoring`
+
+### POST /sandboxes/{id}/restore
+
+Start restoring an archived sandbox ahead of use: `503` `restoring` with `Retry-After` while it restores, `200` with the sandbox once it is not archived.
+
+### PATCH /sandboxes/{id}
+
+Change a sandbox's idle windows. The body sets any of `idle_stop_after`, `idle_archive_after` and `idle_delete_after`, with the bounds of [create](#post-sandboxes) checked against the result, including the owning tenant's `max_idle_window` whatever key is used; `null` clears a window back to the global one. Unknown fields return `400`. The new windows apply from the next sweep; a stopped sandbox stays stopped.
+
+```json
+{ "idle_stop_after": 1800, "idle_delete_after": 604800 }
+```
+
+**Response:** `200 OK` with the sandbox, as `GET /sandboxes/{id}` returns it.
+
+**Errors:** `400` invalid id, empty or invalid body, a window out of bounds, `404` not found or not the caller's
 
 ---
 
@@ -368,7 +503,7 @@ it does not kill the process; cancel with `DELETE /sandboxes/{id}/executions/{ex
 | `timeout_ms`       | int64             | no       | `300000` (5m)  |
 | `exec_id`          | string            | no       | generated UUID |
 
-`timeout_ms` may not exceed `SANDBOX_RUNNER_MAX_EXEC_TIMEOUT` ([configuration.md](configuration.md#shared-runner-config)); a larger value gets `400` naming the maximum.
+`timeout_ms` may not exceed `SANDBOX_RUNNER_MAX_EXEC_TIMEOUT` ([configuration.md](configuration.md#shared-runner-config)); a larger value gets `400` naming the maximum. Nothing else bounds an execution's length: no proxy hop has a deadline, and the idle sweeper never stops a sandbox while an execution in it is running. A resume can only start from history the daemon still holds, at most `SANDBOX_EXEC_MAX_EVENT_BYTES` per execution, so a long run with a lot of output answers `410` to a resume that fell behind.
 
 The command is always executed via `/bin/sh -c` so that shell features (tilde expansion,
 pipes, redirects, etc.) work consistently.
@@ -419,7 +554,8 @@ All events include a monotonically increasing `seq` number. The `started` event 
 the `exec_id` needed for the resume and cancel endpoints.
 
 Each `stdout` and `stderr` event usually holds one line. An output line longer than 64 KiB
-is sent as several events, and only the last one ends with `\n`. `stdout` and `stderr`
+is sent as several events, and only the last one ends with `\n`. Every line ends with `\n`:
+a last line without one gets one, and `\r\n` arrives as `\n`. `stdout` and `stderr`
 events can interleave, so append the `data` of each event to a separate buffer for its
 `type`.
 
@@ -526,6 +662,8 @@ curl -X DELETE http://localhost:8080/sandboxes/550e8400-e29b-41d4-a716-446655440
 ### GET /sandboxes/{id}/files
 
 List files in a sandbox directory.
+
+File paths are absolute: a `path` is taken from `/`, so `notes.txt` is `/notes.txt`, not relative to an execution's working directory. A path the sandbox does not permit reading or writing is `403` on every file endpoint below; a recursive list skips entries under it that it cannot read.
 
 **Path Parameters:**
 - `id` — Sandbox UUID
@@ -952,10 +1090,13 @@ Admin or provisioner. Create a tenant. By default also mints one API key (`creat
 | `external_ref` | string | no       | `""` |
 | `max_sandboxes`| int    | no       | `SANDBOX_API_DEFAULT_MAX_SANDBOXES` (`50`) |
 | `create_key`   | bool   | no       | `true` |
+| `max_idle_window` | int (seconds) | no | none: `SANDBOX_API_MAX_IDLE_WINDOW` |
 
 `name` is an optional human-readable label. `external_ref` is an optional opaque id from the caller (for example an n8n instance id); the API does not enforce uniqueness. Unknown fields return `400`.
 
 `max_sandboxes` is the per-tenant sandbox quota (`0` = unlimited). Must be between `0` and `2147483647`. When omitted, the service default applies. With a provisioner key an explicit value must be between `1` and `SANDBOX_API_DEFAULT_MAX_SANDBOXES`; `0` and larger values return `400`.
+
+`max_idle_window` caps the per-sandbox idle windows of the tenant's sandboxes, from 60 up to `SANDBOX_API_MAX_IDLE_WINDOW`; it narrows the server's cap, never widens it. The tenant body includes it only when set.
 
 **Response:** `201 Created`
 
@@ -1005,9 +1146,9 @@ Admin or provisioner. Change a tenant's limits. A provisioner key may change any
 }
 ```
 
-`max_sandboxes` is required and has the same bounds as on [create](#post-admintenants): `0`…`2147483647` with an admin key, `1`…`SANDBOX_API_DEFAULT_MAX_SANDBOXES` with a provisioner key. Unknown fields return `400`.
+At least one of `max_sandboxes` and `max_idle_window` is required, each with the bounds of [create](#post-admintenants): `max_sandboxes` `0`…`2147483647` with an admin key, `1`…`SANDBOX_API_DEFAULT_MAX_SANDBOXES` with a provisioner key. `"max_idle_window": null` removes the tenant's cap. Unknown fields return `400`.
 
-The tenant's sandboxes are never touched. If the new limit is below the tenant's current count, creating a new sandbox returns `403` until the tenant is below it again.
+The tenant's sandboxes are never touched, and keep the idle windows they have. If the new limit is below the tenant's current count, creating a new sandbox returns `403` until the tenant is below it again.
 
 **Response:** `200 OK` with the updated tenant, as `GET /admin/tenants/{id}` returns it.
 
@@ -1074,13 +1215,15 @@ Admin or scaler. Lists every registered runner, ordered by `id`, with the capaci
       "capacity_total": 20,
       "capacity_used": 7,
       "capacity_stopped": 2,
+      "cordoned": false,
+      "templates": ["default"],
       "last_seen": 1700000000
     }
   ]
 }
 ```
 
-`last_seen` is the Unix time in seconds of the runner's last heartbeat. `runners` is `[]` when none are registered.
+`cordoned` is true while the runner is [draining](#get-post-delete-adminrunnersiddrain). `templates` lists what it serves. `last_seen` is the Unix time in seconds of the runner's last heartbeat. `runners` is `[]` when none are registered.
 
 **Errors:** `403` provisioner or tenant key, `500` registry read failed
 
@@ -1107,6 +1250,30 @@ Admin or scaler. `PUT` cordons the runner: it gets no new sandboxes and keeps se
 ```bash
 curl -X PUT http://localhost:8080/admin/runners/runner-1/cordon -H "X-Api-Key: SCALER_KEY"
 ```
+
+---
+
+### GET, POST, DELETE /admin/runners/{id}/drain
+
+Admin only. `POST` starts draining the runner: it is cordoned, so it refuses creates and placement skips it, while its sandboxes keep serving, wakes included. `DELETE` stops draining. `GET` reports the state. Each answers with it:
+
+```json
+{
+  "runner_id": "runner-1",
+  "draining": true,
+  "drained": false,
+  "active_executions": 1,
+  "open_streams": 1,
+  "capacity_used": 7,
+  "capacity_stopped": 2
+}
+```
+
+`POST` may send `{"archive": true}`: this API pod then archives every non-ephemeral sandbox on the runner as it goes idle (stopping running ones), and `drained` also waits until only ephemeral sandboxes are left there, so an upgrade keeps every sandbox's files. The response says `"archive": true` while it runs; `DELETE` ends it.
+
+`drained` is true once the runner is draining and has no running execution and no open execution stream (see [activity](#get-sandboxesid)), so it can be restarted without cutting a run short. A restart still deletes every sandbox the runner hosts. The drain lives in the runner's memory: a restarted runner comes back undrained. `capacity_used` and `capacity_stopped` are as in [`GET /admin/runners`](#get-adminrunners).
+
+**Errors:** `403` any key but admin, `404` runner not registered, `503` the runner did not answer (with `Retry-After`)
 
 ---
 

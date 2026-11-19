@@ -15,8 +15,50 @@ export interface SandboxClientOptions {
  * Outbound network policy of a sandbox.
  * - `public`: the public internet; private and link-local ranges are blocked.
  * - `none`: no guest-initiated connection leaves the sandbox, DNS included.
+ * - `proxy`: only what `egressProxy` allows, through the runner's proxy. Validated
+ *   by the API, but no runner serves it yet: the create fails with 501.
  */
-export type EgressMode = "public" | "none";
+export type EgressMode = "public" | "none" | "proxy";
+
+/** What an egress `proxy` sandbox may reach. Wire format documented in API.md. */
+export interface EgressProxySpec {
+  /** Named groups of allowed hosts (lowercase DNS names, optional `:port`, no IPs). */
+  allow: { name: string; hosts: string[] }[];
+  /**
+   * Also let through any other host whose every address is public, on port 443
+   * or 80, uninspected. Refused (`400 allow_public_disabled`) unless the
+   * service enables it.
+   */
+  allow_public?: boolean;
+  /** Git repositories on allowed hosts the sandbox may fetch (`read`) or also push (`write`). */
+  repos?: { host: string; path: string; access: "read" | "write" }[];
+  /** Refs a push may update; an entry ending in `/` is a prefix under `refs/heads/`. */
+  push_refs?: string[];
+  /**
+   * Refs fetches from `repos` must not see; an entry ending in `/` or `.` is a
+   * prefix. Fetches then need Git protocol v2.
+   */
+  hide_refs?: string[];
+  /** Exceptions to `hide_refs`, in the same form. */
+  show_refs?: string[];
+  /**
+   * Per allowed host, a reference to the secret the proxy injects: as
+   * `Authorization: Bearer` (default), `basic` with `username`, or as the value
+   * of `header`.
+   */
+  credentials?: {
+    host: string;
+    secret_ref: string;
+    scheme?: "bearer" | "basic" | "header";
+    username?: string;
+    header?: string;
+    allow_plain_http?: boolean;
+  }[];
+  /** Allowed hosts that are model provider APIs, metered by the proxy. */
+  model_hosts?: { host: string; provider: "anthropic" | "openai" }[];
+  /** Opaque attribution for usage records and refusal logs. */
+  labels?: Record<string, string>;
+}
 
 /** Options for creating a sandbox. */
 export interface CreateSandboxOptions {
@@ -34,6 +76,40 @@ export interface CreateSandboxOptions {
    * Reconnecting to an existing `id` keeps the mode it was created with.
    */
   egress: EgressMode;
+  /** Required when `egress` is `proxy`, refused otherwise. Fixed at creation. */
+  egressProxy?: EgressProxySpec;
+  /** Image the sandbox boots, one of `listTemplates()`. Defaults to `default`. */
+  template?: string;
+  /**
+   * Per-sandbox idle windows in seconds, replacing the service's global ones,
+   * from 60 up to the tenant's or the service's cap. Change them later with
+   * `updateIdleWindows`.
+   */
+  idleStopAfter?: number;
+  idleDeleteAfter?: number;
+  /** Seconds a stopped sandbox idles before its disk is archived (needs an archive store). */
+  idleArchiveAfter?: number;
+}
+
+/** A template a create may name, from `GET /templates`. */
+export interface TemplateInfo {
+  name: string;
+  vcpus: number;
+  memoryMb: number;
+  /** The sandbox's disk; 0 on a Docker runner that enforces no quota. */
+  diskMb: number;
+  /** Healthy, undrained runners serving it now; creates with none answer 503. */
+  runners: number;
+}
+
+/**
+ * Idle windows to change on an existing sandbox, in seconds. A field left out
+ * keeps its value; `null` returns it to the service's global window.
+ */
+export interface IdleWindowsUpdate {
+  idleStopAfter?: number | null;
+  idleDeleteAfter?: number | null;
+  idleArchiveAfter?: number | null;
 }
 
 /** Runtime of a code sandbox. */
@@ -90,7 +166,11 @@ export interface RetryOptions {
 /** Metadata for a sandbox instance. */
 export interface SandboxRecord {
   id: string;
-  /** `running` or `stopped` (idle-stopped; the next request wakes it). */
+  /**
+   * `running`, `stopped` (idle-stopped; the next request wakes it), `archived`
+   * (its disk is in the archive store; the next request restores it, memory
+   * not included) or `restoring`.
+   */
   status: string;
   /** Unix timestamp (seconds) when the sandbox was created. */
   createdAt: number;
@@ -100,6 +180,14 @@ export interface SandboxRecord {
   ephemeral: boolean;
   /** Outbound network policy the sandbox was created with. */
   egress: EgressMode;
+  /** Template the sandbox was created with. Undefined against services that predate templates. */
+  template?: string;
+  /** Per-sandbox idle windows in seconds; undefined when the sandbox uses the global ones. */
+  idleStopAfter?: number;
+  idleDeleteAfter?: number;
+  idleArchiveAfter?: number;
+  /** Unix seconds of the last archive; set while archived or restoring. */
+  archivedAt?: number;
   /**
    * Owning tenant id, or `__admin__` for a sandbox created with an admin key.
    * A tenant key only ever sees its own id. Undefined against services that
@@ -210,6 +298,13 @@ export type SandboxWireResponse = {
   ephemeral?: boolean;
   /** Absent from services that predate egress modes; mapped to `public`, the only policy they had. */
   egress?: EgressMode;
+  /** Absent from services that predate templates. */
+  template?: string;
+  /** Absent when the sandbox uses the global windows, and from services that predate them. */
+  idle_stop_after?: number;
+  idle_delete_after?: number;
+  idle_archive_after?: number;
+  archived_at?: number;
   /** Absent from services that predate sandbox ownership in responses. */
   tenant_id?: string;
 };

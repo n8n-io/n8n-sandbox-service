@@ -149,3 +149,54 @@ func TestLoadConfigParsesAckBridgeNetfilter(t *testing.T) {
 		t.Fatalf("expected LoadConfig to reject non-boolean %s", envAckBridgeNetfilter)
 	}
 }
+
+func TestLoadConfigParsesTemplates(t *testing.T) {
+	t.Setenv("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE", "img/default")
+	t.Setenv("SANDBOX_RUNNER_DOCKER_TEMPLATES", `{"python":{"image":"img/python","memory_mb":2048}}`)
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Templates["python"].Image != "img/python" || cfg.Templates["python"].MemoryMB != 2048 {
+		t.Fatalf("templates = %+v", cfg.Templates)
+	}
+	for _, bad := range []string{
+		`{"default":{"image":"x"}}`,
+		`{"Python":{"image":"x"}}`,
+		`{"python":{}}`,
+		`{"python":{"image":"x","memory":1}}`,
+		`{"python":{"image":"x","memory_mb":-1}}`,
+		`[]`,
+		`{"python":{"image":"x"}} {}`,
+	} {
+		t.Setenv("SANDBOX_RUNNER_DOCKER_TEMPLATES", bad)
+		if _, err := LoadConfig(); err == nil {
+			t.Errorf("accepted %s", bad)
+		}
+	}
+}
+
+func TestLoadConfigRefusesUnenforceableDiskQuota(t *testing.T) {
+	tests := []struct {
+		name    string
+		env     map[string]string
+		wantErr bool
+	}{
+		{name: "default quota, inactive", env: map[string]string{"SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB": "2048"}, wantErr: true},
+		{name: "template quota, inactive", env: map[string]string{"SANDBOX_RUNNER_DOCKER_TEMPLATES": `{"big":{"image":"img","disk_quota_mb":4096}}`}, wantErr: true},
+		{name: "default quota, active", env: map[string]string{"SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB": "2048", "SANDBOX_RUNNER_DISK_QUOTA_ACTIVE": "true"}},
+		{name: "default quota, opted out", env: map[string]string{"SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB": "2048", "SANDBOX_RUNNER_ALLOW_UNENFORCED_DISK_QUOTA": "true"}},
+		{name: "no quota", env: map[string]string{"SANDBOX_RUNNER_DOCKER_TEMPLATES": `{"big":{"image":"img"}}`}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE", "test-image")
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+			if _, err := LoadConfig(); (err != nil) != tc.wantErr {
+				t.Fatalf("LoadConfig() err = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}
