@@ -787,6 +787,33 @@ func TestLoadAPIRejectsInvalidSQLiteWAL(t *testing.T) {
 	}
 }
 
+func TestLoadAPICodeSandboxesEnabled(t *testing.T) {
+	setRequiredAPIEnv(t)
+	t.Setenv("SANDBOX_API_CODE_SANDBOXES_ENABLED", "")
+
+	cfg, err := LoadAPI()
+	if err != nil {
+		t.Fatalf("LoadAPI() failed: %v", err)
+	}
+	if cfg.CodeSandboxesEnabled {
+		t.Fatal("expected CodeSandboxesEnabled false by default")
+	}
+
+	t.Setenv("SANDBOX_API_CODE_SANDBOXES_ENABLED", "true")
+	cfg, err = LoadAPI()
+	if err != nil {
+		t.Fatalf("LoadAPI() failed: %v", err)
+	}
+	if !cfg.CodeSandboxesEnabled {
+		t.Fatal("expected CodeSandboxesEnabled true")
+	}
+
+	t.Setenv("SANDBOX_API_CODE_SANDBOXES_ENABLED", "maybe")
+	if _, err := LoadAPI(); err == nil {
+		t.Fatal("expected error for invalid SANDBOX_API_CODE_SANDBOXES_ENABLED")
+	}
+}
+
 func setRequiredAPIEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("SANDBOX_API_KEYS", "test-key")
