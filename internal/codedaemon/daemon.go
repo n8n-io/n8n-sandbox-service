@@ -84,6 +84,7 @@ func (d *Daemon) Handler() http.Handler {
 		}
 		w.WriteHeader(http.StatusOK)
 	})
+	mux.HandleFunc("POST /tasks", d.handleTask)
 	if d.cfg.AllowLocalClients {
 		return mux
 	}
@@ -137,13 +138,20 @@ func (d *Daemon) Run(ctx context.Context) error {
 // serve runs the HTTP server on an open listener and forces it closed if graceful shutdown fails.
 func (d *Daemon) serve(ctx context.Context, listener net.Listener) error {
 	defer d.Close()
-	srv := &http.Server{Handler: d.Handler(), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: time.Minute}
+	srv := &http.Server{
+		Handler: d.Handler(), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: time.Minute,
+		// Cancelling the daemon also cancels active task requests.
+		BaseContext: func(net.Listener) context.Context { return ctx },
+	}
 	stopped := make(chan error, 1)
 	go func() { stopped <- srv.Serve(listener) }()
 	select {
 	case err := <-stopped:
 		return err
 	case <-ctx.Done():
+		// Stop the runtime so disconnected handlers waiting for task cleanup
+		// can release their lanes and directories during HTTP shutdown.
+		d.Close()
 		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		err := srv.Shutdown(shutdown)
