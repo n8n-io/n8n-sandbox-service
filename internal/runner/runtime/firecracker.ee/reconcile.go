@@ -100,6 +100,8 @@ func snapshotBuildReapScript(jailerBase string) string {
 	// find -exec ... {} +, which fails when the command fails. Neither {} \; nor a
 	// pipe into while would: find ignores the result of {} \;, and /bin/sh has no
 	// pipefail. Startup would then go on with the mounts still there.
+	// GNU find refuses {} + when {} appears anywhere else in its arguments, even
+	// inside the quoted script, so the inner unmount uses xargs, not find -exec.
 	return "set -eu\n" +
 		"for name in $(ip netns list | awk '{print $1}' | grep '^fc-snapshot-' || true); do\n" +
 		"  ip netns pids \"$name\" | xargs -r kill -KILL || true\n" +
@@ -108,7 +110,7 @@ func snapshotBuildReapScript(jailerBase string) string {
 		"if [ -d " + root + " ]; then\n" +
 		"  find " + root + " -mindepth 1 -maxdepth 1 -type d -name 'snapshot-*' -exec sh -c 'set -eu\n" +
 		"for jail do\n" +
-		"  find \"$jail\" -mindepth 1 -exec umount -l {} \\; || true\n" +
+		"  find \"$jail\" -mindepth 1 -print0 | xargs -0 -r -n1 umount -l || true\n" +
 		"  rm -rf \"$jail\"\n" +
 		"done\n" +
 		"' sh {} +\n" +

@@ -108,7 +108,7 @@ func TestSnapshotBuildReapScriptKillsTheVMBeforeRemovingItsJail(t *testing.T) {
 	script := snapshotBuildReapScript("/srv/jailer's base")
 	kill := strings.Index(script, "grep '^fc-snapshot-'")
 	pids := strings.Index(script, "ip netns pids \"$name\" | xargs -r kill -KILL")
-	unmount := strings.Index(script, "umount -l {}")
+	unmount := strings.Index(script, "xargs -0 -r -n1 umount -l")
 	remove := strings.Index(script, "rm -rf \"$jail\"")
 	if kill < 0 || pids < kill || unmount < pids || remove < unmount {
 		t.Fatalf("script = %q, want the snapshot netns killed, then its binds unmounted, then the jail removed", script)
@@ -117,6 +117,10 @@ func TestSnapshotBuildReapScriptKillsTheVMBeforeRemovingItsJail(t *testing.T) {
 	// fail the script.
 	if strings.Contains(script, "while ") || !strings.Contains(script, "' sh {} +") {
 		t.Fatalf("script = %q, want find -exec ... {} + so a failed rm fails the script", script)
+	}
+	// GNU find refuses {} + when {} appears anywhere else in its arguments.
+	if n := strings.Count(script, "{}"); n != 1 {
+		t.Fatalf("script = %q has %d {}, want exactly one for GNU find -exec ... {} +", script, n)
 	}
 	if strings.Contains(script, "fc-sb-") {
 		t.Fatalf("script = %q, want only snapshot-builder netns", script)
