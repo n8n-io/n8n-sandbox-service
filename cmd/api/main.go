@@ -132,7 +132,7 @@ func main() {
 	// server drains.
 	publishCtx, publishCancel := context.WithCancel(context.Background())
 	defer publishCancel()
-	sharedVolumes, err := newSharedVolumes(publishCtx, cfg, sandboxStore, volumes, mrec)
+	sharedVolumes, err := newSharedVolumes(publishCtx, cfg, sandboxStore, volumes, runnerReg, mrec)
 	if err != nil {
 		slog.Error("shared volumes", "error", err)
 		os.Exit(1)

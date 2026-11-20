@@ -32,6 +32,7 @@ const (
 	reasonInvalidTar          = "invalid_tar"
 	reasonDigestMismatch      = "digest_mismatch"
 	reasonPublishInterrupted  = "publish_interrupted"
+	reasonBuildFailed         = "build_failed"
 )
 
 // publishRetryAfter is the Retry-After of a publish that may work later: a
@@ -256,6 +257,7 @@ func handleDeleteSharedVolume(svc *volumes.Service) http.HandlerFunc {
 // writeSharedVolumeError answers err. Its text goes to the caller only for
 // errors whose messages are fixed.
 func writeSharedVolumeError(w http.ResponseWriter, r *http.Request, err error) {
+	var buildFailed *volumes.BuildError
 	switch {
 	case errors.Is(err, volumes.ErrNotFound):
 		writeError(w, http.StatusNotFound, "shared volume not found")
@@ -285,6 +287,15 @@ func writeSharedVolumeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, http.StatusBadRequest, "failed to read request body")
 	case errors.Is(err, volumes.ErrInterrupted):
 		writeErrorReason(w, http.StatusServiceUnavailable, volumes.ErrInterrupted.Error(), reasonPublishInterrupted)
+	case errors.As(err, &buildFailed):
+		status := http.StatusBadGateway
+		if buildFailed.CallerFault() {
+			status = http.StatusUnprocessableEntity
+		}
+		writeErrorReason(w, status, volumes.ErrBuildFailed.Error()+" on a runner: "+buildFailed.Reason, reasonBuildFailed)
+	case errors.Is(err, volumes.ErrNoCapacity):
+		w.Header().Set("Retry-After", publishRetryAfter)
+		writeErrorReason(w, http.StatusServiceUnavailable, volumes.ErrNoCapacity.Error(), reasonNoCapacity)
 	default:
 		slog.ErrorContext(r.Context(), "shared volume request failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "shared volume store failure")

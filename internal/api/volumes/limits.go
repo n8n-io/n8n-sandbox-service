@@ -23,6 +23,10 @@ const (
 	// instance: each hashes, decompresses and reads a tar.
 	MaxPublishesPerPod = 2
 	MaxNameBytes       = 128
+	// MaxImageBytes caps the ext4 image of a shared volume, which runners
+	// fetch within the same timeout as a tar. It is checked before the build,
+	// from the size the builder gives an image of the tar's counts.
+	MaxImageBytes int64 = 5 << 30 // 5 GiB
 )
 
 var namePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$`)

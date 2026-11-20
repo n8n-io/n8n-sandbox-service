@@ -10,8 +10,9 @@ import { FIRECRACKER_ONLY } from './tags';
 
 type BuildOutcome = { result: 'ok' | 'failed' | 'refused' | 'error'; reason?: string; image_bytes?: number; sha256?: string };
 
-// The runner builds a volume image from a tar in a builder microVM. No API
-// route asks for one yet, so the tests call the runner through e2e-runnerctl.
+// The runner builds a volume image from a tar in a builder microVM. These tests
+// call the runner directly, through e2e-runnerctl, to reach cases the API
+// never sends (shared-volume-build.spec.ts goes through the API).
 // The image is checked with debugfs and e2fsck from the host's e2fsprogs: what
 // the builder says about its own work is not taken as proof.
 test.describe('Volume build', FIRECRACKER_ONLY, () => {
