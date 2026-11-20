@@ -1,0 +1,14 @@
+docs/configuration.md
+  h_8fb27e0cdf6d1e 224
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c29eafc29c9ba868ad3836633686fdeb3f6b5c3e",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
