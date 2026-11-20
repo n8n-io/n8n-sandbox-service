@@ -1,0 +1,16 @@
+docs/API.md
+  h_8fb27e0cdf6d1e 914
+docs/limits.md
+  h_8fb27e0cdf6d1e 61
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c63917df7b9abc3955cdd1d37d08edc102b28748",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
