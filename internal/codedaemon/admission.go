@@ -79,7 +79,9 @@ func stopUnreadUpload(w http.ResponseWriter, r *http.Request) {
 		// still read during body cleanup after sending the response, so also
 		// give those reads an expired deadline.
 		w.Header().Set("Connection", "close")
-		_ = http.NewResponseController(w).SetReadDeadline(time.Now())
+		rc := http.NewResponseController(w)
+		_ = rc.EnableFullDuplex()
+		_ = rc.SetReadDeadline(time.Now())
 	}
 }
 
