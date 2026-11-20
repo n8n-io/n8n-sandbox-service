@@ -1,0 +1,20 @@
+internal/codedaemon/events.go
+  h_8fb27e0cdf6d1e 1
+internal/codedaemon/results.go
+  h_8fb27e0cdf6d1e 1-78
+internal/codedaemon/results_test.go
+  h_8fb27e0cdf6d1e 1-24
+internal/codedaemon/task_handler.go
+  h_8fb27e0cdf6d1e 1-83
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a634e89461953b232e1629d86c1517da859575b2",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
