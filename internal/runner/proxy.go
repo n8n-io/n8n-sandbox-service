@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/n8n-io/sandbox-service/internal/codetask"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
@@ -30,12 +31,34 @@ type proxyTarget struct {
 
 // ProxyHandler returns a handler that reverse-proxies requests to the sandbox daemon.
 func ProxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder) http.HandlerFunc {
-	return proxyHandler(rt, cfg, rec, false, true)
+	return proxyHandler(rt, cfg, rec, noBodyCap, true)
 }
 
 // UploadProxyHandler is like ProxyHandler but enforces cfg.MaxFileBytes on the request body.
 func UploadProxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder) http.HandlerFunc {
-	return proxyHandler(rt, cfg, rec, true, true)
+	return proxyHandler(rt, cfg, rec, cfg.MaxFileBytes, true)
+}
+
+// TaskProxyHandler serves POST /sandboxes/{id}/tasks of code sandboxes: it
+// streams the multipart upload to the daemon and its NDJSON events back,
+// with the body capped at cfg.MaxTaskInputBytes plus room for the spec and
+// the multipart headers. A daemon refusal reaches the client while the
+// client is still uploading.
+func TaskProxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder) http.HandlerFunc {
+	proxy := proxyHandler(rt, cfg, rec, codetask.MaxBodyBytes(cfg.MaxTaskInputBytes), true)
+	return func(w http.ResponseWriter, r *http.Request) {
+		early := sandboxproxy.StartEarlyReply(w, r)
+		proxy(w, r.WithContext(context.WithValue(r.Context(), earlyReplyKey{}, early)))
+	}
+}
+
+type earlyReplyKey struct{}
+
+// earlyReply returns the request's EarlyReply, or nil when its route does not
+// relay refusals early.
+func earlyReply(ctx context.Context) *sandboxproxy.EarlyReply {
+	early, _ := ctx.Value(earlyReplyKey{}).(*sandboxproxy.EarlyReply)
+	return early
 }
 
 // deleteExecutionTimeout bounds an execution DELETE. The daemon answers one at
@@ -48,7 +71,7 @@ var deleteExecutionTimeout = 10 * time.Second
 // already lost the execution, so the delete gets 204 (writeExecutionGone) and does
 // not spend the one-shot 409 restart report. Rationale in docs/API.md under DELETE /sandboxes/{id}/executions/{exec_id}.
 func DeleteExecutionHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder) http.HandlerFunc {
-	proxy := proxyHandler(rt, cfg, rec, false, false)
+	proxy := proxyHandler(rt, cfg, rec, noBodyCap, false)
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), deleteExecutionTimeout)
 		defer cancel()
@@ -56,9 +79,14 @@ func DeleteExecutionHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *m
 	}
 }
 
-// wake says whether a sandbox that is not running is started for the request. Only
+// noBodyCap is the maxBody of a route whose body proxyHandler leaves uncapped.
+const noBodyCap = -1
+
+// maxBody caps the request body; noBodyCap leaves it uncapped, and 0 refuses
+// any body. wake says whether a
+// sandbox that is not running is started for the request. Only
 // DeleteExecutionHandler passes false; see there for why.
-func proxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder, limitBody bool, wake bool) http.HandlerFunc {
+func proxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder, maxBody int64, wake bool) http.HandlerFunc {
 	proxy := &httputil.ReverseProxy{
 		Transport: runnerruntime.NoProxyTransport,
 		Rewrite: func(pr *httputil.ProxyRequest) {
@@ -85,6 +113,9 @@ func proxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.Run
 			pr.Out.URL.RawQuery = pr.In.URL.RawQuery
 		},
 		ModifyResponse: func(resp *http.Response) error {
+			if early := earlyReply(resp.Request.Context()); early != nil && resp.StatusCode >= 300 {
+				early.RefuseResponse(resp)
+			}
 			if daemonRedirected(resp.Request, resp, "proxy") {
 				return errDaemonRedirect
 			}
@@ -93,6 +124,10 @@ func proxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.Run
 		},
 		FlushInterval: -1,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			if early := earlyReply(r.Context()); early != nil {
+				early.Refuse()
+				defer early.StopReading()
+			}
 			if errors.Is(err, errDaemonRedirect) {
 				writeError(w, http.StatusBadGateway, err.Error())
 				return
@@ -122,8 +157,8 @@ func proxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.Run
 			return
 		}
 
-		if limitBody {
-			r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxFileBytes)
+		if maxBody != noBodyCap {
+			r.Body = http.MaxBytesReader(w, r.Body, maxBody)
 		}
 
 		// Strip /sandboxes/{id} prefix to get the daemon path.

@@ -58,6 +58,7 @@ Output arrives in pieces of at most 64 KiB; there is no limit on total output.
 | Limit | Default | Set by | When reached |
 | --- | --- | --- | --- |
 | File upload, per request | 10 MiB | `SANDBOX_API_MAX_FILE_BYTES` and `SANDBOX_RUNNER_MAX_FILE_BYTES`; the lower wins | `400` `request body too large`. Appending can grow a file past it |
+| Code sandbox task request | 64 MiB of input files, plus 1 MiB for the `spec` and the multipart headers | `SANDBOX_API_MAX_TASK_INPUT_BYTES` and `SANDBOX_RUNNER_MAX_TASK_INPUT_BYTES`; the lower wins | `400` `request body too large` |
 | File download | no limit | | |
 | File listing, copy, move | no limit | | |
 | `GET /sandboxes` | no paging | | |

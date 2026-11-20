@@ -280,18 +280,20 @@ func TestGatewayServesCodeSandboxesOnlyWhenEnabled(t *testing.T) {
 				t.Fatalf("create gateway router: %v", err)
 			}
 
-			// An invalid body gets 400 from the handler, so 404 means no route.
-			req := httptest.NewRequest(http.MethodPost, "/code/sandboxes", strings.NewReader("{}"))
-			req.Header.Set("X-Api-Key", "public-key")
-			rr := httptest.NewRecorder()
-			router.ServeHTTP(rr, req)
+			// An invalid body or id gets 400 from the handler, so 404 means no route.
+			for _, path := range []string{"/code/sandboxes", "/code/sandboxes/not-a-uuid/tasks"} {
+				req := httptest.NewRequest(http.MethodPost, path, strings.NewReader("{}"))
+				req.Header.Set("X-Api-Key", "public-key")
+				rr := httptest.NewRecorder()
+				router.ServeHTTP(rr, req)
 
-			want := http.StatusNotFound
-			if enabled {
-				want = http.StatusBadRequest
-			}
-			if rr.Code != want {
-				t.Fatalf("expected %d, got %d: %s", want, rr.Code, rr.Body.String())
+				want := http.StatusNotFound
+				if enabled {
+					want = http.StatusBadRequest
+				}
+				if rr.Code != want {
+					t.Fatalf("%s: expected %d, got %d: %s", path, want, rr.Code, rr.Body.String())
+				}
 			}
 		})
 	}

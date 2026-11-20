@@ -164,6 +164,8 @@ Exec and file operation requests are proxied through two hops:
 Client → API (HTTP) → Runner (HTTP reverse proxy) → Daemon (HTTP on :8081)
 ```
 
+Code sandbox tasks (`POST /code/sandboxes/{id}/tasks`) take the same path: the API sends them to the runner's `/sandboxes/{id}/tasks`, and the runner to the daemon's `/tasks`. Code sandboxes are ephemeral, so the cordon check below does not apply to them.
+
 Each hop uses `httputil.ReverseProxy` with URL rewriting. The runner can wake a stopped container before proxying. On a route that can wake the sandbox (every one but execution `DELETE`), if the API's row says stopped and the registry says the runner is cordoned, the API doesn't proxy: it deletes the sandbox and answers `404`, so the client creates it again on another runner. For a runner that can't be reached, it deletes only the row. A delete the runner fails answers `503` and keeps the row.
 
 ## Key Data Flows
