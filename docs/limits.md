@@ -11,7 +11,7 @@ Every limit a client or operator can run into, with its default. The variables a
 | Requests in progress per sandbox, from all replicas | 256 | `SANDBOX_RUNNER_MAX_INFLIGHT_PER_SANDBOX` | `429` `sandbox_request_limit`, `Retry-After: 1` |
 | Execution `DELETE`s in progress per sandbox | 4 | fixed | the same |
 
-Creates, exec and file requests count; a stream counts until it ends, a create until the runner has finished it. `GET /sandboxes`, `GET` and `DELETE /sandboxes/{id}`, admin routes and admin keys are not counted. Setting a limit to `0` turns it and its `DELETE` reserve off. Nothing caps all tenants together on a replica.
+Creates, exec, file and code sandbox task requests count; a stream counts until it ends, a create until the runner has finished it. `GET /sandboxes`, `GET` and `DELETE /sandboxes/{id}`, admin routes and admin keys are not counted. Setting a limit to `0` turns it and its `DELETE` reserve off. Nothing caps all tenants together on a replica.
 
 ## Request rate
 
@@ -38,7 +38,7 @@ A sandbox has no maximum lifetime; it lives as long as it is used.
 | Extra wait before a delete | 1 min | `SANDBOX_API_IDLE_DELETE_SAFETY_BUFFER` |
 | How often the sweeper checks | 1 min | `SANDBOX_API_IDLE_SWEEP_INTERVAL` |
 
-Exec and file requests the sandbox served count as use, `GET /sandboxes/{id}` does not ([details](API.md#get-sandboxesid)). Use is recorded when a response starts, so a command that runs longer than the idle stop window can be stopped mid-run.
+Exec, file and code sandbox task requests the sandbox served count as use, `GET /sandboxes/{id}` does not ([details](API.md#get-sandboxesid)). Use is recorded when a response starts, so a command that runs longer than the idle stop window can be stopped mid-run.
 
 ## Executions
 

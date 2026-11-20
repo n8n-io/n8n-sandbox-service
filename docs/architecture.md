@@ -164,7 +164,7 @@ Exec and file operation requests are proxied through two hops:
 Client → API (HTTP) → Runner (HTTP reverse proxy) → Daemon (HTTP on :8081)
 ```
 
-Code sandbox tasks (`POST /code/sandboxes/{id}/tasks`) take the same path: the API sends them to the runner's `/sandboxes/{id}/tasks`, and the runner to the daemon's `/tasks`. Code sandboxes are ephemeral, so the cordon check below does not apply to them.
+Code sandbox tasks (`POST /code/sandboxes/{id}/tasks`) take the same path: the API sends them to the runner's `/sandboxes/{id}/tasks`, and the runner to the daemon's `/tasks`. Code sandboxes are ephemeral, so the cordon check below does not apply to them. Task responses count as [sandbox activity](#sandbox-activity).
 
 Each hop uses `httputil.ReverseProxy` with URL rewriting. The runner can wake a stopped container before proxying. On a route that can wake the sandbox (every one but execution `DELETE`), if the API's row says stopped and the registry says the runner is cordoned, the API doesn't proxy: it deletes the sandbox and answers `404`, so the client creates it again on another runner. For a runner that can't be reached, it deletes only the row. A delete the runner fails answers `503` and keeps the row.
 
@@ -207,7 +207,7 @@ The report is spent by the first request that wakes the sandbox, so `DELETE /san
 
 The idle sweeper stops and deletes sandboxes by `last_active_at`. Writing it on every request would put a database write on every response, and a burst to one sandbox would queue on its row. So each API replica collects the sandboxes it serves in memory and writes them in the background (`internal/api/activity.go`), all in one statement.
 
-**What counts:** an exec or file response from the sandbox, from when it starts until it ends. `GET /sandboxes/{id}`, `5xx` responses, runner redirects and runner "sandbox gone" answers do not.
+**What counts:** an exec, file or code sandbox task response from the sandbox, from when it starts until it ends. `GET /sandboxes/{id}`, `5xx` responses, runner redirects and runner "sandbox gone" answers do not.
 
 **When `last_active_at` is written**, with `T` = `SANDBOX_API_ACTIVITY_WRITE_INTERVAL` (5 s): every `T`, one statement per replica writes each sandbox it served since the last write. The time written is when its latest response started or ended or, while a response is still open, the time of the write; a response counts as open for at most `SANDBOX_API_MAX_RESPONSE_ACTIVITY` (30 min). A burst to one sandbox therefore costs one row per replica. The statement never moves `last_active_at` back, and it sets `status` to `running`. A request that wakes a stopped sandbox, or comes after a quiet spell, asks for the write at once instead of at the next `T`, so `GET` shows the sandbox running about one database round trip later. A failed write is retried at the next `T`. Writes never delay a response, and each gets up to `T`.
 

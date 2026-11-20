@@ -911,7 +911,7 @@ curl -X POST http://localhost:8080/code/sandboxes \
 
 Runs a task in a code sandbox. The service streams the body to the sandbox's daemon. It streams the daemon's `application/x-ndjson` events back. The daemon defines the body and the events.
 
-The input files can be at most 64 MiB in total (`SANDBOX_API_MAX_TASK_INPUT_BYTES`). The body can be 1 MiB larger, for the `spec` and the multipart headers. The body must arrive in 30 s ([time limits](limits.md#time-limits-on-requests)). An open request counts toward the [in-progress limits](#http-429--too-many-requests-in-progress) and keeps the sandbox active.
+The input files can be at most 64 MiB in total by default (`SANDBOX_API_MAX_TASK_INPUT_BYTES`, up to 1 GiB). The body can be 1 MiB larger, for the `spec` and the multipart headers. The body must arrive in 30 s ([time limits](limits.md#time-limits-on-requests)). An open request counts toward the [in-progress limits](#http-429--too-many-requests-in-progress) and keeps the sandbox active.
 
 **Errors:** `400` invalid id or body too large, `401` missing or unknown API key, `403` provisioner or scaler key, `404` no code sandbox with this id for the caller, or the sandbox was idle too long, `429` [too many requests in progress](#http-429--too-many-requests-in-progress), `502` no runner for the sandbox, `503` runner or daemon not available. The daemon sends all other statuses. Over HTTP/1, an error can arrive before the upload ends. The service then closes the connection.
 
