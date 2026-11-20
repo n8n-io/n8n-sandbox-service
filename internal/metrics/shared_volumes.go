@@ -32,6 +32,26 @@ const (
 	SharedVolumeInterrupted = "interrupted"
 	// SharedVolumeError is a store or database failure.
 	SharedVolumeError = "error"
+	// SharedVolumeNoCapacity is a publish whose image build no runner took in
+	// time.
+	SharedVolumeNoCapacity = "no_capacity"
+	// SharedVolumeBuildFailed is a publish whose image build failed.
+	SharedVolumeBuildFailed = "build_failed"
+)
+
+// Shared volume build results used with ObserveBuild, besides the runner's
+// reasons for a build that failed.
+const (
+	SharedVolumeBuildSuccess = "success"
+	// SharedVolumeBuildRefused is a runner that refused for capacity.
+	SharedVolumeBuildRefused = "refused"
+	// SharedVolumeBuildUnsupported is a runner that can't build images.
+	SharedVolumeBuildUnsupported = "unsupported"
+	// SharedVolumeBuildTransport is a call to a runner that failed without a
+	// runner's reason, or whose answer was not a valid image.
+	SharedVolumeBuildTransport = "transport"
+	// SharedVolumeBuildError is a store failure around a build.
+	SharedVolumeBuildError = "error"
 )
 
 // publishBuckets covers a publish from a small tar, done in under a second,
@@ -43,6 +63,7 @@ var publishBuckets = []float64{0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600, 1800}
 type SharedVolumeRecorder struct {
 	publishes *prometheus.CounterVec
 	duration  prometheus.Histogram
+	builds    *prometheus.CounterVec
 }
 
 // NewSharedVolumeRecorder registers the shared volume metrics on api's
@@ -67,8 +88,34 @@ func NewSharedVolumeRecorder(api *APIRecorder) *SharedVolumeRecorder {
 		Buckets:     publishBuckets,
 		ConstLabels: prometheus.Labels{"role": RoleAPI},
 	})
-	api.reg.MustRegister(publishes, duration)
-	return &SharedVolumeRecorder{publishes: publishes, duration: duration}
+	builds := prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   Namespace,
+			Name:        "shared_volume_builds_total",
+			Help:        "Calls to runners to build the image of a shared volume, labeled by result: success, refused, unsupported, transport, error or the runner's reason.",
+			ConstLabels: prometheus.Labels{"role": RoleAPI},
+		},
+		[]string{"result"},
+	)
+	api.reg.MustRegister(publishes, duration, builds)
+	return &SharedVolumeRecorder{publishes: publishes, duration: duration, builds: builds}
+}
+
+// ObserveBuild records one call to a runner to build an image.
+func (r *SharedVolumeRecorder) ObserveBuild(result string) {
+	if r == nil || r.builds == nil {
+		return
+	}
+	r.builds.WithLabelValues(result).Inc()
+}
+
+// BuildCount returns the counter value for builds with the result. Intended
+// for tests in other packages.
+func (r *SharedVolumeRecorder) BuildCount(result string) float64 {
+	if r == nil || r.builds == nil {
+		return 0
+	}
+	return testutil.ToFloat64(r.builds.WithLabelValues(result))
 }
 
 // ObservePublish records a publish's result.

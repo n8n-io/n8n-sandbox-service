@@ -9,6 +9,9 @@ E2E_PROVISIONER_API_KEY="provisioner-test"
 # Same for the scaler key (SANDBOX_API_SCALER_KEYS / SANDBOX_API_SCALER_KEY).
 # shellcheck disable=SC2034  # read by the run-*.sh callers
 E2E_SCALER_API_KEY="scaler-test"
+# Same for the publisher key (SANDBOX_API_PUBLISHER_KEYS / SANDBOX_API_PUBLISHER_KEY).
+# shellcheck disable=SC2034  # read by the run-*.sh callers
+E2E_PUBLISHER_API_KEY="publisher-test"
 
 # Maps host uname -m to Docker image arch tag (amd64/arm64).
 e2e_docker_arch() {

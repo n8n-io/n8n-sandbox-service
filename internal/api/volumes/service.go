@@ -25,6 +25,12 @@ type timing struct {
 	giveUp time.Duration
 	// cleanup bounds the removal of what a failed publish or a delete left.
 	cleanup time.Duration
+	// builderWait is how long a build waits for a runner that takes it,
+	// trying again after retryFirst, then twice as long each time up to
+	// retryMax.
+	builderWait, retryFirst, retryMax time.Duration
+	// buildCall bounds one call to a runner to build an image.
+	buildCall time.Duration
 }
 
 // limits are the caps a publish is held to: the package's constants, smaller
@@ -33,13 +39,21 @@ type limits struct {
 	maxTarBytes int64
 	policy      safetar.Policy
 	maxVolumes  int
+	// maxImageBytes caps an image; maxRunnerBytes what a volume takes on a
+	// runner, as volume.RunnerBytes counts it.
+	maxImageBytes  int64
+	maxRunnerBytes int64
 }
 
 var defaultTiming = timing{
-	lease:      2 * time.Minute,
-	renewEvery: 30 * time.Second,
-	giveUp:     90 * time.Second,
-	cleanup:    30 * time.Second,
+	lease:       2 * time.Minute,
+	renewEvery:  30 * time.Second,
+	giveUp:      90 * time.Second,
+	cleanup:     30 * time.Second,
+	builderWait: 5 * time.Minute,
+	retryFirst:  time.Second,
+	retryMax:    10 * time.Second,
+	buildCall:   30 * time.Minute,
 }
 
 // Service publishes, lists and deletes shared volumes. A row is written before
@@ -55,6 +69,8 @@ type Service struct {
 	newID  func() string
 	timing timing
 	limits limits
+	// builds is nil on a service whose runners attach tars.
+	builds *Builds
 }
 
 // NewService keeps shared volume rows in records and their objects in objects.
@@ -69,7 +85,13 @@ func NewService(ctx context.Context, records store.SharedVolumes, objects volume
 		now:     time.Now,
 		newID:   func() string { return uuid.New().String() },
 		timing:  defaultTiming,
-		limits:  limits{maxTarBytes: MaxTarBytes, policy: tarPolicy(), maxVolumes: MaxSharedVolumes},
+		limits: limits{
+			maxTarBytes:    MaxTarBytes,
+			policy:         tarPolicy(),
+			maxVolumes:     MaxSharedVolumes,
+			maxImageBytes:  MaxImageBytes,
+			maxRunnerBytes: volume.MaxSandboxVolumeBytes,
+		},
 	}
 }
 
