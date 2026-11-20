@@ -32,7 +32,7 @@ sequenceDiagram
     loop every 5s
         D-->>R: heartbeat
     end
-    W->>D: output (console), heap
+    W->>D: heap
     W->>D: done / error / failed
     D->>D: check outputs, inline result.json, keep outputs
     D-->>R: done / error (last line)
@@ -79,14 +79,14 @@ Timeout: `spec.timeoutMs` can only shorten `CODE_DAEMON_DEFAULT_TASK_TIMEOUT`. `
 
 | `type` | `code` | Meaning |
 | --- | --- | --- |
-| `done` | — | Success. Has `result`, `outputs`, `console`, `outputExpiresAt`. `console` holds only `console` messages from the runtime, not raw process stdout/stderr. |
-| `error` | `user_error` | User code threw. `userError` has runtime details. |
+| `done` | — | Success. Has `result`, `outputs`, `outputExpiresAt`. |
+| `error` | `user_error` | User code threw. `userError` has runtime details. `result` has the inline `result.json`, if valid. |
 | `error` | `crashed` | Runtime failed or exited. |
 | `error` | `oom` | Runtime ran out of memory (best effort). |
 | `error` | `timeout` | Deadline passed. |
 | `error` | `cancelled` | `DELETE` or stream closed. |
 | `error` | `invalid` | Bad output files or `result.json`. |
-| `error` | `output_limit` | No room to keep outputs. |
+| `error` | `output_limit` | No room to keep outputs. `result` has the inline `result.json`. |
 
 A broken stream has no known outcome. The daemon does not replay a task.
 
@@ -111,6 +111,8 @@ stateDiagram-v2
 ### Outputs
 
 - `result.json` ≤ `inlineResultMaxBytes` (max 1 MiB) is inlined into `result`. Invalid JSON → `error invalid`.
+- The runtime puts the console output of the task in `result.json`. The daemon does not read its content.
+- On `user_error`, a valid `result.json` within the limit is also inlined. A missing, larger, or invalid one is left out.
 - Missing or larger `result.json` → `result` is `null`.
 - `in/` is removed. `out/` is kept for `CODE_DAEMON_OUTPUT_TTL` (default 5 min).
 - Kept outputs: max 256 tasks, `CODE_DAEMON_MAX_RETAINED_OUTPUT_BYTES` total. Unexpired outputs are never evicted.
@@ -194,7 +196,7 @@ $CODE_DAEMON_WORK_DIR/task-XXXX/     (0700, per task)
 │   └── task.json     task input and runtime data
 └── out/         runtime writes here
     ├── bin/
-    └── result.json   optional, inlined into "result"
+    └── result.json   optional, inlined into "result"; holds the console output
 ```
 
 ### Response stream
@@ -204,7 +206,7 @@ $CODE_DAEMON_WORK_DIR/task-XXXX/     (0700, per task)
 ```json
 {"type":"accepted","taskId":"t1"}
 {"type":"heartbeat","taskId":"t1"}
-{"type":"done","taskId":"t1","result":{"ok":true},"outputs":[{"path":"result.json","size":11}],"console":[{"stream":"stdout","text":"hi"}],"outputExpiresAt":"2026-11-18T10:05:00Z"}
+{"type":"done","taskId":"t1","result":{"ok":true},"outputs":[{"path":"result.json","size":11}],"outputExpiresAt":"2026-11-18T10:05:00Z"}
 ```
 
 ## 3. Daemon ↔ runtime protocol
@@ -235,7 +237,6 @@ sequenceDiagram
     participant W as Runtime
     W->>D: ready
     D->>W: start {taskId, dir, deadline}
-    W->>D: console {taskId, stream, text}
     W->>D: heap {heapUsedBytes}
     W->>D: done {taskId, heapUsedBytes}
     Note over D,W: cancel path
@@ -255,21 +256,21 @@ Runtime → daemon:
 | `type` | Fields | Meaning |
 | --- | --- | --- |
 | `ready` | — | Accepting tasks. First message. |
-| `console` | `taskId`, `stream` (`stdout`/`stderr`), `text` | Task console line. |
 | `heap` | `heapUsedBytes` | Memory sample. |
 | `done` | `taskId`, `heapUsedBytes?` | Success. Outputs are in `dir/out`. |
-| `error` | `taskId`, `error`, `heapUsedBytes?` | User code failed. `error` is passed to the client as `userError`. |
+| `error` | `taskId`, `error`, `heapUsedBytes?` | User code failed. `error` is passed to the client as `userError`. Outputs, such as `result.json`, are in `dir/out`. |
 | `failed` | `taskId`, `outcome?` | Runtime could not run the task. `outcome: "oom"` → `oom`. |
 | `cancelled` | `taskId` | Ack for `cancel`. |
 
 `done`, `error`, and `failed` are terminal. Messages for unknown task IDs are ignored.
+
+Console output is not part of the protocol. The runtime buffers the console output of a task and writes it to `dir/out/result.json` before it sends `done` or `error`.
 
 ### Daemon rules
 
 | Trigger | Daemon action |
 | --- | --- |
 | `heapUsedBytes` > `CODE_DAEMON_RECYCLE_HEAP_BYTES` | Retire runtime |
-| `console` | Keep max `CODE_DAEMON_MAX_CONSOLE_ENTRIES`, 4 KiB each. Overflow replaces the last entry with `Console output truncated`. |
 | `cancel` sent | Retire runtime, even after ack |
 | No `cancelled` or terminal in 1 s | Kill runtime |
 | Process exits | Fail running tasks: `oom` if stderr marker or cgroup `oom_kill` grew after `SIGKILL`, else `crashed` |
