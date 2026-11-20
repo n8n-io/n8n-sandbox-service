@@ -15,6 +15,10 @@ auth:
     # Optional (SANDBOX_API_SCALER_KEYS, see docs/security-model.md).
     # The API starts without it when the Secret has no such key.
     scalerKeys: scaler-api-keys
+    # Optional (SANDBOX_API_PUBLISHER_KEYS, see docs/security-model.md).
+    # Empty passes no publisher keys to the API; set it, for example to
+    # publisher-api-keys, to read them from that key of the Secret.
+    publisherKeys: ""
     runnerRegistrationToken: runner-registration-token
     runnerApiKey: runner-api-key
     runnerApiKeys: runner-api-keys
@@ -25,6 +29,9 @@ auth:
     provisionerKeys: ""
     # Empty leaves scaler keys out of the generated Secret.
     scalerKeys: ""
+    # Empty leaves publisher keys out of the generated Secret. Needs
+    # auth.secretKeys.publisherKeys.
+    publisherKeys: ""
     runnerRegistrationToken: changeme
     runnerApiKey: changeme
     runnerApiKeys: changeme

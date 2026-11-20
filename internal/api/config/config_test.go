@@ -316,6 +316,51 @@ func TestLoadAPIRejectsScalerKeyInAnotherSet(t *testing.T) {
 	}
 }
 
+func TestLoadAPIParsesPublisherKeys(t *testing.T) {
+	setRequiredAPIEnv(t)
+	t.Setenv("SANDBOX_API_PUBLISHER_KEYS", " publisher-a,,publisher-b ")
+
+	cfg, err := LoadAPI()
+	if err != nil {
+		t.Fatalf("LoadAPI() failed: %v", err)
+	}
+	if len(cfg.PublisherKeys) != 2 {
+		t.Fatalf("PublisherKeys = %v, want 2 keys", cfg.PublisherKeys)
+	}
+	for _, key := range []string{"publisher-a", "publisher-b"} {
+		if _, ok := cfg.PublisherKeys[key]; !ok {
+			t.Errorf("PublisherKeys lacks %q", key)
+		}
+	}
+}
+
+func TestLoadAPIPublisherKeysOptional(t *testing.T) {
+	setRequiredAPIEnv(t)
+	t.Setenv("SANDBOX_API_PUBLISHER_KEYS", "")
+
+	cfg, err := LoadAPI()
+	if err != nil {
+		t.Fatalf("LoadAPI() failed: %v", err)
+	}
+	if len(cfg.PublisherKeys) != 0 {
+		t.Fatalf("PublisherKeys = %v, want none", cfg.PublisherKeys)
+	}
+}
+
+func TestLoadAPIRejectsPublisherKeyInAnotherSet(t *testing.T) {
+	setRequiredAPIEnv(t)
+	t.Setenv("SANDBOX_API_KEYS", "admin-key")
+	t.Setenv("SANDBOX_API_PROVISIONER_KEYS", "prov-key")
+	t.Setenv("SANDBOX_API_SCALER_KEYS", "scaler-key")
+
+	for _, shared := range []string{"admin-key", "prov-key", "scaler-key"} {
+		t.Setenv("SANDBOX_API_PUBLISHER_KEYS", "publisher-only,"+shared)
+		if _, err := LoadAPI(); err == nil {
+			t.Errorf("LoadAPI() accepted publisher key %q, which is also in another set", shared)
+		}
+	}
+}
+
 func TestLoadAPIRequiresAPIKeys(t *testing.T) {
 	os.Unsetenv("SANDBOX_API_KEYS")
 	os.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "x")
