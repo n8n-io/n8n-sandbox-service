@@ -1,0 +1,69 @@
+internal/api/handlers_code_proxy.go
+  h_8fb27e0cdf6d1e 1-8,10-49,53-62,75-78
+  h_8fb27e0cdf6d1e 9,50-52,63-74
+internal/runner/task_proxy_test.go
+  h_8fb27e0cdf6d1e 1-5,7,9-156,219
+  h_8fb27e0cdf6d1e 6,8,157-218
+charts/n8n-sandbox-service/values.yaml
+  h_8fb27e0cdf6d1e 194,343
+docs/API.md
+  h_8fb27e0cdf6d1e 910-926
+docs/security-model.md
+  h_8fb27e0cdf6d1e 74-76
+internal/api/handlers_code_proxy_test.go
+  h_8fb27e0cdf6d1e 1-4,6,8-40,42-175,227-252,254-262,264-363
+  h_8fb27e0cdf6d1e 5,7,41,176-226,253,263
+docs/limits.md
+  h_8fb27e0cdf6d1e 61
+internal/api/config/config.go
+  h_8fb27e0cdf6d1e 17,119-123,248,331,333-334
+  h_8fb27e0cdf6d1e 332
+docs/architecture.md
+  h_8fb27e0cdf6d1e 167-168
+internal/runner/config/config.go
+  h_8fb27e0cdf6d1e 17,49-53,180,225,227-228
+  h_8fb27e0cdf6d1e 226
+internal/api/handlers.go
+  h_8fb27e0cdf6d1e 41-45,141-142,145,154-189,739
+charts/n8n-sandbox-service/Chart.yaml
+  h_8fb27e0cdf6d1e 5
+internal/api/config/config_test.go
+  h_8fb27e0cdf6d1e 154-189
+internal/api/gateway.go
+  h_8fb27e0cdf6d1e 14,102
+  h_8fb27e0cdf6d1e 98-101
+internal/runner/config/config_test.go
+  h_8fb27e0cdf6d1e 220-252
+internal/runner/proxy_test.go
+  h_8fb27e0cdf6d1e 27,30-32,34
+internal/codetask/limits.go
+  h_8fb27e0cdf6d1e 1-22
+docs/configuration.md
+  h_8fb27e0cdf6d1e 41,91
+internal/runner/proxy.go
+  h_8fb27e0cdf6d1e 14,34,39-47,60
+  h_8fb27e0cdf6d1e 48-59,61,74,82-87,89,116-118,127-130,160-161
+charts/n8n-sandbox-service/templates/configmap.yaml
+  h_8fb27e0cdf6d1e 15,48
+internal/runner/server.go
+  h_8fb27e0cdf6d1e 76
+charts/n8n-sandbox-service/testdata/default-render.yaml
+  h_8fb27e0cdf6d1e 21,52
+internal/api/gateway_test.go
+  h_8fb27e0cdf6d1e 283-296
+internal/sandboxproxy/early_reply.go
+  h_8fb27e0cdf6d1e 1-65
+internal/sandboxproxy/signals.go
+  h_8fb27e0cdf6d1e 1-3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7ae1a34dfe31918bce527ca3659f7f0515fdd9e6",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
