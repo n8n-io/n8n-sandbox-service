@@ -1,0 +1,36 @@
+docs/API.md
+  h_8fb27e0cdf6d1e 914
+docs/configuration.md
+  h_8fb27e0cdf6d1e 41,91
+docs/limits.md
+  h_8fb27e0cdf6d1e 61
+internal/api/config/config.go
+  h_8fb27e0cdf6d1e 17,119-121,248,331
+internal/api/config/config_test.go
+  h_8fb27e0cdf6d1e 161-162
+internal/api/gateway.go
+  h_8fb27e0cdf6d1e 14
+internal/api/handlers_code_proxy_test.go
+  h_8fb27e0cdf6d1e 15,21-23,37,230-231,233-246,248-249,251-257
+internal/codetask/limits.go
+  h_8fb27e0cdf6d1e 1-22
+internal/runner/config/config.go
+  h_8fb27e0cdf6d1e 17,49-51,180,225
+internal/runner/config/config_test.go
+  h_8fb27e0cdf6d1e 227-228
+internal/runner/proxy.go
+  h_8fb27e0cdf6d1e 14,44-45,47
+internal/runner/task_proxy_test.go
+  h_8fb27e0cdf6d1e 14,56-57,59-73,75-76,78-81,83-88
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f33c573ef5e92951328c24ba6b9a2e9f57aa65b3",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}

@@ -1,0 +1,54 @@
+charts/n8n-sandbox-service/Chart.yaml
+  h_8fb27e0cdf6d1e 5
+charts/n8n-sandbox-service/templates/configmap.yaml
+  h_8fb27e0cdf6d1e 15,48
+charts/n8n-sandbox-service/testdata/default-render.yaml
+  h_8fb27e0cdf6d1e 21,52
+charts/n8n-sandbox-service/values.yaml
+  h_8fb27e0cdf6d1e 194,343
+docs/API.md
+  h_8fb27e0cdf6d1e 910-926
+docs/architecture.md
+  h_8fb27e0cdf6d1e 167-168
+docs/configuration.md
+  h_8fb27e0cdf6d1e 41,91
+docs/limits.md
+  h_8fb27e0cdf6d1e 61
+docs/security-model.md
+  h_8fb27e0cdf6d1e 74-76
+internal/api/config/config.go
+  h_8fb27e0cdf6d1e 26,119-122,247,332-333
+internal/api/config/config_test.go
+  h_8fb27e0cdf6d1e 154-187
+internal/api/gateway.go
+  h_8fb27e0cdf6d1e 101
+internal/api/handlers.go
+  h_8fb27e0cdf6d1e 41-45,141-142,145,154-189,739
+internal/api/handlers_code_proxy.go
+  h_8fb27e0cdf6d1e 1-62
+internal/api/handlers_code_proxy_test.go
+  h_8fb27e0cdf6d1e 1-37,39-198,200-208,210-298
+internal/runner/config/config.go
+  h_8fb27e0cdf6d1e 26,49-52,179,226-227
+internal/runner/config/config_test.go
+  h_8fb27e0cdf6d1e 220-250
+internal/runner/proxy.go
+  h_8fb27e0cdf6d1e 33,38-45,58,66-71,73,137-138
+internal/runner/proxy_test.go
+  h_8fb27e0cdf6d1e 27,30-32,34
+internal/runner/server.go
+  h_8fb27e0cdf6d1e 76
+internal/runner/task_proxy_test.go
+  h_8fb27e0cdf6d1e 1-143
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c10502812063996d2933b52ccd3dc7c09c20ae1c",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
