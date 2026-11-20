@@ -10,7 +10,7 @@ import (
 
 func main() {
 	app.Main("firecracker", func(cfg *config.Config) (runnerruntime.Runtime, error) {
-		firecrackerCfg, err := firecrackerruntime.LoadConfig(cfg.CapacityTotal)
+		firecrackerCfg, err := firecrackerruntime.ResolveConfig(cfg)
 		if err != nil {
 			return nil, err
 		}
