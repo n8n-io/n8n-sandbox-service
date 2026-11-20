@@ -19,7 +19,7 @@ import (
 
 // newSharedVolumes returns the shared volume service, or nil without a volume
 // store. Publishes in progress are interrupted when ctx ends. When the
-// service's runners attach images, each publish has one of runners build its
+// service's runners attach images, each publish has one of them build its
 // image.
 func newSharedVolumes(ctx context.Context, cfg *config.APIConfig, sandboxStore store.SandboxStore, objects volumestore.Store, runners registry.RunnerRegistry, mrec *metrics.APIRecorder) (*volumes.Service, error) {
 	if objects == nil {

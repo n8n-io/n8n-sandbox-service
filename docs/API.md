@@ -1073,7 +1073,7 @@ A shared volume as these routes return it:
 ```
 
 - `bytes` is the tar as published. `tar` counts its entries, including every directory it leaves out, the sizes of its regular files, and its length once decompressed.
-- `image` is the ext4 image a runner built of the tar. It is left out without `SANDBOX_API_VOLUME_BUILD=firecracker`.
+- `image` is the ext4 image a runner built of the tar. It is left out when the volume has none: without `SANDBOX_API_VOLUME_BUILD=firecracker`, or when the volume was published before it was set.
 - `name` is left out when the volume has none.
 - `published_at` is the Unix time in seconds it became ready.
 

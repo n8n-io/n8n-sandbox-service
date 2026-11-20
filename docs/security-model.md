@@ -134,8 +134,8 @@ What a leaked publisher key can do:
   runner's build timeout. The API trusts the runner for the image's content,
   checks its size and sha256, and logs which runner built it.
 - Delete shared volumes.
-- Keep up to 1,000 volumes of up to 4 GiB each, plus a 5 GiB image each with
-  a builder, ready or being published.
+- Keep up to 1,000 volumes of up to 4 GiB each, ready or being published,
+  each with an image of up to 5 GiB when `SANDBOX_API_VOLUME_BUILD` is set.
   What a failed cleanup leaves in the store does not count against that
   limit. With `SANDBOX_API_VOLUME_STORE=local`, the store is in the API's data
   directory, which with `SANDBOX_API_STORE=sqlite` (the default) also holds

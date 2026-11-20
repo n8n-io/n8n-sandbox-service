@@ -32,7 +32,8 @@ const (
 	SharedVolumeInterrupted = "interrupted"
 	// SharedVolumeError is a store or database failure.
 	SharedVolumeError = "error"
-	// SharedVolumeNoCapacity is a publish no runner took the build of in time.
+	// SharedVolumeNoCapacity is a publish whose image build no runner took in
+	// time.
 	SharedVolumeNoCapacity = "no_capacity"
 	// SharedVolumeBuildFailed is a publish whose image build failed.
 	SharedVolumeBuildFailed = "build_failed"

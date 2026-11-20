@@ -25,7 +25,8 @@ const (
 	MaxNameBytes       = 128
 	// MaxImageBytes caps the ext4 image of a shared volume, which runners
 	// fetch within the same timeout as a tar. It is checked before the build,
-	// from the size the builder gives an image of the tar's counts.
+	// from the size the builder gives an image of the tar's counts. It binds
+	// before MaxEntries: about 580,000 entries without content fill it.
 	MaxImageBytes int64 = 5 << 30 // 5 GiB
 )
 

@@ -9,9 +9,10 @@ import { FIRECRACKER_ONLY } from './tags';
 
 // With SANDBOX_API_VOLUME_BUILD=firecracker, a publish has the runner build the
 // volume's ext4 image and stores it next to the tar. The image is read back
-// from the local volume store's files, which end in a trailer of 48 bytes, and
-// checked with the host's e2fsprogs.
+// from the local volume store's files, which end in a trailer of 48 bytes whose
+// last 32 are the content's sha256, and checked with the host's e2fsprogs.
 const STORE_TRAILER_BYTES = 48;
+const SHA256_BYTES = 32;
 
 type SharedVolume = {
   digest: string;
@@ -64,17 +65,24 @@ test.describe('Shared volume images', FIRECRACKER_ONLY, () => {
     // The image file of this volume, whose tar sits next to it.
     const imageDigest = volume.image!.digest.slice('sha256:'.length);
     const image = path.join(work, 'image.ext4');
-    const withoutTrailer = (name: string) => {
-      const stored = fs.readFileSync(path.join(storeDir, name));
-      return stored.subarray(0, Math.max(0, stored.length - STORE_TRAILER_BYTES));
+    const trailerDigest = (name: string) => {
+      const file = fs.openSync(path.join(storeDir, name), 'r');
+      try {
+        const digest = Buffer.alloc(SHA256_BYTES);
+        fs.readSync(file, digest, 0, SHA256_BYTES, Math.max(0, fs.fstatSync(file).size - SHA256_BYTES));
+        return digest.toString('hex');
+      } finally {
+        fs.closeSync(file);
+      }
     };
     const matches = fs
       .readdirSync(storeDir)
-      .filter((name) => name.endsWith('.ext4'))
-      .filter((name) => sha256(withoutTrailer(name)) === imageDigest);
+      .filter((name) => name.endsWith('.ext4') && trailerDigest(name) === imageDigest);
     expect(matches).toHaveLength(1);
-    const content = withoutTrailer(matches[0]);
+    const stored = fs.readFileSync(path.join(storeDir, matches[0]));
+    const content = stored.subarray(0, stored.length - STORE_TRAILER_BYTES);
     expect(content.length).toBe(volume.image!.bytes);
+    expect(sha256(content)).toBe(imageDigest);
     fs.writeFileSync(image, content);
     const tarFile = path.join(storeDir, matches[0].replace(/\.ext4$/, '.tar'));
     expect(sha256(fs.readFileSync(tarFile).subarray(0, body.length))).toBe(digest);
