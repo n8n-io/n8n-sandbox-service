@@ -50,7 +50,7 @@ func TestRuntimeFixture(t *testing.T) {
 		if dec.Decode(&m) != nil {
 			return
 		}
-		if m.Type != "start" || !m.Shared {
+		if m.Type != "start" {
 			os.Exit(2)
 		}
 		if m.TaskID == "largest" || m.TaskID == "oversized" {

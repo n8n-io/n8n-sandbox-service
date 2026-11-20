@@ -29,7 +29,7 @@ var errWorkerUnavailable = errors.New("runtime unavailable")
 // direction, sent as newline-delimited JSON over FD 3. The runtime's stdout and
 // stderr are not part of the protocol. Type selects the message:
 //   - "ready" (runtime → daemon): the runtime accepts start commands. Sent once after startup.
-//   - "start" (daemon → runtime): run the task staged in Dir, with TaskID and Shared set.
+//   - "start" (daemon → runtime): run the task staged in Dir, with TaskID set.
 //   - "done" or "error" (runtime → daemon): the task with TaskID finished; "error" carries Error.
 //
 // Every message must fit in maxControlMessage. The runtime cuts error details
@@ -39,7 +39,6 @@ type workerMessage struct {
 	Type   string          `json:"type"`
 	TaskID string          `json:"taskId,omitempty"`
 	Dir    string          `json:"dir,omitempty"`
-	Shared bool            `json:"shared,omitempty"`
 	Error  json.RawMessage `json:"error,omitempty"`
 }
 
@@ -288,7 +287,7 @@ func (d *Daemon) dispatch(ctx context.Context, id, dir string) (*execution, erro
 	w.executionsByTaskID[id] = x
 	w.mu.Unlock()
 	d.markDispatched(id)
-	if err := w.send(workerMessage{Type: "start", TaskID: id, Dir: dir, Shared: true}); err != nil {
+	if err := w.send(workerMessage{Type: "start", TaskID: id, Dir: dir}); err != nil {
 		w.kill() // a partial command leaves the shared protocol unusable
 		x.close()
 		return nil, err
