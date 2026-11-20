@@ -234,7 +234,7 @@ sequenceDiagram
     participant D as Daemon
     participant W as Runtime
     W->>D: ready
-    D->>W: start {taskId, dir, shared, deadline}
+    D->>W: start {taskId, dir, deadline}
     W->>D: console {taskId, stream, text}
     W->>D: heap {heapUsedBytes}
     W->>D: done {taskId, heapUsedBytes}
@@ -247,7 +247,7 @@ Daemon → runtime:
 
 | `type` | Fields | Meaning |
 | --- | --- | --- |
-| `start` | `taskId`, `dir`, `shared: true`, `deadline` | Run the task. `dir` is the absolute task directory. `deadline` is Unix ms. |
+| `start` | `taskId`, `dir`, `deadline` | Run the task. `dir` is the absolute task directory. `deadline` is Unix ms. |
 | `cancel` | `taskId` | Stop the task. Reply within 1 s. |
 
 Runtime → daemon:
