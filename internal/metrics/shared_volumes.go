@@ -64,6 +64,7 @@ type SharedVolumeRecorder struct {
 	publishes *prometheus.CounterVec
 	duration  prometheus.Histogram
 	builds    *prometheus.CounterVec
+	swept     *prometheus.CounterVec
 }
 
 // NewSharedVolumeRecorder registers the shared volume metrics on api's
@@ -97,8 +98,17 @@ func NewSharedVolumeRecorder(api *APIRecorder) *SharedVolumeRecorder {
 		},
 		[]string{"result"},
 	)
-	api.reg.MustRegister(publishes, duration, builds)
-	return &SharedVolumeRecorder{publishes: publishes, duration: duration, builds: builds}
+	swept := prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   Namespace,
+			Name:        "shared_volume_sweep_removals_total",
+			Help:        "Shared volumes the sweep removed with their objects, labeled by the state they were in: failed or deleted.",
+			ConstLabels: prometheus.Labels{"role": RoleAPI},
+		},
+		[]string{"state"},
+	)
+	api.reg.MustRegister(publishes, duration, builds, swept)
+	return &SharedVolumeRecorder{publishes: publishes, duration: duration, builds: builds, swept: swept}
 }
 
 // ObserveBuild records one call to a runner to build an image.
@@ -116,6 +126,24 @@ func (r *SharedVolumeRecorder) BuildCount(result string) float64 {
 		return 0
 	}
 	return testutil.ToFloat64(r.builds.WithLabelValues(result))
+}
+
+// ObserveSweepRemoval records a shared volume the sweep removed, by the state
+// it was in.
+func (r *SharedVolumeRecorder) ObserveSweepRemoval(state string) {
+	if r == nil || r.swept == nil {
+		return
+	}
+	r.swept.WithLabelValues(state).Inc()
+}
+
+// SweepRemovalCount returns the counter value for sweep removals of rows in
+// the state. Intended for tests in other packages.
+func (r *SharedVolumeRecorder) SweepRemovalCount(state string) float64 {
+	if r == nil || r.swept == nil {
+		return 0
+	}
+	return testutil.ToFloat64(r.swept.WithLabelValues(state))
 }
 
 // ObservePublish records a publish's result.

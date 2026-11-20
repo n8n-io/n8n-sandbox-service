@@ -308,6 +308,72 @@ func testSharedVolumes(t *testing.T, s SharedVolumes) {
 		}
 	})
 
+	t.Run("the sweep fails lapsed leases and lists what may be removed", func(t *testing.T) {
+		lapsed := publishingRow(randomSHA256(), "", 100, 220)
+		live := publishingRow(randomSHA256(), "", 100, 5000)
+		for _, row := range []*SharedVolume{lapsed, live} {
+			if _, err := s.ReserveSharedVolume(ctx, row, testMaxLive); err != nil {
+				t.Fatal(err)
+			}
+		}
+		ready := reserveReady(t, s, randomSHA256(), "", 100)
+		deleted := reserveReady(t, s, randomSHA256(), "", 100)
+		if _, err := s.DeleteSharedVolume(ctx, deleted.SHA256, 300); err != nil {
+			t.Fatal(err)
+		}
+		failed := publishingRow(randomSHA256(), "", 100, 5000)
+		if _, err := s.ReserveSharedVolume(ctx, failed, testMaxLive); err != nil {
+			t.Fatal(err)
+		}
+		if ok, err := s.FailSharedVolume(ctx, failed.ID, 900); err != nil || !ok {
+			t.Fatalf("fail = %v, %v", ok, err)
+		}
+
+		// Only leases that ended before lapsedBefore count.
+		if _, err := s.FailLapsedSharedVolumes(ctx, 220, 1000); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := s.GetSharedVolume(ctx, lapsed.SHA256); err != nil || got == nil || got.State != SharedVolumePublishing {
+			t.Fatalf("the row whose lease ended at 220 = %+v, %v; want it publishing still", got, err)
+		}
+		count, err := s.FailLapsedSharedVolumes(ctx, 300, 1000)
+		if err != nil || count < 1 {
+			t.Fatalf("FailLapsedSharedVolumes() = %d, %v; want the lapsed row at least", count, err)
+		}
+		if isFailed, err := s.FailSharedVolume(ctx, lapsed.ID, 1001); err != nil || !isFailed {
+			t.Fatalf("the lapsed row is failed = %v, %v; want true", isFailed, err)
+		}
+		if got, err := s.GetSharedVolume(ctx, live.SHA256); err != nil || got == nil || got.State != SharedVolumePublishing {
+			t.Fatalf("the row with a live lease = %+v, %v; want it publishing", got, err)
+		}
+
+		removable := func(failedBefore int64) map[string]bool {
+			t.Helper()
+			rows, err := s.ListRemovableSharedVolumes(ctx, failedBefore, 1_000_000)
+			if err != nil {
+				t.Fatal(err)
+			}
+			listed := map[string]bool{}
+			for index, row := range rows {
+				listed[row.ID] = true
+				if index > 0 && row.UpdatedAt < rows[index-1].UpdatedAt {
+					t.Fatalf("row %d changed later than the one after it", index-1)
+				}
+			}
+			return listed
+		}
+		early := removable(950)
+		if !early[deleted.ID] || !early[failed.ID] || early[lapsed.ID] || early[live.ID] || early[ready.ID] {
+			t.Fatalf("removable at 950 = %v; want the deleted row and the row failed at 900 only", early)
+		}
+		if later := removable(1000); !later[lapsed.ID] || later[live.ID] || later[ready.ID] {
+			t.Fatalf("removable at 1000 = %v; want the row failed at 1000 too", later)
+		}
+		if rows, err := s.ListRemovableSharedVolumes(ctx, 1000, 1); err != nil || len(rows) != 1 {
+			t.Fatalf("ListRemovableSharedVolumes() with a limit of 1 = %d rows, %v", len(rows), err)
+		}
+	})
+
 	t.Run("list is newest first", func(t *testing.T) {
 		now := time.Now().Unix()
 		older := reserveReady(t, s, randomSHA256(), "", now)

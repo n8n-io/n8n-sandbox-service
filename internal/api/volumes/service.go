@@ -31,6 +31,9 @@ type timing struct {
 	builderWait, retryFirst, retryMax time.Duration
 	// buildCall bounds one call to a runner to build an image.
 	buildCall time.Duration
+	// sweepEvery is the time between two sweeps, and failedGrace how long a
+	// failed row stays before a sweep removes it.
+	sweepEvery, failedGrace time.Duration
 }
 
 // limits are the caps a publish is held to: the package's constants, smaller
@@ -54,6 +57,8 @@ var defaultTiming = timing{
 	retryFirst:  time.Second,
 	retryMax:    10 * time.Second,
 	buildCall:   30 * time.Minute,
+	sweepEvery:  5 * time.Minute,
+	failedGrace: 10 * time.Minute,
 }
 
 // Service publishes, lists and deletes shared volumes. A row is written before
@@ -141,7 +146,8 @@ func (s *Service) Delete(ctx context.Context, sha256, role string) error {
 }
 
 // remove deletes the objects of the shared volume id, then its row unless it
-// is ready. It is the one place that removes a volume.
+// is ready. It is the one place that removes a volume: a delete, a failed
+// publish's cleanup and the sweep all call it.
 func (s *Service) remove(ctx context.Context, id string) error {
 	for _, kind := range []volume.Kind{volume.KindTar, volume.KindExt4} {
 		if err := s.objects.Delete(ctx, objectKey(id, kind)); err != nil {
