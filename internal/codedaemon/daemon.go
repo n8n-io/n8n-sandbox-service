@@ -17,12 +17,16 @@ type Config struct {
 	// AllowLocalClients disables the check that rejects requests from inside
 	// the sandbox. Only for debugging and local development.
 	AllowLocalClients bool
+	MaxConcurrency    int // Number of lanes. Each running or uploading task holds one.
 }
 
 func LoadConfig() (Config, error) {
-	cfg := Config{ListenAddr: ":8081"}
+	cfg := Config{ListenAddr: ":8081", MaxConcurrency: 1}
 	envvar.String("CODE_DAEMON_LISTEN_ADDR", &cfg.ListenAddr)
 	if err := envvar.Bool("CODE_DAEMON_ALLOW_LOCAL_CLIENTS", &cfg.AllowLocalClients); err != nil {
+		return Config{}, err
+	}
+	if err := envvar.IntBetween("CODE_DAEMON_MAX_CONCURRENCY", &cfg.MaxConcurrency, 1, 32); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
@@ -30,10 +34,13 @@ func LoadConfig() (Config, error) {
 
 // Daemon serves runner requests over HTTP inside the sandbox.
 type Daemon struct {
-	cfg Config
+	cfg   Config
+	lanes chan struct{} // One token per occupied lane; capacity is the lane limit.
 }
 
-func New(cfg Config) *Daemon { return &Daemon{cfg: cfg} }
+func New(cfg Config) *Daemon {
+	return &Daemon{cfg: cfg, lanes: make(chan struct{}, max(1, cfg.MaxConcurrency))}
+}
 
 // Handler registers the runner's routes and applies the client source guard by default.
 func (d *Daemon) Handler() http.Handler {
