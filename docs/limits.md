@@ -120,4 +120,4 @@ On Docker, memory, CPU and process limits apply only with `SANDBOX_RUNNER_ENABLE
 
 ## Retries
 
-`429` and `503` `no_capacity` carry `Retry-After: 1`; other `503`s carry none. The [SDK](../sdk/README.md) does not read `Retry-After`. It retries `429`; `503` and network errors only for idempotent requests; and a create on `503` `no_capacity`, or on any `503` when it names an `id`. It retries up to 3 times after 200 ms, doubling up to 10 s, with jitter, and resumes a broken exec stream up to 10 times per command, 250 ms apart.
+`429` and `503` `no_capacity` carry `Retry-After: 1`, or `30` on a [shared volume](#shared-volumes) publish; other `503`s carry none. The [SDK](../sdk/README.md) does not read `Retry-After`. It retries `429`; `503` and network errors only for idempotent requests; and a create on `503` `no_capacity`, or on any `503` when it names an `id`. It retries up to 3 times after 200 ms, doubling up to 10 s, with jitter, and resumes a broken exec stream up to 10 times per command, 250 ms apart.
