@@ -38,8 +38,8 @@ func newHeartbeatEvent(taskID string) heartbeatEvent {
 type doneEvent struct {
 	Type    string          `json:"type"`
 	TaskID  string          `json:"taskId"`
-	Result  json.RawMessage `json:"result"`            // Inline result.json, or JSON null when not inlined.
-	Outputs []outputEntry   `json:"outputs,omitempty"` // Manifest of published output files.
+	Result  json.RawMessage `json:"result"`  // Inline result.json, or JSON null when not inlined.
+	Outputs []outputEntry   `json:"outputs"` // Manifest of published output files; [] when there are none.
 }
 
 func newDoneEvent(taskID string, result json.RawMessage, outputs []outputEntry) doneEvent {

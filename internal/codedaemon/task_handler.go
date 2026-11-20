@@ -59,25 +59,35 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// waitForTask sends heartbeats while awaiting a terminal event. If the stream
-// closes first, it waits for execution to end and returns no event to write.
+// waitForTask sends heartbeats while awaiting a terminal event. If a heartbeat
+// write fails, it waits for execution to end and returns no event to write.
 func (d *Daemon) waitForTask(r *http.Request, spec taskSpec, stream taskStream, x *execution, root *os.Root) (any, bool) {
 	heartbeat := time.NewTicker(heartbeatInterval)
 	defer heartbeat.Stop()
 	for {
 		select {
 		case msg, ok := <-x.result:
-			if !ok {
-				return newErrorEvent(spec.TaskID, "crashed", "runtime exited"), true
-			}
-			return d.resultEvent(spec, root, msg), true
+			return d.terminalEvent(spec, root, msg, ok), true
 		case <-heartbeat.C:
 			if stream.emit(newHeartbeatEvent(spec.TaskID)) == nil {
 				continue
 			}
+			x.waitDetached()
+			return nil, false
 		case <-r.Context().Done():
+			// Daemon shutdown also cancels the request while the stream is
+			// still open. Wait for the task so the stream gets a terminal event.
+			// After a client disconnect, writing that event fails harmlessly.
+			msg, ok := <-x.result
+			return d.terminalEvent(spec, root, msg, ok), true
 		}
-		x.waitDetached()
-		return nil, false
 	}
+}
+
+// terminalEvent maps a receive from execution.result to the last stream event.
+func (d *Daemon) terminalEvent(spec taskSpec, root *os.Root, msg workerMessage, ok bool) any {
+	if !ok {
+		return newErrorEvent(spec.TaskID, "crashed", "runtime exited")
+	}
+	return d.resultEvent(spec, root, msg)
 }

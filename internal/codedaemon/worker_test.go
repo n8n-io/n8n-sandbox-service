@@ -76,6 +76,12 @@ func TestRuntimeFixture(t *testing.T) {
 			}
 			continue
 		}
+		if m.TaskID == "no-outputs" {
+			if enc.Encode(workerMessage{Type: "done", TaskID: m.TaskID}) != nil {
+				os.Exit(2)
+			}
+			continue
+		}
 		if m.TaskID == "quiet" {
 			time.Sleep(heartbeatInterval + 250*time.Millisecond)
 		}
@@ -126,8 +132,13 @@ func TestWorkerExitPreservesResult(t *testing.T) {
 	}
 	// The buffered terminal result is still readable after process cleanup.
 	event, ok := d.waitForTask(req, spec, taskStream{}, x, root)
-	if _, done := event.(doneEvent); !ok || !done {
+	done, isDone := event.(doneEvent)
+	if !ok || !isDone {
 		t.Fatalf("terminal event = %+v, %v", event, ok)
+	}
+	var result []string
+	if err := json.Unmarshal(done.Result, &result); err != nil || len(result) != 3 || result[1] != spec.TaskID {
+		t.Fatalf("result = %s, %v", done.Result, err)
 	}
 }
 

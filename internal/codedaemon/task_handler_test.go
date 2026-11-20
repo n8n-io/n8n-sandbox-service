@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -131,6 +133,42 @@ func TestDisconnectLeavesSharedRuntimeRunning(t *testing.T) {
 			t.Fatalf("other task's terminal event = %+v", event)
 		}
 		break
+	}
+}
+
+func TestShutdownEndsOpenStreamWithTerminalEvent(t *testing.T) {
+	d := testDaemon(t, Config{})
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	srv := httptest.NewUnstartedServer(d.Handler())
+	srv.Config.BaseContext = func(net.Listener) context.Context { return ctx }
+	srv.Start()
+	defer srv.Close()
+	defer d.Close()
+	req := taskRequest(t, `{"taskId":"quiet"}`, nil)
+	req.RequestURI = ""
+	req.URL, _ = url.Parse(srv.URL + "/tasks")
+	res, err := (&http.Client{Timeout: 2 * heartbeatInterval}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	dec := json.NewDecoder(res.Body)
+	var event decodedEvent
+	if err := dec.Decode(&event); err != nil || event.Type != "accepted" {
+		t.Fatalf("first event = %+v, %v", event, err)
+	}
+	// Shut down like serve: cancel the requests, then stop the runtime.
+	cancel()
+	d.Close()
+	for event.Type == "accepted" || event.Type == "heartbeat" {
+		event = decodedEvent{}
+		if err := dec.Decode(&event); err != nil {
+			t.Fatalf("stream ended without a terminal event: %v", err)
+		}
+	}
+	if event.Type != "error" || event.Code != "crashed" {
+		t.Fatalf("terminal event = %+v", event)
 	}
 }
 
