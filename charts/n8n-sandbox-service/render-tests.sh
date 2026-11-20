@@ -11,8 +11,7 @@ CHART_DIR=$(cd "$(dirname "$0")" && pwd)
 
 render() {
 	helm template n8n-sandbox-service "$CHART_DIR" \
-		--set auth.existingSecret=n8n-sandbox-auth \
-		--set runner.config.capacityTotal=1000 "$@"
+		--set auth.existingSecret=n8n-sandbox-auth "$@"
 }
 
 must_fail() {
@@ -49,19 +48,16 @@ render --set dataPlane.mode=external --set networkPolicy.enabled=true >/dev/null
 render "${privileged[@]}" >/dev/null
 render "${privileged[@]}" --set networkPolicy.enabled=true >/dev/null
 
-echo "==> runner capacity has no default"
-for bad in '' 0 -5 abc 1.5; do
-	must_fail "runner.config.capacityTotal must be a positive whole number" --set "runner.config.capacityTotal=$bad"
+echo "==> runner capacity must be a whole number"
+for bad in -5 abc 1.5; do
+	must_fail "runner.config.capacityTotal must be a whole number" --set "runner.config.capacityTotal=$bad"
 done
-must_fail "runner.config.capacityTotal must be a positive whole number" --set-string "runner.config.capacityTotal="
-# Without the helper's pinned value, the empty default fails.
-if helm template n8n-sandbox-service "$CHART_DIR" --set auth.existingSecret=n8n-sandbox-auth >/dev/null 2>&1; then
-	echo "expected the render to fail without runner.config.capacityTotal" >&2
-	exit 1
-fi
-# An external data plane renders no runner.
-helm template n8n-sandbox-service "$CHART_DIR" --set auth.existingSecret=n8n-sandbox-auth \
-	--set dataPlane.mode=external >/dev/null
+# Empty falls back to the runner default and 0 means unlimited, as before 0.15.0.
+render --set-string "runner.config.capacityTotal=" >/dev/null
+render --set "runner.config.capacityTotal=0" --show-only templates/configmap.yaml |
+	grep -q 'SANDBOX_RUNNER_CAPACITY_TOTAL: "0"'
+# An external data plane renders no runner, so the value is not checked.
+render --set dataPlane.mode=external --set "runner.config.capacityTotal=abc" >/dev/null
 
 echo "==> default values render the golden manifests"
 # Existing installs must not change: the default render is pinned byte for
@@ -302,8 +298,7 @@ statefulset_name() {
 	local release_name=$1
 	shift
 	helm template "$release_name" "$CHART_DIR" \
-		--set auth.existingSecret=n8n-sandbox-auth \
-		--set runner.config.capacityTotal=1000 "$@" \
+		--set auth.existingSecret=n8n-sandbox-auth "$@" \
 		--show-only templates/runner-statefulset.yaml |
 		awk '/^  name:/{print $2; exit}'
 }
@@ -691,15 +686,10 @@ render --set-json 'api.terminationGracePeriodSeconds=1000000' \
 	grep -q '^      terminationGracePeriodSeconds: 1000000$'
 must_fail "api.terminationGracePeriodSeconds must be a whole number of seconds" \
 	--set-json 'api.terminationGracePeriodSeconds=2.5'
-helm template n8n-sandbox-service "$CHART_DIR" --set auth.existingSecret=n8n-sandbox-auth \
-	--set-json 'runner.config.capacityTotal=1000000' --show-only templates/configmap.yaml |
+render --set-json 'runner.config.capacityTotal=1000000' --show-only templates/configmap.yaml |
 	grep -q 'SANDBOX_RUNNER_CAPACITY_TOTAL: "1000000"'
-if out=$(helm template n8n-sandbox-service "$CHART_DIR" --set auth.existingSecret=n8n-sandbox-auth \
-	--set-json 'runner.config.capacityTotal=2.5' 2>&1); then
-	echo "expected runner.config.capacityTotal=2.5 to fail the render" >&2
-	exit 1
-fi
-grep -q "runner.config.capacityTotal must be a positive whole number" <<<"$out"
+must_fail "runner.config.capacityTotal must be a whole number" \
+	--set-json 'runner.config.capacityTotal=2.5'
 render --set-json 'api.podLabels.build=20240101' \
 	--show-only templates/api-deployment.yaml | grep -q '^        build: "20240101"$'
 

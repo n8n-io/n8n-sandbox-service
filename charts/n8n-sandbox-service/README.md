@@ -8,21 +8,19 @@ Create or provide:
 
 - An auth Secret with API keys and runner registration tokens, or set `auth.*` values and let the chart create one.
 - TLS Secrets for the API registration server, API control client, runner registration client, and runner control server, or set `tls.mode=certManager`.
-- For `dataPlane.mode=in-cluster`, set `runner.config.capacityTotal` (see [Runner Capacity](#runner-capacity)).
 - A Sysbox-ready node pool for `runner.isolation=sysbox` (the default). Use `runner.isolation=privileged` on clusters that cannot install sysbox.
 
 ```sh
 helm upgrade --install n8n-sandbox-service ./charts/n8n-sandbox-service \
   --namespace n8n-sandbox \
-  --create-namespace \
-  --set runner.config.capacityTotal=100
+  --create-namespace
 ```
 
 ## Runner Capacity
 
 `runner.config.capacityTotal` is how many sandboxes the in-cluster Docker runner takes. The runner reports its sandbox count in a heartbeat every 10 seconds, and the API stops sending it new sandboxes once that count reaches `capacityTotal`. The runner itself does not refuse a create, so a burst inside those 10 seconds can go past it.
 
-It has no default, and with `dataPlane.mode=in-cluster` the render fails when it is empty, `0`, or not a whole number. A value above `2147483647` renders, but the runner then fails at startup, because it reads the value as a 32-bit integer. A default would be a guess: the Docker runner shares the node with other pods, so it cannot work out from memory how many sandboxes fit. Sandboxes run inside the runner pod and share its memory limit. When `runner.resources.limits.memory` is set, size it as that limit divided by `runner.config.defaultMemoryMb`. Otherwise, use the node's memory, leaving room for everything else on the node. Stopped sandboxes count too. The Firecracker runner derives its own count from host memory when `SANDBOX_RUNNER_CAPACITY_TOTAL` is unset ([Firecracker slots](../../docs/configuration.md#firecracker-slots)).
+The default of `1000` is a placeholder, not sized for any node: set it yourself. With `dataPlane.mode=in-cluster` the render fails when it is not a whole number. `0` means unlimited, and an empty value falls back to the runner default of `1000`. A value above `2147483647` renders, but the runner then fails at startup, because it reads the value as a 32-bit integer. Sandboxes run inside the runner pod and share its memory limit. When `runner.resources.limits.memory` is set, size it as that limit divided by `runner.config.defaultMemoryMb`. Otherwise, use the node's memory, leaving room for everything else on the node. Stopped sandboxes count too. The Firecracker runner derives its own count from host memory when `SANDBOX_RUNNER_CAPACITY_TOTAL` is unset ([Firecracker slots](../../docs/configuration.md#firecracker-slots)).
 
 ## Data Plane Mode
 
@@ -80,10 +78,6 @@ Two hardening options:
 - **VM-based RuntimeClass.** Set `runner.privileged.runtime.runtimeClassName` to a VM runtime such as Kata Containers. `privileged: true` then applies inside the guest VM, not on the node. Talos ships an official kata-containers system extension. This needs bare-metal nodes or nested virtualization.
 
 Do not set `runner.privileged.runtime.runtimeClassName: sysbox-runc`; the chart fails the render and points you to `runner.isolation: sysbox`.
-
-## Upgrading to 0.15.0
-
-`runner.config.capacityTotal` no longer defaults to `1000`. With `dataPlane.mode=in-cluster`, an upgrade that does not set it fails to render. Set it before upgrading; to keep the old behaviour exactly, set `1000`, or size it as described in [Runner Capacity](#runner-capacity).
 
 ## Migrating from 0.3.x
 
@@ -186,7 +180,7 @@ runner:
 
 The render fails in two cases:
 
-- `runner.config.diskQuotaPoolSizeGb` is not a positive whole number of GB. The chart never falls back to the derived pool size, because that size scales with `runner.config.capacityTotal`. A 2048 MB per-sandbox quota and a `capacityTotal` of 1000 derive a 2400 GB pool.
+- `runner.config.diskQuotaPoolSizeGb` is not a positive whole number of GB. The chart never falls back to the derived pool size, because that size scales with `runner.config.capacityTotal`. A 2048 MB per-sandbox quota and the default `capacityTotal` of 1000 derive a 2400 GB pool.
 - `runner.config.diskQuotaPoolSizeGb` is larger than the chart-owned volume.
 
 If the node kernel lacks xfs quota support, the pool mount fails. The runner then logs `disk quota enforcement: DISABLED`, the inner Docker daemon uses the container filesystem, and the volume stays unused. Watch that log line after you enable quotas.

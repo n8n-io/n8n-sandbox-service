@@ -50,8 +50,8 @@
 {{- end -}}
 {{- if eq .Values.dataPlane.mode "in-cluster" -}}
 {{- $capacityTotal := include "n8n-sandbox-service.scalarString" .Values.runner.config.capacityTotal -}}
-{{- if not (regexMatch "^[1-9][0-9]*$" $capacityTotal) -}}
-{{- fail (printf "runner.config.capacityTotal must be a positive whole number (got %q): the Docker runner does not derive its capacity, so size it from the node's memory and each sandbox's memory limit. See the chart README section 'Runner Capacity'" $capacityTotal) -}}
+{{- if not (regexMatch "^[0-9]*$" $capacityTotal) -}}
+{{- fail (printf "runner.config.capacityTotal must be a whole number (got %q). See the chart README section 'Runner Capacity'" $capacityTotal) -}}
 {{- end -}}
 {{- end -}}
 {{- if eq .Values.dataPlane.mode "in-cluster" -}}
