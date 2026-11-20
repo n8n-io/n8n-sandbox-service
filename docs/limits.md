@@ -75,6 +75,10 @@ All fixed. [API.md](API.md#shared-volumes) has the routes.
 | Entries of the tar, counting every directory it leaves out | 1,000,000 | `413` `too_large` |
 | File content in the tar | 4 GiB | `413` `too_large` |
 | Tar once decompressed, headers and padding included | 8 GiB | `413` `too_large` |
+| Image, with `SANDBOX_API_VOLUME_BUILD=firecracker` | 5 GiB | `413` `too_large` |
+| Volume on a runner: its image, or its tar plus its unpacked files | 10 GiB | `413` `too_large` |
+| Wait for a runner to build the image | 5 min | `503` `no_capacity` |
+| One image build | 30 min | `502` `build_failed` |
 | Path or link target of an entry | 4,095 bytes | `422` `invalid_tar` |
 | Name | 1–128 bytes of `a-z`, `0-9`, `.`, `_`, `-`; starts and ends with a letter or digit | `400` |
 | Names per volume, and volumes per name | 1 | `409` `name_mismatch` or `name_taken` |
@@ -83,7 +87,7 @@ All fixed. [API.md](API.md#shared-volumes) has the routes.
 | A publish of a digest another request is publishing | | `409` `publish_in_progress`, `Retry-After: 30` |
 | `GET /shared-volumes` | no paging | |
 
-The size limit keeps a runner's download within `SANDBOX_RUNNER_VOLUME_FETCH_TIMEOUT`. The entry limit bounds the memory the [volume builder](../internal/runner/runtime/firecracker.ee/README.md#volume-builder) spends on the entries. Publishes count against no tenant's requests in progress.
+The tar and image limits keep a runner's download within `SANDBOX_RUNNER_VOLUME_FETCH_TIMEOUT`. The entry limit bounds the memory the [volume builder](../internal/runner/runtime/firecracker.ee/README.md#volume-builder) spends on the entries. Publishes count against no tenant's requests in progress.
 
 ## Time limits on requests
 

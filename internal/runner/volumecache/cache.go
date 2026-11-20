@@ -157,11 +157,11 @@ type room struct {
 // for a tar the most its tree can take, since the tar stays on disk until the
 // tree is complete.
 func roomFor(key Key, src Source) room {
+	need := volume.RunnerBytes(key.Kind, src.Size, src.Tar)
 	if key.Kind != volume.KindTar {
-		return room{bytes: src.Size, inodes: 1}
+		return room{bytes: need, inodes: 1}
 	}
-	tree := treeRoom(src.Tar)
-	return room{bytes: src.Size + tree.bytes, inodes: 1 + tree.inodes}
+	return room{bytes: need, inodes: 1 + treeRoom(src.Tar).inodes}
 }
 
 type entry struct {

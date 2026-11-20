@@ -3,6 +3,9 @@ package volumes
 import (
 	"errors"
 	"fmt"
+
+	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
+	"github.com/n8n-io/sandbox-service/internal/volume"
 )
 
 // Errors of the shared volume operations. The messages are fixed or built from
@@ -24,7 +27,33 @@ var (
 	// ErrUpload wraps an error reading the request body: a client that went
 	// away, or a stall.
 	ErrUpload = errors.New("reading the upload failed")
+	// ErrNoCapacity is a publish whose image no runner was free to build in
+	// time. Nothing of it is kept.
+	ErrNoCapacity = errors.New("no runner was free to build the volume's image; try again later")
+	// ErrBuildFailed is behind every *BuildError.
+	ErrBuildFailed = errors.New("the volume's image build failed")
 )
+
+// BuildError is an image build a runner was sent and that failed. Reason is
+// one of runnerruntime.VolumeBuildReasons, or "transport" for a call that
+// failed without a runner's reason or answered with no valid image. Only
+// Error, which is for logs, carries the cause.
+type BuildError struct {
+	RunnerID string
+	Reason   string
+	cause    error
+}
+
+func (e *BuildError) Error() string {
+	return fmt.Sprintf("the volume's image build on runner %s failed (%s): %v", e.RunnerID, e.Reason, e.cause)
+}
+
+func (e *BuildError) Unwrap() error { return ErrBuildFailed }
+
+// CallerFault reports whether the tar made the build fail, not the runner.
+func (e *BuildError) CallerFault() bool {
+	return (&runnerruntime.VolumeBuildError{Reason: e.Reason}).CallerFault()
+}
 
 var (
 	errTarTooLarge = fmt.Errorf("%w: the tar is over a limit: at most %d entries (counting the directories it leaves out), %d bytes of file content and %d bytes decompressed",
@@ -32,6 +61,8 @@ var (
 	errUploadTooLarge = fmt.Errorf("%w: the tar may have at most %d bytes", ErrTooLarge, MaxTarBytes)
 	errTarRules       = fmt.Errorf("%w: a volume tar holds only directories, regular files and symbolic links, under relative paths without '..' of at most 4095 bytes, and no entry may go through a symbolic link of the tar", ErrInvalidTar)
 	errTarEmpty       = fmt.Errorf("%w: the tar holds no entries", ErrInvalidTar)
+	errImageTooLarge  = fmt.Errorf("%w: the ext4 image of this tar would be over %d bytes", ErrTooLarge, MaxImageBytes)
+	errTooLargeToRun  = fmt.Errorf("%w: this volume would take more than %d bytes on a runner", ErrTooLarge, volume.MaxSandboxVolumeBytes)
 
 	errLeaseLost    = errors.New("the publish lost its lease")
 	errShuttingDown = errors.New("the API is shutting down")

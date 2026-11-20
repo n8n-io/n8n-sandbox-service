@@ -77,7 +77,7 @@ A sandbox without volumes takes none of these steps.
 
 ## Volume builder
 
-`SandboxControl.BuildVolume` turns a tar into an ext4 image for a read-only volume (`volume_build.go`). The API streams a header (tar length, entry count, content bytes and decompressed length, as it counted them under the volume tar policy) and the tar; the runner streams back the image size, the image and its SHA-256. Nothing in the API calls it yet.
+`SandboxControl.BuildVolume` turns a tar into an ext4 image for a read-only volume (`volume_build.go`). The API streams a header (tar length, entry count, content bytes and decompressed length, as it counted them under the volume tar policy) and the tar; the runner streams back the image size, the image and its SHA-256. The API calls it to publish a [shared volume](../../../../docs/API.md#shared-volumes) with `SANDBOX_API_VOLUME_BUILD=firecracker`.
 
 A build runs in a builder microVM, one per runner at a time, without a sandbox slot:
 

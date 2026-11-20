@@ -1067,11 +1067,13 @@ A shared volume as these routes return it:
   "name": "n8n-assistant-2.45.5",
   "bytes": 104857600,
   "tar": {"entries": 41234, "content_bytes": 391000000, "decompressed_bytes": 412000000},
+  "image": {"bytes": 1073741824, "digest": "sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae"},
   "published_at": 1763380000
 }
 ```
 
 - `bytes` is the tar as published. `tar` counts its entries, including every directory it leaves out, the sizes of its regular files, and its length once decompressed.
+- `image` is the ext4 image a runner built of the tar. It is left out without `SANDBOX_API_VOLUME_BUILD=firecracker`.
 - `name` is left out when the volume has none.
 - `published_at` is the Unix time in seconds it became ready.
 
@@ -1090,6 +1092,8 @@ The API checks the tar while it arrives, and stores it only if all of these hold
 
 The request answers before reading the body when it can: a client that sends `Expect: 100-continue` uploads nothing for a `200`, `409`, `411` or `413`. An upload may take as long as it keeps sending: it fails with `408` after a minute without a byte, or after an hour. Once the body has arrived, the publish finishes even if the client goes away.
 
+With `SANDBOX_API_VOLUME_BUILD=firecracker`, a runner builds the volume's ext4 image in the same request. A busy runner passes the build on; a failed build is not retried.
+
 A name never moves to another digest. To publish other content under a name, `DELETE` the volume that has it, then publish.
 
 **Response:** `201 Created` with the volume and `Location: /shared-volumes/sha256:{hex}`. `200 OK` with the volume when this digest is already published: its body is not read, and the volume gets the name if it has none.
@@ -1106,11 +1110,14 @@ A name never moves to another digest. To publish other content under a name, `DE
 | `409` | `publish_in_progress` | This digest is being published by another request. `Retry-After: 30` |
 | `409` | `shared_volume_limit` | The service holds its maximum number of shared volumes |
 | `411` | | No `Content-Length` |
-| `413` | `too_large` | The tar or its counts are over a limit |
+| `413` | `too_large` | The tar, its counts or its image are over a [limit](limits.md#shared-volumes) |
 | `422` | `invalid_tar` | The tar breaks a rule above, can't be read, or has no entries |
 | `422` | `digest_mismatch` | The body does not have the sha256 in the URL |
+| `422` | `build_failed` | The image build failed because of the tar (`tar`, `too_large`, `no_space`) |
 | `429` | `publish_limit` | Two publishes are already in progress on this API instance. `Retry-After: 30` |
 | `501` | `volume_store_disabled` | No volume store |
+| `502` | `build_failed` | The image build failed on the runner. The message names the reason |
+| `503` | `no_capacity` | No runner took the image build within 5 minutes. `Retry-After: 30` |
 | `503` | `publish_interrupted` | The API instance is shutting down, or the publish lost its lease. Publish again: the retry answers `200` if the volume got published after all |
 
 A failed publish removes what it stored. If that removal fails, the API logs a warning, and what is left stays in the store. A volume that became ready although its publish failed, as when the database's answer was lost, stays published: a retry answers `200`.
