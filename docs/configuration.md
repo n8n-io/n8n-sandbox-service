@@ -194,7 +194,7 @@ These variables are set inside each sandbox container and are typically baked in
 
 ## Code daemon
 
-The `code-daemon` runs inside a code sandbox and is reached only by the runner. It refuses peers from its own network namespace. Its `GET /healthz` probe does not use a lane. Invalid values prevent startup. The probe returns `503` once the shared runtime fails to start, stops, or the daemon closes; the daemon does not restart the runtime, since that would discard shared state.
+The `code-daemon` runs inside a code sandbox and is reached only by the runner. It refuses peers from its own network namespace. Its `GET /healthz` probe does not use a lane. Invalid values prevent startup. The probe returns `503` once the shared runtime fails to start, while it is stopped, or after the daemon closes. A failed start is not retried.
 
 | Variable | Default | Description |
 | --- | --- | --- |
@@ -212,7 +212,7 @@ The `code-daemon` runs inside a code sandbox and is reached only by the runner. 
 | `CODE_DAEMON_MAX_OUTPUT_BYTES` | `67108864` | Max total bytes of the output files a task returns (64 MiB; up to 1 GiB) |
 | `CODE_DAEMON_MAX_FILES` | `256` | Max input files and max output files a task returns (up to `4096`) |
 
-At the execution timeout, or when the runner cancels a task or closes its stream, the daemon asks the runtime to cancel the task. The shared runtime then takes no new tasks and stops when its tasks end. If the runtime does not confirm the cancel within one second, the daemon stops it at once, which can fail the other tasks on it.
+At the execution timeout, or when the runner cancels a task or closes its stream, the daemon asks the runtime to cancel the task. The shared runtime then takes no new tasks and stops when its tasks end. If the runtime does not confirm the cancel within one second, the daemon stops it at once, which can fail the other tasks on it. The next task starts a fresh runtime.
 
 Input and output file paths are at most 1024 bytes. A task's input files can create up to 4096 directories. The output limits apply to the files a task returns, found in up to 4096 directories; writes to the output directory are not capped. A task fails if its output directory holds a symlink or another entry that is not a regular file or a directory.
 

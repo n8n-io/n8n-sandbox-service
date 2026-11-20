@@ -65,6 +65,10 @@ func TestCancelRunningTask(t *testing.T) {
 			if err := dec.Decode(&event); !errors.Is(err, io.EOF) {
 				t.Fatalf("cancelled stream did not finish: %v", err)
 			}
+			next := beginTask(t, client, srv.URL, "after-cancel")
+			if err := next.Decode(&event); err != nil || event.Type != "done" {
+				t.Fatalf("follow-up event = %+v, %v", event, err)
+			}
 		})
 	}
 }

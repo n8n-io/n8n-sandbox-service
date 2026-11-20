@@ -123,7 +123,7 @@ func TestRuntimeFixture(t *testing.T) {
 	}
 }
 
-func TestWorkerExitPreservesResult(t *testing.T) {
+func TestWorkerExitPreservesResultAndAllowsRestart(t *testing.T) {
 	d := testDaemon(t, Config{})
 	req := taskRequest(t, `{"taskId":"exit-after-result"}`, nil)
 	spec, mr := d.admit(httptest.NewRecorder(), req)
@@ -155,6 +155,28 @@ func TestWorkerExitPreservesResult(t *testing.T) {
 	outcome := x.watch(t.Context())
 	if _, done := d.resultEvent(spec, root, outcome.result).(doneEvent); outcome.code != "" || !done {
 		t.Fatalf("terminal outcome = %+v", outcome)
+	}
+	w, err := d.getWorker(t.Context())
+	if err != nil || w == x.worker {
+		t.Fatalf("did not start a fresh runtime: %v", err)
+	}
+}
+
+func TestDispatchAfterKillWaitsForFreshRuntime(t *testing.T) {
+	d := testDaemon(t, Config{})
+	old, err := d.getWorker(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	old.kill()
+	w, err := d.getWorker(t.Context())
+	if err != nil || w == old {
+		t.Fatalf("did not start a fresh runtime: %v", err)
+	}
+	select {
+	case <-old.done:
+	default:
+		t.Fatal("started a fresh runtime before the old one was reaped")
 	}
 }
 
@@ -401,8 +423,10 @@ func TestStoppedWorkerFailsPendingTasksAndCleansUpDescendants(t *testing.T) {
 			case <-time.After(timeout):
 				t.Fatal("pending task was not unblocked")
 			}
-			if _, err := d.dispatch(t.Context(), "next", d.cfg.WorkDir, d.taskTimeout(0)); !errors.Is(err, errWorkerUnavailable) {
-				t.Fatalf("unexpected dispatch error: %v", err)
+			if mode == "shutdown" {
+				if _, err := d.dispatch(t.Context(), "next", d.cfg.WorkDir, d.taskTimeout(0)); !errors.Is(err, errWorkerUnavailable) {
+					t.Fatalf("unexpected dispatch error: %v", err)
+				}
 			}
 			probe := httptest.NewRecorder()
 			d.Handler().ServeHTTP(probe, httptest.NewRequest(http.MethodGet, "/healthz", nil))

@@ -63,7 +63,7 @@ type Daemon struct {
 
 	workerMu       sync.Mutex
 	startupTimeout time.Duration // how long a started worker has to report ready
-	worker         *worker       // started lazily and never replaced once set
+	worker         *worker       // current runtime, started on demand and replaced after it exits
 	startFailed    bool          // set when the worker could not be started; it is not retried
 	closed         bool          // prevents starting a worker after Close
 }

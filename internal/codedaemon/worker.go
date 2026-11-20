@@ -252,6 +252,24 @@ func (w *worker) send(msg workerMessage, deadline time.Time) error {
 // getWorker starts the shared runtime on demand and waits until it is ready to accept commands.
 func (d *Daemon) getWorker(ctx context.Context) (*worker, error) {
 	d.workerMu.Lock()
+	for d.worker != nil && d.worker.isStopped() && !d.closed {
+		select {
+		case <-d.worker.done:
+			// Replace the exited worker on this dispatch, not during shutdown.
+			d.worker = nil
+			continue
+		default:
+		}
+		// A stopped worker is reaped soon. Wait for it, then start a new one.
+		stopped := d.worker
+		d.workerMu.Unlock()
+		select {
+		case <-stopped.done:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		d.workerMu.Lock()
+	}
 	if d.closed || d.startFailed {
 		d.workerMu.Unlock()
 		return nil, errWorkerUnavailable
@@ -259,7 +277,7 @@ func (d *Daemon) getWorker(ctx context.Context) (*worker, error) {
 	if d.worker == nil {
 		w, err := startWorker(d.cfg, d.startupTimeout)
 		if err != nil {
-			// Like a runtime that stops, a failed start is not retried.
+			// A failed start is not retried.
 			d.startFailed = true
 			d.workerMu.Unlock()
 			return nil, fmt.Errorf("start runtime: %w", err)
@@ -337,15 +355,23 @@ func (d *Daemon) dispatch(ctx context.Context, id, dir string, timeout time.Dura
 	return x, nil
 }
 
-// releaseExecution removes a task from the worker and stops a retired runtime
-// after its last task leaves.
+// releaseExecution removes a task from the worker and reaps a retired runtime
+// after its last task leaves, so a later dispatch can start a replacement.
 func (d *Daemon) releaseExecution(x *execution) {
 	w := x.worker
 	w.mu.Lock()
 	delete(w.executionsByTaskID, x.id)
 	drained := w.retiring && len(w.executionsByTaskID) == 0
 	w.mu.Unlock()
-	if drained {
-		w.kill()
+	if !drained {
+		return
 	}
+
+	w.kill()
+	<-w.done
+	d.workerMu.Lock()
+	if d.worker == w {
+		d.worker = nil
+	}
+	d.workerMu.Unlock()
 }

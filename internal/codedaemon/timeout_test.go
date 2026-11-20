@@ -31,7 +31,7 @@ func TestTaskTimeoutCanOnlyShortenServiceLimit(t *testing.T) {
 	}
 }
 
-func TestHungTaskTimesOut(t *testing.T) {
+func TestHungTaskTimesOutAndRuntimeRecovers(t *testing.T) {
 	d := testDaemon(t, Config{})
 	w := httptest.NewRecorder()
 	d.Handler().ServeHTTP(w, taskRequest(t, `{"taskId":"hang","timeoutMs":50}`, nil))
@@ -42,6 +42,17 @@ func TestHungTaskTimesOut(t *testing.T) {
 	}
 	if err := dec.Decode(&terminal); err != nil || terminal.Type != "error" || terminal.Code != "timeout" {
 		t.Fatalf("terminal = %+v, %v", terminal, err)
+	}
+
+	w = httptest.NewRecorder()
+	d.Handler().ServeHTTP(w, taskRequest(t, `{"taskId":"next"}`, nil))
+	dec = json.NewDecoder(w.Body)
+	if err := dec.Decode(&accepted); err != nil || accepted.Type != "accepted" {
+		t.Fatalf("next accepted = %+v, %v", accepted, err)
+	}
+	terminal = decodedEvent{}
+	if err := dec.Decode(&terminal); err != nil || terminal.Type != "done" {
+		t.Fatalf("next terminal = %+v, %v", terminal, err)
 	}
 }
 
