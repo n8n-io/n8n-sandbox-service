@@ -1,0 +1,14 @@
+charts/n8n-sandbox-service/Chart.yaml
+  h_8fb27e0cdf6d1e 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d97c9c9391c0aa7c277126ef20a667b81549a8e9",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
