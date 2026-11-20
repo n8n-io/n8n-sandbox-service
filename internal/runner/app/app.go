@@ -104,17 +104,7 @@ func Run(cfg *config.Config, rt runnerruntime.Runtime) {
 			}
 			return 0
 		})
-		mrec.SetCapacityTotal(func() float64 {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			// Keep Total when the count fails. Docker still returns its configured
-			// capacity with that error, and 0 means unlimited.
-			capacity, err := rt.Capacity(ctx)
-			if err != nil {
-				slog.Warn("metrics: read runtime capacity", "error", err)
-			}
-			return float64(capacity.Total)
-		})
+		mrec.SetCapacityTotal(cfg.CapacityTotal)
 		if n, err := hostinfo.MemTotal(hostinfo.MeminfoPath); err != nil {
 			slog.Warn("metrics: host memory unavailable", "error", err)
 		} else {

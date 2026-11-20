@@ -132,14 +132,12 @@ func connectOnce(ctx context.Context, cfg *config.Config, rt runnerruntime.Runti
 		}
 	}()
 
-	var sentTotal int32
 	send := func() error {
 		capacity, err := rt.Capacity(ctx)
 		if err != nil {
 			slog.Warn("runtime capacity failed", "error", err)
 			capacity = runnerruntime.Capacity{Total: cfg.CapacityTotal}
 		}
-		sentTotal = capacity.Total
 		healthy := true
 		if err := rt.Ready(ctx); err != nil {
 			healthy = false
@@ -165,7 +163,7 @@ func connectOnce(ctx context.Context, cfg *config.Config, rt runnerruntime.Runti
 		"runner_id", cfg.RunnerID,
 		"http_base_url", cfg.RunnerHTTPBaseURL,
 		"control_grpc_addr", cfg.ResolvedControlGRPCAdvertiseAddr(),
-		"capacity_total", sentTotal,
+		"capacity_total", cfg.CapacityTotal,
 	)
 
 	tick := time.NewTicker(10 * time.Second)

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Builds the golden snapshot (snapshot_mem, snapshot_state, boot.json) on a Firecracker
-# host. Run by the runner at admission (SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT)
-# or by hand as root.
+# host. The runner runs it before listening when the slot count needs boot.json, and
+# again from Prepare if a snapshot file is missing
+# (SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT). It can also be run by hand as root.
 set -euo pipefail
 
 KERNEL=""
@@ -133,7 +134,12 @@ cleanup() {
 	rm -f "$BOOT_PARAMS_TMP" >/dev/null 2>&1
 	exit "$exit_code"
 }
+# A stop signal has to clean up too: EXIT alone does not run when the shell is
+# killed by a signal. INT and TERM exit with the usual signal codes, which then
+# runs cleanup through EXIT, so a stopped build never looks like a success.
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 echo "==> Installing sandbox daemon into Firecracker rootfs..."
 ROOTFS_MOUNT="$(mktemp -d)"

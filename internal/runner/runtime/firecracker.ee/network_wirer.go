@@ -13,10 +13,9 @@ import (
 // Nothing in SetupScript is specific to the sandbox that will use the slot: the
 // TAP name and address, the guest IP, the uplink subnet and the egress rules all
 // derive from runner config or the slot index. So a slot's namespace can be built
-// before any sandbox is assigned to it. wireSlots builds every free slot once
-// admission has sized them, and rebuilds a slot after each release.
-// setupNetwork, which activation still calls, finds the slot wired and skips
-// the build. The one sandbox-specific
+// before any sandbox is assigned to it. wireSlots builds every free slot at
+// startup and rebuilds a slot after each release; setupNetwork, which activation
+// still calls, finds the slot wired and skips the build. The one sandbox-specific
 // rule, the egress "none" DROP, is added by activation on top of the built
 // namespace and deleted with it, so the pool only holds the default policy.
 //
@@ -62,14 +61,12 @@ func (r *Runtime) setupNetwork(ctx context.Context, slot int, blockEgress bool) 
 	return nil
 }
 
-// unwiredSlots counts the slots whose namespace is not currently built. It copies
-// the slot slice under r.mu, then reads the wired flags without that lock, so a
-// scrape does not wait behind a build.
+// unwiredSlots counts the slots whose namespace is not currently built. Lock-free,
+// so a scrape never waits behind a build.
 func (r *Runtime) unwiredSlots() int {
 	n := 0
-	slots := r.slotList()
-	for i := range slots {
-		if !slots[i].wired.Load() {
+	for i := range r.slots {
+		if !r.slots[i].wired.Load() {
 			n++
 		}
 	}
@@ -77,7 +74,7 @@ func (r *Runtime) unwiredSlots() int {
 }
 
 // wireSlots builds the namespace of every free slot, then waits for a release
-// to run again, until ctx ends. sizeSlots starts it once the slot array exists.
+// to run again, until ctx ends. Prepare starts it in its own goroutine.
 //
 // A slot found occupied is left alone: the sandbox on it has either built it or
 // is about to. Occupancy is read under r.mu but not held across the build, so a

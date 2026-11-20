@@ -119,7 +119,6 @@ func newTestRuntime(capacity int32) *Runtime {
 		sandboxes:    make(map[string]*sandboxState),
 		readyCh:      make(chan struct{}),
 		wireCh:       make(chan struct{}, 1),
-		hostPaths:    testHostPaths(),
 	}
 	// Part of the runtime's environment rather than a per-test stub: every sandbox
 	// is reserved against the sidecar of the snapshot it is created from, so without

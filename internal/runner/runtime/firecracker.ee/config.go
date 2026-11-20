@@ -151,7 +151,7 @@ func LoadConfig(capacityTotal int32) (Config, error) {
 	return cfg, nil
 }
 
-// loadConfigWithoutCapacity is LoadConfig for a slot count admission derives later.
+// loadConfigWithoutCapacity is LoadConfig for a slot count ResolveConfig works out from host memory.
 func loadConfigWithoutCapacity() (Config, error) {
 	cfg, err := parseConfig()
 	if err != nil {

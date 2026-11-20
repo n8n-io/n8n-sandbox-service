@@ -59,7 +59,6 @@ func useTestGoldenSnapshotDir(t *testing.T, rt *Runtime) string {
 	rt.config.SnapshotMemPath = filepath.Join(dir, "mem")
 	rt.config.SnapshotStatePath = filepath.Join(dir, "state")
 	writeBootParams(t, bootParamsPath(rt.config), testBootParams(rt.config))
-	rt.hostPaths = fakeHostMemory(t, 64*gib, "")
 	return dir
 }
 
@@ -218,14 +217,14 @@ func TestPinSnapshotAssetsRequiresBootParams(t *testing.T) {
 	rt.deps.pathExists = func(string) bool { return true }
 	dir := useTestGoldenSnapshotDir(t, rt)
 
-	if _, err := rt.pinSnapshotAssets(); err != nil {
+	if err := rt.pinSnapshotAssets(); err != nil {
 		t.Fatalf("pinSnapshotAssets() with a valid sidecar: %v", err)
 	}
 
 	if err := os.Remove(filepath.Join(dir, bootParamsFileName)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := rt.pinSnapshotAssets(); err == nil || !strings.Contains(err.Error(), "boot parameters") {
+	if err := rt.pinSnapshotAssets(); err == nil || !strings.Contains(err.Error(), "boot parameters") {
 		t.Fatalf("pinSnapshotAssets() without a sidecar error = %v", err)
 	}
 }
@@ -239,7 +238,7 @@ func TestPinSnapshotAssetsRejectsSnapshotBuiltForAnotherGuestIP(t *testing.T) {
 	p.GuestIP = "10.9.9.9"
 	writeBootParams(t, bootParamsPath(rt.config), p)
 
-	_, err := rt.pinSnapshotAssets()
+	err := rt.pinSnapshotAssets()
 	if err == nil || !strings.Contains(err.Error(), "guest_ip") {
 		t.Fatalf("pinSnapshotAssets() error = %v, want a guest_ip mismatch", err)
 	}

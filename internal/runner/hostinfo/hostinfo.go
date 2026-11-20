@@ -5,21 +5,13 @@ import (
 	"bufio"
 	"fmt"
 	"os"
-	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"syscall"
 )
 
-const (
-	// MeminfoPath is where the kernel reports host memory.
-	MeminfoPath = "/proc/meminfo"
-	// SelfCgroupPath names the cgroup this process is in.
-	SelfCgroupPath = "/proc/self/cgroup"
-	// CgroupRoot is where the cgroup v2 hierarchy is mounted.
-	CgroupRoot = "/sys/fs/cgroup"
-)
+// MeminfoPath is where the kernel reports host memory.
+const MeminfoPath = "/proc/meminfo"
 
 // MemTotal returns MemTotal from a /proc/meminfo-formatted file, in bytes.
 func MemTotal(path string) (int64, error) {
@@ -51,80 +43,6 @@ func MemTotal(path string) (int64, error) {
 	return 0, fmt.Errorf("read host memory: no MemTotal in %s", path)
 }
 
-// CgroupMemoryLimit returns the finite memory.max of this process's cgroup v2
-// (the "0::<path>" line of selfCgroup, under root). ok is false for anything
-// else: no such line, a ".." path, no file, "max", or cgroup v1.
-func CgroupMemoryLimit(selfCgroup, root string) (limit int64, ok bool, err error) {
-	raw, err := os.ReadFile(selfCgroup)
-	if os.IsNotExist(err) {
-		return 0, false, nil
-	}
-	if err != nil {
-		return 0, false, fmt.Errorf("read cgroup membership: %w", err)
-	}
-	var rel string
-	found := false
-	for _, line := range strings.Split(string(raw), "\n") {
-		if p, cut := strings.CutPrefix(line, "0::"); cut {
-			rel, found = strings.TrimSpace(p), true
-			break
-		}
-	}
-	root = filepath.Clean(root)
-	dir := filepath.Clean(filepath.Join(root, rel))
-	if !found || !strings.HasPrefix(rel, "/") || slices.Contains(strings.Split(rel, "/"), "..") || !withinDir(root, dir) {
-		return 0, false, nil
-	}
-	var tightest int64
-	var have bool
-	for {
-		n, finite, err := readMemoryMax(filepath.Join(dir, "memory.max"))
-		if err != nil {
-			return 0, false, err
-		}
-		if finite && (!have || n < tightest) {
-			tightest, have = n, true
-		}
-		if dir == root {
-			break
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir || !withinDir(root, parent) {
-			break
-		}
-		dir = parent
-	}
-	return tightest, have, nil
-}
-
-// withinDir reports whether path is dir or a directory inside it.
-func withinDir(dir, path string) bool {
-	rel, err := filepath.Rel(dir, path)
-	if err != nil {
-		return false
-	}
-	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
-}
-
-func readMemoryMax(path string) (limit int64, ok bool, err error) {
-	raw, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return 0, false, nil
-	}
-	if err != nil {
-		return 0, false, fmt.Errorf("read cgroup memory limit: %w", err)
-	}
-	v := strings.TrimSpace(string(raw))
-	if v == "max" {
-		return 0, false, nil
-	}
-	n, err := strconv.ParseInt(v, 10, 64)
-	if err != nil || n <= 0 {
-		return 0, false, fmt.Errorf("read cgroup memory limit: unexpected value %q in %s", v, path)
-	}
-	return n, true, nil
-}
-
 // VolumeTotal returns the total size, in bytes, of the filesystem holding path.
 func VolumeTotal(path string) (int64, error) {
 	var stat syscall.Statfs_t
@@ -132,20 +50,4 @@ func VolumeTotal(path string) (int64, error) {
 		return 0, fmt.Errorf("read size of %s: %w", path, err)
 	}
 	return int64(stat.Blocks) * int64(stat.Bsize), nil
-}
-
-// MemoryBudget is MemTotal, or the cgroup limit when that is lower.
-func MemoryBudget(meminfo, selfCgroup, cgroupRoot string) (int64, error) {
-	budget, err := MemTotal(meminfo)
-	if err != nil {
-		return 0, err
-	}
-	limit, ok, err := CgroupMemoryLimit(selfCgroup, cgroupRoot)
-	if err != nil {
-		return 0, err
-	}
-	if ok && limit < budget {
-		budget = limit
-	}
-	return budget, nil
 }

@@ -44,14 +44,12 @@ type releaseManifest struct {
 
 // Prepare pins guest assets, ensures a golden snapshot, configures host NAT,
 // and runs an admission canary before marking the runtime ready. Failures
-// (including transient host NAT) retry with backoff via runAdmissionLoop,
-// except a sizingError, on which the process exits so a restart can size the
-// slots.
+// (including transient host NAT) retry with backoff via runAdmissionLoop.
 //
-// Admission also sizes the slots from the golden snapshot it pins, then starts
-// the slot wirer (network_wirer.go), which builds free slots' network namespaces
-// in the background. Admission does not wait for it.
+// It also starts the slot wirer (network_wirer.go), which builds free slots' network
+// namespaces in the background. Admission does not wait for it.
 func (r *Runtime) Prepare(ctx context.Context) {
+	go r.wireSlots(ctx)
 	r.runAdmissionLoop(ctx)
 }
 
@@ -62,12 +60,6 @@ func (r *Runtime) runAdmissionLoop(ctx context.Context) {
 		if err == nil {
 			r.markAdmissionOK()
 			slog.Info("firecracker admission succeeded; runner is healthy")
-			return
-		}
-		var sizing sizingError
-		if errors.As(err, &sizing) {
-			slog.Error("firecracker cannot size its slots; exiting so a restart re-reads the golden snapshot", "error", err)
-			r.deps.exit(1)
 			return
 		}
 		slog.Error("firecracker admission failed; runner stays unhealthy", "error", err)
@@ -109,11 +101,7 @@ func (r *Runtime) admitOnce(ctx context.Context) error {
 	if err := r.deps.checkTemplateKernel(templateKernelPath(r.config)); err != nil {
 		return err
 	}
-	params, err := r.pinSnapshotAssets()
-	if err != nil {
-		return err
-	}
-	if err := r.sizeSlots(ctx, params); err != nil {
+	if err := r.pinSnapshotAssets(); err != nil {
 		return err
 	}
 	return r.runAdmissionCanary(ctx)
@@ -145,23 +133,23 @@ func (r *Runtime) pinBaseAssets() error {
 	return r.verifyManifestPin()
 }
 
-func (r *Runtime) pinSnapshotAssets() (*bootParams, error) {
+func (r *Runtime) pinSnapshotAssets() error {
 	required := map[string]string{
 		"snapshot memory": r.config.SnapshotMemPath,
 		"snapshot state":  r.config.SnapshotStatePath,
 	}
 	for label, path := range required {
 		if !r.deps.pathExists(path) {
-			return nil, fmt.Errorf("firecracker %s path does not exist: %s", label, path)
+			return fmt.Errorf("firecracker %s path does not exist: %s", label, path)
 		}
 	}
 
 	params, err := loadBootParams(bootParamsPath(r.config))
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if err := params.matchesConfig(r.config); err != nil {
-		return nil, err
+		return err
 	}
 	slog.Info("firecracker golden snapshot boot parameters",
 		"vcpu_count", params.VCPUCount,
@@ -170,7 +158,7 @@ func (r *Runtime) pinSnapshotAssets() (*bootParams, error) {
 		"boot_args", params.BootArgs,
 		"guest_ip", params.GuestIP,
 	)
-	return params, nil
+	return nil
 }
 
 func (r *Runtime) verifyManifestPin() error {
