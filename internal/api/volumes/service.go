@@ -31,6 +31,9 @@ type timing struct {
 	builderWait, retryFirst, retryMax time.Duration
 	// buildCall bounds one call to a runner to build an image.
 	buildCall time.Duration
+	// sweepEvery is the time between two sweeps, and failedGrace how long a
+	// failed row stays before a sweep removes it.
+	sweepEvery, failedGrace time.Duration
 }
 
 // limits are the caps a publish is held to: the package's constants, smaller
@@ -54,6 +57,8 @@ var defaultTiming = timing{
 	retryFirst:  time.Second,
 	retryMax:    10 * time.Second,
 	buildCall:   30 * time.Minute,
+	sweepEvery:  5 * time.Minute,
+	failedGrace: 10 * time.Minute,
 }
 
 // Service publishes, lists and deletes shared volumes. A row is written before
@@ -134,22 +139,23 @@ func (s *Service) Delete(ctx context.Context, sha256, role string) error {
 	slog.InfoContext(ctx, "shared volume deleted", "version_id", row.ID, "sha256", row.SHA256, "name", row.Name, "role", role)
 	removeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.timing.cleanup)
 	defer cancel()
-	if err := s.remove(removeCtx, row.ID); err != nil {
+	if _, err := s.remove(removeCtx, row.ID); err != nil {
 		slog.WarnContext(ctx, "shared volume removal failed; the row stays deleted", "version_id", row.ID, "sha256", row.SHA256, "error", err)
 	}
 	return nil
 }
 
 // remove deletes the objects of the shared volume id, then its row unless it
-// is ready. It is the one place that removes a volume.
-func (s *Service) remove(ctx context.Context, id string) error {
+// is ready, and reports whether it removed the row: false when another
+// removal got there first. It is the one place that removes a volume: a
+// delete, a failed publish's cleanup and the sweep all call it.
+func (s *Service) remove(ctx context.Context, id string) (bool, error) {
 	for _, kind := range []volume.Kind{volume.KindTar, volume.KindExt4} {
 		if err := s.objects.Delete(ctx, objectKey(id, kind)); err != nil {
-			return err
+			return false, err
 		}
 	}
-	_, err := s.records.RemoveSharedVolume(ctx, id)
-	return err
+	return s.records.RemoveSharedVolume(ctx, id)
 }
 
 func objectKey(id string, kind volume.Kind) volumestore.Key {

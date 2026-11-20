@@ -137,6 +137,9 @@ func main() {
 		slog.Error("shared volumes", "error", err)
 		os.Exit(1)
 	}
+	if sharedVolumes != nil {
+		go sharedVolumes.Sweep(publishCtx)
+	}
 
 	handler, err := api.NewGatewayRouter(sandboxStore, cfg, runnerReg, mrec, activity, api.WithSharedVolumes(sharedVolumes))
 	if err != nil {

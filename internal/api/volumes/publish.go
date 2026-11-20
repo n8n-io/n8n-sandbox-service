@@ -306,7 +306,7 @@ func (s *Service) discard(ctx context.Context, row *store.SharedVolume, cause er
 		}
 		return
 	}
-	if err := s.remove(cleanupCtx, row.ID); err != nil {
+	if _, err := s.remove(cleanupCtx, row.ID); err != nil {
 		slog.WarnContext(ctx, "shared volume publish cleanup failed; the row stays failed", "version_id", row.ID, "error", err)
 	}
 }
