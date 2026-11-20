@@ -349,7 +349,7 @@ func testSharedVolumes(t *testing.T, s SharedVolumes) {
 
 		removable := func(failedBefore int64) map[string]bool {
 			t.Helper()
-			rows, err := s.ListRemovableSharedVolumes(ctx, failedBefore, 1_000_000)
+			rows, err := s.ListRemovableSharedVolumes(ctx, failedBefore, SharedVolumePosition{}, 1_000_000)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -369,8 +369,34 @@ func testSharedVolumes(t *testing.T, s SharedVolumes) {
 		if later := removable(1000); !later[lapsed.ID] || later[live.ID] || later[ready.ID] {
 			t.Fatalf("removable at 1000 = %v; want the row failed at 1000 too", later)
 		}
-		if rows, err := s.ListRemovableSharedVolumes(ctx, 1000, 1); err != nil || len(rows) != 1 {
-			t.Fatalf("ListRemovableSharedVolumes() with a limit of 1 = %d rows, %v", len(rows), err)
+		// Pages of one row, each after the last, list every row once.
+		all, err := s.ListRemovableSharedVolumes(ctx, 1000, SharedVolumePosition{}, 1_000_000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var paged []string
+		var after SharedVolumePosition
+		for {
+			page, err := s.ListRemovableSharedVolumes(ctx, 1000, after, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(page) == 0 {
+				break
+			}
+			if len(page) != 1 {
+				t.Fatalf("a page with a limit of 1 has %d rows", len(page))
+			}
+			paged = append(paged, page[0].ID)
+			after = SharedVolumePosition{UpdatedAt: page[0].UpdatedAt, ID: page[0].ID}
+		}
+		if len(paged) != len(all) {
+			t.Fatalf("paging listed %d rows, one page of all %d", len(paged), len(all))
+		}
+		for index, row := range all {
+			if paged[index] != row.ID {
+				t.Fatalf("paging listed %s at %d, one page of all %s", paged[index], index, row.ID)
+			}
 		}
 	})
 

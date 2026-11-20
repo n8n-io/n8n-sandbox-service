@@ -106,9 +106,17 @@ type SharedVolumes interface {
 	// whose lease ended before lapsedBefore, and returns how many it marked.
 	FailLapsedSharedVolumes(ctx context.Context, lapsedBefore, now int64) (int64, error)
 	// ListRemovableSharedVolumes returns up to limit rows whose objects and
-	// row may go: the deleted ones, and the failed ones whose state changed
-	// at or before failedBefore. The longest unchanged come first.
-	ListRemovableSharedVolumes(ctx context.Context, failedBefore int64, limit int) ([]*SharedVolume, error)
+	// row may go, after the position after: the deleted ones, and the failed
+	// ones whose state changed at or before failedBefore. The longest
+	// unchanged come first.
+	ListRemovableSharedVolumes(ctx context.Context, failedBefore int64, after SharedVolumePosition, limit int) ([]*SharedVolume, error)
+}
+
+// SharedVolumePosition is a row's place in ListRemovableSharedVolumes's
+// order. The zero value is before every row.
+type SharedVolumePosition struct {
+	UpdatedAt int64
+	ID        string
 }
 
 var (

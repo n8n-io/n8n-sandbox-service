@@ -18,10 +18,10 @@ func (q sharedVolumeSQL) failLapsedAll(ctx context.Context, lapsedBefore, now in
 	return failed, nil
 }
 
-func (q sharedVolumeSQL) listRemovable(ctx context.Context, failedBefore int64, limit int) ([]*SharedVolume, error) {
+func (q sharedVolumeSQL) listRemovable(ctx context.Context, failedBefore int64, after SharedVolumePosition, limit int) ([]*SharedVolume, error) {
 	rows, err := q.db.QueryContext(ctx, q.bind(`SELECT `+sharedVolumeCols+` FROM shared_volumes
-		WHERE state = 'deleted' OR (state = 'failed' AND updated_at <= ?)
-		ORDER BY updated_at, id LIMIT ?`), failedBefore, limit)
+		WHERE (state = 'deleted' OR (state = 'failed' AND updated_at <= ?)) AND (updated_at, id) > (?, ?)
+		ORDER BY updated_at, id LIMIT ?`), failedBefore, after.UpdatedAt, after.ID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("store: list removable shared volumes: %w", err)
 	}
@@ -44,14 +44,14 @@ func (s *SQLiteStore) FailLapsedSharedVolumes(ctx context.Context, lapsedBefore,
 	return s.sharedVolumes().failLapsedAll(ctx, lapsedBefore, now)
 }
 
-func (s *SQLiteStore) ListRemovableSharedVolumes(ctx context.Context, failedBefore int64, limit int) ([]*SharedVolume, error) {
-	return s.sharedVolumes().listRemovable(ctx, failedBefore, limit)
+func (s *SQLiteStore) ListRemovableSharedVolumes(ctx context.Context, failedBefore int64, after SharedVolumePosition, limit int) ([]*SharedVolume, error) {
+	return s.sharedVolumes().listRemovable(ctx, failedBefore, after, limit)
 }
 
 func (s *PostgresStore) FailLapsedSharedVolumes(ctx context.Context, lapsedBefore, now int64) (int64, error) {
 	return s.sharedVolumes().failLapsedAll(ctx, lapsedBefore, now)
 }
 
-func (s *PostgresStore) ListRemovableSharedVolumes(ctx context.Context, failedBefore int64, limit int) ([]*SharedVolume, error) {
-	return s.sharedVolumes().listRemovable(ctx, failedBefore, limit)
+func (s *PostgresStore) ListRemovableSharedVolumes(ctx context.Context, failedBefore int64, after SharedVolumePosition, limit int) ([]*SharedVolume, error) {
+	return s.sharedVolumes().listRemovable(ctx, failedBefore, after, limit)
 }

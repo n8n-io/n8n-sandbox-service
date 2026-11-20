@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -15,6 +16,29 @@ import (
 // setClock makes env's service see the time at.
 func (env *testEnv) setClock(at time.Time) {
 	env.service.now = func() time.Time { return at }
+}
+
+// stateOf returns the state of the row id, or "" when it is gone. Failed and
+// deleted rows are among the removable ones; the others are live.
+func (env *testEnv) stateOf(t *testing.T, id, sha256 string) store.SharedVolumeState {
+	t.Helper()
+	rows, err := env.records.ListRemovableSharedVolumes(context.Background(), math.MaxInt64, store.SharedVolumePosition{}, 1_000_000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range rows {
+		if row.ID == id {
+			return row.State
+		}
+	}
+	live, err := env.records.GetSharedVolume(context.Background(), sha256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if live != nil && live.ID == id {
+		return live.State
+	}
+	return ""
 }
 
 func (env *testEnv) hasObject(t *testing.T, id string, kind volume.Kind) bool {
@@ -54,11 +78,11 @@ func TestSweepFailsALapsedPublishAndRemovesItAfterTheGrace(t *testing.T) {
 
 	env.setClock(start)
 	env.service.sweep(context.Background())
-	if isFailed, err := env.records.FailSharedVolume(context.Background(), "lapsed", start.Unix()); err != nil || !isFailed {
-		t.Fatalf("the lapsed row is failed = %v, %v; want true", isFailed, err)
+	if state := env.stateOf(t, lapsed.ID, lapsed.SHA256); state != store.SharedVolumeFailed {
+		t.Fatalf("the lapsed row is %q, want failed by the sweep", state)
 	}
-	if got, err := env.records.GetSharedVolume(context.Background(), justEnded.SHA256); err != nil || got == nil || got.State != store.SharedVolumePublishing {
-		t.Fatalf("the row whose lease just ended = %+v, %v; want it left to a later sweep", got, err)
+	if state := env.stateOf(t, justEnded.ID, justEnded.SHA256); state != store.SharedVolumePublishing {
+		t.Fatalf("the row whose lease just ended is %q, want it left to a later sweep", state)
 	}
 	if !env.hasObject(t, "lapsed", volume.KindTar) {
 		t.Fatal("the sweep removed the tar of a row failed just now, before the grace")
@@ -168,4 +192,73 @@ func TestSweepRunsUntilItsContextEnds(t *testing.T) {
 		t.Fatal("Sweep() did not return once its context ended")
 	}
 	env.assertNothingLeft(t)
+}
+
+// deleteTwo publishes two volumes and deletes them, the second a second
+// later, leaving both rows deleted with their objects.
+func deleteTwo(t *testing.T, env *testEnv) (first, second *store.SharedVolume) {
+	t.Helper()
+	start := time.Now()
+	env.objects.failDelete = true
+	var rows []*store.SharedVolume
+	for index, data := range [][]byte{validTar(t), makeTar(t, file("second", "x"))} {
+		published, err := env.publish(t, data, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		env.setClock(start.Add(time.Duration(index) * time.Second))
+		if err := env.service.Delete(context.Background(), published.Volume.SHA256, "publisher"); err != nil {
+			t.Fatal(err)
+		}
+		rows = append(rows, published.Volume)
+	}
+	env.objects.failDelete = false
+	env.setClock(start.Add(2 * time.Second))
+	return rows[0], rows[1]
+}
+
+func TestSweepGoesPastARowItCannotRemove(t *testing.T) {
+	env := newTestEnv(t)
+	previous := sweepBatch
+	sweepBatch = 1
+	t.Cleanup(func() { sweepBatch = previous })
+	first, second := deleteTwo(t, env)
+	env.objects.failDeleteOf = first.ID
+
+	env.service.sweep(context.Background())
+
+	if state := env.stateOf(t, first.ID, first.SHA256); state != store.SharedVolumeDeleted {
+		t.Fatalf("the row whose removal fails is %q, want it deleted still", state)
+	}
+	if state := env.stateOf(t, second.ID, second.SHA256); state != "" {
+		t.Fatalf("the row after it is %q, want it removed", state)
+	}
+}
+
+func TestSweepStopsWhenItsTimeIsUp(t *testing.T) {
+	env := newTestEnv(t)
+	deleteTwo(t, env)
+	env.objects.deleteHangs = true
+	env.service.timing.sweepEvery = 50 * time.Millisecond
+
+	started := time.Now()
+	env.service.sweep(context.Background())
+
+	if took := time.Since(started); took >= env.service.timing.cleanup {
+		t.Fatalf("the sweep took %s, want it to stop after %s rather than wait out each removal", took, env.service.timing.sweepEvery)
+	}
+}
+
+// Two instances that sweep one row count it once between them.
+func TestSweepCountsOnlyWhatItRemoved(t *testing.T) {
+	env := newTestEnv(t)
+	deleteTwo(t, env)
+	env.records.otherPodRemoves = true
+
+	env.service.sweep(context.Background())
+
+	env.assertNothingLeft(t)
+	if got := env.metrics.SweepRemovalCount(string(store.SharedVolumeDeleted)); got != 0 {
+		t.Errorf("deleted rows swept = %v, want 0: another instance removed them", got)
+	}
 }
