@@ -38,6 +38,11 @@ type generalSandboxStore interface {
 	LockSandbox(ctx context.Context, id string) (unlock func(), err error)
 }
 
+// sandboxDeleter deletes sandbox records of any kind.
+type sandboxDeleter interface {
+	Delete(id string) error
+}
+
 // tenantGetter reads tenants.
 type tenantGetter interface {
 	GetTenant(id string) (*store.Tenant, error)
@@ -133,36 +138,52 @@ func sandboxProxyHandler(s generalSandboxStore, reg registry.RunnerRegistry, cfg
 				return
 			}
 
-			if rec.RunnerHTTPBase == "" {
-				writeError(w, http.StatusBadGateway, "sandbox has no runner routing information")
+			u, ok := runnerTarget(w, rec)
+			if !ok {
 				return
 			}
-
-			// Re-check the scheme even though registration rejects non-https:
-			// this record may predate that rule, and proxying to an http base
-			// would send the runner API key in the clear, because
-			// Transport.TLSClientConfig applies only to https URLs.
-			u, err := url.Parse(strings.TrimRight(rec.RunnerHTTPBase, "/"))
-			if err != nil || !strings.EqualFold(u.Scheme, "https") {
-				writeError(w, http.StatusBadGateway, "sandbox runner is not reachable over https")
-				return
-			}
-
-			upstreamStart := time.Now()
-			proxy := newRunnerReverseProxy(u, cfg.RunnerAPIKey, transport, func(resp *http.Response) {
-				// Response headers are in, so for a streamed exec this is the
-				// time to first byte rather than the full round trip.
-				fields.Add("ttfb_ms", time.Since(upstreamStart).Milliseconds())
-				if reapSandboxIfRunnerGone(s, id, resp) {
-					return
-				}
-				trackSandboxActivity(activity, rec, resp)
-			})
+			proxy := newRunnerReverseProxy(u, cfg.RunnerAPIKey, transport, runnerResponseHook(s, activity, rec, fields))
 			if route.limitBody {
 				r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxFileBytes)
 			}
 			proxy.ServeHTTP(w, r)
 		}
+	}
+}
+
+// runnerTarget returns the base URL of rec's runner. When there is none to
+// proxy to, it answers 502 and returns false.
+func runnerTarget(w http.ResponseWriter, rec *store.SandboxRecord) (*url.URL, bool) {
+	if rec.RunnerHTTPBase == "" {
+		writeError(w, http.StatusBadGateway, "sandbox has no runner routing information")
+		return nil, false
+	}
+
+	// Re-check the scheme even though registration rejects non-https: this
+	// record may predate that rule, and proxying to an http base would send
+	// the runner API key in the clear, because Transport.TLSClientConfig
+	// applies only to https URLs.
+	u, err := url.Parse(strings.TrimRight(rec.RunnerHTTPBase, "/"))
+	if err != nil || !strings.EqualFold(u.Scheme, "https") {
+		writeError(w, http.StatusBadGateway, "sandbox runner is not reachable over https")
+		return nil, false
+	}
+	return u, true
+}
+
+// runnerResponseHook returns the onResponse of a proxied sandbox request: it
+// logs the time to first byte, drops the record of a sandbox the runner no
+// longer knows, and otherwise counts the response as activity.
+func runnerResponseHook(s sandboxDeleter, activity *ActivityRecorder, rec *store.SandboxRecord, fields *obs.Fields) func(*http.Response) {
+	upstreamStart := time.Now()
+	return func(resp *http.Response) {
+		// Response headers are in, so for a streamed exec this is the time to
+		// first byte rather than the full round trip.
+		fields.Add("ttfb_ms", time.Since(upstreamStart).Milliseconds())
+		if reapSandboxIfRunnerGone(s, rec.ID, resp) {
+			return
+		}
+		trackSandboxActivity(activity, rec, resp)
 	}
 }
 
@@ -715,7 +736,7 @@ func newRunnerReverseProxy(runnerURL *url.URL, runnerAPIKey string, transport ht
 // never evidence of a working sandbox — counting it as activity would let a
 // retrying client refresh last_active_at and keep the idle sweeper from ever
 // reclaiming the row left behind.
-func reapSandboxIfRunnerGone(s generalSandboxStore, sandboxID string, resp *http.Response) bool {
+func reapSandboxIfRunnerGone(s sandboxDeleter, sandboxID string, resp *http.Response) bool {
 	if !sandboxproxy.RunnerReportsSandboxGone(resp) {
 		return false
 	}

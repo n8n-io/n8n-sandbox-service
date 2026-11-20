@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/n8n-io/sandbox-service/internal/codetask"
 	"github.com/n8n-io/sandbox-service/internal/envvar"
 	"github.com/n8n-io/sandbox-service/internal/logging"
 )
@@ -114,6 +115,11 @@ type APIConfig struct {
 
 	// MaxFileBytes is the maximum size of file upload requests accepted by API.
 	MaxFileBytes int64
+
+	// MaxTaskInputBytes is the maximum total size of a code sandbox task's
+	// input files. The request body may be codetask.BodyOverheadBytes larger.
+	// Parsed from SANDBOX_API_MAX_TASK_INPUT_BYTES (default 64 MiB, at most 1 GiB).
+	MaxTaskInputBytes int64
 
 	// DefaultMaxSandboxes is the default per-tenant sandbox quota when
 	// POST /admin/tenants omits max_sandboxes (0 = unlimited).
@@ -239,6 +245,7 @@ func LoadAPI() (*APIConfig, error) {
 		ListenAddr:            defaultListenAddr,
 		GRPCListenAddr:        defaultGRPCListenAddr,
 		MaxFileBytes:          defaultMaxFileBytes,
+		MaxTaskInputBytes:     codetask.DefaultMaxInputBytes,
 		DefaultMaxSandboxes:   defaultMaxSandboxes,
 		MaxInflightPerTenant:  defaultMaxInflightPerTenant,
 		DataDir:               "/var/lib/n8n-sandbox-api",
@@ -318,6 +325,10 @@ func LoadAPI() (*APIConfig, error) {
 	}
 
 	if err := envvar.PositiveInt("SANDBOX_API_MAX_FILE_BYTES", &cfg.MaxFileBytes); err != nil {
+		return nil, err
+	}
+
+	if err := envvar.IntBetween("SANDBOX_API_MAX_TASK_INPUT_BYTES", &cfg.MaxTaskInputBytes, 1, codetask.MaxInputBytesCeiling); err != nil {
 		return nil, err
 	}
 
