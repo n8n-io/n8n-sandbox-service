@@ -60,7 +60,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && echo "${node_sha}  /tmp/node.tar.xz" | sha256sum -c - \
     && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 \
     && rm /tmp/node.tar.xz \
-    && npm install -g npm@11.21.2 \
+    && npm install -g npm@11.21.3 \
     && node -v && npm -v \
     && npm install -g typescript@7.0.2 \
     && apt-get autoremove -y \

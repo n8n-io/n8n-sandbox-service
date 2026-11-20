@@ -1,12 +1,13 @@
 # Configuration
 
-All services are configured via environment variables. In the variables the API, runner and daemon binaries read, surrounding whitespace is ignored (except in `SANDBOX_API_POSTGRES_PASSWORD`), an empty value counts as unset, and a value that does not parse stops the service at startup. This does not cover the variables `scripts/start-runner.sh` reads. [limits.md](limits.md) lists the limits clients and operators run into.
+All services are configured via environment variables. In the variables the API, runner, daemon and code daemon binaries read, surrounding whitespace is ignored (except in `SANDBOX_API_POSTGRES_PASSWORD`), an empty value counts as unset, and a value that does not parse stops the service at startup. This does not cover the variables `scripts/start-runner.sh` reads. [limits.md](limits.md) lists the limits clients and operators run into.
 
 ## Contents
 
 - [API](#api)
 - [Runner](#runner)
 - [Sandbox daemon](#sandbox-daemon)
+- [Code daemon](#code-daemon)
 - [Metrics](#metrics)
 - [Disk quotas](#disk-quotas)
 
@@ -42,6 +43,7 @@ All services are configured via environment variables. In the variables the API,
 | `SANDBOX_API_MAX_INFLIGHT_PER_TENANT` | `512` | Requests a tenant may have in progress at once on this replica, all its keys together; more get `429` ([what counts](API.md#http-429--too-many-requests-in-progress)). A first estimate: 32 sandboxes with 16 requests in progress each. It also bounds what a tenant holds here while requests wait on a slow runner, which the per-sandbox limit cannot see. `0` = no limit, for execution `DELETE`s too |
 | `SANDBOX_API_KEY_CACHE_TTL` | `15s` | How long each replica remembers a tenant key lookup (`0`–`1m`, `0` = no cache; [how](architecture.md#tenant-key-cache)). A revoked key, or the key of a deleted tenant, still works on other replicas for up to this long |
 | `SANDBOX_API_ENABLE_CORS` | `false` | Enable CORS headers (allow all origins); needed for the browser playground |
+| `SANDBOX_API_CODE_SANDBOXES_ENABLED` | `false` | Serve the [code sandbox](API.md#code-sandboxes) routes. When `false`, they answer `404` |
 | `SANDBOX_API_METRICS_ENABLED` | `false` | When true, expose Prometheus `/metrics` (no `X-Api-Key`; firewall the port it lands on). `SANDBOX_API_METRICS_LISTEN_ADDR` chooses the listener. See [Metrics](#metrics). |
 | `SANDBOX_API_RUNNER_HEARTBEAT_GRACE` | `45s` | How long after the last gRPC heartbeat a runner remains eligible for placement (Go [`time.ParseDuration`](https://pkg.go.dev/time#ParseDuration) syntax, e.g. `45s`, `2m`) |
 | `SANDBOX_API_IDLE_STOP_AFTER` | `1h` | Idle time after which the sweeper stops a sandbox (deletes it if `ephemeral`). `0` disables. Extended by twice `SANDBOX_API_ACTIVITY_WRITE_INTERVAL`, and by four times that before an ephemeral sandbox is deleted ([why](architecture.md#sandbox-activity)) |
@@ -190,6 +192,30 @@ These variables are set inside each sandbox container and are typically baked in
 | `SANDBOX_DAEMON_LOG_LEVEL` | `info` | Minimum log severity (`debug`, `info`, `warn`, `error`; case-insensitive) |
 | `SANDBOX_EXEC_MAX_EVENT_BYTES` | `16777216` | Max bytes of event history retained per execution (16 MiB); must be positive |
 | `SANDBOX_EXEC_RETAIN` | `10m` | Duration to retain completed executions (Go [`time.ParseDuration`](https://pkg.go.dev/time#ParseDuration) syntax, e.g. `10m`, `1h`); must be positive |
+
+## Code daemon
+
+The `code-daemon` runs inside a code sandbox and is reached only by the runner. It refuses peers from its own network namespace. Its `GET /healthz` probe does not use a lane. Invalid values prevent startup. The probe returns `503` once the shared runtime fails to start, stops, or the daemon closes; the daemon does not restart the runtime, since that would discard shared state.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `CODE_DAEMON_LOG_LEVEL` | `info` | Minimum log severity (`debug`, `info`, `warn`, `error`; case-insensitive) |
+| `CODE_DAEMON_LISTEN_ADDR` | `:8081` | Listen address |
+| `CODE_DAEMON_MAX_CONCURRENCY` | `1` | Number of lanes (`1`–`32`). A lane runs one task, from upload to completion |
+| `CODE_DAEMON_ALLOW_LOCAL_CLIENTS` | `false` | Accept peers from inside the sandbox. Local development only |
+| `CODE_DAEMON_WORK_DIR` | `/work` | Parent of the task directories and working directory of the runtime. Created with mode `0700` if missing |
+| `CODE_DAEMON_RUNTIMES_FILE` | `/etc/code-runtime/runtimes.json` | Runtime registry, shipped in the sandbox image |
+| `CODE_DAEMON_RUNTIME` | `n8n-js` | Registry entry to run |
+
+The runtime registry is a JSON object keyed by runtime name. Each entry has a `command`: the executable followed by its arguments. A missing file, invalid JSON, or a missing or empty `command` for the selected runtime prevents startup. For example:
+
+```json
+{
+  "n8n-js": { "command": ["/usr/local/bin/node", "/opt/runtime/index.js"] }
+}
+```
+
+The daemon starts that command once, as the shared runtime process, when it dispatches the first task. The runtime must report ready within 15 seconds. A command that cannot be run, such as a wrong executable path, is only detected then: it fails that task and the health probe.
 
 ## Metrics
 

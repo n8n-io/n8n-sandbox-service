@@ -149,6 +149,10 @@ type APIConfig struct {
 	// EnableCORS enables CORS headers (allow all origins). Default false.
 	EnableCORS bool
 
+	// CodeSandboxesEnabled serves the /code/sandboxes routes. Parsed from
+	// SANDBOX_API_CODE_SANDBOXES_ENABLED (default false).
+	CodeSandboxesEnabled bool
+
 	// MetricsEnabled controls whether the Prometheus /metrics endpoint is served.
 	// Parsed from SANDBOX_API_METRICS_ENABLED (default false). When true, /metrics
 	// bypasses X-Api-Key authentication on whichever listener serves it; operators
@@ -360,6 +364,9 @@ func LoadAPI() (*APIConfig, error) {
 		return nil, err
 	}
 	if err := envvar.Bool("SANDBOX_API_ENABLE_CORS", &cfg.EnableCORS); err != nil {
+		return nil, err
+	}
+	if err := envvar.Bool("SANDBOX_API_CODE_SANDBOXES_ENABLED", &cfg.CodeSandboxesEnabled); err != nil {
 		return nil, err
 	}
 

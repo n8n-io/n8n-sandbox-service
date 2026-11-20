@@ -262,6 +262,41 @@ func TestGatewayMetricsEndpointDisabledReturns404(t *testing.T) {
 	}
 }
 
+func TestGatewayServesCodeSandboxesOnlyWhenEnabled(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("enabled=%t", enabled), func(t *testing.T) {
+			s, err := store.New(":memory:")
+			if err != nil {
+				t.Fatalf("create store: %v", err)
+			}
+			defer s.Close()
+
+			router, err := NewGatewayRouter(s, &config.APIConfig{
+				APIKeys:              map[string]struct{}{"public-key": {}},
+				MaxFileBytes:         1024,
+				CodeSandboxesEnabled: enabled,
+			}, registry.New(45*time.Second), metrics.NewAPIRecorder(false), NewActivityRecorder(s, nil))
+			if err != nil {
+				t.Fatalf("create gateway router: %v", err)
+			}
+
+			// An invalid body gets 400 from the handler, so 404 means no route.
+			req := httptest.NewRequest(http.MethodPost, "/code/sandboxes", strings.NewReader("{}"))
+			req.Header.Set("X-Api-Key", "public-key")
+			rr := httptest.NewRecorder()
+			router.ServeHTTP(rr, req)
+
+			want := http.StatusNotFound
+			if enabled {
+				want = http.StatusBadRequest
+			}
+			if rr.Code != want {
+				t.Fatalf("expected %d, got %d: %s", want, rr.Code, rr.Body.String())
+			}
+		})
+	}
+}
+
 func TestGatewayOmitsMetricsWhenOnDedicatedListener(t *testing.T) {
 	s, err := store.New(":memory:")
 	if err != nil {
