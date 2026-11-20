@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -31,9 +32,17 @@ const LocalObjectPath = "/volume-objects/"
 // It grants access on its own, so it must stay out of logs.
 const SignatureParam = "sig"
 
+// MinSigningKeyBytes is the shortest signing key NewLocal accepts.
+const MinSigningKeyBytes = 32
+
 const (
 	expiresParam = "expires"
 	tempPrefix   = ".put-"
+
+	// NewLocal removes only temp files older than this: another API instance
+	// on a shared directory may still be writing a younger one. A day is far
+	// longer than any upload and any clock skew to a file server.
+	staleTempAge = 24 * time.Hour
 
 	// Every file ends with a trailer, so that its content and its digest are
 	// committed together by one link: magic, size, sha256.
@@ -46,23 +55,42 @@ var (
 	errExpiredSignature = errors.New("expired signature")
 )
 
-// Local keeps objects as files under one API instance's data directory and
-// serves them on that API through URLs signed with a key that is random per
-// process. It therefore needs a single API instance, and its URLs stop working
+// Local keeps objects as files in one directory and serves them on the API
+// through signed URLs. Several API instances can share it: the directory on a
+// shared file system with hard links, such as NFS mounted with
+// lookupcache=positive, and the same signing key in every instance. Without a signing key it signs with a key that is random
+// per process, so it needs a single API instance, and its URLs stop working
 // when the process restarts.
 type Local struct {
 	// dir is the store's directory, which holds every object.
 	dir     string
 	baseURL string
-	// signingKey is the HMAC key that signs and verifies read URLs.
+	// signingKey signs read URLs; verifyKeys, which start with it, verify
+	// them.
 	signingKey []byte
+	verifyKeys [][]byte
 	now        func() time.Time
+	link       func(oldname, newname string) error
 }
 
-// NewLocal stores objects under <dataDir>/volumes. baseURL is where runners
-// reach the API's volume-objects listener; ReadURL returns URLs under it.
-func NewLocal(dataDir, baseURL string) (*Local, error) {
-	dir := filepath.Join(dataDir, "volumes")
+// LocalOptions are the optional settings of NewLocal.
+type LocalOptions struct {
+	// SigningKey signs and verifies read URLs, at least MinSigningKeyBytes.
+	// Empty means a key random per process.
+	SigningKey []byte
+	// PreviousSigningKey verifies read URLs too but signs none, so that URLs
+	// signed before a key rotation keep working. It needs SigningKey.
+	PreviousSigningKey []byte
+}
+
+// NewLocal stores objects in dir, which it creates if its parent exists.
+// baseURL is where runners reach the API's volume-objects listener; ReadURL
+// returns URLs under it.
+func NewLocal(dir, baseURL string, opts LocalOptions) (*Local, error) {
+	verifyKeys, err := checkSigningKeys(opts)
+	if err != nil {
+		return nil, err
+	}
 	if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
 		return nil, fmt.Errorf("volumestore: create %s: %w", dir, err)
 	}
@@ -74,29 +102,151 @@ func NewLocal(dataDir, baseURL string) (*Local, error) {
 	if err := os.Chmod(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("volumestore: %w", err)
 	}
-	// No Put runs yet, so every temp file is left over from a crash.
-	if err := removeTemps(dir); err != nil {
+	if err := checkHardLinks(dir, os.Link); err != nil {
+		return nil, err
+	}
+	if mountinfo, err := os.ReadFile("/proc/self/mountinfo"); err == nil && cachesMissingNames(string(mountinfo), dir) {
+		slog.Warn("volumestore: the store directory is on NFS mounted without lookupcache=positive; "+
+			"if several API instances share it, objects one of them commits can look missing to another for up to a minute",
+			"dir", dir)
+	}
+	if err := removeStaleTemps(dir, time.Now()); err != nil {
 		return nil, fmt.Errorf("volumestore: remove leftover temp files: %w", err)
 	}
-	signingKey := make([]byte, 32)
-	if _, err := rand.Read(signingKey); err != nil {
-		return nil, err
+	if verifyKeys == nil {
+		signingKey := make([]byte, MinSigningKeyBytes)
+		if _, err := rand.Read(signingKey); err != nil {
+			return nil, err
+		}
+		verifyKeys = [][]byte{signingKey}
 	}
 	return &Local{
 		dir:        dir,
 		baseURL:    strings.TrimRight(baseURL, "/"),
-		signingKey: signingKey,
+		signingKey: verifyKeys[0],
+		verifyKeys: verifyKeys,
 		now:        time.Now,
+		link:       os.Link,
 	}, nil
 }
 
-func removeTemps(dir string) error {
+// checkSigningKeys returns the keys that verify read URLs, the signing key
+// first, or nil for a random one. Errors never show a key.
+func checkSigningKeys(opts LocalOptions) ([][]byte, error) {
+	if len(opts.SigningKey) == 0 {
+		if len(opts.PreviousSigningKey) > 0 {
+			return nil, errors.New("volumestore: a previous signing key needs a signing key")
+		}
+		return nil, nil
+	}
+	keys := [][]byte{bytes.Clone(opts.SigningKey)}
+	if len(opts.PreviousSigningKey) > 0 {
+		keys = append(keys, bytes.Clone(opts.PreviousSigningKey))
+	}
+	for _, key := range keys {
+		if len(key) < MinSigningKeyBytes {
+			return nil, fmt.Errorf("volumestore: a signing key must be at least %d bytes", MinSigningKeyBytes)
+		}
+	}
+	return keys, nil
+}
+
+// checkHardLinks fails unless link makes hard links in dir's file system,
+// which Put commits by. SMB shares, for one, have none.
+func checkHardLinks(dir string, link func(oldname, newname string) error) error {
+	probe, err := os.CreateTemp(dir, tempPrefix+"*")
+	if err != nil {
+		return fmt.Errorf("volumestore: %w", err)
+	}
+	defer os.Remove(probe.Name())
+	if err := probe.Close(); err != nil {
+		return fmt.Errorf("volumestore: %w", err)
+	}
+	linked := probe.Name() + ".link"
+	err = link(probe.Name(), linked)
+	defer os.Remove(linked)
+	// As in Put, the names decide, not the error.
+	if !sameFile(probe.Name(), linked) {
+		if err == nil {
+			err = errors.New("the link is not the same file")
+		}
+		return fmt.Errorf("volumestore: %s must be on a file system with hard links, such as a local disk or NFS, not SMB: %w", dir, err)
+	}
+	return nil
+}
+
+// sameFile reports whether both names lead to one file.
+func sameFile(name, other string) bool {
+	info, err := os.Lstat(name)
+	if err != nil {
+		return false
+	}
+	otherInfo, err := os.Lstat(other)
+	return err == nil && os.SameFile(info, otherInfo)
+}
+
+// cachesMissingNames reports whether dir is on an NFS mount, as listed in
+// the text of /proc/self/mountinfo, that remembers names it found missing
+// (lookupcache=all, the default). A name another NFS client creates then
+// stays missing here until the parent directory's cached attributes expire.
+func cachesMissingNames(mountinfo, dir string) bool {
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved
+	}
+	unescape := strings.NewReplacer(`\040`, " ", `\011`, "\t", `\012`, "\n", `\134`, `\`)
+	var mountPoint, fsType, superOptions string
+	for _, line := range strings.Split(mountinfo, "\n") {
+		// ID, parent, device, root, mount point, options, optional fields,
+		// "-", file system type, source, super options.
+		fields := strings.Fields(line)
+		separator := slices.Index(fields, "-")
+		if separator < 6 || len(fields) < separator+4 {
+			continue
+		}
+		candidate := unescape.Replace(fields[4])
+		within := candidate == "/" || dir == candidate || strings.HasPrefix(dir, candidate+"/")
+		// The longest mount point wins, and of equal ones the last mounted.
+		if within && len(candidate) >= len(mountPoint) {
+			mountPoint, fsType, superOptions = candidate, fields[separator+1], fields[separator+3]
+		}
+	}
+	if fsType != "nfs" && fsType != "nfs4" {
+		return false
+	}
+	for option := range strings.SplitSeq(superOptions, ",") {
+		switch option {
+		case "lookupcache=pos", "lookupcache=positive", "lookupcache=none":
+			return false
+		}
+	}
+	return true
+}
+
+// removeStaleTemps removes the temp files under dir that were last written
+// before now less staleTempAge. Other API instances may commit or remove
+// files meanwhile.
+func removeStaleTemps(dir string, now time.Time) error {
 	return filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
-		if entry.Type().IsRegular() && strings.HasPrefix(entry.Name(), tempPrefix) {
-			return os.Remove(path)
+		if !entry.Type().IsRegular() || !strings.HasPrefix(entry.Name(), tempPrefix) {
+			return nil
+		}
+		info, err := entry.Info()
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		} else if err != nil {
+			return err
+		}
+		if now.Sub(info.ModTime()) < staleTempAge {
+			return nil
+		}
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
 		}
 		return nil
 	})
@@ -151,8 +301,10 @@ func (l *Local) Put(ctx context.Context, key Key, content io.Reader, opts PutOpt
 	if err := tmp.Close(); err != nil {
 		return Object{}, err
 	}
-	// Unlike rename, link refuses to replace an existing file.
-	if err := os.Link(tmp.Name(), dst); err != nil {
+	// Unlike rename, link refuses to replace an existing file. Over NFS a
+	// link that was made can still fail, as EEXIST for its own retried
+	// request, so the name decides, as open(2) advises for lock files.
+	if err := l.link(tmp.Name(), dst); err != nil && !sameFile(tmp.Name(), dst) {
 		if errors.Is(err, fs.ErrExist) {
 			return Object{}, ErrExists
 		}
@@ -231,6 +383,8 @@ func (l *Local) open(key Key) (*localFile, error) {
 	}, nil
 }
 
+// Stat reads the size and digest from the file's trailer, which anyone who
+// can write the store's directory controls.
 func (l *Local) Stat(_ context.Context, key Key) (Object, error) {
 	lf, err := l.open(key)
 	if err != nil {
@@ -251,6 +405,8 @@ func (l *Local) Open(_ context.Context, key Key) (io.ReadCloser, Object, error) 
 	}{io.NewSectionReader(lf.file, 0, lf.obj.Size), lf.file}, lf.obj, nil
 }
 
+// Delete removes the object. On NFS that also ends the downloads of it that
+// other API instances are serving: their reads fail with ESTALE.
 func (l *Local) Delete(_ context.Context, key Key) error {
 	if err := key.Validate(); err != nil {
 		return err
@@ -281,7 +437,7 @@ func (l *Local) ReadURL(_ context.Context, key Key, ttl time.Duration) (string, 
 	expires := strconv.FormatInt(expiryUnix, 10)
 	query := url.Values{
 		expiresParam:   {expires},
-		SignatureParam: {hex.EncodeToString(l.sign(http.MethodGet, path, expires))},
+		SignatureParam: {hex.EncodeToString(sign(l.signingKey, http.MethodGet, path, expires))},
 	}
 	return l.baseURL + path + "?" + query.Encode(), nil
 }
@@ -304,7 +460,7 @@ func (l *Local) VerifyRequest(req *http.Request) (Key, error) {
 	}
 	expires := query.Get(expiresParam)
 	sig, err := hex.DecodeString(query.Get(SignatureParam))
-	if err != nil || !hmac.Equal(sig, l.sign(req.Method, req.URL.Path, expires)) {
+	if err != nil || !l.validSignature(sig, req.Method, req.URL.Path, expires) {
 		return Key{}, errBadSignature
 	}
 	exp, err := strconv.ParseInt(expires, 10, 64)
@@ -317,8 +473,17 @@ func (l *Local) VerifyRequest(req *http.Request) (Key, error) {
 	return key, nil
 }
 
-func (l *Local) sign(method, path, expires string) []byte {
-	mac := hmac.New(sha256.New, l.signingKey)
+func (l *Local) validSignature(sig []byte, method, path, expires string) bool {
+	for _, key := range l.verifyKeys {
+		if hmac.Equal(sig, sign(key, method, path, expires)) {
+			return true
+		}
+	}
+	return false
+}
+
+func sign(key []byte, method, path, expires string) []byte {
+	mac := hmac.New(sha256.New, key)
 	mac.Write([]byte(method + "\n" + path + "\n" + expires))
 	return mac.Sum(nil)
 }

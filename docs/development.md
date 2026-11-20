@@ -103,6 +103,14 @@ for i in $(seq 30); do docker exec sandbox-test-postgres pg_isready -h 127.0.0.1
 SANDBOX_TEST_POSTGRES_HOST=127.0.0.1 SANDBOX_TEST_POSTGRES_PASSWORD=postgres make test-integration
 ```
 
+The `local` volume store's tests run two stores on one directory, as two API instances. With `SANDBOX_TEST_VOLUME_LOCAL_DIRS`, two paths separated by a comma, they use those instead: two mounts of one NFS export, with `nosharecache` so each keeps caches of its own, and `lookupcache=positive`. The tests need Linux and a writable export:
+
+```bash
+mount -t nfs -o vers=4.1,nosharecache,lookupcache=positive server:/ /mnt/a
+mount -t nfs -o vers=4.1,nosharecache,lookupcache=positive server:/ /mnt/b
+SANDBOX_TEST_VOLUME_LOCAL_DIRS=/mnt/a,/mnt/b go test -count=1 -run 'Local' ./internal/api/volumestore/
+```
+
 Run the full end-to-end suite (all topologies sequentially):
 
 ```bash

@@ -124,7 +124,7 @@ func startVolumeObjectsServer(t *testing.T, maxInflight int, stallTimeout time.D
 	otherCA := newTestCA(t, dir, "other-ca")
 	serverCert, serverKey := registrationCA.issue(t, dir, "api", x509.ExtKeyUsageServerAuth)
 
-	store, err := volumestore.NewLocal(t.TempDir(), "https://api.test:8443")
+	store, err := volumestore.NewLocal(t.TempDir(), "https://api.test:8443", volumestore.LocalOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -319,7 +319,7 @@ func TestNewVolumeObjectsServerFailsOnOccupiedPort(t *testing.T) {
 	dir := t.TempDir()
 	registrationCA := newTestCA(t, dir, "registration-ca")
 	serverCert, serverKey := registrationCA.issue(t, dir, "api", x509.ExtKeyUsageServerAuth)
-	store, err := volumestore.NewLocal(t.TempDir(), "https://api.test:8443")
+	store, err := volumestore.NewLocal(t.TempDir(), "https://api.test:8443", volumestore.LocalOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,7 +343,7 @@ func TestNewVolumeObjectsServerFailsOnOccupiedPort(t *testing.T) {
 }
 
 func TestNewVolumeObjectsServerNeedsTheRegistrationCertificates(t *testing.T) {
-	store, err := volumestore.NewLocal(t.TempDir(), "https://api.test:8443")
+	store, err := volumestore.NewLocal(t.TempDir(), "https://api.test:8443", volumestore.LocalOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
