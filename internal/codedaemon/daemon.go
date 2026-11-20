@@ -92,7 +92,7 @@ func (d *Daemon) Handler() http.Handler {
 		// The runner connects from outside the sandbox network namespace.
 		host, _, err := net.SplitHostPort(r.RemoteAddr)
 		if err != nil || isLocalAddress(net.ParseIP(host)) {
-			http.Error(w, "local clients are not allowed", http.StatusForbidden)
+			rejectAdmission(w, r, "local clients are not allowed", http.StatusForbidden)
 			return
 		}
 		mux.ServeHTTP(w, r)
