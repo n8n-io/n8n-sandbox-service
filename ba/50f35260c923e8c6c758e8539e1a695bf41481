@@ -1,0 +1,22 @@
+docs/API.md
+  h_8fb27e0cdf6d1e 914
+docs/architecture.md
+  h_8fb27e0cdf6d1e 167,210
+docs/configuration.md
+  h_8fb27e0cdf6d1e 41,91
+docs/limits.md
+  h_8fb27e0cdf6d1e 14,41
+internal/runner/middleware_limits_test.go
+  h_8fb27e0cdf6d1e 126,146-147
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ba50f35260c923e8c6c758e8539e1a695bf41481",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
