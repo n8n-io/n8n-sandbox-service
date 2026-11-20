@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
@@ -16,7 +17,11 @@ import (
 	"time"
 )
 
-const workerStartupTimeout = 15 * time.Second
+const (
+	workerStartupTimeout = 15 * time.Second
+	// maxControlMessage bounds every control message, including its newline.
+	maxControlMessage = 512 << 10 // 512 KiB
+)
 
 var errWorkerUnavailable = errors.New("runtime unavailable")
 
@@ -27,7 +32,9 @@ var errWorkerUnavailable = errors.New("runtime unavailable")
 //   - "start" (daemon → runtime): run the task staged in Dir, with TaskID and Shared set.
 //   - "done" or "error" (runtime → daemon): the task with TaskID finished; "error" carries Error.
 //
-// The daemon ignores unknown types and stops the runtime on invalid JSON.
+// Every message must fit in maxControlMessage. The runtime cuts error details
+// to fit. The daemon ignores unknown types, and stops the runtime on invalid
+// JSON or a larger message.
 type workerMessage struct {
 	Type   string          `json:"type"`
 	TaskID string          `json:"taskId,omitempty"`
@@ -115,11 +122,13 @@ func newControlSocket() (net.Conn, *os.File, error) {
 // readControl receives readiness and task results until the control connection fails or closes.
 func (w *worker) readControl() {
 	scanner := bufio.NewScanner(w.conn)
-	scanner.Buffer(make([]byte, 4096), 1<<20) // 1 MiB control message limit
+	scanner.Buffer(make([]byte, 4096), maxControlMessage)
 	ready := false
+	var stopErr error
 	for scanner.Scan() {
 		var msg workerMessage
-		if json.Unmarshal(scanner.Bytes(), &msg) != nil {
+		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
+			stopErr = fmt.Errorf("invalid control message: %w", err)
 			break
 		}
 		switch msg.Type {
@@ -138,6 +147,15 @@ func (w *worker) readControl() {
 			}
 			w.mu.Unlock()
 		}
+	}
+	if err := scanner.Err(); errors.Is(err, bufio.ErrTooLong) {
+		stopErr = fmt.Errorf("control message over %d bytes", maxControlMessage)
+	} else if err != nil {
+		stopErr = err
+	}
+	// A read error after kill comes from closing the connection ourselves.
+	if stopErr != nil && !w.isStopped() {
+		slog.Warn("stopping code runtime", "error", stopErr)
 	}
 	w.kill()
 }

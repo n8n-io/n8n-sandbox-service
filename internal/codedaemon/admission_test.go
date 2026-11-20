@@ -38,6 +38,15 @@ func taskRequest(t *testing.T, spec string, files map[string]string) *http.Reque
 	return r
 }
 
+func TestAdmissionAcceptsLongestTaskID(t *testing.T) {
+	d := New(Config{MaxConcurrency: 1})
+	r := taskRequest(t, `{"taskId":"`+strings.Repeat("x", 128)+`"}`, nil)
+	if _, mr := d.admit(httptest.NewRecorder(), r); mr == nil {
+		t.Fatal("spec with the longest task ID was not admitted")
+	}
+	d.releaseLane()
+}
+
 func TestAdmissionRejectsBeforeReadingInputPart(t *testing.T) {
 	d := New(Config{MaxConcurrency: 1})
 	r := taskRequest(t, `{"taskId":"first"}`, nil)
