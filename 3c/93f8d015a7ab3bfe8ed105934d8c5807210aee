@@ -1,0 +1,14 @@
+internal/codedaemon/limits_test.go
+  h_8fb27e0cdf6d1e 57,62
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3c93f8d015a7ab3bfe8ed105934d8c5807210aee",
+  "prompts": {},
+  "humans": {
+    "h_8fb27e0cdf6d1e": {
+      "author": "Tomi Turtiainen <10324676+tomi@users.noreply.github.com>"
+    }
+  }
+}
