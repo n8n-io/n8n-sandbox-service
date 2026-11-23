@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-const maxSpecBytes = 64 << 10 // 64 KiB
+const maxSpecBytes = 1 << 10 // 1 KiB
 
 var taskIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,128}$`)
 

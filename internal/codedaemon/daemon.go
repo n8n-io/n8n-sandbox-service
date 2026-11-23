@@ -22,6 +22,7 @@ type Config struct {
 
 	WorkDir        string   // root for task directories and the runtime's working directory
 	RuntimeCommand []string // executable followed by its arguments, from the runtime registry
+	Limits         Limits   // per-task budgets; non-positive values use defaults
 }
 
 func LoadConfig() (Config, error) {
@@ -33,6 +34,11 @@ func LoadConfig() (Config, error) {
 	if err := envvar.IntBetween("CODE_DAEMON_MAX_CONCURRENCY", &cfg.MaxConcurrency, 1, 32); err != nil {
 		return Config{}, err
 	}
+	limits, err := loadLimits()
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.Limits = limits
 	return cfg, nil
 }
 
@@ -51,6 +57,7 @@ type Daemon struct {
 }
 
 func New(cfg Config) *Daemon {
+	cfg.Limits = cfg.Limits.withDefaults()
 	return &Daemon{cfg: cfg, lanes: make(chan struct{}, max(1, cfg.MaxConcurrency)), dispatchedByTaskID: make(map[string]bool)}
 }
 

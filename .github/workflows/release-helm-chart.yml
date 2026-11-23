@@ -26,7 +26,7 @@ jobs:
           version: '3.17.0'
 
       - name: Lint chart
-        run: helm lint charts/n8n-sandbox-service --set auth.existingSecret=n8n-sandbox-auth
+        run: helm lint charts/n8n-sandbox-service --set auth.existingSecret=n8n-sandbox-auth --set runner.config.capacityTotal=100
 
       - name: Log in to GHCR
         run: |
