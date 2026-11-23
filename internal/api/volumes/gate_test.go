@@ -65,6 +65,7 @@ func TestTarGateRefusesATarBeforeItsEnd(t *testing.T) {
 		"path out of tree": {makeTar(t, file("../secret-name", "x")), ErrInvalidTar},
 		"through a link":   {makeTar(t, link("dir", "elsewhere"), file("dir/secret-name", "x")), ErrInvalidTar},
 		"no entries":       {makeTar(t), ErrInvalidTar},
+		"only metadata":    {makeTar(t, tarEntry{typeflag: tar.TypeXGlobalHeader, body: "secret-name"}), ErrInvalidTar},
 		"not a tar":        {[]byte(strings.Repeat("secret-name ", 200)), ErrInvalidTar},
 		"too many entries": {makeTar(t, tooMany...), ErrTooLarge},
 		"too much content": {makeTar(t, file("secret-name", strings.Repeat("x", 1<<14+1))), ErrTooLarge},

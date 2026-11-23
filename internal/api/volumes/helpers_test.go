@@ -3,6 +3,7 @@ package volumes
 import (
 	"archive/tar"
 	"bytes"
+	"cmp"
 	"compress/gzip"
 	"errors"
 	"io"
@@ -18,6 +19,8 @@ type tarEntry struct {
 	typeflag byte
 	body     string
 	linkname string
+	// mode is 0o644 when 0.
+	mode int64
 }
 
 func dir(name string) tarEntry        { return tarEntry{name: name, typeflag: tar.TypeDir} }
@@ -31,9 +34,13 @@ func makeTar(t *testing.T, entries ...tarEntry) []byte {
 	var buf bytes.Buffer
 	writer := tar.NewWriter(&buf)
 	for _, entry := range entries {
-		header := &tar.Header{Name: entry.name, Typeflag: entry.typeflag, Mode: 0o644, Size: int64(len(entry.body)), Linkname: entry.linkname}
+		header := &tar.Header{Name: entry.name, Typeflag: entry.typeflag, Mode: cmp.Or(entry.mode, 0o644), Size: int64(len(entry.body)), Linkname: entry.linkname}
 		if entry.typeflag != tar.TypeReg {
 			header.Size = 0
+		}
+		if entry.typeflag == tar.TypeXGlobalHeader {
+			// Metadata for the whole archive, its body as a pax comment.
+			header = &tar.Header{Typeflag: entry.typeflag, PAXRecords: map[string]string{"comment": entry.body}}
 		}
 		if err := writer.WriteHeader(header); err != nil {
 			t.Fatal(err)
@@ -68,7 +75,7 @@ func validTar(t *testing.T) []byte {
 	return makeTar(t,
 		file("docs/guide/readme.md", "read me\n"),
 		dir("bin"),
-		file("bin/run.sh", "#!/bin/sh\n"),
+		tarEntry{name: "bin/run.sh", typeflag: tar.TypeReg, body: "#!/bin/sh\n", mode: 0o755},
 		link("bin/readme", "../docs/guide/readme.md"),
 	)
 }
@@ -103,6 +110,9 @@ func (reader *chunkedReader) Read(buf []byte) (int, error) {
 		}
 	}
 	end := min(reader.read+reader.piece, len(reader.data), reader.read+len(buf))
+	if reader.failAt > 0 {
+		end = min(end, reader.failAt)
+	}
 	copied := copy(buf, reader.data[reader.read:end])
 	reader.read += copied
 	return copied, nil

@@ -38,7 +38,7 @@ func newTarGate(body io.Reader, policy safetar.Policy) *tarGate {
 	gate := &tarGate{body: body, pipeWriter: pipeWriter, results: make(chan validation, 1)}
 	go func() {
 		stats, err := safetar.Validate(pipeReader, policy)
-		if err == nil && stats.Entries == 0 {
+		if err == nil && stats.Entries == stats.GlobalHeaders {
 			err = errTarEmpty
 		}
 		// Ends a write waiting on a validator that stopped early.
