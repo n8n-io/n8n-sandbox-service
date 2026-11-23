@@ -208,15 +208,12 @@ auth:
     apiKeys: api-keys
     provisionerKeys: provisioner-api-keys
     scalerKeys: scaler-api-keys
-    volumePublisherKeys: volume-publisher-api-keys
     runnerRegistrationToken: runner-registration-token
     runnerApiKey: runner-api-key
     runnerApiKeys: runner-api-keys
 ```
 
 `provisionerKeys` is optional: the API reads it as `SANDBOX_API_PROVISIONER_KEYS` with `secretKeyRef.optional: true`, so a Secret without that key runs with no provisioner keys. When it is set, `api.config.defaultMaxSandboxes` must be above `0` or the API refuses to start. `scalerKeys` (`SANDBOX_API_SCALER_KEYS`) is optional the same way.
-
-`volumePublisherKeys` (`SANDBOX_API_VOLUME_PUBLISHER_KEYS`, for publishing [shared volumes](../../docs/API.md#shared-volumes)) is empty by default, and the API then gets no volume publisher keys. Set it to a key of the Secret, for example `volume-publisher-api-keys`, to pass them. Shared volumes also need a volume store: `api.config.volumeStore=local`, or `SANDBOX_API_VOLUME_STORE=remote` through `api.extraEnv` (see [Volume Store](#volume-store)). The chart refuses a volume publisher Secret key that another `auth.secretKeys` entry also names. A publish uploads a tar of up to 4 GiB in one request, so publish through the API Service from inside the cluster rather than through the ingress: an ingress that buffers request bodies (nginx does unless `proxy-request-buffering` is off) or caps their size or duration gets in the way.
 
 If `auth.existingSecret` is empty, the chart creates an opaque Secret from `auth.generated`:
 
@@ -227,7 +224,6 @@ auth:
     apiKeys: replace-with-random-api-key
     provisionerKeys: "" # optional; empty leaves the key out
     scalerKeys: "" # optional; empty leaves the key out
-    volumePublisherKeys: "" # optional; needs auth.secretKeys.volumePublisherKeys
     runnerRegistrationToken: replace-with-random-registration-token
     runnerApiKey: replace-with-random-runner-api-key
     runnerApiKeys: replace-with-random-runner-api-key
@@ -235,7 +231,7 @@ auth:
 
 The chart fails rendering when any required generated auth value is empty or `changeme`. Do not expose the API with placeholder credentials.
 
-The API uses `apiKeys`, `provisionerKeys`, `scalerKeys`, `volumePublisherKeys`, `runnerRegistrationToken`, and `runnerApiKey`. The runner uses `runnerApiKeys` and `runnerRegistrationToken`.
+The API uses `apiKeys`, `provisionerKeys`, `scalerKeys`, `runnerRegistrationToken`, and `runnerApiKey`. The runner uses `runnerApiKeys` and `runnerRegistrationToken`.
 
 ## TLS Secrets
 

@@ -494,40 +494,6 @@ render "${generated[@]}" --set auth.generated.scalerKeys=scaler-secret \
 must_fail "auth.generated.scalerKeys must not be a placeholder" \
 	"${generated[@]}" --set auth.generated.scalerKeys=changeme
 
-echo "==> volume publisher keys reach the API only when their Secret key is named"
-if grep 'SANDBOX_API_VOLUME_PUBLISHER_KEYS' >/dev/null <<<"$api"; then
-	echo "the default render must not pass volume publisher keys" >&2
-	exit 1
-fi
-null_volume_publisher_api=$(render --set auth.secretKeys.volumePublisherKeys=null --show-only templates/api-deployment.yaml)
-if grep 'SANDBOX_API_VOLUME_PUBLISHER_KEYS' >/dev/null <<<"$null_volume_publisher_api"; then
-	echo "a null auth.secretKeys.volumePublisherKeys must not pass volume publisher keys" >&2
-	exit 1
-fi
-volume_publisher_api=$(render --set auth.secretKeys.volumePublisherKeys=volume-publisher-api-keys --show-only templates/api-deployment.yaml)
-volume_publisher_env=$(awk '/name: SANDBOX_API_VOLUME_PUBLISHER_KEYS/{f=1; next} f && /- name:/{exit} f' <<<"$volume_publisher_api")
-grep 'key: volume-publisher-api-keys' >/dev/null <<<"$volume_publisher_env"
-grep 'optional: true' >/dev/null <<<"$volume_publisher_env"
-render "${generated[@]}" --set auth.secretKeys.volumePublisherKeys=volume-publisher-api-keys \
-	--set auth.generated.volumePublisherKeys=volume-publisher-secret \
-	--show-only templates/secrets.yaml | grep 'volume-publisher-api-keys: "volume-publisher-secret"' >/dev/null
-for blank in "" "  "; do
-	secret=$(render "${generated[@]}" --set auth.secretKeys.volumePublisherKeys=volume-publisher-api-keys \
-		--set auth.generated.volumePublisherKeys="$blank" --show-only templates/secrets.yaml)
-	if grep 'volume-publisher-api-keys' >/dev/null <<<"$secret"; then
-		echo "a blank auth.generated.volumePublisherKeys must not render a Secret key" >&2
-		exit 1
-	fi
-done
-must_fail "auth.generated.volumePublisherKeys must not be a placeholder" \
-	"${generated[@]}" --set auth.secretKeys.volumePublisherKeys=volume-publisher-api-keys --set auth.generated.volumePublisherKeys=changeme
-must_fail "auth.generated.volumePublisherKeys needs auth.secretKeys.volumePublisherKeys" \
-	"${generated[@]}" --set auth.generated.volumePublisherKeys=volume-publisher-secret
-must_fail "auth.secretKeys.volumePublisherKeys must not name the Secret key auth.secretKeys.runnerApiKey names" \
-	--set auth.secretKeys.volumePublisherKeys=runner-api-key
-must_fail "auth.secretKeys.volumePublisherKeys must not name the Secret key auth.secretKeys.apiKeys names" \
-	"${generated[@]}" --set auth.secretKeys.volumePublisherKeys=api-keys --set auth.generated.volumePublisherKeys=volume-publisher-secret
-
 echo "==> API autoscaling is off by default"
 default_api=$(render --show-only templates/api-deployment.yaml)
 grep -q 'replicas: 1' <<<"$default_api"

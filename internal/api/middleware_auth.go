@@ -22,20 +22,8 @@ const (
 	// docs/security-model.md, "Provisioner keys".
 	roleProvisioner authRole = "provisioner"
 	roleScaler      authRole = "scaler"
-	// roleVolumePublisher: shared volumes only. See docs/security-model.md,
-	// "Volume publisher keys".
-	roleVolumePublisher authRole = "volume_publisher"
-	roleTenant          authRole = "tenant"
+	roleTenant      authRole = "tenant"
 )
-
-// volumePublisherMayCall reports whether a volume publisher key may call
-// urlPath: the shared volume routes, on a clean path.
-func volumePublisherMayCall(urlPath string) bool {
-	if path.Clean(urlPath) != urlPath {
-		return false
-	}
-	return urlPath == sharedVolumesPath || strings.HasPrefix(urlPath, sharedVolumesPath+"/")
-}
 
 // provisionerPathPrefix confines provisioner keys; the handlers under it other
 // than tenant create, limit update and delete require admin.
@@ -97,10 +85,10 @@ func apiKeyPrefix(plaintext string) string {
 }
 
 // AuthMiddleware checks X-Api-Key against env admin keys, then env provisioner
-// keys, then env scaler keys, then env volume publisher keys, then DB-backed
-// tenant keys, whose lookups keyCache remembers. GET and HEAD on /healthz and
-// /metrics are always allowed through.
-func AuthMiddleware(adminKeys, provisionerKeys, scalerKeys, volumePublisherKeys map[string]struct{}, s apiKeyStore, keyCache *apiKeyCache) func(http.Handler) http.Handler {
+// keys, then env scaler keys, then DB-backed tenant keys, whose lookups
+// keyCache remembers. GET and HEAD on /healthz and /metrics are always allowed
+// through.
+func AuthMiddleware(adminKeys, provisionerKeys, scalerKeys map[string]struct{}, s apiKeyStore, keyCache *apiKeyCache) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if publicPaths.Public(r) {
@@ -134,15 +122,6 @@ func AuthMiddleware(adminKeys, provisionerKeys, scalerKeys, volumePublisherKeys 
 					return
 				}
 				next.ServeHTTP(w, r.WithContext(withAuthIdentity(r.Context(), authIdentity{Role: roleScaler})))
-				return
-			}
-
-			if constantTimeContains(volumePublisherKeys, key) {
-				if !volumePublisherMayCall(r.URL.Path) {
-					writeError(w, http.StatusForbidden, "volume publisher API key may only manage shared volumes")
-					return
-				}
-				next.ServeHTTP(w, r.WithContext(withAuthIdentity(r.Context(), authIdentity{Role: roleVolumePublisher})))
 				return
 			}
 
