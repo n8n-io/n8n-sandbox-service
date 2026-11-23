@@ -16,6 +16,12 @@ helm upgrade --install n8n-sandbox-service ./charts/n8n-sandbox-service \
   --create-namespace
 ```
 
+## Runner Capacity
+
+`runner.config.capacityTotal` is how many sandboxes the in-cluster Docker runner takes. The runner reports its sandbox count in a heartbeat every 10 seconds, and the API stops sending it new sandboxes once that count reaches `capacityTotal`. The runner itself does not refuse a create, so a burst inside those 10 seconds can go past it.
+
+The default of `1000` is a placeholder, not sized for any node: set it yourself. With `dataPlane.mode=in-cluster` the render fails when it is not a whole number. `0` means unlimited, and an empty value falls back to the runner default of `1000`. A value above `2147483647` renders, but the runner then fails at startup, because it reads the value as a 32-bit integer. Sandboxes run inside the runner pod and share its memory limit. When `runner.resources.limits.memory` is set, size it as that limit divided by `runner.config.defaultMemoryMb`. Otherwise, use the node's memory, leaving room for everything else on the node. Stopped sandboxes count too. The Firecracker runner derives its own count from host memory when `SANDBOX_RUNNER_CAPACITY_TOTAL` is unset ([Firecracker slots](../../docs/configuration.md#firecracker-slots)).
+
 ## Data Plane Mode
 
 `dataPlane.mode` selects where the data plane runs:

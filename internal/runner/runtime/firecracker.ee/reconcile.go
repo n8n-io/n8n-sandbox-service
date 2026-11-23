@@ -6,10 +6,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
-	fcnetwork "github.com/n8n-io/sandbox-service/internal/runner/runtime/firecracker.ee/network"
 	"github.com/n8n-io/sandbox-service/internal/shellquote"
 )
 
@@ -69,19 +67,54 @@ func (r *Runtime) reconcileJailerState(ctx context.Context) error {
 }
 
 func (r *Runtime) reconcileNetworkNamespaces(ctx context.Context) error {
-	script := startupNetworkCleanupScript(len(r.slots))
+	script := startupNetworkCleanupScript()
 	return r.deps.run(ctx, "sudo", "/bin/sh", "-c", script)
 }
 
-func startupNetworkCleanupScript(capacity int) string {
-	var b strings.Builder
-	b.WriteString("set -eu\n")
-	for slot := range capacity {
-		b.WriteString(strings.TrimSpace(fcnetwork.CleanupScript(slot)))
-		b.WriteByte('\n')
-	}
-	b.WriteString("ip netns list | awk '{print $1}' | grep '^fc-sb-' | xargs -r -n1 ip netns delete 2>/dev/null || true\n")
-	return b.String()
+// startupNetworkCleanupScript deletes every slot netns and host veth by name,
+// not by slot number. One line per slot would make the script too long for one
+// shell argument on a host with thousands of slots, and names also catch slots
+// left over from an earlier, larger slot count. Deleting a netns removes its
+// veth pair once nothing holds the namespace; the veth line catches a host end
+// whose namespace outlived `ip netns delete` because a process still held it.
+func startupNetworkCleanupScript() string {
+	return "set -eu\n" +
+		"ip netns list | awk '{print $1}' | grep '^fc-sb-' | xargs -r -n1 ip netns delete 2>/dev/null || true\n" +
+		"ip -o link show | awk -F': ' '{print $2}' | cut -d@ -f1 | grep '^fc-veth-' | xargs -r -n1 ip link delete 2>/dev/null || true\n"
+}
+
+// reapInterruptedSnapshotBuilds kills a golden-snapshot microVM left by a
+// runner that exited during the build, and removes that build's jail. New has
+// not run yet on that path, so its reconcile cannot be what cleans it up, and
+// a start that is stopped in the same place never reaches New either.
+func reapInterruptedSnapshotBuilds(ctx context.Context, cfg Config) error {
+	return runCommand(ctx, "sudo", "/bin/sh", "-c", snapshotBuildReapScript(cfg.JailerBaseDir))
+}
+
+// snapshotBuildReapScript kills fc-snapshot-* netns holders and lazy-unmounts
+// the snapshot-* jails under the jailer root before removing those directories.
+// Removing a jail fails the script when it still cannot be removed, so startup
+// stops instead of continuing with those mounts in place.
+func snapshotBuildReapScript(jailerBase string) string {
+	root := shellquote.Quote(filepath.Join(jailerBase, "firecracker"))
+	// find -exec ... {} +, which fails when the command fails. Neither {} \; nor a
+	// pipe into while would: find ignores the result of {} \;, and /bin/sh has no
+	// pipefail. Startup would then go on with the mounts still there.
+	// GNU find refuses {} + when {} appears anywhere else in its arguments, even
+	// inside the quoted script, so the inner unmount uses xargs, not find -exec.
+	return "set -eu\n" +
+		"for name in $(ip netns list | awk '{print $1}' | grep '^fc-snapshot-' || true); do\n" +
+		"  ip netns pids \"$name\" | xargs -r kill -KILL || true\n" +
+		"  ip netns delete \"$name\" || true\n" +
+		"done\n" +
+		"if [ -d " + root + " ]; then\n" +
+		"  find " + root + " -mindepth 1 -maxdepth 1 -type d -name 'snapshot-*' -exec sh -c 'set -eu\n" +
+		"for jail do\n" +
+		"  find \"$jail\" -mindepth 1 -print0 | xargs -0 -r -n1 umount -l || true\n" +
+		"  rm -rf \"$jail\"\n" +
+		"done\n" +
+		"' sh {} +\n" +
+		"fi\n"
 }
 
 func reconcileContext() (context.Context, context.CancelFunc) {

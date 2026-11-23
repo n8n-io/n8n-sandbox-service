@@ -2,10 +2,11 @@
 # Smoke test against a deployed or local sandbox API.
 #
 # Uses SANDBOX_API_KEY as an admin key to mint a tenant API key, then runs
-# create (ephemeral) → exec → resolv.conf → DNS → HTTPS → file write/read → delete
-# with that tenant key (not the admin key). It then creates one sandbox with
-# egress "public" (same network checks) and one with egress "none" (direct IP,
-# DNS and HTTPS must all be blocked while exec still works).
+# create (ephemeral) → exec → guest clock → resolv.conf → DNS → HTTPS →
+# file write/read → bulk upload → delete with that tenant key (not the admin
+# key). It then creates one sandbox with egress "public" (same guest checks) and
+# one with egress "none" (direct IP, DNS and HTTPS must all be blocked while exec
+# still works).
 #
 # Environment:
 #   SANDBOX_API_BASE       — API base URL (required unless set in env file or
@@ -55,8 +56,12 @@ ADMIN_KEY="${SANDBOX_API_KEY:-}"
 KEY=""
 TENANT_ID=""
 EXEC_TIMEOUT_MS="${SMOKE_EXEC_TIMEOUT_MS:-60000}"
+# A guest whose clock a snapshot restore did not advance is off by the
+# snapshot's age, hours rather than seconds.
+CLOCK_TOLERANCE_S=30
 SMOKE_FILE_PATH="/tmp/n8n-sandbox-smoke.txt"
 SMOKE_FILE_CONTENT="smoke-$(date -u +%Y%m%dT%H%M%SZ)"
+SMOKE_ARCHIVE_DIR="/tmp/n8n-sandbox-smoke-archive"
 
 PORT_FORWARD="${SMOKE_PORT_FORWARD:-0}"
 if [ -z "${BASE}" ] && [ "${PORT_FORWARD}" != "1" ]; then
@@ -117,6 +122,7 @@ fi
 sid=""
 sid2=""
 tmp_files=""
+archive_src=""
 pf_pid=""
 pf_service=""
 pf_error=""
@@ -174,6 +180,9 @@ cleanup() {
 	if [ -n "${tmp_files}" ]; then
 		# shellcheck disable=SC2086
 		rm -f ${tmp_files}
+	fi
+	if [ -n "${archive_src}" ]; then
+		rm -rf "${archive_src}"
 	fi
 }
 trap cleanup EXIT
@@ -408,11 +417,104 @@ read_file() {
 	api_curl "${BASE}/sandboxes/${target_sid}/files/content?path=${path}"
 }
 
+# A Firecracker guest restored from a snapshot keeps the snapshot's wall clock
+# unless KVM advances it, which depends on the runner host. The guest's time has
+# to fall inside the local window around the exec that reads it.
+assert_guest_clock() {
+	local target_sid="$1"
+	local label="${2:-}guest clock"
+	local out before="" after="" guest="" skew=0 attempt=0
+
+	# Not mktemp_track: that runs in a subshell and cannot record the file.
+	out="$(mktemp)"
+	tmp_files="${tmp_files} ${out}"
+	while [ "${attempt}" -lt 5 ]; do
+		attempt=$((attempt + 1))
+		before="$(date -u +%s)"
+		if api_json -N -X POST "${BASE}/sandboxes/${target_sid}/executions" \
+			-d "{\"command\":\"date -u +%s\",\"timeout_ms\":${EXEC_TIMEOUT_MS}}" >"${out}" &&
+			[ "$(trim_output "$(exec_exit_code "${out}" 2>/dev/null)")" = "0" ]; then
+			after="$(date -u +%s)"
+			guest="$(trim_output "$(jq -rs 'map(select(.type=="stdout")) | map(.data) | join("")' "${out}")")"
+			break
+		fi
+		sleep 2
+	done
+
+	print_exec_verbose "${out}"
+
+	if [ -z "${after}" ]; then
+		fail "${label}: exec failed after retries"
+	fi
+	case "${guest}" in
+	'' | *[!0-9]*) fail "${label}: guest printed ${guest:-nothing}, want Unix seconds" ;;
+	esac
+	if [ "${guest}" -lt "${before}" ]; then
+		skew=$((guest - before))
+	elif [ "${guest}" -gt "${after}" ]; then
+		skew=$((guest - after))
+	fi
+	if [ "${skew#-}" -gt "${CLOCK_TOLERANCE_S}" ]; then
+		fail "${label}: guest is off the local clock by ${skew}s, more than ${CLOCK_TOLERANCE_S}s"
+	fi
+	printf '    %s: ok (off by %ss)\n' "${label}" "${skew}"
+}
+
+# Uploads two files as one gzipped tar, one of them in directories the archive
+# does not list, and reads both back.
+assert_archive_upload() {
+	local target_sid="$1"
+	local dest="$2"
+	local names="top.txt nested/dir/file.txt"
+	local name archive resp http_code got want downloaded want_files=0 want_bytes=0
+
+	archive="$(mktemp)"
+	resp="$(mktemp)"
+	tmp_files="${tmp_files} ${archive} ${resp}"
+	archive_src="$(mktemp -d)"
+	mkdir -p "${archive_src}/nested/dir"
+	for name in ${names}; do
+		printf '%s' "${SMOKE_FILE_CONTENT} ${name}" >"${archive_src}/${name}"
+		want_files=$((want_files + 1))
+		want_bytes=$((want_bytes + $(wc -c <"${archive_src}/${name}")))
+	done
+	# COPYFILE_DISABLE keeps macOS tar from adding a ._ entry per file.
+	# shellcheck disable=SC2086
+	COPYFILE_DISABLE=1 tar -czf "${archive}" -C "${archive_src}" ${names}
+	rm -rf "${archive_src}"
+	archive_src=""
+
+	http_code="$(trim_output "$(
+		api_curl -o "${resp}" -w "%{http_code}" -X POST \
+			"${BASE}/sandboxes/${target_sid}/files/archive?path=${dest}" \
+			-H "Content-Type: application/gzip" \
+			--data-binary "@${archive}"
+	)")"
+	if [ "${http_code}" != "200" ]; then
+		fail "bulk upload: HTTP ${http_code}, want 200"
+	fi
+	got="$(jq -c '{files, bytes}' "${resp}" 2>/dev/null || true)"
+	want="{\"files\":${want_files},\"bytes\":${want_bytes}}"
+	if [ "${got}" != "${want}" ]; then
+		fail "bulk upload: response ${got:-<not JSON>}, want ${want}"
+	fi
+
+	for name in ${names}; do
+		downloaded="$(read_file "${dest}/${name}" "${target_sid}")" ||
+			fail "bulk upload: read ${dest}/${name} failed"
+		if [ "${downloaded}" != "${SMOKE_FILE_CONTENT} ${name}" ]; then
+			fail "bulk upload: ${dest}/${name} read back as ${downloaded:-<empty>}"
+		fi
+	done
+	printf '    bulk upload: ok (%s files, %s bytes)\n' "${want_files}" "${want_bytes}"
+}
+
 run_core_guest_checks() {
 	local target_sid="$1"
 	local prefix="${2:-}"
 
 	assert_exec "${prefix}warm-up" "true" 0 "${target_sid}"
+	assert_guest_clock "${target_sid}" "${prefix}"
 	assert_exec "${prefix}exec echo" "echo hello world" 0 "${target_sid}"
 	assert_exec "${prefix}resolv.conf" "grep -E '^nameserver ' /etc/resolv.conf" 0 "${target_sid}"
 	assert_exec "${prefix}dns resolve" "getent ahostsv4 example.com | head -1 | awk '{print \$1}'" 0 "${target_sid}"
@@ -469,6 +571,9 @@ fi
 printf '    file write/read: ok\n'
 
 assert_exec "exec reads uploaded file" "cat ${SMOKE_FILE_PATH}"
+
+step "bulk upload (files/archive)"
+assert_archive_upload "${sid}" "${SMOKE_ARCHIVE_DIR}"
 
 delete_sandbox "${sid}" "delete sandbox"
 

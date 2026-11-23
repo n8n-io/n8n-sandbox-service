@@ -125,7 +125,7 @@ jobs:
         run: helm version
 
       - name: Lint chart
-        run: helm lint charts/n8n-sandbox-service --set auth.existingSecret=n8n-sandbox-auth
+        run: helm lint charts/n8n-sandbox-service --set auth.existingSecret=n8n-sandbox-auth --set runner.config.capacityTotal=100
 
       - name: Run chart render tests
         run: charts/n8n-sandbox-service/render-tests.sh

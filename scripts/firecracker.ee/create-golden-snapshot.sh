@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Builds the golden snapshot (snapshot_mem, snapshot_state, boot.json) on a Firecracker
-# host. Run by the runner at admission (SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT)
-# or by hand as root.
+# host. The runner runs it before listening when the slot count needs boot.json, and
+# again from Prepare if a snapshot file is missing
+# (SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT). It can also be run by hand as root.
 set -euo pipefail
 
 KERNEL=""

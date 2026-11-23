@@ -141,6 +141,30 @@ func defaultConfig() Config {
 
 // LoadConfig reads Firecracker runtime configuration from environment variables.
 func LoadConfig(capacityTotal int32) (Config, error) {
+	cfg, err := loadConfigWithoutCapacity()
+	if err != nil {
+		return Config{}, err
+	}
+	if err := validateCapacity(cfg, capacityTotal); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+// loadConfigWithoutCapacity is LoadConfig for a slot count ResolveConfig works out from host memory.
+func loadConfigWithoutCapacity() (Config, error) {
+	cfg, err := parseConfig()
+	if err != nil {
+		return Config{}, err
+	}
+	if err := validateConfig(cfg); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+// parseConfig reads the environment without validating it.
+func parseConfig() (Config, error) {
 	cfg := defaultConfig()
 
 	envvar.String("SANDBOX_RUNNER_FIRECRACKER_JAILER_BIN", &cfg.JailerBin)
@@ -180,13 +204,10 @@ func LoadConfig(capacityTotal int32) (Config, error) {
 		return Config{}, err
 	}
 
-	if err := validateConfig(cfg, capacityTotal); err != nil {
-		return Config{}, err
-	}
 	return cfg, nil
 }
 
-func validateConfig(cfg Config, capacityTotal int32) error {
+func validateConfig(cfg Config) error {
 	requiredAbs := map[string]string{
 		"SANDBOX_RUNNER_FIRECRACKER_JAILER_BIN":          cfg.JailerBin,
 		"SANDBOX_RUNNER_FIRECRACKER_BIN":                 cfg.FirecrackerBin,
@@ -215,15 +236,6 @@ func validateConfig(cfg Config, capacityTotal int32) error {
 	if cfg.ProxyPortStart <= 0 || cfg.ProxyPortStart > 65535 {
 		return fmt.Errorf("SANDBOX_RUNNER_FIRECRACKER_PROXY_PORT_START must be between 1 and 65535, got %d", cfg.ProxyPortStart)
 	}
-	if capacityTotal <= 0 {
-		return fmt.Errorf("SANDBOX_RUNNER_CAPACITY_TOTAL must be positive for firecracker backend")
-	}
-	if int64(cfg.ProxyPortStart)+int64(capacityTotal)-1 > 65535 {
-		return fmt.Errorf("firecracker proxy port range starting at %d exceeds 65535 for capacity %d", cfg.ProxyPortStart, capacityTotal)
-	}
-	if int64(capacityTotal) > fcnetwork.MaxSlots {
-		return fmt.Errorf("SANDBOX_RUNNER_CAPACITY_TOTAL %d exceeds the %d slots the firecracker uplink addressing covers", capacityTotal, fcnetwork.MaxSlots)
-	}
 	if cfg.ManifestPath != "" && !strings.HasPrefix(cfg.ManifestPath, "/") {
 		return fmt.Errorf("SANDBOX_RUNNER_FIRECRACKER_MANIFEST_PATH must be an absolute path, got %q", cfg.ManifestPath)
 	}
@@ -236,6 +248,20 @@ func validateConfig(cfg Config, capacityTotal int32) error {
 	}
 	if cfg.DaemonBin != "" && !strings.HasPrefix(cfg.DaemonBin, "/") {
 		return fmt.Errorf("SANDBOX_RUNNER_FIRECRACKER_DAEMON_BIN must be an absolute path, got %q", cfg.DaemonBin)
+	}
+	return nil
+}
+
+// validateCapacity checks a set slot count against the structural ceilings.
+func validateCapacity(cfg Config, capacityTotal int32) error {
+	if capacityTotal <= 0 {
+		return fmt.Errorf("SANDBOX_RUNNER_CAPACITY_TOTAL must be positive for firecracker backend")
+	}
+	if int64(cfg.ProxyPortStart)+int64(capacityTotal)-1 > 65535 {
+		return fmt.Errorf("firecracker proxy port range starting at %d exceeds 65535 for capacity %d", cfg.ProxyPortStart, capacityTotal)
+	}
+	if int64(capacityTotal) > fcnetwork.MaxSlots {
+		return fmt.Errorf("SANDBOX_RUNNER_CAPACITY_TOTAL %d exceeds the %d slots the firecracker uplink addressing covers", capacityTotal, fcnetwork.MaxSlots)
 	}
 	return nil
 }

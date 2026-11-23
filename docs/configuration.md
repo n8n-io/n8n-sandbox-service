@@ -82,7 +82,7 @@ The idle sweeper waits `SANDBOX_API_ORPHAN_REAP_BUFFER` (default `5m`) after a r
 | `SANDBOX_RUNNER_REGISTRATION_TOKEN` | *(required)* | Must match `SANDBOX_API_RUNNER_REGISTRATION_TOKEN` on the API |
 | `SANDBOX_RUNNER_HTTP_BASE_URL` | *(required)* | Base URL the API uses to reach this runner; its host must match a SAN on the runner's control cert (e.g. `https://runner:8080`). An `http://` value is upgraded to `https://` with a warning, since the listener only serves TLS; the API rejects any registration whose base URL is not `https://` |
 | `SANDBOX_RUNNER_ID` | hostname | Stable runner id sent to the API |
-| `SANDBOX_RUNNER_CAPACITY_TOTAL` | `1000` | Reported capacity for placement (`0` = unlimited) |
+| `SANDBOX_RUNNER_CAPACITY_TOTAL` | Docker `1000`; Firecracker derived | Reported capacity for placement (`0` = unlimited on Docker; Firecracker needs a positive value). Docker does not derive it: size it from the host's memory and each sandbox's memory limit. On Firecracker a set value may only lower the derived count ([slots](#firecracker-slots)) |
 | `SANDBOX_RUNNER_DATA_DIR` | `/var/sandboxes` | Per-sandbox data directory (Firecracker: see [Data volume](../internal/runner/runtime/firecracker.ee/README.md#data-volume)) |
 | `SANDBOX_RUNNER_VOLUME_CACHE_DIR` | `<data dir>/volume-cache` | Where the runner caches downloaded volume objects. Wiped at startup. Must be an absolute path, and not `/`, the data dir or a directory that contains it. The runner creates it, but not its parent |
 | `SANDBOX_RUNNER_VOLUME_CACHE_MAX_BYTES` | `21474836480` | Volume cache budget (20 GiB): allocated bytes of cached objects plus the room fetches in progress set aside: an object's size, and for a `tar` also the most its unpacked files can take, since the tar stays on disk until they are complete. An evicted object counts until its files are removed. On the data volume, Firecracker creates and volume builds count the budget less the objects it has finished downloading as taken ([data volume](../internal/runner/runtime/firecracker.ee/README.md#data-volume)). A download starts only if it fits the budget and leaves 5% of the disk, and of its inodes, free, evicting unused objects least recently used first. If objects in use and downloads in progress still leave no room, or the disk fills during the download, it is refused like a full runner; an object larger than the whole budget fails outright. 20 GiB holds several multi-GB images and leaves most of a data volume of a few hundred GiB to sandboxes; lower it on small disks |
@@ -126,7 +126,17 @@ These variables are parsed by the Firecracker runner entrypoint.
 
 #### Firecracker slots
 
-A Firecracker slot is one schedulable VM position on a runner. The runner creates slots from `SANDBOX_RUNNER_CAPACITY_TOTAL`; if capacity is `100`, the runner has slots `0` through `99`. A sandbox occupies one slot from create until stop/delete.
+A Firecracker slot is one schedulable VM position on a runner. The runner creates one slot per unit of capacity; if capacity is `100`, the runner has slots `0` through `99`. A sandbox occupies one slot from create until stop/delete.
+
+The runner sets the slot count once, at startup, before it listens. The count needs the golden snapshot's `mem_size_mib`, so when `snapshot_mem`, `snapshot_state` or `boot.json` is missing and `SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT` is set, the runner builds the snapshot first. Before building, it runs the checks admission runs before a build (the Firecracker binaries, the template kernel and rootfs, who owns the kernel, and the release manifest) and checks that the create script and daemon binary exist. If any of these fails, the runner exits. A failed build is retried with backoff, from 1 s up to 30 s. A stop during the build stops the runner before it listens, and the create script cleans up after itself; a hard kill is cleaned up on the next start. The runner does not listen or register while it builds, so a new VM shows up in `/admin/runners` only once its snapshot exists; until then its progress is in its logs. With the snapshot missing and no create script, the runner exits. With `SANDBOX_RUNNER_CAPACITY_TOTAL` unset, the count is derived from host memory:
+
+```text
+slots = min(floor((MemTotal - 4 GiB) * ratio / (mem_size_mib + 64 MiB)), proxy ports, 16384)
+```
+
+`MemTotal` comes from `/proc/meminfo`; no cgroup memory limit is read. 4 GiB covers the runner, the OS and the shared snapshot file; 64 MiB is per-VM overhead. `ratio` is `SANDBOX_RUNNER_FIRECRACKER_MEMORY_RATIO` (default `1.0`). A set `SANDBOX_RUNNER_CAPACITY_TOTAL` may only lower the result. A higher value, a bad ratio, `MemTotal` that fits no guest, or a snapshot that does not match the runner's settings (see [boot.json](#golden-snapshot-boot-parameters-bootjson)) stops the runner before it listens. If a snapshot file goes missing while the runner runs, admission rebuilds the snapshot but keeps the slot count; restart the runner to size it from the new snapshot. When the proxy port range or the uplink limit binds, the runner logs it.
+
+The data volume is not part of the slot count yet: a per-sandbox disk size has not been measured. Disk is checked per create instead: a create is refused, and the API tries another runner, when the volume has less than 5% free ([data volume](../internal/runner/runtime/firecracker.ee/README.md#data-volume)).
 
 Slots give the host-side Firecracker resources stable names without exposing those details to the API or clients. For slot `n`, the runtime derives:
 
@@ -154,8 +164,9 @@ Slots give the host-side Firecracker resources stable names without exposing tho
 | `SANDBOX_RUNNER_FIRECRACKER_DAEMON_WAIT_TIMEOUT` | `60s` | Maximum time to wait for guest daemon health after snapshot restore |
 | `SANDBOX_RUNNER_FIRECRACKER_MANIFEST_PATH` | _(empty)_ | Optional absolute path to release `MANIFEST.json` for git_sha / daemon checksum pinning |
 | `SANDBOX_RUNNER_FIRECRACKER_EXPECTED_GIT_SHA` | _(empty)_ | When set, must match `git_sha` in the manifest (requires `MANIFEST_PATH`) |
-| `SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT` | _(empty)_ | Absolute path to `create-golden-snapshot.sh`. When set and any of `snapshot_mem`, `snapshot_state` or `boot.json` is missing, Prepare runs it (mem/state paths must share a directory). Production Firecracker hosts set this so the runner owns host-local snapshot creation. Empty = do not auto-create |
+| `SANDBOX_RUNNER_FIRECRACKER_CREATE_SNAPSHOT_SCRIPT` | _(empty)_ | Absolute path to `create-golden-snapshot.sh`. When set and any of `snapshot_mem`, `snapshot_state` or `boot.json` is missing, the runner runs it before listening, and Prepare runs it again if a file goes missing later (mem/state paths must share a directory). Production Firecracker hosts set this so the runner owns host-local snapshot creation. Empty = do not auto-create |
 | `SANDBOX_RUNNER_FIRECRACKER_DAEMON_BIN` | `/srv/firecracker/bin/sandbox-daemon` | Host path to `sandbox-daemon` used for golden snapshot create and optional manifest checksum |
+| `SANDBOX_RUNNER_FIRECRACKER_MEMORY_RATIO` | `1.0` | Multiplier on the memory-derived slot count; a finite number above 0. Above `1.0` can overcommit host memory, and nothing watches memory pressure |
 | `SANDBOX_RUNNER_FIRECRACKER_VOLUME_BUILD_TIMEOUT` | `5m` | How long a [volume builder](../internal/runner/runtime/firecracker.ee/README.md#volume-builder) microVM may run before the runner ends it and the build fails with `timeout` |
 
 The runner reports healthy only after `Prepare` has verified these assets, created the snapshot if needed, and passed an admission canary — see [the runtime README](../internal/runner/runtime/firecracker.ee/README.md#admission-prepare--ready).
@@ -169,7 +180,7 @@ The runner reports healthy only after `Prepare` has verified these assets, creat
 - `volume_drives`: the read-only drives reserved for volumes ([runtime README](../internal/runner/runtime/firecracker.ee/README.md#volume-drives)). A `schema_version` 1 sidecar predates them and still loads if it lists none.
 - Auto-create passes the runner's `GUEST_IP`, `HOST_TAP_IP_CIDR`, `HOST_TAP_DEVICE_NAME` and `DAEMON_PORT` to the script. When running it by hand, set the same variables. `MEM_MIB`, `VCPUS` and `VOLUME_DRIVES` (default 8, 0–15) are script-owned.
 - With auto-create enabled, `SNAPSHOT_MEM_PATH`/`SNAPSHOT_STATE_PATH` must be the generated files or symlinks to them; an independent copy would keep serving an old snapshot under a `boot.json` describing the new one, and admission rejects that.
-- The three files describe one build. A missing `boot.json` is an incomplete snapshot: with the create script configured, `Prepare` rebuilds the set; otherwise admission fails naming the script and `--out` directory to re-run.
+- The three files describe one build. A missing `boot.json` is an incomplete snapshot. With the create script set, the runner builds the set before it listens, and Prepare builds it again if a file goes missing later. Without the script, the runner exits before it listens.
 
 #### Resource limits
 
@@ -206,6 +217,11 @@ The `code-daemon` runs inside a code sandbox and is reached only by the runner. 
 | `CODE_DAEMON_WORK_DIR` | `/work` | Parent of the task directories and working directory of the runtime. Created with mode `0700` if missing |
 | `CODE_DAEMON_RUNTIMES_FILE` | `/etc/code-runtime/runtimes.json` | Runtime registry, shipped in the sandbox image |
 | `CODE_DAEMON_RUNTIME` | `n8n-js` | Registry entry to run |
+| `CODE_DAEMON_MAX_INPUT_BYTES` | `67108864` | Max total bytes of a task's input files, including task.json and binary files (64 MiB; up to 1 GiB) |
+| `CODE_DAEMON_MAX_OUTPUT_BYTES` | `67108864` | Max total bytes of the output files a task returns (64 MiB; up to 1 GiB) |
+| `CODE_DAEMON_MAX_FILES` | `256` | Max input files and max output files a task returns (up to `4096`) |
+
+Input and output file paths are at most 1024 bytes. A task's input files can create up to 4096 directories. The output limits apply to the files a task returns, found in up to 4096 directories; writes to the output directory are not capped. A task fails if its output directory holds a symlink or another entry that is not a regular file or a directory.
 
 The runtime registry is a JSON object keyed by runtime name. Each entry has a `command`: the executable followed by its arguments. A missing file, invalid JSON, or a missing or empty `command` for the selected runtime prevents startup. For example:
 
@@ -250,6 +266,7 @@ Series exposed today:
 - Runner: `sandbox_container_operations_total{operation,result}`, `sandbox_container_operation_duration_seconds{operation}`, `sandbox_containers_active`, plus `sandbox_guest_deaths_total`, sandbox guests that died on their own, `sandbox_recoveries_total{result}`, attempts to bring one back, and `sandbox_runner_cordoned`, `1` while the runner is cordoned.
 - `sandbox_tls_certificate_expiry_timestamp_seconds{path}`, the expiry of each TLS certificate the process presents, by file (both binaries). See [observability.md](observability.md#tls-certificates).
 - Firecracker runner: `sandbox_lifecycle_step_duration_seconds{operation,step}`, the per-step breakdown of a create, wake or recovery, `sandbox_slots_unwired`, slots whose network namespace is not yet built (zero in steady state), `sandbox_volume_mount_requests_total{result}`, guest volume mount requests by result, and `sandbox_volume_builds_total{result}` with `sandbox_volume_build_duration_seconds`, volume image builds. See [observability.md](observability.md).
+- Both runners, set once at startup: `sandbox_host_memory_bytes`, `sandbox_data_volume_bytes` (size of the filesystem holding the data dir) and `sandbox_capacity_total` (the capacity the runner reports to the API; `0` is unlimited on Docker).
 - Runner volume cache: `sandbox_volume_cache_bytes` (what the budget counts), `sandbox_volume_cache_entries`, `sandbox_volume_cache_pinned_entries` (held by a sandbox, never evicted), `sandbox_volume_cache_fetches_total{result}` (`hit`, `downloaded`, or the failure: `http`, `size`, `digest`, `timeout`, `full`, `io`), `sandbox_volume_cache_download_duration_seconds` (successful downloads), `sandbox_volume_cache_evictions_total`, `sandbox_volume_cache_unpacks_total{result}` (`success`, or the failure: `invalid`, `full`, `timeout`, `io`) and `sandbox_volume_cache_unpack_duration_seconds` (successful unpacks).
 - Runner volumes, both runtimes: `sandbox_volumes_left_out_total{reason}`, optional volumes a create left out.
 - Plus the standard `go_*` and `process_*` collectors.
