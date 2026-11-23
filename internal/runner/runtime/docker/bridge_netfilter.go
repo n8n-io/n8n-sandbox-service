@@ -50,7 +50,7 @@ func checkHostWideBridgeNetfilter(p bridgeNetfilterPaths, ackLoaded bool) (bool,
 	missing := fmt.Errorf("%s does not exist: load the br_netfilter kernel module on the host", p.callIPTables)
 	b, err := os.ReadFile(p.osRelease)
 	if err != nil {
-		return false, fmt.Errorf("%w (read kernel release: %v)", missing, err)
+		return false, fmt.Errorf("%w (read kernel release: %v)", missing, err) //nolint:errorlint // Only missing classifies the error.
 	}
 	release := strings.TrimSpace(string(b))
 	sysctlVisibleInRunner, ok := kernelAtLeast(release, 5, 3)

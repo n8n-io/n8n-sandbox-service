@@ -542,7 +542,7 @@ func TestRefusals(t *testing.T) {
 				if !errors.Is(err, tc.want) {
 					t.Fatalf("expected %v, got %v", tc.want, err)
 				}
-				if tc.want == ErrTooLarge && errors.Is(err, ErrInvalid) {
+				if errors.Is(tc.want, ErrTooLarge) && errors.Is(err, ErrInvalid) {
 					t.Fatalf("a cap is not an invalid archive: %v", err)
 				}
 				var entryErr *EntryError

@@ -4,6 +4,7 @@ package grpcapi
 
 import (
 	"crypto/subtle"
+	"errors"
 	"io"
 	"log/slog"
 	"strings"
@@ -64,7 +65,7 @@ func (s *RunnerRegistryServer) Connect(stream grpc.BidiStreamingServer[pb.Runner
 
 	for {
 		hb, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			if committedRunnerID != "" {
 				slog.Info("runner registration stream closed", "runner_id", committedRunnerID)
 			}

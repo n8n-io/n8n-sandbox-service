@@ -16,7 +16,7 @@ func RecoveryMiddleware(next http.Handler) http.Handler {
 		rw := &recoveryResponseWriter{ResponseWriter: w}
 		defer func() {
 			if err := recover(); err != nil {
-				if err == http.ErrAbortHandler {
+				if err == http.ErrAbortHandler { //nolint:errorlint // net/http compares the panic value by identity.
 					panic(err)
 				}
 				slog.Error("panic recovered", "err", err, "path", r.URL.Path, "stack", string(debug.Stack()))
