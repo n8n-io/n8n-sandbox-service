@@ -46,7 +46,7 @@ func TestBuildParametersGetOnlyAnErrorOutsideABuilder(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		_ = cmd.Process.Kill()
 		// The output is the copying goroutines' until Wait returns.
-		<-exited
+		<-exited //nolint:errcheck // The kill causes the Wait error.
 		t.Fatalf("the daemon kept running\n%s", output.String())
 	}
 	if !strings.Contains(output.String(), "volume build refused") {

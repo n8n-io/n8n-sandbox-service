@@ -109,7 +109,7 @@ func ExecProxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics
 		if upResp.StatusCode != http.StatusOK {
 			w.Header().Set("Content-Type", upResp.Header.Get("Content-Type"))
 			w.WriteHeader(upResp.StatusCode)
-			io.Copy(w, upResp.Body)
+			_, _ = io.Copy(w, upResp.Body)
 			return
 		}
 

@@ -198,7 +198,7 @@ func unpack(r io.Reader, p Policy, s sink) (Stats, error) {
 func check(hdr *tar.Header, p Policy, links symlinks) error {
 	name := hdr.Name
 	if !filepath.IsLocal(name) || hasDotDot(name) {
-		return fmt.Errorf("%w: path must be relative and must not contain ..", ErrInvalid)
+		return fmt.Errorf("%w: path must be relative and must not contain a .. element", ErrInvalid)
 	}
 	if p.MaxPathBytes > 0 && (len(name) > p.MaxPathBytes || hdr.Typeflag == tar.TypeSymlink && len(hdr.Linkname) > p.MaxPathBytes) {
 		return fmt.Errorf("%w: path and link target must not be longer than %d bytes", ErrInvalid, p.MaxPathBytes)
@@ -219,7 +219,7 @@ func check(hdr *tar.Header, p Policy, links symlinks) error {
 			return fmt.Errorf("%w: symbolic link target must not be empty", ErrInvalid)
 		}
 		if p.LocalSymlinks && (!filepath.IsLocal(hdr.Linkname) || hasDotDot(hdr.Linkname)) {
-			return fmt.Errorf("%w: symbolic link target must be relative and must not contain ..", ErrInvalid)
+			return fmt.Errorf("%w: symbolic link target must be relative and must not contain a .. element", ErrInvalid)
 		}
 	case p.AllowSymlinks:
 		return fmt.Errorf("%w: only regular files, directories and symbolic links are allowed", ErrInvalid)

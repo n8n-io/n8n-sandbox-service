@@ -4,6 +4,7 @@ package firecracker
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"os"
 	"runtime"
@@ -51,7 +52,12 @@ func dialContextInNetNSOnLockedThread(ctx context.Context, netnsPath string, net
 		return nil, err
 	}
 	// If this is the main thread, Go parks it instead of ending it, so switch back.
-	defer unix.Setns(int(current.Fd()), unix.CLONE_NEWNET)
+	// The dial result does not depend on the switch back, so only log a failure.
+	defer func() {
+		if err := unix.Setns(int(current.Fd()), unix.CLONE_NEWNET); err != nil {
+			slog.Error("restore network namespace after dial", "error", err)
+		}
+	}()
 
 	var dialer net.Dialer
 	return dialer.DialContext(ctx, network, address)

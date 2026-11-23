@@ -782,7 +782,7 @@ func TestStartCommandRunsInOwnProcessGroup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("startCommand() failed: %v", err)
 	}
-	defer proc.Kill()
+	defer func() { _ = proc.Kill() }()
 
 	groupProc, ok := proc.(*processGroup)
 	if !ok {

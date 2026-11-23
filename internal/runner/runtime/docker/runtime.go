@@ -728,7 +728,7 @@ func waitForDaemon(ctx context.Context, baseURL string) error {
 			if err != nil {
 				continue
 			}
-			io.Copy(io.Discard, resp.Body)
+			_, _ = io.Copy(io.Discard, resp.Body)
 			resp.Body.Close()
 			if resp.StatusCode != http.StatusOK {
 				continue
