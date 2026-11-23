@@ -24,13 +24,15 @@ Everything trusts the layer above it. Sandboxes trust nothing.
 The API is the only component that knows about tenants. Every other component
 trusts it to have made the decision correctly.
 
-Requests carry an `X-Api-Key` header. There are four key classes:
+Requests carry an `X-Api-Key` header. There are five key classes:
 
 - Admin keys, listed in `SANDBOX_API_KEYS`: full access.
 - Provisioner keys, listed in `SANDBOX_API_PROVISIONER_KEYS`: tenant create,
   limit update and delete only, see below.
 - Scaler keys, listed in `SANDBOX_API_SCALER_KEYS`: runner capacity listing
   and cordoning only, see below.
+- Volume publisher keys, listed in `SANDBOX_API_VOLUME_PUBLISHER_KEYS`: shared
+  volumes only, see below.
 - Tenant keys, minted by an admin or returned on tenant create, stored only as
   a SHA-256 hash alongside an 8-character lookup prefix, so a database read
   does not yield usable credentials. Revocation sets `revoked_at`, which the
@@ -88,7 +90,7 @@ Authorization runs on every sandbox request through `canAccessSandbox` in
   fall through to the admin pseudo-tenant.
 - Sandboxes owned by the admin pseudo-tenant are not visible to tenant keys.
 - Admin routes under `/admin` require an admin key, except the three
-  provisioner routes above and the scaler route below.
+  provisioner routes above and the scaler routes below.
 
 Cross-tenant and non-existent sandboxes both return `404`, so a tenant cannot
 use the status code to learn whether an ID exists.
@@ -106,6 +108,15 @@ key can therefore cordon every runner and stop new creates fleet-wide, and
 through that get stopped sandboxes deleted: the API deletes a stopped sandbox
 on a cordoned runner instead of waking it. Startup fails if a scaler key is
 also an admin or provisioner key.
+
+### Volume publisher keys
+
+The class is for the job that publishes shared volumes, which are meant for
+every tenant to mount, so publishing them must not take an admin key. A volume
+publisher key reaches only `/shared-volumes` and the paths below it, on a clean
+path: sandboxes, tenants, keys and runners all answer `403`, and it can read no
+tenant data. Startup fails if a volume publisher key is also an admin,
+provisioner or scaler key.
 
 ### Concurrency limits
 
