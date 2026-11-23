@@ -20,6 +20,10 @@ func TestPostgresSharedVolumesConcurrentDeletes(t *testing.T) {
 	testConcurrentSharedVolumeDeletes(t, []SharedVolumes{openTestPostgresStore(t), openTestPostgresStore(t)})
 }
 
+func TestPostgresSharedVolumeDeleteDuringFinish(t *testing.T) {
+	testDeleteDuringFinish(t, []SharedVolumes{openTestPostgresStore(t), openTestPostgresStore(t)})
+}
+
 // Every API pod runs the schema when it starts, several at once after a
 // rollout.
 func TestPostgresSharedVolumesSchemaRunsOnPodsStartingTogether(t *testing.T) {

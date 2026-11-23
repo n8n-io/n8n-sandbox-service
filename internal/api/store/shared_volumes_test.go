@@ -76,6 +76,11 @@ func TestSharedVolumesConcurrentDeletes(t *testing.T) {
 	testConcurrentSharedVolumeDeletes(t, []SharedVolumes{sqlite, sqlite})
 }
 
+func TestSharedVolumeDeleteDuringFinish(t *testing.T) {
+	sqlite := newSQLiteSharedVolumes(t)
+	testDeleteDuringFinish(t, []SharedVolumes{sqlite, sqlite})
+}
+
 // A start stops waiting for SQLite's one connection when its context ends.
 func TestSQLiteSharedVolumeStartGivesUpWithItsContext(t *testing.T) {
 	sqlite := newSQLiteSharedVolumes(t)
@@ -400,5 +405,42 @@ func testConcurrentSharedVolumeDeletes(t *testing.T, stores []SharedVolumes) {
 	wait.Wait()
 	if deleted != 1 {
 		t.Fatalf("%d deletes got the row, want 1", deleted)
+	}
+}
+
+// testDeleteDuringFinish deletes volumes whose publish finishes at the same
+// time: each delete gets the volume, deleted or still publishing, never
+// nothing.
+func testDeleteDuringFinish(t *testing.T, stores []SharedVolumes) {
+	ctx := context.Background()
+	for range 200 {
+		row := publishingRow(randomSHA256(), "")
+		startPublish(t, stores[0], row, testLease)
+		sha := row.SHA256
+		var (
+			wait      sync.WaitGroup
+			found     *SharedVolume
+			deleteErr error
+		)
+		start := make(chan struct{})
+		wait.Go(func() {
+			<-start
+			if _, err := stores[0].FinishSharedVolumePublish(ctx, row); err != nil {
+				t.Errorf("finish: %v", err)
+			}
+		})
+		wait.Go(func() {
+			<-start
+			found, deleteErr = stores[1].MarkSharedVolumeDeleted(ctx, sha)
+		})
+		close(start)
+		wait.Wait()
+		if deleteErr != nil {
+			t.Fatalf("delete: %v", deleteErr)
+		}
+		if found == nil {
+			live, _ := stores[0].GetLiveSharedVolume(ctx, sha)
+			t.Fatalf("delete during the finish found no volume; the volume is %+v", live)
+		}
 	}
 }
