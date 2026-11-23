@@ -9,7 +9,11 @@ GOFMT = $(shell go env GOROOT)/bin/gofmt
 
 SHELL_FILES := $(shell git ls-files '*.sh')
 
-.PHONY: all daemon runner runner-docker runner-firecracker api test test-integration proto-volumestore clean docker docker-local docker-arm64 docker-amd64 docker-api-arm64 docker-api-amd64 docker-runner-arm64 docker-runner-amd64 docker-firecracker-runner-amd64 docker-sandbox-arm64 docker-sandbox-amd64 fmt fmt-check vet shell-fmt shell-fmt-check shell-lint check-shell-files playground up down smoke sdk sdk-install sdk-build sdk-typecheck sdk-test sdk-fmt sdk-fmt-check sdk-lint
+# lint reports only issues in code that changed since this revision. Set it
+# empty to check all code: make lint LINT_BASE=
+LINT_BASE ?= origin/main
+
+.PHONY: all daemon runner runner-docker runner-firecracker api test test-integration proto-volumestore clean docker docker-local docker-arm64 docker-amd64 docker-api-arm64 docker-api-amd64 docker-runner-arm64 docker-runner-amd64 docker-firecracker-runner-amd64 docker-sandbox-arm64 docker-sandbox-amd64 fmt fmt-check vet lint shell-fmt shell-fmt-check shell-lint check-shell-files playground up down smoke sdk sdk-install sdk-build sdk-typecheck sdk-test sdk-fmt sdk-fmt-check sdk-lint
 
 all: daemon runner api
 
@@ -32,6 +36,11 @@ fmt-check:
 ## vet: Run go vet on all packages.
 vet:
 	go vet ./...
+
+# GOOS=linux: CI runs on Linux, and some packages have Linux-only files.
+## lint: Run golangci-lint on Go code changed since LINT_BASE (default origin/main).
+lint:
+	GOOS=linux golangci-lint run $(if $(LINT_BASE),--new-from-merge-base='$(LINT_BASE)') ./...
 
 ## shell-fmt: Format all shell scripts with shfmt.
 shell-fmt: check-shell-files

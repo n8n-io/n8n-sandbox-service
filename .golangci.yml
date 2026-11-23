@@ -1,0 +1,54 @@
+# golangci-lint v2. CI pins the version in .github/workflows/ci.yml.
+#
+# `make lint` reports only issues in code that changed since LINT_BASE
+# (default origin/main). `make lint LINT_BASE=` checks all code.
+version: "2"
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - err113
+    - errorlint
+    - forbidigo
+    - revive
+
+  settings:
+    errcheck:
+      # The code ignores these errors on purpose: a failed deadline shows up
+      # as an error on the next read or write.
+      exclude-functions:
+        - (*net/http.ResponseController).SetReadDeadline
+        - (*net/http.ResponseController).SetWriteDeadline
+        - (net.Conn).SetDeadline
+        - (net.Conn).SetReadDeadline
+        - (net.Conn).SetWriteDeadline
+
+    forbidigo:
+      forbid:
+        - pattern: ^any$
+          msg: >-
+            Use a concrete type or a closed interface. If any is correct, add
+            `//nolint:forbidigo // <reason>` on the line.
+
+    revive:
+      rules:
+        # forbidigo matches identifiers only, so it cannot see interface{}.
+        # use-any changes interface{} to any, which forbidigo then reports.
+        - name: use-any
+
+  exclusions:
+    presets:
+      # Ignores unchecked errors from Close, Flush, os.Remove(All),
+      # os.(Un)Setenv and the print functions.
+      - std-error-handling
+    rules:
+      # forbidigo and err113 apply to internal/codedaemon only. To turn them
+      # on for another package, add it to path-except.
+      - path-except: ^internal/codedaemon/
+        linters: [forbidigo, err113]
+      - path: _test\.go$
+        linters: [forbidigo, err113]
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

@@ -7,8 +7,14 @@ Always run the following checks after modifying Go files:
 ```sh
 make fmt-check
 make vet
+make lint
 make test
 ```
+
+`make lint` needs golangci-lint (`brew install golangci-lint`). CI pins v2.15.0.
+It reports only issues in code that changed since `origin/main`. Do not add
+`//nolint` to silence a finding unless the code is correct as it is. Give the
+reason in the comment, for example `//nolint:forbidigo // <reason>`.
 
 After modifying anything under `sdk/`, run:
 
