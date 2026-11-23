@@ -523,8 +523,11 @@ must_fail "auth.generated.volumePublisherKeys must not be a placeholder" \
 	"${generated[@]}" --set auth.secretKeys.volumePublisherKeys=volume-publisher-api-keys --set auth.generated.volumePublisherKeys=changeme
 must_fail "auth.generated.volumePublisherKeys needs auth.secretKeys.volumePublisherKeys" \
 	"${generated[@]}" --set auth.generated.volumePublisherKeys=volume-publisher-secret
-must_fail "auth.secretKeys.volumePublisherKeys must not name the Secret key auth.secretKeys.runnerApiKey names" \
-	--set auth.secretKeys.volumePublisherKeys=runner-api-key
+for entry in apiKeys=api-keys provisionerKeys=provisioner-api-keys scalerKeys=scaler-api-keys \
+	runnerRegistrationToken=runner-registration-token runnerApiKey=runner-api-key runnerApiKeys=runner-api-keys; do
+	must_fail "auth.secretKeys.volumePublisherKeys must not name the Secret key auth.secretKeys.${entry%%=*} names" \
+		--set auth.secretKeys.volumePublisherKeys="${entry#*=}"
+done
 must_fail "auth.secretKeys.volumePublisherKeys must not name the Secret key auth.secretKeys.apiKeys names" \
 	"${generated[@]}" --set auth.secretKeys.volumePublisherKeys=api-keys --set auth.generated.volumePublisherKeys=volume-publisher-secret
 
