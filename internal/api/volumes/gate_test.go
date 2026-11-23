@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,7 +33,7 @@ func TestTarGatePassesAValidTar(t *testing.T) {
 	plain := validTar(t)
 	for name, data := range map[string][]byte{"plain": plain, "gzip": gzipped(t, plain)} {
 		t.Run(name, func(t *testing.T) {
-			gate := newTarGate(bytes.NewReader(data), testPolicy)
+			gate := newTarGate(bytes.NewReader(data), testPolicy, nil)
 			defer gate.close()
 			read, err := readGate(gate)
 			if err != io.EOF || gate.err() != nil {
@@ -71,7 +73,7 @@ func TestTarGateRefusesATarBeforeItsEnd(t *testing.T) {
 		"too much content": {makeTar(t, file("secret-name", strings.Repeat("x", 1<<14+1))), ErrTooLarge},
 	} {
 		t.Run(name, func(t *testing.T) {
-			gate := newTarGate(bytes.NewReader(tc.data), testPolicy)
+			gate := newTarGate(bytes.NewReader(tc.data), testPolicy, nil)
 			defer gate.close()
 			_, err := readGate(gate)
 			if err == io.EOF || !errors.Is(err, tc.want) || !errors.Is(gate.err(), tc.want) {
@@ -85,16 +87,60 @@ func TestTarGateRefusesATarBeforeItsEnd(t *testing.T) {
 }
 
 func TestTarGateReportsAFailedUpload(t *testing.T) {
-	gate := newTarGate(&chunkedReader{data: validTar(t), piece: 512, failAt: 1024}, testPolicy)
+	for name, data := range map[string][]byte{"plain": validTar(t), "gzip": gzipped(t, validTar(t))} {
+		t.Run(name, func(t *testing.T) {
+			gate := newTarGate(&chunkedReader{data: data, piece: 64, failAt: len(data) / 2}, testPolicy, nil)
+			defer gate.close()
+			if _, err := readGate(gate); !errors.Is(err, ErrUpload) {
+				t.Fatalf("the read ended with %v, want ErrUpload", err)
+			}
+		})
+	}
+}
+
+// A client that stalls after sending an entry the validator refuses gets the
+// tar's error at once, not when its read times out.
+func TestTarGateInterruptsAReadOnceTheTarIsRefused(t *testing.T) {
+	reader := &chunkedReader{data: makeTar(t, file("../outside", "x")), piece: 512, next: make(chan struct{}, 1), stop: make(chan struct{})}
+	reader.next <- struct{}{}
+	var stopOnce sync.Once
+	stopReading := func() { stopOnce.Do(func() { close(reader.stop) }) }
+	var interrupts atomic.Int32
+	gate := newTarGate(reader, testPolicy, func() {
+		interrupts.Add(1)
+		stopReading()
+	})
 	defer gate.close()
-	if _, err := readGate(gate); !errors.Is(err, ErrUpload) {
-		t.Fatalf("the read ended with %v, want ErrUpload", err)
+	ended := make(chan error, 1)
+	go func() {
+		_, err := readGate(gate)
+		ended <- err
+	}()
+	select {
+	case err := <-ended:
+		if !errors.Is(err, ErrInvalidTar) || errors.Is(err, ErrUpload) || interrupts.Load() != 1 {
+			t.Fatalf("the read ended with %v after %d interrupts, want ErrInvalidTar after 1", err, interrupts.Load())
+		}
+	case <-time.After(5 * time.Second):
+		stopReading()
+		<-ended
+		t.Fatal("the read kept waiting for the client after the tar was refused")
+	}
+}
+
+// Once the body has ended, a refused tar does not interrupt it.
+func TestTarGateLeavesAnEndedBodyAlone(t *testing.T) {
+	var interrupts atomic.Int32
+	gate := newTarGate(bytes.NewReader(makeTar(t)), testPolicy, func() { interrupts.Add(1) })
+	defer gate.close()
+	if _, err := readGate(gate); !errors.Is(err, ErrInvalidTar) || interrupts.Load() != 0 {
+		t.Fatalf("the read ended with %v after %d interrupts, want ErrInvalidTar after none", err, interrupts.Load())
 	}
 }
 
 // A store that stops reading early must not leave the validator running.
 func TestTarGateCloseEndsTheValidator(t *testing.T) {
-	gate := newTarGate(bytes.NewReader(validTar(t)), testPolicy)
+	gate := newTarGate(bytes.NewReader(validTar(t)), testPolicy, nil)
 	if _, err := gate.Read(make([]byte, 100)); err != nil {
 		t.Fatal(err)
 	}

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync/atomic"
 
 	"github.com/n8n-io/sandbox-service/internal/safetar"
 	"github.com/n8n-io/sandbox-service/internal/volume"
@@ -23,6 +24,9 @@ type tarGate struct {
 	pipeWriter *io.PipeWriter
 	results    chan validation
 	result     *validation
+	// bodyEnded is set once body returned io.EOF; from then on a refused tar
+	// leaves body alone.
+	bodyEnded atomic.Bool
 	// failure is the error Read returned once, and returns from then on.
 	failure  error
 	finished bool
@@ -33,13 +37,19 @@ type validation struct {
 	err   error
 }
 
-func newTarGate(body io.Reader, policy safetar.Policy) *tarGate {
+// newTarGate reads body. interrupt, if set, ends a read of body that waits
+// for the client: the gate calls it when the validator refuses the tar before
+// body has ended.
+func newTarGate(body io.Reader, policy safetar.Policy, interrupt func()) *tarGate {
 	pipeReader, pipeWriter := io.Pipe()
 	gate := &tarGate{body: body, pipeWriter: pipeWriter, results: make(chan validation, 1)}
 	go func() {
 		stats, err := safetar.Validate(pipeReader, policy)
 		if err == nil && stats.Entries == stats.GlobalHeaders {
 			err = errTarEmpty
+		}
+		if err != nil && !errors.Is(err, errAborted) && interrupt != nil && !gate.bodyEnded.Load() {
+			interrupt()
 		}
 		// Ends a write waiting on a validator that stopped early.
 		pipeReader.CloseWithError(errValidated)
@@ -56,6 +66,9 @@ func (gate *tarGate) Read(buf []byte) (int, error) {
 		return 0, io.EOF
 	}
 	read, err := gate.body.Read(buf)
+	if errors.Is(err, io.EOF) {
+		gate.bodyEnded.Store(true)
+	}
 	if read > 0 {
 		if _, writeErr := gate.pipeWriter.Write(buf[:read]); writeErr != nil {
 			// The validator stopped before the end, which only a verdict does.
@@ -76,7 +89,10 @@ func (gate *tarGate) Read(buf []byte) (int, error) {
 		return read, io.EOF
 	case err != nil:
 		gate.pipeWriter.CloseWithError(errAborted)
-		gate.wait()
+		// A validator that refused the tar first is what interrupted the read.
+		if result := gate.wait(); result.err != nil && !errors.Is(result.err, errAborted) {
+			return 0, gate.fail(verdict(result))
+		}
 		return 0, gate.fail(fmt.Errorf("%w: %w", ErrUpload, err))
 	}
 	return read, nil
