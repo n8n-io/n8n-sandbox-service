@@ -12,10 +12,15 @@ import (
 
 const inlineResultMax = 1 << 20 // 1 MiB; default and maximum inline result size.
 
+var (
+	errInvalidResult = errors.New("invalid result file")
+	errOutputChanged = errors.New("output changed after publication")
+)
+
 // resultEvent translates the worker's terminal message and validates successful outputs.
 // The daemon does not look inside result.json. The runtime puts what the
 // client needs there, such as the task's console output.
-func (d *Daemon) resultEvent(spec taskSpec, root *os.Root, msg workerMessage) any {
+func (d *Daemon) resultEvent(spec taskSpec, root *os.Root, msg workerMessage) taskEvent {
 	limit := spec.InlineResultMaxBytes
 	if limit <= 0 || limit > inlineResultMax {
 		limit = inlineResultMax
@@ -57,7 +62,7 @@ func readResult(root *os.Root, entry outputEntry) (json.RawMessage, error) {
 	defer f.Close()
 	data, err := io.ReadAll(io.LimitReader(f, entry.Size+1))
 	if err != nil || int64(len(data)) != entry.Size || !json.Valid(data) {
-		return nil, errors.New("invalid result file")
+		return nil, errInvalidResult
 	}
 	return data, nil
 }
@@ -72,7 +77,7 @@ func openOutput(root *os.Root, expected outputEntry) (*os.File, error) {
 	info, err := f.Stat()
 	if err != nil || !info.Mode().IsRegular() || info.Size() != expected.Size {
 		_ = f.Close()
-		return nil, errors.New("output changed after publication")
+		return nil, errOutputChanged
 	}
 	return f, nil
 }

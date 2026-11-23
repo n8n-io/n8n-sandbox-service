@@ -61,7 +61,7 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 
 // waitForTask sends heartbeats while awaiting a terminal event. If a heartbeat
 // write fails, it waits for execution to end and returns no event to write.
-func (d *Daemon) waitForTask(r *http.Request, spec taskSpec, stream taskStream, x *execution, root *os.Root) (any, bool) {
+func (d *Daemon) waitForTask(r *http.Request, spec taskSpec, stream taskStream, x *execution, root *os.Root) (taskEvent, bool) {
 	heartbeat := time.NewTicker(heartbeatInterval)
 	defer heartbeat.Stop()
 	for {
@@ -85,7 +85,7 @@ func (d *Daemon) waitForTask(r *http.Request, spec taskSpec, stream taskStream, 
 }
 
 // terminalEvent maps a receive from execution.result to the last stream event.
-func (d *Daemon) terminalEvent(spec taskSpec, root *os.Root, msg workerMessage, ok bool) any {
+func (d *Daemon) terminalEvent(spec taskSpec, root *os.Root, msg workerMessage, ok bool) taskEvent {
 	if !ok {
 		return newErrorEvent(spec.TaskID, "crashed", "runtime exited")
 	}

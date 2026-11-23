@@ -12,7 +12,16 @@ const (
 	heartbeatInterval = 5 * time.Second
 )
 
-// Each event type below is one NDJSON line in the task stream.
+// taskEvent is one NDJSON line in the task stream. Only the event types below
+// implement it, so emit cannot write other values to the stream.
+type taskEvent interface {
+	isTaskEvent()
+}
+
+func (acceptedEvent) isTaskEvent()  {}
+func (heartbeatEvent) isTaskEvent() {}
+func (doneEvent) isTaskEvent()      {}
+func (errorEvent) isTaskEvent()     {}
 
 // acceptedEvent tells the client that the runtime received the task.
 type acceptedEvent struct {
@@ -87,7 +96,7 @@ func newTaskStream(w http.ResponseWriter) taskStream {
 
 // emit writes and flushes one event. Only the request goroutine writes events,
 // so heartbeats and completion cannot race on the stream.
-func (s taskStream) emit(e any) error {
+func (s taskStream) emit(e taskEvent) error {
 	_ = s.rc.SetWriteDeadline(time.Now().Add(eventWriteTimeout))
 	defer s.rc.SetWriteDeadline(time.Time{})
 	if err := s.enc.Encode(e); err != nil {
