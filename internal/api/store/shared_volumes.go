@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
+	"time"
 )
 
 // SharedVolumeState is where a shared volume is in its life.
@@ -17,27 +17,28 @@ const (
 	SharedVolumePublishing SharedVolumeState = "publishing"
 	SharedVolumeReady      SharedVolumeState = "ready"
 	// SharedVolumeFailed is a publish that did not finish. Its objects may
-	// exist until the row is removed.
+	// exist until the row is purged.
 	SharedVolumeFailed SharedVolumeState = "failed"
 	// SharedVolumeDeleted is a ready volume a caller deleted: hidden, and
-	// removed with its objects.
+	// purged with its objects.
 	SharedVolumeDeleted SharedVolumeState = "deleted"
 )
 
 // SharedVolume is a row of shared_volumes: one published tar, by its sha256.
-// Times are Unix seconds.
+// Times are Unix seconds by the database's clock.
 type SharedVolume struct {
 	// ID is chosen by the API and names the volume's objects in the volume
 	// store, so no two rows share an object.
 	ID     string
 	SHA256 string
 	// Name is "" for none. Publishing and ready rows have different names.
-	Name              string
-	State             SharedVolumeState
-	TarBytes          int64
-	Entries           int64
-	ContentBytes      int64
-	DecompressedBytes int64
+	Name  string
+	State SharedVolumeState
+	// TarBytes is the tar's length as published, plain or gzip.
+	TarBytes             int64
+	TarEntries           int64
+	TarContentBytes      int64
+	TarDecompressedBytes int64
 	// ImageBytes is 0 for a volume without an ext4 image.
 	ImageBytes  int64
 	ImageSHA256 string
@@ -64,44 +65,45 @@ var (
 )
 
 // SharedVolumes keeps the shared_volumes rows. Rows are written before their
-// objects and removed after them, so every object has a row. A publishing row
-// whose lease ended before now is taken over: marked failed.
+// objects and purged after them, so every object has a row. A publishing row
+// whose lease has ended is taken over: marked failed.
 type SharedVolumes interface {
-	// ReserveSharedVolume inserts volume, which must be publishing, with
-	// volume.UpdatedAt as now. It first marks failed the publishing rows with
-	// its sha256 or name whose lease has ended. It returns
-	// ErrSharedVolumeDigestLive, with that row when it could read it, when a
-	// publishing or ready row has the sha256; ErrSharedVolumeNameTaken when
-	// one has the name; ErrSharedVolumeLimit when maxLive rows are publishing
-	// or ready. On Postgres, concurrent reservations can pass maxLive by their
-	// number.
-	ReserveSharedVolume(ctx context.Context, volume *SharedVolume, maxLive int) (*SharedVolume, error)
-	// RenewSharedVolumeLease moves a publishing row's lease to leaseUntil. It
-	// returns false when the row is no longer publishing.
-	RenewSharedVolumeLease(ctx context.Context, id string, leaseUntil int64) (bool, error)
-	// FinishSharedVolume makes the publishing row volume.ID ready with
-	// volume's sizes, image and ReadyAt. It returns false when the row is no
-	// longer publishing.
-	FinishSharedVolume(ctx context.Context, volume *SharedVolume) (bool, error)
-	// FailSharedVolume marks a publishing row failed. It returns whether the
-	// row is failed now, so false for a ready row, whose objects stay.
-	FailSharedVolume(ctx context.Context, id string, now int64) (bool, error)
-	// NameSharedVolume names a ready row that has no name. It returns false
-	// when there is no such row, and ErrSharedVolumeNameTaken.
-	NameSharedVolume(ctx context.Context, id, name string) (bool, error)
-	// GetSharedVolume returns the publishing or ready row with the sha256, or
-	// nil.
-	GetSharedVolume(ctx context.Context, sha256 string) (*SharedVolume, error)
-	// ListSharedVolumes returns the ready rows, newest first; only the one
-	// with the name when name is set.
-	ListSharedVolumes(ctx context.Context, name string) ([]*SharedVolume, error)
-	// DeleteSharedVolume marks the ready row with the sha256 deleted, after
-	// marking failed a publishing row with it whose lease has ended. It returns
-	// the row with the sha256 that is still publishing or now deleted, or nil.
-	DeleteSharedVolume(ctx context.Context, sha256 string, now int64) (*SharedVolume, error)
-	// RemoveSharedVolume deletes the row unless it is ready. It returns false
-	// when there was no such row.
-	RemoveSharedVolume(ctx context.Context, id string) (bool, error)
+	// StartSharedVolumePublish inserts volume as a publishing row whose lease
+	// ends lease from now, and sets volume's state and times. It first fails
+	// the publishing rows with its sha256 or name whose lease has ended. It
+	// returns ErrSharedVolumeDigestLive, with the live row when there still is
+	// one, when a publishing or ready row has the sha256;
+	// ErrSharedVolumeNameTaken when one has the name; ErrSharedVolumeLimit
+	// when it would make more than maxLiveVolumes rows publishing or ready.
+	// On Postgres, concurrent starts can pass maxLiveVolumes by their number.
+	StartSharedVolumePublish(ctx context.Context, volume *SharedVolume, lease time.Duration, maxLiveVolumes int) (*SharedVolume, error)
+	// RenewSharedVolumePublish moves the lease of a publishing row to end
+	// lease from now. It returns false when the row is no longer publishing.
+	RenewSharedVolumePublish(ctx context.Context, id string, lease time.Duration) (bool, error)
+	// FinishSharedVolumePublish makes the publishing row volume.ID ready with
+	// volume's sizes and image, and sets volume's state and times. It returns
+	// false when the row is no longer publishing.
+	FinishSharedVolumePublish(ctx context.Context, volume *SharedVolume) (bool, error)
+	// FailSharedVolumePublish marks a publishing row failed. It returns
+	// whether the row is failed now, so true for a row another publish took
+	// over, and false for a ready or deleted row, whose objects stay.
+	FailSharedVolumePublish(ctx context.Context, id string) (bool, error)
+	// NameReadySharedVolume names a ready row that has no name. It returns
+	// false when there is no such row, and ErrSharedVolumeNameTaken.
+	NameReadySharedVolume(ctx context.Context, id, name string) (bool, error)
+	// GetLiveSharedVolume returns the ready row with the sha256, or the
+	// publishing one whose lease has not ended, or nil.
+	GetLiveSharedVolume(ctx context.Context, sha256 string) (*SharedVolume, error)
+	// ListReadySharedVolumes returns the ready rows, newest first; only the
+	// one with the name when name is set.
+	ListReadySharedVolumes(ctx context.Context, name string) ([]*SharedVolume, error)
+	// MarkSharedVolumeDeleted marks the ready row with the sha256 deleted,
+	// after failing a publishing row with it whose lease has ended. It returns
+	// the deleted row, else the row still publishing the sha256, else nil.
+	MarkSharedVolumeDeleted(ctx context.Context, sha256 string) (*SharedVolume, error)
+	// PurgeSharedVolume deletes the row id if it is failed or deleted. It
+	// returns false when there is no such row.
+	PurgeSharedVolume(ctx context.Context, id string) (bool, error)
 }
 
 var (
@@ -109,7 +111,8 @@ var (
 	_ SharedVolumes = (*PostgresStore)(nil)
 )
 
-// Index names, which Postgres reports on a unique violation.
+// Unique index names, which Postgres reports on a violation. SQLite reports
+// the column instead.
 const (
 	sharedVolumesSHA256Index = "shared_volumes_live_sha256_uniq"
 	sharedVolumesNameIndex   = "shared_volumes_live_name_uniq"
@@ -118,38 +121,16 @@ const (
 // sharedVolumesLive selects the rows that hold their sha256 and name.
 const sharedVolumesLive = `state IN ('publishing', 'ready')`
 
-const sharedVolumeCols = `id, sha256, name, state, tar_bytes, entries, content_bytes, decompressed_bytes, image_bytes, image_sha256, published_by, created_at, ready_at, updated_at, lease_until`
+const sharedVolumeCols = `id, sha256, name, state, tar_bytes, tar_entries, tar_content_bytes, tar_decompressed_bytes, image_bytes, image_sha256, published_by, created_at, ready_at, updated_at, lease_until`
 
-// sqlQuerier is what *sql.DB, *sql.Conn and *sql.Tx share.
-type sqlQuerier interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-}
-
-// sqlTx is a transaction that writes; SQLite runs one at a time.
-type sqlTx struct {
-	sqlQuerier
-	commit   func() error
-	rollback func()
-}
-
-// sharedVolumeSQL runs the shared_volumes queries, written with ? placeholders,
-// on either database.
-type sharedVolumeSQL struct {
-	db    *sql.DB
-	begin func(ctx context.Context) (*sqlTx, error)
-	// bind rewrites the ? placeholders of a query for the database.
-	bind func(query string) string
-	// uniqueIndex returns the index a unique violation is on, or "".
-	uniqueIndex func(err error) string
-}
+// sharedVolumeSQL runs the shared_volumes queries.
+type sharedVolumeSQL struct{ sqlDialect }
 
 func scanSharedVolume(row scanner) (*SharedVolume, error) {
 	var volume SharedVolume
 	var state string
-	err := row.Scan(&volume.ID, &volume.SHA256, &volume.Name, &state, &volume.TarBytes, &volume.Entries,
-		&volume.ContentBytes, &volume.DecompressedBytes, &volume.ImageBytes, &volume.ImageSHA256,
+	err := row.Scan(&volume.ID, &volume.SHA256, &volume.Name, &state, &volume.TarBytes, &volume.TarEntries,
+		&volume.TarContentBytes, &volume.TarDecompressedBytes, &volume.ImageBytes, &volume.ImageSHA256,
 		&volume.PublishedBy, &volume.CreatedAt, &volume.ReadyAt, &volume.UpdatedAt, &volume.LeaseUntil)
 	if err != nil {
 		return nil, err
@@ -158,7 +139,7 @@ func scanSharedVolume(row scanner) (*SharedVolume, error) {
 	return &volume, nil
 }
 
-// getOne returns the row the query selects, or nil.
+// getOne returns the row the query selects or returns, or nil.
 func (q sharedVolumeSQL) getOne(ctx context.Context, querier sqlQuerier, query string, args ...any) (*SharedVolume, error) {
 	volume, err := scanSharedVolume(querier.QueryRowContext(ctx, q.bind(query), args...))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -170,182 +151,134 @@ func (q sharedVolumeSQL) getOne(ctx context.Context, querier sqlQuerier, query s
 	return volume, nil
 }
 
-// changed runs an update or delete and reports whether it changed a row.
-func (q sharedVolumeSQL) changed(ctx context.Context, querier sqlQuerier, query string, args ...any) (bool, error) {
-	result, err := querier.ExecContext(ctx, q.bind(query), args...)
-	if err != nil {
-		return false, err
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-	return rows > 0, nil
-}
-
-// failLapsed marks failed the publishing rows whose lease ended before now and
-// that have the sha256 or, if set, the name.
-func (q sharedVolumeSQL) failLapsed(ctx context.Context, tx *sqlTx, sha256, name string, now int64) error {
-	query := `UPDATE shared_volumes SET state = 'failed', updated_at = ?, lease_until = 0
-		WHERE state = 'publishing' AND lease_until < ? AND (sha256 = ?`
-	args := []any{now, now, sha256}
-	if name != "" {
-		query += ` OR name = ?`
-		args = append(args, name)
-	}
-	if _, err := tx.ExecContext(ctx, q.bind(query+`)`), args...); err != nil {
-		return fmt.Errorf("store: take over shared volume leases: %w", err)
+// uniqueViolation returns the error a unique violation in err stands for, or
+// nil.
+func (q sharedVolumeSQL) uniqueViolation(err error) error {
+	switch {
+	case q.violatesUnique(err, sharedVolumesSHA256Index, "shared_volumes.sha256"):
+		return ErrSharedVolumeDigestLive
+	case q.violatesUnique(err, sharedVolumesNameIndex, "shared_volumes.name"):
+		return ErrSharedVolumeNameTaken
 	}
 	return nil
 }
 
-// inTx runs work in a transaction and commits it unless work returns an error
-// that wantsRollback reports. Other errors from work are returned after the
-// commit, so a takeover done before them is kept.
-func (q sharedVolumeSQL) inTx(ctx context.Context, work func(tx *sqlTx) error, wantsRollback func(error) bool) error {
-	tx, err := q.begin(ctx)
-	if err != nil {
-		return fmt.Errorf("store: begin shared volume transaction: %w", err)
+// failLapsedPublishes marks failed the publishing rows whose lease has ended
+// and that have the sha256 or, if set, the name.
+func (q sharedVolumeSQL) failLapsedPublishes(ctx context.Context, sha256, name string) error {
+	query := `UPDATE shared_volumes SET state = 'failed', updated_at = ` + q.nowSQL + `, lease_until = 0
+		WHERE state = 'publishing' AND lease_until < ` + q.nowSQL + ` AND (sha256 = ?`
+	args := []any{sha256}
+	if name != "" {
+		query += ` OR name = ?`
+		args = append(args, name)
 	}
-	workErr := work(tx)
-	if workErr != nil && wantsRollback(workErr) {
-		tx.rollback()
-		return workErr
+	if _, err := q.db.ExecContext(ctx, q.bind(query+`)`), args...); err != nil {
+		return fmt.Errorf("store: take over lapsed shared volume publishes: %w", err)
 	}
-	if err := tx.commit(); err != nil {
-		return fmt.Errorf("store: commit shared volume transaction: %w", err)
-	}
-	return workErr
+	return nil
 }
 
-// sqlError marks an error that rolls a transaction back.
-type sqlError struct{ err error }
+func leaseSeconds(lease time.Duration) int64 { return int64(lease / time.Second) }
 
-func (e sqlError) Error() string { return e.err.Error() }
-func (e sqlError) Unwrap() error { return e.err }
-
-func isSQLError(err error) bool {
-	var target sqlError
-	return errors.As(err, &target)
-}
-
-func (q sharedVolumeSQL) reserve(ctx context.Context, volume *SharedVolume, maxLive int) (*SharedVolume, error) {
-	if volume.State != SharedVolumePublishing {
-		return nil, fmt.Errorf("store: reserve a shared volume in state %q", volume.State)
+func (q sharedVolumeSQL) startPublish(ctx context.Context, volume *SharedVolume, lease time.Duration, maxLiveVolumes int) (*SharedVolume, error) {
+	if err := q.failLapsedPublishes(ctx, volume.SHA256, volume.Name); err != nil {
+		return nil, err
 	}
-	var existing *SharedVolume
 	err := q.inTx(ctx, func(tx *sqlTx) error {
-		if err := q.failLapsed(ctx, tx, volume.SHA256, volume.Name, volume.UpdatedAt); err != nil {
-			return sqlError{err}
-		}
-		live, err := q.getOne(ctx, tx, `SELECT `+sharedVolumeCols+` FROM shared_volumes WHERE sha256 = ? AND `+sharedVolumesLive, volume.SHA256)
-		if err != nil {
-			return sqlError{err}
-		}
-		if live != nil {
-			existing = live
-			return ErrSharedVolumeDigestLive
-		}
-		if volume.Name != "" {
-			var taken int
-			err := tx.QueryRowContext(ctx, q.bind(`SELECT COUNT(*) FROM shared_volumes WHERE name = ? AND `+sharedVolumesLive), volume.Name).Scan(&taken)
-			if err != nil {
-				return sqlError{fmt.Errorf("store: check shared volume name: %w", err)}
+		inserted := tx.QueryRowContext(ctx, q.bind(`INSERT INTO shared_volumes
+			(id, sha256, name, state, published_by, created_at, updated_at, lease_until)
+			VALUES (?, ?, ?, 'publishing', ?, `+q.nowSQL+`, `+q.nowSQL+`, `+q.nowSQL+` + ?)
+			RETURNING created_at, lease_until`),
+			volume.ID, volume.SHA256, volume.Name, volume.PublishedBy, leaseSeconds(lease))
+		if err := inserted.Scan(&volume.CreatedAt, &volume.LeaseUntil); err != nil {
+			if violation := q.uniqueViolation(err); violation != nil {
+				return violation
 			}
-			if taken > 0 {
-				return ErrSharedVolumeNameTaken
-			}
+			return fmt.Errorf("store: insert shared volume: %w", err)
 		}
-		var count int
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM shared_volumes WHERE `+sharedVolumesLive).Scan(&count); err != nil {
-			return sqlError{fmt.Errorf("store: count shared volumes: %w", err)}
+		var liveVolumes int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM shared_volumes WHERE `+sharedVolumesLive).Scan(&liveVolumes); err != nil {
+			return fmt.Errorf("store: count shared volumes: %w", err)
 		}
-		if count >= maxLive {
+		if liveVolumes > maxLiveVolumes {
 			return ErrSharedVolumeLimit
 		}
-		_, err = tx.ExecContext(ctx, q.bind(`INSERT INTO shared_volumes (`+sharedVolumeCols+`)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
-			volume.ID, volume.SHA256, volume.Name, string(volume.State), volume.TarBytes, volume.Entries,
-			volume.ContentBytes, volume.DecompressedBytes, volume.ImageBytes, volume.ImageSHA256,
-			volume.PublishedBy, volume.CreatedAt, volume.ReadyAt, volume.UpdatedAt, volume.LeaseUntil)
-		switch q.uniqueIndex(err) {
-		case sharedVolumesSHA256Index:
-			return sqlError{ErrSharedVolumeDigestLive}
-		case sharedVolumesNameIndex:
-			return sqlError{ErrSharedVolumeNameTaken}
-		}
-		if err != nil {
-			return sqlError{fmt.Errorf("store: insert shared volume: %w", err)}
-		}
 		return nil
-	}, isSQLError)
-	if errors.Is(err, ErrSharedVolumeDigestLive) && existing == nil {
-		// Another pod inserted it after this one looked.
-		var getErr error
-		if existing, getErr = q.get(ctx, volume.SHA256); getErr != nil {
+	})
+	switch {
+	case errors.Is(err, ErrSharedVolumeDigestLive), errors.Is(err, ErrSharedVolumeNameTaken):
+		// When both indexes refuse the row, the database picks which one it
+		// reports: a live row with the sha256 decides.
+		existing, getErr := q.getLive(ctx, volume.SHA256)
+		if getErr != nil {
 			return nil, getErr
 		}
+		if existing != nil {
+			return existing, ErrSharedVolumeDigestLive
+		}
+		return nil, err
+	case err != nil:
+		return nil, err
 	}
-	return existing, unwrapSQLError(err)
+	volume.State, volume.UpdatedAt = SharedVolumePublishing, volume.CreatedAt
+	return nil, nil
 }
 
-func unwrapSQLError(err error) error {
-	var target sqlError
-	if errors.As(err, &target) && (errors.Is(target.err, ErrSharedVolumeDigestLive) || errors.Is(target.err, ErrSharedVolumeNameTaken)) {
-		return target.err
-	}
-	return err
-}
-
-func (q sharedVolumeSQL) renew(ctx context.Context, id string, leaseUntil int64) (bool, error) {
-	ok, err := q.changed(ctx, q.db, `UPDATE shared_volumes SET lease_until = ? WHERE id = ? AND state = 'publishing'`, leaseUntil, id)
+func (q sharedVolumeSQL) renewPublish(ctx context.Context, id string, lease time.Duration) (bool, error) {
+	renewed, err := q.changed(ctx, q.db, `UPDATE shared_volumes SET lease_until = `+q.nowSQL+` + ?
+		WHERE id = ? AND state = 'publishing'`, leaseSeconds(lease), id)
 	if err != nil {
-		return false, fmt.Errorf("store: renew shared volume lease: %w", err)
+		return false, fmt.Errorf("store: renew shared volume publish: %w", err)
 	}
-	return ok, nil
+	return renewed, nil
 }
 
-func (q sharedVolumeSQL) finish(ctx context.Context, volume *SharedVolume) (bool, error) {
-	ok, err := q.changed(ctx, q.db, `UPDATE shared_volumes SET state = 'ready', tar_bytes = ?, entries = ?,
-		content_bytes = ?, decompressed_bytes = ?, image_bytes = ?, image_sha256 = ?, ready_at = ?,
-		updated_at = ?, lease_until = 0
-		WHERE id = ? AND state = 'publishing'`,
-		volume.TarBytes, volume.Entries, volume.ContentBytes, volume.DecompressedBytes, volume.ImageBytes,
-		volume.ImageSHA256, volume.ReadyAt, volume.ReadyAt, volume.ID)
+func (q sharedVolumeSQL) finishPublish(ctx context.Context, volume *SharedVolume) (bool, error) {
+	err := q.db.QueryRowContext(ctx, q.bind(`UPDATE shared_volumes SET state = 'ready', tar_bytes = ?,
+		tar_entries = ?, tar_content_bytes = ?, tar_decompressed_bytes = ?, image_bytes = ?, image_sha256 = ?,
+		ready_at = `+q.nowSQL+`, updated_at = `+q.nowSQL+`, lease_until = 0
+		WHERE id = ? AND state = 'publishing'
+		RETURNING ready_at`),
+		volume.TarBytes, volume.TarEntries, volume.TarContentBytes, volume.TarDecompressedBytes,
+		volume.ImageBytes, volume.ImageSHA256, volume.ID).Scan(&volume.ReadyAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
 	if err != nil {
-		return false, fmt.Errorf("store: finish shared volume: %w", err)
+		return false, fmt.Errorf("store: finish shared volume publish: %w", err)
 	}
-	return ok, nil
+	volume.State, volume.UpdatedAt, volume.LeaseUntil = SharedVolumeReady, volume.ReadyAt, 0
+	return true, nil
 }
 
-func (q sharedVolumeSQL) fail(ctx context.Context, id string, now int64) (bool, error) {
-	if _, err := q.changed(ctx, q.db, `UPDATE shared_volumes SET state = 'failed', updated_at = ?, lease_until = 0
-		WHERE id = ? AND state = 'publishing'`, now, id); err != nil {
-		return false, fmt.Errorf("store: fail shared volume: %w", err)
+func (q sharedVolumeSQL) failPublish(ctx context.Context, id string) (bool, error) {
+	failed, err := q.changed(ctx, q.db, `UPDATE shared_volumes SET state = 'failed', lease_until = 0,
+		updated_at = CASE WHEN state = 'failed' THEN updated_at ELSE `+q.nowSQL+` END
+		WHERE id = ? AND state IN ('publishing', 'failed')`, id)
+	if err != nil {
+		return false, fmt.Errorf("store: fail shared volume publish: %w", err)
 	}
-	var failed int
-	if err := q.db.QueryRowContext(ctx, q.bind(`SELECT COUNT(*) FROM shared_volumes WHERE id = ? AND state = 'failed'`), id).Scan(&failed); err != nil {
-		return false, fmt.Errorf("store: fail shared volume: %w", err)
-	}
-	return failed > 0, nil
+	return failed, nil
 }
 
-func (q sharedVolumeSQL) name(ctx context.Context, id, name string) (bool, error) {
-	ok, err := q.changed(ctx, q.db, `UPDATE shared_volumes SET name = ? WHERE id = ? AND state = 'ready' AND name = ''`, name, id)
-	if q.uniqueIndex(err) == sharedVolumesNameIndex {
-		return false, ErrSharedVolumeNameTaken
+func (q sharedVolumeSQL) setName(ctx context.Context, id, name string) (bool, error) {
+	named, err := q.changed(ctx, q.db, `UPDATE shared_volumes SET name = ? WHERE id = ? AND state = 'ready' AND name = ''`, name, id)
+	if violation := q.uniqueViolation(err); violation != nil {
+		return false, violation
 	}
 	if err != nil {
 		return false, fmt.Errorf("store: name shared volume: %w", err)
 	}
-	return ok, nil
+	return named, nil
 }
 
-func (q sharedVolumeSQL) get(ctx context.Context, sha256 string) (*SharedVolume, error) {
-	return q.getOne(ctx, q.db, `SELECT `+sharedVolumeCols+` FROM shared_volumes WHERE sha256 = ? AND `+sharedVolumesLive, sha256)
+func (q sharedVolumeSQL) getLive(ctx context.Context, sha256 string) (*SharedVolume, error) {
+	return q.getOne(ctx, q.db, `SELECT `+sharedVolumeCols+` FROM shared_volumes WHERE sha256 = ?
+		AND (state = 'ready' OR (state = 'publishing' AND lease_until >= `+q.nowSQL+`))`, sha256)
 }
 
-func (q sharedVolumeSQL) list(ctx context.Context, name string) ([]*SharedVolume, error) {
+func (q sharedVolumeSQL) listReady(ctx context.Context, name string) ([]*SharedVolume, error) {
 	query := `SELECT ` + sharedVolumeCols + ` FROM shared_volumes WHERE state = 'ready'`
 	var args []any
 	if name != "" {
@@ -371,55 +304,24 @@ func (q sharedVolumeSQL) list(ctx context.Context, name string) ([]*SharedVolume
 	return volumes, nil
 }
 
-func (q sharedVolumeSQL) delete(ctx context.Context, sha256 string, now int64) (*SharedVolume, error) {
-	var found *SharedVolume
-	err := q.inTx(ctx, func(tx *sqlTx) error {
-		if err := q.failLapsed(ctx, tx, sha256, "", now); err != nil {
-			return err
-		}
-		live, err := q.getOne(ctx, tx, `SELECT `+sharedVolumeCols+` FROM shared_volumes WHERE sha256 = ? AND `+sharedVolumesLive, sha256)
-		if err != nil || live == nil || live.State != SharedVolumeReady {
-			found = live
-			return err
-		}
-		deleted, err := q.changed(ctx, tx, `UPDATE shared_volumes SET state = 'deleted', updated_at = ? WHERE id = ? AND state = 'ready'`, now, live.ID)
-		if err != nil {
-			return fmt.Errorf("store: delete shared volume: %w", err)
-		}
-		if !deleted {
-			// A concurrent delete got there first.
-			return nil
-		}
-		live.State, live.UpdatedAt = SharedVolumeDeleted, now
-		found = live
-		return nil
-	}, func(error) bool { return true })
-	if err != nil {
+func (q sharedVolumeSQL) markDeleted(ctx context.Context, sha256 string) (*SharedVolume, error) {
+	if err := q.failLapsedPublishes(ctx, sha256, ""); err != nil {
 		return nil, err
 	}
-	return found, nil
+	deleted, err := q.getOne(ctx, q.db, `UPDATE shared_volumes SET state = 'deleted', updated_at = `+q.nowSQL+`
+		WHERE sha256 = ? AND state = 'ready'
+		RETURNING `+sharedVolumeCols, sha256)
+	if err != nil || deleted != nil {
+		return deleted, err
+	}
+	// Nothing was ready to delete: report a publish of the sha256, if any.
+	return q.getOne(ctx, q.db, `SELECT `+sharedVolumeCols+` FROM shared_volumes WHERE sha256 = ? AND state = 'publishing'`, sha256)
 }
 
-func (q sharedVolumeSQL) remove(ctx context.Context, id string) (bool, error) {
-	ok, err := q.changed(ctx, q.db, `DELETE FROM shared_volumes WHERE id = ? AND state <> 'ready'`, id)
+func (q sharedVolumeSQL) purge(ctx context.Context, id string) (bool, error) {
+	purged, err := q.changed(ctx, q.db, `DELETE FROM shared_volumes WHERE id = ? AND state IN ('failed', 'deleted')`, id)
 	if err != nil {
-		return false, fmt.Errorf("store: remove shared volume: %w", err)
+		return false, fmt.Errorf("store: purge shared volume: %w", err)
 	}
-	return ok, nil
-}
-
-// bindNumbered rewrites ? placeholders as $1, $2, … for Postgres. The queries
-// here have no ? anywhere else.
-func bindNumbered(query string) string {
-	var out strings.Builder
-	number := 0
-	for _, char := range query {
-		if char == '?' {
-			number++
-			fmt.Fprintf(&out, "$%d", number)
-			continue
-		}
-		out.WriteRune(char)
-	}
-	return out.String()
+	return purged, nil
 }

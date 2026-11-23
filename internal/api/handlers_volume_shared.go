@@ -17,7 +17,7 @@ import (
 )
 
 // sharedVolumesPath is the root of the shared volume routes, the only ones a
-// publisher key reaches.
+// volume publisher key reaches.
 const sharedVolumesPath = "/shared-volumes"
 
 // Reasons of the shared volume routes' errors.
@@ -67,22 +67,34 @@ func registerSharedVolumeRoutes(mux *http.ServeMux, svc *volumes.Service) {
 
 // mayReadSharedVolumes and mayWriteSharedVolumes are the roles the shared
 // volume routes take. Tenant keys get neither for now.
-func mayReadSharedVolumes(role authRole) bool  { return role == roleAdmin || role == rolePublisher }
-func mayWriteSharedVolumes(role authRole) bool { return role == roleAdmin || role == rolePublisher }
+func mayReadSharedVolumes(role authRole) bool {
+	return role == roleAdmin || role == roleVolumePublisher
+}
+func mayWriteSharedVolumes(role authRole) bool {
+	return role == roleAdmin || role == roleVolumePublisher
+}
+
+// volumeRoles are the roles that may change shared volumes, as the volumes
+// service names them.
+var volumeRoles = map[authRole]volumes.Role{
+	roleAdmin:           volumes.RoleAdmin,
+	roleVolumePublisher: volumes.RoleVolumePublisher,
+}
 
 // sharedVolumeAccess answers a caller whose role allowed refuses, or any
-// caller when there is no volume store. ok is false when it answered.
-func sharedVolumeAccess(w http.ResponseWriter, r *http.Request, svc *volumes.Service, allowed func(authRole) bool) (authRole, bool) {
-	id, ok := authFromContext(r.Context())
-	if !ok || !allowed(id.Role) {
-		writeError(w, http.StatusForbidden, "shared volumes require an admin or publisher API key")
+// caller when there is no volume store, and returns the caller's role for
+// the volumes service. ok is false when it answered.
+func sharedVolumeAccess(w http.ResponseWriter, r *http.Request, svc *volumes.Service, allowed func(authRole) bool) (role volumes.Role, ok bool) {
+	id, authenticated := authFromContext(r.Context())
+	if !authenticated || !allowed(id.Role) {
+		writeError(w, http.StatusForbidden, "shared volumes require an admin or volume publisher API key")
 		return "", false
 	}
 	if svc == nil {
 		writeErrorReason(w, http.StatusNotImplemented, "shared volumes need a volume store, and none is configured (SANDBOX_API_VOLUME_STORE)", reasonVolumeStoreDisabled)
 		return "", false
 	}
-	return id.Role, true
+	return volumeRoles[id.Role], true
 }
 
 // sharedVolumeDigest reads the {ref} path segment: sha256:<64 lowercase hex>.
@@ -139,9 +151,9 @@ func sharedVolumeResponseOf(row *store.SharedVolume) sharedVolumeResponse {
 		Name:   row.Name,
 		Bytes:  row.TarBytes,
 		Tar: volume.TarCounts{
-			Entries:           row.Entries,
-			ContentBytes:      row.ContentBytes,
-			DecompressedBytes: row.DecompressedBytes,
+			Entries:           row.TarEntries,
+			ContentBytes:      row.TarContentBytes,
+			DecompressedBytes: row.TarDecompressedBytes,
 		},
 		PublishedAt: row.ReadyAt,
 	}
@@ -177,7 +189,7 @@ func handlePutSharedVolume(svc *volumes.Service) http.HandlerFunc {
 			Name:       name,
 			Size:       r.ContentLength,
 			Body:       body,
-			Role:       string(role),
+			Role:       role,
 			UploadDone: body.done,
 			Interrupt:  body.interrupt,
 		})
@@ -245,7 +257,7 @@ func handleDeleteSharedVolume(svc *volumes.Service) http.HandlerFunc {
 			return
 		}
 		obs.FieldsFrom(r.Context()).Add("sha256", digest)
-		if err := svc.Delete(r.Context(), digest, string(role)); err != nil {
+		if err := svc.Delete(r.Context(), digest, role); err != nil {
 			writeSharedVolumeError(w, r, err)
 			return
 		}

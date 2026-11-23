@@ -96,13 +96,13 @@ func validTar(t *testing.T) []byte {
 	)
 }
 
-// trackingRecords records which rows were reserved and removed, and can fail
+// trackingRecords records which rows were started and purged, and can fail
 // some calls.
 type trackingRecords struct {
 	store.SharedVolumes
-	mutex    sync.Mutex
-	reserved []string
-	removed  []string
+	mutex   sync.Mutex
+	started []string
+	purged  []string
 	// finishLosesReply commits a finish but reports an error, as a lost
 	// database reply would.
 	finishLosesReply bool
@@ -111,7 +111,7 @@ type trackingRecords struct {
 	renewals   int
 }
 
-func (records *trackingRecords) RenewSharedVolumeLease(ctx context.Context, id string, leaseUntil int64) (bool, error) {
+func (records *trackingRecords) RenewSharedVolumePublish(ctx context.Context, id string, lease time.Duration) (bool, error) {
 	records.mutex.Lock()
 	records.renewals++
 	hangs := records.renewHangs
@@ -120,7 +120,7 @@ func (records *trackingRecords) RenewSharedVolumeLease(ctx context.Context, id s
 		<-ctx.Done()
 		return false, ctx.Err()
 	}
-	return records.SharedVolumes.RenewSharedVolumeLease(ctx, id, leaseUntil)
+	return records.SharedVolumes.RenewSharedVolumePublish(ctx, id, lease)
 }
 
 func (records *trackingRecords) renewalCount() int {
@@ -129,28 +129,28 @@ func (records *trackingRecords) renewalCount() int {
 	return records.renewals
 }
 
-func (records *trackingRecords) ReserveSharedVolume(ctx context.Context, volume *store.SharedVolume, maxLive int) (*store.SharedVolume, error) {
-	live, err := records.SharedVolumes.ReserveSharedVolume(ctx, volume, maxLive)
+func (records *trackingRecords) StartSharedVolumePublish(ctx context.Context, volume *store.SharedVolume, lease time.Duration, maxLiveVolumes int) (*store.SharedVolume, error) {
+	live, err := records.SharedVolumes.StartSharedVolumePublish(ctx, volume, lease, maxLiveVolumes)
 	if err == nil {
 		records.mutex.Lock()
-		records.reserved = append(records.reserved, volume.ID)
+		records.started = append(records.started, volume.ID)
 		records.mutex.Unlock()
 	}
 	return live, err
 }
 
-func (records *trackingRecords) RemoveSharedVolume(ctx context.Context, id string) (bool, error) {
-	removed, err := records.SharedVolumes.RemoveSharedVolume(ctx, id)
-	if removed {
+func (records *trackingRecords) PurgeSharedVolume(ctx context.Context, id string) (bool, error) {
+	purged, err := records.SharedVolumes.PurgeSharedVolume(ctx, id)
+	if purged {
 		records.mutex.Lock()
-		records.removed = append(records.removed, id)
+		records.purged = append(records.purged, id)
 		records.mutex.Unlock()
 	}
-	return removed, err
+	return purged, err
 }
 
-func (records *trackingRecords) FinishSharedVolume(ctx context.Context, volume *store.SharedVolume) (bool, error) {
-	finished, err := records.SharedVolumes.FinishSharedVolume(ctx, volume)
+func (records *trackingRecords) FinishSharedVolumePublish(ctx context.Context, volume *store.SharedVolume) (bool, error) {
+	finished, err := records.SharedVolumes.FinishSharedVolumePublish(ctx, volume)
 	if err == nil && records.finishLosesReply {
 		return false, errors.New("connection reset")
 	}
@@ -221,15 +221,15 @@ func newTestEnvWith(t *testing.T, objects volumestore.Store, storeDir string) *t
 		env.local = local
 	}
 	env.service = NewService(ctx, env.records, env.objects, env.metrics)
-	env.service.limits = limits{maxTarBytes: 1 << 20, policy: testPolicy, maxVolumes: 100}
+	env.service.limits = limits{maxTarBytes: 1 << 20, policy: testPolicy, maxLiveVolumes: 100}
 	env.service.timing = timing{lease: time.Minute, renewEvery: time.Hour, giveUp: time.Hour, cleanup: 5 * time.Second}
 	return env
 }
 
-func (env *testEnv) publish(t *testing.T, data []byte, name string) (Published, error) {
+func (env *testEnv) publish(t *testing.T, data []byte, name string) (PublishResult, error) {
 	t.Helper()
 	return env.service.Publish(context.Background(), PublishRequest{
-		SHA256: digestOf(data), Name: name, Size: int64(len(data)), Body: bytes.NewReader(data), Role: "publisher",
+		SHA256: digestOf(data), Name: name, Size: int64(len(data)), Body: bytes.NewReader(data), Role: RoleVolumePublisher,
 	})
 }
 
@@ -252,17 +252,17 @@ func (env *testEnv) storedFiles(t *testing.T) []string {
 	return files
 }
 
-// assertNothingLeft checks that every reserved row was removed and the store
+// assertNothingLeft checks that every started row was purged and the store
 // holds no file.
 func (env *testEnv) assertNothingLeft(t *testing.T) {
 	t.Helper()
 	env.records.mutex.Lock()
-	reserved, removed := slices.Clone(env.records.reserved), slices.Clone(env.records.removed)
+	started, purged := slices.Clone(env.records.started), slices.Clone(env.records.purged)
 	env.records.mutex.Unlock()
-	slices.Sort(reserved)
-	slices.Sort(removed)
-	if !slices.Equal(reserved, removed) {
-		t.Errorf("rows reserved %v, removed %v; want every one removed", reserved, removed)
+	slices.Sort(started)
+	slices.Sort(purged)
+	if !slices.Equal(started, purged) {
+		t.Errorf("rows started %v, purged %v; want every one purged", started, purged)
 	}
 	if files := env.storedFiles(t); len(files) > 0 {
 		t.Errorf("the store holds %v, want nothing", files)

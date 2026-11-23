@@ -85,8 +85,8 @@ spec:
                   name: {{ include "n8n-sandbox-service.authSecretName" . }}
                   key: {{ .Values.auth.secretKeys.scalerKeys }}
                   optional: true
-            {{- with (trim (toString (default "" .Values.auth.secretKeys.publisherKeys))) }}
-            - name: SANDBOX_API_PUBLISHER_KEYS
+            {{- with (trim (toString (default "" .Values.auth.secretKeys.volumePublisherKeys))) }}
+            - name: SANDBOX_API_VOLUME_PUBLISHER_KEYS
               valueFrom:
                 secretKeyRef:
                   name: {{ include "n8n-sandbox-service.authSecretName" $ }}

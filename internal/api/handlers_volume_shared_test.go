@@ -29,8 +29,8 @@ import (
 )
 
 const (
-	sharedAdminKey     = "admin-key"
-	sharedPublisherKey = "publisher-key"
+	sharedAdminKey           = "admin-key"
+	sharedVolumePublisherKey = "publisher-key"
 )
 
 type sharedVolumeEnv struct {
@@ -66,7 +66,7 @@ func newSharedVolumeEnv(t *testing.T, withStore bool) *sharedVolumeEnv {
 		APIKeys:              map[string]struct{}{sharedAdminKey: {}},
 		ProvisionerKeys:      map[string]struct{}{"provisioner-key": {}},
 		ScalerKeys:           map[string]struct{}{"scaler-key": {}},
-		PublisherKeys:        map[string]struct{}{sharedPublisherKey: {}},
+		VolumePublisherKeys:  map[string]struct{}{sharedVolumePublisherKey: {}},
 		DefaultMaxSandboxes:  10,
 		MaxInflightPerTenant: 4,
 	}), registry.New(45*time.Second), metrics.NewAPIRecorder(true), NewActivityRecorder(sqlite, nil), WithSharedVolumes(service))
@@ -143,7 +143,7 @@ func reasonOf(t *testing.T, recorder *httptest.ResponseRecorder) string {
 	return body.Reason
 }
 
-func TestSharedVolumeRoutesTakeAdminAndPublisherKeysOnly(t *testing.T) {
+func TestSharedVolumeRoutesTakeAdminAndVolumePublisherKeysOnly(t *testing.T) {
 	env := newSharedVolumeEnv(t, true)
 	data := sharedTar(t, "a")
 	path := sharedPath(data)
@@ -164,7 +164,7 @@ func TestSharedVolumeRoutesTakeAdminAndPublisherKeysOnly(t *testing.T) {
 		t.Fatalf("store holds %v after refused requests", files)
 	}
 
-	for _, key := range []string{sharedAdminKey, sharedPublisherKey} {
+	for _, key := range []string{sharedAdminKey, sharedVolumePublisherKey} {
 		other := sharedTar(t, "by-"+key)
 		if got := env.do(t, http.MethodPut, sharedPath(other), key, other); got.Code != http.StatusCreated {
 			t.Fatalf("PUT with %s = %d %s, want 201", key, got.Code, got.Body.String())
@@ -190,7 +190,7 @@ func keyKind(env *sharedVolumeEnv, key string) string {
 	return key
 }
 
-func TestPublisherKeyReachesNothingElse(t *testing.T) {
+func TestVolumePublisherKeyReachesNothingElse(t *testing.T) {
 	env := newSharedVolumeEnv(t, true)
 	for _, request := range []struct {
 		method, target string
@@ -207,9 +207,9 @@ func TestPublisherKeyReachesNothingElse(t *testing.T) {
 		{http.MethodGet, "/shared-volumes/../sandboxes"},
 		{http.MethodGet, "/shared-volumes/"},
 	} {
-		got := env.do(t, request.method, request.target, sharedPublisherKey, nil)
-		if got.Code != http.StatusForbidden || !strings.Contains(got.Body.String(), "publisher API key may only manage shared volumes") {
-			t.Errorf("%s %s with a publisher key = %d %s, want 403", request.method, request.target, got.Code, got.Body.String())
+		got := env.do(t, request.method, request.target, sharedVolumePublisherKey, nil)
+		if got.Code != http.StatusForbidden || !strings.Contains(got.Body.String(), "volume publisher API key may only manage shared volumes") {
+			t.Errorf("%s %s with a volume publisher key = %d %s, want 403", request.method, request.target, got.Code, got.Body.String())
 		}
 	}
 }
@@ -223,7 +223,7 @@ func TestSharedVolumeRoutesWithoutAStore(t *testing.T) {
 		{http.MethodPut, sharedPath(data)}, {http.MethodGet, sharedPath(data)},
 		{http.MethodDelete, sharedPath(data)}, {http.MethodGet, "/shared-volumes"},
 	} {
-		got := env.do(t, request.method, request.target, sharedPublisherKey, data)
+		got := env.do(t, request.method, request.target, sharedVolumePublisherKey, data)
 		if got.Code != http.StatusNotImplemented || reasonOf(t, got) != reasonVolumeStoreDisabled {
 			t.Errorf("%s %s = %d %s, want 501 %s", request.method, request.target, got.Code, got.Body.String(), reasonVolumeStoreDisabled)
 		}
@@ -238,7 +238,7 @@ func TestPutSharedVolume(t *testing.T) {
 	data := sharedTar(t, "docs/readme", "bin/run")
 	path := sharedPath(data)
 
-	created := env.do(t, http.MethodPut, path+"?name=n8n-assistant-2.45.5", sharedPublisherKey, data)
+	created := env.do(t, http.MethodPut, path+"?name=n8n-assistant-2.45.5", sharedVolumePublisherKey, data)
 	if created.Code != http.StatusCreated || created.Header().Get("Location") != path {
 		t.Fatalf("PUT = %d %s, Location %q; want 201 and %s", created.Code, created.Body.String(), created.Header().Get("Location"), path)
 	}
@@ -254,16 +254,16 @@ func TestPutSharedVolume(t *testing.T) {
 		t.Errorf("body %s has an image without a builder", created.Body.String())
 	}
 
-	if again := env.do(t, http.MethodPut, path, sharedPublisherKey, data); again.Code != http.StatusOK {
+	if again := env.do(t, http.MethodPut, path, sharedVolumePublisherKey, data); again.Code != http.StatusOK {
 		t.Fatalf("repeated PUT = %d %s, want 200", again.Code, again.Body.String())
 	}
-	if got := env.do(t, http.MethodGet, path, sharedPublisherKey, nil); got.Code != http.StatusOK || got.Body.String() != created.Body.String() {
+	if got := env.do(t, http.MethodGet, path, sharedVolumePublisherKey, nil); got.Code != http.StatusOK || got.Body.String() != created.Body.String() {
 		t.Fatalf("GET = %d %s, want the PUT's body", got.Code, got.Body.String())
 	}
-	if got := env.do(t, http.MethodGet, "/shared-volumes?name=n8n-assistant-2.45.5", sharedPublisherKey, nil); got.Code != http.StatusOK || !strings.HasPrefix(got.Body.String(), "[{") {
+	if got := env.do(t, http.MethodGet, "/shared-volumes?name=n8n-assistant-2.45.5", sharedVolumePublisherKey, nil); got.Code != http.StatusOK || !strings.HasPrefix(got.Body.String(), "[{") {
 		t.Fatalf("list by name = %d %s", got.Code, got.Body.String())
 	}
-	if got := env.do(t, http.MethodGet, "/shared-volumes?name=other", sharedPublisherKey, nil); got.Code != http.StatusOK || strings.TrimSpace(got.Body.String()) != "[]" {
+	if got := env.do(t, http.MethodGet, "/shared-volumes?name=other", sharedVolumePublisherKey, nil); got.Code != http.StatusOK || strings.TrimSpace(got.Body.String()) != "[]" {
 		t.Fatalf("list by an unknown name = %d %s, want []", got.Code, got.Body.String())
 	}
 
@@ -289,7 +289,7 @@ func TestPutSharedVolume(t *testing.T) {
 		"escaped colon okay": {"/shared-volumes/sha256%3A" + sharedDigest(other), other, http.StatusCreated, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got := env.do(t, http.MethodPut, tc.target, sharedPublisherKey, tc.body)
+			got := env.do(t, http.MethodPut, tc.target, sharedVolumePublisherKey, tc.body)
 			if got.Code != tc.status || (tc.reason != "" && reasonOf(t, got) != tc.reason) {
 				t.Fatalf("PUT %s = %d %s, want %d %s", tc.target, got.Code, got.Body.String(), tc.status, tc.reason)
 			}
@@ -302,7 +302,7 @@ func TestPutSharedVolumeNeedsALength(t *testing.T) {
 	data := sharedTar(t, "a")
 	req := httptest.NewRequest(http.MethodPut, sharedPath(data), io.NopCloser(bytes.NewReader(data)))
 	req.ContentLength = -1
-	req.Header.Set("X-Api-Key", sharedPublisherKey)
+	req.Header.Set("X-Api-Key", sharedVolumePublisherKey)
 	recorder := httptest.NewRecorder()
 	env.router.ServeHTTP(recorder, req)
 	if recorder.Code != http.StatusLengthRequired {
@@ -311,7 +311,7 @@ func TestPutSharedVolumeNeedsALength(t *testing.T) {
 
 	req = httptest.NewRequest(http.MethodPut, sharedPath(data), failingBody{t})
 	req.ContentLength = volumes.MaxTarBytes + 1
-	req.Header.Set("X-Api-Key", sharedPublisherKey)
+	req.Header.Set("X-Api-Key", sharedVolumePublisherKey)
 	recorder = httptest.NewRecorder()
 	env.router.ServeHTTP(recorder, req)
 	if recorder.Code != http.StatusRequestEntityTooLarge || reasonOf(t, recorder) != reasonTooLarge {
@@ -342,18 +342,18 @@ func TestGetAndDeleteSharedVolume(t *testing.T) {
 	if got := env.do(t, http.MethodHead, path, sharedAdminKey, nil); got.Code != http.StatusOK {
 		t.Fatalf("HEAD = %d, want 200", got.Code)
 	}
-	if got := env.do(t, http.MethodDelete, path, sharedPublisherKey, nil); got.Code != http.StatusNoContent {
+	if got := env.do(t, http.MethodDelete, path, sharedVolumePublisherKey, nil); got.Code != http.StatusNoContent {
 		t.Fatalf("DELETE = %d %s, want 204", got.Code, got.Body.String())
 	}
 	if files := env.storedFiles(t); len(files) != 0 {
 		t.Fatalf("store holds %v after DELETE", files)
 	}
 	for _, method := range []string{http.MethodGet, http.MethodDelete} {
-		if got := env.do(t, method, path, sharedPublisherKey, nil); got.Code != http.StatusNotFound {
+		if got := env.do(t, method, path, sharedVolumePublisherKey, nil); got.Code != http.StatusNotFound {
 			t.Fatalf("%s after DELETE = %d, want 404", method, got.Code)
 		}
 	}
-	if got := env.do(t, http.MethodGet, "/shared-volumes/sha256:nope", sharedPublisherKey, nil); got.Code != http.StatusBadRequest {
+	if got := env.do(t, http.MethodGet, "/shared-volumes/sha256:nope", sharedVolumePublisherKey, nil); got.Code != http.StatusBadRequest {
 		t.Fatalf("GET of a malformed digest = %d, want 400", got.Code)
 	}
 }
@@ -428,7 +428,7 @@ func TestSharedVolumeUploadOutlastsTheReadTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	req.ContentLength = int64(len(data))
-	req.Header.Set("X-Api-Key", sharedPublisherKey)
+	req.Header.Set("X-Api-Key", sharedVolumePublisherKey)
 	start := time.Now()
 	resp, err := server.Client().Do(req)
 	if err != nil {
@@ -454,7 +454,7 @@ func TestStalledSharedVolumeUpload(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	fmt.Fprintf(conn, "PUT %s HTTP/1.1\r\nHost: api\r\nX-Api-Key: %s\r\nContent-Length: %d\r\n\r\n", sharedPath(data), sharedPublisherKey, len(data))
+	fmt.Fprintf(conn, "PUT %s HTTP/1.1\r\nHost: api\r\nX-Api-Key: %s\r\nContent-Length: %d\r\n\r\n", sharedPath(data), sharedVolumePublisherKey, len(data))
 	if _, err := conn.Write(data[:1024]); err != nil {
 		t.Fatal(err)
 	}
@@ -482,7 +482,7 @@ func TestSharedVolumeUploadEndsAtShutdown(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	fmt.Fprintf(conn, "PUT %s HTTP/1.1\r\nHost: api\r\nX-Api-Key: %s\r\nContent-Length: %d\r\n\r\n", sharedPath(data), sharedPublisherKey, len(data))
+	fmt.Fprintf(conn, "PUT %s HTTP/1.1\r\nHost: api\r\nX-Api-Key: %s\r\nContent-Length: %d\r\n\r\n", sharedPath(data), sharedVolumePublisherKey, len(data))
 	if _, err := conn.Write(data[:1024]); err != nil {
 		t.Fatal(err)
 	}

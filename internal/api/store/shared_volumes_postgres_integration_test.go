@@ -2,25 +2,44 @@
 
 package store
 
-import "testing"
+import (
+	"sync"
+	"testing"
+)
 
 func TestPostgresSharedVolumes(t *testing.T) {
 	testSharedVolumes(t, openTestPostgresStore(t))
 }
 
 // Two stores on one database stand in for two API pods.
-func TestPostgresSharedVolumesConcurrentReserves(t *testing.T) {
-	testConcurrentSharedVolumeReserves(t, []SharedVolumes{openTestPostgresStore(t), openTestPostgresStore(t)})
+func TestPostgresSharedVolumesConcurrentStarts(t *testing.T) {
+	testConcurrentSharedVolumeStarts(t, []SharedVolumes{openTestPostgresStore(t), openTestPostgresStore(t)})
 }
 
 func TestPostgresSharedVolumesConcurrentDeletes(t *testing.T) {
 	testConcurrentSharedVolumeDeletes(t, []SharedVolumes{openTestPostgresStore(t), openTestPostgresStore(t)})
 }
 
-// The schema runs on every start.
-func TestPostgresSharedVolumesSchemaRunsTwice(t *testing.T) {
-	first := openTestPostgresStore(t)
-	if _, err := first.db.Exec(postgresSharedVolumesSchema); err != nil {
-		t.Fatalf("schema again: %v", err)
+// Every API pod runs the schema when it starts, several at once after a
+// rollout.
+func TestPostgresSharedVolumesSchemaRunsOnPodsStartingTogether(t *testing.T) {
+	postgres := openTestPostgresStore(t)
+	const pods, rounds = 4, 5
+	for range rounds {
+		var wait sync.WaitGroup
+		start := make(chan struct{})
+		for range pods {
+			wait.Go(func() {
+				<-start
+				for _, statement := range postgresSharedVolumesSchema {
+					if _, err := postgres.db.Exec(statement); err != nil {
+						t.Errorf("schema: %v", err)
+						return
+					}
+				}
+			})
+		}
+		close(start)
+		wait.Wait()
 	}
 }

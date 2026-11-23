@@ -11,7 +11,7 @@ There are five key classes:
 - `SANDBOX_API_KEYS` are admin keys. An admin key can create/list/delete any sandbox, manage tenants and mint tenant API keys via the admin API, and manage shared volumes.
 - `SANDBOX_API_PROVISIONER_KEYS` are provisioner keys: `POST /admin/tenants`, `PATCH /admin/tenants/{id}` and `DELETE /admin/tenants/{id}` only, `403` everywhere else. Why the class exists and what it does not protect: [security-model.md](security-model.md#provisioner-keys).
 - `SANDBOX_API_SCALER_KEYS` are scaler keys: `GET /admin/runners` and `PUT`/`DELETE /admin/runners/{id}/cordon` only, `403` on every other path ([security-model.md](security-model.md#scaler-keys)).
-- `SANDBOX_API_PUBLISHER_KEYS` are publisher keys: the [shared volume](#shared-volumes) routes only, `403` on every other path ([security-model.md](security-model.md#publisher-keys)).
+- `SANDBOX_API_VOLUME_PUBLISHER_KEYS` are volume publisher keys: the [shared volume](#shared-volumes) routes only, `403` on every other path ([security-model.md](security-model.md#volume-publisher-keys)).
 - Tenant keys are minted by an admin (or returned when a tenant is created). A tenant key may only create sandboxes for that tenant and may only list/get/delete/proxy its own sandboxes. Self-hosted operators can ignore tenant APIs entirely and keep using the admin key.
 
 Tenant keys are returned in plaintext once on create; only a hash is stored. Each API replica remembers a tenant key lookup for `SANDBOX_API_KEY_CACHE_TTL` (default `15s`), so a revoked key, or the key of a deleted tenant, can still be accepted by other replicas for up to that long.
@@ -1057,7 +1057,7 @@ Admin only. Revoke an API key (`204`). The API replica that handles the revoke r
 
 ## Shared volumes
 
-A shared volume is a tar of content published for all tenants. It is addressed by the sha256 of its tar, as `sha256:<64 lowercase hex digits>`, and may carry a name. Admin and publisher keys only; tenant, provisioner and scaler keys get `403`. Without a volume store (`SANDBOX_API_VOLUME_STORE` empty) every route answers `501` with reason `volume_store_disabled`. Limits are in [limits.md](limits.md#shared-volumes).
+A shared volume is a tar of content published for all tenants. It is addressed by the sha256 of its tar, as `sha256:<64 lowercase hex digits>`, and may carry a name. Admin and volume publisher keys only; tenant, provisioner and scaler keys get `403`. Without a volume store (`SANDBOX_API_VOLUME_STORE` empty) every route answers `501` with reason `volume_store_disabled`. Limits are in [limits.md](limits.md#shared-volumes).
 
 A shared volume as these routes return it:
 
@@ -1099,7 +1099,7 @@ A name never moves to another digest. To publish other content under a name, `DE
 | Status | `reason` | When |
 | --- | --- | --- |
 | `400` | | Malformed digest or name, `name` given twice, another query parameter, or the body broke off |
-| `403` | | Not an admin or publisher key |
+| `403` | | Not an admin or volume publisher key |
 | `408` | | The upload stalled for a minute or took more than an hour |
 | `409` | `name_taken` | Another volume, ready or being published, has the name |
 | `409` | `name_mismatch` | This digest is published under another name |
@@ -1118,7 +1118,7 @@ A failed publish removes what it stored. If that removal fails, the API logs a w
 **Example:**
 
 ```bash
-curl -T bundle.tar -H "X-Api-Key: PUBLISHER_KEY" \
+curl -T bundle.tar -H "X-Api-Key: VOLUME_PUBLISHER_KEY" \
   "http://sandbox-api:8080/shared-volumes/sha256:$(sha256sum bundle.tar | cut -d' ' -f1)?name=n8n-assistant-2.45.5"
 ```
 

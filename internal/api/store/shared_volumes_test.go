@@ -32,32 +32,31 @@ func randomVolumeName() string {
 	return "volume-" + uuid.New().String()[:8]
 }
 
-// publishingRow is a row to reserve, with a lease that ends at leaseUntil.
-func publishingRow(sha, name string, now, leaseUntil int64) *SharedVolume {
-	return &SharedVolume{
-		ID:          uuid.New().String(),
-		SHA256:      sha,
-		Name:        name,
-		State:       SharedVolumePublishing,
-		PublishedBy: "publisher",
-		CreatedAt:   now,
-		UpdatedAt:   now,
-		LeaseUntil:  leaseUntil,
+// publishingRow is a row to start a publish of.
+func publishingRow(sha, name string) *SharedVolume {
+	return &SharedVolume{ID: uuid.New().String(), SHA256: sha, Name: name, PublishedBy: "volume_publisher"}
+}
+
+const (
+	testMaxLive = 1 << 30
+	testLease   = time.Minute
+	// lapsedLease starts a publish whose lease has already ended.
+	lapsedLease = -time.Minute
+)
+
+func startPublish(t *testing.T, s SharedVolumes, row *SharedVolume, lease time.Duration) {
+	t.Helper()
+	if live, err := s.StartSharedVolumePublish(context.Background(), row, lease, testMaxLive); err != nil || live != nil {
+		t.Fatalf("start = %+v, %v; want nil, nil", live, err)
 	}
 }
 
-const testMaxLive = 1 << 30
-
-func reserveReady(t *testing.T, s SharedVolumes, sha, name string, readyAt int64) *SharedVolume {
+func publishReady(t *testing.T, s SharedVolumes, sha, name string) *SharedVolume {
 	t.Helper()
-	ctx := context.Background()
-	row := publishingRow(sha, name, readyAt, readyAt+120)
-	if _, err := s.ReserveSharedVolume(ctx, row, testMaxLive); err != nil {
-		t.Fatalf("reserve: %v", err)
-	}
-	row.TarBytes, row.Entries, row.ContentBytes, row.DecompressedBytes = 10240, 3, 12, 10240
-	row.ReadyAt = readyAt
-	if finished, err := s.FinishSharedVolume(ctx, row); err != nil || !finished {
+	row := publishingRow(sha, name)
+	startPublish(t, s, row, testLease)
+	row.TarBytes, row.TarEntries, row.TarContentBytes, row.TarDecompressedBytes = 10240, 3, 12, 10240
+	if finished, err := s.FinishSharedVolumePublish(context.Background(), row); err != nil || !finished {
 		t.Fatalf("finish = %v, %v; want true", finished, err)
 	}
 	return row
@@ -67,9 +66,9 @@ func TestSharedVolumes(t *testing.T) {
 	testSharedVolumes(t, newSQLiteSharedVolumes(t))
 }
 
-func TestSharedVolumesConcurrentReserves(t *testing.T) {
-	s := newSQLiteSharedVolumes(t)
-	testConcurrentSharedVolumeReserves(t, []SharedVolumes{s, s})
+func TestSharedVolumesConcurrentStarts(t *testing.T) {
+	sqlite := newSQLiteSharedVolumes(t)
+	testConcurrentSharedVolumeStarts(t, []SharedVolumes{sqlite, sqlite})
 }
 
 func TestSharedVolumesConcurrentDeletes(t *testing.T) {
@@ -77,9 +76,8 @@ func TestSharedVolumesConcurrentDeletes(t *testing.T) {
 	testConcurrentSharedVolumeDeletes(t, []SharedVolumes{sqlite, sqlite})
 }
 
-// A reservation stops waiting for SQLite's one connection when its context
-// ends.
-func TestSQLiteSharedVolumeReserveGivesUpWithItsContext(t *testing.T) {
+// A start stops waiting for SQLite's one connection when its context ends.
+func TestSQLiteSharedVolumeStartGivesUpWithItsContext(t *testing.T) {
 	sqlite := newSQLiteSharedVolumes(t)
 	held, err := sqlite.beginImmediate()
 	if err != nil {
@@ -90,35 +88,39 @@ func TestSQLiteSharedVolumeReserveGivesUpWithItsContext(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		_, err := sqlite.ReserveSharedVolume(ctx, publishingRow(randomSHA256(), "", 100, 220), testMaxLive)
+		_, err := sqlite.StartSharedVolumePublish(ctx, publishingRow(randomSHA256(), ""), testLease, testMaxLive)
 		done <- err
 	}()
 	select {
 	case err := <-done:
 		if !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("ReserveSharedVolume() = %v, want the context's deadline", err)
+			t.Fatalf("StartSharedVolumePublish() = %v, want the context's deadline", err)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("ReserveSharedVolume() kept waiting for the connection")
+		t.Fatal("StartSharedVolumePublish() kept waiting for the connection")
 	}
 }
 
 func TestSharedVolumesLimit(t *testing.T) {
-	s := newSQLiteSharedVolumes(t)
+	sqlite := newSQLiteSharedVolumes(t)
 	ctx := context.Background()
-	if _, err := s.ReserveSharedVolume(ctx, publishingRow(randomSHA256(), "", 100, 200), 2); err != nil {
-		t.Fatalf("first reserve: %v", err)
+	if _, err := sqlite.StartSharedVolumePublish(ctx, publishingRow(randomSHA256(), ""), testLease, 2); err != nil {
+		t.Fatalf("first start: %v", err)
 	}
-	ready := reserveReady(t, s, randomSHA256(), "", 100)
-	if _, err := s.ReserveSharedVolume(ctx, publishingRow(randomSHA256(), "", 100, 200), 2); !errors.Is(err, ErrSharedVolumeLimit) {
-		t.Fatalf("third reserve = %v, want ErrSharedVolumeLimit", err)
+	ready := publishReady(t, sqlite, randomSHA256(), "")
+	over := publishingRow(randomSHA256(), "")
+	if _, err := sqlite.StartSharedVolumePublish(ctx, over, testLease, 2); !errors.Is(err, ErrSharedVolumeLimit) {
+		t.Fatalf("third start = %v, want ErrSharedVolumeLimit", err)
+	}
+	if got, err := sqlite.GetLiveSharedVolume(ctx, over.SHA256); err != nil || got != nil {
+		t.Fatalf("get of the refused start = %+v, %v; want nil: its insert is rolled back", got, err)
 	}
 	// A deleted row doesn't count.
-	if row, err := s.DeleteSharedVolume(ctx, ready.SHA256, 101); err != nil || row == nil {
+	if row, err := sqlite.MarkSharedVolumeDeleted(ctx, ready.SHA256); err != nil || row == nil {
 		t.Fatalf("delete = %v, %v", row, err)
 	}
-	if _, err := s.ReserveSharedVolume(ctx, publishingRow(randomSHA256(), "", 102, 300), 2); err != nil {
-		t.Fatalf("reserve after a delete: %v", err)
+	if _, err := sqlite.StartSharedVolumePublish(ctx, publishingRow(randomSHA256(), ""), testLease, 2); err != nil {
+		t.Fatalf("start after a delete: %v", err)
 	}
 }
 
@@ -126,43 +128,41 @@ func TestSharedVolumesLimit(t *testing.T) {
 func testSharedVolumes(t *testing.T, s SharedVolumes) {
 	ctx := context.Background()
 
-	t.Run("reserve, renew, finish, get and list", func(t *testing.T) {
+	t.Run("start, renew, finish, get and list", func(t *testing.T) {
 		sha, name := randomSHA256(), randomVolumeName()
-		row := publishingRow(sha, name, 100, 220)
-		if live, err := s.ReserveSharedVolume(ctx, row, testMaxLive); err != nil || live != nil {
-			t.Fatalf("reserve = %v, %v; want nil, nil", live, err)
+		row := publishingRow(sha, name)
+		startPublish(t, s, row, testLease)
+		if row.State != SharedVolumePublishing || row.CreatedAt == 0 || row.LeaseUntil != row.CreatedAt+60 {
+			t.Fatalf("started row = %+v; want publishing, with a lease a minute from its start", row)
 		}
-		got, err := s.GetSharedVolume(ctx, sha)
-		if err != nil || got == nil || got.State != SharedVolumePublishing || got.ID != row.ID || got.Name != name {
-			t.Fatalf("get publishing = %+v, %v", got, err)
+		got, err := s.GetLiveSharedVolume(ctx, sha)
+		if err != nil || got == nil || *got != *row {
+			t.Fatalf("get publishing = %+v, %v; want %+v", got, err, row)
 		}
-		if listed, err := s.ListSharedVolumes(ctx, name); err != nil || len(listed) != 0 {
+		if listed, err := s.ListReadySharedVolumes(ctx, name); err != nil || len(listed) != 0 {
 			t.Fatalf("list before ready = %v, %v; want none", listed, err)
 		}
-		if kept, err := s.RenewSharedVolumeLease(ctx, row.ID, 400); err != nil || !kept {
-			t.Fatalf("renew = %v, %v; want true", kept, err)
+		if renewed, err := s.RenewSharedVolumePublish(ctx, row.ID, 2*testLease); err != nil || !renewed {
+			t.Fatalf("renew = %v, %v; want true", renewed, err)
 		}
-		row.TarBytes, row.Entries, row.ContentBytes, row.DecompressedBytes = 10240, 3, 12, 10240
-		row.ImageBytes, row.ImageSHA256, row.ReadyAt = 4096, randomSHA256(), 150
-		if finished, err := s.FinishSharedVolume(ctx, row); err != nil || !finished {
+		row.TarBytes, row.TarEntries, row.TarContentBytes, row.TarDecompressedBytes = 10240, 3, 12, 10240
+		row.ImageBytes, row.ImageSHA256 = 4096, randomSHA256()
+		if finished, err := s.FinishSharedVolumePublish(ctx, row); err != nil || !finished {
 			t.Fatalf("finish = %v, %v; want true", finished, err)
 		}
-		got, err = s.GetSharedVolume(ctx, sha)
-		if err != nil || got == nil {
-			t.Fatalf("get ready = %v, %v", got, err)
+		if row.State != SharedVolumeReady || row.ReadyAt < row.CreatedAt || row.UpdatedAt != row.ReadyAt || row.LeaseUntil != 0 {
+			t.Fatalf("finished row = %+v; want ready, at a time the database set", row)
 		}
-		want := *row
-		want.State, want.UpdatedAt, want.LeaseUntil = SharedVolumeReady, 150, 0
-		if *got != want {
-			t.Fatalf("get ready = %+v, want %+v", *got, want)
+		if got, err = s.GetLiveSharedVolume(ctx, sha); err != nil || got == nil || *got != *row {
+			t.Fatalf("get ready = %+v, %v; want %+v", got, err, row)
 		}
-		if kept, err := s.RenewSharedVolumeLease(ctx, row.ID, 500); err != nil || kept {
-			t.Fatalf("renew of a ready row = %v, %v; want false", kept, err)
+		if renewed, err := s.RenewSharedVolumePublish(ctx, row.ID, testLease); err != nil || renewed {
+			t.Fatalf("renew of a ready row = %v, %v; want false", renewed, err)
 		}
-		if failed, err := s.FailSharedVolume(ctx, row.ID, 160); err != nil || failed {
+		if failed, err := s.FailSharedVolumePublish(ctx, row.ID); err != nil || failed {
 			t.Fatalf("fail of a ready row = %v, %v; want false", failed, err)
 		}
-		listed, err := s.ListSharedVolumes(ctx, name)
+		listed, err := s.ListReadySharedVolumes(ctx, name)
 		if err != nil || len(listed) != 1 || listed[0].ID != row.ID {
 			t.Fatalf("list by name = %v, %v; want the row", listed, err)
 		}
@@ -170,149 +170,143 @@ func testSharedVolumes(t *testing.T, s SharedVolumes) {
 
 	t.Run("a live digest or name is refused", func(t *testing.T) {
 		sha, name := randomSHA256(), randomVolumeName()
-		ready := reserveReady(t, s, sha, name, 100)
-		live, err := s.ReserveSharedVolume(ctx, publishingRow(sha, "", 110, 230), testMaxLive)
+		ready := publishReady(t, s, sha, name)
+		live, err := s.StartSharedVolumePublish(ctx, publishingRow(sha, ""), testLease, testMaxLive)
 		if !errors.Is(err, ErrSharedVolumeDigestLive) || live == nil || live.ID != ready.ID {
-			t.Fatalf("reserve of a ready digest = %v, %v; want ErrSharedVolumeDigestLive with the row", live, err)
+			t.Fatalf("start of a ready digest = %v, %v; want ErrSharedVolumeDigestLive with the row", live, err)
 		}
-		if _, err := s.ReserveSharedVolume(ctx, publishingRow(randomSHA256(), name, 110, 230), testMaxLive); !errors.Is(err, ErrSharedVolumeNameTaken) {
-			t.Fatalf("reserve of a taken name = %v, want ErrSharedVolumeNameTaken", err)
+		// Both indexes refuse it; the digest's row answers.
+		live, err = s.StartSharedVolumePublish(ctx, publishingRow(sha, name), testLease, testMaxLive)
+		if !errors.Is(err, ErrSharedVolumeDigestLive) || live == nil || live.ID != ready.ID {
+			t.Fatalf("start of a ready digest under its name = %v, %v; want ErrSharedVolumeDigestLive with the row", live, err)
+		}
+		if _, err := s.StartSharedVolumePublish(ctx, publishingRow(randomSHA256(), name), testLease, testMaxLive); !errors.Is(err, ErrSharedVolumeNameTaken) {
+			t.Fatalf("start of a taken name = %v, want ErrSharedVolumeNameTaken", err)
 		}
 
-		publishing := publishingRow(randomSHA256(), randomVolumeName(), 100, 220)
-		if _, err := s.ReserveSharedVolume(ctx, publishing, testMaxLive); err != nil {
-			t.Fatal(err)
-		}
-		live, err = s.ReserveSharedVolume(ctx, publishingRow(publishing.SHA256, "", 110, 230), testMaxLive)
+		publishing := publishingRow(randomSHA256(), randomVolumeName())
+		startPublish(t, s, publishing, testLease)
+		live, err = s.StartSharedVolumePublish(ctx, publishingRow(publishing.SHA256, ""), testLease, testMaxLive)
 		if !errors.Is(err, ErrSharedVolumeDigestLive) || live == nil || live.State != SharedVolumePublishing {
-			t.Fatalf("reserve of a publishing digest = %v, %v; want ErrSharedVolumeDigestLive", live, err)
+			t.Fatalf("start of a publishing digest = %v, %v; want ErrSharedVolumeDigestLive", live, err)
 		}
-		if _, err := s.ReserveSharedVolume(ctx, publishingRow(randomSHA256(), publishing.Name, 110, 230), testMaxLive); !errors.Is(err, ErrSharedVolumeNameTaken) {
-			t.Fatalf("reserve of a publishing name = %v, want ErrSharedVolumeNameTaken", err)
+		if _, err := s.StartSharedVolumePublish(ctx, publishingRow(randomSHA256(), publishing.Name), testLease, testMaxLive); !errors.Is(err, ErrSharedVolumeNameTaken) {
+			t.Fatalf("start of a publishing name = %v, want ErrSharedVolumeNameTaken", err)
 		}
 	})
 
 	t.Run("a lapsed lease is taken over", func(t *testing.T) {
 		name := randomVolumeName()
-		lapsed := publishingRow(randomSHA256(), name, 100, 220)
-		if _, err := s.ReserveSharedVolume(ctx, lapsed, testMaxLive); err != nil {
-			t.Fatal(err)
+		lapsed := publishingRow(randomSHA256(), name)
+		startPublish(t, s, lapsed, lapsedLease)
+		if got, err := s.GetLiveSharedVolume(ctx, lapsed.SHA256); err != nil || got != nil {
+			t.Fatalf("get of a lapsed publish = %+v, %v; want nil", got, err)
 		}
-		// The same digest at 230, after the lease ended.
-		retry := publishingRow(lapsed.SHA256, name, 230, 350)
-		if _, err := s.ReserveSharedVolume(ctx, retry, testMaxLive); err != nil {
-			t.Fatalf("reserve after the lease ended: %v", err)
+		startPublish(t, s, publishingRow(lapsed.SHA256, name), testLease)
+		if renewed, err := s.RenewSharedVolumePublish(ctx, lapsed.ID, testLease); err != nil || renewed {
+			t.Fatalf("renew of the lapsed row = %v, %v; want false", renewed, err)
 		}
-		if kept, err := s.RenewSharedVolumeLease(ctx, lapsed.ID, 400); err != nil || kept {
-			t.Fatalf("renew of the lapsed row = %v, %v; want false", kept, err)
-		}
-		if finished, err := s.FinishSharedVolume(ctx, lapsed); err != nil || finished {
+		if finished, err := s.FinishSharedVolumePublish(ctx, lapsed); err != nil || finished {
 			t.Fatalf("finish of the lapsed row = %v, %v; want false", finished, err)
 		}
-		if failed, err := s.FailSharedVolume(ctx, lapsed.ID, 240); err != nil || !failed {
+		if failed, err := s.FailSharedVolumePublish(ctx, lapsed.ID); err != nil || !failed {
 			t.Fatalf("fail of the lapsed row = %v, %v; want true: it is failed", failed, err)
 		}
 
-		// Another digest under the lapsed name at 400.
-		byName := publishingRow(randomSHA256(), randomVolumeName(), 100, 220)
-		if _, err := s.ReserveSharedVolume(ctx, byName, testMaxLive); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := s.ReserveSharedVolume(ctx, publishingRow(randomSHA256(), byName.Name, 400, 520), testMaxLive); err != nil {
-			t.Fatalf("reserve of a lapsed name: %v", err)
-		}
-		if kept, err := s.RenewSharedVolumeLease(ctx, byName.ID, 600); err != nil || kept {
-			t.Fatalf("renew of the row whose name was taken over = %v, %v; want false", kept, err)
+		// Another digest under a lapsed publish's name.
+		byName := publishingRow(randomSHA256(), randomVolumeName())
+		startPublish(t, s, byName, lapsedLease)
+		startPublish(t, s, publishingRow(randomSHA256(), byName.Name), testLease)
+		if renewed, err := s.RenewSharedVolumePublish(ctx, byName.ID, testLease); err != nil || renewed {
+			t.Fatalf("renew of the row whose name was taken over = %v, %v; want false", renewed, err)
 		}
 	})
 
 	t.Run("naming a ready volume", func(t *testing.T) {
-		unnamed := reserveReady(t, s, randomSHA256(), "", 100)
-		other := reserveReady(t, s, randomSHA256(), randomVolumeName(), 100)
-		if _, err := s.NameSharedVolume(ctx, unnamed.ID, other.Name); !errors.Is(err, ErrSharedVolumeNameTaken) {
+		unnamed := publishReady(t, s, randomSHA256(), "")
+		other := publishReady(t, s, randomSHA256(), randomVolumeName())
+		if _, err := s.NameReadySharedVolume(ctx, unnamed.ID, other.Name); !errors.Is(err, ErrSharedVolumeNameTaken) {
 			t.Fatalf("name with a taken name = %v, want ErrSharedVolumeNameTaken", err)
 		}
 		name := randomVolumeName()
-		if named, err := s.NameSharedVolume(ctx, unnamed.ID, name); err != nil || !named {
+		if named, err := s.NameReadySharedVolume(ctx, unnamed.ID, name); err != nil || !named {
 			t.Fatalf("name = %v, %v; want true", named, err)
 		}
-		if named, err := s.NameSharedVolume(ctx, unnamed.ID, randomVolumeName()); err != nil || named {
+		if named, err := s.NameReadySharedVolume(ctx, unnamed.ID, randomVolumeName()); err != nil || named {
 			t.Fatalf("second name = %v, %v; want false: one name per volume", named, err)
 		}
-		if got, _ := s.GetSharedVolume(ctx, unnamed.SHA256); got == nil || got.Name != name {
+		if got, _ := s.GetLiveSharedVolume(ctx, unnamed.SHA256); got == nil || got.Name != name {
 			t.Fatalf("get after naming = %+v", got)
 		}
 	})
 
 	t.Run("delete hides a ready volume and frees its name", func(t *testing.T) {
 		name := randomVolumeName()
-		ready := reserveReady(t, s, randomSHA256(), name, 100)
-		deleted, err := s.DeleteSharedVolume(ctx, ready.SHA256, 200)
+		ready := publishReady(t, s, randomSHA256(), name)
+		deleted, err := s.MarkSharedVolumeDeleted(ctx, ready.SHA256)
 		if err != nil || deleted == nil || deleted.State != SharedVolumeDeleted || deleted.ID != ready.ID {
 			t.Fatalf("delete = %+v, %v; want the row, deleted", deleted, err)
 		}
-		if got, err := s.GetSharedVolume(ctx, ready.SHA256); err != nil || got != nil {
+		if got, err := s.GetLiveSharedVolume(ctx, ready.SHA256); err != nil || got != nil {
 			t.Fatalf("get after delete = %+v, %v; want nil", got, err)
 		}
-		if again, err := s.DeleteSharedVolume(ctx, ready.SHA256, 210); err != nil || again != nil {
+		if again, err := s.MarkSharedVolumeDeleted(ctx, ready.SHA256); err != nil || again != nil {
 			t.Fatalf("second delete = %+v, %v; want nil", again, err)
 		}
-		if _, err := s.ReserveSharedVolume(ctx, publishingRow(randomSHA256(), name, 220, 340), testMaxLive); err != nil {
-			t.Fatalf("reserve of the freed name: %v", err)
-		}
-		if _, err := s.ReserveSharedVolume(ctx, publishingRow(ready.SHA256, "", 220, 340), testMaxLive); err != nil {
-			t.Fatalf("reserve of the deleted digest: %v", err)
-		}
+		startPublish(t, s, publishingRow(randomSHA256(), name), testLease)
+		startPublish(t, s, publishingRow(ready.SHA256, ""), testLease)
 	})
 
 	t.Run("delete leaves a publishing volume, and fails a lapsed one", func(t *testing.T) {
-		publishing := publishingRow(randomSHA256(), "", 100, 220)
-		if _, err := s.ReserveSharedVolume(ctx, publishing, testMaxLive); err != nil {
-			t.Fatal(err)
-		}
-		got, err := s.DeleteSharedVolume(ctx, publishing.SHA256, 200)
+		publishing := publishingRow(randomSHA256(), "")
+		startPublish(t, s, publishing, testLease)
+		got, err := s.MarkSharedVolumeDeleted(ctx, publishing.SHA256)
 		if err != nil || got == nil || got.State != SharedVolumePublishing {
 			t.Fatalf("delete while publishing = %+v, %v; want the publishing row", got, err)
 		}
-		if got, err := s.DeleteSharedVolume(ctx, publishing.SHA256, 230); err != nil || got != nil {
+		lapsed := publishingRow(randomSHA256(), "")
+		startPublish(t, s, lapsed, lapsedLease)
+		if got, err := s.MarkSharedVolumeDeleted(ctx, lapsed.SHA256); err != nil || got != nil {
 			t.Fatalf("delete after the lease ended = %+v, %v; want nil", got, err)
 		}
-		if failed, err := s.FailSharedVolume(ctx, publishing.ID, 240); err != nil || !failed {
+		if failed, err := s.FailSharedVolumePublish(ctx, lapsed.ID); err != nil || !failed {
 			t.Fatalf("the lapsed row is failed = %v, %v; want true", failed, err)
 		}
 	})
 
-	t.Run("remove takes every row but a ready one", func(t *testing.T) {
-		ready := reserveReady(t, s, randomSHA256(), "", 100)
-		if removed, err := s.RemoveSharedVolume(ctx, ready.ID); err != nil || removed {
-			t.Fatalf("remove of a ready row = %v, %v; want false", removed, err)
+	t.Run("purge takes failed and deleted rows only", func(t *testing.T) {
+		ready := publishReady(t, s, randomSHA256(), "")
+		if purged, err := s.PurgeSharedVolume(ctx, ready.ID); err != nil || purged {
+			t.Fatalf("purge of a ready row = %v, %v; want false", purged, err)
 		}
-		if _, err := s.DeleteSharedVolume(ctx, ready.SHA256, 200); err != nil {
+		if _, err := s.MarkSharedVolumeDeleted(ctx, ready.SHA256); err != nil {
 			t.Fatal(err)
 		}
-		if removed, err := s.RemoveSharedVolume(ctx, ready.ID); err != nil || !removed {
-			t.Fatalf("remove of a deleted row = %v, %v; want true", removed, err)
+		if purged, err := s.PurgeSharedVolume(ctx, ready.ID); err != nil || !purged {
+			t.Fatalf("purge of a deleted row = %v, %v; want true", purged, err)
 		}
-		if removed, err := s.RemoveSharedVolume(ctx, ready.ID); err != nil || removed {
-			t.Fatalf("second remove = %v, %v; want false", removed, err)
+		if purged, err := s.PurgeSharedVolume(ctx, ready.ID); err != nil || purged {
+			t.Fatalf("second purge = %v, %v; want false", purged, err)
 		}
-		publishing := publishingRow(randomSHA256(), "", 100, 220)
-		if _, err := s.ReserveSharedVolume(ctx, publishing, testMaxLive); err != nil {
-			t.Fatal(err)
+		publishing := publishingRow(randomSHA256(), "")
+		startPublish(t, s, publishing, testLease)
+		if purged, err := s.PurgeSharedVolume(ctx, publishing.ID); err != nil || purged {
+			t.Fatalf("purge of a publishing row = %v, %v; want false", purged, err)
 		}
-		if failed, err := s.FailSharedVolume(ctx, publishing.ID, 150); err != nil || !failed {
+		if failed, err := s.FailSharedVolumePublish(ctx, publishing.ID); err != nil || !failed {
 			t.Fatalf("fail = %v, %v; want true", failed, err)
 		}
-		if removed, err := s.RemoveSharedVolume(ctx, publishing.ID); err != nil || !removed {
-			t.Fatalf("remove of a failed row = %v, %v; want true", removed, err)
+		if purged, err := s.PurgeSharedVolume(ctx, publishing.ID); err != nil || !purged {
+			t.Fatalf("purge of a failed row = %v, %v; want true", purged, err)
 		}
 	})
 
 	t.Run("list is newest first", func(t *testing.T) {
-		now := time.Now().Unix()
-		older := reserveReady(t, s, randomSHA256(), "", now)
-		newer := reserveReady(t, s, randomSHA256(), "", now+1)
-		listed, err := s.ListSharedVolumes(ctx, "")
+		older := publishReady(t, s, randomSHA256(), "")
+		// ready_at counts whole seconds of the database clock.
+		time.Sleep(1100 * time.Millisecond)
+		newer := publishReady(t, s, randomSHA256(), "")
+		listed, err := s.ListReadySharedVolumes(ctx, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -331,9 +325,9 @@ func testSharedVolumes(t *testing.T, s SharedVolumes) {
 	})
 }
 
-// testConcurrentSharedVolumeReserves reserves one digest from every store at
-// once: exactly one wins, the others see its row.
-func testConcurrentSharedVolumeReserves(t *testing.T, stores []SharedVolumes) {
+// testConcurrentSharedVolumeStarts starts publishing one digest from every
+// store at once: exactly one wins, the others see its row.
+func testConcurrentSharedVolumeStarts(t *testing.T, stores []SharedVolumes) {
 	ctx := context.Background()
 	sha := randomSHA256()
 	const perStore = 4
@@ -343,13 +337,13 @@ func testConcurrentSharedVolumeReserves(t *testing.T, stores []SharedVolumes) {
 		won    int
 		others int
 	)
-	// Holds every reservation back until all of them are started.
+	// Holds every start back until all of them are running.
 	start := make(chan struct{})
 	for _, s := range stores {
 		for range perStore {
 			wait.Go(func() {
 				<-start
-				_, err := s.ReserveSharedVolume(ctx, publishingRow(sha, "", 100, 220), testMaxLive)
+				_, err := s.StartSharedVolumePublish(ctx, publishingRow(sha, ""), testLease, testMaxLive)
 				mutex.Lock()
 				defer mutex.Unlock()
 				switch {
@@ -358,7 +352,7 @@ func testConcurrentSharedVolumeReserves(t *testing.T, stores []SharedVolumes) {
 				case errors.Is(err, ErrSharedVolumeDigestLive):
 					others++
 				default:
-					t.Errorf("reserve: %v", err)
+					t.Errorf("start: %v", err)
 				}
 			})
 		}
@@ -375,7 +369,7 @@ func testConcurrentSharedVolumeReserves(t *testing.T, stores []SharedVolumes) {
 func testConcurrentSharedVolumeDeletes(t *testing.T, stores []SharedVolumes) {
 	ctx := context.Background()
 	sha := randomSHA256()
-	reserveReady(t, stores[0], sha, "", 100)
+	publishReady(t, stores[0], sha, "")
 	const perStore = 4
 	var (
 		wait    sync.WaitGroup
@@ -387,7 +381,7 @@ func testConcurrentSharedVolumeDeletes(t *testing.T, stores []SharedVolumes) {
 		for range perStore {
 			wait.Go(func() {
 				<-start
-				row, err := records.DeleteSharedVolume(ctx, sha, 200)
+				row, err := records.MarkSharedVolumeDeleted(ctx, sha)
 				mutex.Lock()
 				defer mutex.Unlock()
 				switch {

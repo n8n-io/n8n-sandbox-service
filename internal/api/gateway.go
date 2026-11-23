@@ -104,7 +104,7 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	if rec.Enabled() {
 		handler = metrics.HTTPMiddleware(rec)(handler)
 	}
-	handler = AuthMiddleware(cfg.APIKeys, cfg.ProvisionerKeys, cfg.ScalerKeys, cfg.PublisherKeys, s, keyCache)(handler)
+	handler = AuthMiddleware(cfg.APIKeys, cfg.ProvisionerKeys, cfg.ScalerKeys, cfg.VolumePublisherKeys, s, keyCache)(handler)
 	handler = publicPaths.RejectOtherMethods(handler)
 	handler = LoggingMiddleware(handler)
 	if cfg.EnableCORS {

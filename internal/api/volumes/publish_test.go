@@ -33,13 +33,13 @@ func TestPublishStoresTheTarWithItsCounts(t *testing.T) {
 	}
 	row := published.Volume
 	want := volume.TarCounts{Entries: int64(stats.Entries), ContentBytes: stats.Bytes, DecompressedBytes: stats.DecompressedBytes}
-	got := volume.TarCounts{Entries: row.Entries, ContentBytes: row.ContentBytes, DecompressedBytes: row.DecompressedBytes}
+	got := volume.TarCounts{Entries: row.TarEntries, ContentBytes: row.TarContentBytes, DecompressedBytes: row.TarDecompressedBytes}
 	if got != want || row.TarBytes != int64(len(data)) || row.State != store.SharedVolumeReady || row.Name != "n8n-assistant-2.45.5" {
 		t.Fatalf("row = %+v, want counts %+v, %d bytes, ready and named", row, want, len(data))
 	}
 	// docs and docs/guide are left out of the tar and counted.
-	if row.Entries != 6 {
-		t.Errorf("Entries = %d, want 6", row.Entries)
+	if row.TarEntries != 6 {
+		t.Errorf("TarEntries = %d, want 6", row.TarEntries)
 	}
 	object, err := env.local.Stat(context.Background(), objectKey(row.ID, volume.KindTar))
 	if err != nil || object.SHA256 != digestOf(data) || object.Size != int64(len(data)) {
@@ -60,7 +60,7 @@ func TestPublishTakesGzip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Publish() = %v", err)
 	}
-	if published.Volume.TarBytes != int64(len(data)) || published.Volume.DecompressedBytes <= int64(len(data)) {
+	if published.Volume.TarBytes != int64(len(data)) || published.Volume.TarDecompressedBytes <= int64(len(data)) {
 		t.Fatalf("row = %+v, want the gzip's size and a larger decompressed size", published.Volume)
 	}
 }
@@ -72,9 +72,9 @@ func TestRepeatedPublishDoesNotReadTheBody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	repeat := func(name string) (Published, error) {
+	repeat := func(name string) (PublishResult, error) {
 		return env.service.Publish(context.Background(), PublishRequest{
-			SHA256: digestOf(data), Name: name, Size: int64(len(data)), Body: unreadable{t}, Role: "admin",
+			SHA256: digestOf(data), Name: name, Size: int64(len(data)), Body: unreadable{t}, Role: RoleAdmin,
 		})
 	}
 
@@ -104,13 +104,13 @@ func TestPublishRefusesATakenNameBeforeReadingTheBody(t *testing.T) {
 	}
 	other := makeTar(t, file("other", "x"))
 	_, err := env.service.Publish(context.Background(), PublishRequest{
-		SHA256: digestOf(other), Name: "taken", Size: int64(len(other)), Body: unreadable{t}, Role: "publisher",
+		SHA256: digestOf(other), Name: "taken", Size: int64(len(other)), Body: unreadable{t}, Role: RoleVolumePublisher,
 	})
 	if !errors.Is(err, ErrNameTaken) {
 		t.Fatalf("Publish() = %v, want ErrNameTaken", err)
 	}
-	if len(env.records.reserved) != 1 {
-		t.Fatalf("reserved %v, want only the first volume", env.records.reserved)
+	if len(env.records.started) != 1 {
+		t.Fatalf("started %v, want only the first volume", env.records.started)
 	}
 	if files := env.storedFiles(t); len(files) != 1 {
 		t.Fatalf("store holds %v, want the first tar only", files)
@@ -156,7 +156,7 @@ func TestPublishLeavesNothingOfARefusedUpload(t *testing.T) {
 				size = int64(len(tc.data))
 			}
 			_, err := env.service.Publish(context.Background(), PublishRequest{
-				SHA256: digest, Size: size, Body: bytes.NewReader(tc.data), Role: "publisher",
+				SHA256: digest, Size: size, Body: bytes.NewReader(tc.data), Role: RoleVolumePublisher,
 			})
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("Publish() = %v, want %v", err, tc.want)
@@ -184,7 +184,7 @@ func TestRefusedTarErrorsNameNoEntry(t *testing.T) {
 
 func TestPublishOfAnEmptyBody(t *testing.T) {
 	env := newTestEnv(t)
-	_, err := env.service.Publish(context.Background(), PublishRequest{SHA256: digestOf(nil), Body: unreadable{t}, Role: "admin"})
+	_, err := env.service.Publish(context.Background(), PublishRequest{SHA256: digestOf(nil), Body: unreadable{t}, Role: RoleAdmin})
 	if !errors.Is(err, ErrInvalidTar) {
 		t.Fatalf("Publish() = %v, want ErrInvalidTar", err)
 	}
@@ -195,7 +195,7 @@ func TestPublishOfAClientThatGoesAway(t *testing.T) {
 	data := validTar(t)
 	body := &chunkedReader{data: data, piece: 512, failAt: 1024}
 	_, err := env.service.Publish(context.Background(), PublishRequest{
-		SHA256: digestOf(data), Size: int64(len(data)), Body: body, Role: "publisher",
+		SHA256: digestOf(data), Size: int64(len(data)), Body: body, Role: RoleVolumePublisher,
 	})
 	if !errors.Is(err, ErrUpload) {
 		t.Fatalf("Publish() = %v, want ErrUpload", err)
@@ -215,7 +215,7 @@ func TestPublishOfAClientWhoseRequestEnds(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		_, err := env.service.Publish(ctx, PublishRequest{
-			SHA256: digestOf(data), Size: int64(len(data)), Body: &chunkedReader{data: data, piece: 512, next: next}, Role: "publisher",
+			SHA256: digestOf(data), Size: int64(len(data)), Body: &chunkedReader{data: data, piece: 512, next: next}, Role: RoleVolumePublisher,
 		})
 		done <- err
 	}()
@@ -250,13 +250,13 @@ func TestFailedCleanupLeavesTheRowFailed(t *testing.T) {
 	env.objects.failDelete = true
 	data := validTar(t)
 	_, err := env.service.Publish(context.Background(), PublishRequest{
-		SHA256: digestOf([]byte("other")), Size: int64(len(data)), Body: bytes.NewReader(data), Role: "publisher",
+		SHA256: digestOf([]byte("other")), Size: int64(len(data)), Body: bytes.NewReader(data), Role: RoleVolumePublisher,
 	})
 	if !errors.Is(err, ErrDigestMismatch) {
 		t.Fatalf("Publish() = %v, want ErrDigestMismatch", err)
 	}
-	if len(env.records.removed) != 0 {
-		t.Fatalf("removed %v, want the row kept for a later removal", env.records.removed)
+	if len(env.records.purged) != 0 {
+		t.Fatalf("purged %v, want the row kept for a later purge", env.records.purged)
 	}
 	// Failed, so it no longer holds the digest.
 	env.objects.failDelete = false
@@ -290,7 +290,7 @@ func TestPublishInProgressAndThePublishLimit(t *testing.T) {
 		done := make(chan error, 1)
 		go func() {
 			_, err := env.service.Publish(context.Background(), PublishRequest{
-				SHA256: digestOf(data), Size: int64(len(data)), Body: &chunkedReader{data: data, piece: 512, next: next}, Role: "publisher",
+				SHA256: digestOf(data), Size: int64(len(data)), Body: &chunkedReader{data: data, piece: 512, next: next}, Role: RoleVolumePublisher,
 			})
 			done <- err
 		}()
@@ -299,23 +299,23 @@ func TestPublishInProgressAndThePublishLimit(t *testing.T) {
 	firstNext, secondNext := make(chan struct{}), make(chan struct{})
 	firstDone, secondDone := start(first, firstNext), start(second, secondNext)
 	waitFor(t, func() bool {
-		firstRow, _ := env.records.GetSharedVolume(context.Background(), digestOf(first))
-		secondRow, _ := env.records.GetSharedVolume(context.Background(), digestOf(second))
+		firstRow, _ := env.records.GetLiveSharedVolume(context.Background(), digestOf(first))
+		secondRow, _ := env.records.GetLiveSharedVolume(context.Background(), digestOf(second))
 		return firstRow != nil && secondRow != nil
 	})
 
 	if _, err := env.service.Publish(context.Background(), PublishRequest{
-		SHA256: digestOf(first), Size: int64(len(first)), Body: unreadable{t}, Role: "publisher",
+		SHA256: digestOf(first), Size: int64(len(first)), Body: unreadable{t}, Role: RoleVolumePublisher,
 	}); !errors.Is(err, ErrPublishInProgress) {
 		t.Fatalf("Publish() of a digest being published = %v, want ErrPublishInProgress", err)
 	}
 	third := makeTar(t, file("third", "x"))
 	if _, err := env.service.Publish(context.Background(), PublishRequest{
-		SHA256: digestOf(third), Size: int64(len(third)), Body: unreadable{t}, Role: "publisher",
+		SHA256: digestOf(third), Size: int64(len(third)), Body: unreadable{t}, Role: RoleVolumePublisher,
 	}); !errors.Is(err, ErrPublishLimit) {
 		t.Fatalf("Publish() over the limit = %v, want ErrPublishLimit", err)
 	}
-	if err := env.service.Delete(context.Background(), digestOf(first), "publisher"); !errors.Is(err, ErrPublishInProgress) {
+	if err := env.service.Delete(context.Background(), digestOf(first), RoleVolumePublisher); !errors.Is(err, ErrPublishInProgress) {
 		t.Fatalf("Delete() of a digest being published = %v, want ErrPublishInProgress", err)
 	}
 
@@ -336,11 +336,11 @@ func TestShutdownInterruptsAPublish(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		_, err := env.service.Publish(context.Background(), PublishRequest{
-			SHA256: digestOf(data), Size: int64(len(data)), Body: &chunkedReader{data: data, piece: 512, next: next}, Role: "publisher",
+			SHA256: digestOf(data), Size: int64(len(data)), Body: &chunkedReader{data: data, piece: 512, next: next}, Role: RoleVolumePublisher,
 		})
 		done <- err
 	}()
-	waitFor(t, func() bool { return len(env.service.slots) == 1 })
+	waitFor(t, func() bool { return len(env.service.runningPublishes) == 1 })
 	env.shutdown()
 	close(next)
 	if err := <-done; !errors.Is(err, ErrInterrupted) {
@@ -357,17 +357,17 @@ func TestALostLeaseInterruptsAPublish(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		_, err := env.service.Publish(context.Background(), PublishRequest{
-			SHA256: digestOf(data), Size: int64(len(data)), Body: &chunkedReader{data: data, piece: 512, next: next}, Role: "publisher",
+			SHA256: digestOf(data), Size: int64(len(data)), Body: &chunkedReader{data: data, piece: 512, next: next}, Role: RoleVolumePublisher,
 		})
 		done <- err
 	}()
 	var row *store.SharedVolume
 	waitFor(t, func() bool {
-		row, _ = env.records.GetSharedVolume(context.Background(), digestOf(data))
+		row, _ = env.records.GetLiveSharedVolume(context.Background(), digestOf(data))
 		return row != nil
 	})
 	// Another pod took the row over.
-	if failed, err := env.records.FailSharedVolume(context.Background(), row.ID, time.Now().Unix()); err != nil || !failed {
+	if failed, err := env.records.FailSharedVolumePublish(context.Background(), row.ID); err != nil || !failed {
 		t.Fatalf("fail the row = %v, %v", failed, err)
 	}
 	time.Sleep(50 * time.Millisecond)
@@ -386,7 +386,7 @@ func startWaitingPublish(env *testEnv, data []byte) chan error {
 	done := make(chan error, 1)
 	go func() {
 		_, err := env.service.Publish(context.Background(), PublishRequest{
-			SHA256: digestOf(data), Size: int64(len(data)), Role: "publisher",
+			SHA256: digestOf(data), Size: int64(len(data)), Role: RoleVolumePublisher,
 			Body:      &chunkedReader{data: data, piece: 512, next: make(chan struct{}), stop: stop},
 			Interrupt: func() { stopOnce.Do(func() { close(stop) }) },
 		})
@@ -410,7 +410,7 @@ func publishError(t *testing.T, done chan error) error {
 func TestShutdownInterruptsAWaitingUpload(t *testing.T) {
 	env := newTestEnv(t)
 	done := startWaitingPublish(env, validTar(t))
-	waitFor(t, func() bool { return len(env.service.slots) == 1 })
+	waitFor(t, func() bool { return len(env.service.runningPublishes) == 1 })
 	env.shutdown()
 	if err := publishError(t, done); !errors.Is(err, ErrInterrupted) {
 		t.Fatalf("Publish() = %v, want ErrInterrupted", err)
@@ -440,7 +440,7 @@ func TestAHangingRenewalDoesNotHoldUpAPublish(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		_, err := env.service.Publish(context.Background(), PublishRequest{
-			SHA256: digestOf(data), Size: int64(len(data)), Role: "publisher",
+			SHA256: digestOf(data), Size: int64(len(data)), Role: RoleVolumePublisher,
 			Body: &chunkedReader{data: data, piece: 512, next: next},
 		})
 		done <- err
@@ -456,11 +456,8 @@ func TestALapsedLeaseIsTakenOver(t *testing.T) {
 	env := newTestEnv(t)
 	data := validTar(t)
 	// A publish on a pod that died: its row is publishing with a lease that ended.
-	lapsed := &store.SharedVolume{
-		ID: "lapsed", SHA256: digestOf(data), Name: "name", State: store.SharedVolumePublishing,
-		PublishedBy: "publisher", CreatedAt: 1, UpdatedAt: 1, LeaseUntil: 2,
-	}
-	if _, err := env.records.SharedVolumes.ReserveSharedVolume(context.Background(), lapsed, 100); err != nil {
+	lapsed := &store.SharedVolume{ID: "lapsed", SHA256: digestOf(data), Name: "name", PublishedBy: string(RoleVolumePublisher)}
+	if _, err := env.records.SharedVolumes.StartSharedVolumePublish(context.Background(), lapsed, -time.Minute, 100); err != nil {
 		t.Fatal(err)
 	}
 	published, err := env.publish(t, data, "name")
@@ -476,13 +473,13 @@ func TestDeleteRemovesTheVolume(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := env.service.Delete(context.Background(), digestOf(data), "publisher"); err != nil {
+	if err := env.service.Delete(context.Background(), digestOf(data), RoleVolumePublisher); err != nil {
 		t.Fatalf("Delete() = %v", err)
 	}
 	if _, err := env.service.Get(context.Background(), digestOf(data)); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Get() after Delete() = %v, want ErrNotFound", err)
 	}
-	if err := env.service.Delete(context.Background(), digestOf(data), "publisher"); !errors.Is(err, ErrNotFound) {
+	if err := env.service.Delete(context.Background(), digestOf(data), RoleVolumePublisher); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("second Delete() = %v, want ErrNotFound", err)
 	}
 	env.assertNothingLeft(t)
@@ -500,7 +497,7 @@ func TestDeleteWhoseRemovalFailsHidesTheVolume(t *testing.T) {
 		t.Fatal(err)
 	}
 	env.objects.failDelete = true
-	if err := env.service.Delete(context.Background(), digestOf(data), "admin"); err != nil {
+	if err := env.service.Delete(context.Background(), digestOf(data), RoleAdmin); err != nil {
 		t.Fatalf("Delete() = %v; the removal is left for later", err)
 	}
 	if _, err := env.service.Get(context.Background(), digestOf(data)); !errors.Is(err, ErrNotFound) {
@@ -553,7 +550,7 @@ func TestPublishThroughARemoteStore(t *testing.T) {
 				digest = digestOf(tc.data)
 			}
 			_, err := env.service.Publish(context.Background(), PublishRequest{
-				SHA256: digest, Size: int64(len(tc.data)), Body: bytes.NewReader(tc.data), Role: "publisher",
+				SHA256: digest, Size: int64(len(tc.data)), Body: bytes.NewReader(tc.data), Role: RoleVolumePublisher,
 			})
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("Publish() = %v, want %v", err, tc.want)
@@ -573,7 +570,7 @@ func TestPublishThroughARemoteStore(t *testing.T) {
 	if err != nil || object.SHA256 != digestOf(data) {
 		t.Fatalf("stored object = %+v, %v", object, err)
 	}
-	if err := env.service.Delete(context.Background(), digestOf(data), "publisher"); err != nil {
+	if err := env.service.Delete(context.Background(), digestOf(data), RoleVolumePublisher); err != nil {
 		t.Fatal(err)
 	}
 	if count := helper.count(); count != 0 {
