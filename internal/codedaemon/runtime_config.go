@@ -4,12 +4,15 @@ package codedaemon
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/n8n-io/sandbox-service/internal/envvar"
 )
+
+var errMissingCommand = errors.New("missing command for runtime")
 
 func envOr(key, fallback string) string {
 	if value := envvar.Get(key); value != "" {
@@ -40,7 +43,7 @@ func (cfg *Config) LoadRuntime() error {
 	name := envOr("CODE_DAEMON_RUNTIME", "n8n-js")
 	command := runtimesByName[name].Command
 	if len(command) == 0 || command[0] == "" {
-		return fmt.Errorf("missing command for runtime %q", name)
+		return fmt.Errorf("%w %q", errMissingCommand, name)
 	}
 	cfg.WorkDir, cfg.RuntimeCommand = workDir, command
 	return nil

@@ -24,7 +24,10 @@ const (
 	maxControlMessage = 512 << 10 // 512 KiB
 )
 
-var errWorkerUnavailable = errors.New("runtime unavailable")
+var (
+	errWorkerUnavailable     = errors.New("runtime unavailable")
+	errControlMessageTooLong = fmt.Errorf("control message over %d bytes", maxControlMessage)
+)
 
 // workerMessage is any message between the daemon and the runtime, in either
 // direction, sent as newline-delimited JSON over FD 3. The runtime's stdout and
@@ -182,7 +185,7 @@ func (w *worker) readControl() {
 		}
 	}
 	if err := scanner.Err(); errors.Is(err, bufio.ErrTooLong) {
-		stopErr = fmt.Errorf("control message over %d bytes", maxControlMessage)
+		stopErr = errControlMessageTooLong
 	} else if err != nil {
 		stopErr = err
 	}

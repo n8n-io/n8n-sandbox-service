@@ -13,7 +13,10 @@ import (
 	"strings"
 )
 
-var errDuplicateTask = errors.New("task ID already used")
+var (
+	errDuplicateTask    = errors.New("task ID already used")
+	errInvalidInputPart = errors.New("invalid input part")
+)
 
 // reserveTask rejects task IDs that are already reserved or have been dispatched.
 func (d *Daemon) reserveTask(id string) error {
@@ -77,7 +80,7 @@ func writeInputs(dir string, mr *multipart.Reader, limits Limits) error {
 	dirs := make(map[string]struct{})
 	for {
 		part, err := mr.NextPart()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return nil
 		}
 		if err != nil {
@@ -87,7 +90,7 @@ func writeInputs(dir string, mr *multipart.Reader, limits Limits) error {
 		_, params, err := mime.ParseMediaType(part.Header.Get("Content-Disposition"))
 		rel := params["filename"]
 		if err != nil || part.FormName() != "input" || !validFilePath(rel) {
-			return errors.New("invalid input part")
+			return errInvalidInputPart
 		}
 		files++
 		if files > limits.Files || !addParentDirs(dirs, rel) {
