@@ -23,6 +23,11 @@ import (
 
 // ErrInvalid marks an archive that cannot be read, or an entry the policy does
 // not accept.
+var (
+	errSymlinksNeedMaxEntries   = errors.New("AllowSymlinks needs MaxEntries")
+	errParentDirsNeedMaxEntries = errors.New("CountParentDirectories needs MaxEntries")
+)
+
 var ErrInvalid = errors.New("invalid archive")
 
 // ErrTooLarge marks an archive with more entries or more file content than the
@@ -111,10 +116,10 @@ func unpack(r io.Reader, p Policy, s sink) (Stats, error) {
 		return stats, fmt.Errorf("%w: negative cap", ErrTooLarge)
 	}
 	if p.AllowSymlinks && p.MaxEntries == 0 {
-		return stats, errors.New("AllowSymlinks needs MaxEntries")
+		return stats, errSymlinksNeedMaxEntries
 	}
 	if p.CountParentDirectories && p.MaxEntries == 0 {
-		return stats, errors.New("CountParentDirectories needs MaxEntries")
+		return stats, errParentDirsNeedMaxEntries
 	}
 	src, err := gunzipIfCompressed(r)
 	if err != nil {

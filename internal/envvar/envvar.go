@@ -5,12 +5,15 @@
 package envvar
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 )
+
+var errInvalidValue = errors.New("invalid value")
 
 // Integer is the set of integer types the integer readers fill.
 type Integer interface {
@@ -73,7 +76,7 @@ func read[T any](name string, dst *T, parse func(string) (T, error), valid func(
 	}
 	parsed, err := parse(v)
 	if err != nil || !valid(parsed) {
-		return fmt.Errorf("%s must be %s, got %q", name, want, v)
+		return fmt.Errorf("%w: %s must be %s, got %q", errInvalidValue, name, want, v)
 	}
 	*dst = parsed
 	return nil

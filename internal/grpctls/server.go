@@ -24,7 +24,7 @@ func NewServerTLSConfig(serverCertFile, serverKeyFile, clientCAFile string, clie
 	}
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(caPEM) {
-		return nil, fmt.Errorf("grpctls: no PEM certificates in %s", clientCAFile)
+		return nil, fmt.Errorf("%w in %s", errNoPEMCertificates, clientCAFile)
 	}
 
 	reloader, err := reloaderFor(serverCertFile, serverKeyFile)

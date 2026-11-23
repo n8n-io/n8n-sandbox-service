@@ -30,6 +30,8 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/volume"
 )
 
+var errImageIsTar = errors.New("the image path names the tar")
+
 func usage() {
 	fmt.Fprintf(os.Stderr, `usage:
   %[1]s stop <sandbox-id>
@@ -310,7 +312,7 @@ func buildVolume(args []string) {
 
 	// Creating the image truncates it.
 	if existing, err := os.Stat(imagePath); err == nil && os.SameFile(info, existing) {
-		exitOn("create image", errors.New("the image path names the tar"))
+		exitOn("create image", errImageIsTar)
 	}
 	image, err := os.OpenFile(imagePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	exitOn("create image", err)

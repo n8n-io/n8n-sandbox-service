@@ -190,7 +190,7 @@ func main() {
 			"grpc_addr", cfg.GRPCListenAddr,
 			"store", cfg.Store,
 			"max_inflight_per_tenant", cfg.MaxInflightPerTenant)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErr <- err
 		}
 	}()
@@ -206,7 +206,7 @@ func main() {
 	if metricsSrv != nil {
 		go func() {
 			slog.Info("metrics listening", "addr", cfg.MetricsListenAddr, "path", "/metrics")
-			if err := metricsSrv.Serve(metricsLis); err != nil && err != http.ErrServerClosed {
+			if err := metricsSrv.Serve(metricsLis); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				serverErr <- err
 			}
 		}()
@@ -216,7 +216,7 @@ func main() {
 		go func() {
 			slog.Info("volume objects listening", "addr", cfg.VolumeLocalListenAddr, "tls", true)
 			// Certificate and key come from volumeObjectsSrv.TLSConfig.
-			if err := volumeObjectsSrv.ServeTLS(volumeObjectsLis, "", ""); err != nil && err != http.ErrServerClosed {
+			if err := volumeObjectsSrv.ServeTLS(volumeObjectsLis, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				serverErr <- err
 			}
 		}()

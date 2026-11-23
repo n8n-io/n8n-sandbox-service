@@ -157,7 +157,7 @@ func HandleExec(ctx context.Context, command string, env []string, workdir strin
 		killed = true
 		slog.Debug("exec wait error", "err", waitErr)
 	}
-	if ctx.Err() == context.DeadlineExceeded {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		timedOut = true
 		killed = true
 	}

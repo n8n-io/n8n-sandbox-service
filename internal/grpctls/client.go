@@ -3,11 +3,14 @@ package grpctls
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"os"
 
 	"google.golang.org/grpc/credentials"
 )
+
+var errNoPEMCertificates = errors.New("grpctls: no PEM certificates")
 
 // NewClientTLSConfig builds an mTLS client config that presents clientCertFile
 // and verifies the server against serverCAFile.
@@ -19,7 +22,7 @@ func NewClientTLSConfig(serverCAFile, clientCertFile, clientKeyFile, serverName 
 	}
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(caPEM) {
-		return nil, fmt.Errorf("grpctls: no PEM certificates in %s", serverCAFile)
+		return nil, fmt.Errorf("%w in %s", errNoPEMCertificates, serverCAFile)
 	}
 
 	reloader, err := reloaderFor(clientCertFile, clientKeyFile)
