@@ -18,7 +18,10 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 )
 
-const scalerKey = "scaler-key"
+const (
+	scalerKey          = "scaler-key"
+	volumePublisherKey = "volume-publisher-key"
+)
 
 func newRunnersGateway(t *testing.T) (http.Handler, *registry.MemoryRegistry) {
 	t.Helper()
@@ -33,6 +36,7 @@ func newRunnersGateway(t *testing.T) (http.Handler, *registry.MemoryRegistry) {
 		APIKeys:             map[string]struct{}{provAdminKey: {}},
 		ProvisionerKeys:     map[string]struct{}{provKey: {}},
 		ScalerKeys:          map[string]struct{}{scalerKey: {}},
+		VolumePublisherKeys: map[string]struct{}{volumePublisherKey: {}},
 		RunnerAPIKey:        "runner-key",
 		MaxFileBytes:        1024,
 		DefaultMaxSandboxes: provMaxDflt,
@@ -80,6 +84,22 @@ func TestListRunnersEmptyIsArray(t *testing.T) {
 	rr := doJSON(t, router, http.MethodGet, "/admin/runners", provAdminKey, "")
 	if rr.Code != http.StatusOK || strings.TrimSpace(rr.Body.String()) != `{"runners":[]}` {
 		t.Fatalf("expected 200 {\"runners\":[]}, got %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+// The gateway hands its volume publisher keys to the auth middleware: the key
+// is known, so a path it may not call answers 403, not 401, and a path it may
+// call is not refused.
+func TestGatewayKnowsVolumePublisherKeys(t *testing.T) {
+	router, _ := newRunnersGateway(t)
+	if rr := doJSON(t, router, http.MethodGet, "/admin/runners", volumePublisherKey, ""); rr.Code != http.StatusForbidden {
+		t.Errorf("/admin/runners with a volume publisher key: expected 403, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if rr := doJSON(t, router, http.MethodGet, "/shared-volumes", volumePublisherKey, ""); rr.Code == http.StatusUnauthorized || rr.Code == http.StatusForbidden {
+		t.Errorf("/shared-volumes with a volume publisher key: the auth refused it with %d body=%s", rr.Code, rr.Body.String())
+	}
+	if rr := doJSON(t, router, http.MethodGet, "/admin/runners", "unknown-key", ""); rr.Code != http.StatusUnauthorized {
+		t.Errorf("/admin/runners with an unknown key: expected 401, got %d body=%s", rr.Code, rr.Body.String())
 	}
 }
 

@@ -114,7 +114,7 @@ also an admin or provisioner key.
 The class is for the job that publishes shared volumes, so that job needs no
 admin key. A volume publisher key reaches only `/shared-volumes` and the paths
 below it. Every other path answers `403`, and so does a path with `.`, `..` or
-`//` in it. Startup fails if a volume publisher key is also an admin,
+`//` in it. The probes `/healthz` and `/metrics` need no key. Startup fails if a volume publisher key is also an admin,
 provisioner or scaler key.
 
 ### Concurrency limits

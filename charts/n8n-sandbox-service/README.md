@@ -222,7 +222,7 @@ auth:
 
 `provisionerKeys` is optional: the API reads it as `SANDBOX_API_PROVISIONER_KEYS` with `secretKeyRef.optional: true`, so a Secret without that key runs with no provisioner keys. When it is set, `api.config.defaultMaxSandboxes` must be above `0` or the API refuses to start. `scalerKeys` (`SANDBOX_API_SCALER_KEYS`) is optional the same way.
 
-`volumePublisherKeys` (`SANDBOX_API_VOLUME_PUBLISHER_KEYS`, see [security-model.md](../../docs/security-model.md#volume-publisher-keys)) is empty by default, and the API then gets no volume publisher keys. Set it to a key of the Secret, for example `volume-publisher-api-keys`, to pass them. The chart refuses a volume publisher Secret key that another `auth.secretKeys` entry also names.
+`volumePublisherKeys` (`SANDBOX_API_VOLUME_PUBLISHER_KEYS`, see [security-model.md](../../docs/security-model.md#volume-publisher-keys)) is empty by default, and the API then gets no volume publisher keys. Set it to a key of the Secret, for example `volume-publisher-api-keys`, to pass them. The API reads it with `secretKeyRef.optional: true`, so a Secret without that key runs with no volume publisher keys. The chart refuses a volume publisher Secret key that another `auth.secretKeys` entry also names.
 
 If `auth.existingSecret` is empty, the chart creates an opaque Secret from `auth.generated`:
 
