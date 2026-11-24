@@ -328,11 +328,11 @@ a loopback API fails its readiness probe long before metrics matter.
 {{- if eq (lower (trim (toString .Values.auth.generated.scalerKeys))) "changeme" -}}
 {{- fail "auth.generated.scalerKeys must not be a placeholder value; leave it empty to run without scaler keys" -}}
 {{- end -}}
-{{- $volumePublisherKeys := trim (toString (default "" .Values.auth.generated.volumePublisherKeys)) -}}
-{{- if eq (lower $volumePublisherKeys) "changeme" -}}
+{{- $generatedVolumePublisherKeys := trim (toString (default "" .Values.auth.generated.volumePublisherKeys)) -}}
+{{- if eq (lower $generatedVolumePublisherKeys) "changeme" -}}
 {{- fail "auth.generated.volumePublisherKeys must not be a placeholder value; leave it empty to run without volume publisher keys" -}}
 {{- end -}}
-{{- if and $volumePublisherKeys (not (trim (toString (default "" .Values.auth.secretKeys.volumePublisherKeys)))) -}}
+{{- if and $generatedVolumePublisherKeys (not (trim (toString (default "" .Values.auth.secretKeys.volumePublisherKeys)))) -}}
 {{- fail "auth.generated.volumePublisherKeys needs auth.secretKeys.volumePublisherKeys, the Secret key to keep them under (for example volume-publisher-api-keys)" -}}
 {{- end -}}
 {{- end -}}
@@ -340,7 +340,7 @@ a loopback API fails its readiness probe long before metrics matter.
 {{- if $volumePublisherSecretKey -}}
 {{- range $name, $secretKey := .Values.auth.secretKeys -}}
 {{- if and (ne $name "volumePublisherKeys") (eq (trim (toString $secretKey)) $volumePublisherSecretKey) -}}
-{{- fail (printf "auth.secretKeys.volumePublisherKeys must not name the Secret key auth.secretKeys.%s names (%q): that key's value would become volume publisher keys" $name $volumePublisherSecretKey) -}}
+{{- fail (printf "auth.secretKeys.volumePublisherKeys (%q) is also the Secret key of auth.secretKeys.%s; that value would become volume publisher keys" $volumePublisherSecretKey $name) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

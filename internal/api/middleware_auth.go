@@ -28,12 +28,11 @@ const (
 	roleTenant          authRole = "tenant"
 )
 
-// sharedVolumesPath is the root of the shared volume routes, the only ones a
-// volume publisher key reaches.
 const sharedVolumesPath = "/shared-volumes"
 
 // volumePublisherMayCall reports whether a volume publisher key may call
-// urlPath: the shared volume routes, on a clean path.
+// urlPath. It refuses an unclean path, so that a path such as
+// /shared-volumes/../sandboxes does not pass the prefix check.
 func volumePublisherMayCall(urlPath string) bool {
 	if path.Clean(urlPath) != urlPath {
 		return false

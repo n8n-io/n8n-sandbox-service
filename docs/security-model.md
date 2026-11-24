@@ -111,11 +111,10 @@ also an admin or provisioner key.
 
 ### Volume publisher keys
 
-The class is for the job that publishes shared volumes, which are meant for
-every tenant to mount, so publishing them must not take an admin key. A volume
-publisher key reaches only `/shared-volumes` and the paths below it, on a clean
-path: sandboxes, tenants, keys and runners all answer `403`, and it can read no
-tenant data. Startup fails if a volume publisher key is also an admin,
+The class is for the job that publishes shared volumes, so that job needs no
+admin key. A volume publisher key reaches only `/shared-volumes` and the paths
+below it. Every other path answers `403`, and so does a path with `.`, `..` or
+`//` in it. Startup fails if a volume publisher key is also an admin,
 provisioner or scaler key.
 
 ### Concurrency limits

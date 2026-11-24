@@ -536,10 +536,10 @@ must_fail "auth.generated.volumePublisherKeys needs auth.secretKeys.volumePublis
 	"${generated[@]}" --set auth.generated.volumePublisherKeys=volume-publisher-secret
 for entry in apiKeys=api-keys provisionerKeys=provisioner-api-keys scalerKeys=scaler-api-keys \
 	runnerRegistrationToken=runner-registration-token runnerApiKey=runner-api-key runnerApiKeys=runner-api-keys; do
-	must_fail "auth.secretKeys.volumePublisherKeys must not name the Secret key auth.secretKeys.${entry%%=*} names" \
+	must_fail "is also the Secret key of auth.secretKeys.${entry%%=*}" \
 		--set auth.secretKeys.volumePublisherKeys="${entry#*=}"
 done
-must_fail "auth.secretKeys.volumePublisherKeys must not name the Secret key auth.secretKeys.apiKeys names" \
+must_fail "is also the Secret key of auth.secretKeys.apiKeys" \
 	"${generated[@]}" --set auth.secretKeys.volumePublisherKeys=api-keys --set auth.generated.volumePublisherKeys=volume-publisher-secret
 
 echo "==> API autoscaling is off by default"
