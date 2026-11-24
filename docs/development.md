@@ -160,12 +160,18 @@ After modifying Go files, always run:
 ```bash
 make fmt-check    # Check that all Go files are gofmt-formatted
 make vet          # Run go vet on all packages
-make lint         # Run golangci-lint on code changed since origin/main
+make lint         # Run golangci-lint on code changed since LINT_BASE (default origin/main)
 ```
 
-`make lint` needs golangci-lint (`brew install golangci-lint`). CI pins v2.15.0.
+`make lint` needs golangci-lint v2.15.0, the version that CI pins:
+
+```bash
+go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
+```
+
 `.golangci.yml` sets the linters. Some linters apply to `internal/codedaemon`
-only. To check all code, not only changed code, run `make lint LINT_BASE=`.
+only. CI sets its own `LINT_BASE`. To check all code, not only changed code,
+run `make lint LINT_BASE=`.
 
 To auto-format:
 
