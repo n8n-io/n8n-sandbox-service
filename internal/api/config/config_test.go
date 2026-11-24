@@ -1,6 +1,8 @@
 package config
 
 import (
+	"bytes"
+	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"os"
@@ -871,10 +873,140 @@ func setRequiredVolumeEnv(t *testing.T) {
 		"SANDBOX_API_VOLUME_STORE",
 		"SANDBOX_API_VOLUME_LOCAL_URL",
 		"SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR",
+		"SANDBOX_API_VOLUME_LOCAL_DIR",
+		"SANDBOX_API_VOLUME_LOCAL_PREVIOUS_SIGNING_KEY",
 		"SANDBOX_API_VOLUME_REMOTE_SOCKET",
+		"SANDBOX_API_DATA_DIR",
 	} {
 		t.Setenv(name, "")
 	}
+	// Unset, not blank: a blank signing key is refused.
+	t.Setenv("SANDBOX_API_VOLUME_LOCAL_SIGNING_KEY", "")
+	os.Unsetenv("SANDBOX_API_VOLUME_LOCAL_SIGNING_KEY")
+}
+
+// setLocalVolumeEnv turns the local store on with its required settings.
+func setLocalVolumeEnv(t *testing.T) {
+	t.Helper()
+	setRequiredVolumeEnv(t)
+	t.Setenv("SANDBOX_API_VOLUME_STORE", "local")
+	t.Setenv("SANDBOX_API_VOLUME_LOCAL_URL", "https://sandbox-api:8443")
+}
+
+// mustLoadAPI returns the configuration and ends the test if LoadAPI fails.
+func mustLoadAPI(t *testing.T) *APIConfig {
+	t.Helper()
+	cfg, err := LoadAPI()
+	if err != nil {
+		t.Fatalf("LoadAPI() failed: %v", err)
+	}
+	return cfg
+}
+
+func TestLoadAPIVolumeLocalDir(t *testing.T) {
+	setLocalVolumeEnv(t)
+	if cfg := mustLoadAPI(t); cfg.VolumeLocalDir != "/var/lib/n8n-sandbox-api/volumes" {
+		t.Errorf("VolumeLocalDir = %q, want the default under the default data dir", cfg.VolumeLocalDir)
+	}
+
+	t.Setenv("SANDBOX_API_DATA_DIR", "/data/api")
+	if cfg := mustLoadAPI(t); cfg.VolumeLocalDir != "/data/api/volumes" {
+		t.Errorf("VolumeLocalDir = %q, want /data/api/volumes", cfg.VolumeLocalDir)
+	}
+
+	t.Setenv("SANDBOX_API_VOLUME_LOCAL_DIR", " /mnt/shared/volumes/ ")
+	if cfg := mustLoadAPI(t); cfg.VolumeLocalDir != "/mnt/shared/volumes" {
+		t.Errorf("VolumeLocalDir = %q, want /mnt/shared/volumes", cfg.VolumeLocalDir)
+	}
+
+	for _, dir := range []string{"volumes", "./volumes", "/", "/.."} {
+		t.Setenv("SANDBOX_API_VOLUME_LOCAL_DIR", dir)
+		if _, err := LoadAPI(); err == nil || !strings.Contains(err.Error(), "SANDBOX_API_VOLUME_LOCAL_DIR") {
+			t.Errorf("SANDBOX_API_VOLUME_LOCAL_DIR=%q: LoadAPI() = %v, want an error that names it", dir, err)
+		}
+	}
+}
+
+func TestLoadAPIVolumeLocalSigningKeys(t *testing.T) {
+	key := bytes.Repeat([]byte{0xfb}, 32)
+	previous := bytes.Repeat([]byte{0x01}, 48)
+	padded := base64.StdEncoding.EncodeToString(key)
+	for name, encoded := range map[string]string{
+		"padded":            padded,
+		"unpadded":          base64.RawStdEncoding.EncodeToString(key),
+		"with a newline":    padded + "\n",
+		"with spaces round": "  " + padded + "  ",
+	} {
+		t.Run(name, func(t *testing.T) {
+			setLocalVolumeEnv(t)
+			t.Setenv("SANDBOX_API_VOLUME_LOCAL_SIGNING_KEY", encoded)
+			cfg, err := LoadAPI()
+			if err != nil {
+				t.Fatalf("LoadAPI() failed: %v", err)
+			}
+			if !bytes.Equal(cfg.VolumeLocalSigningKey, key) || cfg.VolumeLocalPreviousSigningKey != nil {
+				t.Errorf("signing key %x, previous %x; want %x and none", cfg.VolumeLocalSigningKey, cfg.VolumeLocalPreviousSigningKey, key)
+			}
+		})
+	}
+
+	setLocalVolumeEnv(t)
+	if cfg := mustLoadAPI(t); cfg.VolumeLocalSigningKey != nil {
+		t.Fatalf("without a key: %x; want no key, for a random one", cfg.VolumeLocalSigningKey)
+	}
+	t.Setenv("SANDBOX_API_VOLUME_LOCAL_SIGNING_KEY", padded)
+	t.Setenv("SANDBOX_API_VOLUME_LOCAL_PREVIOUS_SIGNING_KEY", base64.StdEncoding.EncodeToString(previous))
+	if cfg := mustLoadAPI(t); !bytes.Equal(cfg.VolumeLocalPreviousSigningKey, previous) {
+		t.Fatalf("previous key %x; want %x", cfg.VolumeLocalPreviousSigningKey, previous)
+	}
+}
+
+// A key that is short or not standard base64 stops the API, and the error
+// shows none of it.
+func TestLoadAPIRejectsBadVolumeLocalSigningKeys(t *testing.T) {
+	good := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0xfb}, 32))
+	short := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0xfb}, 31))
+	urlSafe := base64.URLEncoding.EncodeToString(bytes.Repeat([]byte{0xfb}, 32))
+	cases := []struct {
+		name, key, previous string
+	}{
+		{"short", short, ""},
+		{"URL-safe alphabet", urlSafe, ""},
+		{"not base64", "correct horse battery staple, but long enough!", ""},
+		{"stray bits", good[:42] + "Z=", ""},
+		{"short previous", good, short},
+		// A Secret with an empty value must not turn into a random key.
+		{"empty", "", ""},
+		{"blank", " \n", ""},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			setLocalVolumeEnv(t)
+			t.Setenv("SANDBOX_API_VOLUME_LOCAL_SIGNING_KEY", testCase.key)
+			t.Setenv("SANDBOX_API_VOLUME_LOCAL_PREVIOUS_SIGNING_KEY", testCase.previous)
+			_, err := LoadAPI()
+			if err == nil {
+				t.Fatal("expected LoadAPI() to refuse the key")
+			}
+			if !strings.Contains(err.Error(), "SIGNING_KEY") {
+				t.Errorf("error %q names no variable", err)
+			}
+			for _, value := range []string{testCase.key, testCase.previous} {
+				if value != "" && strings.Contains(err.Error(), value) {
+					t.Errorf("error %q shows the key", err)
+				}
+			}
+		})
+	}
+
+	t.Run("previous without a key", func(t *testing.T) {
+		setLocalVolumeEnv(t)
+		t.Setenv("SANDBOX_API_VOLUME_LOCAL_PREVIOUS_SIGNING_KEY", good)
+		_, err := LoadAPI()
+		if err == nil || !strings.Contains(err.Error(), "needs SANDBOX_API_VOLUME_LOCAL_SIGNING_KEY") || strings.Contains(err.Error(), good) {
+			t.Fatalf("LoadAPI() = %v, want an error that a previous key needs a key, without the key", err)
+		}
+	})
 }
 
 // The local settings are read only with local: without it they start no
@@ -887,14 +1019,18 @@ func TestLoadAPIVolumeStoreDefaultsToNone(t *testing.T) {
 			t.Setenv("SANDBOX_API_VOLUME_REMOTE_SOCKET", "/run/volume-store/helper.sock")
 			t.Setenv("SANDBOX_API_VOLUME_LOCAL_URL", "http://ignored")
 			t.Setenv("SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR", ":8080")
+			t.Setenv("SANDBOX_API_VOLUME_LOCAL_DIR", "relative")
+			t.Setenv("SANDBOX_API_VOLUME_LOCAL_SIGNING_KEY", "short")
+			t.Setenv("SANDBOX_API_VOLUME_LOCAL_PREVIOUS_SIGNING_KEY", "short")
 
 			cfg, err := LoadAPI()
 			if err != nil {
 				t.Fatalf("LoadAPI() failed: %v", err)
 			}
-			if cfg.VolumeStore != VolumeStoreBackend(store) || cfg.VolumeLocalURL != "" || cfg.VolumeLocalListenAddr != "" {
-				t.Errorf("VolumeStore = %q, VolumeLocalURL = %q, VolumeLocalListenAddr = %q; want %q and no local settings",
-					cfg.VolumeStore, cfg.VolumeLocalURL, cfg.VolumeLocalListenAddr, store)
+			if cfg.VolumeStore != VolumeStoreBackend(store) || cfg.VolumeLocalURL != "" || cfg.VolumeLocalListenAddr != "" ||
+				cfg.VolumeLocalDir != "" || cfg.VolumeLocalSigningKey != nil || cfg.VolumeLocalPreviousSigningKey != nil {
+				t.Errorf("VolumeStore = %q, VolumeLocalURL = %q, VolumeLocalListenAddr = %q, VolumeLocalDir = %q; want %q and no local settings",
+					cfg.VolumeStore, cfg.VolumeLocalURL, cfg.VolumeLocalListenAddr, cfg.VolumeLocalDir, store)
 			}
 		})
 	}
