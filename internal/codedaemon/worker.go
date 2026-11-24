@@ -71,7 +71,7 @@ func startWorker(cfg Config, startupTimeout time.Duration) (*worker, error) {
 		return nil, err
 	}
 	defer child.Close()
-	cmd := exec.Command(cfg.RuntimeCommand[0], cfg.RuntimeCommand[1:]...)
+	cmd := exec.Command(cfg.RuntimeCommand[0], cfg.RuntimeCommand[1:]...) //nolint:gosec // The image's runtime registry sets the command, not the task.
 	cmd.Dir = cfg.WorkDir
 	cmd.Env = []string{"PATH=" + envOr("PATH", "/usr/bin:/bin"), "HOME=" + envOr("HOME", "/home/node"), "NODE_ENV=production"}
 	cmd.ExtraFiles = []*os.File{child}

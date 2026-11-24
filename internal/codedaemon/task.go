@@ -80,7 +80,9 @@ func writeInputs(dir string, mr *multipart.Reader, limits Limits) error {
 	dirs := make(map[string]struct{})
 	for {
 		part, err := mr.NextPart()
-		if errors.Is(err, io.EOF) {
+		// NextPart returns a bare io.EOF only after the closing boundary. A
+		// wrapped io.EOF means the upload was cut, which must fail.
+		if err == io.EOF { //nolint:errorlint // See above.
 			return nil
 		}
 		if err != nil {
