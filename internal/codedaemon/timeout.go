@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	defaultTaskTimeout = 5 * time.Minute
+	defaultTaskTimeout = time.Minute
 	maxTaskTimeout     = 24 * time.Hour // Hard cap on configured execution limits.
 )
 
