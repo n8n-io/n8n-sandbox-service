@@ -728,6 +728,31 @@ func TestLocalConcurrentPutsFromTwoStoresCommitOnce(t *testing.T) {
 	}
 }
 
+// An instance that has seen an object can store it again right after another
+// instance deletes it, although over NFS its cache still holds the name.
+func TestLocalPutAfterAnotherStoreDeletes(t *testing.T) {
+	firstDir, secondDir := sharedStoreDirs(t)
+	first := newSharedTestLocal(t, firstDir, LocalOptions{SigningKey: testSigningKey})
+	second := newSharedTestLocal(t, secondDir, LocalOptions{SigningKey: testSigningKey})
+	ctx := context.Background()
+	if _, err := first.Put(ctx, sharedKey, strings.NewReader("old"), PutOptions{MaxBytes: 10}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.Stat(ctx, sharedKey); err != nil {
+		t.Fatalf("Stat from the second store: %v", err)
+	}
+	if err := first.Delete(ctx, sharedKey); err != nil {
+		t.Fatal(err)
+	}
+	obj, err := second.Put(ctx, sharedKey, strings.NewReader("new"), PutOptions{MaxBytes: 10})
+	if err != nil {
+		t.Fatalf("Put from the second store after the first deleted the object: %v", err)
+	}
+	if got, err := first.Stat(ctx, sharedKey); err != nil || got != obj {
+		t.Fatalf("Stat from the first store = %+v, %v; want %+v", got, err, obj)
+	}
+}
+
 // Over NFS a link that was made can report an error, such as EEXIST for its
 // own retried request. The object is committed all the same.
 func TestLocalPutCommitsWhenTheLinkReportsAnErrorButWasMade(t *testing.T) {

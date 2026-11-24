@@ -189,9 +189,14 @@ a loopback API fails its readiness probe long before metrics matter.
 {{- fail (printf "api.config.volumeStore=local requires api.replicaCount=1 (got %v) unless api.volumeLocal.existingClaim and api.volumeLocal.existingSecret are both set: without them the store keeps volume objects on one API pod's volume and signs read URLs with a key of that pod's own. See the chart README section 'Sharing the Volume Store'" .Values.api.replicaCount) -}}
 {{- end -}}
 {{- end -}}
-{{/* Autoscaling checks the store below. */}}
-{{- if and (not .Values.api.autoscaling.enabled) (gt (int .Values.api.replicaCount) 1) (ne .Values.api.config.store "postgres") -}}
+{{/* Autoscaling checks the store and persistence below. */}}
+{{- if and (not .Values.api.autoscaling.enabled) (gt (int .Values.api.replicaCount) 1) -}}
+{{- if ne .Values.api.config.store "postgres" -}}
 {{- fail (printf "api.config.volumeStore=local with api.replicaCount=%v requires api.config.store=postgres: with sqlite every API pod keeps its own store and runner registry. See the chart README section 'Sharing the Volume Store'" .Values.api.replicaCount) -}}
+{{- end -}}
+{{- if .Values.api.persistence.enabled -}}
+{{- fail (printf "api.config.volumeStore=local with api.replicaCount=%v requires api.persistence.enabled=false: every API pod would mount the one volume claim, and the store lives on api.volumeLocal.existingClaim. See the chart README section 'Sharing the Volume Store'" .Values.api.replicaCount) -}}
+{{- end -}}
 {{- end -}}
 {{- if not (or .Values.api.persistence.enabled $volumeLocalClaim) -}}
 {{- fail "api.config.volumeStore=local requires api.persistence.enabled or api.volumeLocal.existingClaim: the store keeps volume objects in api.config.dataDir, which is otherwise lost with the pod. See the chart README section 'Volume Store'" -}}

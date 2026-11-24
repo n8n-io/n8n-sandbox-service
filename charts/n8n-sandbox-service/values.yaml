@@ -210,9 +210,10 @@ api:
       - ReadWriteOnce
 
   # Shares the local volume store (api.config.volumeStore=local) between API
-  # pods. With both existingClaim and existingSecret set, and
-  # api.config.store=postgres, local allows several API pods and autoscaling.
-  # See the chart README section 'Sharing the Volume Store'.
+  # pods. With both existingClaim and existingSecret set,
+  # api.config.store=postgres and api.persistence.enabled=false, local allows
+  # several API pods and autoscaling. See the chart README section 'Sharing the
+  # Volume Store'.
   volumeLocal:
     # An existing ReadWriteMany claim that holds the store instead of
     # api.config.dataDir. Its file system must support hard links: NFS does,

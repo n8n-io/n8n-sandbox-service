@@ -263,8 +263,11 @@ func (l *Local) Put(ctx context.Context, key Key, content io.Reader, opts PutOpt
 	}
 	dst := l.path(key)
 	// Only an early exit that spares the upload. Two Puts can both pass it;
-	// the link below lets only one of them commit.
-	if _, err := os.Lstat(dst); err == nil {
+	// the link below lets only one of them commit. Open, not Lstat: over NFS
+	// Lstat can find a name another instance deleted for up to a minute,
+	// while open asks the server.
+	if existing, err := os.Open(dst); err == nil {
+		existing.Close()
 		return Object{}, ErrExists
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return Object{}, err
