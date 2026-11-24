@@ -10,13 +10,13 @@ import (
 	"strings"
 )
 
-// ErrTenantHasSandboxes is returned when DeleteTenant is called while the tenant
-// still owns sandbox rows.
 var (
 	errInvalidKind = errors.New("store: invalid sandbox kind")
 	errNoKinds     = errors.New("store: no sandbox kinds given")
 )
 
+// ErrTenantHasSandboxes is returned when DeleteTenant is called while the tenant
+// still owns sandbox rows.
 var ErrTenantHasSandboxes = errors.New("tenant has sandboxes")
 
 // ErrTenantNotFound is returned when persisting a tenant-owned sandbox whose
