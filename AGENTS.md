@@ -81,6 +81,8 @@ Firecracker-only e2e spec `FIRECRACKER_ONLY` instead.
 
 ### Naming
 
-- Give each map a `byX` suffix that tells its key (for example, `sandboxesByID`).
+- Give each lookup map a `byX` suffix that tells its key (for example,
+  `sandboxesByID`). Sets (`map[K]struct{}`) and fields that mirror an external
+  or wire format (for example, `Env`, `Labels`) are exceptions.
 - Use descriptive names. Do not use abbreviations. Method receivers are an
   exception: they can use short names (for example, `func (s *Server)`).
