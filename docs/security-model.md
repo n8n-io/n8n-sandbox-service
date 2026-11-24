@@ -207,7 +207,31 @@ API signed for that one object, an HMAC-SHA256 over method, path and an expiry
 at most an hour ahead; a missing, altered or expired signature gets `403`. Any
 client certificate the CA signed opens a connection, so the signature is what
 limits a runner to the objects it was handed. The access log of both listeners
-redacts the signature. With `remote`, the
+redacts the signature.
+
+The signature is an HMAC with a key only API instances hold. Without
+`SANDBOX_API_VOLUME_LOCAL_SIGNING_KEY`, each API process draws a random key at
+startup and keeps it in memory. With it, every instance holds the same key,
+from a secret the operator provides; the chart reads it from a Secret, never
+from a ConfigMap. Whoever holds the key can sign a URL to any object of any
+scope, though using one still takes a runner's client certificate. The API
+never logs the key or repeats it in an error. An instance with another key, or
+without one, refuses with `403` the URLs the others sign. To rotate, put the
+current key in `SANDBOX_API_VOLUME_LOCAL_PREVIOUS_SIGNING_KEY`, which verifies
+but never signs, and the new key in `SANDBOX_API_VOLUME_LOCAL_SIGNING_KEY`,
+restart every instance, and remove the previous key an hour later, when the
+URLs it signed have expired. Instances not yet restarted refuse URLs signed
+with the new key; rolling the new key out as the previous key first avoids
+that. After a leak, replace the key without keeping it as the previous one, so
+every URL it signed stops working at once.
+
+Anyone who can read the store's directory can read every scope's objects, and
+anyone who can write to it can change them. For a shared volume that is anyone
+who can mount it or reach its NFS export, so mount it in the API pods only and
+limit who reaches the export. Runners check every object against the sha256
+handed to them with its URL, so a changed object fails its download, provided
+that digest comes from the API's records and not from the store. With
+`remote`, the
 [store helper](volume-store-helper.md) holds the storage credentials and issues
 the read URLs; it serves gRPC on its socket without TLS and authenticates
 nobody, so only the API may reach it.
@@ -620,7 +644,7 @@ The boundaries above are covered by tests rather than asserted on paper.
 | Scaler keys: `GET /admin/runners` and runner cordon only, `403` on every other path, no overlap with the other key sets | [internal/api/handlers_runners_test.go](../internal/api/handlers_runners_test.go), [internal/api/config/config_test.go](../internal/api/config/config_test.go), [e2e/tests/admin-runners.spec.ts](../e2e/tests/admin-runners.spec.ts) |
 | Concurrency limits: per tenant (creates included) and per sandbox, the execution `DELETE` limits and timeout, the `timeout_ms` cap | [internal/api/middleware_limits_test.go](../internal/api/middleware_limits_test.go), [internal/runner/middleware_limits_test.go](../internal/runner/middleware_limits_test.go), [internal/limits/limits_test.go](../internal/limits/limits_test.go), [e2e/tests/request-limits.spec.ts](../e2e/tests/request-limits.spec.ts) |
 | Runner listeners require a CA-signed client certificate; the API verifies each runner's host name and refuses a non-https base | [internal/runner/mtls_test.go](../internal/runner/mtls_test.go), [internal/api/runnertls_test.go](../internal/api/runnertls_test.go), [internal/api/registry/validate_test.go](../internal/api/registry/validate_test.go) |
-| `local` volume objects: only on their own listener, which refuses a connection without a client certificate, with one from another CA or below TLS 1.3, and serves an object only with its signature; the public listener has no such route; signatures stay out of both access logs; `http` URLs refused | [cmd/api/volume_objects_server_test.go](../cmd/api/volume_objects_server_test.go), [internal/api/handlers_volume_objects_test.go](../internal/api/handlers_volume_objects_test.go), [internal/api/volumestore/local_test.go](../internal/api/volumestore/local_test.go), [internal/api/config/config_test.go](../internal/api/config/config_test.go) |
+| `local` volume objects: only on their own listener, which refuses a connection without a client certificate, with one from another CA or below TLS 1.3, and serves an object only with its signature; the public listener has no such route; signatures stay out of both access logs; `http` URLs refused; a URL verifies on every instance with the signing key and on none with another or a random key, a previous key verifies but never signs; short or malformed keys refused at startup; keys in no log line or error | [cmd/api/volume_objects_server_test.go](../cmd/api/volume_objects_server_test.go), [cmd/api/main_test.go](../cmd/api/main_test.go), [internal/api/handlers_volume_objects_test.go](../internal/api/handlers_volume_objects_test.go), [internal/api/volumestore/local_test.go](../internal/api/volumestore/local_test.go), [internal/api/config/config_test.go](../internal/api/config/config_test.go) |
 | Runner volume downloads: `https` only, no redirects followed; the registration certificate and CA, and no proxy, on the API's host alone; size and sha256 checked | [internal/runner/volumecache/transport_test.go](../internal/runner/volumecache/transport_test.go), [internal/runner/volumecache/cache_test.go](../internal/runner/volumecache/cache_test.go) |
 | No caller-set header but `Content-Type` passed on to the daemon; daemon redirects refused; daemon signal headers stripped, sandbox-gone body ignored | [internal/runner/proxy_test.go](../internal/runner/proxy_test.go), [internal/api/handlers_reap_test.go](../internal/api/handlers_reap_test.go), [e2e/tests/runner-restart.spec.ts](../e2e/tests/runner-restart.spec.ts) |
 | Sandbox-to-sandbox (unicast and multicast), blocked-range egress and guest DNS; egress `none` across stop/wake and slot reuse | [e2e/tests/network-isolation.spec.ts](../e2e/tests/network-isolation.spec.ts) |

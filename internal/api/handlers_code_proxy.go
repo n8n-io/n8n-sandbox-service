@@ -1,3 +1,5 @@
+// This file proxies code sandbox requests from the API to the runner.
+
 package api
 
 import (

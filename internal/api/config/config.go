@@ -3,6 +3,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"math"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/n8n-io/sandbox-service/internal/api/volumestore"
 	"github.com/n8n-io/sandbox-service/internal/codetask"
 	"github.com/n8n-io/sandbox-service/internal/envvar"
 	"github.com/n8n-io/sandbox-service/internal/logging"
@@ -234,6 +236,16 @@ type APIConfig struct {
 	// VolumeLocalListenAddr, which signed object URLs point at
 	// (VolumeStoreLocal).
 	VolumeLocalURL string
+	// VolumeLocalDir is the local store's directory (VolumeStoreLocal).
+	// Parsed from SANDBOX_API_VOLUME_LOCAL_DIR (default <DataDir>/volumes).
+	VolumeLocalDir string
+	// VolumeLocalSigningKey signs the local store's read URLs; nil means a
+	// key random per process (VolumeStoreLocal). Parsed from
+	// SANDBOX_API_VOLUME_LOCAL_SIGNING_KEY.
+	VolumeLocalSigningKey []byte
+	// VolumeLocalPreviousSigningKey verifies them too but signs none.
+	// Parsed from SANDBOX_API_VOLUME_LOCAL_PREVIOUS_SIGNING_KEY.
+	VolumeLocalPreviousSigningKey []byte
 	// VolumeRemoteSocket is the Unix socket of the store helper
 	// (VolumeStoreRemote).
 	VolumeRemoteSocket string
@@ -506,6 +518,25 @@ func loadVolumeStore(cfg *APIConfig) error {
 			return err
 		}
 		cfg.VolumeLocalListenAddr = listenAddr
+		localDir, err := parseVolumeLocalDir(cfg.DataDir)
+		if err != nil {
+			return err
+		}
+		cfg.VolumeLocalDir = localDir
+		// Set but blank, as from a Secret with an empty value, it would give
+		// every instance a random key of its own.
+		if value, set := os.LookupEnv("SANDBOX_API_VOLUME_LOCAL_SIGNING_KEY"); set && strings.TrimSpace(value) == "" {
+			return fmt.Errorf("SANDBOX_API_VOLUME_LOCAL_SIGNING_KEY is set but empty: set a key, or unset it for a key random per process")
+		}
+		if cfg.VolumeLocalSigningKey, err = parseSigningKey("SANDBOX_API_VOLUME_LOCAL_SIGNING_KEY"); err != nil {
+			return err
+		}
+		if cfg.VolumeLocalPreviousSigningKey, err = parseSigningKey("SANDBOX_API_VOLUME_LOCAL_PREVIOUS_SIGNING_KEY"); err != nil {
+			return err
+		}
+		if cfg.VolumeLocalPreviousSigningKey != nil && cfg.VolumeLocalSigningKey == nil {
+			return fmt.Errorf("SANDBOX_API_VOLUME_LOCAL_PREVIOUS_SIGNING_KEY needs SANDBOX_API_VOLUME_LOCAL_SIGNING_KEY")
+		}
 	case VolumeStoreRemote:
 		cfg.VolumeStore = VolumeStoreRemote
 		socket := envvar.Get("SANDBOX_API_VOLUME_REMOTE_SOCKET")
@@ -537,6 +568,35 @@ func parseLocalURL() (string, error) {
 		return "", fmt.Errorf("SANDBOX_API_VOLUME_LOCAL_URL must be an https URL with a host and port only: no credentials, path, query or fragment")
 	}
 	return strings.TrimRight(raw, "/"), nil
+}
+
+// parseVolumeLocalDir reads SANDBOX_API_VOLUME_LOCAL_DIR, which defaults to
+// <dataDir>/volumes.
+func parseVolumeLocalDir(dataDir string) (string, error) {
+	const name = "SANDBOX_API_VOLUME_LOCAL_DIR"
+	dir := envvar.Get(name)
+	if dir == "" {
+		return filepath.Join(dataDir, "volumes"), nil
+	}
+	dir = filepath.Clean(dir)
+	if !filepath.IsAbs(dir) || dir == string(filepath.Separator) {
+		return "", fmt.Errorf("%s must be an absolute path other than /, got %q", name, dir)
+	}
+	return dir, nil
+}
+
+// parseSigningKey reads a signing key in standard base64, padded or not, nil
+// when unset or blank. Errors never show the value.
+func parseSigningKey(name string) ([]byte, error) {
+	encoded := envvar.Get(name)
+	if encoded == "" {
+		return nil, nil
+	}
+	key, err := base64.RawStdEncoding.Strict().DecodeString(strings.TrimRight(encoded, "="))
+	if err != nil || len(key) < volumestore.MinSigningKeyBytes {
+		return nil, fmt.Errorf("%s must be at least %d bytes in standard base64, such as the output of `openssl rand -base64 %d`", name, volumestore.MinSigningKeyBytes, volumestore.MinSigningKeyBytes)
+	}
+	return key, nil
 }
 
 // parseVolumeLocalListenAddr reads SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR. One

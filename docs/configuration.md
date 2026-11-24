@@ -25,7 +25,7 @@ All services are configured via environment variables. In the variables the API,
 | `SANDBOX_API_GRPC_LISTEN_ADDR` | `:9090` | Private gRPC listen address for runner registration streams |
 | `SANDBOX_API_METRICS_LISTEN_ADDR` | *(empty)* | Dedicated `host:port` for Prometheus `/metrics`. Empty, or the same port as `SANDBOX_API_LISTEN_ADDR`, serves `/metrics` on the public listener; any other port starts a second server that serves only `/metrics`. Must not use the `SANDBOX_API_GRPC_LISTEN_ADDR` port. Ignored, with a warning, when `SANDBOX_API_METRICS_ENABLED=false`. See [Metrics](#metrics). |
 | `SANDBOX_API_STORE` | `sqlite` | Store backend: `sqlite` (default, single API pod) or `postgres` (multi-pod) |
-| `SANDBOX_API_DATA_DIR` | `/var/lib/n8n-sandbox-api` | SQLite store directory when `SANDBOX_API_STORE=sqlite`, and where `SANDBOX_API_VOLUME_STORE=local` creates `volumes/`; must exist and be writable. Mount a persistent volume here to retain sandbox state across API pod restarts. With `SANDBOX_API_SQLITE_WAL=true`, use a local or block volume, not a network file system. |
+| `SANDBOX_API_DATA_DIR` | `/var/lib/n8n-sandbox-api` | SQLite store directory when `SANDBOX_API_STORE=sqlite`, and where `SANDBOX_API_VOLUME_LOCAL_DIR` lies by default; must exist and be writable. Mount a persistent volume here to keep the SQLite store, and the local volume store in its default place, across API pod restarts. With `SANDBOX_API_SQLITE_WAL=true`, use a local or block volume, not a network file system. |
 | `SANDBOX_API_SQLITE_WAL` | `true` | Open the SQLite store in WAL mode with `synchronous=NORMAL`. `false` switches to the DELETE rollback journal with `synchronous=FULL`, including databases previously opened in WAL mode. The API fails to start if SQLite does not apply the requested journal mode. |
 | `SANDBOX_API_POSTGRES_HOST` | *(required with postgres)* | Postgres host |
 | `SANDBOX_API_POSTGRES_PORT` | `5432` | Postgres port |
@@ -33,9 +33,12 @@ All services are configured via environment variables. In the variables the API,
 | `SANDBOX_API_POSTGRES_PASSWORD` | *(required with postgres)* | Postgres password |
 | `SANDBOX_API_POSTGRES_DB` | *(required with postgres)* | Postgres database name |
 | `SANDBOX_API_POSTGRES_SSLMODE` | `require` | Postgres TLS mode (`disable`, `require`, `verify-full`, etc.) |
-| `SANDBOX_API_VOLUME_STORE` | *(empty)* | Where volume objects are stored: empty (no store), `local` or `remote`. `local` keeps them in `<SANDBOX_API_DATA_DIR>/volumes` and serves them to runners on a listener of its own (`SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR`), under URLs signed with a key that is random per process, so like `sqlite` it needs a single API instance, and its URLs stop working on restart. `remote` hands them to a [store helper](volume-store-helper.md) next to the API, which holds the storage credentials and issues the read URLs |
+| `SANDBOX_API_VOLUME_STORE` | *(empty)* | Where volume objects are stored: empty (no store), `local` or `remote`. `local` keeps them in `SANDBOX_API_VOLUME_LOCAL_DIR` and serves them to runners on a listener of its own (`SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR`), under signed URLs. Without `SANDBOX_API_VOLUME_LOCAL_SIGNING_KEY` it signs with a key that is random per process, so like `sqlite` it needs a single API instance, and its URLs stop working on restart; several instances can [share it](#sharing-the-local-volume-store). `remote` hands them to a [store helper](volume-store-helper.md) next to the API, which holds the storage credentials and issues the read URLs |
 | `SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR` | `:8443` | With `local`, the `host:port` of the listener that serves `GET /volume-objects/…` and nothing else. It speaks TLS 1.3 and requires a client certificate, with the registration listener's `SANDBOX_API_GRPC_TLS_*` files, so it accepts the certificates runners register with ([security-model.md](security-model.md#api-to-runner)). Its port must differ from those of `SANDBOX_API_LISTEN_ADDR`, `SANDBOX_API_GRPC_LISTEN_ADDR` and `SANDBOX_API_METRICS_LISTEN_ADDR`. Not read without `local` |
 | `SANDBOX_API_VOLUME_LOCAL_URL` | *(required with local)* | Base URL at which runners reach that listener, such as `https://sandbox-api:8443`: `https` with a host and optional port, and no credentials, path, query or fragment (a trailing `/` is ignored). The host must be the one runners register with (the host of their `SANDBOX_RUNNER_API_GRPC_ADDR`). The listener presents the registration certificate (`SANDBOX_API_GRPC_TLS_CERT_FILE`), which must carry that host, or the runners' `SANDBOX_RUNNER_REGISTRATION_GRPC_SERVER_NAME` if set. Read URLs point at `<url>/volume-objects/…` |
+| `SANDBOX_API_VOLUME_LOCAL_DIR` | `<SANDBOX_API_DATA_DIR>/volumes` | With `local`, the absolute path of the store's directory. The API creates it if its parent exists, sets its mode to `0700`, and refuses to start unless its file system makes hard links. At startup it removes upload temp files in it that are older than a day. Not read without `local` |
+| `SANDBOX_API_VOLUME_LOCAL_SIGNING_KEY` | *(empty)* | With `local`, the key that signs read URLs, at least 32 bytes in standard base64, padded or not (`openssl rand -base64 32`). Every API instance with the key accepts the URLs any of them signs, and URLs outlive restarts. Unset means a key random per process; set but empty is refused. Never logged ([security-model.md](security-model.md#api-to-runner)). Not read without `local` |
+| `SANDBOX_API_VOLUME_LOCAL_PREVIOUS_SIGNING_KEY` | *(empty)* | With `local`, a key in the same form that verifies read URLs but signs none, for a rotation. Needs `SANDBOX_API_VOLUME_LOCAL_SIGNING_KEY`. Not read without `local` |
 | `SANDBOX_API_VOLUME_REMOTE_SOCKET` | *(required with remote)* | Absolute path, at most 107 bytes, of the Unix socket the store helper serves gRPC on. The helper authenticates nobody, so only the API and the helper may reach it |
 | `SANDBOX_API_MAX_FILE_BYTES` | `10485760` | Maximum file upload size (10 MB), also the compressed size of an archive upload |
 | `SANDBOX_API_MAX_TASK_INPUT_BYTES` | `67108864` | Total size of the input files of a code sandbox task (64 MiB; up to 1 GiB). The API refuses a task request body more than 1 MiB larger, the room for the `spec` and the multipart headers. The runner and the daemon (`CODE_DAEMON_MAX_INPUT_BYTES`) apply their own limits |
@@ -68,6 +71,17 @@ All services are configured via environment variables. In the variables the API,
 **Multi-pod (Postgres):** Set `SANDBOX_API_STORE=postgres` and the `SANDBOX_API_POSTGRES_*` variables when running multiple API replicas. Sandbox metadata and runner heartbeats are shared in Postgres; the idle sweeper uses a Postgres advisory lock so only one pod sweeps at a time. New sandboxes are placed on the eligible runner with the lowest reported `capacity_used`. Disable `api.persistence` in Helm when using Postgres (state lives in the database, not local disk). Each replica opens up to 25 store connections plus `SANDBOX_API_IDLE_SWEEP_CONCURRENCY + 5` lock connections; size Postgres `max_connections` for every replica and other clients.
 
 The idle sweeper waits `SANDBOX_API_ORPHAN_REAP_BUFFER` (default `5m`) after a runner's last heartbeat before removing its orphaned sandbox rows from the API store (sandboxes that are already idle stop/delete candidates). With SQLite, this is based on observing the runner stream close; with Postgres, it is based on `last_seen` in the shared registry.
+
+### Sharing the local volume store
+
+Several API instances, such as API pods on Postgres, can share `SANDBOX_API_VOLUME_STORE=local` with:
+
+- the same `SANDBOX_API_VOLUME_LOCAL_SIGNING_KEY` in every instance;
+- `SANDBOX_API_VOLUME_LOCAL_DIR` on one volume that all of them mount read-write (`ReadWriteMany`), on a file system with hard links, such as NFS (Amazon EFS, Google Filestore, Azure Files over NFS, Longhorn) or CephFS. SMB shares, such as Azure Files over SMB, have no hard links;
+- NFS mounted with `lookupcache=positive`. By default an NFS client remembers names it found missing, so an object another instance commits can look missing for up to a minute. The API warns at startup when the directory is on NFS without that option;
+- NFS exported `sync`, the default, and every instance running as the same user.
+
+Every instance serves downloads: `SANDBOX_API_VOLUME_LOCAL_URL` names all of them, such as a Kubernetes Service does, so one instance can serve a URL another signed. The per-scope download cap (`SANDBOX_API_MAX_INFLIGHT_PER_TENANT`) applies per instance. On NFS, deleting an object also ends the downloads of it in progress on other instances.
 
 ## Runner
 
@@ -218,6 +232,7 @@ The `code-daemon` runs inside a code sandbox and is reached only by the runner. 
 | `CODE_DAEMON_WORK_DIR` | `/work` | Parent of the task directories and working directory of the runtime. Created with mode `0700` if missing |
 | `CODE_DAEMON_RUNTIMES_FILE` | `/etc/code-runtime/runtimes.json` | Runtime registry, shipped in the sandbox image |
 | `CODE_DAEMON_RUNTIME` | `n8n-js` | Registry entry to run |
+| `CODE_DAEMON_RUNTIME_LOG_WRITES` | `16` | Writes sampled from each of the runtime's stdout and stderr into the daemon log, at most 1 KiB each (up to `10000`). Later output is dropped. A sampled write is also dropped when the log queue is full |
 | `CODE_DAEMON_MAX_INPUT_BYTES` | `67108864` | Max total bytes of a task's input files, including task.json and binary files (64 MiB; up to 1 GiB) |
 | `CODE_DAEMON_MAX_OUTPUT_BYTES` | `67108864` | Max total bytes of the output files a task returns (64 MiB; up to 1 GiB) |
 | `CODE_DAEMON_MAX_FILES` | `256` | Max input files and max output files a task returns (up to `4096`) |

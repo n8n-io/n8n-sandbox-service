@@ -1,3 +1,5 @@
+// This file relays an upstream refusal while the client still uploads.
+
 package sandboxproxy
 
 import (
