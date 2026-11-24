@@ -23,10 +23,13 @@ type Config struct {
 	WorkDir        string   // root for task directories and the runtime's working directory
 	RuntimeCommand []string // executable followed by its arguments, from the runtime registry
 	Limits         Limits   // per-task budgets; non-positive values use defaults
+	// RuntimeLogWrites caps the writes to each of the runtime's stdout and
+	// stderr that reach the daemon log. Non-positive uses the default of 16.
+	RuntimeLogWrites int
 }
 
 func LoadConfig() (Config, error) {
-	cfg := Config{ListenAddr: ":8081", MaxConcurrency: 1}
+	cfg := Config{ListenAddr: ":8081", MaxConcurrency: 1, RuntimeLogWrites: defaultRuntimeLogWrites}
 	envvar.String("CODE_DAEMON_LISTEN_ADDR", &cfg.ListenAddr)
 	if err := envvar.Bool("CODE_DAEMON_ALLOW_LOCAL_CLIENTS", &cfg.AllowLocalClients); err != nil {
 		return Config{}, err
@@ -39,6 +42,9 @@ func LoadConfig() (Config, error) {
 		return Config{}, err
 	}
 	cfg.Limits = limits
+	if err := envvar.IntBetween("CODE_DAEMON_RUNTIME_LOG_WRITES", &cfg.RuntimeLogWrites, 1, 10_000); err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
 }
 
@@ -50,15 +56,22 @@ type Daemon struct {
 	tasksMu            sync.Mutex
 	dispatchedByTaskID map[string]bool // false before dispatch, true once dispatch is attempted
 
-	workerMu    sync.Mutex
-	worker      *worker // started lazily and never replaced once set
-	startFailed bool    // set when the worker could not be started; it is not retried
-	closed      bool    // prevents starting a worker after Close
+	workerMu       sync.Mutex
+	startupTimeout time.Duration // how long a started worker has to report ready
+	worker         *worker       // started lazily and never replaced once set
+	startFailed    bool          // set when the worker could not be started; it is not retried
+	closed         bool          // prevents starting a worker after Close
 }
 
 func New(cfg Config) *Daemon {
 	cfg.Limits = cfg.Limits.withDefaults()
-	return &Daemon{cfg: cfg, lanes: make(chan struct{}, max(1, cfg.MaxConcurrency)), dispatchedByTaskID: make(map[string]bool)}
+	if cfg.RuntimeLogWrites <= 0 {
+		cfg.RuntimeLogWrites = defaultRuntimeLogWrites
+	}
+	return &Daemon{
+		cfg: cfg, lanes: make(chan struct{}, max(1, cfg.MaxConcurrency)), dispatchedByTaskID: make(map[string]bool),
+		startupTimeout: workerStartupTimeout,
+	}
 }
 
 // Handler registers the runner's routes and applies the client source guard by default.
@@ -71,6 +84,7 @@ func (d *Daemon) Handler() http.Handler {
 		}
 		w.WriteHeader(http.StatusOK)
 	})
+	mux.HandleFunc("POST /tasks", d.handleTask)
 	if d.cfg.AllowLocalClients {
 		return mux
 	}
@@ -78,7 +92,7 @@ func (d *Daemon) Handler() http.Handler {
 		// The runner connects from outside the sandbox network namespace.
 		host, _, err := net.SplitHostPort(r.RemoteAddr)
 		if err != nil || isLocalAddress(net.ParseIP(host)) {
-			http.Error(w, "local clients are not allowed", http.StatusForbidden)
+			rejectAdmission(w, r, "local clients are not allowed", http.StatusForbidden)
 			return
 		}
 		mux.ServeHTTP(w, r)
@@ -124,13 +138,20 @@ func (d *Daemon) Run(ctx context.Context) error {
 // serve runs the HTTP server on an open listener and forces it closed if graceful shutdown fails.
 func (d *Daemon) serve(ctx context.Context, listener net.Listener) error {
 	defer d.Close()
-	srv := &http.Server{Handler: d.Handler(), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: time.Minute}
+	srv := &http.Server{
+		Handler: d.Handler(), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: time.Minute,
+		// Cancelling the daemon also cancels active task requests.
+		BaseContext: func(net.Listener) context.Context { return ctx },
+	}
 	stopped := make(chan error, 1)
 	go func() { stopped <- srv.Serve(listener) }()
 	select {
 	case err := <-stopped:
 		return err
 	case <-ctx.Done():
+		// Stop the runtime so disconnected handlers waiting for task cleanup
+		// can release their lanes and directories during HTTP shutdown.
+		d.Close()
 		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		err := srv.Shutdown(shutdown)

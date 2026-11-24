@@ -24,11 +24,12 @@ func TestInputLimits(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := taskRequest(t, `{"taskId":"test"}`, tc.files)
-			_, mr := d.admit(httptest.NewRecorder(), r)
+			spec, mr := d.admit(httptest.NewRecorder(), r)
 			if mr == nil {
 				t.Fatal("request not admitted")
 			}
 			defer d.releaseLane()
+			defer d.releaseTask(spec.TaskID)
 			_, err := d.stageInputs(mr)
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("stage error = %v, want %v", err, tc.want)
@@ -53,11 +54,12 @@ func TestInputDirectoryLimit(t *testing.T) {
 		want  error
 	}{{8, nil}, {9, errInputLimit}} {
 		t.Run(strconv.Itoa(tc.files), func(t *testing.T) {
-			_, mr := d.admit(httptest.NewRecorder(), taskRequest(t, `{"taskId":"test"}`, deepFiles(tc.files)))
+			spec, mr := d.admit(httptest.NewRecorder(), taskRequest(t, `{"taskId":"test"}`, deepFiles(tc.files)))
 			if mr == nil {
 				t.Fatal("request not admitted")
 			}
 			defer d.releaseLane()
+			defer d.releaseTask(spec.TaskID)
 			dir, err := d.stageInputs(mr)
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("stage error = %v, want %v", err, tc.want)
