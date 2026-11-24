@@ -1,3 +1,5 @@
+// This file defines the limits of a shared volume and the rule for its name.
+
 // Package volumes handles shared volumes: their limits, and the check of a tar
 // while it streams into the volume store.
 package volumes
@@ -9,20 +11,29 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/volume"
 )
 
-// Limits of a shared volume, in docs/limits.md. Runners fetch the tar within
-// their fetch timeout, sized for objects up to 5 GB, and the builder holds a
-// set of the tar's directories in memory, so the entries stay at a million.
+// Limits of a shared volume.
 const (
-	MaxTarBytes          int64 = 4 << 30 // 4 GiB
-	MaxContentBytes      int64 = 4 << 30 // 4 GiB
+	// MaxUploadBytes is the tar as uploaded, plain or gzip. Runners fetch it
+	// within SANDBOX_RUNNER_VOLUME_FETCH_TIMEOUT, 5 minutes by default.
+	MaxUploadBytes int64 = 4 << 30 // 4 GiB
+	// MaxContentBytes is the same size: a plain tar holds no more content than
+	// its own size.
+	MaxContentBytes int64 = 4 << 30 // 4 GiB
+	// MaxDecompressedBytes bounds the work of the API and the builder on a
+	// small gzip.
 	MaxDecompressedBytes int64 = 8 << 30 // 8 GiB
-	MaxEntries                 = 1_000_000
-	// MaxSharedVolumes counts the publishing and ready ones.
+	// MaxEntries counts the directories a tar leaves out too. The builder keeps
+	// them in memory, about 50 bytes each, in a guest with 512 MiB.
+	MaxEntries = 1_000_000
+	// MaxSharedVolumes counts the publishing and ready ones. The publisher
+	// deletes old versions, so only a faulty publisher reaches the limit.
 	MaxSharedVolumes = 1000
-	// MaxPublishesPerPod bounds the CPU and memory publishes take on one API
-	// instance: each hashes, decompresses and reads a tar.
-	MaxPublishesPerPod = 2
-	MaxNameBytes       = 128
+	// MaxConcurrentPublishesPerPod bounds the CPU and memory publishes take on
+	// one API instance: each uses about one core and 50 MB to hash, decompress
+	// and read a tar.
+	MaxConcurrentPublishesPerPod = 2
+	// MaxNameBytes fits a name such as n8n-assistant-2.46.0-beta.1.
+	MaxNameBytes = 128
 )
 
 var namePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$`)

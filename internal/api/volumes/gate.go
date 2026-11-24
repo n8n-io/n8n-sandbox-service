@@ -1,3 +1,6 @@
+// This file hands an upload to the volume store while a validator checks the
+// tar.
+
 package volumes
 
 import (
@@ -22,14 +25,18 @@ var (
 type tarGate struct {
 	body       io.Reader
 	pipeWriter *io.PipeWriter
-	results    chan validation
-	result     *validation
-	// bodyEnded is set once body returned io.EOF; from then on a refused tar
-	// leaves body alone.
+	// validationDone receives the validator's verdict once.
+	validationDone chan validation
+	// validationResult is nil until waitForValidation received the verdict.
+	validationResult *validation
+	// bodyEnded is set once body returned io.EOF. After that, the validator
+	// does not call interrupt.
 	bodyEnded atomic.Bool
-	// failure is the error Read returned once, and returns from then on.
-	failure  error
-	finished bool
+	// failure is the first error Read returned. Read returns it again on every
+	// later call.
+	failure error
+	// validTarEnded is set once Read returned io.EOF for a valid tar.
+	validTarEnded bool
 }
 
 type validation struct {
@@ -37,12 +44,13 @@ type validation struct {
 	err   error
 }
 
-// newTarGate reads body. interrupt, if set, ends a read of body that waits
-// for the client: the gate calls it when the validator refuses the tar before
-// body has ended.
+// newTarGate starts a validator on the bytes the gate passes on. Always call
+// close: it ends the validator if reading stopped early. interrupt, if not
+// nil, must end a read of body that waits for the client. The gate calls it
+// when the validator refuses the tar before body ends.
 func newTarGate(body io.Reader, policy safetar.Policy, interrupt func()) *tarGate {
 	pipeReader, pipeWriter := io.Pipe()
-	gate := &tarGate{body: body, pipeWriter: pipeWriter, results: make(chan validation, 1)}
+	gate := &tarGate{body: body, pipeWriter: pipeWriter, validationDone: make(chan validation, 1)}
 	go func() {
 		stats, err := safetar.Validate(pipeReader, policy)
 		if err == nil && stats.Entries == stats.GlobalHeaders {
@@ -53,68 +61,70 @@ func newTarGate(body io.Reader, policy safetar.Policy, interrupt func()) *tarGat
 		}
 		// Ends a write waiting on a validator that stopped early.
 		pipeReader.CloseWithError(errValidated)
-		gate.results <- validation{stats: stats, err: err}
+		gate.validationDone <- validation{stats: stats, err: err}
 	}()
 	return gate
 }
 
-func (gate *tarGate) Read(buf []byte) (int, error) {
+func (gate *tarGate) Read(buffer []byte) (int, error) {
 	if gate.failure != nil {
 		return 0, gate.failure
 	}
-	if gate.finished {
+	if gate.validTarEnded {
 		return 0, io.EOF
 	}
-	read, err := gate.body.Read(buf)
+	read, err := gate.body.Read(buffer)
 	if errors.Is(err, io.EOF) {
 		gate.bodyEnded.Store(true)
 	}
 	if read > 0 {
-		if _, writeErr := gate.pipeWriter.Write(buf[:read]); writeErr != nil {
-			// The validator stopped before the end, which only a verdict does.
-			failed := verdict(gate.wait())
-			if failed == nil {
-				failed = errTarRules
+		if _, writeError := gate.pipeWriter.Write(buffer[:read]); writeError != nil {
+			// A write fails only after the validator closed the pipe. It closes
+			// it early only when it refuses the tar.
+			refusal := verdict(gate.waitForValidation())
+			if refusal == nil {
+				refusal = errTarRules
 			}
-			return 0, gate.fail(failed)
+			return 0, gate.recordFailure(refusal)
 		}
 	}
 	switch {
 	case errors.Is(err, io.EOF):
 		_ = gate.pipeWriter.Close()
-		if failed := verdict(gate.wait()); failed != nil {
-			return 0, gate.fail(failed)
+		if refusal := verdict(gate.waitForValidation()); refusal != nil {
+			return 0, gate.recordFailure(refusal)
 		}
-		gate.finished = true
+		gate.validTarEnded = true
 		return read, io.EOF
 	case err != nil:
 		gate.pipeWriter.CloseWithError(errAborted)
-		// A validator that refused the tar first is what interrupted the read.
-		if result := gate.wait(); result.err != nil && !errors.Is(result.err, errAborted) {
-			return 0, gate.fail(verdict(result))
+		// The validator's interrupt can cause this error. Then report the
+		// refusal, not a failed upload.
+		if result := gate.waitForValidation(); result.err != nil && !errors.Is(result.err, errAborted) {
+			return 0, gate.recordFailure(verdict(result))
 		}
-		return 0, gate.fail(fmt.Errorf("%w: %w", ErrUpload, err))
+		return 0, gate.recordFailure(fmt.Errorf("%w: %w", ErrUpload, err))
 	}
 	return read, nil
 }
 
-func (gate *tarGate) fail(err error) error {
+func (gate *tarGate) recordFailure(err error) error {
 	gate.failure = err
 	return err
 }
 
-func (gate *tarGate) wait() validation {
-	if gate.result == nil {
-		result := <-gate.results
-		gate.result = &result
+func (gate *tarGate) waitForValidation() validation {
+	if gate.validationResult == nil {
+		result := <-gate.validationDone
+		gate.validationResult = &result
 	}
-	return *gate.result
+	return *gate.validationResult
 }
 
 // close ends the validator if the store stopped reading early.
 func (gate *tarGate) close() {
 	gate.pipeWriter.CloseWithError(errAborted)
-	gate.wait()
+	gate.waitForValidation()
 }
 
 // err returns what ended the upload, nil if it ended well or never failed.
@@ -124,7 +134,7 @@ func (gate *tarGate) err() error {
 
 // counts returns what the validator counted; only after a valid tar.
 func (gate *tarGate) counts() volume.TarCounts {
-	stats := gate.wait().stats
+	stats := gate.waitForValidation().stats
 	return volume.TarCounts{
 		Entries:           int64(stats.Entries),
 		ContentBytes:      stats.Bytes,

@@ -70,7 +70,7 @@ func TestTarGateRefusesATarBeforeItsEnd(t *testing.T) {
 		"only metadata":    {makeTar(t, tarEntry{typeflag: tar.TypeXGlobalHeader, body: "secret-name"}), ErrInvalidTar},
 		"not a tar":        {[]byte(strings.Repeat("secret-name ", 200)), ErrInvalidTar},
 		"too many entries": {makeTar(t, tooMany...), ErrTooLarge},
-		"too much content": {makeTar(t, file("secret-name", strings.Repeat("x", 1<<14+1))), ErrTooLarge},
+		"too much content": {makeTar(t, file("secret-name", strings.Repeat("x", testMaxContentBytes+1))), ErrTooLarge},
 	} {
 		t.Run(name, func(t *testing.T) {
 			gate := newTarGate(bytes.NewReader(tc.data), testPolicy, nil)

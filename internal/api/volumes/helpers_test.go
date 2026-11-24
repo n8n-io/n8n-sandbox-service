@@ -80,8 +80,14 @@ func validTar(t *testing.T) []byte {
 	)
 }
 
-// testPolicy keeps the caps small enough to reach in a test.
-var testPolicy = volume.TarPolicy(16, 1<<14, 1<<16)
+// The caps of testPolicy, small enough to reach in a test.
+const (
+	testMaxEntries           = 16
+	testMaxContentBytes      = 16 << 10 // 16 KiB
+	testMaxDecompressedBytes = 64 << 10 // 64 KiB
+)
+
+var testPolicy = volume.TarPolicy(testMaxEntries, testMaxContentBytes, testMaxDecompressedBytes)
 
 // chunkedReader hands out data in pieces, waiting for each piece's turn on
 // next, then fails with failAt bytes read if failAt is set. A wait ends like

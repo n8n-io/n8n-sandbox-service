@@ -1,3 +1,5 @@
+// This file defines the errors of publishing a shared volume.
+
 package volumes
 
 import (
