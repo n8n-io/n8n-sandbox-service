@@ -47,6 +47,25 @@ func TestAdmissionAcceptsLongestTaskID(t *testing.T) {
 	d.releaseLane()
 }
 
+func TestAdmissionRejectsInvalidSpec(t *testing.T) {
+	for name, spec := range map[string]string{
+		"negative timeout": `{"taskId":"negative","timeoutMs":-1}`,
+		"invalid task ID":  `{"taskId":"bad/id"}`,
+		"invalid JSON":     `{"taskId":`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := New(Config{MaxConcurrency: 1})
+			w := httptest.NewRecorder()
+			if _, mr := d.admit(w, taskRequest(t, spec, nil)); mr != nil || w.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d", w.Code, http.StatusBadRequest)
+			}
+			if len(d.lanes) != 0 || len(d.dispatchedByTaskID) != 0 {
+				t.Fatalf("rejected spec reserved %d lanes and %d task IDs", len(d.lanes), len(d.dispatchedByTaskID))
+			}
+		})
+	}
+}
+
 func TestAdmissionRejectsBeforeReadingInputPart(t *testing.T) {
 	d := New(Config{MaxConcurrency: 1})
 	r := taskRequest(t, `{"taskId":"first"}`, nil)
