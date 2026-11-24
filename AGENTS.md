@@ -75,7 +75,8 @@ Firecracker-only e2e spec `FIRECRACKER_ONLY` instead.
   code does, unless the code is unusual or unclear.
 - When you use a bit shift (`<<`), add a comment that gives the value (for
   example, `4 << 20 // 4 MiB`).
-- Document the purpose of each `.go` file. Test files are an exception.
+- Document the purpose of each `.go` file. Test files and generated files
+  (marked `DO NOT EDIT`) are exceptions.
 - Document the purpose of a struct field when its name does not make it clear.
 
 ### Naming
