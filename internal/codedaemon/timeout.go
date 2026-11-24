@@ -13,6 +13,8 @@ const (
 	maxTaskTimeout     = 24 * time.Hour // Hard cap on configured execution limits.
 )
 
+var errDefaultAboveMax = errors.New("default task timeout exceeds maximum task timeout")
+
 // loadTaskTimeouts returns the default and maximum execution durations. A lower
 // configured maximum also lowers the default unless the default is set explicitly.
 func loadTaskTimeouts() (time.Duration, time.Duration, error) {
@@ -25,7 +27,7 @@ func loadTaskTimeouts() (time.Duration, time.Duration, error) {
 		return 0, 0, err
 	}
 	if value > upper {
-		return 0, 0, errors.New("default task timeout exceeds maximum task timeout")
+		return 0, 0, errDefaultAboveMax
 	}
 	return value, upper, nil
 }
