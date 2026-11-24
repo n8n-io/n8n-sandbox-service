@@ -1,3 +1,5 @@
+import type { Readable } from "node:stream";
+
 /** Configuration for creating a SandboxClient instance. */
 export interface SandboxClientOptions {
   /** API key for authenticating with the sandbox service. */
@@ -65,6 +67,42 @@ export interface CodeSandbox {
   /** True only for the create that made the sandbox. */
   created: boolean;
   state: string;
+}
+
+/** The `spec` part of a code task. The daemon defines the fields. */
+export interface CodeTaskSpec {
+  taskId: string;
+  [field: string]: unknown;
+}
+
+/** A binary input file of a code task. */
+export interface CodeTaskInput {
+  /** Relative path of the file in the task, such as `bin/0`. Must not be `task.json`. */
+  path: string;
+  /** File content. A stream is sent as it is read, without buffering. */
+  content: FileContent | Readable;
+  /** MIME type of the content, such as `image/png`. Default `application/octet-stream`. */
+  contentType?: string;
+}
+
+/** Options for running a code task. */
+export interface RunCodeTaskOptions {
+  spec: CodeTaskSpec;
+  /**
+   * JSON content of the task, sent as the `task.json` input. A stream is sent
+   * as it is read, without buffering.
+   */
+  taskInput: FileContent | Readable;
+  /** Binary input files of the task. */
+  inputs?: CodeTaskInput[];
+  /** Aborts the upload and closes the event stream. */
+  signal?: AbortSignal;
+}
+
+/** An event of a code task. The daemon defines the types and fields. */
+export interface CodeTaskEvent {
+  type: string;
+  [field: string]: unknown;
 }
 
 /** Retry policy for transient HTTP failures. */

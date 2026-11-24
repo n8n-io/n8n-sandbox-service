@@ -50,6 +50,13 @@ function isErrorEvent(json: JsonObject): json is ExecErrorEvent {
 
 /** Yields parsed exec events from an NDJSON stream, one per line. */
 export async function* readNdjsonStream(stream: Readable): AsyncGenerator<ExecEvent> {
+  for await (const line of readNdjsonLines(stream)) {
+    yield parseExecEvent(line);
+  }
+}
+
+/** Yields the non-empty lines of an NDJSON stream, without surrounding whitespace. */
+export async function* readNdjsonLines(stream: Readable): AsyncGenerator<string> {
   let pending = "";
   const decoder = new TextDecoder("utf-8");
 
@@ -61,7 +68,7 @@ export async function* readNdjsonStream(stream: Readable): AsyncGenerator<ExecEv
       const line = pending.slice(0, newlineIndex).trim();
       pending = pending.slice(newlineIndex + 1);
       if (line.length > 0) {
-        yield parseExecEvent(line);
+        yield line;
       }
       newlineIndex = pending.indexOf("\n");
     }
@@ -71,7 +78,7 @@ export async function* readNdjsonStream(stream: Readable): AsyncGenerator<ExecEv
 
   const last = pending.trim();
   if (last.length > 0) {
-    yield parseExecEvent(last);
+    yield last;
   }
 }
 

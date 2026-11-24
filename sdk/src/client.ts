@@ -11,11 +11,12 @@ import {
   listFiles,
   stat,
 } from "./files";
-import { createCodeSandbox } from "./code-sandboxes";
+import { createCodeSandbox, runCodeTask } from "./code-sandboxes";
 import { HttpClient } from "./http";
 import { createSandbox, getSandbox, deleteSandbox } from "./sandboxes";
 import type {
   CodeSandbox,
+  CodeTaskEvent,
   CopyFileRequest,
   CreateCodeSandboxOptions,
   CreateSandboxOptions,
@@ -27,6 +28,7 @@ import type {
   FileStat,
   ListFilesOptions,
   MoveFileRequest,
+  RunCodeTaskOptions,
   SandboxClientOptions,
   SandboxRecord,
 } from "./types";
@@ -75,6 +77,17 @@ export class SandboxClient {
    */
   async createCodeSandbox(options: CreateCodeSandboxOptions): Promise<CodeSandbox> {
     return createCodeSandbox(this.http, options);
+  }
+
+  /**
+   * Runs a task in a code sandbox. Resolves when the response starts, with the
+   * task events as they arrive. Never retried: see README "Code sandboxes".
+   */
+  async runCodeTask(
+    id: string,
+    options: RunCodeTaskOptions,
+  ): Promise<AsyncGenerator<CodeTaskEvent, void, undefined>> {
+    return runCodeTask(this.http, id, options);
   }
 
   // #endregion

@@ -83,6 +83,21 @@ const code = await client.createCodeSandbox({
 console.log(code.id, code.created);
 ```
 
+`runCodeTask` sends a task as a streamed `multipart/form-data` body: the `spec` as JSON, then `taskInput` as the `task.json` input, then each binary input as a file with its `contentType` (default `application/octet-stream`). It resolves when the response starts, with the task's NDJSON events as they arrive. The daemon defines the spec fields, the inputs and the events.
+
+```ts
+const events = await client.runCodeTask(code.id, {
+  spec: { taskId: 't_1' },
+  taskInput: JSON.stringify(task),
+  inputs: [{ path: 'bin/0', content: fs.createReadStream(file) }],
+});
+for await (const event of events) {
+  console.log(event.type);
+}
+```
+
+`runCodeTask` is never retried, also not on a `429`, because a stream input cannot be sent twice. A refused task fails with a `SandboxServiceError` before any event. A refused task, or a task with invalid options, destroys its stream inputs. Open them again before you retry it. Ending the iteration early, calling `return()` on the events, or aborting `signal` closes the event stream. A line that is not a JSON object with a string `type` fails the iteration with an `InvalidStreamEventError`.
+
 ### Execute commands
 
 ```ts

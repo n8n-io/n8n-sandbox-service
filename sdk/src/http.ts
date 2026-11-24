@@ -10,6 +10,11 @@ export interface RequestOptions {
   signal?: AbortSignal;
   /** Allow retry on non-idempotent methods (e.g. POST). Default false. */
   isSafeToRetry?: boolean;
+  /**
+   * Set to false to send the request once, for a body that cannot be sent again,
+   * such as a stream. Default true.
+   */
+  retry?: boolean;
 }
 
 interface NormalizedRetryOptions {
@@ -60,6 +65,7 @@ export class HttpClient {
       method,
       options.signal,
       options.isSafeToRetry === true,
+      options.retry !== false,
     );
   }
 
@@ -91,6 +97,7 @@ export class HttpClient {
       method,
       options.signal,
       options.isSafeToRetry === true,
+      options.retry !== false,
     );
   }
 
@@ -125,6 +132,7 @@ export class HttpClient {
       method,
       options.signal,
       options.isSafeToRetry === true,
+      options.retry !== false,
     );
   }
 
@@ -143,6 +151,7 @@ export class HttpClient {
       method,
       options.signal,
       options.isSafeToRetry === true,
+      options.retry !== false,
     );
   }
 
@@ -166,6 +175,7 @@ export class HttpClient {
     method: Method,
     signal?: AbortSignal,
     isSafeToRetry: boolean = false,
+    canRetry: boolean = true,
   ): Promise<T> {
     let attempt = 0;
     while (true) {
@@ -173,7 +183,7 @@ export class HttpClient {
         return await operation();
       } catch (error) {
         const serviceError = this.toServiceError(error);
-        if (!this.shouldRetry(serviceError, attempt, method, signal, isSafeToRetry)) {
+        if (!canRetry || !this.shouldRetry(serviceError, attempt, method, signal, isSafeToRetry)) {
           throw serviceError;
         }
 
