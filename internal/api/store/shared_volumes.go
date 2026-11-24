@@ -308,24 +308,14 @@ func (q sharedVolumeSQL) markDeleted(ctx context.Context, sha256 string) (*Share
 	if err := q.failLapsedPublishes(ctx, sha256, ""); err != nil {
 		return nil, err
 	}
-	// The live row stays locked from the look to the change, so a publish that
-	// finishes in between can't leave the delete with neither.
-	var found *SharedVolume
-	err := q.inTx(ctx, func(tx *sqlTx) error {
-		live, err := q.getOne(ctx, tx, `SELECT `+sharedVolumeCols+` FROM shared_volumes
-			WHERE sha256 = ? AND `+sharedVolumesLive+q.lockRowsSQL, sha256)
-		if err != nil || live == nil || live.State != SharedVolumeReady {
-			found = live
-			return err
-		}
-		found, err = q.getOne(ctx, tx, `UPDATE shared_volumes SET state = 'deleted', updated_at = `+q.nowSQL+`
-			WHERE id = ? RETURNING `+sharedVolumeCols, live.ID)
-		return err
-	})
-	if err != nil {
-		return nil, err
-	}
-	return found, nil
+	// One statement takes the live row in either state and changes it only if
+	// it is ready, so a publish that finishes at the same time can't leave the
+	// delete with neither.
+	return q.getOne(ctx, q.db, `UPDATE shared_volumes
+		SET state = CASE WHEN state = 'ready' THEN 'deleted' ELSE state END,
+			updated_at = CASE WHEN state = 'ready' THEN `+q.nowSQL+` ELSE updated_at END
+		WHERE sha256 = ? AND `+sharedVolumesLive+`
+		RETURNING `+sharedVolumeCols, sha256)
 }
 
 func (q sharedVolumeSQL) purge(ctx context.Context, id string) (bool, error) {

@@ -34,10 +34,6 @@ type sqlDialect struct {
 	bind func(query string) string
 	// nowSQL is the database clock's Unix time in whole seconds.
 	nowSQL string
-	// lockRowsSQL ends a SELECT in a transaction so that the rows it returns
-	// stay locked until the transaction ends. SQLite needs none: its write
-	// transactions hold the database's write lock from BEGIN IMMEDIATE on.
-	lockRowsSQL string
 	// violatesUnique reports whether err is a violation of the unique index
 	// named index, on the column table.column. SQLite names the column, not
 	// the index, of a partial index.
@@ -82,9 +78,8 @@ func newPostgresDialect(store *PostgresStore) sqlDialect {
 				rollback:   func() { _ = tx.Rollback() },
 			}, nil
 		},
-		bind:        bindNumbered,
-		nowSQL:      `CAST(FLOOR(EXTRACT(EPOCH FROM now())) AS BIGINT)`,
-		lockRowsSQL: ` FOR UPDATE`,
+		bind:   bindNumbered,
+		nowSQL: `CAST(FLOOR(EXTRACT(EPOCH FROM now())) AS BIGINT)`,
 		violatesUnique: func(err error, index, _ string) bool {
 			var pgErr *pgconn.PgError
 			return errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation && pgErr.ConstraintName == index
