@@ -217,6 +217,39 @@ func TestLoadRequestLimitsParseAndAllowZero(t *testing.T) {
 	}
 }
 
+func TestLoadMaxTaskInputBytes(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  int64 // 0 = rejected
+	}{
+		{"", 64 * 1024 * 1024},
+		{"1024", 1024},
+		{"1073741824", 1 << 30},
+		{"1073741825", 0},
+		{"0", 0},
+		{"-1", 0},
+		{"abc", 0},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			setRequiredEnv(t)
+			t.Setenv("SANDBOX_RUNNER_MAX_TASK_INPUT_BYTES", tc.value)
+			cfg, err := Load()
+			if tc.want == 0 {
+				if err == nil {
+					t.Fatalf("expected Load() to reject SANDBOX_RUNNER_MAX_TASK_INPUT_BYTES=%q", tc.value)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() failed: %v", err)
+			}
+			if cfg.MaxTaskInputBytes != tc.want {
+				t.Fatalf("MaxTaskInputBytes: want %d, got %d", tc.want, cfg.MaxTaskInputBytes)
+			}
+		})
+	}
+}
+
 func TestLoadRejectsInvalidRequestLimit(t *testing.T) {
 	for _, value := range []string{"-1", "lots", "2147483648"} {
 		t.Run(value, func(t *testing.T) {

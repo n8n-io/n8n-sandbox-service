@@ -514,7 +514,7 @@ api:
 
 ## Volume Store
 
-With `api.config.volumeStore: local`, the API keeps volume objects in `api.config.dataDir` and serves them to runners on a listener of its own. That listener requires TLS 1.3 and a client certificate, with the registration certificates the chart already mounts, so it needs no further setup:
+With `api.config.volumeStore: local`, the API keeps volume objects in `api.config.dataDir`, or on a [shared claim](#sharing-the-volume-store), and serves them to runners on a listener of its own. That listener requires TLS 1.3 and a client certificate, with the registration certificates the chart already mounts, so it needs no further setup:
 
 ```yaml
 api:
@@ -531,6 +531,41 @@ The chart then sets `SANDBOX_API_VOLUME_STORE`, `SANDBOX_API_VOLUME_LOCAL_LISTEN
 | `api.service.volumeObjectsPort` | `8443` | The listener's Service port. |
 | `api.config.volumeLocalUrl` | `""` | Where runners reach the listener. Empty means `https://<API Service name>:<api.service.volumeObjectsPort>`. In either data-plane mode, its host must be the host runners register with, and the API registration certificate must carry it, or the name runners verify registration against if one is set (`tls.certificates.runnerRegistrationClient.serverName` for in-cluster runners), whether cert-manager issues the certificate (`tls.certificates.apiRegistrationServer.dnsNames`) or it comes from an existing Secret. The default meets both for in-cluster runners. |
 
-The store keeps its objects on one API pod's volume and signs read URLs with a key of that pod's own, so it needs `api.persistence.enabled`, `api.replicaCount: 1` and no autoscaling; the render fails otherwise. Read URLs stop working when the pod restarts.
+By default the store keeps its objects on one API pod's volume and signs read URLs with a key of that pod's own, so it needs `api.persistence.enabled`, `api.replicaCount: 1` and no autoscaling; the render fails otherwise. Read URLs stop working when the pod restarts.
 
 With `dataPlane.mode: external`, runners cannot resolve the API Service name, so the render requires `api.config.volumeLocalUrl`, and with `networkPolicy.enabled` the runners must be listed in `networkPolicy.api.grpcIngressFrom`.
+
+### Sharing the Volume Store
+
+With a shared claim and a signing key, the store serves several API pods on Postgres with `api.persistence.enabled: false`, with autoscaling too:
+
+```yaml
+api:
+  replicaCount: 3
+  persistence:
+    enabled: false
+  config:
+    store: postgres
+    volumeStore: local
+  volumeLocal:
+    existingClaim: sandbox-volumes
+    existingSecret: sandbox-volume-signing-key
+```
+
+```sh
+openssl rand -base64 32 |
+  kubectl create secret generic sandbox-volume-signing-key --from-file=signing-key=/dev/stdin
+```
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `api.volumeLocal.existingClaim` | `""` | An existing claim, mounted at `/var/lib/n8n-sandbox-volumes`. The store lives in its `volumes` directory instead of `api.config.dataDir`. |
+| `api.volumeLocal.existingSecret` | `""` | An existing Secret with the key that signs read URLs. |
+| `api.volumeLocal.secretKeys.signingKey` | `signing-key` | The Secret key with the signing key: at least 32 bytes in base64. |
+| `api.volumeLocal.secretKeys.previousSigningKey` | `previous-signing-key` | The Secret key with a previous key, which verifies but never signs, during a rotation. Optional. |
+
+The claim must be `ReadWriteMany` on a file system with hard links, such as NFS (Amazon EFS, Google Filestore, Azure Files over NFS, Longhorn) or CephFS. SMB has none, and the API does not start on it. Mount NFS with `lookupcache=positive`, through the `mountOptions` of the PersistentVolume or StorageClass; otherwise an object one pod stores can look missing to another for up to a minute. The API pods must be able to write to the volume's root. The render cannot check any of this. Anyone who can mount the claim can read and change every tenant's objects, so mount it in the API pods only.
+
+Every API pod serves downloads, and the Service spreads them over the pods. The per-scope download cap applies per pod.
+
+Either value also works alone with one API pod: the claim moves the store off the data volume, and the key keeps read URLs working across restarts. The API reads the Secret at startup, so restart the API pods after changing it. Key rotation: `docs/security-model.md` in the service repository.

@@ -47,7 +47,7 @@ func newVolumeTestGateway(t *testing.T) http.Handler {
 
 func newVolumeTestLocal(t *testing.T) *volumestore.Local {
 	t.Helper()
-	vs, err := volumestore.NewLocal(t.TempDir(), "https://api.test:8443")
+	vs, err := volumestore.NewLocal(t.TempDir(), "https://api.test:8443", volumestore.LocalOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

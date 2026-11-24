@@ -1,5 +1,6 @@
-// Package sandboxproxy defines the response headers the runner uses to signal
-// sandbox state to the API and the client across the two proxy hops.
+// Package sandboxproxy holds what the API and runner proxies share across the
+// two proxy hops: the response headers the runner uses to signal sandbox state
+// to the API and the client, and the relay of early upload refusals.
 package sandboxproxy
 
 import "net/http"

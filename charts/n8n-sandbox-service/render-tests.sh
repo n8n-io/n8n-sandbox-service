@@ -847,10 +847,98 @@ must_fail "api.extraEnv sets SANDBOX_API_VOLUME_STORE=local" \
 render --set 'api.extraEnv[0].name=SANDBOX_API_VOLUME_STORE' --set-string 'api.extraEnv[0].value=remote' \
 	--show-only templates/api-deployment.yaml |
 	grep -A1 'name: SANDBOX_API_VOLUME_STORE' | grep 'value: remote' >/dev/null
-# An env entry would override the chart's settings and leave its ports wrong.
-for name in SANDBOX_API_VOLUME_STORE SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR SANDBOX_API_VOLUME_LOCAL_URL; do
+# An env entry would override the chart's settings and leave its ports, mount
+# or key wrong.
+for name in SANDBOX_API_VOLUME_STORE SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR SANDBOX_API_VOLUME_LOCAL_URL \
+	SANDBOX_API_VOLUME_LOCAL_DIR SANDBOX_API_VOLUME_LOCAL_SIGNING_KEY SANDBOX_API_VOLUME_LOCAL_PREVIOUS_SIGNING_KEY; do
 	must_fail "api.extraEnv sets $name" "${local_store[@]}" \
 		--set "api.extraEnv[0].name=$name" --set-string 'api.extraEnv[0].value=x'
 done
+
+echo "==> api.volumeLocal is read only with the local volume store"
+volume_claim=(--set api.volumeLocal.existingClaim=sandbox-volumes)
+volume_secret=(--set api.volumeLocal.existingSecret=sandbox-volume-key)
+unshared=$(render "${volume_claim[@]}" "${volume_secret[@]}")
+if grep 'local-volume-store\|sandbox-volumes\|sandbox-volume-key\|SANDBOX_API_VOLUME' <<<"$unshared" >/dev/null; then
+	echo "api.volumeLocal must change nothing without api.config.volumeStore=local" >&2
+	exit 1
+fi
+
+echo "==> a shared claim and signing key let several API pods serve the local volume store"
+shared_store=("${local_store[@]}" "${postgres_api[@]}" "${volume_claim[@]}" "${volume_secret[@]}")
+shared_api=$(render "${shared_store[@]}" --set api.replicaCount=3 --show-only templates/api-deployment.yaml)
+grep '^  replicas: 3$' <<<"$shared_api" >/dev/null
+# The claim is mounted where the store directory lives.
+shared_config=$(render "${shared_store[@]}" --set api.replicaCount=3 --show-only templates/configmap.yaml)
+store_dir=$(sed -n 's/.*SANDBOX_API_VOLUME_LOCAL_DIR: "\(.*\)"/\1/p' <<<"$shared_config")
+test "$store_dir" = /var/lib/n8n-sandbox-volumes/volumes
+grep -A1 -- '- name: local-volume-store' <<<"$shared_api" |
+	grep "mountPath: \"${store_dir%/volumes}\"" >/dev/null
+grep -A2 -- '- name: local-volume-store' <<<"$shared_api" |
+	grep 'claimName: "sandbox-volumes"' >/dev/null
+# The key comes from the Secret alone, never from the ConfigMap; the previous
+# key is optional.
+signing_env=$(awk '/name: SANDBOX_API_VOLUME_LOCAL_SIGNING_KEY$/{f=1; next} f && /- name:/{exit} f' <<<"$shared_api")
+grep 'name: "sandbox-volume-key"' <<<"$signing_env" >/dev/null
+grep 'key: "signing-key"' <<<"$signing_env" >/dev/null
+if grep '^ *optional:' <<<"$signing_env" >/dev/null; then
+	echo "the signing key must not be optional" >&2
+	exit 1
+fi
+previous_env=$(awk '/name: SANDBOX_API_VOLUME_LOCAL_PREVIOUS_SIGNING_KEY$/{f=1; next} f && /- name:/{exit} f' <<<"$shared_api")
+grep 'key: "previous-signing-key"' <<<"$previous_env" >/dev/null
+grep 'optional: true' <<<"$previous_env" >/dev/null
+if grep 'SIGNING_KEY' <<<"$shared_config" >/dev/null; then
+	echo "the ConfigMap must not carry a signing key" >&2
+	exit 1
+fi
+render "${shared_store[@]}" \
+	--set api.volumeLocal.secretKeys.signingKey=current \
+	--set api.volumeLocal.secretKeys.previousSigningKey=old \
+	--show-only templates/api-deployment.yaml |
+	grep -A4 'name: SANDBOX_API_VOLUME_LOCAL_PREVIOUS_SIGNING_KEY' | grep 'key: "old"' >/dev/null
+# Autoscaling too.
+render "${shared_store[@]}" --set api.autoscaling.enabled=true --set api.resources.requests.cpu=100m |
+	grep 'kind: HorizontalPodAutoscaler' >/dev/null
+
+echo "==> without both, the local volume store keeps to one API pod"
+# A claim alone moves the store off the data volume, so persistence can go.
+claim_only=$(render "${local_store[@]}" "${volume_claim[@]}" --set api.persistence.enabled=false)
+grep 'SANDBOX_API_VOLUME_LOCAL_DIR: "/var/lib/n8n-sandbox-volumes/volumes"' <<<"$claim_only" >/dev/null
+if grep 'SIGNING_KEY' <<<"$claim_only" >/dev/null; then
+	echo "a claim alone must not set a signing key" >&2
+	exit 1
+fi
+# A key alone keeps read URLs working across restarts of the one pod.
+secret_only=$(render "${local_store[@]}" "${volume_secret[@]}")
+grep 'name: SANDBOX_API_VOLUME_LOCAL_SIGNING_KEY' <<<"$secret_only" >/dev/null
+if grep 'SANDBOX_API_VOLUME_LOCAL_DIR\|local-volume-store' <<<"$secret_only" >/dev/null; then
+	echo "a key alone must leave the store on the data volume" >&2
+	exit 1
+fi
+must_fail "requires api.persistence.enabled or api.volumeLocal.existingClaim" \
+	"${local_store[@]}" "${volume_secret[@]}" --set api.persistence.enabled=false
+must_keep_one_pod() {
+	must_fail "requires api.replicaCount=1 (got 2) unless api.volumeLocal.existingClaim and api.volumeLocal.existingSecret" \
+		"${local_store[@]}" "${postgres_api[@]}" "$@" --set api.replicaCount=2
+	must_fail "requires api.autoscaling.enabled=false unless" \
+		"${local_store[@]}" "${autoscaling[@]}" "$@"
+}
+must_keep_one_pod "${volume_claim[@]}"
+must_keep_one_pod "${volume_secret[@]}"
+# A blank value counts as unset.
+must_keep_one_pod "${volume_claim[@]}" --set-string 'api.volumeLocal.existingSecret= '
+# Several pods share a store only on postgres and without the data volume, as
+# with autoscaling.
+must_fail "api.config.volumeStore=local with api.replicaCount=2 requires api.config.store=postgres" \
+	"${local_store[@]}" "${volume_claim[@]}" "${volume_secret[@]}" --set api.replicaCount=2
+must_fail "api.config.volumeStore=local with api.replicaCount=2 requires api.persistence.enabled=false" \
+	"${local_store[@]}" "${volume_claim[@]}" "${volume_secret[@]}" --set api.config.store=postgres --set api.replicaCount=2
+# The data volume must not cover the claim.
+for data_dir in /var/lib/n8n-sandbox-volumes /var/lib/n8n-sandbox-volumes/ /var/lib/n8n-sandbox-volumes/volumes; do
+	must_fail "must lie outside /var/lib/n8n-sandbox-volumes" "${shared_store[@]}" \
+		--set-string "api.config.dataDir=$data_dir"
+done
+render "${shared_store[@]}" --set-string api.config.dataDir=/var/lib/n8n-sandbox-volumes-data >/dev/null
 
 echo "render tests passed"
