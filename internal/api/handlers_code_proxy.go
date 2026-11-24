@@ -18,9 +18,7 @@ type codeProxyRoute struct {
 }
 
 // codeSandboxProxyHandler proxies code sandbox routes to the sandbox's runner.
-// Code sandboxes are ephemeral: the idle sweeper deletes them rather than
-// stopping them, so unlike sandboxProxyHandler there is no stopped sandbox to
-// keep from waking on a cordoned runner.
+// It has no cordon check; docs/architecture.md tells why.
 func codeSandboxProxyHandler(s codeSandboxStore, cfg *config.APIConfig, transport http.RoundTripper, activity *ActivityRecorder) func(codeProxyRoute) http.HandlerFunc {
 	return func(route codeProxyRoute) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {

@@ -909,7 +909,7 @@ curl -X POST http://localhost:8080/code/sandboxes \
 
 ### POST /code/sandboxes/{id}/tasks
 
-Runs a task in a code sandbox. The service streams the body to the sandbox's daemon. It streams the daemon's `application/x-ndjson` events back. The daemon defines the body and the events.
+Runs a task in a code sandbox. The service sends the request body to the code daemon in the sandbox. It sends the events of the daemon back as an `application/x-ndjson` stream. The daemon defines the format of the body and of the events.
 
 The input files can be at most 64 MiB in total by default, and at most 1 GiB. The API (`SANDBOX_API_MAX_TASK_INPUT_BYTES`), the runner (`SANDBOX_RUNNER_MAX_TASK_INPUT_BYTES`) and the daemon (`CODE_DAEMON_MAX_INPUT_BYTES`) each set this limit, and the lowest one applies. The body can be 1 MiB larger, for the `spec` and the multipart headers. The body must arrive in 30 s ([time limits](limits.md#time-limits-on-requests)). An open request counts toward the [in-progress limits](#http-429--too-many-requests-in-progress) and keeps the sandbox active.
 

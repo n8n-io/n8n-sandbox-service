@@ -48,17 +48,8 @@ func TaskProxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics
 	proxy := proxyHandler(rt, cfg, rec, codetask.MaxBodyBytes(cfg.MaxTaskInputBytes), true)
 	return func(w http.ResponseWriter, r *http.Request) {
 		early := sandboxproxy.StartEarlyReply(w, r)
-		proxy(w, r.WithContext(context.WithValue(r.Context(), earlyReplyKey{}, early)))
+		proxy(w, r.WithContext(sandboxproxy.WithEarlyReply(r.Context(), early)))
 	}
-}
-
-type earlyReplyKey struct{}
-
-// earlyReply returns the request's EarlyReply, or nil when its route does not
-// relay refusals early.
-func earlyReply(ctx context.Context) *sandboxproxy.EarlyReply {
-	early, _ := ctx.Value(earlyReplyKey{}).(*sandboxproxy.EarlyReply)
-	return early
 }
 
 // deleteExecutionTimeout bounds an execution DELETE. The daemon answers one at
@@ -113,7 +104,7 @@ func proxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.Run
 			pr.Out.URL.RawQuery = pr.In.URL.RawQuery
 		},
 		ModifyResponse: func(resp *http.Response) error {
-			if early := earlyReply(resp.Request.Context()); early != nil && resp.StatusCode >= 300 {
+			if early := sandboxproxy.EarlyReplyFrom(resp.Request.Context()); early != nil && resp.StatusCode >= 300 {
 				early.RefuseResponse(resp)
 			}
 			if daemonRedirected(resp.Request, resp, "proxy") {
@@ -124,7 +115,7 @@ func proxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.Run
 		},
 		FlushInterval: -1,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			if early := earlyReply(r.Context()); early != nil {
+			if early := sandboxproxy.EarlyReplyFrom(r.Context()); early != nil {
 				early.Refuse()
 				defer early.StopReading()
 			}

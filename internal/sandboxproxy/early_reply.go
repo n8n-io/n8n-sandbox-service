@@ -1,6 +1,7 @@
 package sandboxproxy
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"time"
@@ -26,8 +27,20 @@ func StartEarlyReply(w http.ResponseWriter, r *http.Request) *EarlyReply {
 	return e
 }
 
-// Refuse marks the response as one that ends the upload, so the connection
-// closes after it instead of being drained for reuse. Call it before the
+type earlyReplyKey struct{}
+
+// WithEarlyReply returns a copy of ctx that carries e.
+func WithEarlyReply(ctx context.Context, e *EarlyReply) context.Context {
+	return context.WithValue(ctx, earlyReplyKey{}, e)
+}
+
+// EarlyReplyFrom returns the EarlyReply in ctx, or nil when there is none.
+func EarlyReplyFrom(ctx context.Context) *EarlyReply {
+	e, _ := ctx.Value(earlyReplyKey{}).(*EarlyReply)
+	return e
+}
+
+// Refuse closes the connection after the response. Call it before the
 // response headers are written.
 func (e *EarlyReply) Refuse() {
 	if e.http1 {
@@ -35,18 +48,15 @@ func (e *EarlyReply) Refuse() {
 	}
 }
 
-// RefuseResponse is Refuse for an upstream response that a ReverseProxy
-// relays: it also calls StopReading when the proxy closes resp.Body, which it
-// does after it has relayed the whole body. Call it from ModifyResponse.
+// RefuseResponse calls Refuse, and StopReading when the ReverseProxy closes
+// resp.Body. Call it from ModifyResponse.
 func (e *EarlyReply) RefuseResponse(resp *http.Response) {
 	e.Refuse()
 	resp.Body = &stopReadingOnClose{ReadCloser: resp.Body, e: e}
 }
 
 // StopReading fails any pending or later read of the request body. Call it
-// once the refusal is written. A ReverseProxy does not return until the
-// transport stops reading the body to send it upstream, and a client that
-// holds the upload open would keep it there until the read timeout.
+// once the refusal is written.
 func (e *EarlyReply) StopReading() {
 	if e.http1 {
 		_ = http.NewResponseController(e.w).SetReadDeadline(time.Now())
