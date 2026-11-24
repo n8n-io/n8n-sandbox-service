@@ -44,12 +44,18 @@ export async function runCodeTask(
   options: RunCodeTaskOptions,
 ): Promise<AsyncGenerator<CodeTaskEvent, void, undefined>> {
   const inputs = options.inputs ?? [];
-  if (inputs.some((input) => input.path === TASK_INPUT_PATH)) {
+  let spec: string;
+  try {
+    if (inputs.some((input) => input.path === TASK_INPUT_PATH)) {
+      throw new Error(`Pass the ${TASK_INPUT_PATH} content as taskInput, not in inputs`);
+    }
+    spec = JSON.stringify(options.spec);
+  } catch (error) {
     destroyStreams([options.taskInput, ...inputs.map((input) => input.content)]);
-    throw new Error(`Pass the ${TASK_INPUT_PATH} content as taskInput, not in inputs`);
+    throw error;
   }
   const parts: MultipartPart[] = [
-    { name: "spec", contentType: "application/json", content: JSON.stringify(options.spec) },
+    { name: "spec", contentType: "application/json", content: spec },
     {
       name: "input",
       filename: TASK_INPUT_PATH,
@@ -126,6 +132,8 @@ async function* readTaskEvents(
 ): AsyncGenerator<CodeTaskEvent, void, undefined> {
   try {
     for await (const line of readNdjsonLines(stream)) {
+      // One chunk can hold many lines, which are yielded after an abort too.
+      if (signal?.aborted) throw new SandboxServiceError("Request aborted", 0);
       yield parseTaskEvent(line);
     }
   } catch (error) {

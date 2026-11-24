@@ -13,7 +13,10 @@ export interface CreateCodeSandboxOptions {
    */
   name: string;
   runtime: CodeRuntime;
-  /** Version of the runtime image. Should match the n8n version. */
+  /**
+   * Version of the runtime image. Should match the n8n version. 1 to 64
+   * characters from `A-Z`, `a-z`, `0-9`, `.`, `+` and `-`.
+   */
   runtimeVersion: string;
   /** Number of lanes: each lane runs one task at a time. */
   maxConcurrency: number;

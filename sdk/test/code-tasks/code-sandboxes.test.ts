@@ -180,11 +180,12 @@ describe("runCodeTask", () => {
 
   it("sends a stream input as it is read", async () => {
     const input = new PassThrough();
-    let received = 0;
+    let received = "";
     server = await startTestServer((req, res) => {
       req.on("data", (chunk: Buffer) => {
-        received += chunk.length;
-        if (chunk.includes("first")) input.end("second");
+        received += chunk.toString("utf-8");
+        // The second write waits until the server has the first one.
+        if (received.includes("first")) input.end("second");
       });
       req.on("end", () => events(res, [{ type: "done" }]));
     });
@@ -198,7 +199,7 @@ describe("runCodeTask", () => {
     });
 
     await expect(collect(stream)).resolves.toEqual([{ type: "done" }]);
-    expect(received).toBeGreaterThan(0);
+    expect(received).toContain("firstsecond");
   });
 
   it.each([429, 503])("does not retry a %i", async (status) => {
@@ -291,6 +292,53 @@ describe("runCodeTask", () => {
     await responseClosed;
   });
 
+  it("yields no buffered event after the signal aborts", async () => {
+    const http = await client((res) => {
+      res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+      res.write('{"type":"first"}\n{"type":"second"}\n');
+    });
+    const controller = new AbortController();
+
+    const stream = await runCodeTask(http, id, {
+      spec: { taskId: "t_1" },
+      taskInput: "{}",
+      signal: controller.signal,
+    });
+    await expect(stream.next()).resolves.toEqual({ done: false, value: { type: "first" } });
+    controller.abort();
+
+    await expect(stream.next()).rejects.toMatchObject({ status: 0, message: "Request aborted" });
+  });
+
+  it.each([
+    ["return()", (stream: AsyncGenerator<unknown>) => stream.return(undefined)],
+    ["an abort", (_: AsyncGenerator<unknown>, controller: AbortController) => controller.abort()],
+  ])("stops a pending upload on %s", async (_, close) => {
+    // Answers at the first input chunk, while the upload is still open.
+    server = await startTestServer((req, res) => {
+      req.once("data", () => {
+        res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+        res.write(JSON.stringify({ type: "accepted" }) + "\n");
+      });
+    });
+    const http = new HttpClient(server.baseUrl, "key");
+    const controller = new AbortController();
+    // Never ends, as a slow upload would.
+    const input = new PassThrough();
+    input.write("x");
+
+    const stream = await runCodeTask(http, id, {
+      spec: { taskId: "t_1" },
+      taskInput: "{}",
+      inputs: [{ path: "bin/0", content: input }],
+      signal: controller.signal,
+    });
+    await stream.next();
+    await close(stream, controller);
+
+    expect(input.destroyed).toBe(true);
+  });
+
   it("ends a pending next() and closes the connection on return()", async () => {
     let closed!: () => void;
     const responseClosed = new Promise<void>((resolve) => (closed = resolve));
@@ -357,7 +405,7 @@ describe("runCodeTask", () => {
     });
     second.destroy(new Error("ENOENT"));
 
-    await expect(task).rejects.toBeInstanceOf(Error);
+    await expect(task).rejects.toThrow("ENOENT");
     expect(first.destroyed).toBe(true);
   });
 
@@ -415,6 +463,23 @@ describe("runCodeTask", () => {
     expect(taskInput.destroyed).toBe(true);
     expect(input.destroyed).toBe(true);
     await new Promise((resolve) => input.on("close", resolve));
+    expect(requests).toHaveLength(0);
+  });
+
+  it("destroys the stream inputs when the spec cannot be serialized", async () => {
+    const http = await client((res) => events(res, []));
+    const taskInput = new PassThrough();
+    const input = new PassThrough();
+
+    await expect(
+      runCodeTask(http, id, {
+        spec: { taskId: "t_1", limit: 1n },
+        taskInput,
+        inputs: [{ path: "bin/0", content: input }],
+      }),
+    ).rejects.toThrow(/BigInt/);
+    expect(taskInput.destroyed).toBe(true);
+    expect(input.destroyed).toBe(true);
     expect(requests).toHaveLength(0);
   });
 
