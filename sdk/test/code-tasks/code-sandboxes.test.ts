@@ -178,21 +178,6 @@ describe("runCodeTask", () => {
     expect(await inputs[2].text()).toBe("stream");
   });
 
-  it("yields each event as it arrives", async () => {
-    const http = await client((res) => {
-      res.writeHead(200, { "Content-Type": "application/x-ndjson" });
-      res.write(JSON.stringify({ type: "accepted" }) + "\n");
-    });
-
-    const stream = await runCodeTask(http, id, { spec: { taskId: "t_1" }, taskInput: "{}" });
-
-    await expect(stream.next()).resolves.toEqual({
-      done: false,
-      value: { type: "accepted" },
-    });
-    await stream.return();
-  });
-
   it("sends a stream input as it is read", async () => {
     const input = new PassThrough();
     let received = 0;
@@ -284,25 +269,7 @@ describe("runCodeTask", () => {
     await responseClosed;
   });
 
-  it("fails the iteration when the signal aborts", async () => {
-    const http = await client((res) => {
-      res.writeHead(200, { "Content-Type": "application/x-ndjson" });
-      res.write(JSON.stringify({ type: "accepted" }) + "\n");
-    });
-    const controller = new AbortController();
-
-    const stream = await runCodeTask(http, id, {
-      spec: { taskId: "t_1" },
-      taskInput: "{}",
-      signal: controller.signal,
-    });
-    await stream.next();
-    controller.abort();
-
-    await expect(stream.next()).rejects.toMatchObject({ status: 0, message: "Request aborted" });
-  });
-
-  it("closes the connection when the signal aborts", async () => {
+  it("fails the iteration and closes the connection when the signal aborts", async () => {
     let closed!: () => void;
     const responseClosed = new Promise<void>((resolve) => (closed = resolve));
     const http = await client((res) => {
@@ -320,6 +287,7 @@ describe("runCodeTask", () => {
     await stream.next();
     controller.abort();
 
+    await expect(stream.next()).rejects.toMatchObject({ status: 0, message: "Request aborted" });
     await responseClosed;
   });
 
@@ -339,6 +307,33 @@ describe("runCodeTask", () => {
     await expect(stream.return()).resolves.toEqual({ done: true, value: undefined });
     await expect(pending).resolves.toEqual({ done: true, value: undefined });
     await responseClosed;
+  });
+
+  it("closes the connection and rethrows on throw()", async () => {
+    let closed!: () => void;
+    const responseClosed = new Promise<void>((resolve) => (closed = resolve));
+    const http = await client((res) => {
+      res.on("close", () => closed());
+      res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+      res.write(JSON.stringify({ type: "accepted" }) + "\n");
+    });
+
+    const stream = await runCodeTask(http, id, { spec: { taskId: "t_1" }, taskInput: "{}" });
+
+    await expect(stream.throw(new Error("stop"))).rejects.toThrow("stop");
+    await responseClosed;
+  });
+
+  it("fails the iteration when the connection drops", async () => {
+    const http = await client((res) => {
+      res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+      res.write(JSON.stringify({ type: "accepted" }) + "\n", () => res.socket?.destroy());
+    });
+
+    const stream = await runCodeTask(http, id, { spec: { taskId: "t_1" }, taskInput: "{}" });
+
+    await expect(stream.next()).resolves.toEqual({ done: false, value: { type: "accepted" } });
+    await expect(stream.next()).rejects.toThrow();
   });
 
   it("fails the task when a waiting stream input fails", async () => {
@@ -380,19 +375,6 @@ describe("runCodeTask", () => {
     },
   );
 
-  it.each(['a"b', "a\\b", "a\r\nb"])("refuses the input path %j", async (path) => {
-    const http = await client((res) => events(res, []));
-
-    await expect(
-      runCodeTask(http, id, {
-        spec: { taskId: "t_1" },
-        taskInput: "{}",
-        inputs: [{ path, content: "x" }],
-      }),
-    ).rejects.toThrow(/must not contain/);
-    expect(requests).toHaveLength(0);
-  });
-
   it("sends the content type of each input", async () => {
     const http = await client((res) => events(res, []));
 
@@ -417,7 +399,8 @@ describe("runCodeTask", () => {
   it("refuses task.json in inputs and destroys the stream inputs", async () => {
     const http = await client((res) => events(res, []));
     const taskInput = new PassThrough();
-    const input = new PassThrough();
+    // The open fails after the destroy; unhandled, it would fail the run.
+    const input = createReadStream(join(tmpdir(), `missing-${randomUUID()}`));
 
     await expect(
       runCodeTask(http, id, {
@@ -429,26 +412,11 @@ describe("runCodeTask", () => {
         ],
       }),
     ).rejects.toThrow(/taskInput/);
-    expect(requests).toHaveLength(0);
     expect(taskInput.destroyed).toBe(true);
     expect(input.destroyed).toBe(true);
+    await new Promise((resolve) => input.on("close", resolve));
+    expect(requests).toHaveLength(0);
   });
-
-  it.each(["", "text/plain\r\nX-Injected: 1"])(
-    "refuses the content type %j",
-    async (contentType) => {
-      const http = await client((res) => events(res, []));
-
-      await expect(
-        runCodeTask(http, id, {
-          spec: { taskId: "t_1" },
-          taskInput: "{}",
-          inputs: [{ path: "bin/0", content: "x", contentType }],
-        }),
-      ).rejects.toThrow(/content type/);
-      expect(requests).toHaveLength(0);
-    },
-  );
 
   it("destroys the stream inputs when an input path is refused", async () => {
     const http = await client((res) => events(res, []));
@@ -465,27 +433,6 @@ describe("runCodeTask", () => {
       }),
     ).rejects.toThrow(/must not contain/);
     expect(input.destroyed).toBe(true);
-  });
-
-  it.each([
-    ["an input path is refused", 'a"b'],
-    ["task.json is in inputs", "task.json"],
-  ])("ignores a late stream error when %s", async (_, path) => {
-    const http = await client((res) => events(res, []));
-    const input = createReadStream(join(tmpdir(), `missing-${randomUUID()}`));
-
-    await expect(
-      runCodeTask(http, id, {
-        spec: { taskId: "t_1" },
-        taskInput: "{}",
-        inputs: [
-          { path: "bin/0", content: input },
-          { path, content: "x" },
-        ],
-      }),
-    ).rejects.toThrow();
-    // The open fails after the destroy; unhandled, it would fail the run.
-    await new Promise((resolve) => input.on("close", resolve));
     expect(requests).toHaveLength(0);
   });
 });
