@@ -24,7 +24,10 @@ const (
 	maxControlMessage = 512 << 10 // 512 KiB
 )
 
-var errWorkerUnavailable = errors.New("runtime unavailable")
+var (
+	errWorkerUnavailable     = errors.New("runtime unavailable")
+	errControlMessageTooLong = fmt.Errorf("control message over %d bytes", maxControlMessage)
+)
 
 // workerMessage is any message between the daemon and the runtime, in either
 // direction, sent as newline-delimited JSON over FD 3. The runtime's stdout and
@@ -68,7 +71,7 @@ func startWorker(cfg Config, startupTimeout time.Duration) (*worker, error) {
 		return nil, err
 	}
 	defer child.Close()
-	cmd := exec.Command(cfg.RuntimeCommand[0], cfg.RuntimeCommand[1:]...)
+	cmd := exec.Command(cfg.RuntimeCommand[0], cfg.RuntimeCommand[1:]...) //nolint:gosec // The image's runtime registry sets the command, not the task.
 	cmd.Dir = cfg.WorkDir
 	cmd.Env = []string{"PATH=" + envOr("PATH", "/usr/bin:/bin"), "HOME=" + envOr("HOME", "/home/node"), "NODE_ENV=production"}
 	cmd.ExtraFiles = []*os.File{child}
@@ -182,7 +185,7 @@ func (w *worker) readControl() {
 		}
 	}
 	if err := scanner.Err(); errors.Is(err, bufio.ErrTooLong) {
-		stopErr = fmt.Errorf("control message over %d bytes", maxControlMessage)
+		stopErr = errControlMessageTooLong
 	} else if err != nil {
 		stopErr = err
 	}

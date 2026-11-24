@@ -52,6 +52,29 @@ jobs:
       - name: Test
         run: make test
 
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          # golangci-lint needs the base commit to find the changed code.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version-file: go.mod
+
+      # Pinned so CI and local runs agree. go install builds it with the Go
+      # version from go.mod, which golangci-lint needs to load the code.
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
+
+      # Only code that changed since the base is checked. See .golangci.yml.
+      - name: Lint Go
+        env:
+          LINT_BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
+        run: make lint LINT_BASE="$LINT_BASE"
+
   integration:
     runs-on: ubuntu-latest
     services:
@@ -156,7 +179,7 @@ jobs:
   # PRs cannot be merged unless this job passes.
   required-checks:
     name: Required Checks
-    needs: [check, integration, sdk, docker, helm, golden-build, e2e]
+    needs: [check, lint, integration, sdk, docker, helm, golden-build, e2e]
     if: always()
     runs-on: ubuntu-latest
     steps:

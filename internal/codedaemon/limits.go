@@ -96,7 +96,7 @@ func collectOutputs(root *os.Root, limits Limits) ([]outputEntry, error) {
 		// both remaining budgets is enough to detect overflow.
 		children, err := f.ReadDir(limits.Files - len(entries) + maxDirs - seenDirs + 1)
 		_ = f.Close()
-		if err != nil && err != io.EOF {
+		if err != nil && !errors.Is(err, io.EOF) {
 			return nil, err
 		}
 		for _, entry := range children {
