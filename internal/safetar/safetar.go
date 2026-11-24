@@ -21,13 +21,13 @@ import (
 	"strings"
 )
 
-// ErrInvalid marks an archive that cannot be read, or an entry the policy does
-// not accept.
 var (
 	errSymlinksNeedMaxEntries   = errors.New("AllowSymlinks needs MaxEntries")
 	errParentDirsNeedMaxEntries = errors.New("CountParentDirectories needs MaxEntries")
 )
 
+// ErrInvalid marks an archive that cannot be read, or an entry the policy does
+// not accept.
 var ErrInvalid = errors.New("invalid archive")
 
 // ErrTooLarge marks an archive with more entries or more file content than the
