@@ -16,7 +16,8 @@ const maxSpecBytes = 1 << 10 // 1 KiB
 var taskIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,128}$`)
 
 type taskSpec struct {
-	TaskID string `json:"taskId"`
+	TaskID               string `json:"taskId"`
+	InlineResultMaxBytes int64  `json:"inlineResultMaxBytes"` // Requested inline limit; defaults to the daemon cap if unset or out of range.
 }
 
 // admit validates the first multipart part and tries to reserve a lane without
@@ -47,6 +48,11 @@ func (d *Daemon) admit(w http.ResponseWriter, r *http.Request) (taskSpec, *multi
 		rejectAdmission(w, r, "invalid task spec", http.StatusBadRequest)
 		return taskSpec{}, nil
 	}
+	if err := d.reserveTask(spec.TaskID); err != nil {
+		stopUnreadUpload(w, r)
+		writeTaskRejection(w, http.StatusConflict, "duplicate_task", err.Error())
+		return taskSpec{}, nil
+	}
 	// d.lanes is a semaphore: its capacity is the lane count and each token in it
 	// is a taken lane. The send succeeds only if a lane is free. With a default
 	// case it never blocks, so a full sandbox answers 429 instead of queueing.
@@ -54,22 +60,38 @@ func (d *Daemon) admit(w http.ResponseWriter, r *http.Request) (taskSpec, *multi
 	case d.lanes <- struct{}{}:
 		return spec, mr
 	default:
-		rejectAdmission(w, r, "no free lane", http.StatusTooManyRequests)
+		d.releaseTask(spec.TaskID)
+		stopUnreadUpload(w, r)
+		writeTaskRejection(w, http.StatusTooManyRequests, "sandbox_full", "no free lane")
 		return taskSpec{}, nil
 	}
 }
 
 // rejectAdmission writes the error without waiting for an unfinished HTTP/1 upload.
 func rejectAdmission(w http.ResponseWriter, r *http.Request, message string, status int) {
+	stopUnreadUpload(w, r)
+	http.Error(w, message, status)
+}
+
+func stopUnreadUpload(w http.ResponseWriter, r *http.Request) {
 	if r.ProtoMajor == 1 {
 		// Do not drain an unread upload to reuse the connection. net/http can
 		// still read during body cleanup after sending the response, so also
 		// give those reads an expired deadline.
 		w.Header().Set("Connection", "close")
-		_ = http.NewResponseController(w).SetReadDeadline(time.Now())
+		rc := http.NewResponseController(w)
+		_ = rc.EnableFullDuplex()
+		_ = rc.SetReadDeadline(time.Now())
 	}
-	http.Error(w, message, status)
 }
 
 // releaseLane frees one slot and must be called once per successful admission.
 func (d *Daemon) releaseLane() { <-d.lanes }
+
+// writeTaskRejection sends a JSON error before the stream so the client gets
+// an HTTP error status instead of a terminal event in a successful response.
+func writeTaskRejection(w http.ResponseWriter, status int, code, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(newTaskRejection(code, message))
+}

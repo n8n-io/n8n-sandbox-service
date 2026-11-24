@@ -2,7 +2,7 @@
   "name": "sandbox-workspace",
   "private": true,
   "dependencies": {
-    "@n8n/workflow-sdk": "0.40.2",
+    "@n8n/workflow-sdk": "0.41.3",
     "tsx": "4.23.15",
     "typescript": "7.0.2"
   },

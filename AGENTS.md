@@ -65,3 +65,24 @@ All Firecracker runner related files should contain `.ee` or be in a directory t
 
 This applies to runner source only. Test files need no `.ee`: tag a
 Firecracker-only e2e spec `FIRECRACKER_ONLY` instead.
+
+## Conventions
+
+### Comments
+
+- Keep all comments short. Write them in Simplified Technical English.
+- Document WHY only when the reason is not obvious. Do not document WHAT the
+  code does, unless the code is unusual or unclear.
+- When you use a bit shift (`<<`), add a comment that gives the value (for
+  example, `4 << 20 // 4 MiB`).
+- Document the purpose of each `.go` file. Test files and generated files
+  (marked `DO NOT EDIT`) are exceptions.
+- Document the purpose of a struct field when its name does not make it clear.
+
+### Naming
+
+- Give each lookup map a `byX` suffix that tells its key (for example,
+  `sandboxesByID`). Sets (`map[K]struct{}`) and fields that mirror an external
+  or wire format (for example, `Env`, `Labels`) are exceptions.
+- Use descriptive names. Do not use abbreviations. Method receivers are an
+  exception: they can use short names (for example, `func (s *Server)`).

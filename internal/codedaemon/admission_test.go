@@ -80,18 +80,24 @@ func TestAdmissionClosesHTTP1ConnectionWithUnfinishedUpload(t *testing.T) {
 	}{
 		{"oversized spec", strings.Repeat("x", 2*maxSpecBytes), http.StatusBadRequest},
 		{"saturated", "{\"taskId\":\"second\"}\r\n--" + boundary + "\r\n", http.StatusTooManyRequests},
+		{"local client", "{\"taskId\":\"local\"}\r\n--" + boundary + "\r\n", http.StatusForbidden},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := New(Config{MaxConcurrency: 1})
 			if tc.status == http.StatusTooManyRequests {
 				d.lanes <- struct{}{}
 			}
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var handler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if _, mr := d.admit(w, r); mr != nil {
 					d.releaseLane()
 					w.WriteHeader(http.StatusOK)
 				}
-			}))
+			})
+			if tc.status == http.StatusForbidden {
+				// The test client connects over loopback, so the source guard rejects it.
+				handler = d.Handler()
+			}
+			srv := httptest.NewServer(handler)
 			defer srv.Close()
 			conn, err := net.DialTimeout("tcp", srv.Listener.Addr().String(), 5*time.Second)
 			if err != nil {
