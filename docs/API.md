@@ -931,7 +931,7 @@ Delete a code sandbox. This stops all its tasks. A task request that is open get
 
 **Response:** `204 No Content`
 
-**Errors:** `400` invalid id, `401` missing or unknown API key, `403` provisioner or scaler key, `404` no code sandbox with this id for the caller, `429` past this route's own limit ([limits](limits.md)), `502` the runner did not delete the sandbox (the sandbox stays, retry)
+**Errors:** `400` invalid id, `401` missing or unknown API key, `403` provisioner or scaler key, `404` no code sandbox with this id for the caller, `502` the runner did not delete the sandbox (the sandbox stays, retry)
 
 **Example:**
 
@@ -946,7 +946,7 @@ Delete all code sandboxes of a name in the caller's tenant: the current sandbox 
 
 **Response:** `204 No Content`
 
-**Errors:** `400` invalid name, `401` missing or unknown API key, `403` provisioner or scaler key, `404` no code sandbox with this name for the caller, `429` past this route's own limit ([limits](limits.md)), `502` the runner did not delete one or more sandboxes (the service tries all of them; the ones not deleted stay, retry)
+**Errors:** `400` invalid name, `401` missing or unknown API key, `403` provisioner or scaler key, `404` no code sandbox with this name for the caller, `502` the runner did not delete one or more sandboxes (the service tries all of them; the ones not deleted stay, retry)
 
 **Example:**
 

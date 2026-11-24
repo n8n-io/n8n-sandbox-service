@@ -7,11 +7,11 @@ Every limit a client or operator can run into, with its default. The variables a
 | Limit | Default | Set by | When reached |
 | --- | --- | --- | --- |
 | Requests in progress per tenant, on each API replica | 512 | `SANDBOX_API_MAX_INFLIGHT_PER_TENANT` | `429` `tenant_request_limit`, `Retry-After: 1` |
-| Execution and code sandbox `DELETE`s in progress per tenant, on each API replica | 16 | fixed | the same |
+| Execution `DELETE`s in progress per tenant, on each API replica | 16 | fixed | the same |
 | Requests in progress per sandbox, from all replicas | 256 | `SANDBOX_RUNNER_MAX_INFLIGHT_PER_SANDBOX` | `429` `sandbox_request_limit`, `Retry-After: 1` |
 | Execution `DELETE`s in progress per sandbox | 4 | fixed | the same |
 
-Creates, exec, file and code sandbox task requests count; a stream counts until it ends, a create until the runner has finished it. `GET /sandboxes`, `GET` and `DELETE /sandboxes/{id}`, admin routes and admin keys are not counted. Setting a limit to `0` turns it and its `DELETE` reserve off. Nothing caps all tenants together on a replica.
+Creates, exec, file and code sandbox task requests count; a stream counts until it ends, a create until the runner has finished it. `GET /sandboxes`, `GET` and `DELETE /sandboxes/{id}`, code sandbox deletes, admin routes and admin keys are not counted. Setting a limit to `0` turns it and its `DELETE` reserve off. Nothing caps all tenants together on a replica.
 
 ## Request rate
 

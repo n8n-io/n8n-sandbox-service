@@ -16,11 +16,11 @@ const reasonTenantRequestLimit = "tenant_request_limit"
 // asking a client to wait longer.
 const limitRetryAfter = "1"
 
-// maxDeletesPerTenant caps a tenant's execution and code sandbox DELETEs in
-// progress on this replica. They are counted apart from its other requests,
-// so it can still cancel work when its limit is full. Bounded, because a
-// DELETE to a stalled daemon or runner holds its slot too.
-const maxDeletesPerTenant = 16
+// maxExecutionDeletesPerTenant caps a tenant's execution DELETEs in progress
+// on this replica. They are counted apart from its other requests, so it can
+// still cancel work when its limit is full. Bounded, because a DELETE to a
+// stalled daemon holds its slot too.
+const maxExecutionDeletesPerTenant = 16
 
 // tenantLimit wraps a route in a per-tenant cap held in l, counted per
 // replica. Only tenant keys count: an admin key is the operator's own and a

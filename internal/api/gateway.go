@@ -46,12 +46,12 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	}
 
 	limitTenant := tenantLimit(limits.NewKeyedLimiter(cfg.MaxInflightPerTenant), rec)
-	// Execution and code sandbox DELETEs have a limit of their own, so a
-	// tenant can cancel work while its other requests fill theirs. Turning the
-	// tenant limit off turns this one off too.
+	// Execution DELETEs have a limit of their own, so a tenant can cancel work
+	// while its other requests fill theirs. Turning the tenant limit off turns
+	// this one off too.
 	maxDeletes := 0
 	if cfg.MaxInflightPerTenant > 0 {
-		maxDeletes = maxDeletesPerTenant
+		maxDeletes = maxExecutionDeletesPerTenant
 	}
 	limitTenantDeletes := tenantLimit(limits.NewKeyedLimiter(maxDeletes), rec)
 	mux.HandleFunc("GET /sandboxes", handleListSandboxes(s))
@@ -60,8 +60,8 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	mux.HandleFunc("POST /sandboxes", limitTenant(handleCreateSandbox(s, s, reg, cfg, rec, quota)))
 	if cfg.CodeSandboxesEnabled {
 		mux.HandleFunc("POST /code/sandboxes", limitTenant(handleCreateCodeSandbox(s, s, reg, cfg, rec, quota, &singleflight.Group{})))
-		mux.HandleFunc("DELETE /code/sandboxes/{id}", limitTenantDeletes(handleDeleteCodeSandbox(s, reg, cfg, rec)))
-		mux.HandleFunc("DELETE /code/sandboxes/names/{name}", limitTenantDeletes(handleDeleteCodeSandboxByName(s, reg, cfg, rec)))
+		mux.HandleFunc("DELETE /code/sandboxes/{id}", handleDeleteCodeSandbox(s, reg, cfg, rec))
+		mux.HandleFunc("DELETE /code/sandboxes/names/{name}", handleDeleteCodeSandboxByName(s, reg, cfg, rec))
 	}
 	mux.HandleFunc("GET /sandboxes/{id}", handleGetSandbox(s, cfg))
 	mux.HandleFunc("DELETE /sandboxes/{id}", handleDeleteSandbox(s, cfg, rec))
