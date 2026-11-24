@@ -283,8 +283,7 @@ func TestLocalPutNeverOverwrites(t *testing.T) {
 	}
 }
 
-// Both writers pass the existence check before either commits, so only the
-// link decides.
+// Concurrent Puts of one key: the link lets only one of them commit.
 func TestLocalConcurrentPutsCommitOnce(t *testing.T) {
 	local, dir := newTestLocal(t)
 	ctx := context.Background()

@@ -262,16 +262,6 @@ func (l *Local) Put(ctx context.Context, key Key, content io.Reader, opts PutOpt
 		return Object{}, err
 	}
 	dst := l.path(key)
-	// Only an early exit that spares the upload. Two Puts can both pass it;
-	// the link below lets only one of them commit. Open, not Lstat: over NFS
-	// Lstat can find a name another instance deleted for up to a minute,
-	// while open asks the server.
-	if existing, err := os.Open(dst); err == nil {
-		existing.Close()
-		return Object{}, ErrExists
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return Object{}, err
-	}
 	dir := filepath.Dir(dst)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return Object{}, err
@@ -304,9 +294,11 @@ func (l *Local) Put(ctx context.Context, key Key, content io.Reader, opts PutOpt
 	if err := tmp.Close(); err != nil {
 		return Object{}, err
 	}
-	// Unlike rename, link refuses to replace an existing file. Over NFS a
-	// link that was made can still fail, as EEXIST for its own retried
-	// request, so the name decides, as open(2) advises for lock files.
+	// Unlike rename, link refuses to replace an existing file. It is the only
+	// existence check: over NFS a lookup can trust a cached name another
+	// instance deleted, while link asks the server. A link that was made can
+	// still fail, as EEXIST for its own retried request, so the name decides,
+	// as open(2) advises for lock files.
 	if err := l.link(tmp.Name(), dst); err != nil && !sameFile(tmp.Name(), dst) {
 		if errors.Is(err, fs.ErrExist) {
 			return Object{}, ErrExists
