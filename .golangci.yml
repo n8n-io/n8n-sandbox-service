@@ -40,7 +40,11 @@ linters:
       - std-error-handling
     rules:
       - path-except: ^internal/codedaemon/
-        linters: [forbidigo, err113]
+        linters: [forbidigo]
+      # err113 is on only for the listed packages, not their subpackages.
+      - path-except: >-
+          ^(cmd/api|cmd/e2e-runnerctl|internal/api/store|internal/codedaemon|internal/daemon|internal/envvar|internal/grpctls|internal/logging|internal/runner/app|internal/runner/hostinfo|internal/runner/runtime/docker/netrules|internal/safetar)/[^/]+\.go$
+        linters: [err113]
       - path: _test\.go$
         linters: [forbidigo, err113, gosec]
 

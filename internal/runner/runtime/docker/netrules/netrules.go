@@ -4,6 +4,7 @@ package netrules
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net"
 	"os/exec"
@@ -11,6 +12,13 @@ import (
 	"sync"
 
 	"github.com/n8n-io/sandbox-service/internal/runner/runtime/netpolicy"
+)
+
+var (
+	errContainerIDRequired = errors.New("container id is required")
+	errSourceIPRequired    = errors.New("source ip is required")
+	errBridgeRequired      = errors.New("bridge interface is required")
+	errInvalidBridge       = errors.New("bridge interface is not a valid interface name")
 )
 
 const chainPrefix = "N8N-SB-"
@@ -67,10 +75,10 @@ func EnsureBridgePolicy(bridgeIface string, blockEgress bool) error {
 // daemon port. blockEgress names that bridge's policy, as for EnsureBridgePolicy.
 func ApplyPolicy(bridgeIface, containerID, sourceIP, gatewayIP string, daemonPort int, blockEgress bool) error {
 	if containerID == "" {
-		return fmt.Errorf("container id is required")
+		return errContainerIDRequired
 	}
 	if sourceIP == "" {
-		return fmt.Errorf("source ip is required")
+		return errSourceIPRequired
 	}
 
 	// Serialize all iptables mutations so concurrent sandbox lifecycles
@@ -126,10 +134,10 @@ func ApplyPolicy(bridgeIface, containerID, sourceIP, gatewayIP string, daemonPor
 // pre-empted by the shared chain's terminal ACCEPT.
 func ensureBridgePolicy(bridgeIface string, blockEgress bool) error {
 	if bridgeIface == "" {
-		return fmt.Errorf("bridge interface is required")
+		return errBridgeRequired
 	}
 	if strings.ContainsAny(bridgeIface, "/ ") {
-		return fmt.Errorf("bridge interface %q is not a valid interface name", bridgeIface)
+		return fmt.Errorf("%w: %q", errInvalidBridge, bridgeIface)
 	}
 	// iptables accepts a rule naming an interface that does not exist, and that
 	// rule then matches nothing. Every sandbox would run unfiltered with no

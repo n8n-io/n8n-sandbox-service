@@ -10,6 +10,11 @@ import (
 	"strings"
 )
 
+var (
+	errInvalidKind = errors.New("store: invalid sandbox kind")
+	errNoKinds     = errors.New("store: no sandbox kinds given")
+)
+
 // ErrTenantHasSandboxes is returned when DeleteTenant is called while the tenant
 // still owns sandbox rows.
 var ErrTenantHasSandboxes = errors.New("tenant has sandboxes")
@@ -45,7 +50,7 @@ func AllKinds() []Kind { return []Kind{KindGeneral, KindCode} }
 
 func checkKind(kind Kind) error {
 	if kind != KindGeneral && kind != KindCode {
-		return fmt.Errorf("store: invalid sandbox kind %q", kind)
+		return fmt.Errorf("%w %q", errInvalidKind, kind)
 	}
 	return nil
 }
@@ -68,7 +73,7 @@ func KindFilter(kinds ...Kind) SandboxFilter { return SandboxFilter{Kinds: kinds
 // SQLite keeps its fast COUNT(*) path.
 func (f SandboxFilter) where(conds []string, args []any, placeholder func(n int) string) (string, []any, error) {
 	if len(f.Kinds) == 0 {
-		return "", nil, errors.New("store: no sandbox kinds given")
+		return "", nil, errNoKinds
 	}
 	for _, kind := range f.Kinds {
 		if err := checkKind(kind); err != nil {

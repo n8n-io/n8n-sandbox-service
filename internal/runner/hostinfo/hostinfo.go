@@ -3,11 +3,17 @@ package hostinfo
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
 	"syscall"
+)
+
+var (
+	errUnexpectedMemTotal = errors.New("read host memory: unexpected MemTotal line")
+	errNoMemTotal         = errors.New("read host memory: no MemTotal")
 )
 
 // MeminfoPath is where the kernel reports host memory.
@@ -29,18 +35,18 @@ func MemTotal(path string) (int64, error) {
 		}
 		fields := strings.Fields(rest)
 		if len(fields) != 2 || fields[1] != "kB" {
-			return 0, fmt.Errorf("read host memory: unexpected MemTotal line %q in %s", sc.Text(), path)
+			return 0, fmt.Errorf("%w %q in %s", errUnexpectedMemTotal, sc.Text(), path)
 		}
 		kb, err := strconv.ParseInt(fields[0], 10, 64)
 		if err != nil || kb <= 0 {
-			return 0, fmt.Errorf("read host memory: unexpected MemTotal line %q in %s", sc.Text(), path)
+			return 0, fmt.Errorf("%w %q in %s", errUnexpectedMemTotal, sc.Text(), path)
 		}
 		return kb * 1024, nil
 	}
 	if err := sc.Err(); err != nil {
 		return 0, fmt.Errorf("read host memory: %w", err)
 	}
-	return 0, fmt.Errorf("read host memory: no MemTotal in %s", path)
+	return 0, fmt.Errorf("%w in %s", errNoMemTotal, path)
 }
 
 // VolumeTotal returns the total size, in bytes, of the filesystem holding path.

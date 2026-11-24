@@ -13,6 +13,8 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/safetar"
 )
 
+var errFileTooLarge = errors.New("file_write: data exceeds limit")
+
 // fileOpError is an error of the daemon's own that carries its HTTP status.
 type fileOpError struct {
 	status int
@@ -89,7 +91,7 @@ func HandleFileList(path string, recursive bool, extension string) ([]FileInfo, 
 // an error is returned.
 func HandleFileWrite(path string, data []byte, maxBytes int64, overwrite bool) error {
 	if maxBytes > 0 && int64(len(data)) > maxBytes {
-		return fmt.Errorf("file_write: data size %d exceeds limit %d", len(data), maxBytes)
+		return fmt.Errorf("%w: size %d, limit %d", errFileTooLarge, len(data), maxBytes)
 	}
 
 	resolved := resolvePath(path)

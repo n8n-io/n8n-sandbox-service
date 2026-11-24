@@ -177,9 +177,9 @@ make lint         # Run golangci-lint on code changed since LINT_BASE (default o
 go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
 ```
 
-`.golangci.yml` sets the linters. Some linters apply to `internal/codedaemon`
-only. CI sets its own `LINT_BASE`. To check all code, not only changed code,
-run `make lint LINT_BASE=`.
+`.golangci.yml` sets the linters. Some linters apply only to the packages
+that `.golangci.yml` lists. CI sets its own `LINT_BASE`. To check all code,
+not only changed code, run `make lint LINT_BASE=`.
 
 To auto-format:
 

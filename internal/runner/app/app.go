@@ -5,6 +5,7 @@ package app
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
@@ -217,7 +218,7 @@ func Run(cfg *config.Config, rt runnerruntime.Runtime) {
 			"max_inflight_per_sandbox", cfg.MaxInflightPerSandbox,
 			"max_exec_timeout", cfg.MaxExecTimeout.String())
 		// Certificate and key come from srv.TLSConfig.
-		if err := srv.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+		if err := srv.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErr <- err
 		}
 	}()

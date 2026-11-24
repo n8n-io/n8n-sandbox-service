@@ -3,12 +3,15 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 
 	_ "modernc.org/sqlite" // register the "sqlite" driver
 )
+
+var errJournalMode = errors.New("store: unexpected journal_mode")
 
 // SQLiteStore wraps a *sql.DB and exposes CRUD operations for SandboxRecord rows.
 type SQLiteStore struct {
@@ -47,7 +50,7 @@ func NewSQLite(dbPath string, useWal bool) (*SQLiteStore, error) {
 		}
 		if !strings.EqualFold(mode, wantMode) {
 			_ = db.Close()
-			return nil, fmt.Errorf("store: %s mode requested but journal_mode is %q", wantMode, mode)
+			return nil, fmt.Errorf("%w: %s mode requested, got %q", errJournalMode, wantMode, mode)
 		}
 	}
 

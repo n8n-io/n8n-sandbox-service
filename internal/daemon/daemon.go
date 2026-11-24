@@ -30,6 +30,8 @@ const (
 // timeout_ms out.
 const DefaultExecTimeout = 5 * time.Minute
 
+var errMultipleJSONValues = errors.New("request body must contain a single JSON value")
+
 var defaultExecTimeout = DefaultExecTimeout
 
 type execRequest struct {
@@ -454,7 +456,7 @@ func decodeJSONBody(body io.Reader, dst any) error {
 	var extra json.RawMessage
 	if err := dec.Decode(&extra); err != io.EOF {
 		if err == nil {
-			return fmt.Errorf("request body must contain a single JSON value")
+			return errMultipleJSONValues
 		}
 		return err
 	}
