@@ -1,8 +1,8 @@
 import { Readable } from "node:stream";
-import { InvalidStreamEventError, SandboxServiceError } from "./errors";
-import type { HttpClient } from "./http";
-import { destroyStreamParts, multipartBody, type MultipartPart } from "./multipart";
-import { readNdjsonLines } from "./ndjson";
+import { InvalidStreamEventError, SandboxServiceError } from "../errors";
+import type { HttpClient } from "../http";
+import { readNdjsonLines } from "../ndjson";
+import { destroyStreams, multipartBody, type MultipartPart } from "./multipart";
 import type {
   CodeSandbox,
   CodeTaskEvent,
@@ -34,15 +34,20 @@ export async function createCodeSandbox(
 }
 
 /**
- * Runs a task in code sandbox `id`. Resolves when the response starts, with
- * the task events as they arrive. Ending the iteration early closes the stream.
+ * Runs a task in code sandbox `sandboxId`. Resolves when the response starts,
+ * with the task events as they arrive. Ending the iteration early closes the
+ * stream.
  */
 export async function runCodeTask(
   http: HttpClient,
-  id: string,
+  sandboxId: string,
   options: RunCodeTaskOptions,
 ): Promise<AsyncGenerator<CodeTaskEvent, void, undefined>> {
   const inputs = options.inputs ?? [];
+  if (inputs.some((input) => input.path === TASK_INPUT_PATH)) {
+    destroyStreams([options.taskInput, ...inputs.map((input) => input.content)]);
+    throw new Error(`Pass the ${TASK_INPUT_PATH} content as taskInput, not in inputs`);
+  }
   const parts: MultipartPart[] = [
     { name: "spec", contentType: "application/json", content: JSON.stringify(options.spec) },
     {
@@ -58,15 +63,11 @@ export async function runCodeTask(
       content: input.content,
     })),
   ];
-  if (inputs.some((input) => input.path === TASK_INPUT_PATH)) {
-    destroyStreamParts(parts);
-    throw new Error(`Pass the ${TASK_INPUT_PATH} content as taskInput, not in inputs`);
-  }
-  const { contentType, body, destroy } = multipartBody(parts);
+  const { contentType, body, destroy: destroyUpload } = multipartBody(parts);
 
   let stream: Readable;
   try {
-    ({ stream } = await http.requestStream("POST", `/code/sandboxes/${id}/tasks`, {
+    ({ stream } = await http.requestStream("POST", `/code/sandboxes/${sandboxId}/tasks`, {
       data: body,
       headers: { "Content-Type": contentType },
       signal: options.signal,
@@ -75,7 +76,7 @@ export async function runCodeTask(
       retry: false,
     }));
   } catch (error) {
-    destroy();
+    destroyUpload();
     throw error;
   }
   const { signal } = options;
@@ -84,7 +85,7 @@ export async function runCodeTask(
     closed.value = true;
     signal?.removeEventListener("abort", release);
     stream.destroy();
-    destroy();
+    destroyUpload();
   };
   // The response stream outlives the request, so an abort closes it here.
   if (signal?.aborted) release();

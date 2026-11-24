@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
-import type { FileContent } from "./types";
+import type { FileContent } from "../types";
 
 /** A part of a multipart/form-data body. */
 export interface MultipartPart {
@@ -26,7 +26,7 @@ export interface MultipartBody {
 export function multipartBody(parts: MultipartPart[]): MultipartBody {
   // A body waiting on a stream part cannot stop until the part ends, so the
   // parts are destroyed too.
-  const destroyParts = () => destroyStreamParts(parts);
+  const destroyParts = () => destroyStreams(parts.map((part) => part.content));
   try {
     for (const part of parts) {
       checkHeaderValue("name", part.name);
@@ -60,15 +60,15 @@ export function multipartBody(parts: MultipartPart[]): MultipartBody {
 }
 
 /**
- * Destroys the stream content of parts. Nothing reads them after this, so
+ * Destroys the streams among contents. Nothing reads them after this, so
  * their later errors, such as a file that fails to open, are ignored rather
  * than left unhandled.
  */
-export function destroyStreamParts(parts: MultipartPart[]): void {
-  for (const part of parts) {
-    if (part.content instanceof Readable) {
-      part.content.on("error", () => {});
-      part.content.destroy();
+export function destroyStreams(contents: Array<FileContent | Readable>): void {
+  for (const content of contents) {
+    if (content instanceof Readable) {
+      content.on("error", () => {});
+      content.destroy();
     }
   }
 }

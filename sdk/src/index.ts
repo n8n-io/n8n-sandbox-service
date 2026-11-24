@@ -6,8 +6,6 @@ export {
   InvalidStreamEventError,
 } from "./errors";
 export type {
-  SandboxClientOptions,
-  CreateSandboxOptions,
   CodeRuntime,
   CodeSandbox,
   CodeTaskEvent,
@@ -15,6 +13,10 @@ export type {
   CodeTaskSpec,
   CreateCodeSandboxOptions,
   RunCodeTaskOptions,
+} from "./code-tasks/types";
+export type {
+  SandboxClientOptions,
+  CreateSandboxOptions,
   EgressMode,
   RetryOptions,
   SandboxRecord,

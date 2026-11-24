@@ -5,10 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Readable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
-import { createCodeSandbox, runCodeTask } from "../src/code-sandboxes.js";
+import { createCodeSandbox, runCodeTask } from "../src/code-tasks/code-sandboxes.js";
 import { InvalidStreamEventError, SandboxServiceError } from "../src/errors.js";
 import { HttpClient } from "../src/http.js";
-import type { CreateCodeSandboxOptions } from "../src/types.js";
+import type { CreateCodeSandboxOptions } from "../src/code-tasks/types.js";
 import { startTestServer, type TestServer } from "./helpers.js";
 
 const options: CreateCodeSandboxOptions = {
