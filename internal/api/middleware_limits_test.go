@@ -203,7 +203,7 @@ func TestTenantLimitCountsExecutionDeletesApart(t *testing.T) {
 	sandboxA := "/sandboxes/" + limitTestSandboxA
 
 	releaseExec := g.hold(t, runner, 1, http.MethodPost, sandboxA+"/executions", g.keyA)
-	g.hold(t, runner, maxExecutionDeletesPerTenant, http.MethodDelete, sandboxA+"/executions/exec-1", g.keyA)
+	g.hold(t, runner, maxDeletesPerTenant, http.MethodDelete, sandboxA+"/executions/exec-1", g.keyA)
 
 	rr := g.call(context.Background(), http.MethodDelete, sandboxA+"/executions/exec-1", g.keyA)
 	assertLimitResponse(t, rr, http.StatusTooManyRequests, reasonTenantRequestLimit)
@@ -212,11 +212,36 @@ func TestTenantLimitCountsExecutionDeletesApart(t *testing.T) {
 	g.hold(t, runner, 1, http.MethodPost, sandboxA+"/executions", g.keyA)
 }
 
+// Code sandbox deletes stop tasks, so they share the DELETE limit: a full
+// tenant limit does not block them, but their own limit does.
+func TestTenantLimitCountsCodeSandboxDeletesWithDeletes(t *testing.T) {
+	runner := newBlockingRunner(t)
+	g := newLimitTestGateway(t, runner, func(c *config.APIConfig) {
+		c.MaxInflightPerTenant = 1
+		c.CodeSandboxesEnabled = true
+	})
+	sandboxA := "/sandboxes/" + limitTestSandboxA
+	codeID := "cccccccc-0000-4000-8000-000000000003"
+
+	g.hold(t, runner, 1, http.MethodPost, sandboxA+"/executions", g.keyA)
+	for _, path := range []string{"/code/sandboxes/" + codeID, "/code/sandboxes/names/scope-1"} {
+		if rr := g.call(context.Background(), http.MethodDelete, path, g.keyA); rr.Code != http.StatusNotFound {
+			t.Fatalf("%s with a full tenant limit: got %d body=%s, want %d", path, rr.Code, rr.Body.String(), http.StatusNotFound)
+		}
+	}
+
+	g.hold(t, runner, maxDeletesPerTenant, http.MethodDelete, sandboxA+"/executions/exec-1", g.keyA)
+	for _, path := range []string{"/code/sandboxes/" + codeID, "/code/sandboxes/names/scope-1"} {
+		rr := g.call(context.Background(), http.MethodDelete, path, g.keyA)
+		assertLimitResponse(t, rr, http.StatusTooManyRequests, reasonTenantRequestLimit)
+	}
+}
+
 func TestTenantLimitOffLeavesExecutionDeletesUnlimited(t *testing.T) {
 	runner := newBlockingRunner(t)
 	g := newLimitTestGateway(t, runner, func(c *config.APIConfig) { c.MaxInflightPerTenant = 0 })
 
-	g.hold(t, runner, maxExecutionDeletesPerTenant+1, http.MethodDelete, "/sandboxes/"+limitTestSandboxA+"/executions/exec-1", g.keyA)
+	g.hold(t, runner, maxDeletesPerTenant+1, http.MethodDelete, "/sandboxes/"+limitTestSandboxA+"/executions/exec-1", g.keyA)
 }
 
 // A create holds its slot until the runner finishes, even once the client has

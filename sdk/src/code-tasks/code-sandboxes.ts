@@ -34,6 +34,31 @@ export async function createCodeSandbox(
 }
 
 /**
+ * Deletes a code sandbox and stops all its tasks. Treats 404 as success so retries
+ * after a dropped 204 stay idempotent.
+ */
+export async function deleteCodeSandbox(http: HttpClient, id: string): Promise<void> {
+  await deleteIgnoringNotFound(http, `/code/sandboxes/${encodeURIComponent(id)}`);
+}
+
+/**
+ * Deletes all code sandboxes of `name`, draining ones too, and stops all their tasks.
+ * Treats 404 as success so retries after a dropped 204 stay idempotent.
+ */
+export async function deleteCodeSandboxByName(http: HttpClient, name: string): Promise<void> {
+  await deleteIgnoringNotFound(http, `/code/sandboxes/names/${encodeURIComponent(name)}`);
+}
+
+async function deleteIgnoringNotFound(http: HttpClient, path: string): Promise<void> {
+  try {
+    await http.requestVoid("DELETE", path);
+  } catch (err) {
+    if (err instanceof SandboxServiceError && err.status === 404) return;
+    throw err;
+  }
+}
+
+/**
  * Runs a task in code sandbox `sandboxId`. Resolves when the response starts,
  * with the task events as they arrive. Ending the iteration early closes the
  * stream.

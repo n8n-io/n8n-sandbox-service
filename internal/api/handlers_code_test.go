@@ -124,6 +124,8 @@ func TestCreateCodeSandboxRejectsInvalidRequests(t *testing.T) {
 		"no name":           strings.Replace(codeCreateBody, `"name":"scope-1",`, ``, 1),
 		"bad name":          strings.Replace(codeCreateBody, `"scope-1"`, `"a/b"`, 1),
 		"long name":         strings.Replace(codeCreateBody, `"scope-1"`, `"`+strings.Repeat("a", 129)+`"`, 1),
+		"dot name":          strings.Replace(codeCreateBody, `"scope-1"`, `"."`, 1),
+		"dot dot name":      strings.Replace(codeCreateBody, `"scope-1"`, `".."`, 1),
 		"bad runtime":       strings.Replace(codeCreateBody, `"n8n-js"`, `"bash"`, 1),
 		"no version":        strings.Replace(codeCreateBody, `"2.42.0"`, `""`, 1),
 		"bad version":       strings.Replace(codeCreateBody, `"2.42.0"`, `"2 42"`, 1),

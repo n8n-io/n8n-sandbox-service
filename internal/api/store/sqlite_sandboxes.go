@@ -160,6 +160,13 @@ func (s *SQLiteStore) GetCodeSandboxByName(tenantID, name string) (*SandboxRecor
 	return rec, nil
 }
 
+func (s *SQLiteStore) ListCodeSandboxesByName(tenantID, name string) ([]*SandboxRecord, error) {
+	q := `SELECT ` + sqliteSandboxCols + ` FROM sandboxes
+		WHERE tenant_id = ? AND name = ? AND kind = 'code'
+		ORDER BY created_at, id`
+	return s.querySandboxRecords(q, tenantID, name)
+}
+
 func (s *SQLiteStore) UpdateStatus(id, status string) error {
 	const q = `UPDATE sandboxes SET status = ? WHERE id = ?`
 	if _, err := s.db.Exec(q, status, id); err != nil {

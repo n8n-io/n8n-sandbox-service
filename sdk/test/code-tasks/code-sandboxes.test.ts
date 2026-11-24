@@ -5,7 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Readable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
-import { createCodeSandbox, runCodeTask } from "../../src/code-tasks/code-sandboxes.js";
+import {
+  createCodeSandbox,
+  deleteCodeSandbox,
+  deleteCodeSandboxByName,
+  runCodeTask,
+} from "../../src/code-tasks/code-sandboxes.js";
 import { InvalidStreamEventError, SandboxServiceError } from "../../src/errors.js";
 import { HttpClient } from "../../src/http.js";
 import type { CreateCodeSandboxOptions } from "../../src/code-tasks/types.js";
@@ -86,6 +91,60 @@ describe("createCodeSandbox", () => {
       reason: "sandbox_settings_mismatch",
     });
     expect(requests).toHaveLength(1);
+  });
+});
+
+describe("deleteCodeSandbox and deleteCodeSandboxByName", () => {
+  let server: TestServer | undefined;
+  let requests: { method?: string; url?: string }[] = [];
+
+  afterEach(async () => {
+    await server?.close();
+    server = undefined;
+    requests = [];
+  });
+
+  /** Answers every request with status. */
+  async function client(status: number): Promise<HttpClient> {
+    server = await startTestServer((req, res) => {
+      requests.push({ method: req.method, url: req.url });
+      if (status === 204) {
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+      res.writeHead(status, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "failed", code: status }));
+    });
+    return new HttpClient(server.baseUrl, "key", { baseDelayMs: 0 });
+  }
+
+  it("deletes by id", async () => {
+    const http = await client(204);
+
+    await expect(deleteCodeSandbox(http, sandbox.id)).resolves.toBeUndefined();
+    expect(requests).toEqual([{ method: "DELETE", url: `/code/sandboxes/${sandbox.id}` }]);
+  });
+
+  it("deletes by name and encodes the name", async () => {
+    const http = await client(204);
+
+    await expect(deleteCodeSandboxByName(http, "wf:1")).resolves.toBeUndefined();
+    expect(requests).toEqual([{ method: "DELETE", url: "/code/sandboxes/names/wf%3A1" }]);
+  });
+
+  it("treats 404 as success", async () => {
+    const http = await client(404);
+
+    await expect(deleteCodeSandbox(http, sandbox.id)).resolves.toBeUndefined();
+    await expect(deleteCodeSandboxByName(http, "scope-1")).resolves.toBeUndefined();
+  });
+
+  it("throws on other errors", async () => {
+    const http = await client(502);
+
+    await expect(deleteCodeSandbox(http, sandbox.id)).rejects.toMatchObject({ status: 502 });
+    await expect(deleteCodeSandboxByName(http, "scope-1")).rejects.toMatchObject({ status: 502 });
   });
 });
 

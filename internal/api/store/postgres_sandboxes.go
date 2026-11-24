@@ -145,6 +145,13 @@ func (s *PostgresStore) GetCodeSandboxByName(tenantID, name string) (*SandboxRec
 	return rec, nil
 }
 
+func (s *PostgresStore) ListCodeSandboxesByName(tenantID, name string) ([]*SandboxRecord, error) {
+	q := `SELECT ` + pgSandboxCols + ` FROM sandboxes
+		WHERE tenant_id = $1 AND name = $2 AND kind = 'code'
+		ORDER BY created_at, id`
+	return s.querySandboxRecords(q, tenantID, name)
+}
+
 func (s *PostgresStore) UpdateStatus(id, status string) error {
 	const q = `UPDATE sandboxes SET status = $1 WHERE id = $2`
 	if _, err := s.db.Exec(q, status, id); err != nil {

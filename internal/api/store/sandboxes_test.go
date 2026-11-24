@@ -366,6 +366,33 @@ func testCodeSandboxNames(t *testing.T, s SandboxStore, tenantA, tenantB string)
 		t.Fatalf("GetCodeSandboxByName(n3): %+v err=%v, want %s, not draining %s", got, err, current.ID, drained.ID)
 	}
 
+	// The list holds draining sandboxes too, but no general sandboxes and none
+	// of other tenants.
+	listIDs := func(tenantID, name string) map[string]bool {
+		t.Helper()
+		recs, err := s.ListCodeSandboxesByName(tenantID, name)
+		if err != nil {
+			t.Fatalf("ListCodeSandboxesByName(%s): %v", name, err)
+		}
+		ids := map[string]bool{}
+		for _, rec := range recs {
+			ids[rec.ID] = true
+		}
+		return ids
+	}
+	if ids := listIDs(tenantA, "n3"); len(ids) != 2 || !ids[drained.ID] || !ids[current.ID] {
+		t.Fatalf("ListCodeSandboxesByName(n3) = %v, want %s and %s", ids, drained.ID, current.ID)
+	}
+	if ids := listIDs(tenantA, "n1"); len(ids) != 1 || !ids[first.ID] {
+		t.Fatalf("ListCodeSandboxesByName(n1) = %v, want only %s", ids, first.ID)
+	}
+	if ids := listIDs(tenantA, "n2"); len(ids) != 0 {
+		t.Fatalf("ListCodeSandboxesByName(general kind) = %v, want none", ids)
+	}
+	if ids := listIDs(tenantB, "n3"); len(ids) != 0 {
+		t.Fatalf("ListCodeSandboxesByName(other tenant) = %v, want none", ids)
+	}
+
 	// A duplicate id is not a name conflict.
 	dup := code(tenantA, "n4")
 	dup.ID, dup.Status, dup.CreatedAt, dup.LastActiveAt = first.ID, "running", now, now
