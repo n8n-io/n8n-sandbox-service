@@ -71,9 +71,9 @@ together with the tenant was minted by an admin.
 Authorization runs on every sandbox request through `canAccessSandbox` in
 [internal/api/middleware_auth.go](../internal/api/middleware_auth.go):
 
-- Read, delete and all proxied routes (exec and files) load the sandbox record
-  of the route's kind only, so a sandbox of another kind is not found, and
-  compare its `tenant_id` against the caller's. An admin key passes this check
+- Read, delete and all proxied routes (exec, files and code tasks) load the
+  sandbox record of the route's kind only, so a sandbox of another kind is
+  not found, and compare its `tenant_id` against the caller's. An admin key passes this check
   for every sandbox, whoever owns it. A create whose id belongs to a sandbox
   of another kind gets `409`.
 - List is scoped at the query level. It always filters by the route's kind.

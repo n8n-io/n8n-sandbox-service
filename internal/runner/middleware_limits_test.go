@@ -123,6 +123,7 @@ func TestSandboxLimitRefusesRequestsOverCap(t *testing.T) {
 		{http.MethodGet, "/executions/exec-1?follow=true", ""},
 		{http.MethodPut, "/files?path=/tmp/x", "data"},
 		{http.MethodGet, "/stat?path=/tmp", ""},
+		{http.MethodPost, "/tasks", "parts"},
 	} {
 		rr := lr.call(route.method, sandbox+route.path, route.body)
 		if rr.Code != http.StatusTooManyRequests {
@@ -142,8 +143,8 @@ func TestSandboxLimitRefusesRequestsOverCap(t *testing.T) {
 	if hits := lr.daemon.hits.Load(); hits != 2 {
 		t.Errorf("daemon hits = %d, want 2: a refused request must not reach the daemon", hits)
 	}
-	if got := lr.rec.RequestsLimitedCount(metrics.LimitSandbox); got != 4 {
-		t.Errorf("sandbox limited count = %v, want 4", got)
+	if got := lr.rec.RequestsLimitedCount(metrics.LimitSandbox); got != 5 {
+		t.Errorf("sandbox limited count = %v, want 5", got)
 	}
 
 	// The cap is per sandbox.

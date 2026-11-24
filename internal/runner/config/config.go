@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/n8n-io/sandbox-service/internal/codetask"
 	"github.com/n8n-io/sandbox-service/internal/daemon"
 	"github.com/n8n-io/sandbox-service/internal/envvar"
 	"github.com/n8n-io/sandbox-service/internal/logging"
@@ -44,6 +45,11 @@ type Config struct {
 	// MaxFileBytes is the maximum size of a single file that may be written
 	// into a sandbox. Parsed from SANDBOX_RUNNER_MAX_FILE_BYTES (default 10 MB).
 	MaxFileBytes int64
+
+	// MaxTaskInputBytes is the maximum total size of a code sandbox task's
+	// input files. The request body may be codetask.BodyOverheadBytes larger.
+	// Parsed from SANDBOX_RUNNER_MAX_TASK_INPUT_BYTES (default 64 MiB, at most 1 GiB).
+	MaxTaskInputBytes int64
 
 	// DataDir is the directory under which per-sandbox data is stored.
 	// Parsed from SANDBOX_RUNNER_DATA_DIR (default /var/sandboxes).
@@ -176,6 +182,7 @@ func (c *Config) ResolvedControlGRPCAdvertiseAddr() string {
 func Load() (*Config, error) {
 	cfg := &Config{
 		MaxFileBytes:          defaultMaxFileBytes,
+		MaxTaskInputBytes:     codetask.DefaultMaxInputBytes,
 		DataDir:               defaultDataDir,
 		ListenAddr:            defaultListenAddr,
 		CapacityTotal:         defaultRunnerCapacityTotal,
@@ -217,6 +224,10 @@ func Load() (*Config, error) {
 	}
 
 	if err := envvar.PositiveInt("SANDBOX_RUNNER_MAX_FILE_BYTES", &cfg.MaxFileBytes); err != nil {
+		return nil, err
+	}
+
+	if err := envvar.IntBetween("SANDBOX_RUNNER_MAX_TASK_INPUT_BYTES", &cfg.MaxTaskInputBytes, 1, codetask.MaxInputBytesCeiling); err != nil {
 		return nil, err
 	}
 
