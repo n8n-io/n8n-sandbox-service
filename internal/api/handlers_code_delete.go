@@ -3,12 +3,14 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
 
 	"github.com/n8n-io/sandbox-service/internal/api/config"
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
+	"github.com/n8n-io/sandbox-service/internal/api/runnerctl"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/obs"
@@ -127,4 +129,42 @@ func writeCodeDeleteError(w http.ResponseWriter, err error) {
 		return
 	}
 	writeError(w, http.StatusInternalServerError, err.Error())
+}
+
+// codeRunnerDeleteError is a failed delete of a code sandbox on its runner.
+type codeRunnerDeleteError struct{ err error }
+
+func (e *codeRunnerDeleteError) Error() string { return "runner delete: " + e.err.Error() }
+
+func (e *codeRunnerDeleteError) Unwrap() error { return e.err }
+
+// deleteCodeSandbox locks the code sandbox id and reads its record again.
+// When the record exists and shouldDelete returns true for it, it deletes the
+// sandbox on its runner, which stops all its tasks, and then deletes the
+// record. It reports whether it deleted the sandbox. ctx bounds only the wait
+// for the lock: once the delete starts, it goes on without ctx's
+// cancellation, so a caller that goes away does not leave the sandbox half
+// deleted.
+func deleteCodeSandbox(ctx context.Context, s codeSandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, id string, shouldDelete func(*store.SandboxRecord) bool) (bool, error) {
+	unlock, err := s.LockSandbox(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
+	rec, err := s.GetCodeSandbox(id)
+	if err != nil {
+		return false, err
+	}
+	if rec == nil || !shouldDelete(rec) {
+		return false, nil
+	}
+	deleteCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), runnerLifecycleBudget)
+	defer cancel()
+	if err := runnerctl.DeleteSandbox(deleteCtx, resolveControlAddr(rec, reg), cfg.RunnerAPIKey, runnerControlTLS(cfg), rec.ID); err != nil {
+		return false, &codeRunnerDeleteError{err: err}
+	}
+	if err := s.Delete(rec.ID); err != nil {
+		return false, err
+	}
+	return true, nil
 }
