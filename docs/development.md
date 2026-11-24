@@ -64,7 +64,7 @@ Stop all services:
 make down
 ```
 
-Quick smoke test (create, exec, resolv.conf, DNS, HTTPS, file write/read, delete, then a sandbox with `egress: public` and one with `egress: none` whose outbound traffic must be blocked):
+Quick smoke test (create, exec, guest clock, resolv.conf, DNS, HTTPS, file write/read, bulk upload, delete, then a sandbox with `egress: public` and one with `egress: none` whose outbound traffic must be blocked):
 
 ```bash
 make smoke

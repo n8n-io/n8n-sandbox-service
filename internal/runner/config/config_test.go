@@ -304,3 +304,24 @@ func TestLoadRejectsInvalidMaxExecTimeout(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadRecordsWhetherCapacityWasSet(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("SANDBOX_RUNNER_CAPACITY_TOTAL", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	if cfg.CapacityTotalSet || cfg.CapacityTotal != defaultRunnerCapacityTotal {
+		t.Errorf("unset: CapacityTotalSet=%v CapacityTotal=%d, want false and the default", cfg.CapacityTotalSet, cfg.CapacityTotal)
+	}
+
+	t.Setenv("SANDBOX_RUNNER_CAPACITY_TOTAL", "100")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	if !cfg.CapacityTotalSet || cfg.CapacityTotal != 100 {
+		t.Errorf("set: CapacityTotalSet=%v CapacityTotal=%d, want true and 100", cfg.CapacityTotalSet, cfg.CapacityTotal)
+	}
+}

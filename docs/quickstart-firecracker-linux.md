@@ -8,6 +8,11 @@ Full tarball contract: [BUNDLE.md](../BUNDLE.md).
 ## Requirements
 
 - Ubuntu 24.04 (or 22.04 with the HWE kernel), amd64, `/dev/kvm`, root for the runner. The host kernel must be 5.16 or later with a TSC-based clocksource (`tsc`, or `hyperv_clocksource_tsc_page` on Azure): restores advance the guest clock with `KVM_CLOCK_REALTIME` ([Guest clock](../internal/runner/runtime/firecracker.ee/README.md#guest-clock))
+- 12 GiB of RAM or more for the `SANDBOX_RUNNER_CAPACITY_TOTAL=10` used below.
+  The runner keeps 4 GiB for itself and needs 576 MiB per sandbox (512 MiB
+  guest plus 64 MiB), and it stops at startup when the set capacity does not
+  fit ([Firecracker slots](configuration.md#firecracker-slots)). On a smaller
+  host, lower the capacity or leave it unset to derive it.
 - `crane` or `docker` on PATH — section 1 unpacks the pinned sandbox OCI image
   with whichever is present. Later sections use Docker to run the API and runner.
   `install-runner-host.sh` does not install either.

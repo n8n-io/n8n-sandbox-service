@@ -59,6 +59,9 @@ dataPlane:
 
 runner:
   isolation: sysbox
+  config:
+    # Required: sandboxes per runner. See the chart README "Runner Capacity".
+    capacityTotal: "50"
   sysbox:
     runtime:
       runtimeClassName: sysbox-runc

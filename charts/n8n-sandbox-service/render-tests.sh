@@ -48,6 +48,17 @@ render --set dataPlane.mode=external --set networkPolicy.enabled=true >/dev/null
 render "${privileged[@]}" >/dev/null
 render "${privileged[@]}" --set networkPolicy.enabled=true >/dev/null
 
+echo "==> runner capacity must be a whole number"
+for bad in -5 abc 1.5; do
+	must_fail "runner.config.capacityTotal must be a whole number" --set "runner.config.capacityTotal=$bad"
+done
+# Empty falls back to the runner default and 0 means unlimited, as before 0.15.0.
+render --set-string "runner.config.capacityTotal=" >/dev/null
+render --set "runner.config.capacityTotal=0" --show-only templates/configmap.yaml |
+	grep -q 'SANDBOX_RUNNER_CAPACITY_TOTAL: "0"'
+# An external data plane renders no runner, so the value is not checked.
+render --set dataPlane.mode=external --set "runner.config.capacityTotal=abc" >/dev/null
+
 echo "==> default values render the golden manifests"
 # Existing installs must not change: the default render is pinned byte for
 # byte, with the chart and app versions masked so version bumps leave it alone,
@@ -675,6 +686,10 @@ render --set-json 'api.terminationGracePeriodSeconds=1000000' \
 	grep -q '^      terminationGracePeriodSeconds: 1000000$'
 must_fail "api.terminationGracePeriodSeconds must be a whole number of seconds" \
 	--set-json 'api.terminationGracePeriodSeconds=2.5'
+render --set-json 'runner.config.capacityTotal=1000000' --show-only templates/configmap.yaml |
+	grep -q 'SANDBOX_RUNNER_CAPACITY_TOTAL: "1000000"'
+must_fail "runner.config.capacityTotal must be a whole number" \
+	--set-json 'runner.config.capacityTotal=2.5'
 render --set-json 'api.podLabels.build=20240101' \
 	--show-only templates/api-deployment.yaml | grep -q '^        build: "20240101"$'
 
