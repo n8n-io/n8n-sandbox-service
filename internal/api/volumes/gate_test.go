@@ -36,7 +36,7 @@ func TestTarGatePassesAValidTar(t *testing.T) {
 			gate := newTarGate(bytes.NewReader(data), testPolicy, nil)
 			defer gate.close()
 			read, err := readGate(gate)
-			if err != io.EOF || gate.err() != nil {
+			if !errors.Is(err, io.EOF) || gate.err() != nil {
 				t.Fatalf("the read ended with %v, err() = %v; want io.EOF and nil", err, gate.err())
 			}
 			if !bytes.Equal(read, data) {
@@ -76,7 +76,7 @@ func TestTarGateRefusesATarBeforeItsEnd(t *testing.T) {
 			gate := newTarGate(bytes.NewReader(tc.data), testPolicy, nil)
 			defer gate.close()
 			_, err := readGate(gate)
-			if err == io.EOF || !errors.Is(err, tc.want) || !errors.Is(gate.err(), tc.want) {
+			if errors.Is(err, io.EOF) || !errors.Is(err, tc.want) || !errors.Is(gate.err(), tc.want) {
 				t.Fatalf("the read ended with %v, err() = %v; want %v", err, gate.err(), tc.want)
 			}
 			if strings.Contains(err.Error(), "secret-name") {
@@ -123,8 +123,8 @@ func TestTarGateInterruptsAReadOnceTheTarIsRefused(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		stopReading()
-		<-ended
-		t.Fatal("the read kept waiting for the client after the tar was refused")
+		err := <-ended
+		t.Fatalf("the read kept waiting for the client after the tar was refused; it ended with %v", err)
 	}
 }
 

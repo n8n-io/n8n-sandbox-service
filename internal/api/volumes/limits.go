@@ -4,12 +4,7 @@
 // while it streams into the volume store.
 package volumes
 
-import (
-	"regexp"
-
-	"github.com/n8n-io/sandbox-service/internal/safetar"
-	"github.com/n8n-io/sandbox-service/internal/volume"
-)
+import "regexp"
 
 // Limits of a shared volume.
 const (
@@ -43,8 +38,4 @@ var namePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$`)
 // can't look like a digest reference, which has a ":".
 func ValidName(name string) bool {
 	return len(name) <= MaxNameBytes && namePattern.MatchString(name)
-}
-
-func tarPolicy() safetar.Policy {
-	return volume.TarPolicy(MaxEntries, MaxContentBytes, MaxDecompressedBytes)
 }
