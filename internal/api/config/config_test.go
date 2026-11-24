@@ -153,6 +153,42 @@ func TestLoadAPIDefaultMaxSandboxesFromEnv(t *testing.T) {
 	}
 }
 
+func TestLoadAPIMaxTaskInputBytes(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  int64 // 0 = rejected
+	}{
+		{"", 64 * 1024 * 1024},
+		{"1024", 1024},
+		{"1073741824", 1 << 30},
+		{"1073741825", 0},
+		{"0", 0},
+		{"-1", 0},
+		{"abc", 0},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			t.Setenv("SANDBOX_API_KEYS", "test-key")
+			t.Setenv("SANDBOX_API_RUNNER_REGISTRATION_TOKEN", "reg-token")
+			t.Setenv("SANDBOX_API_MAX_TASK_INPUT_BYTES", tc.value)
+			setRequiredGRPCMTLS(t)
+
+			cfg, err := LoadAPI()
+			if tc.want == 0 {
+				if err == nil {
+					t.Fatalf("expected LoadAPI to reject SANDBOX_API_MAX_TASK_INPUT_BYTES=%q", tc.value)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("LoadAPI() failed: %v", err)
+			}
+			if cfg.MaxTaskInputBytes != tc.want {
+				t.Fatalf("MaxTaskInputBytes: want %d, got %d", tc.want, cfg.MaxTaskInputBytes)
+			}
+		})
+	}
+}
+
 func TestLoadAPIRejectsInvalidDefaultMaxSandboxes(t *testing.T) {
 	for _, v := range []string{"-1", "abc", "2147483648", "1.5"} {
 		t.Run(v, func(t *testing.T) {

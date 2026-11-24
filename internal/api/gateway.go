@@ -11,6 +11,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/config"
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
+	"github.com/n8n-io/sandbox-service/internal/codetask"
 	"github.com/n8n-io/sandbox-service/internal/limits"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 )
@@ -93,6 +94,11 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	mux.HandleFunc("DELETE /sandboxes/{id}/files", proxy)
 	mux.HandleFunc("POST /sandboxes/{id}/mkdir", proxy)
 	mux.HandleFunc("GET /sandboxes/{id}/stat", proxy)
+
+	if cfg.CodeSandboxesEnabled {
+		codeProxy := codeSandboxProxyHandler(s, cfg, runnerTransport, activity)
+		mux.HandleFunc("POST /code/sandboxes/{id}/tasks", limitTenant(codeProxy(codeProxyRoute{runnerSuffix: "/tasks", maxBody: codetask.MaxBodyBytes(cfg.MaxTaskInputBytes)})))
+	}
 
 	var handler http.Handler = mux
 	if rec.Enabled() {

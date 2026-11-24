@@ -7,8 +7,16 @@ Always run the following checks after modifying Go files:
 ```sh
 make fmt-check
 make vet
+make lint
 make test
 ```
+
+`make lint` needs golangci-lint v2.15.0, the version that CI pins. Install it with
+`go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0`.
+It reports only issues in code that changed since `LINT_BASE`. Locally,
+`LINT_BASE` is `origin/main` by default. CI sets its own base. Do not add
+`//nolint` to silence a finding unless the code is correct as it is. Give the
+reason in the comment, for example `//nolint:forbidigo // <reason>`.
 
 After modifying anything under `sdk/`, run:
 

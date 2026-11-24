@@ -24,12 +24,14 @@ var wakingHandlers = map[string]func(runnerruntime.Runtime, *config.Config, *met
 	"proxy":        ProxyHandler,
 	"upload proxy": UploadProxyHandler,
 	"exec proxy":   ExecProxyHandler,
+	"task proxy":   TaskProxyHandler,
 }
 
-// MaxFileBytes has to be set for the upload proxy, which enforces it on every body
-// it forwards and would otherwise reject this one as too large before proxying.
+// MaxFileBytes and MaxTaskInputBytes have to be set for the upload and task
+// proxies, which enforce them on every body they forward and would otherwise
+// reject this one as too large before proxying.
 func proxyTestConfig() *config.Config {
-	return &config.Config{MaxFileBytes: 1 << 20}
+	return &config.Config{MaxFileBytes: 1 << 20, MaxTaskInputBytes: 1 << 20}
 }
 
 func proxyTestRequest() *http.Request {

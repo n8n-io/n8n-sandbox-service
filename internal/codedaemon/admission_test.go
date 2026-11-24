@@ -56,7 +56,7 @@ func TestAdmissionRejectsBeforeReadingInputPart(t *testing.T) {
 	const boundary = "test-boundary"
 	// Send only enough of the body to finish the first part. An attempt to
 	// advance to the input part would have to read the withheld data.
-	var body io.Reader = io.MultiReader(strings.NewReader("--"+boundary+"\r\nContent-Disposition: form-data; name=\"spec\"\r\n\r\n{\"taskId\":\"second\"}\r\n--"+boundary+"\r\n"), failRead{t})
+	body := io.MultiReader(strings.NewReader("--"+boundary+"\r\nContent-Disposition: form-data; name=\"spec\"\r\n\r\n{\"taskId\":\"second\"}\r\n--"+boundary+"\r\n"), failRead{t})
 	r = httptest.NewRequest(http.MethodPost, "/tasks", body)
 	r.Header.Set("Content-Type", "multipart/form-data; boundary="+boundary)
 	w := httptest.NewRecorder()

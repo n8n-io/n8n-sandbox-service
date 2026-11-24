@@ -1,0 +1,49 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - err113
+    - errorlint
+    - forbidigo
+    - gosec
+    - revive
+
+  settings:
+    errcheck:
+      # A failed deadline shows up as an error on the next read or write.
+      exclude-functions:
+        - (*net/http.ResponseController).SetReadDeadline
+        - (*net/http.ResponseController).SetWriteDeadline
+        - (net.Conn).SetDeadline
+        - (net.Conn).SetReadDeadline
+        - (net.Conn).SetWriteDeadline
+
+    forbidigo:
+      forbid:
+        - pattern: ^any$
+          msg: >-
+            Use a concrete type or a closed interface. If any is correct, add
+            `//nolint:forbidigo // <reason>` on the line.
+
+    gosec:
+      excludes:
+        - G104 # errcheck reports these.
+
+    revive:
+      rules:
+        # forbidigo cannot match interface{}, but use-any reports it.
+        - name: use-any
+
+  exclusions:
+    presets:
+      - std-error-handling
+    rules:
+      - path-except: ^internal/codedaemon/
+        linters: [forbidigo, err113]
+      - path: _test\.go$
+        linters: [forbidigo, err113, gosec]
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

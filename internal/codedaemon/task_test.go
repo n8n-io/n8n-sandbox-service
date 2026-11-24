@@ -72,6 +72,26 @@ func TestStageInputs(t *testing.T) {
 	}
 }
 
+func TestStageInputsRejectsUploadWithoutClosingBoundary(t *testing.T) {
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	part, err := mw.CreateFormFile("input", "a.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(part, "a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cut := bytes.TrimSuffix(body.Bytes(), []byte("--\r\n"))
+	d := testDaemon(t, Config{})
+	if _, err := d.stageInputs(multipart.NewReader(bytes.NewReader(cut), mw.Boundary())); err == nil {
+		t.Fatal("upload without the closing boundary was accepted")
+	}
+}
+
 func TestStageInputsRejectsNonInputPart(t *testing.T) {
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
