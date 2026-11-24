@@ -29,6 +29,10 @@ ARG NODE_ARM64_SHA256=6e51a2ada00f0011cc266f65d98922b403d7ad88f809ca2aa615a5fe1c
 # xz-utils only untars the Node tarball below, but it stays in the image:
 # build-essential needs it through dpkg-dev.
 #
+# tar uses --no-same-owner because the Node tarball keeps the uid of its build
+# machine. For x64 24.22.3 that is 1000, the sandbox user, which would make
+# /usr/local writable for the sandbox.
+#
 # e2fsprogs is in the base image already. It is listed because the daemon's
 # volume build mode runs /sbin/mke2fs and /sbin/e2fsck.
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -58,7 +62,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${node_arch}.tar.xz" \
          -o /tmp/node.tar.xz \
     && echo "${node_sha}  /tmp/node.tar.xz" | sha256sum -c - \
-    && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 \
+    && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 --no-same-owner \
     && rm /tmp/node.tar.xz \
     && npm install -g npm@11.21.3 \
     && node -v && npm -v \
