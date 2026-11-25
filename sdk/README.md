@@ -23,13 +23,13 @@ const client = new SandboxClient({
 
 By default the client retries transient failures: 3 extra attempts (four tries total), backoff with jitter, and HTTP statuses `429` and `503` (plus transport errors, represented as status `0`). `502` is not in the default retry set — the service uses it when repeating the same request is unlikely to help.
 
-The service answers `429` when a tenant or a sandbox has too many requests in progress at once (see [API.md](https://github.com/n8n-io/n8n-sandbox-service/blob/main/docs/API.md#http-429--too-many-requests-in-progress)). It refuses such a request before it reaches the sandbox, so every method is retried on a `429`.
+The service answers `429` when a tenant or a sandbox has too many requests in progress at once (see [API.md](https://github.com/n8n-io/n8n-sandbox-service/blob/main/docs/API.md#http-429--too-many-requests-in-progress)). It refuses such a request before it reaches the sandbox, so every method except `runCodeTask` is retried on a `429` (see [Code sandboxes](#code-sandboxes)).
 
 - Turn off retries: `retry: { attempts: 0 }`.
 - Tune backoff: `retry: { attempts: 5, baseDelayMs: 100, maxDelayMs: 30_000, jitter: false }`.
 - Also retry other statuses (only if you accept the risk): `retry: { retryOnStatuses: [429, 502, 503] }`.
 - Idempotent methods (`GET`, `HEAD`, `OPTIONS`, `PUT`, `DELETE`) use this policy automatically.
-- `POST` is retried only where the service makes it idempotent: `createSandbox` with an explicit `id`, and `exec` after a `429`. Other `POST`s, such as appending to a file, surface a `429` to the caller.
+- On other statuses and transport errors, `POST` is retried only where the service makes it idempotent, such as `createSandbox` with an explicit `id`. Other `POST`s, such as appending to a file, are retried only on a `429`.
 - `createSandbox` without an `id` is also retried on a `503` whose body has `reason: "no_capacity"`: no runner was eligible or had room, and nothing was created (see [API.md](https://github.com/n8n-io/n8n-sandbox-service/blob/main/docs/API.md#post-sandboxes)). Once the retries run out, it throws a `SandboxServiceError` with that `reason`.
 
 `exec` still has its own stream resume loop (`exec_id`, `POST` then `GET` follow): after a `503`, a transport error or a stream that ends early, it posts the same `exec_id` again, or resumes with `GET` once events have arrived. Constructor `retry` applies to each underlying HTTP call: `GET` resume lines benefit from the default policy, and an exec `POST` refused with `429` is re-posted with the same `exec_id`, which starts the command, or follows it if an earlier attempt started it. When those retries run out on a `429` while the command may be running, `exec` cancels it in the background and throws. It does not replace the exec event/state machine.
@@ -82,6 +82,22 @@ const code = await client.createCodeSandbox({
 });
 console.log(code.id, code.created);
 ```
+
+`runCodeTask` sends a task as a streamed `multipart/form-data` body: the `spec` as JSON, then `taskInput` as the `task.json` input, then each binary input as a file with its `contentType` (default `application/octet-stream`). It resolves when the response starts, with the task's NDJSON events as they arrive: `accepted`, then a `heartbeat` every 5 seconds, then `done` or `error`.
+
+```ts
+const events = await client.runCodeTask(code.id, {
+  spec: { taskId: 't_1' },
+  taskInput: JSON.stringify(task),
+  inputs: [{ path: 'bin/0', content: fs.createReadStream(file) }],
+});
+for await (const event of events) {
+  if (event.type === 'done') console.log(event.result, event.outputs);
+  if (event.type === 'error') console.log(event.code, event.message);
+}
+```
+
+`runCodeTask` is never retried, also not on a `429`, because a stream input cannot be sent twice. A refused task fails with a `SandboxServiceError` before any event. A refused task, or a task with invalid options, destroys its stream inputs. Open them again before you retry it. Ending the iteration early, or calling `return()` or `throw()` on the events, closes the event stream and stops the upload. Aborting `signal` does the same, and the next read fails with a `SandboxServiceError` with `status` `0`. A line that is not a JSON object with a known `type` fails the iteration with an `InvalidStreamEventError`.
 
 ### Execute commands
 

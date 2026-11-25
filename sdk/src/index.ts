@@ -1,11 +1,29 @@
 export { SandboxClient } from "./client";
-export { SandboxServiceError, SandboxCrashedError, EgressMismatchError } from "./errors";
+export {
+  SandboxServiceError,
+  SandboxCrashedError,
+  EgressMismatchError,
+  InvalidStreamEventError,
+} from "./errors";
+export type {
+  CodeRuntime,
+  CodeSandbox,
+  CodeTaskAcceptedEvent,
+  CodeTaskBinaryInput,
+  CodeTaskDoneEvent,
+  CodeTaskErrorCode,
+  CodeTaskErrorEvent,
+  CodeTaskEvent,
+  CodeTaskEventType,
+  CodeTaskHeartbeatEvent,
+  CodeTaskOutput,
+  CodeTaskSpec,
+  CreateCodeSandboxOptions,
+  RunCodeTaskOptions,
+} from "./code-tasks/types";
 export type {
   SandboxClientOptions,
   CreateSandboxOptions,
-  CodeRuntime,
-  CodeSandbox,
-  CreateCodeSandboxOptions,
   EgressMode,
   RetryOptions,
   SandboxRecord,

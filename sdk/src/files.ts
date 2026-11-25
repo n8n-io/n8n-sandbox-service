@@ -49,7 +49,7 @@ export async function writeFiles(
     params: { path: "/" },
     headers: { "Content-Type": "application/gzip" },
     data: archive,
-    isSafeToRetry: true,
+    retry: "always",
   });
 }
 
