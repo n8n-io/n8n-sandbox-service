@@ -62,6 +62,8 @@ var (
 	// ErrSharedVolumeLimit is returned when the publishing and ready rows are
 	// already at the limit.
 	ErrSharedVolumeLimit = errors.New("too many shared volumes")
+	// ErrSharedVolumeNameEmpty is returned when a row is to get an empty name.
+	ErrSharedVolumeNameEmpty = errors.New("shared volume name is empty")
 )
 
 // SharedVolumes keeps the shared_volumes rows. Rows are written before their
@@ -90,9 +92,8 @@ type SharedVolumes interface {
 	// NameReadySharedVolume names the ready row id if it has no name. It
 	// returns the name the row has afterwards, which differs from name when
 	// the row was named before with another name, and "" when there is no
-	// such ready row. name must not be empty: it would leave an unnamed row as
-	// it is and return "", like a missing row. It returns
-	// ErrSharedVolumeNameTaken when another live row has the name.
+	// such ready row. It returns ErrSharedVolumeNameEmpty for an empty name,
+	// and ErrSharedVolumeNameTaken when another live row has the name.
 	NameReadySharedVolume(ctx context.Context, id, name string) (string, error)
 	// GetLiveSharedVolume returns the ready row with the sha256, or the
 	// publishing one whose lease has not ended, or nil.
@@ -276,6 +277,9 @@ func (q sharedVolumeSQL) failPublish(ctx context.Context, id string) (bool, erro
 // setName takes the row in either naming state and changes only a name that
 // is empty, so the caller learns the name the row has without a second read.
 func (q sharedVolumeSQL) setName(ctx context.Context, id, name string) (string, error) {
+	if name == "" {
+		return "", ErrSharedVolumeNameEmpty
+	}
 	var storedName string
 	err := q.db.QueryRowContext(ctx, q.bind(`UPDATE shared_volumes
 		SET name = CASE WHEN name = '' THEN ? ELSE name END

@@ -1,7 +1,7 @@
 // This file defines the limits of a shared volume and the rule for its name.
 
-// Package volumes handles shared volumes: their limits, and the check of a tar
-// while it streams into the volume store.
+// Package volumes publishes, lists and removes shared volumes: the steps
+// between a publish request, the shared_volumes rows and the volume store.
 package volumes
 
 import "regexp"
