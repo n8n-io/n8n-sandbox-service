@@ -396,6 +396,12 @@ func TestLoadCodeSandboxes(t *testing.T) {
 		t.Fatalf("code limits = %d, %d; want 50, 4096", cfg.CodeCPUPercent, cfg.CodeMaxMemoryMB)
 	}
 
+	t.Setenv("SANDBOX_RUNNER_CODE_MAX_MEMORY_MB", "64")
+	cfg, err = Load()
+	if err != nil || cfg.CodeMaxMemoryMB != 64 {
+		t.Fatalf("Load() with SANDBOX_RUNNER_CODE_MAX_MEMORY_MB at the code sandbox minimum = %v; want 64 accepted", err)
+	}
+
 	t.Setenv("SANDBOX_RUNNER_CODE_MAX_MEMORY_MB", "63")
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() accepted SANDBOX_RUNNER_CODE_MAX_MEMORY_MB below the code sandbox minimum")

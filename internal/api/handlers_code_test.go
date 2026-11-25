@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -246,7 +247,6 @@ func TestCreateCodeSandboxRunnerRefusals(t *testing.T) {
 		{name: "code sandboxes disabled", err: status.Error(codes.FailedPrecondition, "runner does not support code sandboxes"), wantCode: http.StatusBadGateway},
 		{name: "memory over the runner maximum", err: status.Error(codes.InvalidArgument, "memory_mb over the maximum"), wantCode: http.StatusBadRequest},
 		{name: "code image not ready", err: status.Error(codes.Unavailable, "code image not yet available"), wantCode: http.StatusServiceUnavailable},
-		{name: "other runner error", err: status.Error(codes.Internal, "docker container create --name sandbox-x registry:5000/code-image"), wantCode: http.StatusInternalServerError},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := &fakeSandboxControl{createErr: tc.err}
@@ -257,15 +257,41 @@ func TestCreateCodeSandboxRunnerRefusals(t *testing.T) {
 			if rr.Code != tc.wantCode {
 				t.Fatalf("create: got %d body=%s, want %d", rr.Code, rr.Body.String(), tc.wantCode)
 			}
-			// The runner's message can hold runner details.
-			if strings.Contains(rr.Body.String(), "docker") || strings.Contains(rr.Body.String(), "registry") {
-				t.Fatalf("create body %s has the runner's message", rr.Body.String())
-			}
 			if _, deleted := fake.calls(); len(deleted) != 0 {
 				t.Fatalf("runner deletes = %v, want none", deleted)
 			}
 			if stored, _ := s.List(store.SandboxFilter{Kinds: []store.Kind{store.KindCode}, TenantID: tenant.Tenant.ID}); len(stored) != 0 {
 				t.Fatalf("stored %d sandboxes, want none", len(stored))
+			}
+		})
+	}
+}
+
+// Errors other than the placement sentinels and the runner refusals can hold
+// runner details, such as the Docker command line or a dial target, so the
+// client gets a generic message.
+func TestCodePlacementErrorHidesRunnerDetails(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want error
+	}{
+		{name: "runner error", err: fmt.Errorf("failed to create container: %w", status.Error(codes.Internal, "docker container create registry:5000/code-image"))},
+		{name: "dial error", err: fmt.Errorf("failed to create container: %w", errors.New("runnerctl dial: tls: open /etc/runner-tls/ca.crt"))},
+		{name: "no runners", err: registry.ErrNoRunners, want: registry.ErrNoRunners},
+		{name: "runners at capacity", err: errRunnersAtCapacity, want: errRunnersAtCapacity},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := codePlacementError(tc.err)
+			if tc.want != nil {
+				if !errors.Is(got, tc.want) {
+					t.Fatalf("codePlacementError() = %v, want %v", got, tc.want)
+				}
+				return
+			}
+			var cerr *codeCreateError
+			if !errors.As(got, &cerr) || cerr.code != http.StatusInternalServerError || cerr.msg != "failed to create sandbox" {
+				t.Fatalf("codePlacementError() = %#v, want the generic 500", got)
 			}
 		})
 	}

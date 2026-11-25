@@ -240,11 +240,12 @@ func handleCreateCodeSandbox(s codeSandboxStore, tenants tenantGetter, reg regis
 	}
 }
 
-// codePlacementError gives a runner's create error its response. Other
-// runner errors get a generic message: they can hold runner details, such as
-// the Docker command line. placeSandbox has logged them.
+// codePlacementError gives a create error from placeSandbox its response.
+// All errors but the placement sentinels and the runner refusals get a
+// generic message: they can hold runner details, such as the Docker command
+// line or a dial target. placeSandbox has logged them.
 func codePlacementError(err error) error {
-	if _, isRunnerError := status.FromError(err); !isRunnerError {
+	if errors.Is(err, registry.ErrNoRunners) || errors.Is(err, errRunnersAtCapacity) {
 		return err
 	}
 	switch status.Code(err) {

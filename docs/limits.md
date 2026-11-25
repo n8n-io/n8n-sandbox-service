@@ -66,7 +66,7 @@ Output arrives in pieces of at most 64 KiB; there is no limit on total output.
 | --- | --- | --- | --- |
 | File upload, per request | 10 MiB | `SANDBOX_API_MAX_FILE_BYTES` and `SANDBOX_RUNNER_MAX_FILE_BYTES`; the lower wins | `400` `request body too large`. Appending can grow a file past it |
 | Code sandbox task request | 64 MiB of input files, plus 1 MiB for the `spec` and the multipart headers | `SANDBOX_API_MAX_TASK_INPUT_BYTES`, `SANDBOX_RUNNER_MAX_TASK_INPUT_BYTES` and `CODE_DAEMON_MAX_INPUT_BYTES`; the lowest wins | `400` `request body too large` |
-| Code sandbox memory | the `memoryMb` of the create, from 64 MB to 512 MB | `SANDBOX_RUNNER_CODE_MAX_MEMORY_MB` | `400` on create |
+| Code sandbox memory | the `memoryMb` of the create: at least 64 MB, and at most 512 MB | minimum fixed; maximum `SANDBOX_RUNNER_CODE_MAX_MEMORY_MB` | `400` on create |
 | Code sandbox CPU | one core | `SANDBOX_RUNNER_CODE_CPU_PERCENT` | the sandbox is throttled |
 | File download | no limit | | |
 | File listing, copy, move | no limit | | |

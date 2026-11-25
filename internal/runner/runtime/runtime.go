@@ -84,7 +84,8 @@ type CreateOptions struct {
 
 // ParseCreateOptions decodes the wire form of CreateOptions. Empty means the
 // defaults; otherwise it must be an object with a valid Egress and valid
-// volumes.
+// volumes. Code options need at least MinCodeMemoryMB, egress none and no
+// volumes. The runner's maximum memory is checked by the gRPC layer.
 func ParseCreateOptions(s string) (*CreateOptions, error) {
 	opts := &CreateOptions{}
 	if strings.TrimSpace(s) != "" {

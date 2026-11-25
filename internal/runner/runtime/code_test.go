@@ -14,6 +14,11 @@ func TestParseCreateOptionsCode(t *testing.T) {
 		t.Fatalf("code = %+v, want memory_mb 1024", opts.CodeOpts)
 	}
 
+	opts, err = ParseCreateOptions(`{"egress":"none","code_options":{"memory_mb":64}}`)
+	if err != nil || opts.CodeOpts.MemoryMB != MinCodeMemoryMB {
+		t.Fatalf("ParseCreateOptions(minimum memory) = %+v, %v; want memory_mb %d", opts, err, MinCodeMemoryMB)
+	}
+
 	opts, err = ParseCreateOptions(`{"egress":"none"}`)
 	if err != nil || opts.CodeOpts != nil {
 		t.Fatalf("ParseCreateOptions(no code) = %+v, %v; want no code", opts, err)

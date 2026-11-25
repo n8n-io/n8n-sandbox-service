@@ -19,10 +19,8 @@ const send = (message) => control.write(`${JSON.stringify(message)}\n`);
 
 async function runTask(taskId, dir) {
 	const lines = [];
-	const taskConsole = {
-		log: (...args) => lines.push(args.map(String).join(" ")),
-	};
-	taskConsole.error = taskConsole.log;
+	const log = (...args) => lines.push(args.map(String).join(" "));
+	const taskConsole = { log, info: log, warn: log, error: log, debug: log };
 	const writeResult = (value) =>
 		fs.writeFileSync(path.join(dir, "out", "result.json"), JSON.stringify({ result: value, console: lines }));
 	try {
@@ -31,7 +29,11 @@ async function runTask(taskId, dir) {
 		writeResult(result);
 		send({ type: "done", taskId });
 	} catch (error) {
-		writeResult(null);
+		try {
+			writeResult(null);
+		} catch {
+			// The error message below still ends the task.
+		}
 		const message = String(error && error.message ? error.message : error).slice(0, maxErrorMessage);
 		send({ type: "error", taskId, error: { message } });
 	}
