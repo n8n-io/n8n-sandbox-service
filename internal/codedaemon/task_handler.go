@@ -3,6 +3,7 @@
 package codedaemon
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -43,51 +44,54 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 	}
 	defer root.Close()
 	stream := newTaskStream(w)
-	x, err := d.dispatch(r.Context(), spec.TaskID, dir)
+	x, err := d.dispatch(r.Context(), spec.TaskID, dir, d.taskTimeout(spec.TimeoutMs))
 	if err != nil {
 		slog.Warn("dispatch code task", "task_id", spec.TaskID, "error", err)
 		_ = stream.emit(newErrorEvent(spec.TaskID, "crashed", "runtime unavailable"))
 		return
 	}
 	defer x.close()
+	// Start monitoring before the first HTTP write. The buffered result lets the
+	// watcher finish even when the response is blocked.
+	finished := make(chan executionOutcome, 1)
+	go func() { finished <- x.watch() }()
 	if stream.emit(newAcceptedEvent(spec.TaskID)) != nil {
-		x.waitDetached()
+		<-finished
 		return
 	}
-	if event, ok := d.waitForTask(r, spec, stream, x, root); ok {
-		_ = stream.emit(event)
+	outcome, ok := waitForTask(r.Context(), spec, stream, finished)
+	if !ok {
+		return
 	}
+	if outcome.code != "" {
+		_ = stream.emit(newErrorEvent(spec.TaskID, outcome.code, outcome.message))
+		return
+	}
+	_ = stream.emit(d.resultEvent(spec, root, outcome.result))
 }
 
-// waitForTask sends heartbeats while awaiting a terminal event. If a heartbeat
-// write fails, it waits for execution to end and returns no event to write.
-func (d *Daemon) waitForTask(r *http.Request, spec taskSpec, stream taskStream, x *execution, root *os.Root) (taskEvent, bool) {
+// waitForTask sends heartbeats while awaiting the execution outcome. If a
+// heartbeat write fails, it waits for execution to end and returns no outcome.
+func waitForTask(ctx context.Context, spec taskSpec, stream taskStream, finished <-chan executionOutcome) (executionOutcome, bool) {
 	heartbeat := time.NewTicker(heartbeatInterval)
 	defer heartbeat.Stop()
 	for {
 		select {
-		case msg, ok := <-x.result:
-			return d.terminalEvent(spec, root, msg, ok), true
+		case outcome := <-finished:
+			return outcome, true
 		case <-heartbeat.C:
 			if stream.emit(newHeartbeatEvent(spec.TaskID)) == nil {
 				continue
 			}
-			x.waitDetached()
-			return nil, false
-		case <-r.Context().Done():
+			// Until the runtime supports per-task cancellation, retain the lane
+			// and files until the task ends or its deadline stops the process.
+			<-finished
+			return executionOutcome{}, false
+		case <-ctx.Done():
 			// Daemon shutdown also cancels the request while the stream is
 			// still open. Wait for the task so the stream gets a terminal event.
 			// After a client disconnect, writing that event fails harmlessly.
-			msg, ok := <-x.result
-			return d.terminalEvent(spec, root, msg, ok), true
+			return <-finished, true
 		}
 	}
-}
-
-// terminalEvent maps a receive from execution.result to the last stream event.
-func (d *Daemon) terminalEvent(spec taskSpec, root *os.Root, msg workerMessage, ok bool) taskEvent {
-	if !ok {
-		return newErrorEvent(spec.TaskID, "crashed", "runtime exited")
-	}
-	return d.resultEvent(spec, root, msg)
 }

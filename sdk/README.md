@@ -87,7 +87,7 @@ console.log(code.id, code.created);
 
 ```ts
 const events = await client.runCodeTask(code.id, {
-  spec: { taskId: 't_1' },
+  spec: { taskId: 't_1', timeoutMs: 30_000 },
   taskInput: JSON.stringify(task),
   inputs: [{ path: 'bin/0', content: fs.createReadStream(file) }],
 });
@@ -96,6 +96,8 @@ for await (const event of events) {
   if (event.type === 'error') console.log(event.code, event.message);
 }
 ```
+
+`spec.timeoutMs` is required and must be positive. The sandbox lowers a larger value to its maximum, which is 1 minute by default. A task that runs too long ends with an `error` event with code `timeout`.
 
 `runCodeTask` is never retried, also not on a `429`, because a stream input cannot be sent twice. A refused task fails with a `SandboxServiceError` before any event. A refused task, or a task with invalid options, destroys its stream inputs. Open them again before you retry it. Ending the iteration early, or calling `return()` or `throw()` on the events, closes the event stream and stops the upload. Aborting `signal` does the same, and the next read fails with a `SandboxServiceError` with `status` `0`. A line that is not a JSON object with a known `type` fails the iteration with an `InvalidStreamEventError`.
 

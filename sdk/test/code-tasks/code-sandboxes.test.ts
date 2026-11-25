@@ -193,7 +193,7 @@ describe("runCodeTask", () => {
     input.write("first");
 
     const stream = await runCodeTask(http, id, {
-      spec: { taskId: "t_1" },
+      spec: { taskId: "t_1", timeoutMs: 1000 },
       taskInput: "{}",
       inputs: [{ path: "bin/0", content: input }],
     });
@@ -208,9 +208,10 @@ describe("runCodeTask", () => {
       res.end(JSON.stringify({ error: "sandbox is full", code: status, reason: "sandbox_full" }));
     });
 
-    const err = await runCodeTask(http, id, { spec: { taskId: "t_1" }, taskInput: "{}" }).catch(
-      (e) => e,
-    );
+    const err = await runCodeTask(http, id, {
+      spec: { taskId: "t_1", timeoutMs: 1000 },
+      taskInput: "{}",
+    }).catch((e) => e);
 
     expect(err).toBeInstanceOf(SandboxServiceError);
     expect(err).toMatchObject({ status, reason: "sandbox_full" });
@@ -229,7 +230,7 @@ describe("runCodeTask", () => {
 
     await expect(
       runCodeTask(http, id, {
-        spec: { taskId: "t_1" },
+        spec: { taskId: "t_1", timeoutMs: 1000 },
         taskInput: "{}",
         inputs: [{ path: "bin/0", content: input }],
       }),
@@ -246,7 +247,10 @@ describe("runCodeTask", () => {
       res.write(JSON.stringify({ type: "accepted" }) + "\n");
     });
 
-    const stream = await runCodeTask(http, id, { spec: { taskId: "t_1" }, taskInput: "{}" });
+    const stream = await runCodeTask(http, id, {
+      spec: { taskId: "t_1", timeoutMs: 1000 },
+      taskInput: "{}",
+    });
     for await (const event of stream) {
       expect(event).toEqual({ type: "accepted" });
       break;
@@ -264,7 +268,10 @@ describe("runCodeTask", () => {
       res.write(JSON.stringify({ type: "accepted" }) + "\n");
     });
 
-    const stream = await runCodeTask(http, id, { spec: { taskId: "t_1" }, taskInput: "{}" });
+    const stream = await runCodeTask(http, id, {
+      spec: { taskId: "t_1", timeoutMs: 1000 },
+      taskInput: "{}",
+    });
     await expect(stream.return()).resolves.toEqual({ done: true, value: undefined });
 
     await responseClosed;
@@ -281,7 +288,7 @@ describe("runCodeTask", () => {
     const controller = new AbortController();
 
     const stream = await runCodeTask(http, id, {
-      spec: { taskId: "t_1" },
+      spec: { taskId: "t_1", timeoutMs: 1000 },
       taskInput: "{}",
       signal: controller.signal,
     });
@@ -300,7 +307,7 @@ describe("runCodeTask", () => {
     const controller = new AbortController();
 
     const stream = await runCodeTask(http, id, {
-      spec: { taskId: "t_1" },
+      spec: { taskId: "t_1", timeoutMs: 1000 },
       taskInput: "{}",
       signal: controller.signal,
     });
@@ -328,7 +335,7 @@ describe("runCodeTask", () => {
     input.write("x");
 
     const stream = await runCodeTask(http, id, {
-      spec: { taskId: "t_1" },
+      spec: { taskId: "t_1", timeoutMs: 1000 },
       taskInput: "{}",
       inputs: [{ path: "bin/0", content: input }],
       signal: controller.signal,
@@ -348,7 +355,10 @@ describe("runCodeTask", () => {
       res.write(JSON.stringify({ type: "accepted" }) + "\n");
     });
 
-    const stream = await runCodeTask(http, id, { spec: { taskId: "t_1" }, taskInput: "{}" });
+    const stream = await runCodeTask(http, id, {
+      spec: { taskId: "t_1", timeoutMs: 1000 },
+      taskInput: "{}",
+    });
     await stream.next();
     const pending = stream.next();
 
@@ -366,7 +376,10 @@ describe("runCodeTask", () => {
       res.write(JSON.stringify({ type: "accepted" }) + "\n");
     });
 
-    const stream = await runCodeTask(http, id, { spec: { taskId: "t_1" }, taskInput: "{}" });
+    const stream = await runCodeTask(http, id, {
+      spec: { taskId: "t_1", timeoutMs: 1000 },
+      taskInput: "{}",
+    });
 
     await expect(stream.throw(new Error("stop"))).rejects.toThrow("stop");
     await responseClosed;
@@ -378,7 +391,10 @@ describe("runCodeTask", () => {
       res.write(JSON.stringify({ type: "accepted" }) + "\n", () => res.socket?.destroy());
     });
 
-    const stream = await runCodeTask(http, id, { spec: { taskId: "t_1" }, taskInput: "{}" });
+    const stream = await runCodeTask(http, id, {
+      spec: { taskId: "t_1", timeoutMs: 1000 },
+      taskInput: "{}",
+    });
 
     await expect(stream.next()).resolves.toEqual({ done: false, value: { type: "accepted" } });
     await expect(stream.next()).rejects.toThrow();
@@ -396,7 +412,7 @@ describe("runCodeTask", () => {
     const second = new PassThrough();
 
     const task = runCodeTask(http, id, {
-      spec: { taskId: "t_1" },
+      spec: { taskId: "t_1", timeoutMs: 1000 },
       taskInput: "{}",
       inputs: [
         { path: "bin/0", content: first },
@@ -417,7 +433,10 @@ describe("runCodeTask", () => {
         res.end(line + "\n");
       });
 
-      const stream = await runCodeTask(http, id, { spec: { taskId: "t_1" }, taskInput: "{}" });
+      const stream = await runCodeTask(http, id, {
+        spec: { taskId: "t_1", timeoutMs: 1000 },
+        taskInput: "{}",
+      });
 
       await expect(collect(stream)).rejects.toBeInstanceOf(InvalidStreamEventError);
     },
@@ -427,7 +446,7 @@ describe("runCodeTask", () => {
     const http = await client((res) => events(res, []));
 
     const stream = await runCodeTask(http, id, {
-      spec: { taskId: "t_1" },
+      spec: { taskId: "t_1", timeoutMs: 1000 },
       taskInput: "{}",
       inputs: [
         { path: "bin/0", content: "x", contentType: 'image/svg+xml; charset="utf-8"' },
@@ -452,7 +471,7 @@ describe("runCodeTask", () => {
 
     await expect(
       runCodeTask(http, id, {
-        spec: { taskId: "t_1" },
+        spec: { taskId: "t_1", timeoutMs: 1000 },
         taskInput,
         inputs: [
           { path: "bin/0", content: input },
@@ -473,7 +492,7 @@ describe("runCodeTask", () => {
 
     await expect(
       runCodeTask(http, id, {
-        spec: { taskId: "t_1", limit: 1n },
+        spec: { taskId: "t_1", timeoutMs: 1000, limit: 1n },
         taskInput,
         inputs: [{ path: "bin/0", content: input }],
       }),
@@ -489,7 +508,7 @@ describe("runCodeTask", () => {
 
     await expect(
       runCodeTask(http, id, {
-        spec: { taskId: "t_1" },
+        spec: { taskId: "t_1", timeoutMs: 1000 },
         taskInput: "{}",
         inputs: [
           { path: "bin/0", content: input },

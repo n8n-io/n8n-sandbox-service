@@ -48,6 +48,12 @@ export interface CodeTaskSpec {
    */
   taskId: string;
   /**
+   * Execution timeout of the task in milliseconds. Must be positive. The
+   * sandbox lowers a larger value to its own maximum (default 1 minute). Upload
+   * and runtime startup do not count toward it.
+   */
+  timeoutMs: number;
+  /**
    * Maximum size in bytes of the `result.json` that the events include as
    * `result`. Default and maximum 1 MiB.
    */
@@ -113,8 +119,10 @@ export interface CodeTaskDoneEvent {
  * - `user_error`: the task code failed.
  * - `invalid`: the outputs or `result.json` are not valid, or are too large.
  * - `crashed`: the runtime is not available or stopped.
+ * - `timeout`: the task ran longer than its timeout. This stops the runtime of
+ *   the sandbox, so later tasks in it fail.
  */
-export type CodeTaskErrorCode = "user_error" | "invalid" | "crashed";
+export type CodeTaskErrorCode = "user_error" | "invalid" | "crashed" | "timeout";
 
 /** Terminal event of a task that failed. */
 export interface CodeTaskErrorEvent {

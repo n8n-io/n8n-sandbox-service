@@ -4,6 +4,7 @@ package codedaemon
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -15,9 +16,16 @@ const maxSpecBytes = 1 << 10 // 1 KiB
 
 var taskIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,128}$`)
 
+var (
+	errSpecTooLarge   = errors.New("task spec too large")
+	errInvalidTaskID  = errors.New("invalid task id")
+	errInvalidTimeout = errors.New("timeout must be positive")
+)
+
 type taskSpec struct {
 	TaskID               string `json:"taskId"`
 	InlineResultMaxBytes int64  `json:"inlineResultMaxBytes"` // Requested inline limit; defaults to the daemon cap if unset or out of range.
+	TimeoutMs            int64  `json:"timeoutMs"`            // Required execution limit; the service cap applies when it is larger.
 }
 
 // admit validates the first multipart part and tries to reserve a lane without
@@ -41,10 +49,8 @@ func (d *Daemon) admit(w http.ResponseWriter, r *http.Request) (taskSpec, *multi
 		rejectAdmission(w, r, "first part must be spec", http.StatusBadRequest)
 		return taskSpec{}, nil
 	}
-	var spec taskSpec
-	// Read one extra byte to distinguish an oversized spec from one at the limit.
-	data, err := io.ReadAll(io.LimitReader(part, maxSpecBytes+1))
-	if err != nil || len(data) > maxSpecBytes || json.Unmarshal(data, &spec) != nil || !taskIDPattern.MatchString(spec.TaskID) {
+	spec, err := readTaskSpec(part)
+	if err != nil {
 		rejectAdmission(w, r, "invalid task spec", http.StatusBadRequest)
 		return taskSpec{}, nil
 	}
@@ -65,6 +71,37 @@ func (d *Daemon) admit(w http.ResponseWriter, r *http.Request) (taskSpec, *multi
 		writeTaskRejection(w, http.StatusTooManyRequests, "sandbox_full", "no free lane")
 		return taskSpec{}, nil
 	}
+}
+
+// readTaskSpec reads and decodes the spec part, then validates it.
+func readTaskSpec(part io.Reader) (taskSpec, error) {
+	// Read one extra byte to distinguish an oversized spec from one at the limit.
+	data, err := io.ReadAll(io.LimitReader(part, maxSpecBytes+1))
+	if err != nil {
+		return taskSpec{}, err
+	}
+	if len(data) > maxSpecBytes {
+		return taskSpec{}, errSpecTooLarge
+	}
+	var spec taskSpec
+	if err := json.Unmarshal(data, &spec); err != nil {
+		return taskSpec{}, err
+	}
+	if err := validateTaskSpec(spec); err != nil {
+		return taskSpec{}, err
+	}
+	return spec, nil
+}
+
+// validateTaskSpec checks the fields of a decoded spec.
+func validateTaskSpec(spec taskSpec) error {
+	if !taskIDPattern.MatchString(spec.TaskID) {
+		return errInvalidTaskID
+	}
+	if spec.TimeoutMs <= 0 {
+		return errInvalidTimeout
+	}
+	return nil
 }
 
 // rejectAdmission writes the error without waiting for an unfinished HTTP/1 upload.

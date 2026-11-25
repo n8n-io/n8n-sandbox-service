@@ -9,7 +9,7 @@ import (
 func TestUserErrorInlinesResult(t *testing.T) {
 	d := testDaemon(t, Config{})
 	w := httptest.NewRecorder()
-	d.Handler().ServeHTTP(w, taskRequest(t, `{"taskId":"user-error"}`, nil))
+	d.Handler().ServeHTTP(w, taskRequest(t, `{"taskId":"user-error","timeoutMs":60000}`, nil))
 	dec := json.NewDecoder(w.Body)
 	var accepted, terminal decodedEvent
 	if err := dec.Decode(&accepted); err != nil || accepted.Type != "accepted" {
@@ -18,7 +18,7 @@ func TestUserErrorInlinesResult(t *testing.T) {
 	if err := dec.Decode(&terminal); err != nil || terminal.Type != "error" || terminal.Code != "user_error" {
 		t.Fatalf("terminal = %+v, %v", terminal, err)
 	}
-	if string(terminal.UserError) != `{"message":"boom"}` || string(terminal.Result) != `{"console":["before throw"]}` {
+	if string(terminal.UserError) != `{"message":"boom","timeoutMs":60000}` || string(terminal.Result) != `{"console":["before throw"]}` {
 		t.Fatalf("user error = %s, result = %s", terminal.UserError, terminal.Result)
 	}
 }
@@ -26,7 +26,7 @@ func TestUserErrorInlinesResult(t *testing.T) {
 func TestDoneWithoutOutputsHasEmptyManifest(t *testing.T) {
 	d := testDaemon(t, Config{})
 	w := httptest.NewRecorder()
-	d.Handler().ServeHTTP(w, taskRequest(t, `{"taskId":"no-outputs"}`, nil))
+	d.Handler().ServeHTTP(w, taskRequest(t, `{"taskId":"no-outputs","timeoutMs":60000}`, nil))
 	dec := json.NewDecoder(w.Body)
 	var accepted decodedEvent
 	if err := dec.Decode(&accepted); err != nil || accepted.Type != "accepted" {

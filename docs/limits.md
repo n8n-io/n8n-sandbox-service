@@ -53,6 +53,13 @@ Exec, file and code sandbox task requests the sandbox served count as use, `GET 
 
 Output arrives in pieces of at most 64 KiB; there is no limit on total output.
 
+## Code sandbox tasks
+
+| Limit | Default | Set by | When reached |
+| --- | --- | --- | --- |
+| Run time of a task | required, no default | `spec.timeoutMs` | the runtime is stopped; the stream ends with `error` code `timeout`. Later tasks in the sandbox fail |
+| Largest run time | 1 min, at most 15 min | `CODE_DAEMON_MAX_TASK_TIMEOUT` | a larger `spec.timeoutMs` is lowered to it |
+
 ## Sizes
 
 | Limit | Default | Set by | When reached |
