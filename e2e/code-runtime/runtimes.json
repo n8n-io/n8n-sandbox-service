@@ -1,0 +1,3 @@
+{
+  "n8n-js": { "command": ["node", "/opt/code-runtime/runtime.cjs"] }
+}

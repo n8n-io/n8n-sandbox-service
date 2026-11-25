@@ -182,7 +182,7 @@ func TestDockerVolumeArgs(t *testing.T) {
 		t.Errorf("Docker would read %q, %v; want %q", fields, err, wantFields)
 	}
 
-	createArgs := dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerBridgeNetwork, nil, false, nil, true, mounts[:1])
+	createArgs := dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerBridgeNetwork, nil, false, sandboxKindGeneric, nil, true, mounts[:1])
 	if tail := createArgs[len(createArgs)-5:]; !reflect.DeepEqual(tail, append(want[:4:4], "sandbox-image")) {
 		t.Errorf("create args end in %q, want the volume args before the image", tail)
 	}

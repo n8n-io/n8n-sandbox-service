@@ -439,6 +439,9 @@ func (r *Runtime) CreateSandbox(ctx context.Context, sandboxID string, opts *run
 	if len(sandboxID) < 12 {
 		return nil, fmt.Errorf("sandbox ID must be at least 12 characters, got %d", len(sandboxID))
 	}
+	if opts != nil && opts.CodeOpts != nil {
+		return nil, fmt.Errorf("firecracker: %w", runnerruntime.ErrCodeSandboxesUnsupported)
+	}
 
 	ctx, cancel := withLifecycleBudget(ctx, createBudget)
 	defer cancel()

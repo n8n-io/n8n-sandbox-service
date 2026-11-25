@@ -13,7 +13,7 @@ SHELL_FILES := $(shell git ls-files '*.sh')
 # empty to check all code: make lint LINT_BASE=
 LINT_BASE ?= origin/main
 
-.PHONY: all daemon runner runner-docker runner-firecracker api test test-integration proto-volumestore clean docker docker-local docker-arm64 docker-amd64 docker-api-arm64 docker-api-amd64 docker-runner-arm64 docker-runner-amd64 docker-firecracker-runner-amd64 docker-sandbox-arm64 docker-sandbox-amd64 fmt fmt-check vet lint shell-fmt shell-fmt-check shell-lint check-shell-files playground up down smoke sdk sdk-install sdk-build sdk-typecheck sdk-test sdk-fmt sdk-fmt-check sdk-lint
+.PHONY: all daemon runner runner-docker runner-firecracker api test test-integration proto-volumestore clean docker docker-local docker-arm64 docker-amd64 docker-api-arm64 docker-api-amd64 docker-runner-arm64 docker-runner-amd64 docker-firecracker-runner-amd64 docker-sandbox-arm64 docker-sandbox-amd64 docker-code-sandbox-e2e-arm64 docker-code-sandbox-e2e-amd64 fmt fmt-check vet lint shell-fmt shell-fmt-check shell-lint check-shell-files playground up down smoke sdk sdk-install sdk-build sdk-typecheck sdk-test sdk-fmt sdk-fmt-check sdk-lint
 
 all: daemon runner api
 
@@ -146,6 +146,14 @@ docker-sandbox-arm64:
 ## docker-sandbox-amd64: Build the sandbox image for linux/amd64.
 docker-sandbox-amd64:
 	docker buildx build -f Dockerfile.sandbox --platform linux/amd64 -t n8n-sandbox:latest-amd64 --load .
+
+## docker-code-sandbox-e2e-arm64: Build the e2e-only code sandbox image for linux/arm64. It is not published.
+docker-code-sandbox-e2e-arm64:
+	docker buildx build -f e2e/code-runtime/Dockerfile --platform linux/arm64 -t n8n-code-sandbox-e2e:latest-arm64 --load .
+
+## docker-code-sandbox-e2e-amd64: Build the e2e-only code sandbox image for linux/amd64. It is not published.
+docker-code-sandbox-e2e-amd64:
+	docker buildx build -f e2e/code-runtime/Dockerfile --platform linux/amd64 -t n8n-code-sandbox-e2e:latest-amd64 --load .
 
 ## sdk: Install, build, typecheck, and test the SDK.
 sdk: sdk-install sdk-build sdk-typecheck sdk-test

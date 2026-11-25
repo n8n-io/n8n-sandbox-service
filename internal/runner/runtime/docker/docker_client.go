@@ -32,6 +32,9 @@ const (
 	// containerLabelVolumes marks a container with volumes bound in.
 	containerLabelVolumes    = "sandbox-service.volumes"
 	containerLabelVolumesVal = "true"
+	// containerLabelKind holds the sandboxKind, so a wake knows how to check
+	// that the daemon is ready.
+	containerLabelKind = "sandbox-service.kind"
 
 	// managedLabelFilter selects the containers this runner owns, and is what keeps
 	// every lookup and the death watcher agreeing on that set.
@@ -98,7 +101,7 @@ func sandboxAttachment(inspect *containerInspect) (network, ip string) {
 
 type dockerBackend interface {
 	ping(ctx context.Context) error
-	createContainer(ctx context.Context, sandboxID, containerName, image, network string, limits *ResourceLimits, enableCgroups bool, mounts []volumeMount) (string, error)
+	createContainer(ctx context.Context, sandboxID, containerName, image, network string, limits *ResourceLimits, enableCgroups bool, kind sandboxKind, mounts []volumeMount) (string, error)
 	startContainer(ctx context.Context, containerID string) error
 	stopContainer(ctx context.Context, containerID string) error
 	removeContainer(ctx context.Context, containerID string) error
@@ -179,8 +182,8 @@ func (dc *dockerClient) ping(ctx context.Context) error {
 	return err
 }
 
-func (dc *dockerClient) createContainer(ctx context.Context, sandboxID, containerName, image, network string, limits *ResourceLimits, enableCgroups bool, mounts []volumeMount) (string, error) {
-	args := dockerContainerCreateArgs(sandboxID, containerName, image, network, limits, enableCgroups, dc.dnsServers, dc.onlyIPv4, mounts)
+func (dc *dockerClient) createContainer(ctx context.Context, sandboxID, containerName, image, network string, limits *ResourceLimits, enableCgroups bool, kind sandboxKind, mounts []volumeMount) (string, error) {
+	args := dockerContainerCreateArgs(sandboxID, containerName, image, network, limits, enableCgroups, kind, dc.dnsServers, dc.onlyIPv4, mounts)
 
 	out, err := dc.run(ctx, args...)
 	if err != nil {
@@ -189,7 +192,7 @@ func (dc *dockerClient) createContainer(ctx context.Context, sandboxID, containe
 	return strings.TrimSpace(out), nil
 }
 
-func dockerContainerCreateArgs(sandboxID, containerName, image, network string, limits *ResourceLimits, enableCgroups bool, dnsServers []string, onlyIPv4 bool, mounts []volumeMount) []string {
+func dockerContainerCreateArgs(sandboxID, containerName, image, network string, limits *ResourceLimits, enableCgroups bool, kind sandboxKind, dnsServers []string, onlyIPv4 bool, mounts []volumeMount) []string {
 	args := []string{
 		"container", "create",
 		"--name", containerName,
@@ -201,6 +204,7 @@ func dockerContainerCreateArgs(sandboxID, containerName, image, network string, 
 		"--network", network,
 		"--label", containerLabelManaged + "=" + containerLabelManagedVal,
 		"--label", containerLabelSandboxID + "=" + sandboxID,
+		"--label", containerLabelKind + "=" + string(kind),
 		"--user", "1000:1000",
 		// The daemon process only. internal/daemon/exec.go sets the environment
 		// user commands see.

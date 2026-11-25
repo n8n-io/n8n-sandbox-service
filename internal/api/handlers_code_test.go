@@ -15,6 +15,8 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const codeCreateBody = `{"name":"scope-1","runtime":"n8n-js","runtimeVersion":"2.42.0","maxConcurrency":2,"memoryMb":1024,"idleTimeoutMs":30000,"maxAgeMs":60000}`
@@ -58,8 +60,8 @@ func TestCreateCodeSandboxIsIdempotentOnName(t *testing.T) {
 		rec.IdleTimeoutMs != 30000 || rec.MaxAgeMs != 60000 || rec.DrainingSince != 0 {
 		t.Fatalf("stored record = %+v", rec)
 	}
-	if fake.createOptionsJSON[0] != `{"egress":"none"}` {
-		t.Fatalf("create options = %q, want egress none", fake.createOptionsJSON[0])
+	if want := `{"egress":"none","code_options":{"memory_mb":1024}}`; fake.createOptionsJSON[0] != want {
+		t.Fatalf("create options = %q, want %q", fake.createOptionsJSON[0], want)
 	}
 
 	rr = postCreateCodeSandbox(t, router, tenant.Key.APIKey, codeCreateBody)
@@ -209,6 +211,61 @@ func TestCreateCodeSandboxRunnerDidNotApplyEgress(t *testing.T) {
 	}
 	if stored, _ := s.List(store.SandboxFilter{Kinds: []store.Kind{store.KindCode}, TenantID: tenant.Tenant.ID}); len(stored) != 0 {
 		t.Fatalf("stored %d sandboxes, want none", len(stored))
+	}
+}
+
+// A runner from before code sandboxes ignores the code options and starts a
+// general sandbox. Its echo has no code, so the sandbox is rolled back.
+func TestCreateCodeSandboxRunnerDidNotApplyCode(t *testing.T) {
+	fake := &fakeSandboxControl{applied: func(string) string { return `{"egress":"none"}` }}
+	router, s, _ := newIdleTestGateway(t, "admin-key", fake)
+	tenant := mintTenantKey(t, router, `{"name":"code"}`)
+
+	rr := postCreateCodeSandbox(t, router, tenant.Key.APIKey, codeCreateBody)
+	if rr.Code != http.StatusBadGateway || !strings.Contains(rr.Body.String(), "does not support code sandboxes") {
+		t.Fatalf("create: got %d body=%s, want %d", rr.Code, rr.Body.String(), http.StatusBadGateway)
+	}
+	if _, deleted := fake.calls(); len(deleted) != 1 {
+		t.Fatalf("runner deletes = %v, want the rolled back create", deleted)
+	}
+	if stored, _ := s.List(store.SandboxFilter{Kinds: []store.Kind{store.KindCode}, TenantID: tenant.Tenant.ID}); len(stored) != 0 {
+		t.Fatalf("stored %d sandboxes, want none", len(stored))
+	}
+}
+
+// A runner refuses a code sandbox before it creates anything, so nothing is
+// rolled back or stored.
+func TestCreateCodeSandboxRunnerRefusals(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		err      error
+		wantCode int
+	}{
+		{name: "code sandboxes disabled", err: status.Error(codes.FailedPrecondition, "runner does not support code sandboxes"), wantCode: http.StatusBadGateway},
+		{name: "memory over the runner maximum", err: status.Error(codes.InvalidArgument, "memory_mb over the maximum"), wantCode: http.StatusBadRequest},
+		{name: "code image not ready", err: status.Error(codes.Unavailable, "code image not yet available"), wantCode: http.StatusServiceUnavailable},
+		{name: "other runner error", err: status.Error(codes.Internal, "docker container create --name sandbox-x registry:5000/code-image"), wantCode: http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeSandboxControl{createErr: tc.err}
+			router, s, _ := newIdleTestGateway(t, "admin-key", fake)
+			tenant := mintTenantKey(t, router, `{"name":"code"}`)
+
+			rr := postCreateCodeSandbox(t, router, tenant.Key.APIKey, codeCreateBody)
+			if rr.Code != tc.wantCode {
+				t.Fatalf("create: got %d body=%s, want %d", rr.Code, rr.Body.String(), tc.wantCode)
+			}
+			// The runner's message can hold runner details.
+			if strings.Contains(rr.Body.String(), "docker") || strings.Contains(rr.Body.String(), "registry") {
+				t.Fatalf("create body %s has the runner's message", rr.Body.String())
+			}
+			if _, deleted := fake.calls(); len(deleted) != 0 {
+				t.Fatalf("runner deletes = %v, want none", deleted)
+			}
+			if stored, _ := s.List(store.SandboxFilter{Kinds: []store.Kind{store.KindCode}, TenantID: tenant.Tenant.ID}); len(stored) != 0 {
+				t.Fatalf("stored %d sandboxes, want none", len(stored))
+			}
+		})
 	}
 }
 

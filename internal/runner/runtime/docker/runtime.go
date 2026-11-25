@@ -76,10 +76,13 @@ type Runtime struct {
 	applyPolicy     func(bridgeIface, containerID, sourceIP, gatewayIP string, daemonPort int, blockEgress bool) error
 	teardownRules   func(containerID string) error
 	waitForDaemon   func(ctx context.Context, baseURL string) error
-	imageReady      atomic.Bool
-	imageReadyCh    chan struct{}
-	metrics         *metrics.RunnerRecorder
-	watchBackoff    time.Duration
+	// waitForCodeDaemon is waitForDaemon for code sandboxes.
+	waitForCodeDaemon func(ctx context.Context, baseURL string) error
+	imageReady        atomic.Bool
+	imageReadyCh      chan struct{}
+	codeImageReady    atomic.Bool
+	metrics           *metrics.RunnerRecorder
+	watchBackoff      time.Duration
 
 	volumeCache runnerruntime.VolumeCache
 	// sandboxLocks serializes, per sandbox ID, a create with volumes and the
@@ -104,6 +107,9 @@ var _ runnerruntime.Runtime = (*Runtime)(nil)
 // New creates a new Docker runtime. It reconciles any previous containers and ensures
 // the runner networks exist.
 func New(runnerConfig *config.Config, cfg Config) (*Runtime, error) {
+	if runnerConfig.CodeSandboxesEnabled && cfg.CodeImage == "" {
+		return nil, fmt.Errorf("SANDBOX_RUNNER_DOCKER_CODE_IMAGE must be set when SANDBOX_RUNNER_CODE_SANDBOXES_ENABLED is true")
+	}
 	api, err := newDockerAPI(cfg.Host)
 	if err != nil {
 		return nil, fmt.Errorf("SANDBOX_RUNNER_DOCKER_HOST: %w", err)
@@ -171,21 +177,22 @@ func (m *Runtime) applyNetworkPolicy(n *runnerNetwork, containerID, containerIP 
 // network policy, or daemon readiness behavior without nil defaults.
 func newRuntime(runnerConfig *config.Config, cfg Config, docker dockerBackend) *Runtime {
 	return &Runtime{
-		runnerConfig:    runnerConfig,
-		config:          cfg,
-		publicNetwork:   runnerNetwork{networkName: runnerBridgeNetwork, bridgeName: runnerBridgeNetwork},
-		noEgressNetwork: runnerNetwork{networkName: runnerNoEgressNetwork, bridgeName: runnerNoEgressBridge, blockEgress: true},
-		docker:          docker,
-		applyPolicy:     netrules.ApplyPolicy,
-		teardownRules:   netrules.Teardown,
-		waitForDaemon:   waitForDaemon,
-		imageReadyCh:    make(chan struct{}),
-		watchBackoff:    2 * time.Second,
-		expectedStops:   make(map[string]expectedStop),
-		restarted:       make(map[string]struct{}),
-		sandboxLocks:    make(map[string]*sandboxLock),
-		setNoSuidNoDev:  setNoSuidNoDev,
-		checkVolumeTree: checkVolumeTree,
+		runnerConfig:      runnerConfig,
+		config:            cfg,
+		publicNetwork:     runnerNetwork{networkName: runnerBridgeNetwork, bridgeName: runnerBridgeNetwork},
+		noEgressNetwork:   runnerNetwork{networkName: runnerNoEgressNetwork, bridgeName: runnerNoEgressBridge, blockEgress: true},
+		docker:            docker,
+		applyPolicy:       netrules.ApplyPolicy,
+		teardownRules:     netrules.Teardown,
+		waitForDaemon:     waitForDaemon,
+		waitForCodeDaemon: waitForCodeDaemon,
+		imageReadyCh:      make(chan struct{}),
+		watchBackoff:      2 * time.Second,
+		expectedStops:     make(map[string]expectedStop),
+		restarted:         make(map[string]struct{}),
+		sandboxLocks:      make(map[string]*sandboxLock),
+		setNoSuidNoDev:    setNoSuidNoDev,
+		checkVolumeTree:   checkVolumeTree,
 	}
 }
 
@@ -198,12 +205,30 @@ func (m *Runtime) SetMetricsRecorder(rec *metrics.RunnerRecorder) {
 // EnsureSandboxImage pulls the sandbox image with retries. It is intended to
 // run in a goroutine after the HTTP server is listening.
 func (m *Runtime) EnsureSandboxImage(ctx context.Context) {
-	image := m.config.SandboxImage
+	if !m.pullImageWithRetry(ctx, m.config.SandboxImage) {
+		return
+	}
+	m.imageReady.Store(true)
+	close(m.imageReadyCh)
+	slog.Info("sandbox image ready", "image", m.config.SandboxImage)
+}
 
+// ensureCodeImage pulls the code image with retries.
+func (m *Runtime) ensureCodeImage(ctx context.Context) {
+	if !m.pullImageWithRetry(ctx, m.config.CodeImage) {
+		return
+	}
+	m.codeImageReady.Store(true)
+	slog.Info("code image ready", "image", m.config.CodeImage)
+}
+
+// pullImageWithRetry pulls image until it succeeds or ctx ends. It reports
+// whether the pull succeeded.
+func (m *Runtime) pullImageWithRetry(ctx context.Context, image string) bool {
 	for attempt := 1; ; attempt++ {
 		if err := ctx.Err(); err != nil {
 			slog.Error("image pull canceled", "image", image, "error", err)
-			return
+			return false
 		}
 
 		if err := m.docker.pullImage(ctx, image); err != nil {
@@ -212,16 +237,12 @@ func (m *Runtime) EnsureSandboxImage(ctx context.Context) {
 				"image", image, "attempt", attempt, "retry_in", backoff, "error", err)
 			select {
 			case <-ctx.Done():
-				return
+				return false
 			case <-time.After(backoff):
 				continue
 			}
 		}
-
-		m.imageReady.Store(true)
-		close(m.imageReadyCh)
-		slog.Info("sandbox image ready", "image", image)
-		return
+		return true
 	}
 }
 
@@ -241,6 +262,10 @@ func (m *Runtime) ImageReadyCh() <-chan struct{} {
 // sandbox while not watching would restart it silently.
 func (m *Runtime) Prepare(ctx context.Context) {
 	go m.watchGuestDeaths(ctx)
+	// A separate pull, so neither image waits for the other.
+	if m.runnerConfig.CodeSandboxesEnabled {
+		go m.ensureCodeImage(ctx)
+	}
 	m.EnsureSandboxImage(ctx)
 }
 
@@ -327,9 +352,17 @@ func (m *Runtime) CreateContainer(ctx context.Context, sandboxID string, opts *C
 }
 
 // checkCreate refuses a create before anything is acquired or created.
-func (m *Runtime) checkCreate(sandboxID string) error {
+func (m *Runtime) checkCreate(sandboxID string, opts *CreateOptions) error {
 	if !m.imageReady.Load() {
 		return fmt.Errorf("sandbox image not yet available")
+	}
+	if opts != nil && opts.CodeOpts != nil {
+		if !m.runnerConfig.CodeSandboxesEnabled {
+			return runnerruntime.ErrCodeSandboxesUnsupported
+		}
+		if !m.codeImageReady.Load() {
+			return runnerruntime.ErrCodeImageNotReady
+		}
 	}
 	// Validate sandboxID length before slicing to prevent panic
 	if len(sandboxID) < 12 {
@@ -341,7 +374,7 @@ func (m *Runtime) checkCreate(sandboxID string) error {
 // createContainer creates and starts a container with mounts bound in. On
 // error, leftBehind reports a container its cleanup could not remove.
 func (m *Runtime) createContainer(ctx context.Context, sandboxID string, opts *CreateOptions, mounts []volumeMount) (info *ContainerInfo, leftBehind bool, err error) {
-	if err := m.checkCreate(sandboxID); err != nil {
+	if err := m.checkCreate(sandboxID, opts); err != nil {
 		return nil, false, err
 	}
 	if opts == nil {
@@ -349,10 +382,17 @@ func (m *Runtime) createContainer(ctx context.Context, sandboxID string, opts *C
 	}
 
 	containerName := "sandbox-" + sandboxID[:12]
-	limits := m.defaultLimits()
+	image, limits := m.config.SandboxImage, m.defaultLimits()
+	kind := sandboxKindGeneric
+	if opts.CodeOpts != nil {
+		kind = sandboxKindCode
+		image = m.config.CodeImage
+		limits.MemoryMB = opts.CodeOpts.MemoryMB
+		limits.CPUPercent = m.runnerConfig.CodeCPUPercent
+	}
 	n := m.networkFor(opts.BlockEgress())
 
-	containerID, err := m.docker.createContainer(ctx, sandboxID, containerName, m.config.SandboxImage, n.networkName, limits, m.config.EnableCgroups, mounts)
+	containerID, err := m.docker.createContainer(ctx, sandboxID, containerName, image, n.networkName, limits, m.config.EnableCgroups, kind, mounts)
 	if err != nil {
 		return nil, false, fmt.Errorf("create container: %w", err)
 	}
@@ -377,7 +417,7 @@ func (m *Runtime) createContainer(ctx context.Context, sandboxID string, opts *C
 	}
 
 	baseURL := fmt.Sprintf("http://%s:%d", containerIP, daemonPort)
-	if err := m.waitForDaemon(ctx, baseURL); err != nil {
+	if err := m.waitReady(ctx, baseURL, kind); err != nil {
 		return nil, cleanupOnError(), fmt.Errorf("connect to daemon: %w", err)
 	}
 
@@ -506,7 +546,7 @@ func (m *Runtime) ensureSandboxRunningOnce(ctx context.Context, sandboxID string
 		return recovering, fmt.Errorf("apply network rules: %w", err)
 	}
 	baseURL := fmt.Sprintf("http://%s:%d", containerIP, daemonPort)
-	if err := m.waitForDaemon(ctx, baseURL); err != nil {
+	if err := m.waitReady(ctx, baseURL, kindOf(inspect)); err != nil {
 		m.cleanupWakeFailure(containerID)
 		return recovering, err
 	}
@@ -707,7 +747,67 @@ func canStartContainer(state containerState) bool {
 	}
 }
 
+// sandboxKind says which daemon a sandbox container runs.
+type sandboxKind string
+
+const (
+	// sandboxKindGeneric runs the sandbox daemon from the sandbox image.
+	sandboxKindGeneric sandboxKind = "generic"
+	// sandboxKindCode runs the code daemon from the code image.
+	sandboxKindCode sandboxKind = "code"
+)
+
+// kindOf reads the kind of a container from its label. A container without
+// the label is generic.
+func kindOf(inspect *containerInspect) sandboxKind {
+	if sandboxKind(inspect.Config.Labels[containerLabelKind]) == sandboxKindCode {
+		return sandboxKindCode
+	}
+	return sandboxKindGeneric
+}
+
+// waitReady waits for the daemon of a sandbox of the kind.
+func (m *Runtime) waitReady(ctx context.Context, baseURL string, kind sandboxKind) error {
+	if kind == sandboxKindCode {
+		return m.waitForCodeDaemon(ctx, baseURL)
+	}
+	return m.waitForDaemon(ctx, baseURL)
+}
+
 func waitForDaemon(ctx context.Context, baseURL string) error {
+	return pollDaemon(ctx, baseURL, func(httpClient *http.Client) (bool, error) {
+		// /healthz can become ready slightly before command execution is fully
+		// usable under load; require a tiny exec round-trip before returning.
+		execReq, err := http.NewRequestWithContext(
+			ctx,
+			http.MethodPost,
+			baseURL+"/executions",
+			bytes.NewBufferString(`{"command":"true","timeout_ms":2000}`),
+		)
+		if err != nil {
+			return false, err
+		}
+		execReq.Header.Set("Content-Type", "application/json")
+		execResp, err := httpClient.Do(execReq)
+		if err != nil {
+			return false, nil
+		}
+		body, _ := io.ReadAll(execResp.Body)
+		execResp.Body.Close()
+		// Daemon /executions streams NDJSON events; require a successful exit event.
+		return execResp.StatusCode == http.StatusOK && isSuccessfulExit(body), nil
+	})
+}
+
+// waitForCodeDaemon waits for the code daemon's /healthz only. The code daemon
+// starts its runtime on the first task, and has no /executions route.
+func waitForCodeDaemon(ctx context.Context, baseURL string) error {
+	return pollDaemon(ctx, baseURL, func(*http.Client) (bool, error) { return true, nil })
+}
+
+// pollDaemon polls the daemon's /healthz until it answers 200 and ready
+// reports true. An error from ready ends the wait.
+func pollDaemon(ctx context.Context, baseURL string, ready func(httpClient *http.Client) (bool, error)) error {
 	httpClient := &http.Client{Transport: runnerruntime.NoProxyTransport, Timeout: 3 * time.Second, CheckRedirect: runnerruntime.RefuseRedirect}
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
@@ -733,34 +833,14 @@ func waitForDaemon(ctx context.Context, baseURL string) error {
 			if resp.StatusCode != http.StatusOK {
 				continue
 			}
-
-			// /healthz can become ready slightly before command execution is fully
-			// usable under load; require a tiny exec round-trip before returning.
-			execReq, err := http.NewRequestWithContext(
-				ctx,
-				http.MethodPost,
-				baseURL+"/executions",
-				bytes.NewBufferString(`{"command":"true","timeout_ms":2000}`),
-			)
+			ok, err := ready(httpClient)
 			if err != nil {
 				return err
 			}
-			execReq.Header.Set("Content-Type", "application/json")
-			execResp, err := httpClient.Do(execReq)
-			if err != nil {
-				continue
-			}
-			body, _ := io.ReadAll(execResp.Body)
-			execResp.Body.Close()
-			if execResp.StatusCode != http.StatusOK {
-				continue
-			}
-			// Daemon /executions streams NDJSON events; require a successful exit event.
-			if isSuccessfulExit(body) {
+			if ok {
 				return nil
 			}
 		}
-
 	}
 }
 

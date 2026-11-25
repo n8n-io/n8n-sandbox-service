@@ -28,6 +28,11 @@ type Config struct {
 	// Parsed from SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE.
 	SandboxImage string
 
+	// CodeImage is the image used to start code sandboxes. Parsed from
+	// SANDBOX_RUNNER_DOCKER_CODE_IMAGE. New requires it when code sandboxes
+	// are enabled.
+	CodeImage string
+
 	// DefaultMemoryMB is the default memory limit per sandbox in megabytes.
 	// Parsed from SANDBOX_RUNNER_DEFAULT_MEMORY_MB (default 512).
 	DefaultMemoryMB int64
@@ -90,6 +95,7 @@ func LoadConfig() (Config, error) {
 	if cfg.SandboxImage == "" {
 		return Config{}, fmt.Errorf("SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE must be set")
 	}
+	cfg.CodeImage = envvar.Get("SANDBOX_RUNNER_DOCKER_CODE_IMAGE")
 
 	if err := envvar.PositiveInt("SANDBOX_RUNNER_DEFAULT_MEMORY_MB", &cfg.DefaultMemoryMB); err != nil {
 		return Config{}, err

@@ -358,3 +358,46 @@ func TestLoadRecordsWhetherCapacityWasSet(t *testing.T) {
 		t.Errorf("set: CapacityTotalSet=%v CapacityTotal=%d, want true and 100", cfg.CapacityTotalSet, cfg.CapacityTotal)
 	}
 }
+
+func TestLoadCodeSandboxes(t *testing.T) {
+	setRequiredEnv(t)
+
+	// Off by default, and then the code limits are not read.
+	t.Setenv("SANDBOX_RUNNER_CODE_CPU_PERCENT", "not-a-number")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	if cfg.CodeSandboxesEnabled || cfg.CodeCPUPercent != 0 || cfg.CodeMaxMemoryMB != 0 {
+		t.Fatalf("code settings = %v, %d, %d; want disabled and unset", cfg.CodeSandboxesEnabled, cfg.CodeCPUPercent, cfg.CodeMaxMemoryMB)
+	}
+
+	t.Setenv("SANDBOX_RUNNER_CODE_SANDBOXES_ENABLED", "true")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() accepted an invalid SANDBOX_RUNNER_CODE_CPU_PERCENT")
+	}
+
+	t.Setenv("SANDBOX_RUNNER_CODE_CPU_PERCENT", "")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	if cfg.CodeCPUPercent != defaultCodeCPUPercent || cfg.CodeMaxMemoryMB != defaultCodeMaxMemoryMB {
+		t.Fatalf("code limits = %d, %d; want the defaults", cfg.CodeCPUPercent, cfg.CodeMaxMemoryMB)
+	}
+
+	t.Setenv("SANDBOX_RUNNER_CODE_CPU_PERCENT", "50")
+	t.Setenv("SANDBOX_RUNNER_CODE_MAX_MEMORY_MB", "4096")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	if cfg.CodeCPUPercent != 50 || cfg.CodeMaxMemoryMB != 4096 {
+		t.Fatalf("code limits = %d, %d; want 50, 4096", cfg.CodeCPUPercent, cfg.CodeMaxMemoryMB)
+	}
+
+	t.Setenv("SANDBOX_RUNNER_CODE_MAX_MEMORY_MB", "63")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() accepted SANDBOX_RUNNER_CODE_MAX_MEMORY_MB below the code sandbox minimum")
+	}
+}
