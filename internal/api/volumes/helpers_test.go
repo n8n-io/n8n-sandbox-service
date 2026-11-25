@@ -17,8 +17,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/iotest"
 	"time"
 
+	"github.com/n8n-io/sandbox-service/internal/api/grpc/pb"
+	"github.com/n8n-io/sandbox-service/internal/api/registry"
+	"github.com/n8n-io/sandbox-service/internal/api/runnerctl"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
 	"github.com/n8n-io/sandbox-service/internal/api/volumestore"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
@@ -158,18 +162,54 @@ func (records *trackingRecords) FinishSharedVolumePublish(ctx context.Context, v
 	return finished, err
 }
 
-// failingObjects fails Put or Delete on request.
+// failingObjects fails Put or Delete on request, and counts the Puts started
+// per kind.
 type failingObjects struct {
 	volumestore.Store
 	failPut    bool
 	failDelete bool
+	// failImagePut fails an image's Put after its first read.
+	failImagePut bool
+	// failTarRead fails reading an opened object after its first bytes.
+	failTarRead bool
+	mutex       sync.Mutex
+	putsByKind  map[volume.Kind]int
 }
 
 func (objects *failingObjects) Put(ctx context.Context, key volumestore.Key, content io.Reader, opts volumestore.PutOptions) (volumestore.Object, error) {
+	objects.mutex.Lock()
+	if objects.putsByKind == nil {
+		objects.putsByKind = map[volume.Kind]int{}
+	}
+	objects.putsByKind[key.Kind]++
+	objects.mutex.Unlock()
 	if objects.failPut {
 		return volumestore.Object{}, errors.New("disk on fire")
 	}
+	if objects.failImagePut && key.Kind == volume.KindExt4 {
+		if _, err := content.Read(make([]byte, 1)); err != nil {
+			return volumestore.Object{}, err
+		}
+		return volumestore.Object{}, errors.New("disk on fire")
+	}
 	return objects.Store.Put(ctx, key, content, opts)
+}
+
+func (objects *failingObjects) Open(ctx context.Context, key volumestore.Key) (io.ReadCloser, volumestore.Object, error) {
+	content, object, err := objects.Store.Open(ctx, key)
+	if err != nil || !objects.failTarRead {
+		return content, object, err
+	}
+	return struct {
+		io.Reader
+		io.Closer
+	}{io.MultiReader(io.LimitReader(content, 100), iotest.ErrReader(errors.New("disk on fire"))), content}, object, nil
+}
+
+func (objects *failingObjects) putsOf(kind volume.Kind) int {
+	objects.mutex.Lock()
+	defer objects.mutex.Unlock()
+	return objects.putsByKind[kind]
 }
 
 func (objects *failingObjects) Delete(ctx context.Context, key volumestore.Key) error {
@@ -224,9 +264,99 @@ func newTestEnv(t *testing.T) *testEnv {
 		shutdown: shutdown,
 	}
 	env.service = NewService(ctx, env.records, env.objects, env.metrics)
-	env.service.limits = limits{maxTarBytes: 1 << 20, policy: testPolicy, maxLiveVolumes: 100}
-	env.service.timing = timing{lease: time.Minute, renewEvery: time.Hour, giveUpAfter: time.Hour, cleanupTimeout: 5 * time.Second}
+	env.service.limits = limits{
+		maxTarBytes:    testMaxUploadBytes,
+		policy:         testPolicy,
+		maxLiveVolumes: 100,
+		maxImageBytes:  MaxImageBytes, maxRunnerBytes: volume.MaxSandboxVolumeBytes,
+	}
+	env.service.timing = timing{
+		lease: time.Minute, renewEvery: time.Hour, giveUpAfter: time.Hour, cleanupTimeout: 5 * time.Second,
+		builderWait: 200 * time.Millisecond, retryFirst: 10 * time.Millisecond, retryMax: 50 * time.Millisecond,
+		buildCall: 10 * time.Second,
+	}
 	return env
+}
+
+// withBuilds has env's service build images with build, on runners.
+func (env *testEnv) withBuilds(build BuildFunc, runners ...registry.Runner) *testEnv {
+	env.service.EnableImageBuilds(Builds{Runners: fixedRunners(runners), Build: build, HeartbeatGrace: time.Minute})
+	return env
+}
+
+// fixedRunners lists the same runners every time.
+type fixedRunners []registry.Runner
+
+func (runners fixedRunners) List() ([]registry.Runner, error) {
+	return slices.Clone(runners), nil
+}
+
+// builder returns a runner that builds, heard from just now.
+func builder(id string, used int32) registry.Runner {
+	return registry.Runner{
+		ID: id, HTTPBaseURL: "https://" + id, ControlGRPCAddr: id + ":9091",
+		Healthy: true, CapacityTotal: 4, CapacityUsed: used, LastSeen: time.Now(),
+	}
+}
+
+// fakeBuilds answers builds like runners would. A runner with an answer in
+// refuse answers with it before it reads the tar; any other reads the tar,
+// fails with fail if set after half the image, or sends image.
+type fakeBuilds struct {
+	refusalsByRunnerID map[string]error
+	fail               error
+	image              []byte
+	// claim, if set, is the sha256 the runner says its image has.
+	claim string
+	// beforeImage, if set, runs before the first image byte is sent.
+	beforeImage func()
+
+	mutex   sync.Mutex
+	calls   []string
+	headers []*pb.BuildVolumeHeader
+	tars    [][]byte
+}
+
+func newFakeBuilds(image []byte) *fakeBuilds {
+	return &fakeBuilds{refusalsByRunnerID: map[string]error{}, image: image}
+}
+
+func (builds *fakeBuilds) build(ctx context.Context, runner registry.Runner, header *pb.BuildVolumeHeader, tar io.Reader, image io.Writer) (runnerctl.VolumeImage, error) {
+	builds.mutex.Lock()
+	builds.calls = append(builds.calls, runner.ID)
+	builds.headers = append(builds.headers, header)
+	refusal := builds.refusalsByRunnerID[runner.ID]
+	builds.mutex.Unlock()
+	if refusal != nil {
+		return runnerctl.VolumeImage{}, refusal
+	}
+	data, err := io.ReadAll(tar)
+	if err != nil {
+		return runnerctl.VolumeImage{}, err
+	}
+	builds.mutex.Lock()
+	builds.tars = append(builds.tars, data)
+	builds.mutex.Unlock()
+	if builds.beforeImage != nil {
+		builds.beforeImage()
+	}
+	half := len(builds.image) / 2
+	if _, err := image.Write(builds.image[:half]); err != nil {
+		return runnerctl.VolumeImage{}, err
+	}
+	if builds.fail != nil {
+		return runnerctl.VolumeImage{}, builds.fail
+	}
+	if _, err := image.Write(builds.image[half:]); err != nil {
+		return runnerctl.VolumeImage{}, err
+	}
+	return runnerctl.VolumeImage{Bytes: int64(len(builds.image)), SHA256: cmp.Or(builds.claim, digestOf(builds.image))}, ctx.Err()
+}
+
+func (builds *fakeBuilds) callsMade() []string {
+	builds.mutex.Lock()
+	defer builds.mutex.Unlock()
+	return slices.Clone(builds.calls)
 }
 
 func (env *testEnv) publish(t *testing.T, data []byte, name string) (PublishResult, error) {

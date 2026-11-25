@@ -203,8 +203,15 @@ Related series:
 - `sandbox_shared_volume_publishes_total{result}` — shared volume publishes on
   the API: `created`, `exists`, or why one failed: `invalid_request`,
   `invalid_tar`, `too_large`, `digest_mismatch`, `conflict`, `limit`,
-  `interrupted`, `error`. `sandbox_shared_volume_publish_duration_seconds`
-  times the publishes that created a volume.
+  `interrupted`, `build_failed`, `no_capacity`, `error`.
+  `sandbox_shared_volume_publish_duration_seconds` times the publishes that
+  created a volume.
+- `sandbox_shared_volume_builds_total{result}` — the API's calls to runners to
+  build a shared volume's image: `success`, `refused` (tried on another
+  runner), a failed build's reason as in `sandbox_volume_builds_total`,
+  `transport`, `error` (the volume store), or `unsupported` (a runner that
+  can't build: `SANDBOX_API_VOLUME_BUILD` doesn't match the runners).
+  `shared volume image built` logs the runner that built each image.
 - `sandbox_container_operation_duration_seconds{operation}` — the totals the
   steps add up to, a recovery's under `operation="recover"` like its steps.
 - `sandbox_http_request_duration_seconds{role,route,method}` — end-to-end per

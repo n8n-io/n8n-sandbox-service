@@ -19,6 +19,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/codetask"
 	"github.com/n8n-io/sandbox-service/internal/envvar"
 	"github.com/n8n-io/sandbox-service/internal/logging"
+	"github.com/n8n-io/sandbox-service/internal/volume"
 )
 
 const (
@@ -253,6 +254,11 @@ type APIConfig struct {
 	// VolumeRemoteSocket is the Unix socket of the store helper
 	// (VolumeStoreRemote).
 	VolumeRemoteSocket string
+	// RunnerVolumeKind is the kind of volume object this service's runners
+	// attach, from SANDBOX_API_VOLUME_BUILD: ext4 images with firecracker,
+	// which the API has them build at publish, and tars otherwise. A service
+	// has one kind of runner.
+	RunnerVolumeKind volume.Kind
 }
 
 // LoadAPI reads API gateway configuration from environment variables.
@@ -516,8 +522,27 @@ func LoadAPI() (*APIConfig, error) {
 	if err := loadVolumeStore(cfg); err != nil {
 		return nil, err
 	}
+	if err := loadVolumeBuild(cfg); err != nil {
+		return nil, err
+	}
 
 	return cfg, nil
+}
+
+func loadVolumeBuild(cfg *APIConfig) error {
+	raw := envvar.Get("SANDBOX_API_VOLUME_BUILD")
+	switch strings.ToLower(raw) {
+	case "":
+		cfg.RunnerVolumeKind = volume.KindTar
+	case "firecracker":
+		if cfg.VolumeStore == VolumeStoreNone {
+			return fmt.Errorf("SANDBOX_API_VOLUME_BUILD=firecracker needs SANDBOX_API_VOLUME_STORE: the images are kept there")
+		}
+		cfg.RunnerVolumeKind = volume.KindExt4
+	default:
+		return fmt.Errorf("SANDBOX_API_VOLUME_BUILD must be empty or firecracker, got %q", raw)
+	}
+	return nil
 }
 
 func loadVolumeStore(cfg *APIConfig) error {

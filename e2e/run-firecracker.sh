@@ -12,6 +12,7 @@ export PATH=/usr/local/go/bin:$HOME/go/bin:$PATH
 
 PORT="${PORT:-8080}"
 API_GRPC_ADDR="${API_GRPC_ADDR:-127.0.0.1:19090}"
+API_VOLUME_LOCAL_ADDR="${API_VOLUME_LOCAL_ADDR:-127.0.0.1:18443}"
 RUNNER_ADDR="${RUNNER_ADDR:-127.0.0.1:18082}"
 RUNNER_CONTROL_LISTEN_ADDR="${RUNNER_CONTROL_LISTEN_ADDR:-127.0.0.1:19091}"
 RUNNER_CONTROL_ADVERTISE_ADDR="${RUNNER_CONTROL_ADVERTISE_ADDR:-localhost:19091}"
@@ -58,6 +59,7 @@ cleanup() {
 	e2e_kill_tcp_listeners \
 		"$(e2e_addr_port "127.0.0.1:${PORT}")" \
 		"$(e2e_addr_port "$API_GRPC_ADDR")" \
+		"$(e2e_addr_port "$API_VOLUME_LOCAL_ADDR")" \
 		"$(e2e_addr_port "$RUNNER_ADDR")" \
 		"$(e2e_addr_port "$RUNNER_CONTROL_LISTEN_ADDR")"
 	sudo rm -rf /srv/jailer/firecracker/sandbox-* >/dev/null 2>&1 || true
@@ -121,6 +123,7 @@ rm -f "$API_LOG" "$RUNNER_LOG"
 e2e_kill_tcp_listeners \
 	"$(e2e_addr_port "127.0.0.1:${PORT}")" \
 	"$(e2e_addr_port "$API_GRPC_ADDR")" \
+	"$(e2e_addr_port "$API_VOLUME_LOCAL_ADDR")" \
 	"$(e2e_addr_port "$RUNNER_ADDR")" \
 	"$(e2e_addr_port "$RUNNER_CONTROL_LISTEN_ADDR")"
 
@@ -142,6 +145,12 @@ API_ENV=(
 	SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE="$TLS_DIR/api/control-grpc-api-client.crt"
 	SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE="$TLS_DIR/api/control-grpc-api-client.key"
 	SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_SERVER_NAME="localhost"
+	SANDBOX_API_VOLUME_PUBLISHER_KEYS="$E2E_VOLUME_PUBLISHER_API_KEY"
+	# Shared volumes are kept in API_DATA_DIR, and the runner builds their images.
+	SANDBOX_API_VOLUME_STORE=local
+	SANDBOX_API_VOLUME_LOCAL_LISTEN_ADDR="$API_VOLUME_LOCAL_ADDR"
+	SANDBOX_API_VOLUME_LOCAL_URL="https://${API_VOLUME_LOCAL_ADDR}"
+	SANDBOX_API_VOLUME_BUILD=firecracker
 )
 if [[ "${E2E_IDLE_TTL_SUITE:-}" == "1" ]]; then
 	# Firecracker stop (pause + per-sandbox snapshot) is much slower than Docker
@@ -228,6 +237,8 @@ export E2E_RUNNER_CONTROL_TLS_SERVER_NAME="localhost"
 # server certificate and checks the runner log for their URLs.
 export E2E_TLS_DIR="$TLS_DIR"
 export E2E_RUNNER_LOG="$RUNNER_LOG"
+# shared-volume-build.spec.ts reads the images the local volume store keeps.
+export E2E_API_DATA_DIR="$API_DATA_DIR"
 
 if [[ "${E2E_SKIP_BUILD:-}" != "1" ]]; then
 	echo "Building SDK..."
@@ -263,4 +274,5 @@ fi
 BASE_URL="http://127.0.0.1:$PORT" SANDBOX_API_KEY="$API_KEY" \
 	SANDBOX_API_PROVISIONER_KEY="$E2E_PROVISIONER_API_KEY" \
 	SANDBOX_API_SCALER_KEY="$E2E_SCALER_API_KEY" \
+	SANDBOX_API_VOLUME_PUBLISHER_KEY="$E2E_VOLUME_PUBLISHER_API_KEY" \
 	npx playwright test "${PLAYWRIGHT_SPECS[@]}" --grep-invert "$DOCKER_ONLY_TAG" "$@"

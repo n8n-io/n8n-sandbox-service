@@ -123,7 +123,8 @@ func (s *Service) Publish(ctx context.Context, request PublishRequest) (publishe
 	slog.InfoContext(ctx, "shared volume published",
 		"version_id", row.ID, "sha256", row.SHA256, "name", row.Name, "role", request.Role,
 		"tar_bytes", row.TarBytes, "tar_entries", row.TarEntries, "tar_content_bytes", row.TarContentBytes,
-		"tar_decompressed_bytes", row.TarDecompressedBytes, "duration_ms", s.now().Sub(start).Milliseconds())
+		"tar_decompressed_bytes", row.TarDecompressedBytes, "image_bytes", row.ImageBytes, "image_sha256", row.ImageSHA256,
+		"duration_ms", s.now().Sub(start).Milliseconds())
 	return PublishResult{Volume: row, Created: true}, nil
 }
 
@@ -156,6 +157,16 @@ func (s *Service) uploadAndFinish(requestCtx, publishCtx context.Context, row *s
 
 	row.TarBytes = object.Size
 	row.TarEntries, row.TarContentBytes, row.TarDecompressedBytes = counts.Entries, counts.ContentBytes, counts.DecompressedBytes
+	if err := s.checkRunnerBytes(row); err != nil {
+		return err
+	}
+	if s.builds != nil {
+		image, err := s.build(publishCtx, row)
+		if err != nil {
+			return err
+		}
+		row.ImageBytes, row.ImageSHA256 = image.Size, image.SHA256
+	}
 	finished, err := s.records.FinishSharedVolumePublish(publishCtx, row)
 	if err != nil {
 		return err
@@ -319,6 +330,10 @@ func publishResultLabel(published PublishResult, err error) string {
 		return metrics.SharedVolumePublishConflict
 	case errors.Is(err, ErrVolumeLimit), errors.Is(err, ErrPublishLimit):
 		return metrics.SharedVolumePublishLimit
+	case errors.Is(err, ErrBuildFailed):
+		return metrics.SharedVolumePublishBuildFailed
+	case errors.Is(err, ErrNoCapacity):
+		return metrics.SharedVolumePublishNoCapacity
 	case errors.Is(err, ErrUpload), errors.Is(err, ErrInterrupted):
 		return metrics.SharedVolumePublishInterrupted
 	}

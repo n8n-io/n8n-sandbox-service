@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/n8n-io/sandbox-service/internal/volume"
 )
 
 func setRequiredGRPCMTLS(t *testing.T) {
@@ -958,6 +960,7 @@ func setRequiredVolumeEnv(t *testing.T) {
 		"SANDBOX_API_VOLUME_LOCAL_PREVIOUS_SIGNING_KEY",
 		"SANDBOX_API_VOLUME_REMOTE_SOCKET",
 		"SANDBOX_API_DATA_DIR",
+		"SANDBOX_API_VOLUME_BUILD",
 	} {
 		t.Setenv(name, "")
 	}
@@ -1236,6 +1239,50 @@ func TestLoadAPIVolumeStoreRemote(t *testing.T) {
 	}
 	if cfg.VolumeStore != VolumeStoreRemote || cfg.VolumeRemoteSocket != "/run/volume-store/helper.sock" {
 		t.Errorf("VolumeStore = %q, VolumeRemoteSocket = %q", cfg.VolumeStore, cfg.VolumeRemoteSocket)
+	}
+}
+
+func TestLoadAPIVolumeBuild(t *testing.T) {
+	for _, tc := range []struct {
+		build string
+		kind  volume.Kind
+	}{
+		{"", volume.KindTar},
+		{"firecracker", volume.KindExt4},
+		{" Firecracker ", volume.KindExt4},
+	} {
+		t.Run(tc.build, func(t *testing.T) {
+			setRequiredVolumeEnv(t)
+			t.Setenv("SANDBOX_API_VOLUME_STORE", "remote")
+			t.Setenv("SANDBOX_API_VOLUME_REMOTE_SOCKET", "/run/volume-store/helper.sock")
+			t.Setenv("SANDBOX_API_VOLUME_BUILD", tc.build)
+
+			cfg, err := LoadAPI()
+			if err != nil {
+				t.Fatalf("LoadAPI() failed: %v", err)
+			}
+			if cfg.RunnerVolumeKind != tc.kind {
+				t.Errorf("RunnerVolumeKind = %q, want %q", cfg.RunnerVolumeKind, tc.kind)
+			}
+		})
+	}
+}
+
+func TestLoadAPIRejectsVolumeBuildWithoutAStoreOrOfAnotherKind(t *testing.T) {
+	for name, env := range map[string]map[string]string{
+		"no store":     {"SANDBOX_API_VOLUME_BUILD": "firecracker"},
+		"another kind": {"SANDBOX_API_VOLUME_BUILD": "docker", "SANDBOX_API_VOLUME_STORE": "remote", "SANDBOX_API_VOLUME_REMOTE_SOCKET": "/run/helper.sock"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			setRequiredVolumeEnv(t)
+			for variable, value := range env {
+				t.Setenv(variable, value)
+			}
+			_, err := LoadAPI()
+			if err == nil || !strings.Contains(err.Error(), "SANDBOX_API_VOLUME_BUILD") {
+				t.Fatalf("LoadAPI() = %v, want an error naming SANDBOX_API_VOLUME_BUILD", err)
+			}
+		})
 	}
 }
 
