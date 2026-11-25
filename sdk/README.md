@@ -97,6 +97,8 @@ for await (const event of events) {
 }
 ```
 
+`spec.timeoutMs` is required and must be positive. The sandbox lowers a larger value to its maximum, which is 1 minute by default. A task that runs too long ends with an `error` event with code `timeout`.
+
 `runCodeTask` is never retried, also not on a `429`, because a stream input cannot be sent twice. A refused task fails with a `SandboxServiceError` before any event. A refused task, or a task with invalid options, destroys its stream inputs. Open them again before you retry it. Ending the iteration early, or calling `return()` or `throw()` on the events, closes the event stream and stops the upload. Aborting `signal` does the same, and the next read fails with a `SandboxServiceError` with `status` `0`. A line that is not a JSON object with a known `type` fails the iteration with an `InvalidStreamEventError`.
 
 ### Execute commands

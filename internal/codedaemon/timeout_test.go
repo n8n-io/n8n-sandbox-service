@@ -37,6 +37,17 @@ func TestMaxTaskTimeoutDefaultsToOneMinute(t *testing.T) {
 	}
 }
 
+func TestMaxTaskTimeoutRejectsValueAboveCap(t *testing.T) {
+	t.Setenv("CODE_DAEMON_MAX_TASK_TIMEOUT", "15m")
+	if _, err := LoadConfig(); err != nil {
+		t.Fatalf("rejected the cap: %v", err)
+	}
+	t.Setenv("CODE_DAEMON_MAX_TASK_TIMEOUT", "16m")
+	if _, err := LoadConfig(); err == nil {
+		t.Fatal("accepted a maximum above the cap")
+	}
+}
+
 func TestHungTaskTimesOut(t *testing.T) {
 	d := testDaemon(t, Config{})
 	w := httptest.NewRecorder()

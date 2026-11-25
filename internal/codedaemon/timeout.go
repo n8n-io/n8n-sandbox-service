@@ -9,7 +9,10 @@ import (
 
 const (
 	defaultMaxTaskTimeout = time.Minute
-	maxTaskTimeoutCap     = 24 * time.Hour // Hard cap on the configured maximum.
+	// Hard cap on the configured maximum. It matches the runner's default exec
+	// limit and stays below the API's default response activity window (30m),
+	// so a running task keeps its sandbox from going idle.
+	maxTaskTimeoutCap = 15 * time.Minute
 )
 
 // loadMaxTaskTimeout returns the service cap on the execution duration.

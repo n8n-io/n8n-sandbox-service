@@ -912,6 +912,8 @@ curl -X POST http://localhost:8080/code/sandboxes \
 
 Runs a task in a code sandbox. The service sends the request body to the code daemon in the sandbox. It sends the events of the daemon back as an `application/x-ndjson` stream. The daemon defines the format of the body and of the events.
 
+The spec must set `timeoutMs`, the execution timeout of the task in milliseconds. A missing, zero or negative value gets `400`. A value above [`CODE_DAEMON_MAX_TASK_TIMEOUT`](configuration.md#code-daemon) (default 1 min) is lowered to it. A task that runs too long ends with an `error` event with code `timeout`.
+
 By default, the input files can be at most 64 MiB in total ([limits](limits.md)). The body must arrive in 30 s ([time limits](limits.md#time-limits-on-requests)). An open request counts toward the [in-progress limits](#http-429--too-many-requests-in-progress) and keeps the sandbox active.
 
 **Errors:** `400` invalid id or body too large, `401` missing or unknown API key, `403` provisioner or scaler key, `404` no code sandbox with this id for the caller, or the sandbox was idle too long, `429` [too many requests in progress](#http-429--too-many-requests-in-progress), `502` no runner for the sandbox, `503` runner or daemon not available. The daemon sends all other statuses. Over HTTP/1, an error can arrive before the upload ends. The service then closes the connection.

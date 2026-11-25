@@ -233,7 +233,7 @@ The `code-daemon` runs inside a code sandbox and is reached only by the runner. 
 | `CODE_DAEMON_WORK_DIR` | `/work` | Parent of the task directories and working directory of the runtime. Created with mode `0700` if missing |
 | `CODE_DAEMON_RUNTIMES_FILE` | `/etc/code-runtime/runtimes.json` | Runtime registry, shipped in the sandbox image |
 | `CODE_DAEMON_RUNTIME` | `n8n-js` | Registry entry to run |
-| `CODE_DAEMON_MAX_TASK_TIMEOUT` | `1m` | Upper bound of a task's execution timeout (`1ms`–`24h`, Go [`time.ParseDuration`](https://pkg.go.dev/time#ParseDuration) syntax). Each task must set `spec.timeoutMs`. A larger value is lowered to this bound. Upload and runtime startup have separate deadlines |
+| `CODE_DAEMON_MAX_TASK_TIMEOUT` | `1m` | Upper bound of a task's execution timeout (`1ms`–`15m`, Go [`time.ParseDuration`](https://pkg.go.dev/time#ParseDuration) syntax). Each task must set `spec.timeoutMs`. A larger value is lowered to this bound. Upload and runtime startup have separate deadlines. Keep the API's `SANDBOX_API_MAX_RESPONSE_ACTIVITY` at least this long |
 | `CODE_DAEMON_RUNTIME_LOG_WRITES` | `16` | Writes sampled from each of the runtime's stdout and stderr into the daemon log, at most 1 KiB each (up to `10000`). Later output is dropped. A sampled write is also dropped when the log queue is full |
 | `CODE_DAEMON_MAX_INPUT_BYTES` | `67108864` | Max total bytes of a task's input files, including task.json and binary files (64 MiB; up to 1 GiB) |
 | `CODE_DAEMON_MAX_OUTPUT_BYTES` | `67108864` | Max total bytes of the output files a task returns (64 MiB; up to 1 GiB) |
