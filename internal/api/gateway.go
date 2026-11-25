@@ -21,9 +21,13 @@ import (
 // wraps the request chain, and its /metrics handler is mounted here unless
 // cfg gives metrics a listener of their own. Proxied requests report sandbox
 // activity to activity, which the caller runs.
-func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.RunnerRegistry, rec *metrics.APIRecorder, activity *ActivityRecorder) (http.Handler, error) {
+func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.RunnerRegistry, rec *metrics.APIRecorder, activity *ActivityRecorder, opts ...RouterOption) (http.Handler, error) {
 	if activity == nil {
 		return nil, errors.New("api: an activity recorder is required")
+	}
+	var options routerOptions
+	for _, opt := range opts {
+		opt(&options)
 	}
 	runnerTransport, err := newRunnerTransport(cfg)
 	if err != nil {
@@ -76,6 +80,8 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	mux.HandleFunc("GET /admin/runners", handleListRunners(reg))
 	mux.HandleFunc("PUT /admin/runners/{id}/cordon", handleSetRunnerCordon(reg, cfg, true))
 	mux.HandleFunc("DELETE /admin/runners/{id}/cordon", handleSetRunnerCordon(reg, cfg, false))
+
+	registerSharedVolumeRoutes(mux, options.sharedVolumes)
 
 	proxy := limitTenant(sandboxProxy(proxyRoute{}))
 	uploadProxy := limitTenant(sandboxProxy(proxyRoute{limitBody: true}))

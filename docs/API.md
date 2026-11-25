@@ -8,10 +8,10 @@ Every limit — requests in progress, quotas, sizes, timeouts, idle windows — 
 
 There are five key classes:
 
-- `SANDBOX_API_KEYS` are admin keys. An admin key can create/list/delete any sandbox, manage tenants and mint tenant API keys via the admin API.
+- `SANDBOX_API_KEYS` are admin keys. An admin key can create/list/delete any sandbox, manage tenants and mint tenant API keys via the admin API, and manage shared volumes.
 - `SANDBOX_API_PROVISIONER_KEYS` are provisioner keys: `POST /admin/tenants`, `PATCH /admin/tenants/{id}` and `DELETE /admin/tenants/{id}` only, `403` everywhere else. Why the class exists and what it does not protect: [security-model.md](security-model.md#provisioner-keys).
 - `SANDBOX_API_SCALER_KEYS` are scaler keys: `GET /admin/runners` and `PUT`/`DELETE /admin/runners/{id}/cordon` only, `403` on every other path ([security-model.md](security-model.md#scaler-keys)).
-- `SANDBOX_API_VOLUME_PUBLISHER_KEYS` are volume publisher keys: the shared volume routes only, `403` on every other path ([security-model.md](security-model.md#volume-publisher-keys)).
+- `SANDBOX_API_VOLUME_PUBLISHER_KEYS` are volume publisher keys: the [shared volume](#shared-volumes) routes only, `403` on every other path ([security-model.md](security-model.md#volume-publisher-keys)).
 - Tenant keys are minted by an admin (or returned when a tenant is created). A tenant key may only create sandboxes for that tenant and may only list/get/delete/proxy its own sandboxes. Self-hosted operators can ignore tenant APIs entirely and keep using the admin key.
 
 Tenant keys are returned in plaintext once on create; only a hash is stored. Each API replica remembers a tenant key lookup for `SANDBOX_API_KEY_CACHE_TTL` (default `15s`), so a revoked key, or the key of a deleted tenant, can still be accepted by other replicas for up to that long.
@@ -1069,6 +1069,87 @@ Admin only. Mint an additional API key for the tenant. Returns plaintext `api_ke
 ### DELETE /admin/tenants/{id}/keys/{keyId}
 
 Admin only. Revoke an API key (`204`). The API replica that handles the revoke rejects the key from the next request on; other replicas may still accept it for up to `SANDBOX_API_KEY_CACHE_TTL` (default `15s`). Exec streams that are already open keep running.
+
+---
+
+## Shared volumes
+
+A shared volume is a tar of content published for all tenants. It is addressed by the sha256 of its tar, as `sha256:<64 lowercase hex digits>`, and may carry a name. Admin and volume publisher keys only; tenant, provisioner and scaler keys get `403`. Without a volume store (`SANDBOX_API_VOLUME_STORE` empty) admin and volume publisher keys get `501` with reason `volume_store_disabled`. Limits are in [limits.md](limits.md#shared-volumes).
+
+A shared volume as these routes return it:
+
+```json
+{
+  "digest": "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+  "name": "n8n-assistant-2.45.5",
+  "bytes": 104857600,
+  "tar": {"entries": 41234, "content_bytes": 391000000, "decompressed_bytes": 412000000},
+  "published_at": 1763380000
+}
+```
+
+- `bytes` is the tar as published. `tar.entries` counts the entries, plus each parent directory the tar does not list. `tar.content_bytes` is the total size of its regular files. `tar.decompressed_bytes` is its length after decompression.
+- `name` is left out when the volume has none.
+- `published_at` is the Unix time in seconds it became ready.
+
+No route returns the content.
+
+### PUT /shared-volumes/sha256:{hex}
+
+Publishes the request body, a tar or a gzip-compressed tar, with `Content-Length` (no chunked upload). The optional query parameter `name` names the volume: 1 to 128 bytes of `a-z`, `0-9`, `.`, `_` and `-`, starting and ending with a letter or digit.
+
+The API checks the tar while it arrives, and stores it only if all of these hold:
+
+- It holds only directories, regular files and symbolic links, with relative paths without `..`.
+- No entry goes through a symbolic link of the tar.
+- It has at least one entry and is within the limits.
+- It has the sha256 in the URL.
+
+The API answers before it reads the body when it can: `200` for a digest that is published, `409`, `411`, `413` for a `Content-Length` over the limit, `422` for a `Content-Length` of 0 and `429` when this API instance has no free publish slot. A client that sends `Expect: 100-continue` then uploads nothing. The API checks the other limits while the tar arrives. An upload may take as long as it keeps sending: it fails with `408` after a minute without a byte, or after an hour. Once the body has arrived, the publish finishes even if the client goes away.
+
+A name never moves to another digest. To publish other content under a name, `DELETE` the volume that has it, then publish.
+
+**Response:** `201 Created` with the volume and `Location: /shared-volumes/sha256:{hex}`. `200 OK` with the volume when this digest is already published: its body is not read, and the volume gets the name if it has none.
+
+**Errors:**
+
+| Status | `reason` | When |
+| --- | --- | --- |
+| `400` | | Malformed digest, name or query string, `name` given twice, another query parameter, or the body broke off |
+| `403` | | Not an admin or volume publisher key |
+| `408` | | The upload stalled for a minute or took more than an hour |
+| `409` | `name_taken` | Another volume, ready or being published, has the name |
+| `409` | `name_mismatch` | This digest is published under another name |
+| `409` | `publish_in_progress` | This digest is being published by another request. `Retry-After: 30` |
+| `409` | `shared_volume_limit` | The service holds its maximum number of shared volumes |
+| `411` | | No `Content-Length` |
+| `413` | `too_large` | The tar or its counts are over a limit |
+| `422` | `invalid_tar` | The tar breaks a rule above, can't be read, or has no entries |
+| `422` | `digest_mismatch` | The body does not have the sha256 in the URL |
+| `429` | `publish_limit` | Two publishes are already in progress on this API instance. `Retry-After: 30` |
+| `501` | `volume_store_disabled` | No volume store |
+| `503` | `publish_interrupted` | The API instance is shutting down, or the publish lost its lease. Publish again: the retry answers `200` if the volume got published after all |
+
+A failed publish removes what it stored. If that removal fails, the API logs a warning, and what is left stays in the store. A volume that became ready although its publish failed, as when the database's answer was lost, stays published: a retry answers `200`.
+
+**Example:**
+
+```bash
+curl -T bundle.tar -H "X-Api-Key: VOLUME_PUBLISHER_KEY" \
+  "http://sandbox-api:8080/shared-volumes/sha256:$(sha256sum bundle.tar | cut -d' ' -f1)?name=n8n-assistant-2.45.5"
+```
+
+### GET /shared-volumes/sha256:{hex}
+
+Returns the volume (`200`), `404` if no volume with that digest is ready. `HEAD` answers the same without a body.
+
+### GET /shared-volumes
+
+Returns every ready volume as an array, newest first, without paging. `?name={name}` returns the one with that name, or `[]`.
+
+### DELETE /shared-volumes/sha256:{hex}
+
+Deletes the volume (`204`). It is hidden and its name is free at once; its stored objects are removed in the same request. If that removal fails, the API logs a warning and any objects not yet removed stay. `404` if no volume with that digest is ready, `409` `publish_in_progress` while it is being published.
 
 ---
 
