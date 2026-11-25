@@ -32,7 +32,9 @@ type sqlDialect struct {
 	begin func(ctx context.Context) (*sqlTx, error)
 	// bind rewrites the ? placeholders of a query for the database.
 	bind func(query string) string
-	// nowSQL is the database clock's Unix time in whole seconds.
+	// nowSQL is the database clock's Unix time in whole seconds, as of the start
+	// of the statement. Not of the transaction: a statement that comes after a
+	// wait for a lock must not get a time from before the wait.
 	nowSQL string
 	// lockSQL, if set, takes a lock on the name it gets as its one ? and holds
 	// it until the transaction ends. SQLite has none: its write transactions
@@ -86,7 +88,7 @@ func newPostgresDialect(store *PostgresStore) sqlDialect {
 			}, nil
 		},
 		bind:    bindNumbered,
-		nowSQL:  `CAST(FLOOR(EXTRACT(EPOCH FROM now())) AS BIGINT)`,
+		nowSQL:  `CAST(FLOOR(EXTRACT(EPOCH FROM statement_timestamp())) AS BIGINT)`,
 		lockSQL: `SELECT pg_advisory_xact_lock(hashtextextended(?, 0))`,
 		violatesUnique: func(err error, index, _ string) bool {
 			var pgErr *pgconn.PgError
