@@ -242,7 +242,7 @@ describe("HttpClient", () => {
       });
       const out = await client.requestJson<{ ok: boolean }>("POST", "/post-retry", {
         data: { x: 1 },
-        isSafeToRetry: true,
+        retry: "always",
       });
       expect(out).toEqual({ ok: true });
       expect(hits).toBe(3);

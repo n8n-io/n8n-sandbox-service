@@ -6,6 +6,7 @@ import { destroyStreams, multipartBody, type MultipartPart } from "./multipart";
 import type {
   CodeSandbox,
   CodeTaskEvent,
+  CodeTaskEventType,
   CreateCodeSandboxOptions,
   RunCodeTaskOptions,
 } from "./types";
@@ -13,23 +14,22 @@ import type {
 /** The input path of RunCodeTaskOptions.taskInput. */
 const TASK_INPUT_PATH = "task.json";
 
+const EVENT_TYPES: ReadonlySet<CodeTaskEventType> = new Set<CodeTaskEventType>([
+  "accepted",
+  "heartbeat",
+  "done",
+  "error",
+]);
+
 /** Returns the current code sandbox of `options.name`, or creates one. */
 export async function createCodeSandbox(
   http: HttpClient,
   options: CreateCodeSandboxOptions,
 ): Promise<CodeSandbox> {
   return http.requestJson<CodeSandbox>("POST", "/code/sandboxes", {
-    data: {
-      name: options.name,
-      runtime: options.runtime,
-      runtimeVersion: options.runtimeVersion,
-      maxConcurrency: options.maxConcurrency,
-      memoryMb: options.memoryMb,
-      idleTimeoutMs: options.idleTimeoutMs,
-      maxAgeMs: options.maxAgeMs,
-    },
+    data: options,
     // Idempotent on the name: a repeated create returns the same sandbox.
-    isSafeToRetry: true,
+    retry: "always",
   });
 }
 
@@ -79,7 +79,7 @@ export async function runCodeTask(
       signal: options.signal,
       // The inputs can be streams, which cannot be sent twice. A task can also
       // have run when the outcome is unknown, so the caller decides on a retry.
-      retry: false,
+      retry: "never",
     }));
   } catch (error) {
     destroyUpload();
@@ -158,7 +158,7 @@ function parseTaskEvent(line: string): CodeTaskEvent {
   if (
     typeof json !== "object" ||
     json === null ||
-    typeof (json as CodeTaskEvent).type !== "string"
+    !EVENT_TYPES.has((json as { type?: unknown }).type as CodeTaskEventType)
   ) {
     throw new InvalidStreamEventError(line);
   }

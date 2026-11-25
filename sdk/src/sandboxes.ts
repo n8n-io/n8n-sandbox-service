@@ -15,7 +15,7 @@ export async function createSandbox(
       data: { id: options.id, ephemeral: options.ephemeral, egress: options.egress },
       // Only a caller-supplied id makes a repeated POST idempotent; retrying an
       // anonymous create would provision a second sandbox.
-      isSafeToRetry: options.id !== undefined,
+      retry: options.id !== undefined ? "always" : "idempotent",
     });
   // The client already retries a create with an id on any 503.
   const response = options.id === undefined ? await retryWhileNoCapacity(http, post) : await post();

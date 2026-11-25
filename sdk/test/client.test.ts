@@ -63,7 +63,7 @@ describe("SandboxClient", () => {
     // Only the egress mode goes on the wire; an anonymous create is never retry-safe.
     expect(mock.requestJson).toHaveBeenCalledWith("POST", "/sandboxes", {
       data: { egress: "public" },
-      isSafeToRetry: false,
+      retry: "idempotent",
     });
     expect(result).toEqual({
       id: "abc",
@@ -90,7 +90,7 @@ describe("SandboxClient", () => {
 
     expect(mock.requestJson).toHaveBeenCalledWith("POST", "/sandboxes", {
       data: { egress: "none" },
-      isSafeToRetry: false,
+      retry: "idempotent",
     });
     expect(result.egress).toBe("none");
   });
@@ -110,7 +110,7 @@ describe("SandboxClient", () => {
 
     expect(mock.requestJson).toHaveBeenCalledWith("POST", "/sandboxes", {
       data: { ephemeral: true, egress: "public" },
-      isSafeToRetry: false,
+      retry: "idempotent",
     });
     expect(result.ephemeral).toBe(true);
   });
@@ -134,7 +134,7 @@ describe("SandboxClient", () => {
 
     expect(mock.requestJson).toHaveBeenCalledWith("POST", "/sandboxes", {
       data: { id: "11111111-1111-4111-8111-111111111111", ephemeral: true, egress: "public" },
-      isSafeToRetry: true,
+      retry: "always",
     });
   });
 
@@ -191,7 +191,7 @@ describe("SandboxClient", () => {
 
     expect(mock.requestJson).toHaveBeenCalledWith("POST", "/sandboxes", {
       data: { id: "11111111-1111-4111-8111-111111111111", egress: "public" },
-      isSafeToRetry: true,
+      retry: "always",
     });
     expect(result.id).toBe("11111111-1111-4111-8111-111111111111");
   });
@@ -291,7 +291,7 @@ describe("SandboxClient", () => {
     expect(options).toMatchObject({
       params: { path: "/" },
       headers: { "Content-Type": "application/gzip" },
-      isSafeToRetry: true,
+      retry: "always",
     });
     // Each one-byte file takes a 512-byte header and one 512-byte data block.
     const tar = gunzipSync(options.data);

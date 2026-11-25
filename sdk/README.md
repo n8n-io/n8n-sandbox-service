@@ -83,7 +83,7 @@ const code = await client.createCodeSandbox({
 console.log(code.id, code.created);
 ```
 
-`runCodeTask` sends a task as a streamed `multipart/form-data` body: the `spec` as JSON, then `taskInput` as the `task.json` input, then each binary input as a file with its `contentType` (default `application/octet-stream`). It resolves when the response starts, with the task's NDJSON events as they arrive. The daemon defines the spec fields, the inputs and the events.
+`runCodeTask` sends a task as a streamed `multipart/form-data` body: the `spec` as JSON, then `taskInput` as the `task.json` input, then each binary input as a file with its `contentType` (default `application/octet-stream`). It resolves when the response starts, with the task's NDJSON events as they arrive: `accepted`, then a `heartbeat` every 5 seconds, then `done` or `error`.
 
 ```ts
 const events = await client.runCodeTask(code.id, {
@@ -92,11 +92,12 @@ const events = await client.runCodeTask(code.id, {
   inputs: [{ path: 'bin/0', content: fs.createReadStream(file) }],
 });
 for await (const event of events) {
-  console.log(event.type);
+  if (event.type === 'done') console.log(event.result, event.outputs);
+  if (event.type === 'error') console.log(event.code, event.message);
 }
 ```
 
-`runCodeTask` is never retried, also not on a `429`, because a stream input cannot be sent twice. A refused task fails with a `SandboxServiceError` before any event. A refused task, or a task with invalid options, destroys its stream inputs. Open them again before you retry it. Ending the iteration early, or calling `return()` or `throw()` on the events, closes the event stream and stops the upload. Aborting `signal` does the same, and the next read fails with a `SandboxServiceError` with `status` `0`. A line that is not a JSON object with a string `type` fails the iteration with an `InvalidStreamEventError`.
+`runCodeTask` is never retried, also not on a `429`, because a stream input cannot be sent twice. A refused task fails with a `SandboxServiceError` before any event. A refused task, or a task with invalid options, destroys its stream inputs. Open them again before you retry it. Ending the iteration early, or calling `return()` or `throw()` on the events, closes the event stream and stops the upload. Aborting `signal` does the same, and the next read fails with a `SandboxServiceError` with `status` `0`. A line that is not a JSON object with a known `type` fails the iteration with an `InvalidStreamEventError`.
 
 ### Execute commands
 

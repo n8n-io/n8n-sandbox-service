@@ -295,7 +295,7 @@ describe("runCodeTask", () => {
   it("yields no buffered event after the signal aborts", async () => {
     const http = await client((res) => {
       res.writeHead(200, { "Content-Type": "application/x-ndjson" });
-      res.write('{"type":"first"}\n{"type":"second"}\n');
+      res.write('{"type":"accepted"}\n{"type":"heartbeat"}\n');
     });
     const controller = new AbortController();
 
@@ -304,7 +304,7 @@ describe("runCodeTask", () => {
       taskInput: "{}",
       signal: controller.signal,
     });
-    await expect(stream.next()).resolves.toEqual({ done: false, value: { type: "first" } });
+    await expect(stream.next()).resolves.toEqual({ done: false, value: { type: "accepted" } });
     controller.abort();
 
     await expect(stream.next()).rejects.toMatchObject({ status: 0, message: "Request aborted" });
@@ -409,7 +409,7 @@ describe("runCodeTask", () => {
     expect(first.destroyed).toBe(true);
   });
 
-  it.each(["{", "[]", '{"taskId":"t_1"}', "null"])(
+  it.each(["{", "[]", '{"taskId":"t_1"}', '{"type":"progress"}', "null"])(
     "throws InvalidStreamEventError for the line %s",
     async (line) => {
       const http = await client((res) => {

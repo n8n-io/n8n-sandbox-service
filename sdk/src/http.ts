@@ -3,18 +3,21 @@ import type { Readable } from "node:stream";
 import { SandboxServiceError, createErrorFromResponse } from "./errors";
 import type { RetryOptions } from "./types";
 
+/**
+ * When to retry a failed request:
+ * - `idempotent`: only for idempotent methods, and for any method on a `429`.
+ * - `always`: also for other methods, such as a POST that is safe to repeat.
+ * - `never`: send the request once, such as for a stream body.
+ */
+export type RetryMode = "never" | "idempotent" | "always";
+
 export interface RequestOptions {
   data?: unknown;
   params?: Record<string, string>;
   headers?: Record<string, string>;
   signal?: AbortSignal;
-  /** Allow retry on non-idempotent methods (e.g. POST). Default false. */
-  isSafeToRetry?: boolean;
-  /**
-   * Set to false to send the request once, for a body that cannot be sent again,
-   * such as a stream. Default true.
-   */
-  retry?: boolean;
+  /** Default `idempotent`. */
+  retry?: RetryMode;
 }
 
 interface NormalizedRetryOptions {
@@ -64,8 +67,7 @@ export class HttpClient {
       },
       method,
       options.signal,
-      options.isSafeToRetry === true,
-      options.retry !== false,
+      options.retry,
     );
   }
 
@@ -96,8 +98,7 @@ export class HttpClient {
       },
       method,
       options.signal,
-      options.isSafeToRetry === true,
-      options.retry !== false,
+      options.retry,
     );
   }
 
@@ -131,8 +132,7 @@ export class HttpClient {
       },
       method,
       options.signal,
-      options.isSafeToRetry === true,
-      options.retry !== false,
+      options.retry,
     );
   }
 
@@ -150,8 +150,7 @@ export class HttpClient {
       },
       method,
       options.signal,
-      options.isSafeToRetry === true,
-      options.retry !== false,
+      options.retry,
     );
   }
 
@@ -174,8 +173,7 @@ export class HttpClient {
     operation: () => Promise<T>,
     method: Method,
     signal?: AbortSignal,
-    isSafeToRetry: boolean = false,
-    canRetry: boolean = true,
+    mode: RetryMode = "idempotent",
   ): Promise<T> {
     let attempt = 0;
     while (true) {
@@ -183,7 +181,7 @@ export class HttpClient {
         return await operation();
       } catch (error) {
         const serviceError = this.toServiceError(error);
-        if (!canRetry || !this.shouldRetry(serviceError, attempt, method, signal, isSafeToRetry)) {
+        if (!this.shouldRetry(serviceError, attempt, method, signal, mode)) {
           throw serviceError;
         }
 
@@ -210,15 +208,16 @@ export class HttpClient {
     error: SandboxServiceError,
     attempt: number,
     method: Method,
-    signal?: AbortSignal,
-    isSafeToRetry: boolean = false,
+    signal: AbortSignal | undefined,
+    mode: RetryMode,
   ): boolean {
+    if (mode === "never") return false;
     if (signal?.aborted) return false;
     if (attempt >= this.retry.attempts) return false;
     // The service's request limits refuse a request before it reaches the sandbox,
     // so a 429 is safe to repeat whatever the method.
     if (error.status === 429) return this.retry.retryOnStatuses.has(429);
-    if (!isSafeToRetry && !this.isMethodIdempotent(method)) return false;
+    if (mode === "idempotent" && !this.isMethodIdempotent(method)) return false;
     if (error.status === 0) return true;
     return this.retry.retryOnStatuses.has(error.status);
   }
