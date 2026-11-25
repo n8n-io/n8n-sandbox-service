@@ -5,6 +5,7 @@ package codedaemon
 import (
 	"encoding/json"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"regexp"
@@ -45,6 +46,8 @@ func (d *Daemon) admit(w http.ResponseWriter, r *http.Request) (taskSpec, *multi
 	// Read one extra byte to distinguish an oversized spec from one at the limit.
 	data, err := io.ReadAll(io.LimitReader(part, maxSpecBytes+1))
 	if err != nil || len(data) > maxSpecBytes || json.Unmarshal(data, &spec) != nil || !taskIDPattern.MatchString(spec.TaskID) {
+		slog.Warn("DEBUG invalid task spec", "error", err, "bytes", len(data), "data", string(data), "unmarshal", json.Unmarshal(data, &spec), "task_id", spec.TaskID,
+			"content_type", r.Header.Get("Content-Type"), "content_length", r.ContentLength, "transfer_encoding", r.TransferEncoding, "proto", r.Proto, "part_header", part.Header)
 		rejectAdmission(w, r, "invalid task spec", http.StatusBadRequest)
 		return taskSpec{}, nil
 	}

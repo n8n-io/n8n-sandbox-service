@@ -48,6 +48,8 @@ cleanup() {
 		docker logs "$API_CONTAINER_NAME" 2>&1 || true
 		echo "=== Runner container logs ==="
 		docker logs "$RUNNER_CONTAINER_NAME" 2>&1 || true
+		echo "=== Inner container logs (debug) ==="
+		docker exec "$RUNNER_CONTAINER_NAME" sh -c 'for c in $(docker ps -aq); do echo "--- $c"; docker inspect -f "{{.Config.Image}}" $c; docker logs $c 2>&1 | tail -50; done' || true
 	fi
 
 	echo "Stopping e2e resources..."
