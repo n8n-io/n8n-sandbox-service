@@ -80,6 +80,9 @@ type Policy struct {
 type Stats struct {
 	// Entries counts as MaxEntries does.
 	Entries int
+	// GlobalHeaders counts the pax global headers, which hold metadata for
+	// the whole archive and which Entries counts too.
+	GlobalHeaders int
 	// Files and Bytes count regular files only.
 	Files int
 	Bytes int64
@@ -149,6 +152,7 @@ func unpack(r io.Reader, p Policy, s sink) (Stats, error) {
 		// A pax global header holds metadata for the whole archive, not a file.
 		if hdr.Typeflag == tar.TypeXGlobalHeader {
 			stats.Entries++
+			stats.GlobalHeaders++
 			continue
 		}
 

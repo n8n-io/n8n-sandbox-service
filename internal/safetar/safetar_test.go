@@ -225,7 +225,7 @@ func TestExtractWritesFiles(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if stats != (Stats{Entries: 6, Files: 3, Bytes: 5, DecompressedBytes: int64(len(plain))}) {
+			if stats != (Stats{Entries: 6, GlobalHeaders: 1, Files: 3, Bytes: 5, DecompressedBytes: int64(len(plain))}) {
 				t.Fatalf("unexpected stats: %+v", stats)
 			}
 			if got := readString(t, filepath.Join(target, "x.txt")); got != "new" {
