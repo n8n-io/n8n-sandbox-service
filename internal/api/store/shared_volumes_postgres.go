@@ -64,7 +64,7 @@ func (s *PostgresStore) FailSharedVolumePublish(ctx context.Context, id string) 
 	return s.sharedVolumes().failPublish(ctx, id)
 }
 
-func (s *PostgresStore) NameReadySharedVolume(ctx context.Context, id, name string) (bool, error) {
+func (s *PostgresStore) NameReadySharedVolume(ctx context.Context, id, name string) (string, error) {
 	return s.sharedVolumes().setName(ctx, id, name)
 }
 

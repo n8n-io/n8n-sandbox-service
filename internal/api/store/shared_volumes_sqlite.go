@@ -49,7 +49,7 @@ func (s *SQLiteStore) FailSharedVolumePublish(ctx context.Context, id string) (b
 	return s.sharedVolumes().failPublish(ctx, id)
 }
 
-func (s *SQLiteStore) NameReadySharedVolume(ctx context.Context, id, name string) (bool, error) {
+func (s *SQLiteStore) NameReadySharedVolume(ctx context.Context, id, name string) (string, error) {
 	return s.sharedVolumes().setName(ctx, id, name)
 }
 
