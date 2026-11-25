@@ -11,7 +11,12 @@ import {
   listFiles,
   stat,
 } from "./files";
-import { createCodeSandbox, runCodeTask } from "./code-tasks/code-sandboxes";
+import {
+  createCodeSandbox,
+  deleteCodeSandbox,
+  deleteCodeSandboxByName,
+  runCodeTask,
+} from "./code-tasks/code-sandboxes";
 import type {
   CodeSandbox,
   CodeTaskEvent,
@@ -90,6 +95,22 @@ export class SandboxClient {
     options: RunCodeTaskOptions,
   ): Promise<AsyncGenerator<CodeTaskEvent, void, undefined>> {
     return runCodeTask(this.http, sandboxId, options);
+  }
+
+  /**
+   * Deletes a code sandbox by ID and stops all its tasks. A 404 (already gone) is
+   * treated as success.
+   */
+  async deleteCodeSandbox(id: string): Promise<void> {
+    return deleteCodeSandbox(this.http, id);
+  }
+
+  /**
+   * Deletes all code sandboxes of a name, draining ones too, and stops all their
+   * tasks. A 404 (none left) is treated as success.
+   */
+  async deleteCodeSandboxByName(name: string): Promise<void> {
+    return deleteCodeSandboxByName(this.http, name);
   }
 
   // #endregion

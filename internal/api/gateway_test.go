@@ -281,8 +281,13 @@ func TestGatewayServesCodeSandboxesOnlyWhenEnabled(t *testing.T) {
 			}
 
 			// An invalid body or id gets 400 from the handler, so 404 means no route.
-			for _, path := range []string{"/code/sandboxes", "/code/sandboxes/not-a-uuid/tasks"} {
-				req := httptest.NewRequest(http.MethodPost, path, strings.NewReader("{}"))
+			for _, route := range []struct{ method, path string }{
+				{http.MethodPost, "/code/sandboxes"},
+				{http.MethodPost, "/code/sandboxes/not-a-uuid/tasks"},
+				{http.MethodDelete, "/code/sandboxes/not-a-uuid"},
+				{http.MethodDelete, "/code/sandboxes/names/not*a*name"},
+			} {
+				req := httptest.NewRequest(route.method, route.path, strings.NewReader("{}"))
 				req.Header.Set("X-Api-Key", "public-key")
 				rr := httptest.NewRecorder()
 				router.ServeHTTP(rr, req)
@@ -292,7 +297,7 @@ func TestGatewayServesCodeSandboxesOnlyWhenEnabled(t *testing.T) {
 					want = http.StatusBadRequest
 				}
 				if rr.Code != want {
-					t.Fatalf("%s: expected %d, got %d: %s", path, want, rr.Code, rr.Body.String())
+					t.Fatalf("%s %s: expected %d, got %d: %s", route.method, route.path, want, rr.Code, rr.Body.String())
 				}
 			}
 		})

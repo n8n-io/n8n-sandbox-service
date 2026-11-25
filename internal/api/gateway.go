@@ -64,6 +64,8 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	mux.HandleFunc("POST /sandboxes", limitTenant(handleCreateSandbox(s, s, reg, cfg, rec, quota)))
 	if cfg.CodeSandboxesEnabled {
 		mux.HandleFunc("POST /code/sandboxes", limitTenant(handleCreateCodeSandbox(s, s, reg, cfg, rec, quota, &singleflight.Group{})))
+		mux.HandleFunc("DELETE /code/sandboxes/{id}", handleDeleteCodeSandbox(s, reg, cfg, rec))
+		mux.HandleFunc("DELETE /code/sandboxes/names/{name}", handleDeleteCodeSandboxByName(s, reg, cfg, rec))
 	}
 	mux.HandleFunc("GET /sandboxes/{id}", handleGetSandbox(s, cfg))
 	mux.HandleFunc("DELETE /sandboxes/{id}", handleDeleteSandbox(s, cfg, rec))

@@ -11,7 +11,7 @@ Every limit a client or operator can run into, with its default. The variables a
 | Requests in progress per sandbox, from all replicas | 256 | `SANDBOX_RUNNER_MAX_INFLIGHT_PER_SANDBOX` | `429` `sandbox_request_limit`, `Retry-After: 1` |
 | Execution `DELETE`s in progress per sandbox | 4 | fixed | the same |
 
-Creates, exec, file and code sandbox task requests count; a stream counts until it ends, a create until the runner has finished it. `GET /sandboxes`, `GET` and `DELETE /sandboxes/{id}`, admin routes and admin keys are not counted. Setting a limit to `0` turns it and its `DELETE` reserve off. Nothing caps all tenants together on a replica.
+Creates, exec, file and code sandbox task requests count; a stream counts until it ends, a create until the runner has finished it. `GET /sandboxes`, `GET` and `DELETE /sandboxes/{id}`, code sandbox deletes, admin routes and admin keys are not counted. Setting a limit to `0` turns it and its `DELETE` reserve off. Nothing caps all tenants together on a replica.
 
 ## Request rate
 
@@ -108,7 +108,7 @@ The size limit keeps a runner's download within `SANDBOX_RUNNER_VOLUME_FETCH_TIM
 
 The API sets no deadline on its request-path database calls or on a runner's response headers, so a database or runner that hangs holds requests until their clients give up.
 
-Each API replica uses at most 25 database connections, 1 with SQLite, and a request waits for a free one. With Postgres it opens up to `SANDBOX_API_IDLE_SWEEP_CONCURRENCY` + 5 more (13 by default) for sandbox locks. A create that names an `id` and a `DELETE /sandboxes/{id}` each hold one until they finish, and a sweep holds up to `SANDBOX_API_IDLE_SWEEP_CONCURRENCY`, leaving 5 for requests on the sweeping replica; further ones wait. Size Postgres `max_connections` for both pools on every replica.
+Each API replica uses at most 25 database connections, 1 with SQLite, and a request waits for a free one. With Postgres it opens up to `SANDBOX_API_IDLE_SWEEP_CONCURRENCY` + 5 more (13 by default) for sandbox locks. A create that names an `id`, a `DELETE /sandboxes/{id}` and a code sandbox delete each hold one until they finish (a delete by name holds one for each sandbox in turn), and a sweep holds up to `SANDBOX_API_IDLE_SWEEP_CONCURRENCY`, leaving 5 for requests on the sweeping replica; further ones wait. Size Postgres `max_connections` for both pools on every replica.
 
 ## Resources per sandbox
 

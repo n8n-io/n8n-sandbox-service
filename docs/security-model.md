@@ -78,6 +78,9 @@ Authorization runs on every sandbox request through `canAccessSandbox` in
   not found, and compare its `tenant_id` against the caller's. An admin key passes this check
   for every sandbox, whoever owns it. A create whose id belongs to a sandbox
   of another kind gets `409`.
+- Delete of code sandboxes by name looks up the name in the caller's tenant
+  only. An admin key uses `__admin__`, so it cannot delete the sandboxes of a
+  tenant by name.
 - List is scoped at the query level. It always filters by the route's kind.
   A tenant key lists only its own sandboxes; an admin key lists every tenant's
   unless it narrows the listing with the `tenant_id` query parameter. That

@@ -200,6 +200,9 @@ type SandboxStore interface {
 	// GetCodeSandboxByName returns the code sandbox of the tenant that has the
 	// name and is not draining, or nil when there is none.
 	GetCodeSandboxByName(tenantID, name string) (*SandboxRecord, error)
+	// ListCodeSandboxesByName returns all code sandboxes of the tenant that
+	// have the name, draining or not, oldest first.
+	ListCodeSandboxesByName(tenantID, name string) ([]*SandboxRecord, error)
 	// List returns the sandboxes f selects, newest first.
 	List(f SandboxFilter) ([]*SandboxRecord, error)
 	Count(f SandboxFilter) (int64, error)

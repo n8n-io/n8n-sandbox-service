@@ -873,7 +873,7 @@ Return the current code sandbox of a name, or create one. The client picks the n
 
 **Request body fields:**
 
-- `name` (required) — 1 to 128 characters from `A-Z`, `a-z`, `0-9`, `.`, `_`, `:` and `-`. A name points to at most one current sandbox per tenant. Other tenants can use the same name.
+- `name` (required) — 1 to 128 characters from `A-Z`, `a-z`, `0-9`, `.`, `_`, `:` and `-`, not only dots. A name points to at most one current sandbox per tenant. Other tenants can use the same name.
 - `runtime` (required) — `n8n-js` or `n8n-python`.
 - `runtimeVersion` (required) — up to 64 characters from `A-Z`, `a-z`, `0-9`, `.`, `+` and `-`.
 - `maxConcurrency` (required) — number of lanes, greater than `0`. A lane runs one task at a time.
@@ -925,6 +925,36 @@ curl -N -X POST http://localhost:8080/code/sandboxes/SANDBOX_ID/tasks \
   -H "X-Api-Key: YOUR_API_KEY" \
   -F 'spec={"taskId":"t_1","timeoutMs":30000};type=application/json' \
   -F 'input=@task.json;filename=task.json'
+```
+
+### DELETE /code/sandboxes/{id}
+
+Delete a code sandbox. This stops all its tasks. When the response of an open task request has started, its event stream stops without a `done` or `error` event. When it has not started, the request gets an error status, for example `503` or `404`.
+
+**Response:** `204 No Content`
+
+**Errors:** `400` invalid id, `401` missing or unknown API key, `403` provisioner or scaler key, `404` no code sandbox with this id for the caller, `502` the runner did not delete the sandbox (the sandbox stays, retry)
+
+**Example:**
+
+```bash
+curl -X DELETE http://localhost:8080/code/sandboxes/SANDBOX_ID \
+  -H "X-Api-Key: YOUR_API_KEY"
+```
+
+### DELETE /code/sandboxes/names/{name}
+
+Delete all code sandboxes of a name in the caller's tenant: the current sandbox and the draining sandboxes that no longer hold the name. This stops all their tasks. With an admin key, the tenant is `__admin__`. A sandbox that a create makes while the delete runs can stay.
+
+**Response:** `204 No Content`
+
+**Errors:** `400` invalid name, `401` missing or unknown API key, `403` provisioner or scaler key, `404` no code sandbox with this name for the caller, `502` the runner did not delete one or more sandboxes (the service tries all of them; the ones not deleted stay, retry)
+
+**Example:**
+
+```bash
+curl -X DELETE http://localhost:8080/code/sandboxes/names/scope-1 \
+  -H "X-Api-Key: YOUR_API_KEY"
 ```
 
 ---

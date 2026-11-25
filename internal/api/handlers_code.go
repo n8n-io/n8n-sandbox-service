@@ -30,6 +30,7 @@ type codeSandboxStore interface {
 	Create(record *store.SandboxRecord) error
 	GetCodeSandbox(id string) (*store.SandboxRecord, error)
 	GetCodeSandboxByName(tenantID, name string) (*store.SandboxRecord, error)
+	ListCodeSandboxesByName(tenantID, name string) ([]*store.SandboxRecord, error)
 	Delete(id string) error
 	LockSandbox(ctx context.Context, id string) (unlock func(), err error)
 }
@@ -62,10 +63,16 @@ type createCodeSandboxRequest struct {
 	MaxAgeMs       int64  `json:"maxAgeMs"`
 }
 
+// isValidCodeName reports whether name can name a code sandbox. A name of only
+// dots is refused: in a URL path, "." and ".." do not reach the name routes.
+func isValidCodeName(name string) bool {
+	return codeNameRegex.MatchString(name) && strings.Trim(name, ".") != ""
+}
+
 func (req *createCodeSandboxRequest) validate() error {
 	switch {
-	case !codeNameRegex.MatchString(req.Name):
-		return errors.New("invalid name: 1 to 128 characters from A-Z, a-z, 0-9, '.', '_', ':' and '-'")
+	case !isValidCodeName(req.Name):
+		return errors.New("invalid name: 1 to 128 characters from A-Z, a-z, 0-9, '.', '_', ':' and '-', not only dots")
 	case req.Runtime != codeRuntimeJS && req.Runtime != codeRuntimePython:
 		return fmt.Errorf("invalid runtime: must be %q or %q", codeRuntimeJS, codeRuntimePython)
 	case !codeRuntimeVersionRegex.MatchString(req.RuntimeVersion):
@@ -379,21 +386,13 @@ func createCodeSandbox(r *http.Request, s codeSandboxStore, reg registry.RunnerR
 func deleteIdleCodeSandbox(ctx context.Context, s codeSandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, found *store.SandboxRecord) error {
 	ctx, cancel := context.WithTimeout(ctx, runnerCreateBudget)
 	defer cancel()
-	unlock, err := s.LockSandbox(ctx, found.ID)
-	if err != nil {
-		return err
+	_, err := deleteCodeSandbox(ctx, s, reg, cfg, found.ID, func(rec *store.SandboxRecord) bool {
+		return rec.TenantID == found.TenantID && rec.Name == found.Name &&
+			isPastIdleDeleteWindow(rec, cfg, time.Now().Unix())
+	})
+	var runnerErr *codeRunnerDeleteError
+	if errors.As(err, &runnerErr) {
+		return &codeCreateError{code: http.StatusBadGateway, msg: "failed to delete idle sandbox: " + runnerErr.err.Error()}
 	}
-	defer unlock()
-	rec, err := s.GetCodeSandbox(found.ID)
-	if err != nil {
-		return err
-	}
-	if rec == nil || rec.TenantID != found.TenantID || rec.Name != found.Name ||
-		!isPastIdleDeleteWindow(rec, cfg, time.Now().Unix()) {
-		return nil
-	}
-	if err := runnerctl.DeleteSandbox(ctx, resolveControlAddr(rec, reg), cfg.RunnerAPIKey, runnerControlTLS(cfg), rec.ID); err != nil {
-		return &codeCreateError{code: http.StatusBadGateway, msg: "failed to delete idle sandbox: " + err.Error()}
-	}
-	return s.Delete(rec.ID)
+	return err
 }

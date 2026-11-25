@@ -366,6 +366,51 @@ func testCodeSandboxNames(t *testing.T, s SandboxStore, tenantA, tenantB string)
 		t.Fatalf("GetCodeSandboxByName(n3): %+v err=%v, want %s, not draining %s", got, err, current.ID, drained.ID)
 	}
 
+	// The list holds draining sandboxes too, but no general sandboxes and none
+	// of other tenants.
+	listIDs := func(tenantID, name string) map[string]bool {
+		t.Helper()
+		recs, err := s.ListCodeSandboxesByName(tenantID, name)
+		if err != nil {
+			t.Fatalf("ListCodeSandboxesByName(%s): %v", name, err)
+		}
+		ids := map[string]bool{}
+		for _, rec := range recs {
+			ids[rec.ID] = true
+		}
+		return ids
+	}
+	if ids := listIDs(tenantA, "n3"); len(ids) != 2 || !ids[drained.ID] || !ids[current.ID] {
+		t.Fatalf("ListCodeSandboxesByName(n3) = %v, want %s and %s", ids, drained.ID, current.ID)
+	}
+	if ids := listIDs(tenantA, "n1"); len(ids) != 1 || !ids[first.ID] {
+		t.Fatalf("ListCodeSandboxesByName(n1) = %v, want only %s", ids, first.ID)
+	}
+	if ids := listIDs(tenantA, "n2"); len(ids) != 0 {
+		t.Fatalf("ListCodeSandboxesByName(general kind) = %v, want none", ids)
+	}
+	if ids := listIDs(tenantB, "n3"); len(ids) != 0 {
+		t.Fatalf("ListCodeSandboxesByName(other tenant) = %v, want none", ids)
+	}
+
+	// The list is oldest first. The ids sort the other way, so an order by id
+	// fails too.
+	older := code(tenantA, "n5")
+	older.ID, older.Status, older.CreatedAt, older.LastActiveAt = "code-b-"+tenantA, "running", now-10, now-10
+	older.DrainingSince = now
+	newer := code(tenantA, "n5")
+	newer.ID, newer.Status, newer.CreatedAt, newer.LastActiveAt = "code-a-"+tenantA, "running", now, now
+	for _, rec := range []*SandboxRecord{&older, &newer} {
+		if err := s.Create(rec); err != nil {
+			t.Fatalf("create %s: %v", rec.ID, err)
+		}
+		t.Cleanup(func() { _ = s.Delete(rec.ID) })
+	}
+	recs, err := s.ListCodeSandboxesByName(tenantA, "n5")
+	if err != nil || len(recs) != 2 || recs[0].ID != older.ID || recs[1].ID != newer.ID {
+		t.Fatalf("ListCodeSandboxesByName(n5) = %v err=%v, want [%s %s]", recs, err, older.ID, newer.ID)
+	}
+
 	// A duplicate id is not a name conflict.
 	dup := code(tenantA, "n4")
 	dup.ID, dup.Status, dup.CreatedAt, dup.LastActiveAt = first.ID, "running", now, now
