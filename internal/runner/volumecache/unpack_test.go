@@ -359,6 +359,25 @@ func TestUnpackWaitsForASlotWithinTheFetchTimeout(t *testing.T) {
 	}
 }
 
+// The API refuses a volume by volume.RunnerBytes, so the cache must set aside
+// exactly that much.
+func TestRoomForIsWhatTheAPICounts(t *testing.T) {
+	counts := volume.TarCounts{Entries: 6, ContentBytes: 30, DecompressedBytes: 10240}
+	src := Source{Size: 10240, Tar: counts}
+	tarRoom := roomFor(Key{Scope: volume.SharedScope, Kind: volume.KindTar}, src)
+	if want := (room{bytes: 10240 + 44736, inodes: 1 + 7}); tarRoom != want {
+		t.Errorf("roomFor(tar) = %+v, want %+v", tarRoom, want)
+	}
+	if apiBytes := volume.RunnerBytes(volume.KindTar, src.Size, counts); tarRoom.bytes != apiBytes {
+		t.Errorf("roomFor(tar) sets aside %d bytes, the API counts %d", tarRoom.bytes, apiBytes)
+	}
+	const imageBytes = 1 << 20 // 1 MiB
+	imageRoom := roomFor(Key{Scope: volume.SharedScope, Kind: volume.KindExt4}, Source{Size: imageBytes})
+	if want := (room{bytes: volume.RunnerBytes(volume.KindExt4, imageBytes, volume.TarCounts{}), inodes: 1}); imageRoom != want || want.bytes != imageBytes {
+		t.Errorf("roomFor(ext4) = %+v, want %+v", imageRoom, want)
+	}
+}
+
 // The room a tar fetch sets aside covers the tar and its tree at once, and
 // a fetch that can't have it is refused before it downloads.
 func TestTarFetchHoldsRoomForTheTarAndItsTree(t *testing.T) {

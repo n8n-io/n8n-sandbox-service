@@ -23,26 +23,11 @@ const maxConcurrentUnpacks = 2
 // readDirBatch bounds the names settleTree reads from a directory at once.
 const readDirBatch = 1024
 
-const (
-	// treeBlockBytes is the block size of ext4 and XFS as runners use them.
-	treeBlockBytes = 4 << 10
-	// treeEntryBytes is the most one entry takes besides its content: a block
-	// (a file's partly used last block, a directory's first block, a long
-	// link target) and an eighth of one for its name in its directory.
-	treeEntryBytes = treeBlockBytes + treeBlockBytes/8
-)
-
-// treeRoom is the most a tree unpacked within counts takes on disk. File
-// content is bounded by the decompressed bytes, which the unpack always caps,
-// not by the content bytes, which it leaves uncapped when they are 0. A 64th
-// more is for the extent blocks of fragmented files, and the root is one more
-// entry.
+// treeRoom is the most a tree unpacked within counts takes on disk, as the API
+// counts it too.
 func treeRoom(counts volume.TarCounts) room {
-	content := (counts.DecompressedBytes + treeBlockBytes - 1) / treeBlockBytes * treeBlockBytes
-	return room{
-		bytes:  content + content/64 + (counts.Entries+1)*treeEntryBytes,
-		inodes: counts.Entries + 1,
-	}
+	treeBytes, treeInodes := counts.TreeRoom()
+	return room{bytes: treeBytes, inodes: treeInodes}
 }
 
 // unpack unpacks the verified tar at tarPath into a tree at dest, within

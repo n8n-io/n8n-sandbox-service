@@ -92,6 +92,7 @@ The API gateway is the single public-facing service. It exposes a REST API for s
 | Idle sweeper | `internal/api/ttl.go` | Periodic scan to stop/delete idle sandboxes (ephemeral ones are deleted, never stopped), bounded concurrency with per-call runner deadlines |
 | Activity recorder | `internal/api/activity.go` | Writes `last_active_at` in the background ([Sandbox activity](#sandbox-activity)) |
 | Key cache | `internal/api/apikey_cache.go` | Per-replica cache of tenant key lookups ([Tenant key cache](#tenant-key-cache)) |
+| Shared volumes | `internal/api/volumes/` | Publishes shared volumes into the volume store and has a runner build their images |
 | Config | `internal/api/config/` | Environment variable parsing and validation |
 
 **Middleware chain:** Recovery → CORS (optional) → Logging → Auth (API key) → Metrics (optional)
@@ -148,7 +149,7 @@ Runners register with the API by opening a long-lived gRPC stream (`RunnerRegist
 
 ### API → Runner Control (gRPC Unary + mTLS)
 
-When a client creates or deletes a sandbox, the API calls the runner's `SandboxControl` gRPC service (`CreateSandbox`, `StopSandbox`, `DeleteSandbox`). A delete the runner has received runs to its end on the runtime's own budget, even if the API stops waiting. This channel also uses mTLS with API key authentication in gRPC metadata.
+When a client creates or deletes a sandbox, the API calls the runner's `SandboxControl` gRPC service (`CreateSandbox`, `StopSandbox`, `DeleteSandbox`). A delete the runner has received runs to its end on the runtime's own budget, even if the API stops waiting. With `SANDBOX_API_VOLUME_BUILD=firecracker`, a [shared volume](API.md#shared-volumes) publish also calls `BuildVolume`. This channel also uses mTLS with API key authentication in gRPC metadata.
 
 The runner's HTTP listener uses the same certificate and the same client CA, so both channels to a runner share one identity. It negotiates with `VerifyClientCertIfGiven` so that health probes, which cannot present a certificate, still reach `/livez` and `/readyz`; the auth middleware requires a verified certificate on every other route.
 
@@ -225,7 +226,7 @@ Trust boundaries, the mechanism enforcing each, and the non-guarantees are in [s
 
 ### API store
 
-SQLite at `SANDBOX_API_DATA_DIR/api.db` (default) or Postgres. Tables: `sandboxes` (ID, tenant, status, timestamps, runner routing), `tenants`, `api_keys` (hashed), and on Postgres `runners` (heartbeats; SQLite keeps the runner registry in memory). Migrations run automatically on startup. The SQLite file uses WAL with `synchronous=NORMAL` unless `SANDBOX_API_SQLITE_WAL=false`.
+SQLite at `SANDBOX_API_DATA_DIR/api.db` (default) or Postgres. Tables: `sandboxes` (ID, tenant, status, timestamps, runner routing), `tenants`, `api_keys` (hashed), `shared_volumes`, and on Postgres `runners` (heartbeats; SQLite keeps the runner registry in memory). Migrations run automatically on startup. The SQLite file uses WAL with `synchronous=NORMAL` unless `SANDBOX_API_SQLITE_WAL=false`.
 
 ### Runner stateless
 

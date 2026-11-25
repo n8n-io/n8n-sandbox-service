@@ -30,6 +30,12 @@ type timing struct {
 	// cleanupTimeout bounds the removal of what a failed publish or a delete
 	// left.
 	cleanupTimeout time.Duration
+	// builderWait is how long a build waits for a runner that takes it,
+	// trying again after retryFirst, then twice as long each time up to
+	// retryMax.
+	builderWait, retryFirst, retryMax time.Duration
+	// buildCall bounds one call to a runner to build an image.
+	buildCall time.Duration
 }
 
 // limits are the caps a publish is held to: the package's constants, smaller
@@ -40,6 +46,10 @@ type limits struct {
 	// maxLiveVolumes counts the publishing and ready shared volumes of the
 	// whole service, not of one API pod.
 	maxLiveVolumes int
+	// maxImageBytes caps an image; maxRunnerBytes what a volume takes on a
+	// runner, as volume.RunnerBytes counts it.
+	maxImageBytes  int64
+	maxRunnerBytes int64
 }
 
 // tarPolicy is what a published tar must meet: the volume tar rules, within
@@ -59,6 +69,16 @@ var defaultTiming = timing{
 	renewEvery:     30 * time.Second,
 	giveUpAfter:    90 * time.Second,
 	cleanupTimeout: 30 * time.Second,
+	// A build takes seconds to a minute, and a runner builds one at a time. A
+	// build waits 5 minutes for a runner.
+	builderWait: 5 * time.Minute,
+	// A runner that refuses is busy with one build. Try again after a second,
+	// then back off to 10 seconds.
+	retryFirst: time.Second,
+	retryMax:   10 * time.Second,
+	// The build timeout of a runner is 5 minutes by default. The transfer of
+	// the tar and of the image come on top.
+	buildCall: 30 * time.Minute,
 }
 
 // Role is the role of a key that may change shared volumes.
@@ -83,6 +103,8 @@ type Service struct {
 	generateID       func() string
 	timing           timing
 	limits           limits
+	// builds is nil on a service whose runners attach tars.
+	builds *Builds
 }
 
 // NewService keeps shared volume rows in records and their objects in objects.
@@ -97,7 +119,13 @@ func NewService(shutdownCtx context.Context, records store.SharedVolumes, object
 		now:              time.Now,
 		generateID:       func() string { return uuid.New().String() },
 		timing:           defaultTiming,
-		limits:           limits{maxTarBytes: MaxUploadBytes, policy: tarPolicy(), maxLiveVolumes: MaxSharedVolumes},
+		limits: limits{
+			maxTarBytes:    MaxUploadBytes,
+			policy:         tarPolicy(),
+			maxLiveVolumes: MaxSharedVolumes,
+			maxImageBytes:  MaxImageBytes,
+			maxRunnerBytes: volume.MaxSandboxVolumeBytes,
+		},
 	}
 }
 

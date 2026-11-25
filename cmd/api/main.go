@@ -132,7 +132,7 @@ func main() {
 	// server drains.
 	publishCtx, publishCancel := context.WithCancel(context.Background())
 	defer publishCancel()
-	sharedVolumeService, err := newSharedVolumeService(publishCtx, cfg, sandboxStore, volumes, mrec)
+	sharedVolumeService, err := newSharedVolumeService(publishCtx, cfg, sandboxStore, volumes, runnerReg, mrec)
 	if err != nil {
 		slog.Error("failed to create shared volume service", "error", err)
 		os.Exit(1)

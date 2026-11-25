@@ -83,6 +83,10 @@ All fixed. [API.md](API.md#shared-volumes) has the routes.
 | Entries of the tar, plus the parent directories it does not list | 1,000,000 | `413` `too_large` |
 | File content in the tar | 4 GiB | `413` `too_large` |
 | Tar once decompressed, headers and padding included | 8 GiB | `413` `too_large` |
+| Image, with `SANDBOX_API_VOLUME_BUILD=firecracker` | 5 GiB | `413` `too_large` |
+| Volume on a runner: its image, or its tar plus its unpacked files | 10 GiB | `413` `too_large` |
+| Wait for a runner to build the image | 5 min | `503` `no_capacity`, `Retry-After: 30` |
+| One image build | 30 min | `502` `build_failed` (`timeout`) |
 | Path or link target of an entry | 4,095 bytes | `422` `invalid_tar` |
 | Name | 1–128 bytes of `a-z`, `0-9`, `.`, `_`, `-`; starts and ends with a letter or digit | `400` |
 | Names per volume, and volumes per name | 1 | `409` `name_mismatch` or `name_taken` |
@@ -91,7 +95,7 @@ All fixed. [API.md](API.md#shared-volumes) has the routes.
 | A publish of a digest another request is publishing | | `409` `publish_in_progress`, `Retry-After: 30` |
 | `GET /shared-volumes` | no paging | |
 
-The size limit keeps a runner's download within `SANDBOX_RUNNER_VOLUME_FETCH_TIMEOUT`. The entry limit bounds the memory the [volume builder](../internal/runner/runtime/firecracker.ee/README.md#volume-builder) spends on the entries. Publishes count against no tenant's requests in progress.
+The tar and image limits keep a runner's download within `SANDBOX_RUNNER_VOLUME_FETCH_TIMEOUT`. With a builder, the image limit is reached before the entry limit, at about 580,000 entries. The entry limit bounds the memory the [volume builder](../internal/runner/runtime/firecracker.ee/README.md#volume-builder) spends on the entries. Publishes count against no tenant's requests in progress.
 
 ## Time limits on requests
 
@@ -124,4 +128,4 @@ On Docker, memory, CPU and process limits apply only with `SANDBOX_RUNNER_ENABLE
 
 ## Retries
 
-`429` and `503` `no_capacity` carry `Retry-After: 1`; other `503`s carry none. The [SDK](../sdk/README.md) does not read `Retry-After`. It retries `429`; `503` and network errors only for idempotent requests; and a create on `503` `no_capacity`, or on any `503` when it names an `id`. It retries up to 3 times after 200 ms, doubling up to 10 s, with jitter, and resumes a broken exec stream up to 10 times per command, 250 ms apart.
+`429` and `503` `no_capacity` carry `Retry-After: 1`, or `30` on a [shared volume](#shared-volumes) publish; other `503`s carry none. The [SDK](../sdk/README.md) does not read `Retry-After`. It retries `429`; `503` and network errors only for idempotent requests; and a create on `503` `no_capacity`, or on any `503` when it names an `id`. It retries up to 3 times after 200 ms, doubling up to 10 s, with jitter, and resumes a broken exec stream up to 10 times per command, 250 ms apart.
