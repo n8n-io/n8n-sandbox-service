@@ -15,6 +15,12 @@ REGISTRY_PORT="${REGISTRY_PORT:-5050}"
 REGISTRY_INTERNAL_ADDR="${REGISTRY_NAME}:5000"
 PUSH_SANDBOX_IMAGE="localhost:${REGISTRY_PORT}/n8n-sandbox:e2e-${ARCH}"
 REMOTE_SANDBOX_IMAGE="${REGISTRY_INTERNAL_ADDR}/n8n-sandbox:e2e-${ARCH}"
+CODE_IMAGE="n8n-code-sandbox-e2e:latest-${ARCH}"
+PUSH_CODE_IMAGE="localhost:${REGISTRY_PORT}/n8n-code-sandbox-e2e:e2e-${ARCH}"
+REMOTE_CODE_IMAGE="${REGISTRY_INTERNAL_ADDR}/n8n-code-sandbox-e2e:e2e-${ARCH}"
+# Code sandbox limits on the runner. tests/code-sandbox.spec.ts checks them.
+CODE_CPU_PERCENT=50
+CODE_MAX_MEMORY_MB=1024
 RUNNER_CONTAINER_NAME="sandbox-runner-e2e-$$"
 API_CONTAINER_NAME="sandbox-api-e2e-$$"
 POSTGRES_CONTAINER_NAME="sandbox-postgres-e2e-$$"
@@ -68,7 +74,7 @@ trap cleanup EXIT
 
 if [[ "${E2E_SKIP_BUILD:-}" != "1" ]]; then
 	echo "Building service and sandbox images..."
-	make -C "$PROJECT_DIR" docker-local
+	make -C "$PROJECT_DIR" docker-local "docker-code-sandbox-e2e-${ARCH}"
 fi
 
 e2e_bootstrap_mtls_maybe "$PROJECT_DIR" "$TLS_DIR_OWNED" "$TLS_DIR" "$API_TLS_DNS" "$RUNNER_CONTROL_ALIAS"
@@ -103,6 +109,10 @@ echo "Pushing sandbox image to local registry..."
 docker tag "$SANDBOX_IMAGE" "$PUSH_SANDBOX_IMAGE"
 docker push "$PUSH_SANDBOX_IMAGE"
 
+echo "Pushing code sandbox image to local registry..."
+docker tag "$CODE_IMAGE" "$PUSH_CODE_IMAGE"
+docker push "$PUSH_CODE_IMAGE"
+
 RUNTIME_ARGS=()
 if [[ "${PRIVILEGED:-}" == "1" ]] || [[ "$(uname)" == "Darwin" ]]; then
 	RUNTIME_ARGS+=(--privileged)
@@ -135,6 +145,7 @@ API_DOCKER_RUN+=(
 )
 e2e_api_container_env_args "$API_KEY" "$REG_TOKEN" "$RUNNER_INTERNAL_API_KEY" "$TLS_DIR"
 API_DOCKER_RUN+=("${E2E_API_CONTAINER_ENV_ARGS[@]}")
+API_DOCKER_RUN+=(-e "SANDBOX_API_CODE_SANDBOXES_ENABLED=true")
 API_DOCKER_RUN+=(--name "$API_CONTAINER_NAME" "$API_IMAGE")
 docker run "${API_DOCKER_RUN[@]}"
 
@@ -154,6 +165,10 @@ docker run -d \
 	-e "SANDBOX_RUNNER_API_KEYS=$RUNNER_INTERNAL_API_KEY" \
 	-e "SANDBOX_RUNNER_METRICS_ENABLED=true" \
 	-e "SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE=$REMOTE_SANDBOX_IMAGE" \
+	-e "SANDBOX_RUNNER_CODE_SANDBOXES_ENABLED=true" \
+	-e "SANDBOX_RUNNER_DOCKER_CODE_IMAGE=$REMOTE_CODE_IMAGE" \
+	-e "SANDBOX_RUNNER_CODE_CPU_PERCENT=$CODE_CPU_PERCENT" \
+	-e "SANDBOX_RUNNER_CODE_MAX_MEMORY_MB=$CODE_MAX_MEMORY_MB" \
 	-e "SANDBOX_RUNNER_DOCKER_INSECURE_REGISTRIES=$REGISTRY_INTERNAL_ADDR" \
 	-e "SANDBOX_RUNNER_API_GRPC_ADDR=${API_CONTAINER_NAME}:9090" \
 	-e "SANDBOX_RUNNER_REGISTRATION_TOKEN=$REG_TOKEN" \
@@ -208,6 +223,9 @@ export E2E_RUNNER_CONTROL_TLS_SERVER_NAME="$RUNNER_CONTROL_ALIAS"
 # host; specs that exec in a sandbox through e2e-runnerctl pass it on.
 export E2E_RUNNER_PUBLISHED_HTTP_ADDR="127.0.0.1:${RUNNER_HTTP_HOST_PORT}"
 export E2E_TLS_DIR="$TLS_DIR"
+export E2E_CODE_SANDBOXES=1
+export E2E_CODE_CPU_PERCENT="$CODE_CPU_PERCENT"
+export E2E_CODE_MAX_MEMORY_MB="$CODE_MAX_MEMORY_MB"
 
 echo "Running e2e tests (excluding topology-only + resilience; API restart runs last)..."
 MAIN_SPECS=()

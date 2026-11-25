@@ -213,6 +213,8 @@ func TestSandboxControlGRPCCreateSandboxErrorCodes(t *testing.T) {
 		{name: "other", err: errors.New("clone sandbox rootfs: no space left on device"), want: codes.Internal},
 		{name: "deadline", err: context.DeadlineExceeded, want: codes.DeadlineExceeded},
 		{name: "volumes unsupported", err: fmt.Errorf("no volume cache: %w", runnerruntime.ErrVolumesUnsupported), want: codes.FailedPrecondition},
+		{name: "code unsupported", err: fmt.Errorf("firecracker: %w", runnerruntime.ErrCodeSandboxesUnsupported), want: codes.FailedPrecondition},
+		{name: "code image not ready", err: runnerruntime.ErrCodeImageNotReady, want: codes.Unavailable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := &SandboxControlGRPC{
@@ -227,6 +229,54 @@ func TestSandboxControlGRPCCreateSandboxErrorCodes(t *testing.T) {
 			}
 			if got := runnerctl.IsCapacityRefusal(err); got != tc.refusal {
 				t.Fatalf("IsCapacityRefusal(%v) = %v, want %v", err, got, tc.refusal)
+			}
+		})
+	}
+}
+
+// A runner with code sandboxes disabled, or a code sandbox over the memory
+// cap, is refused before the runtime is asked.
+func TestSandboxControlGRPCCreateSandboxChecksCode(t *testing.T) {
+	const id = "11111111-1111-4111-8111-111111111111"
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-api-key", "runner-key"))
+	for _, tc := range []struct {
+		name     string
+		enabled  bool
+		memoryMB int64
+		want     codes.Code
+	}{
+		{name: "disabled", enabled: false, memoryMB: 512, want: codes.FailedPrecondition},
+		{name: "over the memory cap", enabled: true, memoryMB: 1025, want: codes.InvalidArgument},
+		{name: "at the memory cap", enabled: true, memoryMB: 1024, want: codes.OK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := &createOptsRuntime{}
+			srv := &SandboxControlGRPC{
+				Runtime: rt,
+				Cfg: &config.Config{
+					APIKeys:              map[string]struct{}{"runner-key": {}},
+					CodeSandboxesEnabled: tc.enabled,
+					CodeMaxMemoryMB:      1024,
+				},
+				Rec:    metrics.NewRunnerRecorder(true),
+				Cordon: cordon.New(),
+			}
+			resp, err := srv.CreateSandbox(ctx, &pb.CreateSandboxRequest{
+				SandboxId:         id,
+				CreateOptionsJson: fmt.Sprintf(`{"egress":"none","code_options":{"memory_mb":%d}}`, tc.memoryMB),
+			})
+			if got := status.Code(err); got != tc.want {
+				t.Fatalf("CreateSandbox() code = %v (%v), want %v", got, err, tc.want)
+			}
+			if tc.want != codes.OK {
+				if rt.opts != nil {
+					t.Fatal("runtime was asked to create")
+				}
+				return
+			}
+			want := fmt.Sprintf(`{"egress":"none","code_options":{"memory_mb":%d}}`, tc.memoryMB)
+			if got := resp.GetAppliedCreateOptionsJson(); got != want {
+				t.Fatalf("applied_create_options_json = %q, want %q", got, want)
 			}
 		})
 	}

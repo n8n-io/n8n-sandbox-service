@@ -149,8 +149,9 @@ var VolumeLeftOutReasons = []string{
 // AppliedCreateOptions is the JSON shape of applied_create_options_json: the
 // create options as the runtime applied them.
 type AppliedCreateOptions struct {
-	Egress  Egress          `json:"egress,omitempty"`
-	Volumes []AppliedVolume `json:"volumes,omitempty"`
+	Egress   Egress          `json:"egress,omitempty"`
+	Volumes  []AppliedVolume `json:"volumes,omitempty"`
+	CodeOpts *CodeOptions    `json:"code_options,omitempty"`
 }
 
 // AppliedVolume is a requested volume, without its URL, and whether the
@@ -170,7 +171,7 @@ type AppliedVolume struct {
 // Applied is the echo of a create that left out the volumes in leftOut, which
 // maps an index in o.Volumes to a VolumeLeftOut value.
 func (o *CreateOptions) Applied(leftOut map[int]string) AppliedCreateOptions {
-	applied := AppliedCreateOptions{Egress: o.Egress}
+	applied := AppliedCreateOptions{Egress: o.Egress, CodeOpts: o.CodeOpts}
 	for index, vol := range o.Volumes {
 		reason, isLeftOut := leftOut[index]
 		applied.Volumes = append(applied.Volumes, AppliedVolume{

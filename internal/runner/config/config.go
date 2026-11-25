@@ -18,6 +18,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/daemon"
 	"github.com/n8n-io/sandbox-service/internal/envvar"
 	"github.com/n8n-io/sandbox-service/internal/logging"
+	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 )
 
 const (
@@ -34,6 +35,9 @@ const (
 
 	defaultVolumeCacheMaxBytes = 20 << 30 // 20 GiB
 	defaultVolumeFetchTimeout  = 5 * time.Minute
+
+	defaultCodeCPUPercent  = 100
+	defaultCodeMaxMemoryMB = 512
 )
 
 // Config holds shared runner configuration parsed from environment variables.
@@ -126,6 +130,19 @@ type Config struct {
 	// VolumeFetchTimeout bounds one volume object download. Parsed from
 	// SANDBOX_RUNNER_VOLUME_FETCH_TIMEOUT (default 5m).
 	VolumeFetchTimeout time.Duration
+
+	// CodeSandboxesEnabled lets the runner create code sandboxes. Parsed from
+	// SANDBOX_RUNNER_CODE_SANDBOXES_ENABLED (default false). When false, the
+	// other Code* fields are not read.
+	CodeSandboxesEnabled bool
+
+	// CodeCPUPercent is the CPU limit of a code sandbox as a percentage of one
+	// core. Parsed from SANDBOX_RUNNER_CODE_CPU_PERCENT (default 100).
+	CodeCPUPercent int
+
+	// CodeMaxMemoryMB is the largest memory limit a code sandbox can ask for,
+	// in megabytes. Parsed from SANDBOX_RUNNER_CODE_MAX_MEMORY_MB (default 512).
+	CodeMaxMemoryMB int64
 }
 
 func validateHostPort(v string) error {
@@ -175,6 +192,23 @@ func (c *Config) ResolvedControlGRPCAdvertiseAddr() string {
 		port = p
 	}
 	return net.JoinHostPort(host, port)
+}
+
+// loadCode reads the code sandbox settings. It reads the limits only when
+// code sandboxes are enabled.
+func loadCode(cfg *Config) error {
+	if err := envvar.Bool("SANDBOX_RUNNER_CODE_SANDBOXES_ENABLED", &cfg.CodeSandboxesEnabled); err != nil {
+		return err
+	}
+	if !cfg.CodeSandboxesEnabled {
+		return nil
+	}
+	cfg.CodeCPUPercent = defaultCodeCPUPercent
+	cfg.CodeMaxMemoryMB = defaultCodeMaxMemoryMB
+	if err := envvar.PositiveInt("SANDBOX_RUNNER_CODE_CPU_PERCENT", &cfg.CodeCPUPercent); err != nil {
+		return err
+	}
+	return envvar.IntBetween("SANDBOX_RUNNER_CODE_MAX_MEMORY_MB", &cfg.CodeMaxMemoryMB, runnerruntime.MinCodeMemoryMB, math.MaxInt32)
 }
 
 // Load reads configuration from environment variables and returns a Config.
@@ -245,6 +279,10 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if err := envvar.PositiveDuration("SANDBOX_RUNNER_VOLUME_FETCH_TIMEOUT", &cfg.VolumeFetchTimeout); err != nil {
+		return nil, err
+	}
+
+	if err := loadCode(cfg); err != nil {
 		return nil, err
 	}
 

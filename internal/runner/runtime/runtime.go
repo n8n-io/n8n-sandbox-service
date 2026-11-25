@@ -78,6 +78,8 @@ func ParseEgress(s string) (Egress, error) {
 type CreateOptions struct {
 	Egress  Egress  `json:"egress,omitempty"`
 	Volumes Volumes `json:"volumes,omitempty"`
+	// CodeOpts is set for a code sandbox.
+	CodeOpts *CodeOptions `json:"code_options,omitempty"`
 }
 
 // ParseCreateOptions decodes the wire form of CreateOptions. Empty means the
@@ -100,6 +102,9 @@ func ParseCreateOptions(s string) (*CreateOptions, error) {
 	}
 	opts.Egress = egress
 	if err := validateVolumes(opts.Volumes); err != nil {
+		return nil, err
+	}
+	if err := validateCodeSandboxOptions(opts.CodeOpts, opts.Egress, opts.Volumes); err != nil {
 		return nil, err
 	}
 	if len(opts.Volumes) == 0 {
