@@ -6,11 +6,12 @@ Every limit — requests in progress, quotas, sizes, timeouts, idle windows — 
 
 ### API keys and tenants
 
-There are four key classes:
+There are five key classes:
 
 - `SANDBOX_API_KEYS` are admin keys. An admin key can create/list/delete any sandbox, manage tenants and mint tenant API keys via the admin API.
 - `SANDBOX_API_PROVISIONER_KEYS` are provisioner keys: `POST /admin/tenants`, `PATCH /admin/tenants/{id}` and `DELETE /admin/tenants/{id}` only, `403` everywhere else. Why the class exists and what it does not protect: [security-model.md](security-model.md#provisioner-keys).
 - `SANDBOX_API_SCALER_KEYS` are scaler keys: `GET /admin/runners` and `PUT`/`DELETE /admin/runners/{id}/cordon` only, `403` on every other path ([security-model.md](security-model.md#scaler-keys)).
+- `SANDBOX_API_VOLUME_PUBLISHER_KEYS` are volume publisher keys: the shared volume routes only, `403` on every other path ([security-model.md](security-model.md#volume-publisher-keys)).
 - Tenant keys are minted by an admin (or returned when a tenant is created). A tenant key may only create sandboxes for that tenant and may only list/get/delete/proxy its own sandboxes. Self-hosted operators can ignore tenant APIs entirely and keep using the admin key.
 
 Tenant keys are returned in plaintext once on create; only a hash is stored. Each API replica remembers a tenant key lookup for `SANDBOX_API_KEY_CACHE_TTL` (default `15s`), so a revoked key, or the key of a deleted tenant, can still be accepted by other replicas for up to that long.
