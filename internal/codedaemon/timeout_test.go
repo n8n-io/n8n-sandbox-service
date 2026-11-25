@@ -12,22 +12,28 @@ import (
 	"time"
 )
 
-func TestTaskTimeoutCanOnlyShortenServiceLimit(t *testing.T) {
-	t.Setenv("CODE_DAEMON_DEFAULT_TASK_TIMEOUT", "2s")
+func TestTaskTimeoutIsCappedByServiceLimit(t *testing.T) {
 	t.Setenv("CODE_DAEMON_MAX_TASK_TIMEOUT", "3s")
 	cfg, err := LoadConfig()
 	if err != nil {
 		t.Fatal(err)
 	}
 	d := New(cfg)
-	for request, want := range map[int64]time.Duration{0: 2 * time.Second, 250: 250 * time.Millisecond, 2500: 2 * time.Second, math.MaxInt64: 2 * time.Second} {
+	for request, want := range map[int64]time.Duration{250: 250 * time.Millisecond, 3000: 3 * time.Second, 3500: 3 * time.Second, math.MaxInt64: 3 * time.Second} {
 		if got := d.taskTimeout(request); got != want {
 			t.Errorf("timeout for %d = %s, want %s", request, got, want)
 		}
 	}
-	t.Setenv("CODE_DAEMON_DEFAULT_TASK_TIMEOUT", "4s")
-	if _, err := LoadConfig(); err == nil {
-		t.Fatal("accepted a default longer than the maximum")
+}
+
+func TestMaxTaskTimeoutDefaultsToOneMinute(t *testing.T) {
+	t.Setenv("CODE_DAEMON_MAX_TASK_TIMEOUT", "")
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MaxTimeout != time.Minute {
+		t.Fatalf("max timeout = %s, want 1m", cfg.MaxTimeout)
 	}
 }
 
@@ -79,7 +85,7 @@ func testRuntimeGroupCleanup(t *testing.T, killLeader bool) {
 	}
 	spec := `{"taskId":"hang-with-child","timeoutMs":2000}`
 	if killLeader {
-		spec = `{"taskId":"hang-with-child"}`
+		spec = `{"taskId":"hang-with-child","timeoutMs":60000}`
 	}
 	r := taskRequest(t, spec, map[string]string{"bin/0": listener.Addr().String()})
 	w := httptest.NewRecorder()

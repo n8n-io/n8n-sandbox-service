@@ -17,15 +17,15 @@ const maxSpecBytes = 1 << 10 // 1 KiB
 var taskIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,128}$`)
 
 var (
-	errSpecTooLarge    = errors.New("task spec too large")
-	errInvalidTaskID   = errors.New("invalid task id")
-	errNegativeTimeout = errors.New("negative timeout")
+	errSpecTooLarge   = errors.New("task spec too large")
+	errInvalidTaskID  = errors.New("invalid task id")
+	errInvalidTimeout = errors.New("timeout must be positive")
 )
 
 type taskSpec struct {
 	TaskID               string `json:"taskId"`
 	InlineResultMaxBytes int64  `json:"inlineResultMaxBytes"` // Requested inline limit; defaults to the daemon cap if unset or out of range.
-	TimeoutMs            int64  `json:"timeoutMs"`            // Optional shorter limit; zero uses the service limit.
+	TimeoutMs            int64  `json:"timeoutMs"`            // Required execution limit; the service cap applies when it is larger.
 }
 
 // admit validates the first multipart part and tries to reserve a lane without
@@ -98,8 +98,8 @@ func validateTaskSpec(spec taskSpec) error {
 	if !taskIDPattern.MatchString(spec.TaskID) {
 		return errInvalidTaskID
 	}
-	if spec.TimeoutMs < 0 {
-		return errNegativeTimeout
+	if spec.TimeoutMs <= 0 {
+		return errInvalidTimeout
 	}
 	return nil
 }

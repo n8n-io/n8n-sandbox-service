@@ -23,7 +23,7 @@ func TestInputLimits(t *testing.T) {
 		"count":            {map[string]string{"a": "a", "b": "b", "c": ""}, errInputLimit},
 	} {
 		t.Run(name, func(t *testing.T) {
-			r := taskRequest(t, `{"taskId":"test"}`, tc.files)
+			r := taskRequest(t, `{"taskId":"test","timeoutMs":60000}`, tc.files)
 			spec, mr := d.admit(httptest.NewRecorder(), r)
 			if mr == nil {
 				t.Fatal("request not admitted")
@@ -54,7 +54,7 @@ func TestInputDirectoryLimit(t *testing.T) {
 		want  error
 	}{{8, nil}, {9, errInputLimit}} {
 		t.Run(strconv.Itoa(tc.files), func(t *testing.T) {
-			spec, mr := d.admit(httptest.NewRecorder(), taskRequest(t, `{"taskId":"test"}`, deepFiles(tc.files)))
+			spec, mr := d.admit(httptest.NewRecorder(), taskRequest(t, `{"taskId":"test","timeoutMs":60000}`, deepFiles(tc.files)))
 			if mr == nil {
 				t.Fatal("request not admitted")
 			}

@@ -2,39 +2,28 @@
 package codedaemon
 
 import (
-	"errors"
 	"time"
 
 	"github.com/n8n-io/sandbox-service/internal/envvar"
 )
 
 const (
-	defaultTaskTimeout = time.Minute
-	maxTaskTimeout     = 24 * time.Hour // Hard cap on configured execution limits.
+	defaultMaxTaskTimeout = time.Minute
+	maxTaskTimeoutCap     = 24 * time.Hour // Hard cap on the configured maximum.
 )
 
-var errDefaultAboveMax = errors.New("default task timeout exceeds maximum task timeout")
-
-// loadTaskTimeouts returns the default and maximum execution durations. A lower
-// configured maximum also lowers the default unless the default is set explicitly.
-func loadTaskTimeouts() (time.Duration, time.Duration, error) {
-	upper := maxTaskTimeout
-	if err := envvar.DurationBetween("CODE_DAEMON_MAX_TASK_TIMEOUT", &upper, time.Millisecond, maxTaskTimeout); err != nil {
-		return 0, 0, err
+// loadMaxTaskTimeout returns the service cap on the execution duration.
+func loadMaxTaskTimeout() (time.Duration, error) {
+	value := defaultMaxTaskTimeout
+	if err := envvar.DurationBetween("CODE_DAEMON_MAX_TASK_TIMEOUT", &value, time.Millisecond, maxTaskTimeoutCap); err != nil {
+		return 0, err
 	}
-	value := min(defaultTaskTimeout, upper)
-	if err := envvar.DurationBetween("CODE_DAEMON_DEFAULT_TASK_TIMEOUT", &value, time.Millisecond, maxTaskTimeout); err != nil {
-		return 0, 0, err
-	}
-	if value > upper {
-		return 0, 0, errDefaultAboveMax
-	}
-	return value, upper, nil
+	return value, nil
 }
 
-// taskTimeout lets a request shorten, but never extend, the service limit.
+// taskTimeout uses the requested duration, but never more than the service cap.
 func (d *Daemon) taskTimeout(requestMillis int64) time.Duration {
-	limit := min(d.cfg.DefaultTimeout, d.cfg.MaxTimeout)
+	limit := d.cfg.MaxTimeout
 	// Compare before converting, since the request value may overflow a duration.
 	if requestMillis > 0 && requestMillis <= limit.Milliseconds() {
 		return time.Duration(requestMillis) * time.Millisecond

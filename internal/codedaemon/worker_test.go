@@ -80,7 +80,7 @@ func TestRuntimeFixture(t *testing.T) {
 		if m.TaskID == "user-error" {
 			// A runtime keeps console output in result.json, also on a user error.
 			if os.WriteFile(filepath.Join(m.Dir, "out", "result.json"), []byte(`{"console":["before throw"]}`), 0o600) != nil ||
-				enc.Encode(workerMessage{Type: "error", TaskID: m.TaskID, Error: json.RawMessage(`{"message":"boom"}`)}) != nil {
+				enc.Encode(workerMessage{Type: "error", TaskID: m.TaskID, Error: json.RawMessage(`{"message":"boom","timeoutMs":60000}`)}) != nil {
 				os.Exit(2)
 			}
 			continue
@@ -122,7 +122,7 @@ func TestRuntimeFixture(t *testing.T) {
 
 func TestWorkerExitPreservesResult(t *testing.T) {
 	d := testDaemon(t, Config{})
-	req := taskRequest(t, `{"taskId":"exit-after-result"}`, nil)
+	req := taskRequest(t, `{"taskId":"exit-after-result","timeoutMs":60000}`, nil)
 	spec, mr := d.admit(httptest.NewRecorder(), req)
 	if mr == nil {
 		t.Fatal("request was not admitted")
@@ -169,7 +169,7 @@ func TestStageAndDispatchSharedRuntime(t *testing.T) {
 	}
 	var tasks []pending
 	for _, id := range []string{"first", "second"} {
-		r := taskRequest(t, `{"taskId":"`+id+`"}`, map[string]string{"bin/0": id})
+		r := taskRequest(t, `{"taskId":"`+id+`","timeoutMs":60000}`, map[string]string{"bin/0": id})
 		spec, mr := d.admit(httptest.NewRecorder(), r)
 		if mr == nil {
 			t.Fatal("request was not admitted")

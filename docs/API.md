@@ -921,7 +921,7 @@ By default, the input files can be at most 64 MiB in total ([limits](limits.md))
 ```bash
 curl -N -X POST http://localhost:8080/code/sandboxes/SANDBOX_ID/tasks \
   -H "X-Api-Key: YOUR_API_KEY" \
-  -F 'spec={"taskId":"t_1"};type=application/json' \
+  -F 'spec={"taskId":"t_1","timeoutMs":30000};type=application/json' \
   -F 'input=@task.json;filename=task.json'
 ```
 

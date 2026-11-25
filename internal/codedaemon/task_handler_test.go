@@ -19,7 +19,7 @@ func TestStreamFlushesThroughTerminal(t *testing.T) {
 	srv := httptest.NewServer(d.Handler())
 	defer srv.Close()
 	client := &http.Client{Timeout: 2 * heartbeatInterval}
-	req := taskRequest(t, `{"taskId":"quiet"}`, nil)
+	req := taskRequest(t, `{"taskId":"quiet","timeoutMs":60000}`, nil)
 	res, err := client.Post(srv.URL+"/tasks", req.Header.Get("Content-Type"), req.Body)
 	if err != nil {
 		t.Fatal(err)
@@ -42,7 +42,7 @@ func TestStreamFlushesThroughTerminal(t *testing.T) {
 		t.Fatalf("expected exactly one terminal event, got %v", err)
 	}
 	w := httptest.NewRecorder()
-	d.Handler().ServeHTTP(w, taskRequest(t, `{"taskId":"quiet"}`, nil))
+	d.Handler().ServeHTTP(w, taskRequest(t, `{"taskId":"quiet","timeoutMs":60000}`, nil))
 	if w.Code != http.StatusConflict {
 		t.Fatalf("duplicate status = %d", w.Code)
 	}
@@ -59,7 +59,7 @@ func TestRejectedUploadReleasesLaneAndID(t *testing.T) {
 		{nil, http.StatusOK},
 	} {
 		w := httptest.NewRecorder()
-		h.ServeHTTP(w, taskRequest(t, `{"taskId":"retry"}`, tc.files))
+		h.ServeHTTP(w, taskRequest(t, `{"taskId":"retry","timeoutMs":60000}`, tc.files))
 		if w.Code != tc.status {
 			t.Fatalf("status = %d, want %d: %s", w.Code, tc.status, w.Body.String())
 		}
@@ -82,7 +82,7 @@ func TestRejectedUploadKeepsReadDeadline(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := &readDeadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
-	d.Handler().ServeHTTP(w, taskRequest(t, `{"taskId":"duplicate"}`, nil))
+	d.Handler().ServeHTTP(w, taskRequest(t, `{"taskId":"duplicate","timeoutMs":60000}`, nil))
 	if w.Code != http.StatusConflict || w.deadline.IsZero() {
 		t.Fatalf("status = %d, read deadline = %v", w.Code, w.deadline)
 	}
@@ -97,7 +97,7 @@ func TestDisconnectLeavesSharedRuntimeRunning(t *testing.T) {
 	client := &http.Client{Timeout: 2 * heartbeatInterval}
 	start := func(ctx context.Context, id string) *json.Decoder {
 		t.Helper()
-		upload := taskRequest(t, `{"taskId":"`+id+`"}`, nil)
+		upload := taskRequest(t, `{"taskId":"`+id+`","timeoutMs":60000}`, nil)
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/tasks", upload.Body)
 		if err != nil {
 			t.Fatal(err)
@@ -145,7 +145,7 @@ func TestShutdownEndsOpenStreamWithTerminalEvent(t *testing.T) {
 	srv.Start()
 	defer srv.Close()
 	defer d.Close()
-	req := taskRequest(t, `{"taskId":"quiet"}`, nil)
+	req := taskRequest(t, `{"taskId":"quiet","timeoutMs":60000}`, nil)
 	req.RequestURI = ""
 	req.URL, _ = url.Parse(srv.URL + "/tasks")
 	res, err := (&http.Client{Timeout: 2 * heartbeatInterval}).Do(req)

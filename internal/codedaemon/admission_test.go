@@ -40,7 +40,7 @@ func taskRequest(t *testing.T, spec string, files map[string]string) *http.Reque
 
 func TestAdmissionAcceptsLongestTaskID(t *testing.T) {
 	d := New(Config{MaxConcurrency: 1})
-	r := taskRequest(t, `{"taskId":"`+strings.Repeat("x", 128)+`"}`, nil)
+	r := taskRequest(t, `{"taskId":"`+strings.Repeat("x", 128)+`","timeoutMs":60000}`, nil)
 	if _, mr := d.admit(httptest.NewRecorder(), r); mr == nil {
 		t.Fatal("spec with the longest task ID was not admitted")
 	}
@@ -49,8 +49,10 @@ func TestAdmissionAcceptsLongestTaskID(t *testing.T) {
 
 func TestAdmissionRejectsInvalidSpec(t *testing.T) {
 	for name, spec := range map[string]string{
+		"missing timeout":  `{"taskId":"missing"}`,
+		"zero timeout":     `{"taskId":"zero","timeoutMs":0}`,
 		"negative timeout": `{"taskId":"negative","timeoutMs":-1}`,
-		"invalid task ID":  `{"taskId":"bad/id"}`,
+		"invalid task ID":  `{"taskId":"bad/id","timeoutMs":60000}`,
 		"invalid JSON":     `{"taskId":`,
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -68,14 +70,14 @@ func TestAdmissionRejectsInvalidSpec(t *testing.T) {
 
 func TestAdmissionRejectsBeforeReadingInputPart(t *testing.T) {
 	d := New(Config{MaxConcurrency: 1})
-	r := taskRequest(t, `{"taskId":"first"}`, nil)
+	r := taskRequest(t, `{"taskId":"first","timeoutMs":60000}`, nil)
 	if _, mr := d.admit(httptest.NewRecorder(), r); mr == nil {
 		t.Fatal("first request was not admitted")
 	}
 	const boundary = "test-boundary"
 	// Send only enough of the body to finish the first part. An attempt to
 	// advance to the input part would have to read the withheld data.
-	body := io.MultiReader(strings.NewReader("--"+boundary+"\r\nContent-Disposition: form-data; name=\"spec\"\r\n\r\n{\"taskId\":\"second\"}\r\n--"+boundary+"\r\n"), failRead{t})
+	body := io.MultiReader(strings.NewReader("--"+boundary+"\r\nContent-Disposition: form-data; name=\"spec\"\r\n\r\n{\"taskId\":\"second\",\"timeoutMs\":60000}\r\n--"+boundary+"\r\n"), failRead{t})
 	r = httptest.NewRequest(http.MethodPost, "/tasks", body)
 	r.Header.Set("Content-Type", "multipart/form-data; boundary="+boundary)
 	w := httptest.NewRecorder()
@@ -83,7 +85,7 @@ func TestAdmissionRejectsBeforeReadingInputPart(t *testing.T) {
 		t.Fatalf("saturated admission status = %d", w.Code)
 	}
 	d.releaseLane()
-	r = taskRequest(t, `{"taskId":"second"}`, nil)
+	r = taskRequest(t, `{"taskId":"second","timeoutMs":60000}`, nil)
 	if _, mr := d.admit(httptest.NewRecorder(), r); mr == nil {
 		t.Fatal("released lane was not reusable")
 	}
@@ -98,8 +100,8 @@ func TestAdmissionClosesHTTP1ConnectionWithUnfinishedUpload(t *testing.T) {
 		status int
 	}{
 		{"oversized spec", strings.Repeat("x", 2*maxSpecBytes), http.StatusBadRequest},
-		{"saturated", "{\"taskId\":\"second\"}\r\n--" + boundary + "\r\n", http.StatusTooManyRequests},
-		{"local client", "{\"taskId\":\"local\"}\r\n--" + boundary + "\r\n", http.StatusForbidden},
+		{"saturated", "{\"taskId\":\"second\",\"timeoutMs\":60000}\r\n--" + boundary + "\r\n", http.StatusTooManyRequests},
+		{"local client", "{\"taskId\":\"local\",\"timeoutMs\":60000}\r\n--" + boundary + "\r\n", http.StatusForbidden},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := New(Config{MaxConcurrency: 1})
