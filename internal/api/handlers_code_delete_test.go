@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -215,6 +216,28 @@ func TestDeleteCodeSandboxByNameAsAdmin(t *testing.T) {
 	}
 	if mustGet(t, s, tenantSandbox) == nil {
 		t.Fatal("tenant sandbox removed")
+	}
+}
+
+// A delete by name that the client cancels does not report success or 404, and
+// leaves the sandboxes it did not reach.
+func TestDeleteCodeSandboxByNameCancelledIsNotSuccess(t *testing.T) {
+	fake := &fakeSandboxControl{}
+	router, s, _ := newIdleTestGateway(t, "admin-key", fake)
+	id := createCodeSandboxForTest(t, router, "admin-key")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequestWithContext(ctx, http.MethodDelete, "/code/sandboxes/names/scope-1", nil)
+	req.Header.Set("X-Api-Key", "admin-key")
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code == http.StatusNoContent || rr.Code == http.StatusNotFound {
+		t.Fatalf("delete: got %d body=%s, want an error", rr.Code, rr.Body.String())
+	}
+	if mustGet(t, s, id) == nil {
+		t.Fatal("sandbox removed although the request was cancelled first")
 	}
 }
 

@@ -89,8 +89,12 @@ func handleDeleteCodeSandboxByName(s codeSandboxStore, reg registry.RunnerRegist
 		var deletedIDs []string
 		var firstErr error
 		for _, found := range recs {
-			if r.Context().Err() != nil {
-				// The client has gone. The deletes that started are done.
+			if err := r.Context().Err(); err != nil {
+				// The client has gone. The deletes that started are done. Do
+				// not report success, because sandboxes can remain.
+				if firstErr == nil {
+					firstErr = err
+				}
 				break
 			}
 			deleted, err := deleteCodeSandbox(r.Context(), s, reg, cfg, found.ID, func(rec *store.SandboxRecord) bool {
