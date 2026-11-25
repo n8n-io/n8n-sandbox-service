@@ -22,10 +22,10 @@ func (q sharedVolumeSQL) failAllLapsedPublishes(ctx context.Context) (int64, err
 	return failedRows, nil
 }
 
-func (q sharedVolumeSQL) listPurgeable(ctx context.Context, failedFor time.Duration, after SharedVolumePosition, limit int) ([]*SharedVolume, error) {
+func (q sharedVolumeSQL) listPurgeable(ctx context.Context, leftFor time.Duration, after SharedVolumePosition, limit int) ([]*SharedVolume, error) {
 	rows, err := q.db.QueryContext(ctx, q.bind(`SELECT `+sharedVolumeCols+` FROM shared_volumes
-		WHERE (state = 'deleted' OR (state = 'failed' AND updated_at <= `+q.nowSQL+` - ?)) AND (updated_at, id) > (?, ?)
-		ORDER BY updated_at, id LIMIT ?`), int64(failedFor/time.Second), after.UpdatedAt, after.ID, limit)
+		WHERE state IN ('failed', 'deleted') AND updated_at <= `+q.nowSQL+` - ? AND (updated_at, id) > (?, ?)
+		ORDER BY updated_at, id LIMIT ?`), int64(leftFor/time.Second), after.UpdatedAt, after.ID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("store: list purgeable shared volumes: %w", err)
 	}
@@ -48,14 +48,14 @@ func (s *SQLiteStore) FailLapsedSharedVolumePublishes(ctx context.Context) (int6
 	return s.sharedVolumes().failAllLapsedPublishes(ctx)
 }
 
-func (s *SQLiteStore) ListPurgeableSharedVolumes(ctx context.Context, failedFor time.Duration, after SharedVolumePosition, limit int) ([]*SharedVolume, error) {
-	return s.sharedVolumes().listPurgeable(ctx, failedFor, after, limit)
+func (s *SQLiteStore) ListPurgeableSharedVolumes(ctx context.Context, leftFor time.Duration, after SharedVolumePosition, limit int) ([]*SharedVolume, error) {
+	return s.sharedVolumes().listPurgeable(ctx, leftFor, after, limit)
 }
 
 func (s *PostgresStore) FailLapsedSharedVolumePublishes(ctx context.Context) (int64, error) {
 	return s.sharedVolumes().failAllLapsedPublishes(ctx)
 }
 
-func (s *PostgresStore) ListPurgeableSharedVolumes(ctx context.Context, failedFor time.Duration, after SharedVolumePosition, limit int) ([]*SharedVolume, error) {
-	return s.sharedVolumes().listPurgeable(ctx, failedFor, after, limit)
+func (s *PostgresStore) ListPurgeableSharedVolumes(ctx context.Context, leftFor time.Duration, after SharedVolumePosition, limit int) ([]*SharedVolume, error) {
+	return s.sharedVolumes().listPurgeable(ctx, leftFor, after, limit)
 }

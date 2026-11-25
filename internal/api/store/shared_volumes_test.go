@@ -359,9 +359,9 @@ func testSharedVolumes(t *testing.T, s SharedVolumes) {
 			t.Fatalf("the row with a live lease = %+v, %v; want it publishing", got, err)
 		}
 
-		purgeable := func(failedFor time.Duration) map[string]bool {
+		purgeable := func(leftFor time.Duration) map[string]bool {
 			t.Helper()
-			rows, err := s.ListPurgeableSharedVolumes(ctx, failedFor, SharedVolumePosition{}, 1_000_000)
+			rows, err := s.ListPurgeableSharedVolumes(ctx, leftFor, SharedVolumePosition{}, 1_000_000)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -374,8 +374,8 @@ func testSharedVolumes(t *testing.T, s SharedVolumes) {
 			}
 			return listed
 		}
-		if early := purgeable(time.Hour); !early[deleted.ID] || early[failed.ID] || early[lapsed.ID] || early[live.ID] || early[ready.ID] {
-			t.Fatalf("purgeable an hour after failing = %v; want the deleted row only", early)
+		if early := purgeable(time.Hour); len(early) != 0 {
+			t.Fatalf("purgeable an hour after failing or deleting = %v; want none", early)
 		}
 		if now := purgeable(0); !now[deleted.ID] || !now[failed.ID] || !now[lapsed.ID] || now[live.ID] || now[ready.ID] {
 			t.Fatalf("purgeable at once = %v; want the deleted and the failed rows", now)

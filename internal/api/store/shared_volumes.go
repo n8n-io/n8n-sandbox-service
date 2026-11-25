@@ -114,10 +114,10 @@ type SharedVolumes interface {
 	// FailLapsedSharedVolumePublishes marks failed every publishing row whose
 	// lease has run out, and returns how many it marked.
 	FailLapsedSharedVolumePublishes(ctx context.Context) (int64, error)
-	// ListPurgeableSharedVolumes returns the deleted rows, and the failed rows
-	// whose state changed at least failedFor ago. It returns up to limit rows
-	// after the position after, the oldest change first.
-	ListPurgeableSharedVolumes(ctx context.Context, failedFor time.Duration, after SharedVolumePosition, limit int) ([]*SharedVolume, error)
+	// ListPurgeableSharedVolumes returns the failed and deleted rows whose
+	// state changed at least leftFor ago. It returns up to limit rows after
+	// the position after, the oldest change first.
+	ListPurgeableSharedVolumes(ctx context.Context, leftFor time.Duration, after SharedVolumePosition, limit int) ([]*SharedVolume, error)
 }
 
 // SharedVolumePosition is a row's place in ListPurgeableSharedVolumes's

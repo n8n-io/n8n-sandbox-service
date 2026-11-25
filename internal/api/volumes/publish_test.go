@@ -506,7 +506,8 @@ func TestALapsedLeaseIsTakenOver(t *testing.T) {
 	}
 }
 
-func TestDeleteRemovesTheVolume(t *testing.T) {
+// A delete hides the volume at once and leaves its objects to the sweep.
+func TestDeleteHidesTheVolume(t *testing.T) {
 	env := newTestEnv(t)
 	data := validTar(t)
 	published, err := env.publish(t, data, "name")
@@ -519,32 +520,19 @@ func TestDeleteRemovesTheVolume(t *testing.T) {
 	if _, err := env.service.Get(context.Background(), digestOf(data)); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Get() after Delete() = %v, want ErrNotFound", err)
 	}
+	if listed, err := env.service.List(context.Background(), "name"); err != nil || len(listed) != 0 {
+		t.Fatalf("List() after Delete() = %v, %v; want nothing", listed, err)
+	}
 	if err := env.service.Delete(context.Background(), digestOf(data), RoleVolumePublisher); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("second Delete() = %v, want ErrNotFound", err)
 	}
-	env.assertNothingLeft(t)
+	if !env.hasObject(t, published.Volume.ID, volume.KindTar) {
+		t.Fatal("Delete() removed the tar; a create may still download it")
+	}
 	// The name and the digest can be published again, under a new row.
 	again, err := env.publish(t, data, "name")
 	if err != nil || again.Volume.ID == published.Volume.ID {
 		t.Fatalf("Publish() after Delete() = %+v, %v; want a new volume", again, err)
-	}
-}
-
-func TestDeleteWhoseRemovalFailsHidesTheVolume(t *testing.T) {
-	env := newTestEnv(t)
-	data := validTar(t)
-	if _, err := env.publish(t, data, "name"); err != nil {
-		t.Fatal(err)
-	}
-	env.objects.failDelete = true
-	if err := env.service.Delete(context.Background(), digestOf(data), RoleAdmin); err != nil {
-		t.Fatalf("Delete() = %v; the removal is left for later", err)
-	}
-	if _, err := env.service.Get(context.Background(), digestOf(data)); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("Get() = %v, want ErrNotFound", err)
-	}
-	if listed, err := env.service.List(context.Background(), "name"); err != nil || len(listed) != 0 {
-		t.Fatalf("List() = %v, %v; want nothing", listed, err)
 	}
 }
 

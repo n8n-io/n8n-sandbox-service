@@ -69,7 +69,7 @@ func TestSweepFailsALapsedPublishAndPurgesItAfterTheGrace(t *testing.T) {
 	}
 
 	// The grace has passed.
-	env.service.timing.failedGrace = 0
+	env.service.timing.purgeGrace = 0
 	env.service.sweepOnce(context.Background())
 	env.assertNothingLeft(t)
 	if got := env.metrics.SweepRemovalCount(string(store.SharedVolumeFailed)); got != 1 {
@@ -77,18 +77,25 @@ func TestSweepFailsALapsedPublishAndPurgesItAfterTheGrace(t *testing.T) {
 	}
 }
 
-func TestSweepRemovesADeletedVolumeOnceTheStoreWorks(t *testing.T) {
+func TestSweepRemovesADeletedVolumeAfterTheGraceOnceTheStoreWorks(t *testing.T) {
 	env := newTestEnv(t)
 	data := validTar(t)
 	published, err := env.publish(t, data, "name")
 	if err != nil {
 		t.Fatal(err)
 	}
-	env.objects.failDelete = true
 	if err := env.service.Delete(context.Background(), digestOf(data), RoleVolumePublisher); err != nil {
 		t.Fatal(err)
 	}
 
+	env.service.sweepOnce(context.Background())
+	if !env.hasObject(t, published.Volume.ID, volume.KindTar) {
+		t.Fatal("the sweep removed the tar of a volume deleted just now, before the grace")
+	}
+
+	// The grace has passed, but the store fails.
+	env.service.timing.purgeGrace = 0
+	env.objects.failDelete = true
 	env.service.sweepOnce(context.Background())
 	if !env.hasObject(t, published.Volume.ID, volume.KindTar) {
 		t.Fatal("a sweep whose deletes failed removed the tar")
@@ -119,7 +126,7 @@ func TestSweepLeavesLiveVolumesAlone(t *testing.T) {
 	})
 
 	// Within the publish's lease, and without a grace for failed rows.
-	env.service.timing.failedGrace = 0
+	env.service.timing.purgeGrace = 0
 	env.service.sweepOnce(context.Background())
 
 	if got, err := env.service.Get(context.Background(), ready.Volume.SHA256); err != nil || got.ID != ready.Volume.ID {
@@ -140,15 +147,14 @@ func TestSweepLeavesLiveVolumesAlone(t *testing.T) {
 func TestSweepRunsUntilItsContextEnds(t *testing.T) {
 	env := newTestEnv(t)
 	env.service.timing.sweepEvery = 10 * time.Millisecond
+	env.service.timing.purgeGrace = 0
 	data := validTar(t)
 	if _, err := env.publish(t, data, ""); err != nil {
 		t.Fatal(err)
 	}
-	env.objects.failDelete = true
 	if err := env.service.Delete(context.Background(), digestOf(data), RoleAdmin); err != nil {
 		t.Fatal(err)
 	}
-	env.objects.failDelete = false
 
 	ctx, cancel := context.WithCancel(context.Background())
 	stopped := make(chan struct{})
@@ -170,11 +176,11 @@ func TestSweepRunsUntilItsContextEnds(t *testing.T) {
 	env.assertNothingLeft(t)
 }
 
-// deleteTwoKeepingObjects publishes two volumes and deletes them, leaving both rows deleted
-// with their objects. It returns them in the order a sweep lists them.
-func deleteTwoKeepingObjects(t *testing.T, env *testEnv) (first, second *store.SharedVolume) {
+// deleteTwo publishes two volumes and deletes them, leaving both rows deleted
+// with their objects, and ends the grace. It returns them in the order a sweep
+// lists them.
+func deleteTwo(t *testing.T, env *testEnv) (first, second *store.SharedVolume) {
 	t.Helper()
-	env.objects.failDelete = true
 	for _, data := range [][]byte{validTar(t), makeTar(t, file("second", "x"))} {
 		published, err := env.publish(t, data, "")
 		if err != nil {
@@ -184,7 +190,7 @@ func deleteTwoKeepingObjects(t *testing.T, env *testEnv) (first, second *store.S
 			t.Fatal(err)
 		}
 	}
-	env.objects.failDelete = false
+	env.service.timing.purgeGrace = 0
 	rows, err := env.records.ListPurgeableSharedVolumes(context.Background(), 0, store.SharedVolumePosition{}, 10)
 	if err != nil || len(rows) != 2 {
 		t.Fatalf("purgeable rows = %v, %v; want the two deleted ones", rows, err)
@@ -197,7 +203,7 @@ func TestSweepGoesPastARowItCannotPurge(t *testing.T) {
 	previous := sweepBatchRows
 	sweepBatchRows = 1
 	t.Cleanup(func() { sweepBatchRows = previous })
-	first, second := deleteTwoKeepingObjects(t, env)
+	first, second := deleteTwo(t, env)
 	env.objects.failDeleteOf = first.ID
 
 	env.service.sweepOnce(context.Background())
@@ -216,7 +222,7 @@ func TestSweepStopsWhenItsTimeIsUp(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
 	t.Cleanup(func() { slog.SetDefault(previous) })
 	env := newTestEnv(t)
-	deleteTwoKeepingObjects(t, env)
+	deleteTwo(t, env)
 	env.objects.deleteHangs = true
 	env.service.timing.sweepEvery = 50 * time.Millisecond
 
@@ -234,7 +240,7 @@ func TestSweepStopsWhenItsTimeIsUp(t *testing.T) {
 // Two instances that sweep one row count it once between them.
 func TestSweepCountsOnlyWhatItPurged(t *testing.T) {
 	env := newTestEnv(t)
-	deleteTwoKeepingObjects(t, env)
+	deleteTwo(t, env)
 	env.records.otherPodPurges = true
 
 	env.service.sweepOnce(context.Background())

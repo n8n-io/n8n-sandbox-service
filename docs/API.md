@@ -1156,7 +1156,7 @@ Returns every ready volume as an array, newest first, without paging. `?name={na
 
 ### DELETE /shared-volumes/sha256:{hex}
 
-Deletes the volume (`204`). It is hidden and its name is free at once; its stored objects are removed in the same request. If that removal fails, the API logs a warning, and a later sweep removes them. `404` if no volume with that digest is ready, `409` `publish_in_progress` while it is being published.
+Deletes the volume (`204`). It is hidden and its name is free at once. A sweep removes its stored objects no sooner than 20 minutes later, so that a sandbox create that found it before the delete can still download it. `404` if no volume with that digest is ready, `409` `publish_in_progress` while it is being published.
 
 ---
 

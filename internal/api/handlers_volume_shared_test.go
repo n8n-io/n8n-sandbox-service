@@ -361,9 +361,6 @@ func TestGetAndDeleteSharedVolume(t *testing.T) {
 	if got := env.do(t, http.MethodDelete, path, sharedVolumePublisherKey, nil); got.Code != http.StatusNoContent {
 		t.Fatalf("DELETE = %d %s, want 204", got.Code, got.Body.String())
 	}
-	if files := env.storedFiles(t); len(files) != 0 {
-		t.Fatalf("store holds %v after DELETE", files)
-	}
 	for _, method := range []string{http.MethodGet, http.MethodDelete} {
 		if got := env.do(t, method, path, sharedVolumePublisherKey, nil); got.Code != http.StatusNotFound {
 			t.Fatalf("%s after DELETE = %d, want 404", method, got.Code)

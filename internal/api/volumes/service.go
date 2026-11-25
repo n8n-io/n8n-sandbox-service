@@ -36,9 +36,9 @@ type timing struct {
 	builderWait, retryFirst, retryMax time.Duration
 	// buildCall bounds one call to a runner to build an image.
 	buildCall time.Duration
-	// sweepEvery is the time between two sweeps, and failedGrace how long a
-	// failed row stays before a sweep removes it.
-	sweepEvery, failedGrace time.Duration
+	// sweepEvery is the time between two sweeps, and purgeGrace how long a
+	// failed or deleted row stays before a sweep removes it.
+	sweepEvery, purgeGrace time.Duration
 }
 
 // limits are the caps a publish is held to: the package's constants, smaller
@@ -85,9 +85,11 @@ var defaultTiming = timing{
 	// A row left failed or deleted only takes store space, so a sweep every 5
 	// minutes is soon enough.
 	sweepEvery: 5 * time.Minute,
-	// A failed row waits 10 minutes, so that a publish that is slow to stop has
-	// time to end before the sweep removes its objects.
-	failedGrace: 10 * time.Minute,
+	// A failed row waits, so that a publish that is slow to stop has time to
+	// end before the sweep removes its objects. A deleted row waits, so that a
+	// create that found the volume before the delete can still download it: a
+	// read URL lasts readURLTTL, and a runner download 5 minutes by default.
+	purgeGrace: readURLTTL + 10*time.Minute,
 }
 
 // Role is the role of a key that may change shared volumes.
@@ -160,9 +162,8 @@ func (s *Service) List(ctx context.Context, name string) ([]*store.SharedVolume,
 }
 
 // Delete hides the ready shared volume with the sha256 and frees its name at
-// once, then purges it. If the purge fails, the row stays deleted with what is
-// left of it. It returns ErrNotFound, or ErrPublishInProgress while the sha256
-// is being published.
+// once. A sweep purges it after timing.purgeGrace. It returns ErrNotFound, or
+// ErrPublishInProgress while the sha256 is being published.
 func (s *Service) Delete(ctx context.Context, sha256 string, role Role) error {
 	row, err := s.records.MarkSharedVolumeDeleted(ctx, sha256)
 	if err != nil {
@@ -177,11 +178,6 @@ func (s *Service) Delete(ctx context.Context, sha256 string, role Role) error {
 		return fmt.Errorf("delete of shared volume %s returned a %s row", row.ID, row.State)
 	}
 	slog.InfoContext(ctx, "shared volume deleted", "version_id", row.ID, "sha256", row.SHA256, "name", row.Name, "role", role)
-	purgeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.timing.cleanupTimeout)
-	defer cancel()
-	if _, err := s.purge(purgeCtx, row.ID); err != nil {
-		slog.WarnContext(ctx, "shared volume purge failed; the row stays deleted", "version_id", row.ID, "sha256", row.SHA256, "error", err)
-	}
 	return nil
 }
 

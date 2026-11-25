@@ -135,8 +135,9 @@ What a leaked volume publisher key can do:
 - Delete shared volumes.
 - Keep up to 1,000 volumes of up to 4 GiB each, ready or being published, each with an
   image of up to 5 GiB when `SANDBOX_API_VOLUME_BUILD` is set.
-  What a failed cleanup leaves in the store does not count against that
-  limit, but takes store space until a sweep removes it.
+  What a delete or a failed cleanup leaves in the store does not count
+  against that limit, but takes store space until a sweep removes it: no
+  sooner than 20 minutes after a delete.
   With `SANDBOX_API_VOLUME_STORE=local`, the store is in `SANDBOX_API_VOLUME_LOCAL_DIR`,
   by default a directory in the API's data directory, which with
   `SANDBOX_API_STORE=sqlite` (the default) also holds the database. Put the

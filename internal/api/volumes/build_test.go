@@ -82,6 +82,8 @@ func TestBuildStoresTheImageUnderTheDigestTheAPIComputed(t *testing.T) {
 	if err := env.service.Delete(context.Background(), digestOf(data), RoleVolumePublisher); err != nil {
 		t.Fatal(err)
 	}
+	env.service.timing.purgeGrace = 0
+	env.service.sweepOnce(context.Background())
 	env.assertNothingLeft(t)
 }
 

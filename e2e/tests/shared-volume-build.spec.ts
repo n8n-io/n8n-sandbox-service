@@ -101,7 +101,8 @@ test.describe('Shared volume images', FIRECRACKER_ONLY, () => {
 
     const deleted = await request.delete(`/shared-volumes/sha256:${digest}`, { headers: publisher });
     expect(deleted.status()).toBe(204);
-    expect(fs.existsSync(path.join(storeDir, matches[0]))).toBe(false);
-    expect(fs.existsSync(tarFile)).toBe(false);
+    // A sweep removes the objects no sooner than 20 minutes later.
+    expect(fs.existsSync(path.join(storeDir, matches[0]))).toBe(true);
+    expect(fs.existsSync(tarFile)).toBe(true);
   });
 });
