@@ -88,9 +88,11 @@ type SharedVolumes interface {
 	// over, and false for a ready or deleted row, whose objects stay.
 	FailSharedVolumePublish(ctx context.Context, id string) (bool, error)
 	// NameReadySharedVolume names the ready row id if it has no name. It
-	// returns the name the row has afterwards, which is not name when the row
-	// was named before, and "" when there is no such ready row. It returns
-	// ErrSharedVolumeNameTaken.
+	// returns the name the row has afterwards, which differs from name when
+	// the row was named before with another name, and "" when there is no
+	// such ready row. name must not be empty: it would leave an unnamed row as
+	// it is and return "", like a missing row. It returns
+	// ErrSharedVolumeNameTaken when another live row has the name.
 	NameReadySharedVolume(ctx context.Context, id, name string) (string, error)
 	// GetLiveSharedVolume returns the ready row with the sha256, or the
 	// publishing one whose lease has not ended, or nil.
