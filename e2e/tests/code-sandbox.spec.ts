@@ -13,7 +13,10 @@ const CPU_PERCENT = Number(process.env.E2E_CODE_CPU_PERCENT || '50');
 const MAX_MEMORY_MB = Number(process.env.E2E_CODE_MAX_MEMORY_MB || '1024');
 const MEMORY_MB = 384;
 
+const TASK_TIMEOUT_MS = 30_000;
+
 const client = adminClient();
+const created: string[] = [];
 
 async function createCodeSandbox(memoryMb = MEMORY_MB): Promise<string> {
   const sandbox = await client.createCodeSandbox({
@@ -24,13 +27,14 @@ async function createCodeSandbox(memoryMb = MEMORY_MB): Promise<string> {
     memoryMb,
   });
   expect(sandbox.created).toBe(true);
+  created.push(sandbox.id);
   return sandbox.id;
 }
 
 async function runTask(sandboxId: string, code: string): Promise<CodeTaskEvent> {
   const taskId = `t_${randomUUID().replace(/-/g, '')}`;
   const events = await client.runCodeTask(sandboxId, {
-    spec: { taskId },
+    spec: { taskId, timeoutMs: TASK_TIMEOUT_MS },
     taskInput: JSON.stringify({ code }),
   });
   for await (const event of events) {
@@ -61,6 +65,10 @@ const READ_LIMITS = `
 test.describe('code sandboxes', DOCKER_ONLY, () => {
   test.skip(!process.env.E2E_CODE_SANDBOXES, 'needs a runner with code sandboxes enabled (e2e/run.sh)');
   test.describe.configure({ timeout: 180_000 });
+
+  test.afterEach(async () => {
+    for (const id of created.splice(0)) await client.deleteCodeSandbox(id);
+  });
 
   test('runs a task and returns its result and console output', async () => {
     const id = await createCodeSandbox();
