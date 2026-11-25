@@ -393,6 +393,24 @@ func testCodeSandboxNames(t *testing.T, s SandboxStore, tenantA, tenantB string)
 		t.Fatalf("ListCodeSandboxesByName(other tenant) = %v, want none", ids)
 	}
 
+	// The list is oldest first. The ids sort the other way, so an order by id
+	// fails too.
+	older := code(tenantA, "n5")
+	older.ID, older.Status, older.CreatedAt, older.LastActiveAt = "code-b-"+tenantA, "running", now-10, now-10
+	older.DrainingSince = now
+	newer := code(tenantA, "n5")
+	newer.ID, newer.Status, newer.CreatedAt, newer.LastActiveAt = "code-a-"+tenantA, "running", now, now
+	for _, rec := range []*SandboxRecord{&older, &newer} {
+		if err := s.Create(rec); err != nil {
+			t.Fatalf("create %s: %v", rec.ID, err)
+		}
+		t.Cleanup(func() { _ = s.Delete(rec.ID) })
+	}
+	recs, err := s.ListCodeSandboxesByName(tenantA, "n5")
+	if err != nil || len(recs) != 2 || recs[0].ID != older.ID || recs[1].ID != newer.ID {
+		t.Fatalf("ListCodeSandboxesByName(n5) = %v err=%v, want [%s %s]", recs, err, older.ID, newer.ID)
+	}
+
 	// A duplicate id is not a name conflict.
 	dup := code(tenantA, "n4")
 	dup.ID, dup.Status, dup.CreatedAt, dup.LastActiveAt = first.ID, "running", now, now

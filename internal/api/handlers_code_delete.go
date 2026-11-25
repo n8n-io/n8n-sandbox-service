@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/n8n-io/sandbox-service/internal/api/config"
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
@@ -145,10 +146,9 @@ func (e *codeRunnerDeleteError) Unwrap() error { return e.err }
 // deleteCodeSandbox locks the code sandbox id and reads its record again.
 // When the record exists and shouldDelete returns true for it, it deletes the
 // sandbox on its runner, which stops all its tasks, and then deletes the
-// record. It reports whether it deleted the sandbox. ctx bounds only the wait
-// for the lock: once the delete starts, it goes on without ctx's
-// cancellation, so a caller that goes away does not leave the sandbox half
-// deleted.
+// record. It reports whether it deleted the sandbox. Once the delete starts,
+// it goes on without ctx's cancellation, so a caller that goes away does not
+// leave the sandbox half deleted. ctx's deadline still applies.
 func deleteCodeSandbox(ctx context.Context, s codeSandboxStore, reg registry.RunnerRegistry, cfg *config.APIConfig, id string, shouldDelete func(*store.SandboxRecord) bool) (bool, error) {
 	unlock, err := s.LockSandbox(ctx, id)
 	if err != nil {
@@ -162,7 +162,11 @@ func deleteCodeSandbox(ctx context.Context, s codeSandboxStore, reg registry.Run
 	if rec == nil || !shouldDelete(rec) {
 		return false, nil
 	}
-	deleteCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), runnerLifecycleBudget)
+	deadline := time.Now().Add(runnerLifecycleBudget)
+	if callerDeadline, ok := ctx.Deadline(); ok && callerDeadline.Before(deadline) {
+		deadline = callerDeadline
+	}
+	deleteCtx, cancel := context.WithDeadline(context.WithoutCancel(ctx), deadline)
 	defer cancel()
 	if err := runnerctl.DeleteSandbox(deleteCtx, resolveControlAddr(rec, reg), cfg.RunnerAPIKey, runnerControlTLS(cfg), rec.ID); err != nil {
 		return false, &codeRunnerDeleteError{err: err}

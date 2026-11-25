@@ -927,7 +927,7 @@ curl -N -X POST http://localhost:8080/code/sandboxes/SANDBOX_ID/tasks \
 
 ### DELETE /code/sandboxes/{id}
 
-Delete a code sandbox. This stops all its tasks. A task request that is open gets `502`.
+Delete a code sandbox. This stops all its tasks. When the response of an open task request has started, its event stream stops without a `done` or `error` event. When it has not started, the request gets an error status, for example `503` or `404`.
 
 **Response:** `204 No Content`
 
