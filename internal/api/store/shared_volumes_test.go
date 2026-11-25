@@ -251,6 +251,9 @@ func testSharedVolumes(t *testing.T, s SharedVolumes) {
 		if _, err := s.NameReadySharedVolume(ctx, unnamed.ID, other.Name); !errors.Is(err, ErrSharedVolumeNameTaken) {
 			t.Fatalf("name with a taken name = %v, want ErrSharedVolumeNameTaken", err)
 		}
+		if _, err := s.NameReadySharedVolume(ctx, unnamed.ID, ""); !errors.Is(err, ErrSharedVolumeNameEmpty) {
+			t.Fatalf("name with an empty name = %v, want ErrSharedVolumeNameEmpty", err)
+		}
 		name := randomVolumeName()
 		if stored, err := s.NameReadySharedVolume(ctx, unnamed.ID, name); err != nil || stored != name {
 			t.Fatalf("name = %q, %v; want %q", stored, err, name)
