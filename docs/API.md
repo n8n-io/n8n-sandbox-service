@@ -865,7 +865,7 @@ Return the current code sandbox of a name, or create one. The client picks the n
   "runtime": "n8n-js",
   "runtimeVersion": "2.42.0",
   "maxConcurrency": 2,
-  "memoryMb": 1024,
+  "memoryMb": 512,
   "idleTimeoutMs": 30000,
   "maxAgeMs": 60000
 }
@@ -907,7 +907,7 @@ With a tenant key, the sandbox counts toward the tenant's `max_sandboxes` quota.
 curl -X POST http://localhost:8080/code/sandboxes \
   -H "X-Api-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"name":"scope-1","runtime":"n8n-js","runtimeVersion":"2.42.0","maxConcurrency":2,"memoryMb":1024}'
+  -d '{"name":"scope-1","runtime":"n8n-js","runtimeVersion":"2.42.0","maxConcurrency":2,"memoryMb":512}'
 ```
 
 ### POST /code/sandboxes/{id}/tasks
