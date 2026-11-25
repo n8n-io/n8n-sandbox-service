@@ -1,3 +1,10 @@
+// Encodes the multipart/form-data body of a code task. We do not use a library:
+// - The global FormData takes no Node Readable, so it must buffer each stream
+//   input in memory.
+// - The form-data package keeps the body open until it reaches a failed
+//   stream input, so a slow input before it can stop the task from ending.
+//   It also changes paths and percent-encodes quotes and line breaks in
+//   names, where this file refuses them.
 import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import type { FileContent } from "../types";
