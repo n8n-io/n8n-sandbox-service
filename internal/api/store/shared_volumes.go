@@ -75,7 +75,6 @@ type SharedVolumes interface {
 	// one, when a publishing or ready row has the sha256;
 	// ErrSharedVolumeNameTaken when one has the name; ErrSharedVolumeLimit
 	// when it would make more than maxLiveVolumes rows publishing or ready.
-	// On Postgres, concurrent starts can pass maxLiveVolumes by their number.
 	StartSharedVolumePublish(ctx context.Context, volume *SharedVolume, lease time.Duration, maxLiveVolumes int) (*SharedVolume, error)
 	// RenewSharedVolumePublish moves the lease of a publishing row to end
 	// lease from now. It returns false when the row is no longer publishing.
@@ -88,9 +87,11 @@ type SharedVolumes interface {
 	// whether the row is failed now, so true for a row another publish took
 	// over, and false for a ready or deleted row, whose objects stay.
 	FailSharedVolumePublish(ctx context.Context, id string) (bool, error)
-	// NameReadySharedVolume names a ready row that has no name. It returns
-	// false when there is no such row, and ErrSharedVolumeNameTaken.
-	NameReadySharedVolume(ctx context.Context, id, name string) (bool, error)
+	// NameReadySharedVolume names the ready row id if it has no name. It
+	// returns the name the row has afterwards, which is not name when the row
+	// was named before, and "" when there is no such ready row. It returns
+	// ErrSharedVolumeNameTaken.
+	NameReadySharedVolume(ctx context.Context, id, name string) (string, error)
 	// GetLiveSharedVolume returns the ready row with the sha256, or the
 	// publishing one whose lease has not ended, or nil.
 	GetLiveSharedVolume(ctx context.Context, sha256 string) (*SharedVolume, error)
@@ -120,6 +121,11 @@ const (
 
 // sharedVolumesLive selects the rows that hold their sha256 and name.
 const sharedVolumesLive = `state IN ('publishing', 'ready')`
+
+// sharedVolumesLiveCountLock is the lock name of the transactions that insert
+// a row and then count the live rows against a limit. The lock makes them wait
+// for each other, so the count is exact.
+const sharedVolumesLiveCountLock = "shared_volumes:live_count"
 
 const sharedVolumeCols = `id, sha256, name, state, tar_bytes, tar_entries, tar_content_bytes, tar_decompressed_bytes, image_bytes, image_sha256, published_by, created_at, ready_at, updated_at, lease_until`
 
@@ -186,6 +192,9 @@ func (q sharedVolumeSQL) startPublish(ctx context.Context, volume *SharedVolume,
 		return nil, err
 	}
 	err := q.inTx(ctx, func(tx *sqlTx) error {
+		if err := q.lock(ctx, tx, sharedVolumesLiveCountLock); err != nil {
+			return err
+		}
 		inserted := tx.QueryRowContext(ctx, q.bind(`INSERT INTO shared_volumes
 			(id, sha256, name, state, published_by, created_at, updated_at, lease_until)
 			VALUES (?, ?, ?, 'publishing', ?, `+q.nowSQL+`, `+q.nowSQL+`, `+q.nowSQL+` + ?)
@@ -262,15 +271,24 @@ func (q sharedVolumeSQL) failPublish(ctx context.Context, id string) (bool, erro
 	return failed, nil
 }
 
-func (q sharedVolumeSQL) setName(ctx context.Context, id, name string) (bool, error) {
-	named, err := q.changed(ctx, q.db, `UPDATE shared_volumes SET name = ? WHERE id = ? AND state = 'ready' AND name = ''`, name, id)
+// setName takes the row in either naming state and changes only a name that
+// is empty, so the caller learns the name the row has without a second read.
+func (q sharedVolumeSQL) setName(ctx context.Context, id, name string) (string, error) {
+	var storedName string
+	err := q.db.QueryRowContext(ctx, q.bind(`UPDATE shared_volumes
+		SET name = CASE WHEN name = '' THEN ? ELSE name END
+		WHERE id = ? AND state = 'ready'
+		RETURNING name`), name, id).Scan(&storedName)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
 	if violation := q.uniqueViolation(err); violation != nil {
-		return false, violation
+		return "", violation
 	}
 	if err != nil {
-		return false, fmt.Errorf("store: name shared volume: %w", err)
+		return "", fmt.Errorf("store: name shared volume: %w", err)
 	}
-	return named, nil
+	return storedName, nil
 }
 
 func (q sharedVolumeSQL) getLive(ctx context.Context, sha256 string) (*SharedVolume, error) {

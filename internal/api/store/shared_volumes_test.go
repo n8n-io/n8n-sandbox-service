@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"sync"
@@ -69,6 +70,23 @@ func TestSharedVolumes(t *testing.T) {
 func TestSharedVolumesConcurrentStarts(t *testing.T) {
 	sqlite := newSQLiteSharedVolumes(t)
 	testConcurrentSharedVolumeStarts(t, []SharedVolumes{sqlite, sqlite})
+}
+
+func TestSharedVolumesConcurrentStartsStopAtTheLimit(t *testing.T) {
+	sqlite := newSQLiteSharedVolumes(t)
+	testConcurrentSharedVolumeStartsStopAtTheLimit(t, []SharedVolumes{sqlite, sqlite}, func() int {
+		return countLiveSharedVolumes(t, sqlite.db)
+	})
+}
+
+// countLiveSharedVolumes counts the rows the limit of live volumes counts.
+func countLiveSharedVolumes(t *testing.T, db *sql.DB) int {
+	t.Helper()
+	var liveRows int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM shared_volumes WHERE ` + sharedVolumesLive).Scan(&liveRows); err != nil {
+		t.Fatal(err)
+	}
+	return liveRows
 }
 
 func TestSharedVolumesConcurrentDeletes(t *testing.T) {
@@ -234,11 +252,19 @@ func testSharedVolumes(t *testing.T, s SharedVolumes) {
 			t.Fatalf("name with a taken name = %v, want ErrSharedVolumeNameTaken", err)
 		}
 		name := randomVolumeName()
-		if named, err := s.NameReadySharedVolume(ctx, unnamed.ID, name); err != nil || !named {
-			t.Fatalf("name = %v, %v; want true", named, err)
+		if stored, err := s.NameReadySharedVolume(ctx, unnamed.ID, name); err != nil || stored != name {
+			t.Fatalf("name = %q, %v; want %q", stored, err, name)
 		}
-		if named, err := s.NameReadySharedVolume(ctx, unnamed.ID, randomVolumeName()); err != nil || named {
-			t.Fatalf("second name = %v, %v; want false: one name per volume", named, err)
+		if stored, err := s.NameReadySharedVolume(ctx, unnamed.ID, randomVolumeName()); err != nil || stored != name {
+			t.Fatalf("second name = %q, %v; want %q: one name per volume", stored, err, name)
+		}
+		if stored, err := s.NameReadySharedVolume(ctx, uuid.New().String(), randomVolumeName()); err != nil || stored != "" {
+			t.Fatalf("name of a missing row = %q, %v; want none", stored, err)
+		}
+		publishing := publishingRow(randomSHA256(), "")
+		startPublish(t, s, publishing, testLease)
+		if stored, err := s.NameReadySharedVolume(ctx, publishing.ID, randomVolumeName()); err != nil || stored != "" {
+			t.Fatalf("name of a publishing row = %q, %v; want none", stored, err)
 		}
 		if got, _ := s.GetLiveSharedVolume(ctx, unnamed.SHA256); got == nil || got.Name != name {
 			t.Fatalf("get after naming = %+v", got)
@@ -366,6 +392,48 @@ func testConcurrentSharedVolumeStarts(t *testing.T, stores []SharedVolumes) {
 	wait.Wait()
 	if won != 1 || others != len(stores)*perStore-1 {
 		t.Fatalf("won %d, refused %d; want 1 and the rest", won, others)
+	}
+}
+
+// testConcurrentSharedVolumeStartsStopAtTheLimit starts publishing different
+// digests from every store at once, with room for fewer than start: exactly as
+// many as there is room for win, the others see the limit. countLiveRows
+// counts the rows the limit counts.
+func testConcurrentSharedVolumeStartsStopAtTheLimit(t *testing.T, stores []SharedVolumes, countLiveRows func() int) {
+	ctx := context.Background()
+	const rounds, room, perStore = 3, 5, 8
+	for range rounds {
+		maxLive := countLiveRows() + room
+		var (
+			wait    sync.WaitGroup
+			mutex   sync.Mutex
+			started int
+			refused int
+		)
+		start := make(chan struct{})
+		for _, records := range stores {
+			for range perStore {
+				wait.Go(func() {
+					<-start
+					_, err := records.StartSharedVolumePublish(ctx, publishingRow(randomSHA256(), ""), testLease, maxLive)
+					mutex.Lock()
+					defer mutex.Unlock()
+					switch {
+					case err == nil:
+						started++
+					case errors.Is(err, ErrSharedVolumeLimit):
+						refused++
+					default:
+						t.Errorf("start: %v", err)
+					}
+				})
+			}
+		}
+		close(start)
+		wait.Wait()
+		if started != room || refused != len(stores)*perStore-room || countLiveRows() != maxLive {
+			t.Fatalf("started %d and refused %d, with %d live rows of at most %d; want %d started", started, refused, countLiveRows(), maxLive, room)
+		}
 	}
 }
 

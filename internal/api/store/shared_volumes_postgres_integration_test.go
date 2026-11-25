@@ -16,6 +16,13 @@ func TestPostgresSharedVolumesConcurrentStarts(t *testing.T) {
 	testConcurrentSharedVolumeStarts(t, []SharedVolumes{openTestPostgresStore(t), openTestPostgresStore(t)})
 }
 
+func TestPostgresSharedVolumesConcurrentStartsStopAtTheLimit(t *testing.T) {
+	first, second := openTestPostgresStore(t), openTestPostgresStore(t)
+	testConcurrentSharedVolumeStartsStopAtTheLimit(t, []SharedVolumes{first, second}, func() int {
+		return countLiveSharedVolumes(t, first.db)
+	})
+}
+
 func TestPostgresSharedVolumesConcurrentDeletes(t *testing.T) {
 	testConcurrentSharedVolumeDeletes(t, []SharedVolumes{openTestPostgresStore(t), openTestPostgresStore(t)})
 }
