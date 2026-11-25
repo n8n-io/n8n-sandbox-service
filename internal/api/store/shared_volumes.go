@@ -1,3 +1,6 @@
+// This file defines the shared_volumes rows and the queries on them, for SQLite
+// and Postgres.
+
 package store
 
 import (
@@ -108,6 +111,20 @@ type SharedVolumes interface {
 	// PurgeSharedVolume deletes the row id if it is failed or deleted. It
 	// returns false when there is no such row.
 	PurgeSharedVolume(ctx context.Context, id string) (bool, error)
+	// FailLapsedSharedVolumePublishes marks failed every publishing row whose
+	// lease has run out, and returns how many it marked.
+	FailLapsedSharedVolumePublishes(ctx context.Context) (int64, error)
+	// ListPurgeableSharedVolumes returns the deleted rows, and the failed rows
+	// whose state changed at least failedFor ago. It returns up to limit rows
+	// after the position after, the oldest change first.
+	ListPurgeableSharedVolumes(ctx context.Context, failedFor time.Duration, after SharedVolumePosition, limit int) ([]*SharedVolume, error)
+}
+
+// SharedVolumePosition is a row's place in ListPurgeableSharedVolumes's
+// order. The zero value is before every row.
+type SharedVolumePosition struct {
+	UpdatedAt int64
+	ID        string
 }
 
 var (

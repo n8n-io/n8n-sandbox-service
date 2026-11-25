@@ -36,6 +36,9 @@ type timing struct {
 	builderWait, retryFirst, retryMax time.Duration
 	// buildCall bounds one call to a runner to build an image.
 	buildCall time.Duration
+	// sweepEvery is the time between two sweeps, and failedGrace how long a
+	// failed row stays before a sweep removes it.
+	sweepEvery, failedGrace time.Duration
 }
 
 // limits are the caps a publish is held to: the package's constants, smaller
@@ -79,6 +82,12 @@ var defaultTiming = timing{
 	// The build timeout of a runner is 5 minutes by default. The transfer of
 	// the tar and of the image come on top.
 	buildCall: 30 * time.Minute,
+	// A row left failed or deleted only takes store space, so a sweep every 5
+	// minutes is soon enough.
+	sweepEvery: 5 * time.Minute,
+	// A failed row waits 10 minutes, so that a publish that is slow to stop has
+	// time to end before the sweep removes its objects.
+	failedGrace: 10 * time.Minute,
 }
 
 // Role is the role of a key that may change shared volumes.
@@ -170,22 +179,22 @@ func (s *Service) Delete(ctx context.Context, sha256 string, role Role) error {
 	slog.InfoContext(ctx, "shared volume deleted", "version_id", row.ID, "sha256", row.SHA256, "name", row.Name, "role", role)
 	purgeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.timing.cleanupTimeout)
 	defer cancel()
-	if err := s.purge(purgeCtx, row.ID); err != nil {
+	if _, err := s.purge(purgeCtx, row.ID); err != nil {
 		slog.WarnContext(ctx, "shared volume purge failed; the row stays deleted", "version_id", row.ID, "sha256", row.SHA256, "error", err)
 	}
 	return nil
 }
 
 // purge deletes the objects of the failed or deleted shared volume id, then
-// its row. It is the one place that removes a volume.
-func (s *Service) purge(ctx context.Context, id string) error {
+// its row. It returns false when another purge removed the row first. It is
+// the one place that removes a volume.
+func (s *Service) purge(ctx context.Context, id string) (bool, error) {
 	for _, kind := range []volume.Kind{volume.KindTar, volume.KindExt4} {
 		if err := s.objects.Delete(ctx, objectKey(id, kind)); err != nil {
-			return err
+			return false, err
 		}
 	}
-	_, err := s.records.PurgeSharedVolume(ctx, id)
-	return err
+	return s.records.PurgeSharedVolume(ctx, id)
 }
 
 func objectKey(id string, kind volume.Kind) volumestore.Key {
