@@ -200,6 +200,11 @@ Related series:
   accepted, from the tar's first byte to the end of the call. Each build logs
   `firecracker volume build finished` or `firecracker volume build failed`
   with its sizes and step timings.
+- `sandbox_shared_volume_publishes_total{result}` — shared volume publishes on
+  the API: `created`, `exists`, or why one failed: `invalid_request`,
+  `invalid_tar`, `too_large`, `digest_mismatch`, `conflict`, `limit`,
+  `interrupted`, `error`. `sandbox_shared_volume_publish_duration_seconds`
+  times the publishes that created a volume.
 - `sandbox_container_operation_duration_seconds{operation}` — the totals the
   steps add up to, a recovery's under `operation="recover"` like its steps.
 - `sandbox_http_request_duration_seconds{role,route,method}` — end-to-end per

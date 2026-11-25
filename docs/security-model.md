@@ -111,11 +111,43 @@ also an admin or provisioner key.
 
 ### Volume publisher keys
 
-The class is for the job that publishes shared volumes, so that job needs no
-admin key. A volume publisher key reaches only `/shared-volumes` and the paths
-below it. Every other path answers `403`, and so does a path with `.`, `..` or
-`//` in it. The probes `/healthz` and `/metrics` need no key. Startup fails if a volume publisher key is also an admin,
-provisioner or scaler key.
+The class is for the job that publishes [shared volumes](API.md#shared-volumes),
+so that job needs no admin key. A volume publisher key reaches only
+`/shared-volumes` and the paths below it. Every other path answers `403`, and
+so does a path with `.`, `..` or `//` in it. The probes `/healthz` and
+`/metrics` need no key. Admin keys reach the shared volume
+routes too. Tenant, provisioner and scaler keys get `403` on every shared
+volume route, reads included. Startup fails if a volume publisher key is also
+an admin, provisioner or scaler key.
+
+What a leaked volume publisher key can do:
+
+- Publish a tar. The API stores it only if it holds directories, regular
+  files and symbolic links within the limits, under relative paths without
+  `..`. It does not unpack the tar. It reads the tar once, with the tar reader
+  the runners use, while it streams the tar to the store. If the tar breaks a
+  rule, the API ends the stream with an error, so the store does not commit
+  it. Messages and logs hold no name from a tar.
+- Delete shared volumes.
+- Keep up to 1,000 volumes of up to 4 GiB each, ready or being published.
+  What a failed cleanup leaves in the store does not count against that
+  limit. With `SANDBOX_API_VOLUME_STORE=local`, the store is in `SANDBOX_API_VOLUME_LOCAL_DIR`,
+  by default a directory in the API's data directory, which with
+  `SANDBOX_API_STORE=sqlite` (the default) also holds the database. Put the
+  store on its own volume, so that a full store does not fill the disk of the
+  database.
+
+Names never move silently: publishing another digest under a taken name is
+refused, so repointing a name takes a visible `DELETE` and then a publish. The
+API logs each publish that stores a volume with the key's role, the digest,
+the name and the sizes, and each naming of a volume and each delete with the
+role, the digest and the name. It records the role on the volume and counts
+publishes in `sandbox_shared_volume_publishes_total`. To contain a leaked key,
+remove it from `SANDBOX_API_VOLUME_PUBLISHER_KEYS` and restart the API (env
+keys are not cached), then delete what it published since the leak.
+
+Publishes have their own concurrency and upload time limits, and count against
+no tenant's requests in progress ([limits.md](limits.md#shared-volumes)).
 
 ### Concurrency limits
 

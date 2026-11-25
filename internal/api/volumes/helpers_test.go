@@ -224,7 +224,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		shutdown: shutdown,
 	}
 	env.service = NewService(ctx, env.records, env.objects, env.metrics)
-	env.service.limits = limits{maxTarBytes: testMaxUploadBytes, policy: testPolicy, maxLiveVolumes: 100}
+	env.service.limits = limits{maxTarBytes: 1 << 20, policy: testPolicy, maxLiveVolumes: 100}
 	env.service.timing = timing{lease: time.Minute, renewEvery: time.Hour, giveUpAfter: time.Hour, cleanupTimeout: 5 * time.Second}
 	return env
 }

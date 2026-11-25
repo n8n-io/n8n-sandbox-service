@@ -128,7 +128,17 @@ func main() {
 		activity.Run(activityCtx)
 	}()
 
-	handler, err := api.NewGatewayRouter(sandboxStore, cfg, runnerReg, mrec, activity)
+	// Cancelled at shutdown, so publishes in progress clean up while the
+	// server drains.
+	publishCtx, publishCancel := context.WithCancel(context.Background())
+	defer publishCancel()
+	sharedVolumeService, err := newSharedVolumeService(publishCtx, cfg, sandboxStore, volumes, mrec)
+	if err != nil {
+		slog.Error("failed to create shared volume service", "error", err)
+		os.Exit(1)
+	}
+
+	handler, err := api.NewGatewayRouter(sandboxStore, cfg, runnerReg, mrec, activity, api.WithSharedVolumes(sharedVolumeService))
 	if err != nil {
 		slog.Error("failed to create api router", "error", err)
 		os.Exit(1)
@@ -229,6 +239,7 @@ func main() {
 	case sig := <-quit:
 		slog.Info("received signal, shutting down api", "signal", sig)
 		sweepCancel()
+		publishCancel()
 	case err := <-serverErr:
 		sweepCancel()
 		slog.Error("server error", "error", err)
