@@ -87,7 +87,7 @@ console.log(code.id, code.created);
 
 ```ts
 const events = await client.runCodeTask(code.id, {
-  spec: { taskId: 't_1' },
+  spec: { taskId: 't_1', timeoutMs: 30_000 },
   taskInput: JSON.stringify(task),
   inputs: [{ path: 'bin/0', content: fs.createReadStream(file) }],
 });
