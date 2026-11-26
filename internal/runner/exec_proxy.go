@@ -70,7 +70,7 @@ func ExecProxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics
 			return
 		}
 
-		daemonBaseURL, ok := resolveDaemonURL(w, r, rt, rec, true)
+		daemonBaseURL, ok := resolveDaemonURL(w, r, rt, rec, nil)
 		if !ok {
 			return
 		}

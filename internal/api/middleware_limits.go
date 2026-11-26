@@ -16,7 +16,7 @@ const reasonTenantRequestLimit = "tenant_request_limit"
 // asking a client to wait longer.
 const limitRetryAfter = "1"
 
-// maxExecutionDeletesPerTenant caps a tenant's execution DELETEs in progress
+// maxExecutionDeletesPerTenant caps a tenant's execution and task DELETEs in progress
 // on this replica. They are counted apart from its other requests, so it can
 // still cancel work when its limit is full. Bounded, because a DELETE to a
 // stalled daemon holds its slot too.

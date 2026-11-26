@@ -59,6 +59,8 @@ Output arrives in pieces of at most 64 KiB; there is no limit on total output.
 | --- | --- | --- | --- |
 | Run time of a task | required, no default | `spec.timeoutMs` | the runtime is stopped; the stream ends with `error` code `timeout`. Later tasks in the sandbox fail |
 | Largest run time | 1 min, at most 15 min | `CODE_DAEMON_MAX_TASK_TIMEOUT` | a larger `spec.timeoutMs` is lowered to it |
+| Stopping a task after a timeout, a cancel or a closed stream | 5 s | fixed | the runtime is stopped at once, and its other tasks end with `error` code `crashed`. A task that stops in time lets the other tasks finish |
+| Cancelling with `DELETE` | 10 s | fixed | `503` |
 
 ## Sizes
 

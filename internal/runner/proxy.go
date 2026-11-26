@@ -31,12 +31,12 @@ type proxyTarget struct {
 
 // ProxyHandler returns a handler that reverse-proxies requests to the sandbox daemon.
 func ProxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder) http.HandlerFunc {
-	return proxyHandler(rt, cfg, rec, noBodyCap, true)
+	return proxyHandler(rt, cfg, rec, noBodyCap, nil)
 }
 
 // UploadProxyHandler is like ProxyHandler but enforces cfg.MaxFileBytes on the request body.
 func UploadProxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder) http.HandlerFunc {
-	return proxyHandler(rt, cfg, rec, cfg.MaxFileBytes, true)
+	return proxyHandler(rt, cfg, rec, cfg.MaxFileBytes, nil)
 }
 
 // TaskProxyHandler serves POST /sandboxes/{id}/tasks of code sandboxes: it
@@ -45,7 +45,7 @@ func UploadProxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metri
 // the multipart headers. A daemon refusal reaches the client while the
 // client is still uploading.
 func TaskProxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder) http.HandlerFunc {
-	proxy := proxyHandler(rt, cfg, rec, codetask.MaxBodyBytes(cfg.MaxTaskInputBytes), true)
+	proxy := proxyHandler(rt, cfg, rec, codetask.MaxBodyBytes(cfg.MaxTaskInputBytes), nil)
 	return func(w http.ResponseWriter, r *http.Request) {
 		early := sandboxproxy.StartEarlyReply(w, r)
 		proxy(w, r.WithContext(sandboxproxy.WithEarlyReply(r.Context(), early)))
@@ -62,7 +62,18 @@ var deleteExecutionTimeout = 10 * time.Second
 // already lost the execution, so the delete gets 204 (writeExecutionGone) and does
 // not spend the one-shot 409 restart report. Rationale in docs/API.md under DELETE /sandboxes/{id}/executions/{exec_id}.
 func DeleteExecutionHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder) http.HandlerFunc {
-	proxy := proxyHandler(rt, cfg, rec, noBodyCap, false)
+	return deleteHandler(rt, cfg, rec, writeExecutionGone)
+}
+
+// DeleteTaskHandler serves DELETE /sandboxes/{id}/tasks/{task_id} of code
+// sandboxes. Like DeleteExecutionHandler, it does not wake the sandbox: a
+// stopped sandbox has no running task, so the runner answers 404 itself.
+func DeleteTaskHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder) http.HandlerFunc {
+	return deleteHandler(rt, cfg, rec, writeTaskNotRunning)
+}
+
+func deleteHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder, notRunning func(http.ResponseWriter)) http.HandlerFunc {
+	proxy := proxyHandler(rt, cfg, rec, noBodyCap, notRunning)
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), deleteExecutionTimeout)
 		defer cancel()
@@ -74,10 +85,10 @@ func DeleteExecutionHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *m
 const noBodyCap = -1
 
 // maxBody caps the request body; noBodyCap leaves it uncapped, and 0 refuses
-// any body. wake says whether a
-// sandbox that is not running is started for the request. Only
-// DeleteExecutionHandler passes false; see there for why.
-func proxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder, maxBody int64, wake bool) http.HandlerFunc {
+// any body. A nil notRunning starts a sandbox that is not running for the
+// request. Otherwise notRunning answers the request without starting it. Only
+// the delete handlers set it; see DeleteExecutionHandler for why.
+func proxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.RunnerRecorder, maxBody int64, notRunning func(http.ResponseWriter)) http.HandlerFunc {
 	proxy := &httputil.ReverseProxy{
 		Transport: runnerruntime.NoProxyTransport,
 		Rewrite: func(pr *httputil.ProxyRequest) {
@@ -137,7 +148,7 @@ func proxyHandler(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.Run
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		daemonBaseURL, ok := resolveDaemonURL(w, r, rt, rec, wake)
+		daemonBaseURL, ok := resolveDaemonURL(w, r, rt, rec, notRunning)
 		if !ok {
 			return
 		}
@@ -199,12 +210,12 @@ func daemonRedirected(r *http.Request, resp *http.Response, component string) bo
 // wakes the sandbox if necessary. On error it writes an HTTP response and
 // returns ("", false).
 //
-// wake=false is for a route that must not start a stopped sandbox. It answers the
+// A non-nil notRunning is for a route that must not start a stopped sandbox. It answers the
 // request here rather than leaving the caller to check first and proxy after: the
 // lookup below is a docker ps and inspect, so a caller that decided on its own
 // lookup and then reached a handler that repeats it leaves a window a crash fits
 // inside — one wide enough to have failed in CI. One lookup, one decision.
-func resolveDaemonURL(w http.ResponseWriter, r *http.Request, rt runnerruntime.Runtime, rec *metrics.RunnerRecorder, wake bool) (string, bool) {
+func resolveDaemonURL(w http.ResponseWriter, r *http.Request, rt runnerruntime.Runtime, rec *metrics.RunnerRecorder, notRunning func(http.ResponseWriter)) (string, bool) {
 	id := r.PathValue("id")
 	if !isValidID(id) {
 		writeError(w, http.StatusBadRequest, "invalid sandbox id")
@@ -213,8 +224,8 @@ func resolveDaemonURL(w http.ResponseWriter, r *http.Request, rt runnerruntime.R
 
 	daemonBaseURL, err := rt.DaemonURL(r.Context(), id)
 	if err != nil && errors.Is(err, runnerruntime.ErrSandboxNotRunning) {
-		if !wake {
-			writeExecutionGone(w)
+		if notRunning != nil {
+			notRunning(w)
 			return "", false
 		}
 		wakeStart := time.Now()

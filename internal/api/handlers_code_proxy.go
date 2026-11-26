@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/n8n-io/sandbox-service/internal/api/config"
+	"github.com/n8n-io/sandbox-service/internal/codetask"
 	"github.com/n8n-io/sandbox-service/internal/obs"
 	"github.com/n8n-io/sandbox-service/internal/sandboxproxy"
 )
@@ -17,6 +18,8 @@ type codeProxyRoute struct {
 	runnerSuffix string
 	// maxBody caps the request body.
 	maxBody int64
+	// withTaskID adds the {taskId} path value to runnerSuffix, after a check.
+	withTaskID bool
 }
 
 // codeSandboxProxyHandler proxies code sandbox routes to the sandbox's runner.
@@ -28,6 +31,15 @@ func codeSandboxProxyHandler(s codeSandboxStore, cfg *config.APIConfig, transpor
 			if !isValidUUID(id) {
 				writeError(w, http.StatusBadRequest, "invalid sandbox id")
 				return
+			}
+			runnerSuffix := route.runnerSuffix
+			if route.withTaskID {
+				taskID := r.PathValue("taskId")
+				if !codetask.ValidTaskID(taskID) {
+					writeError(w, http.StatusBadRequest, "invalid task id")
+					return
+				}
+				runnerSuffix += "/" + taskID
 			}
 
 			rec, err := s.GetCodeSandbox(id)
@@ -55,7 +67,7 @@ func codeSandboxProxyHandler(s codeSandboxStore, cfg *config.APIConfig, transpor
 			// The runner serves every kind under /sandboxes/{id}.
 			out := r.WithContext(r.Context())
 			runnerURL := *r.URL
-			runnerURL.Path = "/sandboxes/" + id + route.runnerSuffix
+			runnerURL.Path = "/sandboxes/" + id + runnerSuffix
 			runnerURL.RawPath = ""
 			out.URL = &runnerURL
 

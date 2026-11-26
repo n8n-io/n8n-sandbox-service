@@ -66,7 +66,7 @@ Retry-After: 1
 {"error":"too many requests in progress for this tenant","code":429,"reason":"tenant_request_limit"}
 ```
 
-`reason` is `tenant_request_limit` or `sandbox_request_limit`; the per-sandbox body has no `code`. A stream counts until it ends, a create until the runner has finished it. Execution `DELETE`s have limits of their own, counted the same way: 16 per tenant and 4 per sandbox, so work can be cancelled while the others are full. Safe to retry after the delay.
+`reason` is `tenant_request_limit` or `sandbox_request_limit`; the per-sandbox body has no `code`. A stream counts until it ends, a create until the runner has finished it. Execution and task `DELETE`s have limits of their own, counted the same way: 16 per tenant and 4 per sandbox, so work can be cancelled while the others are full. Safe to retry after the delay.
 
 ### HTTP 409 `sandbox_restarted` — the sandbox came back without its memory
 
@@ -914,6 +914,8 @@ Runs a task in a code sandbox. The service sends the request body to the code da
 
 The spec must set `timeoutMs`, the execution timeout of the task in milliseconds. A missing, zero or negative value gets `400`. A value above [`CODE_DAEMON_MAX_TASK_TIMEOUT`](configuration.md#code-daemon) (default 1 min) is lowered to it. A task that runs too long ends with an `error` event with code `timeout`.
 
+Closing the stream before the terminal event cancels the task, like [`DELETE`](#delete-codesandboxesidtaskstaskid). A cancelled task ends with an `error` event with code `cancelled`. A task that finishes before it stops sends its result instead. A timeout or a cancel stops the shared runtime of the sandbox once its other tasks end. If the runtime does not stop the task in 5 s, the daemon stops the runtime at once, and its other tasks end with code `crashed`. The daemon does not restart the runtime, so all later tasks in the sandbox fail. To run more tasks, delete the sandbox and create a new one.
+
 By default, the input files can be at most 64 MiB in total ([limits](limits.md)). The body must arrive in 30 s ([time limits](limits.md#time-limits-on-requests)). An open request counts toward the [in-progress limits](#http-429--too-many-requests-in-progress) and keeps the sandbox active.
 
 **Errors:** `400` invalid id or body too large, `401` missing or unknown API key, `403` provisioner or scaler key, `404` no code sandbox with this id for the caller, or the sandbox was idle too long, `429` [too many requests in progress](#http-429--too-many-requests-in-progress), `502` no runner for the sandbox, `503` runner or daemon not available. The daemon sends all other statuses. Over HTTP/1, an error can arrive before the upload ends. The service then closes the connection.
@@ -925,6 +927,27 @@ curl -N -X POST http://localhost:8080/code/sandboxes/SANDBOX_ID/tasks \
   -H "X-Api-Key: YOUR_API_KEY" \
   -F 'spec={"taskId":"t_1","timeoutMs":30000};type=application/json' \
   -F 'input=@task.json;filename=task.json'
+```
+
+### DELETE /code/sandboxes/{id}/tasks/{taskId}
+
+Cancels a running task in a code sandbox. The task's stream then ends with an `error` event with code `cancelled`. The cancel also stops the shared runtime when its other tasks end (see [above](#post-codesandboxesidtasks)).
+
+This route does not wake a stopped sandbox. A stopped sandbox has no running task, so the runner answers `404`. Task `DELETE`s share the [limits of execution `DELETE`s](#http-429--too-many-requests-in-progress).
+
+**Path Parameters:**
+- `id` — Code sandbox UUID
+- `taskId` — The `taskId` of the task spec
+
+**Response:** `202 Accepted` when the cancel is requested. The response does not wait for the task to stop.
+
+**Errors:** `400` invalid id, `401` missing or unknown API key, `403` provisioner or scaler key, `404` no code sandbox with this id for the caller, or no running task with this id (body `{"code":"not_found","message":"task not running"}`), `429` too many `DELETE`s in progress, `502` no runner for the sandbox, `503` runner or daemon not available.
+
+**Example:**
+
+```bash
+curl -X DELETE http://localhost:8080/code/sandboxes/SANDBOX_ID/tasks/t_1 \
+  -H "X-Api-Key: YOUR_API_KEY"
 ```
 
 ### DELETE /code/sandboxes/{id}

@@ -74,6 +74,7 @@ func NewRouter(rt runnerruntime.Runtime, cfg *config.Config, rec *metrics.Runner
 	mux.HandleFunc("POST /sandboxes/{id}/mkdir", proxy)
 	mux.HandleFunc("GET /sandboxes/{id}/stat", proxy)
 	mux.HandleFunc("POST /sandboxes/{id}/tasks", limitSandbox(TaskProxyHandler(rt, cfg, rec)))
+	mux.HandleFunc("DELETE /sandboxes/{id}/tasks/{task_id}", limitSandboxDeletes(DeleteTaskHandler(rt, cfg, rec)))
 
 	// Apply middleware (outermost first)
 	var handler http.Handler = mux

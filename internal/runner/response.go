@@ -36,3 +36,10 @@ func writeSandboxRestarted(w http.ResponseWriter) {
 func writeExecutionGone(w http.ResponseWriter) {
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// writeTaskNotRunning answers a task delete whose sandbox is not running. A stop
+// or a crash already ended the task, so there is nothing to cancel. This is
+// the daemon's answer for a task it does not run.
+func writeTaskNotRunning(w http.ResponseWriter) {
+	writeJSON(w, http.StatusNotFound, map[string]string{"code": "not_found", "message": "task not running"})
+}

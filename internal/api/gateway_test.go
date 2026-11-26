@@ -286,6 +286,7 @@ func TestGatewayServesCodeSandboxesOnlyWhenEnabled(t *testing.T) {
 				{http.MethodPost, "/code/sandboxes/not-a-uuid/tasks"},
 				{http.MethodDelete, "/code/sandboxes/not-a-uuid"},
 				{http.MethodDelete, "/code/sandboxes/names/not*a*name"},
+				{http.MethodDelete, "/code/sandboxes/not-a-uuid/tasks/t_1"},
 			} {
 				req := httptest.NewRequest(route.method, route.path, strings.NewReader("{}"))
 				req.Header.Set("X-Api-Key", "public-key")
