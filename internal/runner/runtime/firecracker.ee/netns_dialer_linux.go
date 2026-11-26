@@ -55,7 +55,7 @@ func dialContextInNetNSOnLockedThread(ctx context.Context, netnsPath string, net
 	// The dial result does not depend on the switch back, so only log a failure.
 	defer func() {
 		if err := unix.Setns(int(current.Fd()), unix.CLONE_NEWNET); err != nil {
-			slog.Error("restore network namespace after dial", "error", err)
+			slog.Error("restore network namespace after dial", "netns_path", netnsPath, "error", err)
 		}
 	}()
 
