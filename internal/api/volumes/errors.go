@@ -35,28 +35,28 @@ var (
 	// ErrNoCapacity is a publish whose image no runner was free to build in
 	// time. Nothing of it is kept.
 	ErrNoCapacity = errors.New("no runner was free to build the volume's image; try again later")
-	// ErrBuildFailed is the error that every *BuildError wraps.
+	// ErrBuildFailed is the error that every *ImageBuildError wraps.
 	ErrBuildFailed = errors.New("the volume's image build failed")
 )
 
-// BuildError is an image build that failed on a runner. Reason is one of
+// ImageBuildError is an image build that failed on a runner. Reason is one of
 // runnerruntime.VolumeBuildReasons, or "transport" when the call failed
 // without a reason from the runner, or the runner sent no valid image. Only
 // Error carries the cause. Use it in logs only.
-type BuildError struct {
+type ImageBuildError struct {
 	RunnerID string
 	Reason   string
 	cause    error
 }
 
-func (e *BuildError) Error() string {
+func (e *ImageBuildError) Error() string {
 	return fmt.Sprintf("the volume's image build on runner %s failed (%s): %v", e.RunnerID, e.Reason, e.cause)
 }
 
-func (e *BuildError) Unwrap() error { return ErrBuildFailed }
+func (e *ImageBuildError) Unwrap() error { return ErrBuildFailed }
 
 // CallerFault reports whether the tar made the build fail, not the runner.
-func (e *BuildError) CallerFault() bool {
+func (e *ImageBuildError) CallerFault() bool {
 	return (&runnerruntime.VolumeBuildError{Reason: e.Reason}).CallerFault()
 }
 

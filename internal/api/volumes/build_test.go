@@ -150,7 +150,7 @@ func TestAFailedBuildFailsThePublish(t *testing.T) {
 
 			_, err := env.publish(t, validTar(t), "")
 
-			var failure *BuildError
+			var failure *ImageBuildError
 			if !errors.As(err, &failure) || failure.Reason != testCase.reason || failure.CallerFault() != testCase.callerFault || failure.RunnerID != "a" {
 				t.Fatalf("Publish() = %v; want a build error on runner a with reason %s, caller fault %v", err, testCase.reason, testCase.callerFault)
 			}

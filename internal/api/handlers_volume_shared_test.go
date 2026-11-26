@@ -393,10 +393,10 @@ func TestSharedVolumeErrorAnswers(t *testing.T) {
 		{fmt.Errorf("%w: %w", volumes.ErrUpload, os.ErrDeadlineExceeded), http.StatusRequestTimeout, "", false},
 		{fmt.Errorf("%w: reset", volumes.ErrUpload), http.StatusBadRequest, "", false},
 		{fmt.Errorf("%w: lease", volumes.ErrInterrupted), http.StatusServiceUnavailable, reasonPublishInterrupted, false},
-		{&volumes.BuildError{RunnerID: "secret-runner", Reason: "tar"}, http.StatusUnprocessableEntity, reasonBuildFailed, false},
-		{&volumes.BuildError{RunnerID: "secret-runner", Reason: "no_space"}, http.StatusUnprocessableEntity, reasonBuildFailed, false},
-		{&volumes.BuildError{RunnerID: "secret-runner", Reason: "fsck"}, http.StatusBadGateway, reasonBuildFailed, false},
-		{&volumes.BuildError{RunnerID: "secret-runner", Reason: "transport"}, http.StatusBadGateway, reasonBuildFailed, false},
+		{&volumes.ImageBuildError{RunnerID: "secret-runner", Reason: "tar"}, http.StatusUnprocessableEntity, reasonBuildFailed, false},
+		{&volumes.ImageBuildError{RunnerID: "secret-runner", Reason: "no_space"}, http.StatusUnprocessableEntity, reasonBuildFailed, false},
+		{&volumes.ImageBuildError{RunnerID: "secret-runner", Reason: "fsck"}, http.StatusBadGateway, reasonBuildFailed, false},
+		{&volumes.ImageBuildError{RunnerID: "secret-runner", Reason: "transport"}, http.StatusBadGateway, reasonBuildFailed, false},
 		{fmt.Errorf("%w: 3 refusals", volumes.ErrNoCapacity), http.StatusServiceUnavailable, reasonNoCapacity, true},
 		{errors.New("store: /var/lib/secret/path"), http.StatusInternalServerError, "", false},
 	} {
@@ -410,7 +410,7 @@ func TestSharedVolumeErrorAnswers(t *testing.T) {
 		if strings.Contains(recorder.Body.String(), "secret") || strings.Contains(recorder.Body.String(), "reset") {
 			t.Errorf("%v: body %s passes the error's text on", tc.err, recorder.Body.String())
 		}
-		var failed *volumes.BuildError
+		var failed *volumes.ImageBuildError
 		if errors.As(tc.err, &failed) && !strings.Contains(recorder.Body.String(), "on a runner: "+failed.Reason) {
 			t.Errorf("%v: body %s does not name the runner's reason", tc.err, recorder.Body.String())
 		}

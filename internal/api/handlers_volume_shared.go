@@ -273,7 +273,7 @@ func handleDeleteSharedVolume(service *volumes.Service) http.HandlerFunc {
 // writeSharedVolumeError answers err. Its text goes to the caller only for
 // errors whose messages are fixed.
 func writeSharedVolumeError(writer http.ResponseWriter, request *http.Request, err error) {
-	var buildFailed *volumes.BuildError
+	var buildFailed *volumes.ImageBuildError
 	switch {
 	case errors.Is(err, volumes.ErrNotFound):
 		writeError(writer, http.StatusNotFound, "shared volume not found")

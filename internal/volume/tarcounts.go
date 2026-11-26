@@ -59,7 +59,8 @@ func (counts TarCounts) Policy() safetar.Policy {
 const MaxSandboxVolumeBytes int64 = 10 << 30 // 10 GiB
 
 const (
-	// treeBlockBytes is the block size of ext4 and XFS as runners use them.
+	// treeBlockBytes is the 4 KiB block size of ext4 and XFS on Linux runners.
+	// Fixed so the API and runners compute the same upper bound.
 	treeBlockBytes = 4 << 10 // 4 KiB
 	// treeEntryBytes is the most one entry takes besides its content: a block
 	// (a file's partly used last block, a directory's first block, a long
