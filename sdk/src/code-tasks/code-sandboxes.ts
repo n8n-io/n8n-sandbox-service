@@ -125,6 +125,19 @@ export async function runCodeTask(
 }
 
 /**
+ * Cancels task `taskId` in code sandbox `sandboxId`. Resolves when the cancel
+ * is requested. The task stream then ends with an `error` event with code
+ * `cancelled`. Fails with status 404 when the task is not running.
+ */
+export async function cancelCodeTask(
+  http: HttpClient,
+  sandboxId: string,
+  taskId: string,
+): Promise<void> {
+  await http.requestVoid("DELETE", `/code/sandboxes/${sandboxId}/tasks/${taskId}`);
+}
+
+/**
  * Wraps events so that return() and throw() call release, also before the
  * first next(): a generator that has not started skips its finally block.
  * release comes first, because the generator queues return() and throw()

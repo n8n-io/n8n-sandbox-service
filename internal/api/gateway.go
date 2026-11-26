@@ -106,6 +106,7 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	if cfg.CodeSandboxesEnabled {
 		codeProxy := codeSandboxProxyHandler(s, cfg, runnerTransport, activity)
 		mux.HandleFunc("POST /code/sandboxes/{id}/tasks", limitTenant(codeProxy(codeProxyRoute{runnerSuffix: "/tasks", maxBody: codetask.MaxBodyBytes(cfg.MaxTaskInputBytes)})))
+		mux.HandleFunc("DELETE /code/sandboxes/{id}/tasks/{taskId}", limitTenantDeletes(codeProxy(codeProxyRoute{runnerSuffix: "/tasks", withTaskID: true})))
 	}
 
 	var handler http.Handler = mux

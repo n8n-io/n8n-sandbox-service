@@ -9,13 +9,12 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
-	"regexp"
 	"time"
+
+	"github.com/n8n-io/sandbox-service/internal/codetask"
 )
 
 const maxSpecBytes = 1 << 10 // 1 KiB
-
-var taskIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,128}$`)
 
 var (
 	errSpecTooLarge   = errors.New("task spec too large")
@@ -98,7 +97,7 @@ func readTaskSpec(part io.Reader) (taskSpec, error) {
 
 // validateTaskSpec checks the fields of a decoded spec.
 func validateTaskSpec(spec taskSpec) error {
-	if !taskIDPattern.MatchString(spec.TaskID) {
+	if !codetask.ValidTaskID(spec.TaskID) {
 		return errInvalidTaskID
 	}
 	if spec.TimeoutMs <= 0 {

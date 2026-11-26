@@ -106,6 +106,36 @@ func TestCodeTaskIsProxiedToRunner(t *testing.T) {
 	}
 }
 
+func TestCodeTaskDeleteIsProxiedToRunner(t *testing.T) {
+	var runnerHits atomic.Int32
+	var gotMethod, gotPath string
+	runner := newTestRunnerServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		runnerHits.Add(1)
+		gotMethod, gotPath = r.Method, r.URL.Path
+		w.WriteHeader(http.StatusAccepted)
+	}))
+
+	router, s, _ := newCodeProxyTestGateway(t)
+	tenant := mintTenantKey(t, router, `{"name":"code"}`)
+	createCodeProxySandbox(t, s, codeProxySandboxID, tenant.Tenant.ID, runner.URL, store.KindCode, time.Now().Unix())
+
+	for taskID, want := range map[string]int{"t_1": http.StatusAccepted, "bad.id": http.StatusBadRequest} {
+		req := httptest.NewRequest(http.MethodDelete, "/code/sandboxes/"+codeProxySandboxID+"/tasks/"+taskID, nil)
+		req.Header.Set("X-Api-Key", tenant.Key.APIKey)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code != want {
+			t.Errorf("task %q: status = %d, want %d: %s", taskID, rr.Code, want, rr.Body.String())
+		}
+	}
+	if got := runnerHits.Load(); got != 1 {
+		t.Fatalf("runner hits = %d, want 1: an invalid task id must not reach the runner", got)
+	}
+	if want := "/sandboxes/" + codeProxySandboxID + "/tasks/t_1"; gotMethod != http.MethodDelete || gotPath != want {
+		t.Errorf("runner got %s %s, want DELETE %s", gotMethod, gotPath, want)
+	}
+}
+
 // Neither direction is buffered: the runner reads the first part of the upload
 // while the client still holds the rest, and the client reads the first event
 // while the runner still holds the last.

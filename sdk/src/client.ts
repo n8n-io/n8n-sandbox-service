@@ -12,6 +12,7 @@ import {
   stat,
 } from "./files";
 import {
+  cancelCodeTask,
   createCodeSandbox,
   deleteCodeSandbox,
   deleteCodeSandboxByName,
@@ -111,6 +112,15 @@ export class SandboxClient {
    */
   async deleteCodeSandboxByName(name: string): Promise<void> {
     return deleteCodeSandboxByName(this.http, name);
+  }
+
+  /**
+   * Cancels a running task in a code sandbox. Its stream then ends with an
+   * `error` event with code `cancelled`. Fails with status 404 when the task
+   * is not running.
+   */
+  async cancelCodeTask(sandboxId: string, taskId: string): Promise<void> {
+    return cancelCodeTask(this.http, sandboxId, taskId);
   }
 
   // #endregion

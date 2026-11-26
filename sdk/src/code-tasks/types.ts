@@ -121,8 +121,10 @@ export interface CodeTaskDoneEvent {
  * - `crashed`: the runtime is not available or stopped.
  * - `timeout`: the task ran longer than its timeout. This stops the runtime of
  *   the sandbox, so later tasks in it fail.
+ * - `cancelled`: the task was cancelled, for example because its stream
+ *   closed. Like `timeout`, this stops the runtime of the sandbox.
  */
-export type CodeTaskErrorCode = "user_error" | "invalid" | "crashed" | "timeout";
+export type CodeTaskErrorCode = "user_error" | "invalid" | "crashed" | "timeout" | "cancelled";
 
 /** Terminal event of a task that failed. */
 export interface CodeTaskErrorEvent {

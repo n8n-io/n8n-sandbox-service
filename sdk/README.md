@@ -101,6 +101,12 @@ for await (const event of events) {
 
 `runCodeTask` is never retried, also not on a `429`, because a stream input cannot be sent twice. A refused task fails with a `SandboxServiceError` before any event. A refused task, or a task with invalid options, destroys its stream inputs. Open them again before you retry it. Ending the iteration early, or calling `return()` or `throw()` on the events, closes the event stream and stops the upload. Aborting `signal` does the same, and the next read fails with a `SandboxServiceError` with `status` `0`. A line that is not a JSON object with a known `type` fails the iteration with an `InvalidStreamEventError`.
 
+`cancelCodeTask` cancels a running task. The task's stream then ends with an `error` event with code `cancelled`. A task that is not running fails with a `SandboxServiceError` with `status` `404`. Closing the stream also cancels the task. A task that finishes before it stops sends its result instead. A cancel or a timeout stops the shared runtime of the sandbox once its other tasks end, so later tasks in it fail. If the task does not stop within 5 seconds, the runtime is stopped at once, and its other tasks end with an `error` event with code `crashed`.
+
+```ts
+await client.cancelCodeTask(code.id, 't_1');
+```
+
 `deleteCodeSandbox` deletes a code sandbox by id. `deleteCodeSandboxByName` deletes all code sandboxes of a name, draining ones too. Both stop all tasks of the deleted sandboxes, and both treat a 404 as success.
 
 ```ts

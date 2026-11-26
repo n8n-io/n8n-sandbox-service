@@ -6,12 +6,13 @@
 //     guard, the health probe, and the execution lanes.
 //   - Task handling (handle_task.go, admission.go, staging.go, results.go):
 //     one POST /tasks request.
+//   - Cancel handling (handle_cancel.go): one DELETE /tasks/{taskId} request.
 //   - supervisor (supervisor.go): starts the shared runtime on first use and
 //     never restarts it.
 //   - worker (worker.go, worker_control.go): the runtime process and the
 //     control protocol on FD 3.
-//   - execution (execution.go): one dispatched task, its result, and its
-//     deadline.
+//   - execution (execution.go): one dispatched task, its result, its
+//     deadline, and its cancellation.
 //
 // The life of one task:
 //
@@ -21,8 +22,11 @@
 //  3. The supervisor gets the worker and registers an execution for the task
 //     ID on it. Then it sends the start message to the runtime.
 //  4. The handler streams heartbeats until the execution has an outcome: the
-//     runtime's terminal message, a runtime exit, or the deadline. At the
-//     deadline, the execution stops the shared worker.
+//     runtime's terminal message, a runtime exit, the deadline, a cancel
+//     request, or a closed stream. To stop a task, the execution retires the
+//     worker so no new task joins it, and sends the runtime a cancel message.
+//     If the runtime does not reply within the grace period, the execution
+//     kills the shared worker. A retired worker stops after its last task.
 //  5. The handler sends the terminal event, then removes the task directory
 //     and frees the lane.
 package codedaemon

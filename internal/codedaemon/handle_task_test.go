@@ -88,7 +88,7 @@ func TestRejectedUploadKeepsReadDeadline(t *testing.T) {
 	}
 }
 
-func TestDisconnectLeavesSharedRuntimeRunning(t *testing.T) {
+func TestCooperativeDisconnectDoesNotCancelSibling(t *testing.T) {
 	d := testDaemon(t, Config{MaxConcurrency: 2})
 	srv := httptest.NewServer(d.Handler())
 	// On a test failure, unblock any detached handler before closing the server.
@@ -118,7 +118,7 @@ func TestDisconnectLeavesSharedRuntimeRunning(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	start(ctx, "quiet")
+	start(ctx, "cooperative")
 	other := start(t.Context(), "other")
 	cancel()
 	for {
@@ -167,7 +167,8 @@ func TestShutdownEndsOpenStreamWithTerminalEvent(t *testing.T) {
 			t.Fatalf("stream ended without a terminal event: %v", err)
 		}
 	}
-	if event.Type != "error" || event.Code != "crashed" {
+	// The request context ends first, so the watcher cancels the task.
+	if event.Type != "error" || event.Code != "cancelled" {
 		t.Fatalf("terminal event = %+v", event)
 	}
 }
@@ -181,4 +182,13 @@ type decodedEvent struct {
 	Code      string          `json:"code"`
 	Message   string          `json:"message"`
 	UserError json.RawMessage `json:"userError"`
+}
+
+// decodeSkippingHeartbeats reads the next event that is not a heartbeat.
+func decodeSkippingHeartbeats(dec *json.Decoder, event *decodedEvent) error {
+	for {
+		if err := dec.Decode(event); err != nil || event.Type != "heartbeat" {
+			return err
+		}
+	}
 }

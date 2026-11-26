@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { PassThrough, Readable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  cancelCodeTask,
   createCodeSandbox,
   deleteCodeSandbox,
   deleteCodeSandboxByName,
@@ -145,6 +146,40 @@ describe("deleteCodeSandbox and deleteCodeSandboxByName", () => {
 
     await expect(deleteCodeSandbox(http, sandbox.id)).rejects.toMatchObject({ status: 502 });
     await expect(deleteCodeSandboxByName(http, "scope-1")).rejects.toMatchObject({ status: 502 });
+  });
+});
+
+describe("cancelCodeTask", () => {
+  let server: TestServer | undefined;
+
+  afterEach(async () => {
+    await server?.close();
+    server = undefined;
+  });
+
+  it("sends a DELETE for the task", async () => {
+    const requests: { method?: string; url?: string }[] = [];
+    server = await startTestServer((req, res) => {
+      requests.push({ method: req.method, url: req.url });
+      res.writeHead(202);
+      res.end();
+    });
+    const http = new HttpClient(server.baseUrl, "key", { baseDelayMs: 0 });
+
+    await expect(cancelCodeTask(http, sandbox.id, "t_1")).resolves.toBeUndefined();
+    expect(requests).toEqual([
+      { method: "DELETE", url: `/code/sandboxes/${sandbox.id}/tasks/t_1` },
+    ]);
+  });
+
+  it("throws when the task is not running", async () => {
+    server = await startTestServer((_req, res) => {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ code: "not_found", message: "task not running" }));
+    });
+    const http = new HttpClient(server.baseUrl, "key", { baseDelayMs: 0 });
+
+    await expect(cancelCodeTask(http, sandbox.id, "t_1")).rejects.toMatchObject({ status: 404 });
   });
 });
 

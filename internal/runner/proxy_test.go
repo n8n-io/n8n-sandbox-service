@@ -146,6 +146,32 @@ func TestProxyHandlersDoNotRefuseAnOrdinaryWake(t *testing.T) {
 	}
 }
 
+func deleteTaskRequest() *http.Request {
+	req := httptest.NewRequest(http.MethodDelete, "/sandboxes/"+proxyTestSandboxID+"/tasks/t_1", nil)
+	req.SetPathValue("id", proxyTestSandboxID)
+	req.SetPathValue("task_id", "t_1")
+	return req
+}
+
+// proxyCase is a proxy handler with a request that its route serves.
+type proxyCase struct {
+	handler func(runnerruntime.Runtime, *config.Config, *metrics.RunnerRecorder) http.HandlerFunc
+	request func() *http.Request
+}
+
+// proxyCases returns every handler that proxies to the daemon: the waking
+// handlers and the delete handlers.
+func proxyCases() map[string]proxyCase {
+	cases := map[string]proxyCase{
+		"delete execution": {DeleteExecutionHandler, deleteExecutionRequest},
+		"delete task":      {DeleteTaskHandler, deleteTaskRequest},
+	}
+	for name, h := range wakingHandlers {
+		cases[name] = proxyCase{h, proxyTestRequest}
+	}
+	return cases
+}
+
 func deleteExecutionRequest() *http.Request {
 	path := "/sandboxes/" + proxyTestSandboxID + "/executions/exec-already-finished"
 	req := httptest.NewRequest(http.MethodDelete, path, nil)
@@ -252,11 +278,57 @@ func TestDeleteExecutionIsProxiedWhenTheSandboxIsRunning(t *testing.T) {
 	}
 }
 
+func TestDeleteTaskIsProxiedToTheDaemon(t *testing.T) {
+	var gotMethod, gotPath string
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer daemon.Close()
+
+	cfg := &config.Config{APIKeys: map[string]struct{}{"k": {}}}
+	router := NewRouter(&fakeRuntime{daemonURL: daemon.URL}, cfg, metrics.NewRunnerRecorder(false))
+	req := authedRequest(t.Context(), http.MethodDelete, "/sandboxes/"+proxyTestSandboxID+"/tasks/t_1", "")
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202: %s", rr.Code, rr.Body.String())
+	}
+	if gotMethod != http.MethodDelete || gotPath != "/tasks/t_1" {
+		t.Errorf("daemon got %s %s, want DELETE /tasks/t_1", gotMethod, gotPath)
+	}
+}
+
+// A stopped sandbox has no running task, so the delete does not wake it.
+func TestDeleteTaskDoesNotWakeTheSandbox(t *testing.T) {
+	rt := &fakeRuntime{daemonErr: runnerruntime.ErrSandboxNotRunning}
+	cfg := &config.Config{APIKeys: map[string]struct{}{"k": {}}}
+	router := NewRouter(rt, cfg, metrics.NewRunnerRecorder(false))
+	req := authedRequest(t.Context(), http.MethodDelete, "/sandboxes/"+proxyTestSandboxID+"/tasks/t_1", "")
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404: %s", rr.Code, rr.Body.String())
+	}
+	var body struct{ Code, Message string }
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil || body.Code != "not_found" || body.Message != "task not running" {
+		t.Errorf("body = %s, want the not_found code and the task not running message", rr.Body.String())
+	}
+	if rr.Header().Get(sandboxproxy.SandboxGoneHeader) != "" {
+		t.Error("a stopped sandbox was reported gone")
+	}
+	if got := rt.ensureCalls.Load(); got != 0 {
+		t.Errorf("wakes = %d, want 0", got)
+	}
+}
+
 // A daemon's answers are the guest's to choose. Following its redirect would point
 // the runner, and on a 307 or 308 the exec body, at anything the runner can reach;
 // relaying it would hand the choice to the API and its client.
 func TestProxyHandlersRefuseDaemonRedirects(t *testing.T) {
-	for name, newHandler := range wakingHandlers {
+	for name, tc := range proxyCases() {
 		for _, code := range []int{301, 302, 303, 307, 308} {
 			t.Run(fmt.Sprintf("%s %d", name, code), func(t *testing.T) {
 				var targetHits atomic.Int32
@@ -273,7 +345,7 @@ func TestProxyHandlersRefuseDaemonRedirects(t *testing.T) {
 				defer daemon.Close()
 
 				rec := httptest.NewRecorder()
-				newHandler(&fakeRuntime{daemonURL: daemon.URL}, proxyTestConfig(), metrics.NewRunnerRecorder(false)).ServeHTTP(rec, proxyTestRequest())
+				tc.handler(&fakeRuntime{daemonURL: daemon.URL}, proxyTestConfig(), metrics.NewRunnerRecorder(false)).ServeHTTP(rec, tc.request())
 
 				if rec.Code != http.StatusBadGateway {
 					t.Fatalf("status = %d, want 502: %s", rec.Code, rec.Body.String())
@@ -312,10 +384,10 @@ func TestProxyHandlersStripDaemonSignalHeaders(t *testing.T) {
 	}))
 	defer daemon.Close()
 
-	for name, newHandler := range wakingHandlers {
+	for name, tc := range proxyCases() {
 		t.Run(name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
-			newHandler(&fakeRuntime{daemonURL: daemon.URL}, proxyTestConfig(), metrics.NewRunnerRecorder(false)).ServeHTTP(rec, proxyTestRequest())
+			tc.handler(&fakeRuntime{daemonURL: daemon.URL}, proxyTestConfig(), metrics.NewRunnerRecorder(false)).ServeHTTP(rec, tc.request())
 
 			if rec.Code != http.StatusNotFound || rec.Body.String() != body {
 				t.Fatalf("got %d %q, want the daemon's 404 %q", rec.Code, rec.Body.String(), body)
@@ -334,16 +406,7 @@ func TestProxyHandlersStripDaemonSignalHeaders(t *testing.T) {
 // see besides Content-Type is what Go's client adds on its own.
 func TestProxyHandlersForwardOnlyContentTypeToDaemon(t *testing.T) {
 	allowed := map[string]bool{"Content-Type": true, "Content-Length": true, "Accept-Encoding": true, "User-Agent": true}
-	type route struct {
-		handler func(runnerruntime.Runtime, *config.Config, *metrics.RunnerRecorder) http.HandlerFunc
-		request func() *http.Request
-	}
-	cases := map[string]route{"delete execution": {DeleteExecutionHandler, deleteExecutionRequest}}
-	for name, h := range wakingHandlers {
-		cases[name] = route{h, proxyTestRequest}
-	}
-
-	for name, tc := range cases {
+	for name, tc := range proxyCases() {
 		t.Run(name, func(t *testing.T) {
 			var got, gotTrailer http.Header
 			daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -393,7 +456,7 @@ func (roundTrip roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, 
 // where the test daemons listen, so the default transport is swapped for one
 // that counts its requests.
 func TestProxyHandlersDoNotUseTheDefaultTransport(t *testing.T) {
-	for name, newHandler := range wakingHandlers {
+	for name, tc := range proxyCases() {
 		t.Run(name, func(t *testing.T) {
 			var defaultTransportRequests atomic.Int32
 			original := http.DefaultTransport
@@ -412,7 +475,7 @@ func TestProxyHandlersDoNotUseTheDefaultTransport(t *testing.T) {
 			defer daemon.Close()
 
 			rec := httptest.NewRecorder()
-			newHandler(&fakeRuntime{daemonURL: daemon.URL}, proxyTestConfig(), metrics.NewRunnerRecorder(false)).ServeHTTP(rec, proxyTestRequest())
+			tc.handler(&fakeRuntime{daemonURL: daemon.URL}, proxyTestConfig(), metrics.NewRunnerRecorder(false)).ServeHTTP(rec, tc.request())
 
 			if got := daemonHits.Load(); got != 1 {
 				t.Fatalf("daemon hits = %d, want 1", got)

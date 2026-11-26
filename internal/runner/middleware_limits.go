@@ -12,7 +12,7 @@ import (
 // asking a client to wait longer.
 const limitRetryAfter = "1"
 
-// maxExecutionDeletesPerSandbox caps a sandbox's execution DELETEs in
+// maxExecutionDeletesPerSandbox caps a sandbox's execution and task DELETEs in
 // progress. They are counted apart from its other requests, so work can still
 // be cancelled when the sandbox's limit is full. Bounded, because a DELETE to a
 // stalled daemon holds its slot for up to deleteExecutionTimeout.
