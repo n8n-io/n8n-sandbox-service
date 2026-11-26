@@ -18,6 +18,17 @@ export interface SandboxClientOptions {
  */
 export type EgressMode = "public" | "none";
 
+/** A read-only volume to attach to a sandbox at creation, by name or by digest. */
+export type SandboxVolumeRequest = (
+  | { name: string; digest?: never }
+  | { digest: string; name?: never }
+) & {
+  /** Absolute mount path below `/mnt/`. */
+  mountPath: string;
+  /** When true, a missing or failing volume is left out instead of failing the create. */
+  optional?: boolean;
+};
+
 /** Options for creating a sandbox. */
 export interface CreateSandboxOptions {
   /** UUID to create or reuse. The service generates one when omitted. */
@@ -34,6 +45,8 @@ export interface CreateSandboxOptions {
    * Reconnecting to an existing `id` keeps the mode it was created with.
    */
   egress: EgressMode;
+  /** Read-only volumes to attach at creation (at most 8). Fixed for the sandbox's lifetime. */
+  volumes?: SandboxVolumeRequest[];
 }
 
 /** Retry policy for transient HTTP failures. */
@@ -56,6 +69,19 @@ export interface RetryOptions {
   jitter?: boolean;
 }
 
+/** A volume requested for a sandbox at creation and whether it was attached. */
+export interface SandboxVolume {
+  name?: string;
+  digest?: string;
+  /** Volume scope (e.g. `shared`), omitted when the volume was not found. */
+  scope?: string;
+  mountPath: string;
+  optional: boolean;
+  attached: boolean;
+  /** Why a volume with `attached: false` was left out. */
+  reason?: string;
+}
+
 /** Metadata for a sandbox instance. */
 export interface SandboxRecord {
   id: string;
@@ -75,6 +101,8 @@ export interface SandboxRecord {
    * predate the field.
    */
   tenantId?: string;
+  /** Volumes requested at creation, in request order. Omitted for sandboxes without any. */
+  volumes?: SandboxVolume[];
 }
 
 /** Directory entry returned by the file listing API. */
@@ -170,6 +198,16 @@ export interface DeleteFileOptions {
 
 // Wire-format types (snake_case from the API)
 
+export type SandboxVolumeWire = {
+  name?: string;
+  digest?: string;
+  scope?: string;
+  mount_path: string;
+  optional: boolean;
+  attached: boolean;
+  reason?: string;
+};
+
 export type SandboxWireResponse = {
   id: string;
   status: string;
@@ -181,6 +219,8 @@ export type SandboxWireResponse = {
   egress?: EgressMode;
   /** Absent from services that predate sandbox ownership in responses. */
   tenant_id?: string;
+  /** Absent when the sandbox has no volumes or the service predates them. */
+  volumes?: SandboxVolumeWire[];
 };
 
 export type FileEntryWireResponse = {

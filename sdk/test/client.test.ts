@@ -1,7 +1,7 @@
 import { gunzipSync } from "node:zlib";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { SandboxClient } from "../src/client.js";
-import { EgressMismatchError, SandboxServiceError } from "../src/errors.js";
+import { EgressMismatchError, SandboxServiceError, VolumeMismatchError } from "../src/errors.js";
 import { HttpClient } from "../src/http.js";
 
 vi.mock("../src/http.js", () => {
@@ -229,6 +229,144 @@ describe("SandboxClient", () => {
     const result = await client.getSandbox("xyz");
 
     expect(result.tenantId).toBe("0f0e0d0c-0000-4000-8000-000000000001");
+    expect("volumes" in result).toBe(false);
+  });
+
+  it("createSandbox sends volumes and maps attached and left-out volumes back", async () => {
+    const mock = getMockHttp(client);
+    const digest = "sha256:" + "a".repeat(64);
+    mock.requestJson.mockResolvedValue({
+      id: "abc",
+      status: "running",
+      created_at: 1000,
+      last_active_at: 1000,
+      ephemeral: false,
+      egress: "public",
+      volumes: [
+        {
+          name: "assistant",
+          digest,
+          scope: "shared",
+          mount_path: "/mnt/assistant",
+          optional: false,
+          attached: true,
+        },
+        {
+          name: "missing",
+          mount_path: "/mnt/missing",
+          optional: true,
+          attached: false,
+          reason: "not_found",
+        },
+      ],
+    });
+
+    const result = await client.createSandbox({
+      egress: "public",
+      volumes: [
+        { name: "assistant", mountPath: "/mnt/assistant" },
+        { digest, mountPath: "/mnt/missing", optional: true },
+      ],
+    });
+
+    expect(mock.requestJson).toHaveBeenCalledWith("POST", "/sandboxes", {
+      data: {
+        egress: "public",
+        volumes: [
+          { name: "assistant", mount_path: "/mnt/assistant" },
+          { digest, mount_path: "/mnt/missing", optional: true },
+        ],
+      },
+      retry: "idempotent",
+    });
+    expect(result.volumes).toEqual([
+      {
+        name: "assistant",
+        digest,
+        scope: "shared",
+        mountPath: "/mnt/assistant",
+        optional: false,
+        attached: true,
+      },
+      {
+        name: "missing",
+        mountPath: "/mnt/missing",
+        optional: true,
+        attached: false,
+        reason: "not_found",
+      },
+    ]);
+    expect("reason" in result.volumes![0]!).toBe(false);
+    expect("scope" in result.volumes![1]!).toBe(false);
+  });
+
+  it("createSandbox keeps an explicit empty volumes list and getSandbox maps volumes", async () => {
+    const mock = getMockHttp(client);
+    mock.requestJson.mockResolvedValue({
+      id: "abc",
+      status: "running",
+      created_at: 1000,
+      last_active_at: 1000,
+      ephemeral: false,
+      egress: "public",
+    });
+
+    await client.createSandbox({ id: "abc", egress: "public", volumes: [] });
+
+    expect(mock.requestJson).toHaveBeenCalledWith("POST", "/sandboxes", {
+      data: { id: "abc", egress: "public", volumes: [] },
+      retry: "always",
+    });
+
+    mock.requestJson.mockResolvedValue({
+      id: "abc",
+      status: "running",
+      created_at: 1000,
+      last_active_at: 1000,
+      ephemeral: false,
+      egress: "public",
+      volumes: [
+        {
+          name: "assistant",
+          mount_path: "/mnt/assistant",
+          optional: true,
+          attached: true,
+        },
+      ],
+    });
+    const fetched = await client.getSandbox("abc");
+    expect(fetched.volumes).toEqual([
+      { name: "assistant", mountPath: "/mnt/assistant", optional: true, attached: true },
+    ]);
+  });
+
+  it("createSandbox rejects a sandbox that does not confirm a required volume", async () => {
+    const mock = getMockHttp(client);
+    mock.requestJson.mockResolvedValue({
+      id: "abc",
+      status: "running",
+      created_at: 1000,
+      last_active_at: 1000,
+      ephemeral: false,
+      egress: "public",
+    });
+
+    const err = await client
+      .createSandbox({
+        egress: "public",
+        volumes: [{ name: "kb", mountPath: "/mnt/kb" }],
+      })
+      .catch((thrown: unknown) => thrown);
+    expect(err).toBeInstanceOf(VolumeMismatchError);
+    expect(err).toMatchObject({ sandboxId: "abc", mountPath: "/mnt/kb" });
+
+    // An optional volume omitted by an older service does not throw.
+    await expect(
+      client.createSandbox({
+        egress: "public",
+        volumes: [{ name: "assistant", mountPath: "/mnt/assistant", optional: true }],
+      }),
+    ).resolves.toMatchObject({ id: "abc" });
   });
 
   it("deleteSandbox sends DELETE /sandboxes/{id}", async () => {

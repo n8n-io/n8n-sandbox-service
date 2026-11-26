@@ -93,4 +93,43 @@ describe("createSandbox when no runner has capacity", () => {
     });
     expect(bodies).toHaveLength(3);
   });
+
+  it("repeats an anonymous create when the volume store is unavailable for a create with volumes", async () => {
+    const volumeStoreDown = {
+      error: "volume store unavailable",
+      code: 503,
+      reason: "volume_store_unavailable",
+    };
+    const withVolume = {
+      ...created,
+      volumes: [
+        { name: "assistant", mount_path: "/mnt/assistant", optional: false, attached: true },
+      ],
+    };
+    const http = await client(
+      (attempt) =>
+        attempt === 1 ? { status: 503, body: volumeStoreDown } : { status: 201, body: withVolume },
+      {},
+    );
+
+    await expect(
+      createSandbox(http, {
+        egress: "public",
+        volumes: [{ name: "assistant", mountPath: "/mnt/assistant" }],
+      }),
+    ).resolves.toMatchObject({ id: created.id });
+    expect(bodies).toEqual([
+      { egress: "public", volumes: [{ name: "assistant", mount_path: "/mnt/assistant" }] },
+      { egress: "public", volumes: [{ name: "assistant", mount_path: "/mnt/assistant" }] },
+    ]);
+
+    bodies = [];
+    await server?.close();
+    const httpWithoutVolumes = await client(() => ({ status: 503, body: volumeStoreDown }), {});
+    await expect(createSandbox(httpWithoutVolumes, { egress: "public" })).rejects.toMatchObject({
+      status: 503,
+      reason: "volume_store_unavailable",
+    });
+    expect(bodies).toHaveLength(1);
+  });
 });
