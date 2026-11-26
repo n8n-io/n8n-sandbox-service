@@ -1169,7 +1169,7 @@ A name never moves to another digest. To publish other content under a name, `DE
 | `503` | `no_capacity` | No runner took the image build within 5 minutes. `Retry-After: 30` |
 | `503` | `publish_interrupted` | The API instance is shutting down, or the publish lost its lease. Publish again: the retry answers `200` if the volume got published after all |
 
-A failed publish removes what it stored. If that removal fails, the API logs a warning, and what is left stays in the store. A volume that became ready although its publish failed, as when the database's answer was lost, stays published: a retry answers `200`.
+A failed publish removes what it stored. If that removal fails, the API logs a warning, and a later sweep removes it. A volume that became ready although its publish failed, as when the database's answer was lost, stays published: a retry answers `200`.
 
 **Example:**
 
@@ -1188,7 +1188,7 @@ Returns every ready volume as an array, newest first, without paging. `?name={na
 
 ### DELETE /shared-volumes/sha256:{hex}
 
-Deletes the volume (`204`). It is hidden and its name is free at once; its stored objects are removed in the same request. If that removal fails, the API logs a warning and any objects not yet removed stay. `404` if no volume with that digest is ready, `409` `publish_in_progress` while it is being published.
+Deletes the volume (`204`). It is hidden and its name is free at once; its stored objects are removed in the same request. If that removal fails, the API logs a warning, and a later sweep removes them. `404` if no volume with that digest is ready, `409` `publish_in_progress` while it is being published.
 
 ---
 

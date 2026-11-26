@@ -113,6 +113,9 @@ type trackingRecords struct {
 	// renewHangs makes lease renewals wait until their context ends.
 	renewHangs bool
 	renewals   int
+	// otherPodPurges has another API instance purge each row just before
+	// this one does.
+	otherPodPurges bool
 }
 
 func (records *trackingRecords) RenewSharedVolumePublish(ctx context.Context, id string, lease time.Duration) (bool, error) {
@@ -144,6 +147,13 @@ func (records *trackingRecords) StartSharedVolumePublish(ctx context.Context, vo
 }
 
 func (records *trackingRecords) PurgeSharedVolume(ctx context.Context, id string) (bool, error) {
+	if records.otherPodPurges {
+		if purged, err := records.SharedVolumes.PurgeSharedVolume(ctx, id); err == nil && purged {
+			records.mutex.Lock()
+			records.purged = append(records.purged, id)
+			records.mutex.Unlock()
+		}
+	}
 	purged, err := records.SharedVolumes.PurgeSharedVolume(ctx, id)
 	if purged {
 		records.mutex.Lock()
@@ -168,6 +178,10 @@ type failingObjects struct {
 	failDelete bool
 	// failImagePut fails an image's Put after its first read.
 	failImagePut bool
+	// failDeleteOf fails deleting the objects of that volume ID.
+	failDeleteOf string
+	// deleteHangs makes deletes wait until their context ends.
+	deleteHangs bool
 }
 
 func (objects *failingObjects) Put(ctx context.Context, key volumestore.Key, content io.Reader, opts volumestore.PutOptions) (volumestore.Object, error) {
@@ -184,7 +198,11 @@ func (objects *failingObjects) Put(ctx context.Context, key volumestore.Key, con
 }
 
 func (objects *failingObjects) Delete(ctx context.Context, key volumestore.Key) error {
-	if objects.failDelete {
+	switch {
+	case objects.deleteHangs:
+		<-ctx.Done()
+		return ctx.Err()
+	case objects.failDelete, key.ID == objects.failDeleteOf:
 		return errors.New("disk on fire")
 	}
 	return objects.Store.Delete(ctx, key)
@@ -244,7 +262,8 @@ func newTestEnv(t *testing.T) *testEnv {
 	env.service.timing = timing{
 		lease: time.Minute, renewEvery: time.Hour, giveUpAfter: time.Hour, cleanupTimeout: 5 * time.Second,
 		builderWait: 200 * time.Millisecond, retryFirst: 10 * time.Millisecond, retryMax: 50 * time.Millisecond,
-		buildCall: 10 * time.Second,
+		buildCall:  10 * time.Second,
+		sweepEvery: time.Hour, failedGrace: 10 * time.Minute,
 	}
 	return env
 }
