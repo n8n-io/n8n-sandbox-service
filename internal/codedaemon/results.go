@@ -1,5 +1,5 @@
-// This file turns the runtime's terminal message into a task event and reads
-// result.json from the task's output directory.
+// This file turns the runtime's terminal message into a task event, bounds
+// the output manifest, and reads result.json from the task's output directory.
 package codedaemon
 
 import (
@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path"
 	"syscall"
 )
 
@@ -15,6 +16,10 @@ const inlineResultMax = 1 << 20 // 1 MiB; default and maximum inline result size
 var (
 	errInvalidResult = errors.New("invalid result file")
 	errOutputChanged = errors.New("output changed after publication")
+	errOutputLimit   = errors.New("output limit exceeded")
+	// errInvalidOutput rejects an output entry that is not a regular file or
+	// a directory, such as a symlink, or that has an invalid path.
+	errInvalidOutput = errors.New("invalid output file")
 )
 
 // resultEvent translates the worker's terminal message and validates successful outputs.
@@ -51,6 +56,66 @@ func (d *Daemon) resultEvent(spec taskSpec, root *os.Root, msg workerMessage) ta
 		}
 	}
 	return newDoneEvent(spec.TaskID, result, outputs)
+}
+
+type outputEntry struct {
+	Path string `json:"path"` // relative to the task's output directory
+	Size int64  `json:"size"`
+}
+
+// collectOutputs bounds the manifest for task output publication; it does not cap disk writes.
+func collectOutputs(root *os.Root, limits Limits) ([]outputEntry, error) {
+	entries := make([]outputEntry, 0)
+	var bytes int64
+	seenDirs := 0
+	dirs := []string{"."}
+	for len(dirs) > 0 {
+		dir := dirs[len(dirs)-1]
+		dirs = dirs[:len(dirs)-1]
+		f, err := root.OpenFile(dir, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
+		if err != nil {
+			return nil, err
+		}
+		// Every entry uses up a file or a directory, so reading one more than
+		// both remaining budgets is enough to detect overflow.
+		children, err := f.ReadDir(limits.Files - len(entries) + maxDirs - seenDirs + 1)
+		_ = f.Close()
+		if err != nil && !errors.Is(err, io.EOF) {
+			return nil, err
+		}
+		for _, entry := range children {
+			rel := path.Join(dir, entry.Name())
+			if !validFilePath(rel) {
+				return nil, errInvalidOutput
+			}
+			if entry.IsDir() {
+				if seenDirs++; seenDirs > maxDirs {
+					return nil, errOutputLimit
+				}
+				dirs = append(dirs, rel)
+				continue
+			}
+			if !entry.Type().IsRegular() {
+				return nil, errInvalidOutput
+			}
+			if len(entries) == limits.Files {
+				return nil, errOutputLimit
+			}
+			info, err := entry.Info()
+			if err != nil {
+				return nil, err
+			}
+			if !info.Mode().IsRegular() {
+				return nil, errInvalidOutput
+			}
+			if info.Size() > int64(limits.OutputBytes)-bytes {
+				return nil, errOutputLimit
+			}
+			bytes += info.Size()
+			entries = append(entries, outputEntry{Path: rel, Size: info.Size()})
+		}
+	}
+	return entries, nil
 }
 
 // readResult reads a result.json that must still match its manifest entry and be valid JSON.

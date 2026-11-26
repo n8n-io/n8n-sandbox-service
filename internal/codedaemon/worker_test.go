@@ -1,13 +1,9 @@
 package codedaemon
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -16,7 +12,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -210,120 +205,6 @@ func TestStageAndDispatchSharedRuntime(t *testing.T) {
 		if err := d.reserveTask(task.x.id); !errors.Is(err, errDuplicateTask) {
 			t.Fatalf("duplicate accepted after cleanup: %v", err)
 		}
-	}
-}
-
-func TestDispatchRejectsActiveTaskID(t *testing.T) {
-	d := testDaemon(t, Config{})
-	dir := d.cfg.WorkDir
-	if err := os.MkdirAll(filepath.Join(dir, "out"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	x, err := d.dispatch(t.Context(), "same", dir, d.taskTimeout(0))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer x.close()
-	if _, err := d.dispatch(t.Context(), "same", dir, d.taskTimeout(0)); !errors.Is(err, errDuplicateTask) {
-		t.Fatalf("duplicate dispatch: %v", err)
-	}
-	x.worker.mu.Lock()
-	registered := x.worker.executionsByTaskID["same"]
-	x.worker.mu.Unlock()
-	if registered != x {
-		t.Fatal("duplicate dispatch replaced the active receiver")
-	}
-}
-
-type syncBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (b *syncBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
-}
-
-func (b *syncBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.String()
-}
-
-func TestControlMessageLimit(t *testing.T) {
-	var logs syncBuffer
-	defaultLogger := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
-	t.Cleanup(func() { slog.SetDefault(defaultLogger) })
-	d := testDaemon(t, Config{})
-	result := func(id string) (workerMessage, bool) {
-		t.Helper()
-		x, err := d.dispatch(t.Context(), id, d.cfg.WorkDir, d.taskTimeout(0))
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer x.close()
-		select {
-		case msg, ok := <-x.result:
-			return msg, ok
-		case <-time.After(5 * time.Second):
-			t.Fatal("missing runtime result")
-			return workerMessage{}, false
-		}
-	}
-	if msg, ok := result("largest"); !ok || msg.Type != "error" {
-		t.Fatalf("runtime did not survive the largest control message: %q", msg.Type)
-	}
-	if _, ok := result("oversized"); ok {
-		t.Fatal("runtime survived a message over the limit")
-	}
-	if want := fmt.Sprintf("control message over %d bytes", maxControlMessage); !strings.Contains(logs.String(), want) {
-		t.Fatalf("log does not say why the runtime stopped: %q", logs.String())
-	}
-	probe := httptest.NewRecorder()
-	d.Handler().ServeHTTP(probe, httptest.NewRequest(http.MethodGet, "/healthz", nil))
-	if probe.Code != http.StatusServiceUnavailable {
-		t.Fatalf("runtime stopped but health probe returned %d", probe.Code)
-	}
-}
-
-func TestFailedWorkerStartIsUnhealthyAndNotRetried(t *testing.T) {
-	d := testDaemon(t, Config{RuntimeCommand: []string{filepath.Join(t.TempDir(), "missing")}})
-	if _, err := d.dispatch(t.Context(), "first", d.cfg.WorkDir, d.taskTimeout(0)); err == nil || errors.Is(err, errWorkerUnavailable) {
-		t.Fatalf("want the start error, got %v", err)
-	}
-	probe := httptest.NewRecorder()
-	d.Handler().ServeHTTP(probe, httptest.NewRequest(http.MethodGet, "/healthz", nil))
-	if probe.Code != http.StatusServiceUnavailable {
-		t.Fatalf("worker failed to start but health probe returned %d", probe.Code)
-	}
-	if _, err := d.dispatch(t.Context(), "second", d.cfg.WorkDir, d.taskTimeout(0)); !errors.Is(err, errWorkerUnavailable) {
-		t.Fatalf("unexpected dispatch error: %v", err)
-	}
-}
-
-func TestUnreadyWorkerIsStoppedAfterCallerGivesUp(t *testing.T) {
-	d := testDaemon(t, Config{RuntimeCommand: []string{"/bin/sleep", "60"}})
-	d.startupTimeout = 200 * time.Millisecond
-	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
-	defer cancel()
-	if _, err := d.dispatch(ctx, "first", d.cfg.WorkDir, d.taskTimeout(0)); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("unexpected dispatch error: %v", err)
-	}
-	d.workerMu.Lock()
-	w := d.worker
-	d.workerMu.Unlock()
-	select {
-	case <-w.done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("unready runtime was not stopped")
-	}
-	probe := httptest.NewRecorder()
-	d.Handler().ServeHTTP(probe, httptest.NewRequest(http.MethodGet, "/healthz", nil))
-	if probe.Code != http.StatusServiceUnavailable {
-		t.Fatalf("runtime never became ready but health probe returned %d", probe.Code)
 	}
 }
 

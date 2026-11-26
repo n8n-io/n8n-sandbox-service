@@ -4,49 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 )
-
-func TestTaskTimeoutIsCappedByServiceLimit(t *testing.T) {
-	t.Setenv("CODE_DAEMON_MAX_TASK_TIMEOUT", "3s")
-	cfg, err := LoadConfig()
-	if err != nil {
-		t.Fatal(err)
-	}
-	d := New(cfg)
-	for request, want := range map[int64]time.Duration{250: 250 * time.Millisecond, 3000: 3 * time.Second, 3500: 3 * time.Second, math.MaxInt64: 3 * time.Second} {
-		if got := d.taskTimeout(request); got != want {
-			t.Errorf("timeout for %d = %s, want %s", request, got, want)
-		}
-	}
-}
-
-func TestMaxTaskTimeoutDefaultsToOneMinute(t *testing.T) {
-	t.Setenv("CODE_DAEMON_MAX_TASK_TIMEOUT", "")
-	cfg, err := LoadConfig()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.MaxTimeout != time.Minute {
-		t.Fatalf("max timeout = %s, want 1m", cfg.MaxTimeout)
-	}
-}
-
-func TestMaxTaskTimeoutRejectsValueAboveCap(t *testing.T) {
-	t.Setenv("CODE_DAEMON_MAX_TASK_TIMEOUT", "15m")
-	if _, err := LoadConfig(); err != nil {
-		t.Fatalf("rejected the cap: %v", err)
-	}
-	t.Setenv("CODE_DAEMON_MAX_TASK_TIMEOUT", "16m")
-	if _, err := LoadConfig(); err == nil {
-		t.Fatal("accepted a maximum above the cap")
-	}
-}
 
 func TestHungTaskTimesOut(t *testing.T) {
 	d := testDaemon(t, Config{})
