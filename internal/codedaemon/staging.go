@@ -19,11 +19,6 @@ var (
 	errInvalidInputPart = errors.New("invalid input part")
 )
 
-// maxDirs bounds the directories that a task's inputs create and that are
-// walked to list its outputs, separately from the file limit so nested paths
-// don't use it up.
-const maxDirs = 4096
-
 func validFilePath(path string) bool {
 	return len(path) <= 1024 && path != "." && fs.ValidPath(path) && !strings.ContainsAny(path, "\\\x00")
 }

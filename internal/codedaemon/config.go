@@ -103,6 +103,11 @@ type Limits struct {
 	InputBytes, OutputBytes, Files int
 }
 
+// maxDirs bounds the directories that a task's inputs create and that are
+// walked to list its outputs, separately from the file limit so nested paths
+// don't use it up.
+const maxDirs = 4096
+
 // withDefaults fills in limits that were not set to a positive value.
 func (l Limits) withDefaults() Limits {
 	if l.InputBytes <= 0 {
