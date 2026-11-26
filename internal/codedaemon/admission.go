@@ -1,4 +1,5 @@
-// This file validates task specs and reserves execution lanes before reading input files.
+// This file validates task specs, reserves task IDs, and reserves execution
+// lanes before reading input files.
 
 package codedaemon
 
@@ -21,6 +22,8 @@ var (
 	errInvalidTaskID  = errors.New("invalid task id")
 	errInvalidTimeout = errors.New("timeout must be positive")
 )
+
+var errDuplicateTask = errors.New("task ID already used")
 
 type taskSpec struct {
 	TaskID               string `json:"taskId"`
@@ -102,6 +105,33 @@ func validateTaskSpec(spec taskSpec) error {
 		return errInvalidTimeout
 	}
 	return nil
+}
+
+// reserveTask rejects task IDs that are already reserved or have been dispatched.
+func (d *Daemon) reserveTask(id string) error {
+	d.tasksMu.Lock()
+	defer d.tasksMu.Unlock()
+	if _, exists := d.dispatchedByTaskID[id]; exists {
+		return errDuplicateTask
+	}
+	d.dispatchedByTaskID[id] = false
+	return nil
+}
+
+// releaseTask lets an ID be retried only if dispatch was never attempted.
+func (d *Daemon) releaseTask(id string) {
+	d.tasksMu.Lock()
+	defer d.tasksMu.Unlock()
+	if !d.dispatchedByTaskID[id] {
+		delete(d.dispatchedByTaskID, id)
+	}
+}
+
+// markDispatched keeps the ID reserved even if sending the start message fails.
+func (d *Daemon) markDispatched(id string) {
+	d.tasksMu.Lock()
+	defer d.tasksMu.Unlock()
+	d.dispatchedByTaskID[id] = true
 }
 
 // rejectAdmission writes the error without waiting for an unfinished HTTP/1 upload.

@@ -1,4 +1,4 @@
-// This file reserves task IDs and stages their input files for the shared runtime.
+// This file stages a task's input files in a private task directory.
 
 package codedaemon
 
@@ -9,41 +9,20 @@ import (
 	"mime"
 	"mime/multipart"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
 
 var (
-	errDuplicateTask    = errors.New("task ID already used")
+	errInputLimit       = errors.New("input limit exceeded")
 	errInvalidInputPart = errors.New("invalid input part")
 )
 
-// reserveTask rejects task IDs that are already reserved or have been dispatched.
-func (d *Daemon) reserveTask(id string) error {
-	d.tasksMu.Lock()
-	defer d.tasksMu.Unlock()
-	if _, exists := d.dispatchedByTaskID[id]; exists {
-		return errDuplicateTask
-	}
-	d.dispatchedByTaskID[id] = false
-	return nil
-}
-
-// releaseTask lets an ID be retried only if dispatch was never attempted.
-func (d *Daemon) releaseTask(id string) {
-	d.tasksMu.Lock()
-	defer d.tasksMu.Unlock()
-	if !d.dispatchedByTaskID[id] {
-		delete(d.dispatchedByTaskID, id)
-	}
-}
-
-// markDispatched keeps the ID reserved even if sending the start message fails.
-func (d *Daemon) markDispatched(id string) {
-	d.tasksMu.Lock()
-	defer d.tasksMu.Unlock()
-	d.dispatchedByTaskID[id] = true
-}
+// maxDirs bounds the directories that a task's inputs create and that are
+// walked to list its outputs, separately from the file limit so nested paths
+// don't use it up.
+const maxDirs = 4096
 
 func validFilePath(path string) bool {
 	return len(path) <= 1024 && path != "." && fs.ValidPath(path) && !strings.ContainsAny(path, "\\\x00")
@@ -121,4 +100,16 @@ func writeInputs(dir string, mr *multipart.Reader, limits Limits) error {
 			}
 		}
 	}
+}
+
+// addParentDirs records the parent directories of rel in dirs and reports
+// whether dirs is still within maxDirs.
+func addParentDirs(dirs map[string]struct{}, rel string) bool {
+	for dir := path.Dir(rel); dir != "."; dir = path.Dir(dir) {
+		if _, ok := dirs[dir]; ok {
+			break // its parents are already recorded
+		}
+		dirs[dir] = struct{}{}
+	}
+	return len(dirs) <= maxDirs
 }

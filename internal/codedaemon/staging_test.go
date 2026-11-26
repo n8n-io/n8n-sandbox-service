@@ -2,10 +2,14 @@ package codedaemon
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"mime/multipart"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -104,5 +108,73 @@ func TestStageInputsRejectsNonInputPart(t *testing.T) {
 	d := testDaemon(t, Config{})
 	if _, err := d.stageInputs(multipart.NewReader(&body, mw.Boundary())); err == nil {
 		t.Fatal("non-input part was accepted")
+	}
+}
+
+func TestInputLimits(t *testing.T) {
+	d := testDaemon(t, Config{Limits: Limits{InputBytes: 3, Files: 2}})
+	for name, tc := range map[string]struct {
+		files map[string]string
+		want  error
+	}{
+		"exact":            {map[string]string{"bin/0": "abc"}, nil},
+		"exact with empty": {map[string]string{"a": "abc", "b": ""}, nil},
+		"bytes":            {map[string]string{"bin/0": "abcd"}, errInputLimit},
+		"aggregate bytes":  {map[string]string{"a": "ab", "b": "cd"}, errInputLimit},
+		"count":            {map[string]string{"a": "a", "b": "b", "c": ""}, errInputLimit},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := taskRequest(t, `{"taskId":"test","timeoutMs":60000}`, tc.files)
+			spec, mr := d.admit(httptest.NewRecorder(), r)
+			if mr == nil {
+				t.Fatal("request not admitted")
+			}
+			defer d.releaseLane()
+			defer d.releaseTask(spec.TaskID)
+			_, err := d.stageInputs(mr)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("stage error = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestInputDirectoryLimit(t *testing.T) {
+	d := testDaemon(t, Config{Limits: Limits{InputBytes: 1, Files: 10}})
+	// Each file creates its own chain of 501 directories, so 8 files fit
+	// within maxDirs and 9 files do not.
+	deepFiles := func(n int) map[string]string {
+		files := make(map[string]string, n)
+		for i := range n {
+			files[strconv.Itoa(i)+"/"+strings.Repeat("d/", 500)+"f"] = ""
+		}
+		return files
+	}
+	for _, tc := range []struct {
+		files int
+		want  error
+	}{{8, nil}, {9, errInputLimit}} {
+		t.Run(strconv.Itoa(tc.files), func(t *testing.T) {
+			spec, mr := d.admit(httptest.NewRecorder(), taskRequest(t, `{"taskId":"test","timeoutMs":60000}`, deepFiles(tc.files)))
+			if mr == nil {
+				t.Fatal("request not admitted")
+			}
+			defer d.releaseLane()
+			defer d.releaseTask(spec.TaskID)
+			dir, err := d.stageInputs(mr)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("stage error = %v, want %v", err, tc.want)
+			}
+			if err == nil {
+				_ = os.RemoveAll(dir)
+			}
+		})
+	}
+}
+
+func TestFilePathLength(t *testing.T) {
+	long := strings.Repeat("a/", 511) + "ab" // 1024 bytes
+	if !validFilePath(long) || validFilePath(long+"c") {
+		t.Fatal("paths must be valid up to 1024 bytes and invalid beyond")
 	}
 }
