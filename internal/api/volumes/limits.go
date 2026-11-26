@@ -29,6 +29,11 @@ const (
 	MaxConcurrentPublishesPerPod = 2
 	// MaxNameBytes fits a name such as n8n-assistant-2.46.0-beta.1.
 	MaxNameBytes = 128
+	// MaxImageBytes caps the ext4 image of a shared volume. Runners fetch it
+	// within the same timeout as a tar. The API checks it before the build,
+	// from the image size the builder estimates for the counts of the tar. It
+	// binds before MaxEntries: about 580,000 entries without content reach it.
+	MaxImageBytes int64 = 5 << 30 // 5 GiB
 )
 
 var namePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$`)

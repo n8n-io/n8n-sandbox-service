@@ -52,3 +52,40 @@ func (counts TarCounts) Validate() error {
 func (counts TarCounts) Policy() safetar.Policy {
 	return TarPolicy(int(counts.Entries), counts.ContentBytes, counts.DecompressedBytes)
 }
+
+// MaxSandboxVolumeBytes is the room for one sandbox's volumes on its runner,
+// each counted by RunnerBytes: half the runner volume cache's default budget.
+// A shared volume that alone takes more is refused at publish.
+const MaxSandboxVolumeBytes int64 = 10 << 30 // 10 GiB
+
+const (
+	// treeBlockBytes is the 4 KiB block size of ext4 and XFS on Linux runners.
+	// Fixed so the API and runners compute the same upper bound.
+	treeBlockBytes = 4 << 10 // 4 KiB
+	// treeEntryBytes is the most one entry takes besides its content: a block
+	// (a file's partly used last block, a directory's first block, a long
+	// link target) and an eighth of one for its name in its directory.
+	treeEntryBytes = treeBlockBytes + treeBlockBytes/8
+)
+
+// TreeRoom is the most a tree unpacked within counts, which must be valid,
+// takes on disk. File content is bounded by the decompressed bytes, which the
+// unpack always caps, not by the content bytes, which it leaves uncapped when
+// they are 0. A 64th more is for the extent blocks of fragmented files, and
+// the root is one more entry.
+func (counts TarCounts) TreeRoom() (treeBytes, treeInodes int64) {
+	content := (counts.DecompressedBytes + treeBlockBytes - 1) / treeBlockBytes * treeBlockBytes
+	return content + content/64 + (counts.Entries+1)*treeEntryBytes, counts.Entries + 1
+}
+
+// RunnerBytes is the most a runner's volume cache sets aside for an object of
+// kind with objectBytes bytes: an image its size; a tar its size and the room
+// of its tree, since the tar stays on disk until the tree is complete. counts
+// are the tar's and must be valid.
+func RunnerBytes(kind Kind, objectBytes int64, counts TarCounts) int64 {
+	if kind != KindTar {
+		return objectBytes
+	}
+	treeBytes, _ := counts.TreeRoom()
+	return objectBytes + treeBytes
+}

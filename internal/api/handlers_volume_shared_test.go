@@ -259,8 +259,11 @@ func TestPutSharedVolume(t *testing.T) {
 		t.Fatal(err)
 	}
 	if body.Digest != "sha256:"+sharedDigest(data) || body.Name != "n8n-assistant-2.45.5" || body.Bytes != int64(len(data)) ||
-		body.Tar.Entries != 4 || body.Tar.ContentBytes != 4 || body.Tar.DecompressedBytes != int64(len(data)) || body.PublishedAt == 0 {
+		body.Tar.Entries != 4 || body.Tar.ContentBytes != 4 || body.Tar.DecompressedBytes != int64(len(data)) || body.Image != nil || body.PublishedAt == 0 {
 		t.Fatalf("body = %+v", body)
+	}
+	if strings.Contains(created.Body.String(), "image") {
+		t.Errorf("body %s has an image without a builder", created.Body.String())
 	}
 
 	if again := env.do(t, http.MethodPut, path, sharedVolumePublisherKey, data); again.Code != http.StatusOK {
@@ -390,6 +393,11 @@ func TestSharedVolumeErrorAnswers(t *testing.T) {
 		{fmt.Errorf("%w: %w", volumes.ErrUpload, os.ErrDeadlineExceeded), http.StatusRequestTimeout, "", false},
 		{fmt.Errorf("%w: reset", volumes.ErrUpload), http.StatusBadRequest, "", false},
 		{fmt.Errorf("%w: lease", volumes.ErrInterrupted), http.StatusServiceUnavailable, reasonPublishInterrupted, false},
+		{&volumes.ImageBuildError{RunnerID: "secret-runner", Reason: "tar"}, http.StatusUnprocessableEntity, reasonBuildFailed, false},
+		{&volumes.ImageBuildError{RunnerID: "secret-runner", Reason: "no_space"}, http.StatusUnprocessableEntity, reasonBuildFailed, false},
+		{&volumes.ImageBuildError{RunnerID: "secret-runner", Reason: "fsck"}, http.StatusBadGateway, reasonBuildFailed, false},
+		{&volumes.ImageBuildError{RunnerID: "secret-runner", Reason: "transport"}, http.StatusBadGateway, reasonBuildFailed, false},
+		{fmt.Errorf("%w: 3 refusals", volumes.ErrNoCapacity), http.StatusServiceUnavailable, reasonNoCapacity, true},
 		{errors.New("store: /var/lib/secret/path"), http.StatusInternalServerError, "", false},
 	} {
 		recorder := httptest.NewRecorder()
@@ -402,6 +410,30 @@ func TestSharedVolumeErrorAnswers(t *testing.T) {
 		if strings.Contains(recorder.Body.String(), "secret") || strings.Contains(recorder.Body.String(), "reset") {
 			t.Errorf("%v: body %s passes the error's text on", tc.err, recorder.Body.String())
 		}
+		var failed *volumes.ImageBuildError
+		if errors.As(tc.err, &failed) && !strings.Contains(recorder.Body.String(), "on a runner: "+failed.Reason) {
+			t.Errorf("%v: body %s does not name the runner's reason", tc.err, recorder.Body.String())
+		}
+	}
+}
+
+func TestSharedVolumeResponseHasTheImageOnlyWithOne(t *testing.T) {
+	row := &store.SharedVolume{SHA256: sharedDigest([]byte("tar")), ImageBytes: 2048, ImageSHA256: sharedDigest([]byte("image")), ReadyAt: 1}
+	encoded, err := json.Marshal(sharedVolumeResponseOf(row))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `"image":{"bytes":2048,"digest":"sha256:` + row.ImageSHA256 + `"}`
+	if !strings.Contains(string(encoded), want) {
+		t.Fatalf("response %s lacks %s", encoded, want)
+	}
+	row.ImageBytes = 0
+	encoded, err = json.Marshal(sharedVolumeResponseOf(row))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "image") {
+		t.Fatalf("response %s has an image though the volume has none", encoded)
 	}
 }
 

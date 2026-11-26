@@ -31,6 +31,7 @@ const (
 	reasonInvalidTar          = "invalid_tar"
 	reasonDigestMismatch      = "digest_mismatch"
 	reasonPublishInterrupted  = "publish_interrupted"
+	reasonBuildFailed         = "build_failed"
 )
 
 // publishRetryAfterSeconds is the Retry-After of a publish that may work
@@ -135,11 +136,18 @@ func parseSharedVolumeNameQuery(writer http.ResponseWriter, request *http.Reques
 }
 
 type sharedVolumeResponse struct {
-	Digest      string           `json:"digest"`
-	Name        string           `json:"name,omitempty"`
-	Bytes       int64            `json:"bytes"`
-	Tar         volume.TarCounts `json:"tar"`
-	PublishedAt int64            `json:"published_at"`
+	Digest string           `json:"digest"`
+	Name   string           `json:"name,omitempty"`
+	Bytes  int64            `json:"bytes"`
+	Tar    volume.TarCounts `json:"tar"`
+	// Image is the ext4 image the runners attach, left out without one.
+	Image       *sharedVolumeImage `json:"image,omitempty"`
+	PublishedAt int64              `json:"published_at"`
+}
+
+type sharedVolumeImage struct {
+	Bytes  int64  `json:"bytes"`
+	Digest string `json:"digest"`
 }
 
 func sharedVolumeResponseOf(row *store.SharedVolume) sharedVolumeResponse {
@@ -153,6 +161,9 @@ func sharedVolumeResponseOf(row *store.SharedVolume) sharedVolumeResponse {
 			DecompressedBytes: row.TarDecompressedBytes,
 		},
 		PublishedAt: row.ReadyAt,
+	}
+	if row.ImageBytes > 0 {
+		response.Image = &sharedVolumeImage{Bytes: row.ImageBytes, Digest: "sha256:" + row.ImageSHA256}
 	}
 	return response
 }
@@ -262,6 +273,7 @@ func handleDeleteSharedVolume(service *volumes.Service) http.HandlerFunc {
 // writeSharedVolumeError answers err. Its text goes to the caller only for
 // errors whose messages are fixed.
 func writeSharedVolumeError(writer http.ResponseWriter, request *http.Request, err error) {
+	var buildFailed *volumes.ImageBuildError
 	switch {
 	case errors.Is(err, volumes.ErrNotFound):
 		writeError(writer, http.StatusNotFound, "shared volume not found")
@@ -291,6 +303,15 @@ func writeSharedVolumeError(writer http.ResponseWriter, request *http.Request, e
 		writeError(writer, http.StatusBadRequest, "failed to read request body")
 	case errors.Is(err, volumes.ErrInterrupted):
 		writeErrorReason(writer, http.StatusServiceUnavailable, volumes.ErrInterrupted.Error(), reasonPublishInterrupted)
+	case errors.As(err, &buildFailed):
+		status := http.StatusBadGateway
+		if buildFailed.CallerFault() {
+			status = http.StatusUnprocessableEntity
+		}
+		writeErrorReason(writer, status, volumes.ErrBuildFailed.Error()+" on a runner: "+buildFailed.Reason, reasonBuildFailed)
+	case errors.Is(err, volumes.ErrNoCapacity):
+		writer.Header().Set("Retry-After", publishRetryAfterSeconds)
+		writeErrorReason(writer, http.StatusServiceUnavailable, volumes.ErrNoCapacity.Error(), reasonNoCapacity)
 	default:
 		slog.ErrorContext(request.Context(), "shared volume request failed", "error", err)
 		writeError(writer, http.StatusInternalServerError, "shared volume store failure")

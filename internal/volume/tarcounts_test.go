@@ -30,6 +30,30 @@ func TestTarCountsValidate(t *testing.T) {
 	}
 }
 
+// The expected numbers are the room the runner cache sets aside for a small
+// tar.
+func TestRunnerBytes(t *testing.T) {
+	small := TarCounts{Entries: 6, ContentBytes: 30, DecompressedBytes: 10240}
+	if treeBytes, treeInodes := small.TreeRoom(); treeBytes != 44736 || treeInodes != 7 {
+		t.Errorf("TreeRoom() = %d, %d; want 44736, 7", treeBytes, treeInodes)
+	}
+	if got := RunnerBytes(KindTar, 10240, small); got != 10240+44736 {
+		t.Errorf("RunnerBytes(tar) = %d, want the tar and its tree, %d", got, 10240+44736)
+	}
+	const imageBytes = 1 << 20 // 1 MiB
+	if got := RunnerBytes(KindExt4, imageBytes, small); got != imageBytes {
+		t.Errorf("RunnerBytes(ext4) = %d, want the image's size", got)
+	}
+
+	// A tar at the API's publish limits would take about 16 GiB on a Docker
+	// runner.
+	const tarBytes = 4 << 30 // 4 GiB, as much as content
+	atThePublishLimits := TarCounts{Entries: 1_000_000, ContentBytes: tarBytes, DecompressedBytes: 2 * tarBytes}
+	if got := RunnerBytes(KindTar, tarBytes, atThePublishLimits); got != 17627124224 || got <= MaxSandboxVolumeBytes {
+		t.Errorf("RunnerBytes() at the publish limits = %d, want 17627124224, over the sandbox cap", got)
+	}
+}
+
 func TestTarCountsPolicyHoldsTheTarToItsCounts(t *testing.T) {
 	body := testTar(t,
 		tar.Header{Name: "dir/a", Typeflag: tar.TypeReg, Mode: 0o644},
