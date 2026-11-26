@@ -68,7 +68,7 @@ func TestTaskTimeoutIsCappedByServiceLimit(t *testing.T) {
 	}
 	d := New(cfg)
 	for request, want := range map[int64]time.Duration{250: 250 * time.Millisecond, 3000: 3 * time.Second, 3500: 3 * time.Second, math.MaxInt64: 3 * time.Second} {
-		if got := d.taskTimeout(request); got != want {
+		if got := d.cfg.taskTimeout(request); got != want {
 			t.Errorf("timeout for %d = %s, want %s", request, got, want)
 		}
 	}

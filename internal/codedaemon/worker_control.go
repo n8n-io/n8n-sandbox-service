@@ -19,6 +19,14 @@ const maxControlMessage = 512 << 10 // 512 KiB
 
 var errControlMessageTooLong = fmt.Errorf("control message over %d bytes", maxControlMessage)
 
+// Values of workerMessage.Type.
+const (
+	messageTypeReady = "ready"
+	messageTypeStart = "start"
+	messageTypeDone  = "done"
+	messageTypeError = "error"
+)
+
 // workerMessage is any message between the daemon and the runtime, in either
 // direction, sent as newline-delimited JSON over FD 3. The runtime's stdout and
 // stderr are not part of the protocol. Type selects the message:
@@ -79,20 +87,13 @@ func (w *worker) readControl() {
 			break
 		}
 		switch msg.Type {
-		case "ready":
+		case messageTypeReady:
 			if !ready {
 				ready = true
 				close(w.ready)
 			}
-		case "done", "error":
-			w.mu.Lock()
-			if task := w.executionsByTaskID[msg.TaskID]; task != nil {
-				select {
-				case task.result <- msg:
-				default:
-				}
-			}
-			w.mu.Unlock()
+		case messageTypeDone, messageTypeError:
+			w.deliver(msg)
 		}
 	}
 	if err := scanner.Err(); errors.Is(err, bufio.ErrTooLong) {

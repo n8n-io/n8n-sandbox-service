@@ -1,5 +1,5 @@
-// Package codedaemon implements the runner-facing daemon inside a code sandbox.
-// This file sets up its HTTP server, health probe, and client source guard.
+// This file sets up the HTTP server, health probe, and client source guard.
+
 package codedaemon
 
 import (
@@ -19,11 +19,7 @@ type Daemon struct {
 	tasksMu            sync.Mutex
 	dispatchedByTaskID map[string]bool // false before dispatch, true once dispatch is attempted
 
-	workerMu       sync.Mutex
-	startupTimeout time.Duration // how long a started worker has to report ready
-	worker         *worker       // started lazily and never replaced once set
-	startFailed    bool          // set when the worker could not be started; it is not retried
-	closed         bool          // prevents starting a worker after Close
+	supervisor *supervisor
 }
 
 func New(cfg Config) *Daemon {
@@ -36,7 +32,7 @@ func New(cfg Config) *Daemon {
 	}
 	return &Daemon{
 		cfg: cfg, lanes: make(chan struct{}, max(1, cfg.MaxConcurrency)), dispatchedByTaskID: make(map[string]bool),
-		startupTimeout: workerStartupTimeout,
+		supervisor: newSupervisor(cfg),
 	}
 }
 
@@ -69,9 +65,12 @@ func (d *Daemon) Handler() http.Handler {
 // before its worker starts, and unhealthy once closed, the worker fails to
 // start, or the worker stops.
 func (d *Daemon) isHealthy() bool {
-	d.workerMu.Lock()
-	defer d.workerMu.Unlock()
-	return !d.closed && !d.startFailed && (d.worker == nil || !d.worker.isStopped())
+	return d.supervisor.isHealthy()
+}
+
+// Close prevents worker startup and waits for any existing worker to exit and be reaped.
+func (d *Daemon) Close() {
+	d.supervisor.close()
 }
 
 // isLocalAddress identifies loopback and sandbox interface addresses. If the
