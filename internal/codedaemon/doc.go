@@ -15,14 +15,32 @@
 //
 // The life of one task:
 //
-//  1. Admission reads the spec part, reserves the task ID, and takes a free
-//     lane. If no lane is free, the request gets 429.
-//  2. Staging writes the input files to a private task directory.
-//  3. The supervisor gets the worker and registers an execution for the task
-//     ID on it. Then it sends the start message to the runtime.
-//  4. The handler streams heartbeats until the execution has an outcome: the
-//     runtime's terminal message, a runtime exit, or the deadline. At the
-//     deadline, the execution stops the shared worker.
-//  5. The handler sends the terminal event, then removes the task directory
-//     and frees the lane.
+//	POST /tasks
+//	     |
+//	     v
+//	+------------+  invalid spec, duplicate ID, no free lane
+//	| admission  |-------------------------------------------> 4xx
+//	+------------+
+//	     | task ID reserved, lane taken
+//	     v
+//	+------------+  invalid input, input limit
+//	|  staging   |-------------------------------------------> 4xx
+//	+------------+
+//	     | private task directory
+//	     v
+//	+------------+  getWorker: start the worker once
+//	| supervisor |  worker.register(id, deadline)
+//	+------------+  "start" -----------------------------> +---------+
+//	     |                                                 | runtime |
+//	     v                                                 +---------+
+//	+------------+                                              |
+//	| execution  |<-- worker.deliver <-- readControl <----------+
+//	+------------+     ("done" or "error")
+//	     |          watch: result, runtime exit, or deadline
+//	     |          (at the deadline, it stops the shared worker)
+//	     v
+//	stream: accepted, heartbeats, then one terminal event
+//	     |
+//	     v
+//	unregister, remove the task directory, free the lane
 package codedaemon

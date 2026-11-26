@@ -33,6 +33,13 @@ type worker struct {
 	executionsByTaskID map[string]*execution
 }
 
+func newWorker(cmd *exec.Cmd, conn net.Conn) *worker {
+	return &worker{
+		cmd: cmd, conn: conn, ready: make(chan struct{}), stopped: make(chan struct{}),
+		done: make(chan struct{}), executionsByTaskID: make(map[string]*execution),
+	}
+}
+
 // startWorker launches the runtime in its own process group and gives it the
 // control socket on fd 3. It stops the runtime if it is not ready within
 // startupTimeout, whether or not a caller is still waiting.
@@ -91,13 +98,6 @@ func startWorker(cfg Config, startupTimeout time.Duration) (*worker, error) {
 		w.releaseExecutions()
 	}()
 	return w, nil
-}
-
-func newWorker(cmd *exec.Cmd, conn net.Conn) *worker {
-	return &worker{
-		cmd: cmd, conn: conn, ready: make(chan struct{}), stopped: make(chan struct{}),
-		done: make(chan struct{}), executionsByTaskID: make(map[string]*execution),
-	}
 }
 
 // kill releases pending result waiters and signals the runtime's process group once.
