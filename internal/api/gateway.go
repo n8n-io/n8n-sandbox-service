@@ -11,9 +11,11 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/config"
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
+	"github.com/n8n-io/sandbox-service/internal/api/volumes"
 	"github.com/n8n-io/sandbox-service/internal/codetask"
 	"github.com/n8n-io/sandbox-service/internal/limits"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
+	"github.com/n8n-io/sandbox-service/internal/volume"
 )
 
 // NewGatewayRouter creates the public API gateway that manages state and
@@ -61,7 +63,12 @@ func NewGatewayRouter(s store.SandboxStore, cfg *config.APIConfig, reg registry.
 	mux.HandleFunc("GET /sandboxes", handleListSandboxes(s))
 	// A create holds its slot until the runner is done, even after the client
 	// has gone, so a burst of creates is bounded like any other request.
-	mux.HandleFunc("POST /sandboxes", limitTenant(handleCreateSandbox(s, s, reg, cfg, rec, quota)))
+	// Without a volume store, no volume is found.
+	attacher := volumes.NewAttacher(nil, nil, volume.KindTar)
+	if options.sharedVolumes != nil {
+		attacher = options.sharedVolumes.Attacher()
+	}
+	mux.HandleFunc("POST /sandboxes", limitTenant(handleCreateSandbox(s, s, reg, cfg, rec, quota, attacher)))
 	if cfg.CodeSandboxesEnabled {
 		mux.HandleFunc("POST /code/sandboxes", limitTenant(handleCreateCodeSandbox(s, s, reg, cfg, rec, quota, &singleflight.Group{})))
 	}

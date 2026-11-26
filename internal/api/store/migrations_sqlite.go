@@ -44,6 +44,8 @@ const sqliteAddMaxAgeMsCol = `ALTER TABLE sandboxes ADD COLUMN max_age_ms INTEGE
 
 const sqliteAddDrainingSinceCol = `ALTER TABLE sandboxes ADD COLUMN draining_since INTEGER NOT NULL DEFAULT 0`
 
+const sqliteAddVolumesCol = `ALTER TABLE sandboxes ADD COLUMN volumes TEXT NOT NULL DEFAULT ''`
+
 // A name points to at most one code sandbox per tenant that is not draining.
 // Runs after the column migrations: an existing table gains the columns there.
 const sqliteSandboxCodeNameIndex = `CREATE UNIQUE INDEX IF NOT EXISTS ` + codeNameIndex + `

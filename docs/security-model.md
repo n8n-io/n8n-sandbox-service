@@ -132,7 +132,9 @@ What a leaked volume publisher key can do:
   of each tar, one at a time per runner, within the 5 GiB image limit and the
   runner's build timeout. The API trusts the runner for the image's content,
   checks its size and sha256, and logs which runner built it.
-- Delete shared volumes.
+- Delete shared volumes, and so change what later sandboxes get under a name:
+  delete the volume, then publish other content under the name. A sandbox
+  keeps the version it was created with.
 - Keep up to 1,000 volumes of up to 4 GiB each, ready or being published, each with an
   image of up to 5 GiB when `SANDBOX_API_VOLUME_BUILD` is set.
   What a delete or a failed cleanup leaves in the store does not count
@@ -155,6 +157,29 @@ keys are not cached), then delete what it published since the leak.
 
 Publishes have their own concurrency and upload time limits, and count against
 no tenant's requests in progress ([limits.md](limits.md#shared-volumes)).
+
+### Sandbox volumes
+
+A create may name up to 8 shared volumes for the sandbox, by name or digest
+([API.md](API.md#post-sandboxes)). Every tenant and admin key may attach any
+of them, so a tenant learns which shared volumes exist and their digests;
+tenant keys still get `403` on `/shared-volumes`. The API sends the runner the
+scope, digest and size of the ready volume it found, and from the request only
+the mount path and `optional`, so a request can't make a runner fetch another
+object. The runner gets one read URL per object, valid for 10 minutes, in the
+create RPC only: no log line, response, row or metric holds one. The runner
+echoes what it attached, and a sandbox whose echo differs from what was sent
+is deleted again. Mount paths are below `/mnt/` only.
+
+A deleted shared volume's objects stay in the store for at least 20 minutes,
+so that a create that found the volume before the delete can still download
+it. Runners keep their copy while one of their sandboxes uses it.
+
+The volumes of a sandbox count against no tenant limit. A tenant may hold up
+to 10 GiB of a runner's volume cache per sandbox, stopped ones included, so a
+tenant with many sandboxes can fill the caches of runners: a create with a
+required volume is then refused there, and answered `503` when every runner
+tried is full.
 
 ### Concurrency limits
 
@@ -702,6 +727,7 @@ The boundaries above are covered by tests rather than asserted on paper.
 | Firecracker volumes: images bound read-only before jailer starts, never chowned, unwritable by the jailed Firecracker as uid 1000 and as root, drive paths not replaceable; mounted `ro,nodev,nosuid`; unmounted and unpinned on every path that ends a sandbox; the daemon's answer trusted only for its shape; read URLs in no error, log line or echo | [internal/runner/runtime/firecracker.ee/volume_attach_test.go](../internal/runner/runtime/firecracker.ee/volume_attach_test.go), [internal/runner/runtime/firecracker.ee/volume_mount_test.go](../internal/runner/runtime/firecracker.ee/volume_mount_test.go), [internal/daemon/volume_mount_test.go](../internal/daemon/volume_mount_test.go), [internal/daemon/volumedrives/volumedrives_test.go](../internal/daemon/volumedrives/volumedrives_test.go), [internal/runner/runtime/volume_test.go](../internal/runner/runtime/volume_test.go), [internal/runner/grpc_control_test.go](../internal/runner/grpc_control_test.go), [e2e/tests/volume-attach.spec.ts](../e2e/tests/volume-attach.spec.ts) |
 | Docker volumes: unpack held to the API's counts and the tar rules, nothing left after a failure, no link followed by measuring, eviction or the wipe, trees runner-owned and readable but not writable by the sandbox, bound `ro,nosuid,nodev` without `noexec`, the cache dir remount keeping its flags, pins released only once the container is gone, startup refused while a container with volumes survives, no read URL or tar name in an error or log | [internal/runner/volumecache/unpack_test.go](../internal/runner/volumecache/unpack_test.go), [internal/volume/tarcounts_test.go](../internal/volume/tarcounts_test.go), [internal/runner/runtime/docker/volumes_test.go](../internal/runner/runtime/docker/volumes_test.go), [internal/runner/runtime/docker/volumes_linux_test.go](../internal/runner/runtime/docker/volumes_linux_test.go), [e2e/tests/volume-attach-docker.spec.ts](../e2e/tests/volume-attach-docker.spec.ts) |
 | Volume builder: build mode only as PID 1 and root, the tar policy, the status record against hostile input, read-only tar and rootfs, cleanup on every way out | [internal/daemon/volumebuild/build_test.go](../internal/daemon/volumebuild/build_test.go), [internal/daemon/volumebuild/build_linux_test.go](../internal/daemon/volumebuild/build_linux_test.go), [internal/daemon/volumebuild/contract_test.go](../internal/daemon/volumebuild/contract_test.go), [cmd/daemon/main_test.go](../cmd/daemon/main_test.go), [internal/runner/runtime/firecracker.ee/volume_build_test.go](../internal/runner/runtime/firecracker.ee/volume_build_test.go), [internal/runner/grpc_volume_build_test.go](../internal/runner/grpc_volume_build_test.go), [e2e/tests/volume-build.spec.ts](../e2e/tests/volume-build.spec.ts) |
+| Sandbox volumes: found among the ready shared volumes only, the object sent to the runner taken from the volume found, a runner's echo checked and the sandbox of a mismatch deleted | [internal/api/volumes/attach_test.go](../internal/api/volumes/attach_test.go), [internal/api/handlers_volume_attach_test.go](../internal/api/handlers_volume_attach_test.go) |
 | Shared volume images: built only from the stored, checked tar; stored under the size and sha256 the API computed; nothing kept after a failed build; only the runner's reason in an answer | [internal/api/volumes/build_test.go](../internal/api/volumes/build_test.go), [internal/api/volumes/build_grpc_test.go](../internal/api/volumes/build_grpc_test.go), [internal/api/handlers_volume_shared_test.go](../internal/api/handlers_volume_shared_test.go), [e2e/tests/shared-volume-build.spec.ts](../e2e/tests/shared-volume-build.spec.ts) |
 | Shared volume sweep: removes only failed and deleted versions, never a ready or publishing one | [internal/api/volumes/sweep_test.go](../internal/api/volumes/sweep_test.go), [internal/api/store/shared_volumes_test.go](../internal/api/store/shared_volumes_test.go) |
 | Unprivileged npm and PyPI installation, and the build toolchain | [e2e/tests/sandbox-packages.spec.ts](../e2e/tests/sandbox-packages.spec.ts) |

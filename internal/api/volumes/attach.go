@@ -164,6 +164,15 @@ func NewAttacher(records store.SharedVolumes, objects volumestore.Store, kind vo
 	return &Attacher{records: records, objects: objects, kind: kind}
 }
 
+// Attacher returns an Attacher for this service's volumes, of the kind its
+// runners attach.
+func (s *Service) Attacher() *Attacher {
+	if s.builds != nil {
+		return NewAttacher(s.records, s.objects, volume.KindExt4)
+	}
+	return NewAttacher(s.records, s.objects, volume.KindTar)
+}
+
 // Attachment is the volumes of one create.
 type Attachment struct {
 	// Volumes are the volumes the create asked for, in request order.

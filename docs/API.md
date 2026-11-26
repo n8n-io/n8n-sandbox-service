@@ -174,7 +174,7 @@ Sandboxes past their idle-delete window stay listed until the sweeper removes th
 ]
 ```
 
-`tenant_id` is the owning tenant, or `__admin__` for an admin-owned sandbox. A tenant key only ever sees its own id.
+`tenant_id` is the owning tenant, or `__admin__` for an admin-owned sandbox. A tenant key only ever sees its own id. `volumes` is as under [`POST /sandboxes`](#post-sandboxes).
 
 **Errors:** `400` `tenant_id` is neither a UUID nor `__admin__`, or is given more than once, `403` `tenant_id` sent with a tenant key
 
@@ -201,7 +201,7 @@ Create a sandbox. With no request body, the service generates a UUID. Callers ma
 }
 ```
 
-If that ID still belongs to the caller and is within its idle-delete window, the existing sandbox is returned, or `409` if the request names an `egress` that differs from the sandbox's. If it has passed the window, the stale sandbox is deleted before the ID is reused. If the ID belongs to another tenant (or to admin when the caller is a tenant), the request fails with `409`.
+If that ID still belongs to the caller and is within its idle-delete window, the existing sandbox is returned, or `409` if the request names an `egress` or `volumes` that differ from the sandbox's. If it has passed the window, the stale sandbox is deleted before the ID is reused. If the ID belongs to another tenant (or to admin when the caller is a tenant), the request fails with `409`.
 
 Disconnecting before the response does not cancel a create a runner has accepted: if it succeeds, the sandbox is still created and tracked, and can be found by listing or by repeating the request with the same `id`. A disconnect after a runner refused it (below) ends the create with nothing created.
 
@@ -228,6 +228,22 @@ When no runner is eligible, it is the same except for `error`: `no sandbox runne
 ```
 
 - `egress` (string, default `"public"`) — outbound network policy. `"public"`: the internet, minus the [blocked destinations](security-model.md#guest-to-host-and-network). `"none"`: nothing leaves the sandbox, DNS included; the API still reaches it. Fixed at creation: a reconnect to an existing `id` that names a different mode is refused with `409`, so a caller asking for `"none"` never gets an open sandbox back.
+- `volumes` (array) — read-only [shared volumes](#shared-volumes) to attach, at most 8:
+
+```json
+{
+  "volumes": [
+    {"name": "n8n-assistant-2.45.5", "mount_path": "/mnt/assistant", "optional": true},
+    {"digest": "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08", "mount_path": "/mnt/tools"}
+  ]
+}
+```
+
+  - `name` or `digest`, exactly one. Tenant and admin keys may attach any shared volume.
+  - `mount_path`: absolute and clean, below `/mnt/`, at most 255 bytes. Two volumes can't share a path or sit one below the other, and one volume can't be attached twice.
+  - `optional` (default `false`): a required volume the sandbox can't have fails the create, and nothing is created. An optional one is left out, and the response says why.
+  - Fixed at creation: the sandbox keeps the versions it got, also across stop and wake. A reconnect that names `volumes` must name the same ones, in any order, by name or digest, with the same `mount_path` and `optional`, or gets `409` `sandbox_settings_mismatch`.
+  - A service from before volumes answers `400` to a create that names them.
 
 Unknown fields return `400`.
 
@@ -247,11 +263,27 @@ Resource limits (memory, CPU, process count) are configured on the runner via en
   "last_active_at": 1700000000,
   "ephemeral": false,
   "egress": "public",
-  "tenant_id": "uuid"
+  "tenant_id": "uuid",
+  "volumes": [
+    {"name": "n8n-assistant-2.45.5", "digest": "sha256:9f86…0a08", "scope": "shared", "mount_path": "/mnt/assistant", "optional": true, "attached": true},
+    {"name": "n8n-knowledge-x", "mount_path": "/mnt/knowledge", "optional": true, "attached": false, "reason": "not_found"}
+  ]
 }
 ```
 
-**Errors:** `400` invalid request body, supplied id or `egress` value, `403` tenant sandbox quota exceeded (when creates on other API pods filled it first, the runner create is rolled back), `409` if the supplied id is owned by another tenant/admin, exists with a different `egress` than requested, or the tenant was deleted before the sandbox row could be stored (runner create is rolled back), `429` [too many requests in progress](#http-429--too-many-requests-in-progress), `502` stale sandbox cleanup failed, or the runner did not confirm the requested `egress` (runner create is rolled back; a runner from before egress modes only serves `public`), `503` `no_capacity`: no runner is eligible or has room (see above)
+`volumes` lists the volumes the create asked for, in request order, and is left out for a sandbox without any. `scope` is left out for a volume that wasn't found. `reason` says why a volume with `attached: false` was left out; treat a reason not listed here as left out too:
+
+| `reason` | Meaning |
+| --- | --- |
+| `not_found` | No ready shared volume with this name or digest |
+| `no_image` | Published before the service built images, so its runners can't attach it |
+| `too_large` | With the required volumes and the optional ones before it, over the [size limit](limits.md#sandbox-volumes) |
+| `store_unavailable` | The volume store issued no download link for it |
+| `cache_full`, `timeout`, `download`, `unpack` | The runner could not get it in time, or at all; a timed-out download goes on for later sandboxes |
+| `drive`, `mount_point`, `mount` | The sandbox could not mount it |
+| `error` | Anything else |
+
+**Errors:** `400` invalid request body, supplied id, `egress` value or `volumes` entry (the message names the entry), `403` tenant sandbox quota exceeded (when creates on other API pods filled it first, the runner create is rolled back), `409` if the supplied id is owned by another tenant/admin, exists with a different `egress` than requested, or the tenant was deleted before the sandbox row could be stored (runner create is rolled back), `409` `sandbox_settings_mismatch` if it exists with other volumes, `422` `volume_not_found`, `volume_no_image` or `volume_too_large`: a required volume is left out for that `reason`, nothing created, `429` [too many requests in progress](#http-429--too-many-requests-in-progress), `500` the runner refused the volumes, as when `SANDBOX_API_VOLUME_BUILD` doesn't match it, or a required volume failed on it, `502` stale sandbox cleanup failed, or the runner did not confirm the requested `egress` or volumes (runner create is rolled back; a runner from before egress modes only serves `public`, one from before volumes attaches none), `503` `no_capacity`: no runner is eligible or has room (see above), `503` `volume_store_unavailable`: no download link for a required volume, nothing created
 
 **Examples:**
 
@@ -306,7 +338,7 @@ Each API replica writes `last_active_at` every `SANDBOX_API_ACTIVITY_WRITE_INTER
 }
 ```
 
-`status` is `running` or `stopped`; an ephemeral sandbox is only ever `running`. `egress` is the mode the sandbox was created with. `tenant_id` is the owner, `__admin__` for an admin-owned sandbox.
+`status` is `running` or `stopped`; an ephemeral sandbox is only ever `running`. `egress` is the mode the sandbox was created with. `tenant_id` is the owner, `__admin__` for an admin-owned sandbox. `volumes` is as under [`POST /sandboxes`](#post-sandboxes).
 
 **Errors:** `400` invalid id, `404` not found
 
@@ -1074,7 +1106,7 @@ Admin only. Revoke an API key (`204`). The API replica that handles the revoke r
 
 ## Shared volumes
 
-A shared volume is a tar of content published for all tenants. It is addressed by the sha256 of its tar, as `sha256:<64 lowercase hex digits>`, and may carry a name. Admin and volume publisher keys only; tenant, provisioner and scaler keys get `403`. Without a volume store (`SANDBOX_API_VOLUME_STORE` empty) admin and volume publisher keys get `501` with reason `volume_store_disabled`. Limits are in [limits.md](limits.md#shared-volumes).
+A shared volume is a tar of content published for all tenants. It is addressed by the sha256 of its tar, as `sha256:<64 lowercase hex digits>`, and may carry a name. Tenant and admin keys attach it with `volumes` on [`POST /sandboxes`](#post-sandboxes). These routes take admin and volume publisher keys only; tenant, provisioner and scaler keys get `403`. Without a volume store (`SANDBOX_API_VOLUME_STORE` empty) admin and volume publisher keys get `501` with reason `volume_store_disabled`. Limits are in [limits.md](limits.md#shared-volumes).
 
 A shared volume as these routes return it:
 
@@ -1156,7 +1188,7 @@ Returns every ready volume as an array, newest first, without paging. `?name={na
 
 ### DELETE /shared-volumes/sha256:{hex}
 
-Deletes the volume (`204`). It is hidden and its name is free at once. A sweep removes its stored objects no sooner than 20 minutes later, so that a sandbox create that found it before the delete can still download it. `404` if no volume with that digest is ready, `409` `publish_in_progress` while it is being published.
+Deletes the volume (`204`). It is hidden and its name is free at once. Sandboxes that have it keep it. A sweep removes its stored objects no sooner than 20 minutes later, so that a sandbox create that found it before the delete can still download it. `404` if no volume with that digest is ready, `409` `publish_in_progress` while it is being published.
 
 ---
 

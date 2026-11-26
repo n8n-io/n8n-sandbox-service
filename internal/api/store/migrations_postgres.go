@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS sandboxes (
 	options_hash              VARCHAR(512) NOT NULL DEFAULT '',
 	idle_timeout_ms           BIGINT NOT NULL DEFAULT 0,
 	max_age_ms                BIGINT NOT NULL DEFAULT 0,
-	draining_since            BIGINT NOT NULL DEFAULT 0
+	draining_since            BIGINT NOT NULL DEFAULT 0,
+	volumes                   TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS sandboxes_idle_reap_idx
 	ON sandboxes (status, last_active_at);
@@ -71,14 +72,16 @@ const postgresAddEphemeralCol = `ALTER TABLE sandboxes ADD COLUMN IF NOT EXISTS 
 
 const postgresAddEgressCol = `ALTER TABLE sandboxes ADD COLUMN IF NOT EXISTS egress TEXT NOT NULL DEFAULT 'public'`
 
-// One statement, so the ACCESS EXCLUSIVE lock is taken once per startup.
+// One statement, so the ACCESS EXCLUSIVE lock is taken once per startup. It
+// also adds volumes, which is not a code sandbox column, for that reason.
 const postgresAddCodeSandboxCols = `ALTER TABLE sandboxes
 	ADD COLUMN IF NOT EXISTS kind VARCHAR(32) NOT NULL DEFAULT 'general' CONSTRAINT sandboxes_kind_check CHECK (kind IN ('general', 'code')),
 	ADD COLUMN IF NOT EXISTS name VARCHAR(128) NOT NULL DEFAULT '',
 	ADD COLUMN IF NOT EXISTS options_hash VARCHAR(512) NOT NULL DEFAULT '',
 	ADD COLUMN IF NOT EXISTS idle_timeout_ms BIGINT NOT NULL DEFAULT 0,
 	ADD COLUMN IF NOT EXISTS max_age_ms BIGINT NOT NULL DEFAULT 0,
-	ADD COLUMN IF NOT EXISTS draining_since BIGINT NOT NULL DEFAULT 0`
+	ADD COLUMN IF NOT EXISTS draining_since BIGINT NOT NULL DEFAULT 0,
+	ADD COLUMN IF NOT EXISTS volumes TEXT NOT NULL DEFAULT ''`
 
 // Runs after postgresAddCodeSandboxCols, so existing tables get the comments too.
 const postgresCommentCodeSandboxCols = `
@@ -88,6 +91,7 @@ COMMENT ON COLUMN sandboxes.options_hash IS 'Code sandboxes: hash of the options
 COMMENT ON COLUMN sandboxes.idle_timeout_ms IS 'Code sandboxes: delete after this many milliseconds without activity. 0 = not set';
 COMMENT ON COLUMN sandboxes.max_age_ms IS 'Code sandboxes: drain this many milliseconds after creation. 0 = not set';
 COMMENT ON COLUMN sandboxes.draining_since IS 'Unix seconds when the sandbox started draining. 0 = not draining';
+COMMENT ON COLUMN sandboxes.volumes IS 'JSON of the volumes the create asked for and whether the sandbox has each. Empty for none';
 `
 
 // A name points to at most one code sandbox per tenant that is not draining.

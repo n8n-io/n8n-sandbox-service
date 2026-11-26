@@ -178,6 +178,7 @@ func TestStorePersistsDockerMetadata(t *testing.T) {
 		Ephemeral:    true,
 		Egress:       "none",
 		Kind:         KindGeneral,
+		Volumes:      `[{"name":"a","mount_path":"/mnt/a"}]`,
 	}
 	if err := s.Create(rec); err != nil {
 		t.Fatalf("create record: %v", err)
@@ -190,7 +191,7 @@ func TestStorePersistsDockerMetadata(t *testing.T) {
 	if got == nil {
 		t.Fatal("expected record")
 	}
-	if got.ContainerIP != rec.ContainerIP || got.DaemonPort != rec.DaemonPort || !got.Ephemeral || got.Egress != "none" {
+	if got.ContainerIP != rec.ContainerIP || got.DaemonPort != rec.DaemonPort || !got.Ephemeral || got.Egress != "none" || got.Volumes != rec.Volumes {
 		t.Fatalf("unexpected docker metadata: %+v", got)
 	}
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
 	"github.com/n8n-io/sandbox-service/internal/api/runnerctl"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
+	"github.com/n8n-io/sandbox-service/internal/api/volumes"
 	"github.com/n8n-io/sandbox-service/internal/grpctls"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/obs"
@@ -199,13 +200,21 @@ type SandboxResponse struct {
 	// TenantID is the owning tenant, or store.AdminTenantID for a sandbox
 	// created with an admin key. A tenant only ever sees its own id here.
 	TenantID string `json:"tenant_id"`
+	// Volumes is the store's JSON of []volumes.SandboxVolume, as it is.
+	Volumes json.RawMessage `json:"volumes,omitempty"`
 }
 
 type createSandboxRequest struct {
 	ID        *string `json:"id"`
 	Ephemeral bool    `json:"ephemeral"`
 	Egress    *string `json:"egress"` // nil when left out; "" is the default, as on create
+	// Volumes is nil when left out or null.
+	Volumes []volumes.Request `json:"volumes"`
 }
+
+// maxCreateBodyBytes bounds the body of POST /sandboxes: 8 volumes with the
+// longest names and mount paths take under 4 KiB.
+const maxCreateBodyBytes = 16 << 10 // 16 KiB
 
 func sandboxResponse(rec *store.SandboxRecord) *SandboxResponse {
 	tenantID := rec.TenantID
@@ -222,6 +231,7 @@ func sandboxResponse(rec *store.SandboxRecord) *SandboxResponse {
 		Ephemeral:    rec.Ephemeral,
 		Egress:       rec.Egress,
 		TenantID:     tenantID,
+		Volumes:      json.RawMessage(rec.Volumes),
 	}
 }
 
@@ -352,7 +362,7 @@ func runnerControlTLS(cfg *config.APIConfig) *runnerctl.TLS {
 // see. The runtime's own create budget plus a margin for the round trip.
 const runnerCreateBudget = runnerruntime.CreateBudget + time.Minute
 
-func handleCreateSandbox(s generalSandboxStore, tenants tenantGetter, reg registry.RunnerRegistry, cfg *config.APIConfig, rec *metrics.APIRecorder, quota *tenantQuota) http.HandlerFunc {
+func handleCreateSandbox(s generalSandboxStore, tenants tenantGetter, reg registry.RunnerRegistry, cfg *config.APIConfig, rec *metrics.APIRecorder, quota *tenantQuota, attacher *volumes.Attacher) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		success := false
 		defer func() { rec.ObserveSandboxOp(metrics.OpCreate, success) }()
@@ -370,7 +380,7 @@ func handleCreateSandbox(s generalSandboxStore, tenants tenantGetter, reg regist
 		}
 
 		var req createSandboxRequest
-		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxCreateBodyBytes))
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 			writeError(w, http.StatusBadRequest, "invalid request body")
@@ -386,6 +396,10 @@ func handleCreateSandbox(s generalSandboxStore, tenants tenantGetter, reg regist
 		}
 		egress, err := runnerruntime.ParseEgress(egressField)
 		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := volumes.ValidateRequests(req.Volumes); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -417,7 +431,7 @@ func handleCreateSandbox(s generalSandboxStore, tenants tenantGetter, reg regist
 					return
 				}
 				if !isPastIdleDeleteWindow(existing, cfg, time.Now().Unix()) {
-					success = writeExistingSandbox(w, existing, egress, req.Egress != nil)
+					success = writeExistingSandbox(w, existing, egress, req.Egress != nil, req.Volumes)
 					return
 				}
 				if !deleteSandboxRecord(w, r, s, cfg, existing) {
@@ -454,7 +468,12 @@ func handleCreateSandbox(s generalSandboxStore, tenants tenantGetter, reg regist
 		// runner rollback; a saved one right after the save, below.
 		defer releaseQuota(false)
 
-		requested := runnerruntime.CreateOptions{Egress: egress}
+		attachment, err := attacher.Prepare(r.Context(), req.Volumes)
+		if err != nil {
+			writeVolumeError(w, err)
+			return
+		}
+		requested := runnerruntime.CreateOptions{Egress: egress, Volumes: attachment.RunnerVolumes()}
 		createOptionsJSON, err := json.Marshal(requested)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
@@ -498,7 +517,7 @@ func handleCreateSandbox(s generalSandboxStore, tenants tenantGetter, reg regist
 		// modes echoes nothing and applied the defaults. Anything but what was
 		// asked for would leave the record saying one thing and the network
 		// another, so the sandbox is removed rather than tracked.
-		applied, err := runnerruntime.ParseCreateOptions(gresp.GetAppliedCreateOptionsJson())
+		applied, err := parseAppliedCreateOptions(gresp.GetAppliedCreateOptionsJson())
 		if err != nil || applied.Egress != requested.Egress {
 			rollbackRunnerCreate()
 			slog.ErrorContext(
@@ -512,6 +531,19 @@ func handleCreateSandbox(s generalSandboxStore, tenants tenantGetter, reg regist
 			)
 			writeError(w, http.StatusBadGateway, "runner did not apply the requested egress")
 			return
+		}
+		// A runner from before volumes echoes none, so the create fails.
+		if err := attachment.Apply(applied.Volumes); err != nil {
+			rollbackRunnerCreate()
+			slog.ErrorContext(r.Context(), "create sandbox failed: runner did not apply the requested volumes",
+				"sandbox_id", sandboxID, "runner_id", run.ID, "requested_volumes", requested.Volumes, "error", err)
+			writeError(w, http.StatusBadGateway, "runner did not apply the requested volumes")
+			return
+		}
+		var volumesJSON []byte
+		if len(attachment.Volumes) > 0 {
+			// Plain structs of strings and bools always encode.
+			volumesJSON, _ = json.Marshal(attachment.Volumes)
 		}
 		containerIP := gresp.GetContainerIp()
 
@@ -529,6 +561,7 @@ func handleCreateSandbox(s generalSandboxStore, tenants tenantGetter, reg regist
 			Ephemeral:             req.Ephemeral,
 			Egress:                string(egress),
 			Kind:                  store.KindGeneral,
+			Volumes:               string(volumesJSON),
 		}
 		if err := s.Create(record); err != nil {
 			rollbackRunnerCreate()
@@ -540,7 +573,7 @@ func handleCreateSandbox(s generalSandboxStore, tenants tenantGetter, reg regist
 					writeError(w, http.StatusConflict, "sandbox id unavailable")
 					return
 				}
-				success = writeExistingSandbox(w, existing, egress, req.Egress != nil)
+				success = writeExistingSandbox(w, existing, egress, req.Egress != nil, req.Volumes)
 				return
 			}
 			if errors.Is(err, store.ErrTenantQuotaExceeded) {
@@ -572,6 +605,15 @@ func handleCreateSandbox(s generalSandboxStore, tenants tenantGetter, reg regist
 			return
 		}
 		releaseQuota(true)
+		for index, sandboxVolume := range attachment.Volumes {
+			if sandboxVolume.Attached {
+				rec.ObserveCreateVolume(metrics.VolumeAttached)
+				continue
+			}
+			rec.ObserveCreateVolume(sandboxVolume.Reason)
+			slog.InfoContext(r.Context(), "create sandbox: volume left out", "sandbox_id", sandboxID, "index", index,
+				"name", sandboxVolume.Name, "digest", sandboxVolume.Digest, "reason", sandboxVolume.Reason)
+		}
 		slog.InfoContext(
 			r.Context(),
 			"create sandbox succeeded",
@@ -586,18 +628,69 @@ func handleCreateSandbox(s generalSandboxStore, tenants tenantGetter, reg regist
 }
 
 // writeExistingSandbox answers a create whose id the caller already owns with
-// that sandbox. Egress is fixed at creation, so a mode the request names has to
-// be the sandbox's: a caller asking for none must not get an open sandbox back
-// and take it for sealed. egress is the request's parsed mode; egressGiven is
-// false when the request left it out, in which case whatever the sandbox has
-// is fine.
-func writeExistingSandbox(w http.ResponseWriter, existing *store.SandboxRecord, egress runnerruntime.Egress, egressGiven bool) bool {
+// that sandbox. Egress and volumes are fixed at creation, so those the request
+// names have to be the sandbox's: a caller asking for none must not get an
+// open sandbox back and take it for sealed, nor one without the volumes it
+// asked for. egress is the request's parsed mode; egressGiven is false when
+// the request left it out, and requestedVolumes nil, in which case whatever
+// the sandbox has is fine.
+func writeExistingSandbox(w http.ResponseWriter, existing *store.SandboxRecord, egress runnerruntime.Egress, egressGiven bool, requestedVolumes []volumes.Request) bool {
 	if egressGiven && string(egress) != existing.Egress {
 		writeError(w, http.StatusConflict, "sandbox exists with egress "+existing.Egress)
 		return false
 	}
+	if requestedVolumes != nil {
+		var have []volumes.SandboxVolume
+		if existing.Volumes != "" {
+			if err := json.Unmarshal([]byte(existing.Volumes), &have); err != nil {
+				writeError(w, http.StatusInternalServerError, "read the volumes of the sandbox: "+err.Error())
+				return false
+			}
+		}
+		if !volumes.Matches(have, requestedVolumes) {
+			writeErrorReason(w, http.StatusConflict, "sandbox exists with other volumes", reasonSettingsMismatch)
+			return false
+		}
+	}
 	writeJSON(w, http.StatusOK, sandboxResponse(existing))
 	return true
+}
+
+// parseAppliedCreateOptions reads a runner's echo. Empty is a runner from
+// before egress modes, which applied the defaults.
+func parseAppliedCreateOptions(echo string) (*runnerruntime.AppliedCreateOptions, error) {
+	applied := &runnerruntime.AppliedCreateOptions{}
+	if strings.TrimSpace(echo) != "" {
+		// Via &applied so a JSON null shows up as nil.
+		if err := json.Unmarshal([]byte(echo), &applied); err != nil {
+			return nil, err
+		}
+		if applied == nil {
+			return nil, errors.New("applied create options: null")
+		}
+	}
+	egress, err := runnerruntime.ParseEgress(string(applied.Egress))
+	if err != nil {
+		return nil, err
+	}
+	applied.Egress = egress
+	return applied, nil
+}
+
+// writeVolumeError answers a create that failed because of its volumes.
+func writeVolumeError(w http.ResponseWriter, err error) {
+	var requestErr *volumes.RequestError
+	var requiredErr *volumes.RequiredError
+	switch {
+	case errors.As(err, &requestErr):
+		writeError(w, http.StatusBadRequest, requestErr.Error())
+	case errors.As(err, &requiredErr) && requiredErr.Reason == volumes.LeftOutStoreUnavailable:
+		writeErrorReason(w, http.StatusServiceUnavailable, requiredErr.Error(), "volume_"+requiredErr.Reason)
+	case errors.As(err, &requiredErr):
+		writeErrorReason(w, http.StatusUnprocessableEntity, requiredErr.Error(), "volume_"+requiredErr.Reason)
+	default:
+		writeError(w, http.StatusInternalServerError, err.Error())
+	}
 }
 
 func deleteSandboxRecord(w http.ResponseWriter, r *http.Request, s generalSandboxStore, cfg *config.APIConfig, rec *store.SandboxRecord) bool {
