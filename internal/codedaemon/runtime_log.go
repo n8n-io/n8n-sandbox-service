@@ -1,4 +1,5 @@
 // This file samples the runtime's raw stdout and stderr into the daemon log.
+
 package codedaemon
 
 import (

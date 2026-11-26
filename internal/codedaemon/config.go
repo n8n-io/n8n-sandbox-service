@@ -151,8 +151,8 @@ func loadMaxTaskTimeout() (time.Duration, error) {
 }
 
 // taskTimeout uses the requested duration, but never more than the service cap.
-func (d *Daemon) taskTimeout(requestMillis int64) time.Duration {
-	limit := d.cfg.MaxTimeout
+func (cfg Config) taskTimeout(requestMillis int64) time.Duration {
+	limit := cfg.MaxTimeout
 	// Compare before converting, since the request value may overflow a duration.
 	if requestMillis > 0 && requestMillis <= limit.Milliseconds() {
 		return time.Duration(requestMillis) * time.Millisecond

@@ -45,7 +45,7 @@ func TestRuntimeExitKillsChildHoldingControlSocket(t *testing.T) {
 func testRuntimeGroupCleanup(t *testing.T, killLeader bool) {
 	t.Helper()
 	d := testDaemon(t, Config{})
-	worker, err := d.getWorker(t.Context())
+	worker, err := d.supervisor.getWorker(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}

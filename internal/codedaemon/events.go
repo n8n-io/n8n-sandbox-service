@@ -1,4 +1,5 @@
 // This file defines the NDJSON task events and writes them to the stream.
+
 package codedaemon
 
 import (

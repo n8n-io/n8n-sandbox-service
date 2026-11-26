@@ -133,7 +133,7 @@ func TestWorkerExitPreservesResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer root.Close()
-	x, err := d.dispatch(t.Context(), spec.TaskID, dir, d.taskTimeout(0))
+	x, err := d.supervisor.dispatch(t.Context(), spec.TaskID, dir, d.cfg.taskTimeout(0), d.markDispatched)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +174,7 @@ func TestStageAndDispatchSharedRuntime(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		x, err := d.dispatch(ctx, spec.TaskID, dir, d.taskTimeout(0))
+		x, err := d.supervisor.dispatch(ctx, spec.TaskID, dir, d.cfg.taskTimeout(0), d.markDispatched)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -253,7 +253,7 @@ func TestStoppedWorkerFailsPendingTasksAndCleansUpDescendants(t *testing.T) {
 			d := testDaemon(t, Config{RuntimeCommand: []string{
 				os.Args[0], "-test.run=^TestRuntimeLifecycleFixture$", "--", "lifecycle-fixture", "leader", listener.Addr().String(),
 			}})
-			pending, err := d.dispatch(t.Context(), "pending", d.cfg.WorkDir, d.taskTimeout(0))
+			pending, err := d.supervisor.dispatch(t.Context(), "pending", d.cfg.WorkDir, d.cfg.taskTimeout(0), d.markDispatched)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -268,7 +268,7 @@ func TestStoppedWorkerFailsPendingTasksAndCleansUpDescendants(t *testing.T) {
 			defer descendant.Close()
 
 			if mode == "crash" {
-				crash, err := d.dispatch(t.Context(), "crash", d.cfg.WorkDir, d.taskTimeout(0))
+				crash, err := d.supervisor.dispatch(t.Context(), "crash", d.cfg.WorkDir, d.cfg.taskTimeout(0), d.markDispatched)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -284,7 +284,7 @@ func TestStoppedWorkerFailsPendingTasksAndCleansUpDescendants(t *testing.T) {
 			case <-time.After(timeout):
 				t.Fatal("pending task was not unblocked")
 			}
-			if _, err := d.dispatch(t.Context(), "next", d.cfg.WorkDir, d.taskTimeout(0)); !errors.Is(err, errWorkerUnavailable) {
+			if _, err := d.supervisor.dispatch(t.Context(), "next", d.cfg.WorkDir, d.cfg.taskTimeout(0), d.markDispatched); !errors.Is(err, errWorkerUnavailable) {
 				t.Fatalf("unexpected dispatch error: %v", err)
 			}
 			probe := httptest.NewRecorder()

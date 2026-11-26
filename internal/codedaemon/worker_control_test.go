@@ -37,7 +37,7 @@ func TestControlMessageLimit(t *testing.T) {
 	d := testDaemon(t, Config{})
 	result := func(id string) (workerMessage, bool) {
 		t.Helper()
-		x, err := d.dispatch(t.Context(), id, d.cfg.WorkDir, d.taskTimeout(0))
+		x, err := d.supervisor.dispatch(t.Context(), id, d.cfg.WorkDir, d.cfg.taskTimeout(0), d.markDispatched)
 		if err != nil {
 			t.Fatal(err)
 		}

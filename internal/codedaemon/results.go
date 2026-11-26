@@ -1,5 +1,6 @@
 // This file turns the runtime's terminal message into a task event, bounds
 // the output manifest, and reads result.json from the task's output directory.
+
 package codedaemon
 
 import (
@@ -30,7 +31,7 @@ func (d *Daemon) resultEvent(spec taskSpec, root *os.Root, msg workerMessage) ta
 	if limit <= 0 || limit > inlineResultMax {
 		limit = inlineResultMax
 	}
-	if msg.Type == "error" {
+	if msg.Type == messageTypeError {
 		e := newErrorEvent(spec.TaskID, "user_error", "code execution failed")
 		e.UserError = msg.Error
 		// The error is the outcome, so a missing, large, or invalid
