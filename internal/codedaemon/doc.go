@@ -31,15 +31,18 @@
 //	+------------+  getWorker: start the worker once
 //	| supervisor |  worker.register(id, deadline)
 //	+------------+  "start" -----------------------------> +---------+
-//	     |                                                 | runtime |
-//	     v                                                 +---------+
+//	     |  \                                              | runtime |
+//	     |   +-- dispatch fails --> "crashed" event only   +---------+
+//	     v                                                      |
 //	+------------+                                              |
 //	| execution  |<-- worker.deliver <-- readControl <----------+
 //	+------------+     ("done" or "error")
-//	     |          watch: result, runtime exit, or deadline
-//	     |          (at the deadline, it stops the shared worker)
+//	     |          watch: result, runtime exit, or deadline.
+//	     |          At the deadline, it stops the shared worker. Other
+//	     |          running tasks without a result then end with "crashed".
 //	     v
-//	stream: accepted, heartbeats, then one terminal event
+//	stream: accepted, heartbeats, then one terminal event.
+//	If a write fails, the handler stops writing but waits for the task to end.
 //	     |
 //	     v
 //	unregister, remove the task directory, free the lane
