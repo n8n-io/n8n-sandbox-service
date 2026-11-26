@@ -395,7 +395,7 @@ func (r *Runtime) runAdmissionCanary(ctx context.Context) (err error) {
 			err = fmt.Errorf("admission canary cleanup: %w", delErr)
 			return
 		}
-		err = fmt.Errorf("%w; admission canary cleanup: %v", err, delErr)
+		err = fmt.Errorf("%w; admission canary cleanup: %v", err, delErr) //nolint:errorlint // Only the canary error classifies the result.
 	}()
 
 	daemonURL, urlErr := r.DaemonURL(ctx, sandboxID)

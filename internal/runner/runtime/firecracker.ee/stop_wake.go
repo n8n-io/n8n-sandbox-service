@@ -496,5 +496,5 @@ func (r *Runtime) reserveWakeSlot(state *sandboxState) error {
 }
 
 func containsProcessFinished(err error) bool {
-	return err != nil && (err.Error() == "process already finished" || err == os.ErrProcessDone)
+	return err != nil && (err.Error() == "process already finished" || errors.Is(err, os.ErrProcessDone))
 }

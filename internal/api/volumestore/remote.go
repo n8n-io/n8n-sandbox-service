@@ -288,7 +288,7 @@ func (rs *Remote) settle(ctx context.Context, key Key, sent Object, cause error)
 	case errors.Is(err, ErrNotFound):
 		return Object{}, cause
 	}
-	return Object{}, fmt.Errorf("%w; whether it was stored is unknown: %v", cause, err)
+	return Object{}, fmt.Errorf("%w; whether it was stored is unknown: %v", cause, err) //nolint:errorlint // Only cause classifies the error.
 }
 
 // discard deletes an object the helper stored although it must not have.
@@ -296,7 +296,7 @@ func (rs *Remote) discard(ctx context.Context, key Key, cause error) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
 	if err := rs.Delete(ctx, key); err != nil {
-		return fmt.Errorf("%w; deleting what it stored failed: %v", cause, err)
+		return fmt.Errorf("%w; deleting what it stored failed: %v", cause, err) //nolint:errorlint // Only cause classifies the error.
 	}
 	return cause
 }

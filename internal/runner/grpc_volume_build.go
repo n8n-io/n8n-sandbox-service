@@ -77,7 +77,7 @@ func (s *SandboxControlGRPC) buildVolume(stream volumeBuildStream, builder runne
 		return fmt.Errorf("runner is cordoned: %w", runnerruntime.ErrCapacityExhausted)
 	}
 	if err := s.Runtime.Ready(ctx); err != nil {
-		return fmt.Errorf("runner is not ready (%v): %w", err, runnerruntime.ErrCapacityExhausted)
+		return fmt.Errorf("runner is not ready (%v): %w", err, runnerruntime.ErrCapacityExhausted) //nolint:errorlint // Only ErrCapacityExhausted classifies the error.
 	}
 
 	first, err := stream.Recv()

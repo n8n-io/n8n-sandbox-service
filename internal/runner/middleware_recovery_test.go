@@ -16,7 +16,7 @@ func TestRecoveryMiddlewareRethrowsAbortHandler(t *testing.T) {
 		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/executions", nil))
 	})
 
-	if recovered != http.ErrAbortHandler {
+	if recovered != http.ErrAbortHandler { //nolint:errorlint // net/http compares the panic value by identity.
 		t.Fatalf("expected http.ErrAbortHandler panic, got %v", recovered)
 	}
 }
@@ -50,7 +50,7 @@ func TestRecoveryMiddlewareAbortsAfterResponseStarts(t *testing.T) {
 		handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/executions", nil))
 	})
 
-	if recovered != http.ErrAbortHandler {
+	if recovered != http.ErrAbortHandler { //nolint:errorlint // net/http compares the panic value by identity.
 		t.Fatalf("expected http.ErrAbortHandler panic, got %v", recovered)
 	}
 	if rr.Code != http.StatusOK {

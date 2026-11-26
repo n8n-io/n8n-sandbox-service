@@ -260,7 +260,7 @@ func TestExplainIPv6SysctlError(t *testing.T) {
 	}
 
 	other := errors.New("docker container start abc: Error response from daemon: no such container")
-	if got := explainIPv6SysctlError(other); got != other {
+	if got := explainIPv6SysctlError(other); got != other { //nolint:errorlint // The error must come back unchanged.
 		t.Fatalf("unrelated error rewritten: %v", got)
 	}
 
