@@ -21,10 +21,12 @@ var errControlMessageTooLong = fmt.Errorf("control message over %d bytes", maxCo
 
 // Values of workerMessage.Type.
 const (
-	messageTypeReady = "ready"
-	messageTypeStart = "start"
-	messageTypeDone  = "done"
-	messageTypeError = "error"
+	messageTypeReady     = "ready"
+	messageTypeStart     = "start"
+	messageTypeDone      = "done"
+	messageTypeError     = "error"
+	messageTypeCancel    = "cancel"
+	messageTypeCancelled = "cancelled"
 )
 
 // workerMessage is any message between the daemon and the runtime, in either
@@ -33,6 +35,9 @@ const (
 //   - "ready" (runtime → daemon): the runtime accepts start commands. Sent once after startup.
 //   - "start" (daemon → runtime): run the task staged in Dir, with TaskID set.
 //   - "done" or "error" (runtime → daemon): the task with TaskID finished; "error" carries Error.
+//   - "cancel" (daemon → runtime): stop the task with TaskID.
+//   - "cancelled" (runtime → daemon): the task with TaskID stopped and runs no more code.
+//     The daemon then frees the task's files.
 //
 // Every message must fit in maxControlMessage. The runtime cuts error details
 // to fit. The daemon ignores unknown types, and stops the runtime on invalid
@@ -92,6 +97,8 @@ func (w *worker) readControl() {
 				ready = true
 				close(w.ready)
 			}
+		case messageTypeCancelled:
+			w.acknowledgeCancel(msg.TaskID)
 		case messageTypeDone, messageTypeError:
 			w.deliver(msg)
 		}

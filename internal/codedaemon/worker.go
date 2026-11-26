@@ -3,6 +3,7 @@
 package codedaemon
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net"
@@ -21,16 +22,17 @@ const (
 var errWorkerUnavailable = errors.New("runtime unavailable")
 
 type worker struct {
-	cmd      *exec.Cmd
-	conn     net.Conn
-	ready    chan struct{} // closed when the runtime reports readiness
-	stopped  chan struct{} // closed when shutdown begins; no new executions can register
-	done     chan struct{} // closed after the worker process is reaped
-	stopOnce sync.Once
-	writeMu  sync.Mutex
+	cmd       *exec.Cmd
+	conn      net.Conn
+	ready     chan struct{} // closed when the runtime reports readiness
+	stopped   chan struct{} // closed when shutdown begins; no new executions can register
+	done      chan struct{} // closed after the worker process is reaped
+	stopOnce  sync.Once
+	writeGate chan struct{} // holds one token while a control command is being written
 
 	mu                 sync.Mutex // guards execution registration, delivery, and cleanup; only worker methods lock it
 	executionsByTaskID map[string]*execution
+	retiring           bool // rejects new tasks while existing ones drain; protected by mu
 }
 
 // startWorker launches the runtime in its own process group and gives it the
@@ -95,8 +97,13 @@ func startWorker(cfg Config, startupTimeout time.Duration) (*worker, error) {
 
 func newWorker(cmd *exec.Cmd, conn net.Conn) *worker {
 	return &worker{
-		cmd: cmd, conn: conn, ready: make(chan struct{}), stopped: make(chan struct{}),
-		done: make(chan struct{}), executionsByTaskID: make(map[string]*execution),
+		cmd:                cmd,
+		conn:               conn,
+		ready:              make(chan struct{}),
+		stopped:            make(chan struct{}),
+		done:               make(chan struct{}),
+		writeGate:          make(chan struct{}, 1),
+		executionsByTaskID: make(map[string]*execution),
 	}
 }
 
@@ -126,12 +133,27 @@ func (w *worker) isStopped() bool {
 	}
 }
 
+// acceptsTasks reports whether new tasks can still join the worker.
+func (w *worker) acceptsTasks() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return !w.retiring && !w.isStopped()
+}
+
+// retire stops new tasks from joining. The worker stops when its last task
+// unregisters.
+func (w *worker) retire() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.retiring = true
+}
+
 // register adds a result receiver for the task. It fails if the worker is
-// stopping or the task ID is already active.
+// stopping or retiring, or the task ID is already active.
 func (w *worker) register(id string, deadline time.Time) (*execution, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.isStopped() {
+	if w.isStopped() || w.retiring {
 		return nil, errWorkerUnavailable
 	}
 	if _, exists := w.executionsByTaskID[id]; exists {
@@ -142,11 +164,16 @@ func (w *worker) register(id string, deadline time.Time) (*execution, error) {
 	return x, nil
 }
 
-// unregister removes the task's result receiver without stopping the worker.
+// unregister removes the task's result receiver. It stops a retired worker
+// after its last task leaves.
 func (w *worker) unregister(id string) {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	delete(w.executionsByTaskID, id)
+	drained := w.retiring && len(w.executionsByTaskID) == 0
+	w.mu.Unlock()
+	if drained {
+		w.kill()
+	}
 }
 
 // deliver passes a terminal message to the task's receiver, if it is still registered.
@@ -156,6 +183,33 @@ func (w *worker) deliver(msg workerMessage) {
 	if x := w.executionsByTaskID[msg.TaskID]; x != nil {
 		x.deliver(msg)
 	}
+}
+
+// acknowledgeCancel passes the runtime's cancel reply to the task's receiver,
+// if it is still registered.
+func (w *worker) acknowledgeCancel(id string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if x := w.executionsByTaskID[id]; x != nil {
+		x.acknowledgeCancel()
+	}
+}
+
+// requestCancel signals a running task once and retires the worker before
+// another task can join it. It returns false if the task is not registered or
+// has already finished. A finished task needs no cancel, and retiring its
+// worker would only stop a healthy runtime.
+func (w *worker) requestCancel(id string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	x := w.executionsByTaskID[id]
+	if x == nil || x.finished {
+		return false
+	}
+	if x.requestCancel() {
+		w.retiring = true
+	}
+	return true
 }
 
 // releaseExecutions ends all registered executions after the worker exits.
@@ -168,11 +222,19 @@ func (w *worker) releaseExecutions() {
 	clear(w.executionsByTaskID)
 }
 
-// send serializes writes so concurrent tasks cannot interleave control messages.
-func (w *worker) send(msg workerMessage) error {
-	w.writeMu.Lock()
-	defer w.writeMu.Unlock()
-	if err := w.conn.SetWriteDeadline(time.Now().Add(time.Second)); err != nil {
+// send serializes control writes. The deadline covers both waiting and writing.
+func (w *worker) send(msg workerMessage, deadline time.Time) error {
+	timer := time.NewTimer(time.Until(deadline))
+	defer timer.Stop()
+	select {
+	case w.writeGate <- struct{}{}:
+		defer func() { <-w.writeGate }()
+	case <-timer.C:
+		return context.DeadlineExceeded
+	case <-w.done:
+		return errWorkerUnavailable
+	}
+	if err := w.conn.SetWriteDeadline(deadline); err != nil {
 		return err
 	}
 	return json.NewEncoder(w.conn).Encode(msg)

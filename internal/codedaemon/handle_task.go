@@ -51,29 +51,40 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 		_ = stream.emit(newErrorEvent(spec.TaskID, "crashed", "runtime unavailable"))
 		return
 	}
+	if event, ok := d.runTask(r.Context(), spec, stream, x, root); ok {
+		_ = stream.emit(event)
+	}
+}
+
+// runTask streams updates while the execution watcher runs. It releases the
+// execution before returning a terminal event, or returns false if the stream breaks.
+func (d *Daemon) runTask(ctx context.Context, spec taskSpec, stream taskStream, x *execution, root *os.Root) (taskEvent, bool) {
 	defer x.close()
+	ctx, stop := context.WithCancel(ctx)
+	defer stop()
 	// Start monitoring before the first HTTP write. The buffered result lets the
 	// watcher finish even when the response is blocked.
 	finished := make(chan executionOutcome, 1)
-	go func() { finished <- x.watch() }()
+	go func() { finished <- x.watch(ctx) }()
 	if stream.emit(newAcceptedEvent(spec.TaskID)) != nil {
+		stop()
 		<-finished
-		return
+		return nil, false
 	}
-	outcome, ok := waitForTask(r.Context(), spec, stream, finished)
+	outcome, ok := waitForTask(ctx, spec, stream, stop, finished)
 	if !ok {
-		return
+		return nil, false
 	}
 	if outcome.code != "" {
-		_ = stream.emit(newErrorEvent(spec.TaskID, outcome.code, outcome.message))
-		return
+		return newErrorEvent(spec.TaskID, outcome.code, outcome.message), true
 	}
-	_ = stream.emit(d.resultEvent(spec, root, outcome.result))
+	return d.resultEvent(spec, root, outcome.result), true
 }
 
 // waitForTask sends heartbeats while awaiting the execution outcome. If a
-// heartbeat write fails, it waits for execution to end and returns no outcome.
-func waitForTask(ctx context.Context, spec taskSpec, stream taskStream, finished <-chan executionOutcome) (executionOutcome, bool) {
+// heartbeat write fails, it stops the task, waits for execution to end, and
+// returns no outcome.
+func waitForTask(ctx context.Context, spec taskSpec, stream taskStream, stop context.CancelFunc, finished <-chan executionOutcome) (executionOutcome, bool) {
 	heartbeat := time.NewTicker(heartbeatInterval)
 	defer heartbeat.Stop()
 	for {
@@ -84,14 +95,15 @@ func waitForTask(ctx context.Context, spec taskSpec, stream taskStream, finished
 			if stream.emit(newHeartbeatEvent(spec.TaskID)) == nil {
 				continue
 			}
-			// Until the runtime supports per-task cancellation, retain the lane
-			// and files until the task ends or its deadline stops the process.
+			// Wait for the watcher to finish before releasing the lane and task files.
+			stop()
 			<-finished
 			return executionOutcome{}, false
 		case <-ctx.Done():
-			// Daemon shutdown also cancels the request while the stream is
-			// still open. Wait for the task so the stream gets a terminal event.
-			// After a client disconnect, writing that event fails harmlessly.
+			// The watcher stops the task. Daemon shutdown also cancels the
+			// request while the stream is still open, so wait for the task
+			// and send its terminal event. After a client disconnect, writing
+			// that event fails harmlessly.
 			return <-finished, true
 		}
 	}

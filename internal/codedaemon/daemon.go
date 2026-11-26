@@ -47,6 +47,7 @@ func (d *Daemon) Handler() http.Handler {
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("POST /tasks", d.handleTask)
+	mux.HandleFunc("DELETE /tasks/{taskId}", d.handleCancel)
 	if d.cfg.AllowLocalClients {
 		return mux
 	}
@@ -63,7 +64,7 @@ func (d *Daemon) Handler() http.Handler {
 
 // isHealthy reports whether the daemon can still serve tasks. It is healthy
 // before its worker starts, and unhealthy once closed, the worker fails to
-// start, or the worker stops.
+// start, retires, or stops.
 func (d *Daemon) isHealthy() bool {
 	return d.supervisor.isHealthy()
 }

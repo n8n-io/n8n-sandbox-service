@@ -27,11 +27,20 @@ func newSupervisor(cfg Config) *supervisor {
 }
 
 // isHealthy is true before the worker starts. It is false once closed, the
-// worker fails to start, or the worker stops.
+// worker fails to start, retires, or stops.
 func (s *supervisor) isHealthy() bool {
 	s.workerMu.Lock()
 	defer s.workerMu.Unlock()
-	return !s.closed && !s.startFailed && (s.worker == nil || !s.worker.isStopped())
+	return !s.closed && !s.startFailed && (s.worker == nil || s.worker.acceptsTasks())
+}
+
+// requestCancel asks the worker to cancel a running task. It returns false if
+// no worker runs the task.
+func (s *supervisor) requestCancel(id string) bool {
+	s.workerMu.Lock()
+	w := s.worker
+	s.workerMu.Unlock()
+	return w != nil && w.requestCancel(id)
 }
 
 // getWorker starts the shared runtime on demand and waits until it is ready to accept commands.
@@ -94,7 +103,7 @@ func (s *supervisor) dispatch(ctx context.Context, id, dir string, timeout time.
 		return nil, err
 	}
 	markDispatched(id)
-	if err := w.send(workerMessage{Type: messageTypeStart, TaskID: id, Dir: dir, Deadline: x.deadline.UnixMilli()}); err != nil {
+	if err := w.send(workerMessage{Type: messageTypeStart, TaskID: id, Dir: dir, Deadline: x.deadline.UnixMilli()}, time.Now().Add(time.Second)); err != nil {
 		w.kill() // a partial command leaves the shared protocol unusable
 		x.close()
 		return nil, err

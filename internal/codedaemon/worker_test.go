@@ -54,6 +54,16 @@ func TestRuntimeFixture(t *testing.T) {
 		if dec.Decode(&m) != nil {
 			return
 		}
+		if m.Type == "cancel" {
+			reply := "cancelled"
+			if m.TaskID == "finish-on-cancel" {
+				reply = "done"
+			}
+			if enc.Encode(workerMessage{Type: reply, TaskID: m.TaskID}) != nil {
+				return
+			}
+			continue
+		}
 		if m.Type != "start" {
 			os.Exit(2)
 		}
@@ -91,6 +101,9 @@ func TestRuntimeFixture(t *testing.T) {
 		}
 		if m.TaskID == "hang" {
 			time.Sleep(time.Minute)
+		}
+		if m.TaskID == "pending" || m.TaskID == "cooperative" || m.TaskID == "finish-on-cancel" {
+			continue
 		}
 		_, _ = os.Stdout.WriteString("raw-runtime-stdout\n")
 		_, _ = os.Stderr.WriteString("raw-runtime-stderr\n")
@@ -144,7 +157,7 @@ func TestWorkerExitPreservesResult(t *testing.T) {
 		t.Fatal("runtime did not exit")
 	}
 	// The buffered terminal result is still readable after process cleanup.
-	outcome := x.watch()
+	outcome := x.watch(t.Context())
 	done, isDone := d.resultEvent(spec, root, outcome.result).(doneEvent)
 	if outcome.code != "" || !isDone {
 		t.Fatalf("terminal outcome = %+v", outcome)
