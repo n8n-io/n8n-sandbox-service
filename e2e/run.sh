@@ -80,6 +80,11 @@ e2e_docker_network_create "$NETWORK_NAME"
 
 API_STORE_ENV=()
 e2e_configure_api_store "$NETWORK_NAME" "$POSTGRES_CONTAINER_NAME"
+# The volume store needs a data dir the API's user can write, with Postgres too.
+if ((${#API_DOCKER_USER[@]})) && ((${#API_DATA_VOLUME_ARGS[@]} == 0)); then
+	mkdir -p "$TLS_DIR/api-data"
+	API_DATA_VOLUME_ARGS=(-v "$TLS_DIR/api-data:/var/lib/n8n-sandbox-api")
+fi
 
 if ! docker ps --format '{{.Names}}' | grep -qx "${REGISTRY_NAME}"; then
 	echo "Starting local registry..."
@@ -135,6 +140,13 @@ API_DOCKER_RUN+=(
 )
 e2e_api_container_env_args "$API_KEY" "$REG_TOKEN" "$RUNNER_INTERNAL_API_KEY" "$TLS_DIR"
 API_DOCKER_RUN+=("${E2E_API_CONTAINER_ENV_ARGS[@]}")
+# Shared volumes are kept in the API's data dir. The runner downloads them from
+# its volume-objects listener, on the host it registers with.
+API_DOCKER_RUN+=(
+	-e "SANDBOX_API_VOLUME_PUBLISHER_KEYS=$E2E_VOLUME_PUBLISHER_API_KEY"
+	-e "SANDBOX_API_VOLUME_STORE=local"
+	-e "SANDBOX_API_VOLUME_LOCAL_URL=https://${API_CONTAINER_NAME}:8443"
+)
 API_DOCKER_RUN+=(--name "$API_CONTAINER_NAME" "$API_IMAGE")
 docker run "${API_DOCKER_RUN[@]}"
 
@@ -234,6 +246,7 @@ fi
 BASE_URL="http://localhost:$PORT" SANDBOX_API_KEY="$API_KEY" \
 	SANDBOX_API_PROVISIONER_KEY="$E2E_PROVISIONER_API_KEY" \
 	SANDBOX_API_SCALER_KEY="$E2E_SCALER_API_KEY" \
+	SANDBOX_API_VOLUME_PUBLISHER_KEY="$E2E_VOLUME_PUBLISHER_API_KEY" \
 	npx playwright test "${MAIN_SPECS[@]}" --grep-invert "$FIRECRACKER_ONLY_TAG" "$@"
 
 if [[ "${E2E_IDLE_TTL_SUITE:-}" != "1" ]]; then
