@@ -67,7 +67,7 @@ containers direct access to the host Docker daemon.
   memory limit of its create and the CPU limit
   `SANDBOX_RUNNER_CODE_CPU_PERCENT`, with the same security and network policy
   as other sandboxes. Each container has a `sandbox-service.kind` label,
-  `generic` or `code`, so a wake knows how to check its daemon. The code image is pulled apart from
+  `general` or `code`, so a wake knows how to check its daemon. The code image is pulled apart from
   the sandbox image and does not hold back readiness.
 
 ## Crash recovery
