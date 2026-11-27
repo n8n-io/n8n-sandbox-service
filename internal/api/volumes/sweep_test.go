@@ -96,12 +96,18 @@ func TestSweepRemovesADeletedVolumeOnceTheStoreWorks(t *testing.T) {
 	if got := env.metrics.SweepRemovalCount(string(store.SharedVolumeDeleted)); got != 0 {
 		t.Errorf("deleted rows swept = %v after a failed purge, want 0", got)
 	}
+	if got := env.metrics.SweepErrorCount(); got != 1 {
+		t.Errorf("sweep errors = %v after a failed purge, want 1", got)
+	}
 
 	env.objects.failDelete = false
 	env.service.sweepOnce(context.Background())
 	env.assertNothingLeft(t)
 	if got := env.metrics.SweepRemovalCount(string(store.SharedVolumeDeleted)); got != 1 {
 		t.Errorf("deleted rows swept = %v, want 1", got)
+	}
+	if got := env.metrics.SweepErrorCount(); got != 1 {
+		t.Errorf("sweep errors = %v after recovery, want 1", got)
 	}
 }
 

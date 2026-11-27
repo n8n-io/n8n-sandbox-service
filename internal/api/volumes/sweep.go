@@ -44,6 +44,7 @@ func (s *Service) sweepOnce(ctx context.Context) {
 	failedPublishes, err := s.records.FailLapsedSharedVolumePublishes(ctx)
 	switch {
 	case err != nil:
+		s.metrics.ObserveSweepError()
 		slog.WarnContext(ctx, "shared volume sweep: could not fail the lapsed publishes", "error", err)
 	case failedPublishes > 0:
 		slog.InfoContext(ctx, "shared volume sweep: publishes whose lease ran out marked failed", "count", failedPublishes)
@@ -61,6 +62,7 @@ func (s *Service) purgeLeftovers(ctx context.Context) {
 	for {
 		rows, err := s.records.ListPurgeableSharedVolumes(ctx, s.timing.failedGrace, after, sweepBatchRows)
 		if err != nil {
+			s.metrics.ObserveSweepError()
 			slog.WarnContext(ctx, "shared volume sweep: could not list what to remove", "error", err)
 			return
 		}
@@ -84,6 +86,7 @@ func (s *Service) sweepOne(ctx context.Context, row *store.SharedVolume) {
 	purged, err := s.purge(purgeCtx, row.ID)
 	switch {
 	case err != nil:
+		s.metrics.ObserveSweepError()
 		slog.WarnContext(ctx, "shared volume sweep: purge failed", "version_id", row.ID, "sha256", row.SHA256, "state", row.State, "error", err)
 	case purged:
 		s.metrics.ObserveSweepRemoval(string(row.State))

@@ -67,6 +67,7 @@ type SharedVolumeRecorder struct {
 	duration      prometheus.Histogram
 	builds        *prometheus.CounterVec
 	sweepRemovals *prometheus.CounterVec
+	sweepErrors   prometheus.Counter
 }
 
 // NewSharedVolumeRecorder registers the shared volume metrics on api's
@@ -109,8 +110,17 @@ func NewSharedVolumeRecorder(api *APIRecorder) *SharedVolumeRecorder {
 		},
 		[]string{"state"},
 	)
-	api.reg.MustRegister(publishes, duration, builds, sweepRemovals)
-	return &SharedVolumeRecorder{publishes: publishes, duration: duration, builds: builds, sweepRemovals: sweepRemovals}
+	sweepErrors := prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace:   Namespace,
+		Name:        "shared_volume_sweep_errors_total",
+		Help:        "Errors during shared volume sweeps, including failed purges.",
+		ConstLabels: prometheus.Labels{"role": RoleAPI},
+	})
+	api.reg.MustRegister(publishes, duration, builds, sweepRemovals, sweepErrors)
+	return &SharedVolumeRecorder{
+		publishes: publishes, duration: duration, builds: builds,
+		sweepRemovals: sweepRemovals, sweepErrors: sweepErrors,
+	}
 }
 
 // ObserveBuild records one call to a runner to build an image.
@@ -146,6 +156,23 @@ func (r *SharedVolumeRecorder) SweepRemovalCount(state string) float64 {
 		return 0
 	}
 	return testutil.ToFloat64(r.sweepRemovals.WithLabelValues(state))
+}
+
+// ObserveSweepError records an error during a shared volume sweep.
+func (r *SharedVolumeRecorder) ObserveSweepError() {
+	if r == nil || r.sweepErrors == nil {
+		return
+	}
+	r.sweepErrors.Inc()
+}
+
+// SweepErrorCount returns the counter value for shared volume sweep errors.
+// Intended for tests in other packages.
+func (r *SharedVolumeRecorder) SweepErrorCount() float64 {
+	if r == nil || r.sweepErrors == nil {
+		return 0
+	}
+	return testutil.ToFloat64(r.sweepErrors)
 }
 
 // ObservePublish records a publish's result.
