@@ -484,6 +484,107 @@ func TestFileOpStatusCode(t *testing.T) {
 	}
 }
 
+func TestHandleFileListResolvesSymlinks(t *testing.T) {
+	base := tempBaseDir(t)
+	targetDirectory := filepath.Join(base, "volume")
+	if err := os.MkdirAll(filepath.Join(targetDirectory, "nested"), 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	targetBody := "target-file-content-longer-than-link"
+	targetFile := filepath.Join(targetDirectory, "nested", "guide.md")
+	if err := os.WriteFile(targetFile, []byte(targetBody), 0o644); err != nil {
+		t.Fatalf("write target file: %v", err)
+	}
+
+	workspaceDirectory := filepath.Join(base, "workspace")
+	if err := os.MkdirAll(workspaceDirectory, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	directoryLink := filepath.Join(workspaceDirectory, "knowledge-base")
+	targetsByLinkPath := map[string]string{
+		directoryLink: targetDirectory,
+		filepath.Join(workspaceDirectory, "doc.md"): targetFile,
+		filepath.Join(workspaceDirectory, "broken"): filepath.Join(base, "missing"),
+		filepath.Join(workspaceDirectory, "loop"):   filepath.Join(workspaceDirectory, "loop"),
+		filepath.Join(workspaceDirectory, "up"):     workspaceDirectory,
+	}
+	for linkPath, target := range targetsByLinkPath {
+		if err := os.Symlink(target, linkPath); err != nil {
+			t.Fatalf("symlink %s -> %s: %v", linkPath, target, err)
+		}
+	}
+
+	entries, err := HandleFileList(workspaceDirectory /* recursive= */, false, "")
+	if err != nil {
+		t.Fatalf("non-recursive list: %v", err)
+	}
+	entriesByName := make(map[string]FileInfo, len(entries))
+	for _, entry := range entries {
+		entriesByName[entry.Name] = entry
+	}
+	if directoryEntry := entriesByName["knowledge-base"]; !directoryEntry.IsDir || directoryEntry.Type != "directory" {
+		t.Fatalf("knowledge-base = %+v, want directory", directoryEntry)
+	}
+	if fileEntry := entriesByName["doc.md"]; fileEntry.IsDir || fileEntry.Type != "file" || fileEntry.Size != int64(len(targetBody)) {
+		t.Fatalf("doc.md = %+v, want file with size %d", fileEntry, len(targetBody))
+	}
+	if brokenEntry := entriesByName["broken"]; brokenEntry.Name == "" || brokenEntry.IsDir || brokenEntry.Type != "file" {
+		t.Fatalf("broken = %+v, want fallback file entry", brokenEntry)
+	}
+	if loopEntry := entriesByName["loop"]; loopEntry.Name == "" || loopEntry.IsDir || loopEntry.Type != "file" {
+		t.Fatalf("loop = %+v, want fallback file entry", loopEntry)
+	}
+
+	// Extension filtering keeps symlinked directories just like real directories.
+	filtered, err := HandleFileList(workspaceDirectory /* recursive= */, false, ".md")
+	if err != nil {
+		t.Fatalf("filtered list: %v", err)
+	}
+	filteredByName := make(map[string]FileInfo, len(filtered))
+	for _, entry := range filtered {
+		filteredByName[entry.Name] = entry
+	}
+	if !filteredByName["knowledge-base"].IsDir {
+		t.Fatalf("filtered list dropped symlinked directory: %+v", filtered)
+	}
+	if filteredByName["doc.md"].Name == "" {
+		t.Fatalf("filtered list dropped matching symlinked file: %+v", filtered)
+	}
+	if filteredByName["broken"].Name != "" {
+		t.Fatalf("filtered list kept non-matching broken symlink: %+v", filtered)
+	}
+
+	// Recursive list skips descending into nested symlinked directories (up -> workspace),
+	// avoiding cycles while still reporting their target type.
+	recursiveEntries, err := HandleFileList(workspaceDirectory /* recursive= */, true, "")
+	if err != nil {
+		t.Fatalf("recursive list: %v", err)
+	}
+	recursiveByName := make(map[string]FileInfo, len(recursiveEntries))
+	for _, entry := range recursiveEntries {
+		recursiveByName[entry.Name] = entry
+	}
+	if !recursiveByName["knowledge-base"].IsDir || !recursiveByName["up"].IsDir {
+		t.Fatalf("recursive list did not resolve symlinked directories: %+v", recursiveEntries)
+	}
+	if recursiveByName["knowledge-base/nested"].Name != "" {
+		t.Fatalf("recursive list descended into nested symlinked directory: %+v", recursiveEntries)
+	}
+
+	// Recursive list rooted at a symlinked directory walks its children.
+	walkedLink, err := HandleFileList(directoryLink /* recursive= */, true, ".md")
+	if err != nil {
+		t.Fatalf("recursive list on symlinked root: %v", err)
+	}
+	walkedByName := make(map[string]FileInfo, len(walkedLink))
+	for _, entry := range walkedLink {
+		walkedByName[entry.Name] = entry
+	}
+	if !walkedByName["nested"].IsDir || walkedByName[filepath.Join("nested", "guide.md")].Size != int64(len(targetBody)) {
+		t.Fatalf("walked symlinked root = %+v, want nested/ and nested/guide.md", walkedLink)
+	}
+}
+
 func tempBaseDir(t *testing.T) string {
 	t.Helper()
 	base, err := os.MkdirTemp("", "daemon-files-test-")
