@@ -14,6 +14,10 @@ type execution struct {
 	deadline time.Time          // Set at dispatch, after the worker is ready.
 }
 
+func newExecution(w *worker, id string, deadline time.Time) *execution {
+	return &execution{worker: w, id: id, result: make(chan workerMessage, 1), deadline: deadline}
+}
+
 type executionOutcome struct {
 	result        workerMessage // Terminal runtime reply, including a possible user error.
 	code, message string        // Daemon error details; when code is set, result is unused.
@@ -37,9 +41,22 @@ func (x *execution) watch() executionOutcome {
 	}
 }
 
+// deliver keeps the first terminal message and drops any later one. The
+// worker calls it with its lock held, so it cannot race with workerExited.
+func (x *execution) deliver(msg workerMessage) {
+	select {
+	case x.result <- msg:
+	default:
+	}
+}
+
+// workerExited tells watch that no result will come. The worker calls it once,
+// with its lock held, after the control reader has delivered any final message.
+func (x *execution) workerExited() {
+	close(x.result)
+}
+
 // close unregisters the result receiver without stopping the shared runtime.
 func (x *execution) close() {
-	x.worker.mu.Lock()
-	defer x.worker.mu.Unlock()
-	delete(x.worker.executionsByTaskID, x.id)
+	x.worker.unregister(x.id)
 }

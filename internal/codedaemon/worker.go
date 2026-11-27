@@ -29,8 +29,15 @@ type worker struct {
 	stopOnce sync.Once
 	writeMu  sync.Mutex
 
-	mu                 sync.Mutex // guards execution registration, delivery, and cleanup
+	mu                 sync.Mutex // guards execution registration, delivery, and cleanup; only worker methods lock it
 	executionsByTaskID map[string]*execution
+}
+
+func newWorker(cmd *exec.Cmd, conn net.Conn) *worker {
+	return &worker{
+		cmd: cmd, conn: conn, ready: make(chan struct{}), stopped: make(chan struct{}),
+		done: make(chan struct{}), executionsByTaskID: make(map[string]*execution),
+	}
 }
 
 // startWorker launches the runtime in its own process group and gives it the
@@ -60,10 +67,7 @@ func startWorker(cfg Config, startupTimeout time.Duration) (*worker, error) {
 		_ = conn.Close()
 		return nil, err
 	}
-	w := &worker{
-		cmd: cmd, conn: conn, ready: make(chan struct{}), stopped: make(chan struct{}),
-		done: make(chan struct{}), executionsByTaskID: make(map[string]*execution),
-	}
+	w := newWorker(cmd, conn)
 	controlDone := make(chan struct{})
 	go func() {
 		defer close(controlDone)
@@ -91,12 +95,7 @@ func startWorker(cfg Config, startupTimeout time.Duration) (*worker, error) {
 		close(w.done)
 		// Close result channels after the control reader has queued any final
 		// messages so the handler can receive them before detecting the exit.
-		w.mu.Lock()
-		for _, task := range w.executionsByTaskID {
-			close(task.result)
-		}
-		clear(w.executionsByTaskID)
-		w.mu.Unlock()
+		w.releaseExecutions()
 	}()
 	return w, nil
 }
@@ -125,6 +124,48 @@ func (w *worker) isStopped() bool {
 	default:
 		return false
 	}
+}
+
+// register adds a result receiver for the task. It fails if the worker is
+// stopping or the task ID is already active.
+func (w *worker) register(id string, deadline time.Time) (*execution, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.isStopped() {
+		return nil, errWorkerUnavailable
+	}
+	if _, exists := w.executionsByTaskID[id]; exists {
+		return nil, errDuplicateTask
+	}
+	x := newExecution(w, id, deadline)
+	w.executionsByTaskID[id] = x
+	return x, nil
+}
+
+// unregister removes the task's result receiver without stopping the worker.
+func (w *worker) unregister(id string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	delete(w.executionsByTaskID, id)
+}
+
+// deliver passes a terminal message to the task's receiver, if it is still registered.
+func (w *worker) deliver(msg workerMessage) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if x := w.executionsByTaskID[msg.TaskID]; x != nil {
+		x.deliver(msg)
+	}
+}
+
+// releaseExecutions ends all registered executions after the worker exits.
+func (w *worker) releaseExecutions() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, x := range w.executionsByTaskID {
+		x.workerExited()
+	}
+	clear(w.executionsByTaskID)
 }
 
 // send serializes writes so concurrent tasks cannot interleave control messages.

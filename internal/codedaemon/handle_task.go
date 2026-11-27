@@ -1,5 +1,6 @@
 // This file handles POST /tasks: it admits and stages the upload, dispatches
 // the task, and streams its events until the task ends.
+
 package codedaemon
 
 import (
@@ -44,7 +45,7 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 	}
 	defer root.Close()
 	stream := newTaskStream(w)
-	x, err := d.dispatch(r.Context(), spec.TaskID, dir, d.taskTimeout(spec.TimeoutMs))
+	x, err := d.supervisor.dispatch(r.Context(), spec.TaskID, dir, d.cfg.taskTimeout(spec.TimeoutMs), d.markDispatched)
 	if err != nil {
 		slog.Warn("dispatch code task", "task_id", spec.TaskID, "error", err)
 		_ = stream.emit(newErrorEvent(spec.TaskID, "crashed", "runtime unavailable"))
