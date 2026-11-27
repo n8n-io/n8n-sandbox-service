@@ -103,7 +103,14 @@ describe("createSandbox when no runner has capacity", () => {
     const withVolume = {
       ...created,
       volumes: [
-        { name: "assistant", mount_path: "/mnt/assistant", optional: false, attached: true },
+        {
+          name: "assistant",
+          digest: "sha256:" + "a".repeat(64),
+          scope: "shared",
+          mount_path: "/mnt/assistant",
+          optional: false,
+          attached: true,
+        },
       ],
     };
     const http = await client(

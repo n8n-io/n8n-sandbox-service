@@ -111,9 +111,14 @@ function mapSandboxRecord(wire: SandboxWireResponse): SandboxRecord {
 
 function mapSandboxVolume(wire: SandboxVolumeWire): SandboxVolume {
   if (wire.attached === true) {
+    if (!wire.digest || !wire.scope) {
+      throw new Error(
+        `Sandbox response reported attached volume at "${wire.mount_path}" without digest or scope`,
+      );
+    }
     const volume: AttachedSandboxVolume = {
-      digest: wire.digest ?? "",
-      scope: wire.scope ?? "",
+      digest: wire.digest,
+      scope: wire.scope,
       mountPath: wire.mount_path,
       optional: wire.optional === true,
       attached: true,
@@ -121,9 +126,12 @@ function mapSandboxVolume(wire: SandboxVolumeWire): SandboxVolume {
     if (wire.name !== undefined) volume.name = wire.name;
     return volume;
   }
+  if (wire.optional !== true) {
+    throw new Error(`Sandbox response reported unattached required volume at "${wire.mount_path}"`);
+  }
   const volume: LeftOutSandboxVolume = {
     mountPath: wire.mount_path,
-    optional: wire.optional === true,
+    optional: true,
     attached: false,
     reason: wire.reason ?? "error",
   };

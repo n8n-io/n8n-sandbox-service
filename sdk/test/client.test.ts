@@ -348,6 +348,20 @@ describe("SandboxClient", () => {
         attached: true,
       },
     ]);
+
+    // An attached volume missing digest or scope fails instead of fabricating empty strings.
+    mock.requestJson.mockResolvedValue({
+      id: "abc",
+      status: "running",
+      created_at: 1000,
+      last_active_at: 1000,
+      ephemeral: false,
+      egress: "public",
+      volumes: [
+        { name: "assistant", mount_path: "/mnt/assistant", optional: true, attached: true },
+      ],
+    });
+    await expect(client.getSandbox("abc")).rejects.toThrow("without digest or scope");
   });
 
   it("deleteSandbox sends DELETE /sandboxes/{id}", async () => {

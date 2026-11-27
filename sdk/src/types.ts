@@ -90,7 +90,7 @@ export interface LeftOutSandboxVolume {
   /** Omitted when the volume was not found. */
   scope?: string;
   mountPath: string;
-  optional: boolean;
+  optional: true;
   attached: false;
   /** Why the volume was left out (for example `not_found`, `too_large`, `timeout`). */
   reason: string;
