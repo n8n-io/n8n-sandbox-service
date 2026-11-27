@@ -39,6 +39,16 @@ func fileListEntryInfo(entryPath string, entry os.DirEntry) (os.FileInfo, error)
 	return entry.Info()
 }
 
+// matchesExtensionFilter reports whether an entry passes the extension filter.
+// Directories always pass. An entry that still has ModeSymlink is a link that
+// fileListEntryInfo could not resolve, so it never passes.
+func matchesExtensionFilter(name string, entryInfo os.FileInfo, extension string) bool {
+	if extension == "" || entryInfo.IsDir() {
+		return true
+	}
+	return entryInfo.Mode()&os.ModeSymlink == 0 && strings.HasSuffix(name, extension)
+}
+
 // HandleFileList returns directory entries for the directory at path.
 // If recursive is true, it walks the tree. If extension is non-empty, only files
 // matching that extension are returned.
@@ -57,7 +67,7 @@ func HandleFileList(path string, recursive bool, extension string) ([]FileInfo, 
 			if err != nil {
 				continue
 			}
-			if extension != "" && !entryInfo.IsDir() && !strings.HasSuffix(entry.Name(), extension) {
+			if !matchesExtensionFilter(entry.Name(), entryInfo, extension) {
 				continue
 			}
 			infos = append(infos, fileInfoFrom(entry.Name(), entryInfo))
@@ -84,7 +94,7 @@ func HandleFileList(path string, recursive bool, extension string) ([]FileInfo, 
 		if err != nil {
 			return nil
 		}
-		if extension != "" && !entryInfo.IsDir() && !strings.HasSuffix(entry.Name(), extension) {
+		if !matchesExtensionFilter(entry.Name(), entryInfo, extension) {
 			return nil
 		}
 		relativePath, _ := filepath.Rel(walkRoot, walkPath)

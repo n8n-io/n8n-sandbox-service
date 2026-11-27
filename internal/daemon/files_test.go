@@ -503,10 +503,11 @@ func TestHandleFileListResolvesSymlinks(t *testing.T) {
 	directoryLink := filepath.Join(workspaceDirectory, "knowledge-base")
 	targetsByLinkPath := map[string]string{
 		directoryLink: targetDirectory,
-		filepath.Join(workspaceDirectory, "doc.md"): targetFile,
-		filepath.Join(workspaceDirectory, "broken"): filepath.Join(base, "missing"),
-		filepath.Join(workspaceDirectory, "loop"):   filepath.Join(workspaceDirectory, "loop"),
-		filepath.Join(workspaceDirectory, "up"):     workspaceDirectory,
+		filepath.Join(workspaceDirectory, "doc.md"):    targetFile,
+		filepath.Join(workspaceDirectory, "broken"):    filepath.Join(base, "missing"),
+		filepath.Join(workspaceDirectory, "broken.md"): filepath.Join(base, "missing"),
+		filepath.Join(workspaceDirectory, "loop"):      filepath.Join(workspaceDirectory, "loop"),
+		filepath.Join(workspaceDirectory, "up"):        workspaceDirectory,
 	}
 	for linkPath, target := range targetsByLinkPath {
 		if err := os.Symlink(target, linkPath); err != nil {
@@ -553,6 +554,9 @@ func TestHandleFileListResolvesSymlinks(t *testing.T) {
 	if filteredByName["broken"].Name != "" {
 		t.Fatalf("filtered list kept non-matching broken symlink: %+v", filtered)
 	}
+	if filteredByName["broken.md"].Name != "" {
+		t.Fatalf("filtered list kept matching broken symlink: %+v", filtered)
+	}
 
 	// Recursive list skips descending into nested symlinked directories (up -> workspace),
 	// avoiding cycles while still reporting their target type.
@@ -582,6 +586,17 @@ func TestHandleFileListResolvesSymlinks(t *testing.T) {
 	}
 	if !walkedByName["nested"].IsDir || walkedByName[filepath.Join("nested", "guide.md")].Size != int64(len(targetBody)) {
 		t.Fatalf("walked symlinked root = %+v, want nested/ and nested/guide.md", walkedLink)
+	}
+
+	// Recursive filtering drops a matching broken symlink too.
+	recursiveFiltered, err := HandleFileList(workspaceDirectory /* recursive= */, true, ".md")
+	if err != nil {
+		t.Fatalf("recursive filtered list: %v", err)
+	}
+	for _, entry := range recursiveFiltered {
+		if entry.Name == "broken.md" {
+			t.Fatalf("recursive filtered list kept matching broken symlink: %+v", recursiveFiltered)
+		}
 	}
 }
 
