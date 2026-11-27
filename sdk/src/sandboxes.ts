@@ -1,8 +1,10 @@
 import { delay } from "./delay";
 import type { HttpClient } from "./http";
-import { EgressMismatchError, SandboxServiceError, VolumeMismatchError } from "./errors";
+import { EgressMismatchError, SandboxServiceError } from "./errors";
 import type {
+  AttachedSandboxVolume,
   CreateSandboxOptions,
+  LeftOutSandboxVolume,
   SandboxRecord,
   SandboxVolume,
   SandboxVolumeWire,
@@ -42,20 +44,6 @@ export async function createSandbox(
   // public; a current one refuses a reconnect in another mode itself (409).
   if (record.egress !== options.egress) {
     throw new EgressMismatchError(record.id, options.egress, record.egress);
-  }
-  for (const requested of options.volumes ?? []) {
-    if (requested.optional) continue;
-    const confirmed = record.volumes?.some(
-      (volume) =>
-        volume.attached &&
-        volume.mountPath === requested.mountPath &&
-        (requested.name !== undefined
-          ? volume.name === requested.name
-          : volume.digest === requested.digest),
-    );
-    if (!confirmed) {
-      throw new VolumeMismatchError(record.id, requested.mountPath);
-    }
   }
   return record;
 }
@@ -122,14 +110,25 @@ function mapSandboxRecord(wire: SandboxWireResponse): SandboxRecord {
 }
 
 function mapSandboxVolume(wire: SandboxVolumeWire): SandboxVolume {
-  const volume: SandboxVolume = {
+  if (wire.attached === true) {
+    const volume: AttachedSandboxVolume = {
+      digest: wire.digest ?? "",
+      scope: wire.scope ?? "",
+      mountPath: wire.mount_path,
+      optional: wire.optional === true,
+      attached: true,
+    };
+    if (wire.name !== undefined) volume.name = wire.name;
+    return volume;
+  }
+  const volume: LeftOutSandboxVolume = {
     mountPath: wire.mount_path,
     optional: wire.optional === true,
-    attached: wire.attached === true,
+    attached: false,
+    reason: wire.reason ?? "error",
   };
   if (wire.name !== undefined) volume.name = wire.name;
   if (wire.digest !== undefined) volume.digest = wire.digest;
   if (wire.scope !== undefined) volume.scope = wire.scope;
-  if (wire.reason !== undefined) volume.reason = wire.reason;
   return volume;
 }

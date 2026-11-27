@@ -50,21 +50,6 @@ export class EgressMismatchError extends Error {
 }
 
 /**
- * Error thrown by `createSandbox` when the sandbox does not confirm a required
- * volume (for example against a service that predates volumes and ignored them).
- * The sandbox exists; `sandboxId` lets the caller delete it.
- */
-export class VolumeMismatchError extends Error {
-  constructor(
-    readonly sandboxId: string,
-    readonly mountPath: string,
-  ) {
-    super(`Sandbox ${sandboxId} did not attach required volume at "${mountPath}"`);
-    this.name = "VolumeMismatchError";
-  }
-}
-
-/**
  * Error thrown when an invalid stream event is encountered, such as when a truncated
  * JSON record is encountered. This might indicate a transient connectivity issue with
  * the stream.

@@ -1,7 +1,7 @@
 import { gunzipSync } from "node:zlib";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { SandboxClient } from "../src/client.js";
-import { EgressMismatchError, SandboxServiceError, VolumeMismatchError } from "../src/errors.js";
+import { EgressMismatchError, SandboxServiceError } from "../src/errors.js";
 import { HttpClient } from "../src/http.js";
 
 vi.mock("../src/http.js", () => {
@@ -318,6 +318,7 @@ describe("SandboxClient", () => {
       retry: "always",
     });
 
+    const digest = "sha256:" + "b".repeat(64);
     mock.requestJson.mockResolvedValue({
       id: "abc",
       status: "running",
@@ -328,6 +329,8 @@ describe("SandboxClient", () => {
       volumes: [
         {
           name: "assistant",
+          digest,
+          scope: "shared",
           mount_path: "/mnt/assistant",
           optional: true,
           attached: true,
@@ -336,37 +339,15 @@ describe("SandboxClient", () => {
     });
     const fetched = await client.getSandbox("abc");
     expect(fetched.volumes).toEqual([
-      { name: "assistant", mountPath: "/mnt/assistant", optional: true, attached: true },
+      {
+        name: "assistant",
+        digest,
+        scope: "shared",
+        mountPath: "/mnt/assistant",
+        optional: true,
+        attached: true,
+      },
     ]);
-  });
-
-  it("createSandbox rejects a sandbox that does not confirm a required volume", async () => {
-    const mock = getMockHttp(client);
-    mock.requestJson.mockResolvedValue({
-      id: "abc",
-      status: "running",
-      created_at: 1000,
-      last_active_at: 1000,
-      ephemeral: false,
-      egress: "public",
-    });
-
-    const err = await client
-      .createSandbox({
-        egress: "public",
-        volumes: [{ name: "kb", mountPath: "/mnt/kb" }],
-      })
-      .catch((thrown: unknown) => thrown);
-    expect(err).toBeInstanceOf(VolumeMismatchError);
-    expect(err).toMatchObject({ sandboxId: "abc", mountPath: "/mnt/kb" });
-
-    // An optional volume omitted by an older service does not throw.
-    await expect(
-      client.createSandbox({
-        egress: "public",
-        volumes: [{ name: "assistant", mountPath: "/mnt/assistant", optional: true }],
-      }),
-    ).resolves.toMatchObject({ id: "abc" });
   });
 
   it("deleteSandbox sends DELETE /sandboxes/{id}", async () => {

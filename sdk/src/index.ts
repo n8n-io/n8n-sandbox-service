@@ -3,7 +3,6 @@ export {
   SandboxServiceError,
   SandboxCrashedError,
   EgressMismatchError,
-  VolumeMismatchError,
   InvalidStreamEventError,
 } from "./errors";
 export type {
@@ -28,6 +27,8 @@ export type {
   EgressMode,
   RetryOptions,
   SandboxRecord,
+  AttachedSandboxVolume,
+  LeftOutSandboxVolume,
   SandboxVolume,
   SandboxVolumeRequest,
   FileEntry,

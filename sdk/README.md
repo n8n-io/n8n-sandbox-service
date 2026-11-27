@@ -63,8 +63,6 @@ console.log(scratch.tenantId);
 
 // Read-only volumes: attached at creation (by name or sha256 digest), fixed for the sandbox's lifetime.
 // Optional volumes that are missing or fail are left out with `attached: false` and a `reason`.
-// If a required volume is not confirmed in the response (for example an older service ignored it),
-// `createSandbox` throws `VolumeMismatchError` with `sandboxId`.
 const withVolumes = await client.createSandbox({
   egress: 'public',
   volumes: [

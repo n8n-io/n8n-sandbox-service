@@ -69,18 +69,35 @@ export interface RetryOptions {
   jitter?: boolean;
 }
 
-/** A volume requested for a sandbox at creation and whether it was attached. */
-export interface SandboxVolume {
+/** A volume attached to a sandbox at creation. */
+export interface AttachedSandboxVolume {
+  /** Volume name, omitted for an unnamed volume attached by digest. */
   name?: string;
+  /** `sha256:` digest of the attached volume. */
+  digest: string;
+  /** Volume scope (for example `shared`). */
+  scope: string;
+  mountPath: string;
+  optional: boolean;
+  attached: true;
+}
+
+/** An optional volume requested at creation that was left out. */
+export interface LeftOutSandboxVolume {
+  name?: string;
+  /** Omitted when requested by name and not found. */
   digest?: string;
-  /** Volume scope (e.g. `shared`), omitted when the volume was not found. */
+  /** Omitted when the volume was not found. */
   scope?: string;
   mountPath: string;
   optional: boolean;
-  attached: boolean;
-  /** Why a volume with `attached: false` was left out. */
-  reason?: string;
+  attached: false;
+  /** Why the volume was left out (for example `not_found`, `too_large`, `timeout`). */
+  reason: string;
 }
+
+/** A volume requested for a sandbox at creation and whether it was attached. */
+export type SandboxVolume = AttachedSandboxVolume | LeftOutSandboxVolume;
 
 /** Metadata for a sandbox instance. */
 export interface SandboxRecord {
