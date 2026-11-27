@@ -40,7 +40,7 @@ func New(cfg Config) *Daemon {
 func (d *Daemon) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
-		if !d.isHealthy() {
+		if !d.supervisor.isHealthy() {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
@@ -59,13 +59,6 @@ func (d *Daemon) Handler() http.Handler {
 		}
 		mux.ServeHTTP(w, r)
 	})
-}
-
-// isHealthy reports whether the daemon can still serve tasks. It is healthy
-// before its worker starts, and unhealthy once closed, the worker fails to
-// start, or the worker stops.
-func (d *Daemon) isHealthy() bool {
-	return d.supervisor.isHealthy()
 }
 
 // Close prevents worker startup and waits for any existing worker to exit and be reaped.
