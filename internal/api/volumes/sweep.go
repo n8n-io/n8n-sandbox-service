@@ -57,12 +57,12 @@ func (s *Service) sweepOnce(ctx context.Context) {
 	}
 }
 
-// purgeLeftovers purges the deleted rows and the rows failed at least
-// timing.failedGrace ago, sweepBatchRows at a time. It stops when ctx ends.
+// purgeLeftovers purges the rows failed or deleted at least timing.purgeGrace
+// ago, sweepBatchRows at a time. It stops when ctx ends.
 func (s *Service) purgeLeftovers(ctx context.Context) {
 	var after store.SharedVolumePosition
 	for {
-		rows, err := s.records.ListPurgeableSharedVolumes(ctx, s.timing.failedGrace, after, sweepBatchRows)
+		rows, err := s.records.ListPurgeableSharedVolumes(ctx, s.timing.purgeGrace, after, sweepBatchRows)
 		if err != nil {
 			if ctx.Err() == nil {
 				s.metrics.ObserveSweepError()
