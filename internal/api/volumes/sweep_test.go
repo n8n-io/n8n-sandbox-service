@@ -235,6 +235,9 @@ func TestSweepStopsWhenItsTimeIsUp(t *testing.T) {
 	if !strings.Contains(logs.String(), "out of time") {
 		t.Fatalf("the sweep logged %q, want a line saying it ran out of time", logs.String())
 	}
+	if got := env.metrics.SweepErrorCount(); got != 0 {
+		t.Errorf("sweep errors = %v after the sweep ran out of time, want 0", got)
+	}
 }
 
 // Two instances that sweep one row count it once between them.

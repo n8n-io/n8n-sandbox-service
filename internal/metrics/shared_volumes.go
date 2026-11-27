@@ -60,8 +60,9 @@ const (
 // to several gigabytes uploaded and built.
 var publishBuckets = []float64{0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600, 1800}
 
-// SharedVolumeRecorder counts shared volume publishes on the API's registry.
-// One built on a disabled APIRecorder is a no-op.
+// SharedVolumeRecorder counts shared volume publishes, image builds and
+// sweep removals and errors on the API's registry. One built on a disabled
+// APIRecorder is a no-op.
 type SharedVolumeRecorder struct {
 	publishes     *prometheus.CounterVec
 	duration      prometheus.Histogram
