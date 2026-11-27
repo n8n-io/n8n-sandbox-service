@@ -28,6 +28,27 @@ func resolvePath(path string) string {
 	return filepath.Join("/", filepath.Clean("/"+path))
 }
 
+// fileListEntryInfo resolves symlink targets so HandleFileList matches
+// HandleFileStat. Broken or unreadable links fall back to link metadata.
+func fileListEntryInfo(entryPath string, entry os.DirEntry) (os.FileInfo, error) {
+	if entry.Type()&os.ModeSymlink != 0 {
+		if targetInfo, err := os.Stat(entryPath); err == nil {
+			return targetInfo, nil
+		}
+	}
+	return entry.Info()
+}
+
+// matchesExtensionFilter reports whether an entry passes the extension filter.
+// Directories always pass. An entry that still has ModeSymlink is a link that
+// fileListEntryInfo could not resolve, so it never passes.
+func matchesExtensionFilter(name string, entryInfo os.FileInfo, extension string) bool {
+	if extension == "" || entryInfo.IsDir() {
+		return true
+	}
+	return entryInfo.Mode()&os.ModeSymlink == 0 && strings.HasSuffix(name, extension)
+}
+
 // HandleFileList returns directory entries for the directory at path.
 // If recursive is true, it walks the tree. If extension is non-empty, only files
 // matching that extension are returned.
@@ -42,38 +63,42 @@ func HandleFileList(path string, recursive bool, extension string) ([]FileInfo, 
 
 		infos := make([]FileInfo, 0, len(entries))
 		for _, entry := range entries {
-			if extension != "" && !entry.IsDir() && !strings.HasSuffix(entry.Name(), extension) {
-				continue
-			}
-			fi, err := entry.Info()
+			entryInfo, err := fileListEntryInfo(filepath.Join(resolved, entry.Name()), entry)
 			if err != nil {
 				continue
 			}
-			infos = append(infos, fileInfoFrom(entry.Name(), fi))
+			if !matchesExtensionFilter(entry.Name(), entryInfo, extension) {
+				continue
+			}
+			infos = append(infos, fileInfoFrom(entry.Name(), entryInfo))
 		}
 		return infos, nil
 	}
 
-	// Recursive walk
+	// Follow a symlinked root directory so WalkDir enters it; WalkDir still
+	// skips descending into nested symlinked directories, avoiding cycles.
+	walkRoot := resolved
+	if targetRoot, err := filepath.EvalSymlinks(resolved); err == nil {
+		walkRoot = targetRoot
+	}
+
 	var infos []FileInfo
-	err := filepath.WalkDir(resolved, func(walkPath string, d os.DirEntry, err error) error {
+	err := filepath.WalkDir(walkRoot, func(walkPath string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip entries we cannot access
 		}
-		// Skip the root directory itself
-		if walkPath == resolved {
+		if walkPath == walkRoot {
 			return nil
 		}
-		if extension != "" && !d.IsDir() && !strings.HasSuffix(d.Name(), extension) {
-			return nil
-		}
-		fi, err := d.Info()
+		entryInfo, err := fileListEntryInfo(walkPath, entry)
 		if err != nil {
 			return nil
 		}
-		// Use path relative to the resolved directory
-		relPath, _ := filepath.Rel(resolved, walkPath)
-		infos = append(infos, fileInfoFrom(relPath, fi))
+		if !matchesExtensionFilter(entry.Name(), entryInfo, extension) {
+			return nil
+		}
+		relativePath, _ := filepath.Rel(walkRoot, walkPath)
+		infos = append(infos, fileInfoFrom(relativePath, entryInfo))
 		return nil
 	})
 	if err != nil {
