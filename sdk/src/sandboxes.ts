@@ -1,24 +1,44 @@
 import { delay } from "./delay";
 import type { HttpClient } from "./http";
 import { EgressMismatchError, SandboxServiceError } from "./errors";
-import type { CreateSandboxOptions, SandboxRecord, SandboxWireResponse } from "./types";
+import type {
+  AttachedSandboxVolume,
+  CreateSandboxOptions,
+  LeftOutSandboxVolume,
+  SandboxRecord,
+  SandboxVolume,
+  SandboxVolumeWire,
+  SandboxWireResponse,
+} from "./types";
 
-/** Reason of a 503 for a create no runner had capacity for. Nothing was created. */
 const NO_CAPACITY_REASON = "no_capacity";
+const VOLUME_STORE_UNAVAILABLE_REASON = "volume_store_unavailable";
 
 export async function createSandbox(
   http: HttpClient,
   options: CreateSandboxOptions,
 ): Promise<SandboxRecord> {
+  const hasVolumes = (options.volumes?.length ?? 0) > 0;
   const post = () =>
     http.requestJson<SandboxWireResponse>("POST", "/sandboxes", {
-      data: { id: options.id, ephemeral: options.ephemeral, egress: options.egress },
+      data: {
+        id: options.id,
+        ephemeral: options.ephemeral,
+        egress: options.egress,
+        volumes: options.volumes?.map((volume) => ({
+          name: volume.name,
+          digest: volume.digest,
+          mount_path: volume.mountPath,
+          optional: volume.optional,
+        })),
+      },
       // Only a caller-supplied id makes a repeated POST idempotent; retrying an
       // anonymous create would provision a second sandbox.
       retry: options.id !== undefined ? "always" : "idempotent",
     });
   // The client already retries a create with an id on any 503.
-  const response = options.id === undefined ? await retryWhileNoCapacity(http, post) : await post();
+  const response =
+    options.id === undefined ? await retryAnonymousCreate(http, post, hasVolumes) : await post();
   const record = mapSandboxRecord(response);
   // An API from before egress modes ignores the field and reports none, read as
   // public; a current one refuses a reconnect in another mode itself (409).
@@ -44,16 +64,20 @@ export async function deleteSandbox(http: HttpClient, id: string): Promise<void>
 }
 
 /**
- * Repeats an anonymous create while the service answers that no runner had capacity.
- * That 503 guarantees nothing was created, so repeating the create cannot provision
- * a second sandbox. The retry policy decides how often and how long to wait.
+ * Repeats an anonymous create while the service answers with a 503 whose reason
+ * guarantees nothing was created, so repeating cannot provision a second sandbox.
+ * The retry policy decides how often and how long to wait.
  */
-async function retryWhileNoCapacity<T>(http: HttpClient, post: () => Promise<T>): Promise<T> {
+async function retryAnonymousCreate<T>(
+  http: HttpClient,
+  post: () => Promise<T>,
+  hasVolumes: boolean,
+): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     try {
       return await post();
     } catch (error) {
-      if (!isNoCapacity(error)) throw error;
+      if (!isRetryableCreateError(error, hasVolumes)) throw error;
       const wait = http.retryDelayFor(error, attempt);
       if (wait === undefined) throw error;
       await delay(wait);
@@ -61,11 +85,11 @@ async function retryWhileNoCapacity<T>(http: HttpClient, post: () => Promise<T>)
   }
 }
 
-function isNoCapacity(error: unknown): error is SandboxServiceError {
+function isRetryableCreateError(error: unknown, hasVolumes: boolean): error is SandboxServiceError {
+  if (!(error instanceof SandboxServiceError) || error.status !== 503) return false;
   return (
-    error instanceof SandboxServiceError &&
-    error.status === 503 &&
-    error.reason === NO_CAPACITY_REASON
+    error.reason === NO_CAPACITY_REASON ||
+    (hasVolumes && error.reason === VOLUME_STORE_UNAVAILABLE_REASON)
   );
 }
 
@@ -81,5 +105,38 @@ function mapSandboxRecord(wire: SandboxWireResponse): SandboxRecord {
   // Left out rather than set to undefined so `toEqual` comparisons and JSON
   // output of records from older services stay unchanged.
   if (wire.tenant_id !== undefined) record.tenantId = wire.tenant_id;
+  if (Array.isArray(wire.volumes)) record.volumes = wire.volumes.map(mapSandboxVolume);
   return record;
+}
+
+function mapSandboxVolume(wire: SandboxVolumeWire): SandboxVolume {
+  if (wire.attached === true) {
+    if (!wire.digest || !wire.scope) {
+      throw new Error(
+        `Sandbox response reported attached volume at "${wire.mount_path}" without digest or scope`,
+      );
+    }
+    const volume: AttachedSandboxVolume = {
+      digest: wire.digest,
+      scope: wire.scope,
+      mountPath: wire.mount_path,
+      optional: wire.optional === true,
+      attached: true,
+    };
+    if (wire.name !== undefined) volume.name = wire.name;
+    return volume;
+  }
+  if (wire.optional !== true) {
+    throw new Error(`Sandbox response reported unattached required volume at "${wire.mount_path}"`);
+  }
+  const volume: LeftOutSandboxVolume = {
+    mountPath: wire.mount_path,
+    optional: true,
+    attached: false,
+    reason: wire.reason ?? "error",
+  };
+  if (wire.name !== undefined) volume.name = wire.name;
+  if (wire.digest !== undefined) volume.digest = wire.digest;
+  if (wire.scope !== undefined) volume.scope = wire.scope;
+  return volume;
 }

@@ -30,7 +30,7 @@ The service answers `429` when a tenant or a sandbox has too many requests in pr
 - Also retry other statuses (only if you accept the risk): `retry: { retryOnStatuses: [429, 502, 503] }`.
 - Idempotent methods (`GET`, `HEAD`, `OPTIONS`, `PUT`, `DELETE`) use this policy automatically.
 - On other statuses and transport errors, `POST` is retried only where the service makes it idempotent, such as `createSandbox` with an explicit `id`. Other `POST`s, such as appending to a file, are retried only on a `429`.
-- `createSandbox` without an `id` is also retried on a `503` whose body has `reason: "no_capacity"`: no runner was eligible or had room, and nothing was created (see [API.md](https://github.com/n8n-io/n8n-sandbox-service/blob/main/docs/API.md#post-sandboxes)). Once the retries run out, it throws a `SandboxServiceError` with that `reason`.
+- `createSandbox` without an `id` is also retried on a `503` whose body has `reason: "no_capacity"` or `"volume_store_unavailable"`: nothing was created (see [API.md](https://github.com/n8n-io/n8n-sandbox-service/blob/main/docs/API.md#post-sandboxes)). Once the retries run out, it throws a `SandboxServiceError` with that `reason`.
 
 `exec` still has its own stream resume loop (`exec_id`, `POST` then `GET` follow): after a `503`, a transport error or a stream that ends early, it posts the same `exec_id` again, or resumes with `GET` once events have arrived. Constructor `retry` applies to each underlying HTTP call: `GET` resume lines benefit from the default policy, and an exec `POST` refused with `429` is re-posted with the same `exec_id`, which starts the command, or follows it if an earlier attempt started it. When those retries run out on a `429` while the command may be running, `exec` cancels it in the background and throws. It does not replace the exec event/state machine.
 
@@ -60,6 +60,17 @@ console.log(scratch.ephemeral); // true
 // Owner: the tenant id the key belongs to, or "__admin__" with an admin key.
 // Undefined against a service from before the field existed.
 console.log(scratch.tenantId);
+
+// Read-only volumes: attached at creation (by name or sha256 digest), fixed for the sandbox's lifetime.
+// Optional volumes that are missing or fail are left out with `attached: false` and a `reason`.
+const withVolumes = await client.createSandbox({
+  egress: 'public',
+  volumes: [
+    { name: 'n8n-assistant-2.45.5', mountPath: '/mnt/assistant', optional: true },
+    { digest: 'sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08', mountPath: '/mnt/tools' },
+  ],
+});
+console.log(withVolumes.volumes);
 
 // Get sandbox info
 const info = await client.getSandbox(sandbox.id);
