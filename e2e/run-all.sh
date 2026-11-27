@@ -19,7 +19,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "Building Docker images (once for all phases)..."
-make -C "$PROJECT_DIR" docker-local
+make -C "$PROJECT_DIR" docker-local "docker-code-sandbox-e2e-$(e2e_docker_arch)"
 
 echo "Building SDK once for all phases..."
 make -C "$PROJECT_DIR" sdk-install sdk-build

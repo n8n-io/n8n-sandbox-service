@@ -65,7 +65,7 @@ func (m *Runtime) prepareVolumeCacheDir() error {
 // pin is released if the create fails and its container is gone; delete
 // releases them otherwise.
 func (m *Runtime) createWithVolumes(ctx context.Context, sandboxID string, opts *CreateOptions) (*ContainerInfo, error) {
-	if err := m.checkCreate(sandboxID); err != nil {
+	if err := m.checkCreate(sandboxID, opts); err != nil {
 		return nil, err
 	}
 	if m.volumeCache == nil {

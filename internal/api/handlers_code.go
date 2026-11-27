@@ -15,11 +15,14 @@ import (
 	"time"
 
 	"golang.org/x/sync/singleflight"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/n8n-io/sandbox-service/internal/api/config"
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
 	"github.com/n8n-io/sandbox-service/internal/api/runnerctl"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
+	"github.com/n8n-io/sandbox-service/internal/codetask"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/obs"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
@@ -79,8 +82,8 @@ func (req *createCodeSandboxRequest) validate() error {
 		return errors.New("invalid runtimeVersion")
 	case req.MaxConcurrency <= 0:
 		return errors.New("invalid maxConcurrency: must be greater than 0")
-	case req.MemoryMb <= 0:
-		return errors.New("invalid memoryMb: must be greater than 0")
+	case req.MemoryMb < codetask.MinSandboxMemoryMB:
+		return fmt.Errorf("invalid memoryMb: must be at least %d", codetask.MinSandboxMemoryMB)
 	case req.IdleTimeoutMs < 0:
 		return errors.New("invalid idleTimeoutMs: must not be negative")
 	case req.MaxAgeMs < 0:
@@ -238,6 +241,26 @@ func handleCreateCodeSandbox(s codeSandboxStore, tenants tenantGetter, reg regis
 	}
 }
 
+// codePlacementError gives a create error from placeSandbox its response.
+// All errors but the placement sentinels and the runner refusals get a
+// generic message: they can hold runner details, such as the Docker command
+// line or a dial target. placeSandbox has logged them.
+func codePlacementError(err error) error {
+	if errors.Is(err, registry.ErrNoRunners) || errors.Is(err, errRunnersAtCapacity) {
+		return err
+	}
+	switch status.Code(err) {
+	case codes.FailedPrecondition:
+		return &codeCreateError{code: http.StatusBadGateway, msg: "runner does not support code sandboxes"}
+	case codes.InvalidArgument:
+		// The request is valid here, so the runner refused memoryMb.
+		return &codeCreateError{code: http.StatusBadRequest, msg: "invalid memoryMb: outside the range the runner allows"}
+	case codes.Unavailable:
+		return &codeCreateError{code: http.StatusServiceUnavailable, msg: "runner not ready for code sandboxes, retry", retryAfter: "1"}
+	}
+	return &codeCreateError{code: http.StatusInternalServerError, msg: "failed to create sandbox"}
+}
+
 // codeSandboxOwner is the tenant a code sandbox is created for.
 type codeSandboxOwner struct {
 	tenantID     string
@@ -277,7 +300,10 @@ func createCodeSandbox(r *http.Request, s codeSandboxStore, reg registry.RunnerR
 	defer releaseQuota(false)
 
 	sandboxID := generateUUID()
-	requested := runnerruntime.CreateOptions{Egress: runnerruntime.EgressNone}
+	requested := runnerruntime.CreateOptions{
+		Egress:   runnerruntime.EgressNone,
+		CodeOpts: &runnerruntime.CodeOptions{MemoryMB: int64(req.MemoryMb)},
+	}
 	createOptionsJSON, err := json.Marshal(requested)
 	if err != nil {
 		return nil, err
@@ -287,7 +313,7 @@ func createCodeSandbox(r *http.Request, s codeSandboxStore, reg registry.RunnerR
 	placed, err := placeSandbox(r, reg, cfg, mrec, sandboxID, string(createOptionsJSON),
 		"tenant_id", tenantID, "kind", store.KindCode)
 	if err != nil {
-		return nil, err
+		return nil, codePlacementError(err)
 	}
 	run, gresp := placed.run, placed.resp
 	controlAddr := run.ControlGRPCAddr
@@ -301,6 +327,8 @@ func createCodeSandbox(r *http.Request, s codeSandboxStore, reg registry.RunnerR
 		}
 	}
 
+	// A runner from before code sandboxes ignores the code options and starts
+	// a general sandbox, so its echo has no code.
 	applied, err := runnerruntime.ParseCreateOptions(gresp.GetAppliedCreateOptionsJson())
 	if err != nil || applied.Egress != requested.Egress {
 		rollbackRunnerCreate()
@@ -308,6 +336,13 @@ func createCodeSandbox(r *http.Request, s codeSandboxStore, reg registry.RunnerR
 			"sandbox_id", sandboxID, "runner_id", run.ID,
 			"applied_create_options_json", gresp.GetAppliedCreateOptionsJson(), "error", err)
 		return nil, &codeCreateError{code: http.StatusBadGateway, msg: "runner did not apply the requested egress"}
+	}
+	if applied.CodeOpts == nil || *applied.CodeOpts != *requested.CodeOpts {
+		rollbackRunnerCreate()
+		slog.ErrorContext(ctx, "create code sandbox failed: runner did not apply the code options",
+			"sandbox_id", sandboxID, "runner_id", run.ID,
+			"applied_create_options_json", gresp.GetAppliedCreateOptionsJson())
+		return nil, &codeCreateError{code: http.StatusBadGateway, msg: "runner does not support code sandboxes"}
 	}
 
 	record := &store.SandboxRecord{

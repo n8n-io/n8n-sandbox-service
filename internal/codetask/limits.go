@@ -1,8 +1,13 @@
-// Package codetask holds the code sandbox task limits that the API and the
-// runner share.
+// Package codetask holds the code sandbox limits that the API and the runner
+// share.
 package codetask
 
 const (
+	// MinSandboxMemoryMB is the smallest memory limit of a code sandbox.
+	// Docker refuses less than 6 MB, and the daemon and runtime need more to
+	// start.
+	MinSandboxMemoryMB = 64
+
 	// DefaultMaxInputBytes is the default limit on the total bytes of a
 	// task's input files, as in the code daemon.
 	DefaultMaxInputBytes int64 = 64 << 20 // 64 MiB

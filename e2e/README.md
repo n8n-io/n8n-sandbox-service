@@ -14,6 +14,8 @@ Playwright drives the HTTP API. Shell scripts start Docker networks, the API, an
 | 4 | `run-idle-ttl.sh` | `sandbox-idle-ttl.spec.ts` and `sandbox-ephemeral.spec.ts` on a dedicated stack with short `SANDBOX_API_IDLE_*` timers |
 | 5 | `run-postgres.sh` | Idle TTL, two-runner placement and multi-pod API specs against Postgres |
 
+`run.sh` also builds `e2e/code-runtime/Dockerfile`, a code sandbox image for e2e tests only, and enables code sandboxes on the API and the runner for the whole run. `code-sandbox.spec.ts` runs only when code sandboxes are enabled (`E2E_CODE_SANDBOXES`). The image holds the code daemon and a small Node.js test runtime. It is not published.
+
 Each script also runs alone. `e2e/run-postgres-multi-pod.sh` fronts two API pods with an nginx gRPC TCP proxy (like a k8s Service) and runs the `@multi-pod-failover` specs, which stop the lead pod and assert runner re-registration and idle sweeping on the survivor.
 
 ## Firecracker lane

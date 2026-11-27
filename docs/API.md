@@ -897,7 +897,7 @@ Return the current code sandbox of a name, or create one. The client picks the n
   "runtime": "n8n-js",
   "runtimeVersion": "2.42.0",
   "maxConcurrency": 2,
-  "memoryMb": 1024,
+  "memoryMb": 512,
   "idleTimeoutMs": 30000,
   "maxAgeMs": 60000
 }
@@ -909,10 +909,12 @@ Return the current code sandbox of a name, or create one. The client picks the n
 - `runtime` (required) — `n8n-js` or `n8n-python`.
 - `runtimeVersion` (required) — up to 64 characters from `A-Z`, `a-z`, `0-9`, `.`, `+` and `-`.
 - `maxConcurrency` (required) — number of lanes, greater than `0`. A lane runs one task at a time.
-- `memoryMb` (required) — greater than `0`.
+- `memoryMb` (required) — at least `64`. The memory limit of the sandbox. The runner refuses more than its maximum (`SANDBOX_RUNNER_CODE_MAX_MEMORY_MB`, see [limits](limits.md)) with `400`.
 - `idleTimeoutMs`, `maxAgeMs` (optional) — `0` or more; `0` or left out means not set.
 
-Unknown fields return `400`. The service stores these settings but does not apply them yet. Every code sandbox has egress `none` and is ephemeral (see `POST /sandboxes`).
+Unknown fields return `400`. The service applies `memoryMb`, and stores the other settings but does not apply them yet. The CPU limit comes from the runner configuration. Every code sandbox has egress `none` and is ephemeral (see `POST /sandboxes`).
+
+Runners create code sandboxes only when `SANDBOX_RUNNER_CODE_SANDBOXES_ENABLED` is `true` ([configuration](configuration.md#shared-runner-config)).
 
 A create for a name that already has a current sandbox returns that sandbox with `200` if the settings are equal. If any setting differs, it returns `409` with reason `sandbox_settings_mismatch`. Concurrent creates of one name get the same sandbox. If two API replicas create it at the same time, the one saved second is deleted from its runner. A sandbox past its idle window is deleted, and the name gets a new sandbox.
 
@@ -929,7 +931,7 @@ With a tenant key, the sandbox counts toward the tenant's `max_sandboxes` quota.
 }
 ```
 
-**Errors:** `400` invalid request body, `401` missing or unknown API key, `403` provisioner or scaler key, or tenant sandbox quota exceeded, `409` `sandbox_settings_mismatch` or tenant deleted, `429` [too many requests in progress](#http-429--too-many-requests-in-progress), `502` the runner did not confirm egress `none` or deleting a sandbox past its idle window failed, `503` `no_capacity`, or the name moved to another sandbox during the create (retry)
+**Errors:** `400` invalid request body, or `memoryMb` outside the range the runner allows, `401` missing or unknown API key, `403` provisioner or scaler key, or tenant sandbox quota exceeded, `409` `sandbox_settings_mismatch` or tenant deleted, `429` [too many requests in progress](#http-429--too-many-requests-in-progress), `502` the runner does not support code sandboxes, the runner did not confirm egress `none`, or deleting a sandbox past its idle window failed, `503` `no_capacity`, the runner is not ready for code sandboxes (retry), or the name moved to another sandbox during the create (retry)
 
 **Example:**
 
@@ -937,7 +939,7 @@ With a tenant key, the sandbox counts toward the tenant's `max_sandboxes` quota.
 curl -X POST http://localhost:8080/code/sandboxes \
   -H "X-Api-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"name":"scope-1","runtime":"n8n-js","runtimeVersion":"2.42.0","maxConcurrency":2,"memoryMb":1024}'
+  -d '{"name":"scope-1","runtime":"n8n-js","runtimeVersion":"2.42.0","maxConcurrency":2,"memoryMb":512}'
 ```
 
 ### POST /code/sandboxes/{id}/tasks

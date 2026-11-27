@@ -107,6 +107,9 @@ Every instance serves downloads: `SANDBOX_API_VOLUME_LOCAL_URL` names all of the
 | `SANDBOX_RUNNER_MAX_TASK_INPUT_BYTES` | `67108864` | Total size of the input files of a code sandbox task (64 MiB; up to 1 GiB). The runner refuses a task request body more than 1 MiB larger. The API applies `SANDBOX_API_MAX_TASK_INPUT_BYTES` first, and the daemon `CODE_DAEMON_MAX_INPUT_BYTES` after |
 | `SANDBOX_RUNNER_MAX_INFLIGHT_PER_SANDBOX` | `256` | Requests one sandbox may have in progress at once; more get `429` ([what counts](API.md#http-429--too-many-requests-in-progress)). Room for clients that write many files in parallel, while still bounding what one sandbox holds on its runner. `0` = no limit, for execution `DELETE`s too |
 | `SANDBOX_RUNNER_MAX_EXEC_TIMEOUT` | `15m` | Largest `timeout_ms` an exec may ask for; a larger one gets `400`. A first estimate: long enough for builds and test suites, and what ends a forgotten command, which keeps running after its stream closes. `0` (no limit) or at least `5m`, the timeout a command gets when it sets none. Keep the API's `SANDBOX_API_MAX_RESPONSE_ACTIVITY` at least this long |
+| `SANDBOX_RUNNER_CODE_SANDBOXES_ENABLED` | `false` | Create [code sandboxes](API.md#code-sandboxes). When `false`, the runner refuses them, and the API answers `502`. Placement does not try another runner after this refusal, so give all runners the same value. Only the Docker runner supports code sandboxes |
+| `SANDBOX_RUNNER_CODE_CPU_PERCENT` | `100` | CPU limit of a code sandbox as a percentage of one core. Read only when code sandboxes are enabled |
+| `SANDBOX_RUNNER_CODE_MAX_MEMORY_MB` | `1024` | Largest `memoryMb` a code sandbox can ask for; a larger one gets `400`. At least `64`. Read only when code sandboxes are enabled. Capacity counts sandboxes, not memory: size `SANDBOX_RUNNER_CAPACITY_TOTAL` with this value |
 | `SANDBOX_RUNNER_METRICS_ENABLED` | `false` | When true, expose Prometheus `/metrics` on the runner's HTTP listener (no `X-Api-Key` and no client certificate; firewall the port). See [Metrics](#metrics). |
 | `SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE` | *(required)* | CA (PEM) that signed the API registration gRPC server cert |
 | `SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE` | *(required)* | Runner client cert (PEM) for registration mTLS |
@@ -125,10 +128,11 @@ These variables are parsed by the Docker/sysbox runner entrypoint.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE` | *(required)* | Docker image used for sandbox containers |
+| `SANDBOX_RUNNER_DOCKER_CODE_IMAGE` | *(required with code sandboxes)* | Docker image used for code sandbox containers. It runs the [code daemon](#code-daemon) on port `8081`. Pulled at startup only when `SANDBOX_RUNNER_CODE_SANDBOXES_ENABLED` is `true`; until the pull succeeds, code sandbox creates get `503` |
 | `SANDBOX_RUNNER_DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker daemon endpoint used by the runner; must be `unix://` |
 | `SANDBOX_RUNNER_ENABLE_CGROUPS` | `true` | Whether Docker resource limits are applied |
-| `SANDBOX_RUNNER_DEFAULT_MEMORY_MB` | `512` | Default Docker memory limit per sandbox in megabytes |
-| `SANDBOX_RUNNER_DEFAULT_CPU_PERCENT` | `100` | Default Docker CPU limit as a percentage of one core |
+| `SANDBOX_RUNNER_DEFAULT_MEMORY_MB` | `512` | Default Docker memory limit per sandbox in megabytes. A code sandbox gets its `memoryMb` instead |
+| `SANDBOX_RUNNER_DEFAULT_CPU_PERCENT` | `100` | Default Docker CPU limit as a percentage of one core. A code sandbox gets `SANDBOX_RUNNER_CODE_CPU_PERCENT` instead |
 | `SANDBOX_RUNNER_DEFAULT_PIDS_MAX` | `256` | Default Docker process count limit per sandbox |
 | `SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB` | `0` | Per-sandbox writable-layer quota in MB (`--storage-opt size=`). Effective only when the storage pool mounts successfully — see [Disk quotas](#disk-quotas). `0` means no quota. |
 | `SANDBOX_RUNNER_DISK_QUOTA_POOL_SIZE_GB` | *(derived)* | Size of the xfs+prjquota storage pool backing the inner dockerd. Defaults to `ceil(SANDBOX_RUNNER_DEFAULT_DISK_QUOTA_MB × SANDBOX_RUNNER_CAPACITY_TOTAL × 1.2 / 1024)` (per-sandbox quota times runner capacity, plus 20% headroom for sandbox image layers). Set explicitly to override. |

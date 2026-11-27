@@ -59,8 +59,11 @@ func toGRPCError(err error) error {
 	if errors.Is(err, runnerruntime.ErrCapacityExhausted) {
 		return runnerctl.CapacityRefusal(err.Error())
 	}
-	if errors.Is(err, runnerruntime.ErrVolumesUnsupported) {
+	if errors.Is(err, runnerruntime.ErrVolumesUnsupported) || errors.Is(err, runnerruntime.ErrCodeSandboxesUnsupported) {
 		return status.Error(codes.FailedPrecondition, err.Error())
+	}
+	if errors.Is(err, runnerruntime.ErrCodeImageNotReady) {
+		return status.Error(codes.Unavailable, err.Error())
 	}
 	return status.Errorf(codes.Internal, "%v", err)
 }
@@ -120,6 +123,9 @@ func (s *SandboxControlGRPC) CreateSandbox(ctx context.Context, req *pb.CreateSa
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid create options: "+err.Error())
 	}
+	if err := s.checkCodeOptions(opts.CodeOpts); err != nil {
+		return nil, err
+	}
 	ctx = withTrace(ctx)
 	start := time.Now()
 	info, err := s.Runtime.CreateSandbox(ctx, sandboxID, opts)
@@ -138,6 +144,21 @@ func (s *SandboxControlGRPC) CreateSandbox(ctx context.Context, req *pb.CreateSa
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 	return &pb.CreateSandboxResponse{SandboxId: sandboxID, ContainerIp: info.IP, AppliedCreateOptionsJson: string(applied)}, nil
+}
+
+// checkCodeOptions refuses a code sandbox when code sandboxes are disabled or
+// it asks for more memory than the runner allows.
+func (s *SandboxControlGRPC) checkCodeOptions(options *runnerruntime.CodeOptions) error {
+	if options == nil {
+		return nil
+	}
+	if !s.Cfg.CodeSandboxesEnabled {
+		return status.Error(codes.FailedPrecondition, runnerruntime.ErrCodeSandboxesUnsupported.Error())
+	}
+	if options.MemoryMB > s.Cfg.CodeMaxMemoryMB {
+		return status.Errorf(codes.InvalidArgument, "invalid create options: code_options: memory_mb %d is over the runner maximum of %d", options.MemoryMB, s.Cfg.CodeMaxMemoryMB)
+	}
+	return nil
 }
 
 // StopSandbox stops the sandbox without removing it.

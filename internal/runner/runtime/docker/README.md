@@ -50,7 +50,7 @@ containers direct access to the host Docker daemon.
 - Points container DNS at `SANDBOX_RUNNER_DOCKER_DNS_SERVERS` when set, else
   leaves Docker's default ([Sandbox DNS](../../../../docs/security-model.md#sandbox-dns)).
 - Waits for daemon `/healthz` and a tiny `/executions` round trip before
-  returning a sandbox as ready.
+  returning a sandbox as ready. A code sandbox waits for `/healthz` only.
 - Wakes stopped containers on proxy access, reapplies network rules, and waits
   for the daemon before proxying.
 - Uses singleflight so concurrent wake requests for the same sandbox only run
@@ -62,6 +62,13 @@ containers direct access to the host Docker daemon.
   ([Volumes](#volumes)).
 - Detects guests that died on their own and reports the restart to the client.
 - Attaches read-only volumes on create ([Volumes](#volumes)).
+- Starts code sandboxes from `SANDBOX_RUNNER_DOCKER_CODE_IMAGE` when
+  `SANDBOX_RUNNER_CODE_SANDBOXES_ENABLED` is `true`. A code sandbox gets the
+  memory limit of its create and the CPU limit
+  `SANDBOX_RUNNER_CODE_CPU_PERCENT`, with the same security and network policy
+  as other sandboxes. Each container has a `sandbox-service.kind` label,
+  `general` or `code`, so a wake knows how to check its daemon. The code image is pulled apart from
+  the sandbox image and does not hold back readiness.
 
 ## Crash recovery
 

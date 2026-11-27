@@ -78,7 +78,7 @@ const code = await client.createCodeSandbox({
   runtime: 'n8n-js',
   runtimeVersion: '2.42.0',
   maxConcurrency: 2,
-  memoryMb: 1024,
+  memoryMb: 512,
 });
 console.log(code.id, code.created);
 ```
