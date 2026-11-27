@@ -582,7 +582,7 @@ List files in a sandbox directory.
 ]
 ```
 
-**Errors:** `400` invalid id, `404` directory not found, `429` [too many requests in progress](#http-429--too-many-requests-in-progress)
+**Errors:** `400` invalid id or path is not a directory, `404` directory not found, `429` [too many requests in progress](#http-429--too-many-requests-in-progress)
 
 **Example:**
 
@@ -607,7 +607,7 @@ Download a file from a sandbox.
 
 Raw file contents.
 
-**Errors:** `400` invalid id or missing path, `404` file not found, `429` [too many requests in progress](#http-429--too-many-requests-in-progress)
+**Errors:** `400` invalid id, missing path or path is a directory, `404` file not found, `429` [too many requests in progress](#http-429--too-many-requests-in-progress)
 
 **Example:**
 
@@ -637,7 +637,7 @@ Upload (write) a file to a sandbox.
 
 **Response:** `200 OK`
 
-**Errors:** `400` invalid id or missing path, `409` file exists (when `overwrite=false`), `429` [too many requests in progress](#http-429--too-many-requests-in-progress)
+**Errors:** `400` invalid id, missing path or path is a directory, `409` file exists (when `overwrite=false`), `429` [too many requests in progress](#http-429--too-many-requests-in-progress)
 
 **Example:**
 
@@ -705,7 +705,7 @@ Append data to a file in a sandbox. Creates the file if it doesn't exist.
 
 **Response:** `200 OK`
 
-**Errors:** `400` invalid id or missing path, `404` path not found, `429` [too many requests in progress](#http-429--too-many-requests-in-progress)
+**Errors:** `400` invalid id, missing path or path is a directory, `404` path not found, `429` [too many requests in progress](#http-429--too-many-requests-in-progress)
 
 **Example:**
 
