@@ -84,7 +84,7 @@ func TestNewVolumeStoreUsesTheSigningKeyAndLogsNone(t *testing.T) {
 			hex.EncodeToString(secret),
 			base64.StdEncoding.EncodeToString(secret),
 			base64.RawStdEncoding.EncodeToString(secret),
-			strings.Trim(fmt.Sprint(secret), "[]"),
+			strings.Trim(fmt.Sprint(secret), "[]"), //nolint:staticcheck // QF1010: The decimal byte form is the point.
 		} {
 			if strings.Contains(logged, form) {
 				t.Fatalf("the startup log shows a signing key: %s", logged)

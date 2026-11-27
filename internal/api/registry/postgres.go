@@ -72,10 +72,7 @@ func (r *PostgresRegistry) GoneLongEnough(runnerID string, buffer time.Duration,
 	var lastSeen time.Time
 	err := r.db.QueryRow(q, runnerID).Scan(&lastSeen)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return true
-		}
-		return false
+		return errors.Is(err, sql.ErrNoRows)
 	}
 	return !now.Before(lastSeen.Add(buffer))
 }

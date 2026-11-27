@@ -327,7 +327,7 @@ func TestRunMapsEachFailureToItsReason(t *testing.T) {
 			if status.Result != ResultFailed || status.Reason != tt.want {
 				t.Errorf("status = %+v, want reason %q", status, tt.want)
 			}
-			fromMount := sys.calls
+			var fromMount []string
 			if index := slices.Index(sys.calls, "mount /dev/vdc"); index >= 0 {
 				fromMount = sys.calls[index:]
 			} else {

@@ -210,7 +210,7 @@ func TestConnectEmptyRunnerIDAfterCommitUsesCommittedID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer stream.CloseSend()
+	defer func() { _ = stream.CloseSend() }()
 
 	if err := stream.Send(testHeartbeat("stable-id")); err != nil {
 		t.Fatal(err)
@@ -256,7 +256,7 @@ func TestConnectStoresCordon(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer stream.CloseSend()
+	defer func() { _ = stream.CloseSend() }()
 
 	for _, cordoned := range []bool{false, true, false} {
 		hb := testHeartbeat("cordon-runner")

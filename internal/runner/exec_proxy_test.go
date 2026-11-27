@@ -18,9 +18,6 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/runner/config"
 )
 
-//go:fix inline
-func seq(n uint64) *uint64 { return new(n) }
-
 func startedEvent(execID string) string {
 	return fmt.Sprintf(`{"seq":0,"type":"started","exec_id":%s}`, strconv.Quote(execID))
 }
@@ -207,7 +204,7 @@ func TestExecProxyHappyPath(t *testing.T) {
 	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(lines))
+		_, _ = w.Write([]byte(lines))
 	}))
 	defer daemon.Close()
 
@@ -294,7 +291,7 @@ func TestExecProxyStreamsLargeEvent(t *testing.T) {
 	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(lines))
+		_, _ = w.Write([]byte(lines))
 	}))
 	defer daemon.Close()
 
@@ -332,7 +329,7 @@ func TestExecProxyOneRetry(t *testing.T) {
 		if r.Method == http.MethodPost && r.URL.Path == "/executions" {
 			w.Header().Set("Content-Type", "application/x-ndjson")
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(startedEvent(execID) + "\n"))
+			_, _ = w.Write([]byte(startedEvent(execID) + "\n"))
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()
 			}
@@ -357,7 +354,7 @@ func TestExecProxyOneRetry(t *testing.T) {
 			w.Header().Set("Content-Type", "application/x-ndjson")
 			w.WriteHeader(http.StatusOK)
 			lines := stdoutEvent(1, "hello\n") + "\n" + exitEvent(2) + "\n"
-			w.Write([]byte(lines))
+			_, _ = w.Write([]byte(lines))
 			return
 		}
 	}))
@@ -435,7 +432,7 @@ func TestExecProxyResumeWithoutAfterBeforeFirstEvent(t *testing.T) {
 				stdoutEvent(1, "hello\n"),
 				exitEvent(2),
 			}, "\n") + "\n"
-			w.Write([]byte(lines))
+			_, _ = w.Write([]byte(lines))
 			return
 		}
 	}))
@@ -489,7 +486,7 @@ func TestExecProxyRetriesExhausted(t *testing.T) {
 		if r.Method == http.MethodPost && r.URL.Path == "/executions" {
 			w.Header().Set("Content-Type", "application/x-ndjson")
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(startedEvent(execID) + "\n"))
+			_, _ = w.Write([]byte(startedEvent(execID) + "\n"))
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()
 			}
@@ -552,12 +549,14 @@ func TestExecProxyExecIDPropagation(t *testing.T) {
 		var receivedExecID string
 		daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var body execRequestBody
-			json.NewDecoder(r.Body).Decode(&body)
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode request: %v", err)
+			}
 			receivedExecID = body.ExecID
 
 			w.Header().Set("Content-Type", "application/x-ndjson")
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(startedEvent(body.ExecID) + "\n" + exitEvent(1) + "\n"))
+			_, _ = w.Write([]byte(startedEvent(body.ExecID) + "\n" + exitEvent(1) + "\n"))
 		}))
 		defer daemon.Close()
 
@@ -592,12 +591,14 @@ func TestExecProxyExecIDPropagation(t *testing.T) {
 
 		daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var body execRequestBody
-			json.NewDecoder(r.Body).Decode(&body)
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode request: %v", err)
+			}
 			receivedExecID = body.ExecID
 
 			w.Header().Set("Content-Type", "application/x-ndjson")
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(startedEvent(body.ExecID) + "\n" + exitEvent(1) + "\n"))
+			_, _ = w.Write([]byte(startedEvent(body.ExecID) + "\n" + exitEvent(1) + "\n"))
 		}))
 		defer daemon.Close()
 
@@ -632,7 +633,7 @@ func TestExecProxyAlreadyCompletedOnResume(t *testing.T) {
 		if r.Method == http.MethodPost && r.URL.Path == "/executions" {
 			w.Header().Set("Content-Type", "application/x-ndjson")
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(startedEvent(execID) + "\n"))
+			_, _ = w.Write([]byte(startedEvent(execID) + "\n"))
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()
 			}
@@ -648,7 +649,7 @@ func TestExecProxyAlreadyCompletedOnResume(t *testing.T) {
 		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/executions/") {
 			w.Header().Set("Content-Type", "application/x-ndjson")
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(exitEvent(1) + "\n"))
+			_, _ = w.Write([]byte(exitEvent(1) + "\n"))
 			return
 		}
 	}))

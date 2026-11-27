@@ -66,7 +66,7 @@ func newFakeHelper(t *testing.T) (*fakeHelper, *Remote) {
 	}
 	server := grpc.NewServer(grpc.MaxRecvMsgSize(remoteMaxMessageSize), grpc.MaxSendMsgSize(remoteMaxMessageSize))
 	storepb.RegisterVolumeStoreServer(server, helper)
-	go server.Serve(listener)
+	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(server.Stop)
 	rs, err := NewRemote(helper.socket)
 	if err != nil {

@@ -144,7 +144,8 @@ func ParseAnswer(body []byte, requested []Volume) ([]Outcome, error) {
 		if outcome.Drive != requested[index].Drive {
 			return nil, fmt.Errorf("answer volume %d is drive %d, the request's is drive %d", index, outcome.Drive, requested[index].Drive)
 		}
-		if !(outcome.Mounted && outcome.Reason == "") && !(!outcome.Mounted && KnownReason(outcome.Reason)) {
+		consistent := outcome.Mounted && outcome.Reason == "" || !outcome.Mounted && KnownReason(outcome.Reason)
+		if !consistent {
 			return nil, fmt.Errorf("answer volume %d has an unknown reason or one that contradicts mounted", index)
 		}
 	}
