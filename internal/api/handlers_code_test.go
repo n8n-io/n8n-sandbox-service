@@ -134,6 +134,7 @@ func TestCreateCodeSandboxRejectsInvalidRequests(t *testing.T) {
 		"bad version":       strings.Replace(codeCreateBody, `"2.42.0"`, `"2 42"`, 1),
 		"no maxConcurrency": strings.Replace(codeCreateBody, `"maxConcurrency":2,`, ``, 1),
 		"negative memory":   strings.Replace(codeCreateBody, `"memoryMb":1024`, `"memoryMb":-1`, 1),
+		"under min memory":  strings.Replace(codeCreateBody, `"memoryMb":1024`, `"memoryMb":63`, 1),
 		"negative idle":     strings.Replace(codeCreateBody, `"idleTimeoutMs":30000`, `"idleTimeoutMs":-1`, 1),
 		"negative max age":  strings.Replace(codeCreateBody, `"maxAgeMs":60000`, `"maxAgeMs":-1`, 1),
 	} {

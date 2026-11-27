@@ -11,7 +11,7 @@ import { DOCKER_ONLY } from './tags';
 
 // Without the variables, the runner defaults apply.
 const CPU_PERCENT = Number(process.env.E2E_CODE_CPU_PERCENT || '100');
-const MAX_MEMORY_MB = Number(process.env.E2E_CODE_MAX_MEMORY_MB || '512');
+const MAX_MEMORY_MB = Number(process.env.E2E_CODE_MAX_MEMORY_MB || '1024');
 const MEMORY_MB = 384;
 
 const TASK_TIMEOUT_MS = 30_000;

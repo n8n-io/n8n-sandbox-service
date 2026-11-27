@@ -20,7 +20,7 @@ export interface CreateCodeSandboxOptions {
   runtimeVersion: string;
   /** Number of lanes: each lane runs one task at a time. */
   maxConcurrency: number;
-  /** Total sandbox memory in MB. */
+  /** Total sandbox memory in MB. At least 64. */
   memoryMb: number;
   idleTimeoutMs?: number;
   maxAgeMs?: number;

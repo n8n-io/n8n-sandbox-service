@@ -101,7 +101,7 @@ func sandboxAttachment(inspect *containerInspect) (network, ip string) {
 
 type dockerBackend interface {
 	ping(ctx context.Context) error
-	createContainer(ctx context.Context, sandboxID, containerName, image, network string, limits *ResourceLimits, enableCgroups bool, kind sandboxKind, mounts []volumeMount) (string, error)
+	createContainer(ctx context.Context, spec containerSpec) (string, error)
 	startContainer(ctx context.Context, containerID string) error
 	stopContainer(ctx context.Context, containerID string) error
 	removeContainer(ctx context.Context, containerID string) error
@@ -182,8 +182,22 @@ func (dc *dockerClient) ping(ctx context.Context) error {
 	return err
 }
 
-func (dc *dockerClient) createContainer(ctx context.Context, sandboxID, containerName, image, network string, limits *ResourceLimits, enableCgroups bool, kind sandboxKind, mounts []volumeMount) (string, error) {
-	args := dockerContainerCreateArgs(sandboxID, containerName, image, network, limits, enableCgroups, kind, dc.dnsServers, dc.onlyIPv4, mounts)
+// containerSpec describes a sandbox container to create.
+type containerSpec struct {
+	sandboxID string
+	name      string
+	image     string
+	network   string
+	// limits are applied only when enableCgroups is true. The disk quota is
+	// always applied.
+	limits        *ResourceLimits
+	enableCgroups bool
+	kind          sandboxKind
+	mounts        []volumeMount
+}
+
+func (dc *dockerClient) createContainer(ctx context.Context, spec containerSpec) (string, error) {
+	args := dockerContainerCreateArgs(spec, dc.dnsServers, dc.onlyIPv4)
 
 	out, err := dc.run(ctx, args...)
 	if err != nil {
@@ -192,19 +206,19 @@ func (dc *dockerClient) createContainer(ctx context.Context, sandboxID, containe
 	return strings.TrimSpace(out), nil
 }
 
-func dockerContainerCreateArgs(sandboxID, containerName, image, network string, limits *ResourceLimits, enableCgroups bool, kind sandboxKind, dnsServers []string, onlyIPv4 bool, mounts []volumeMount) []string {
+func dockerContainerCreateArgs(spec containerSpec, dnsServers []string, onlyIPv4 bool) []string {
 	args := []string{
 		"container", "create",
-		"--name", containerName,
+		"--name", spec.name,
 		"--hostname", "sandbox",
 		"--restart", "unless-stopped",
 		// Docker's init runs as PID 1 and reaps orphaned processes. The daemon
 		// does not, so as zombies they would use up the pids limit.
 		"--init",
-		"--network", network,
+		"--network", spec.network,
 		"--label", containerLabelManaged + "=" + containerLabelManagedVal,
-		"--label", containerLabelSandboxID + "=" + sandboxID,
-		"--label", containerLabelKind + "=" + string(kind),
+		"--label", containerLabelSandboxID + "=" + spec.sandboxID,
+		"--label", containerLabelKind + "=" + string(spec.kind),
 		"--user", "1000:1000",
 		// The daemon process only. internal/daemon/exec.go sets the environment
 		// user commands see.
@@ -214,12 +228,12 @@ func dockerContainerCreateArgs(sandboxID, containerName, image, network string, 
 	args = append(args, dockerSandboxSecurityArgs()...)
 	args = append(args, dockerIPv6Args(onlyIPv4)...)
 	args = append(args, dockerDNSArgs(dnsServers)...)
-	if enableCgroups {
-		args = append(args, dockerLimitArgs(limits)...)
+	if spec.enableCgroups {
+		args = append(args, dockerLimitArgs(spec.limits)...)
 	}
-	args = append(args, dockerDiskQuotaArgs(limits)...)
-	args = append(args, dockerVolumeArgs(mounts)...)
-	args = append(args, image)
+	args = append(args, dockerDiskQuotaArgs(spec.limits)...)
+	args = append(args, dockerVolumeArgs(spec.mounts)...)
+	args = append(args, spec.image)
 	return args
 }
 

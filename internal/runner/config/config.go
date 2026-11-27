@@ -18,7 +18,6 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/daemon"
 	"github.com/n8n-io/sandbox-service/internal/envvar"
 	"github.com/n8n-io/sandbox-service/internal/logging"
-	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
 )
 
 const (
@@ -37,7 +36,7 @@ const (
 	defaultVolumeFetchTimeout  = 5 * time.Minute
 
 	defaultCodeCPUPercent  = 100
-	defaultCodeMaxMemoryMB = 512
+	defaultCodeMaxMemoryMB = 1024
 )
 
 // Config holds shared runner configuration parsed from environment variables.
@@ -141,7 +140,7 @@ type Config struct {
 	CodeCPUPercent int
 
 	// CodeMaxMemoryMB is the largest memory limit a code sandbox can ask for,
-	// in megabytes. Parsed from SANDBOX_RUNNER_CODE_MAX_MEMORY_MB (default 512).
+	// in megabytes. Parsed from SANDBOX_RUNNER_CODE_MAX_MEMORY_MB (default 1024).
 	CodeMaxMemoryMB int64
 }
 
@@ -208,7 +207,7 @@ func loadCode(cfg *Config) error {
 	if err := envvar.PositiveInt("SANDBOX_RUNNER_CODE_CPU_PERCENT", &cfg.CodeCPUPercent); err != nil {
 		return err
 	}
-	return envvar.IntBetween("SANDBOX_RUNNER_CODE_MAX_MEMORY_MB", &cfg.CodeMaxMemoryMB, runnerruntime.MinCodeMemoryMB, math.MaxInt32)
+	return envvar.IntBetween("SANDBOX_RUNNER_CODE_MAX_MEMORY_MB", &cfg.CodeMaxMemoryMB, codetask.MinSandboxMemoryMB, math.MaxInt32)
 }
 
 // Load reads configuration from environment variables and returns a Config.

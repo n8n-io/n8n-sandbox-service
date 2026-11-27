@@ -22,6 +22,7 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
 	"github.com/n8n-io/sandbox-service/internal/api/runnerctl"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
+	"github.com/n8n-io/sandbox-service/internal/codetask"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
 	"github.com/n8n-io/sandbox-service/internal/obs"
 	runnerruntime "github.com/n8n-io/sandbox-service/internal/runner/runtime"
@@ -81,8 +82,8 @@ func (req *createCodeSandboxRequest) validate() error {
 		return errors.New("invalid runtimeVersion")
 	case req.MaxConcurrency <= 0:
 		return errors.New("invalid maxConcurrency: must be greater than 0")
-	case req.MemoryMb <= 0:
-		return errors.New("invalid memoryMb: must be greater than 0")
+	case req.MemoryMb < codetask.MinSandboxMemoryMB:
+		return fmt.Errorf("invalid memoryMb: must be at least %d", codetask.MinSandboxMemoryMB)
 	case req.IdleTimeoutMs < 0:
 		return errors.New("invalid idleTimeoutMs: must not be negative")
 	case req.MaxAgeMs < 0:

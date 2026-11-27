@@ -877,7 +877,7 @@ Return the current code sandbox of a name, or create one. The client picks the n
 - `runtime` (required) — `n8n-js` or `n8n-python`.
 - `runtimeVersion` (required) — up to 64 characters from `A-Z`, `a-z`, `0-9`, `.`, `+` and `-`.
 - `maxConcurrency` (required) — number of lanes, greater than `0`. A lane runs one task at a time.
-- `memoryMb` (required) — greater than `0`. The memory limit of the sandbox. The runner refuses less than `64` or more than its maximum (`SANDBOX_RUNNER_CODE_MAX_MEMORY_MB`, see [limits](limits.md)) with `400`.
+- `memoryMb` (required) — at least `64`. The memory limit of the sandbox. The runner refuses more than its maximum (`SANDBOX_RUNNER_CODE_MAX_MEMORY_MB`, see [limits](limits.md)) with `400`.
 - `idleTimeoutMs`, `maxAgeMs` (optional) — `0` or more; `0` or left out means not set.
 
 Unknown fields return `400`. The service applies `memoryMb`, and stores the other settings but does not apply them yet. The CPU limit comes from the runner configuration. Every code sandbox has egress `none` and is ephemeral (see `POST /sandboxes`).

@@ -62,13 +62,13 @@ func (f *fakeDockerBackend) ping(context.Context) error {
 	return errors.New("unexpected ping")
 }
 
-func (f *fakeDockerBackend) createContainer(_ context.Context, _, _, image, network string, limits *ResourceLimits, _ bool, kind sandboxKind, mounts []volumeMount) (string, error) {
+func (f *fakeDockerBackend) createContainer(_ context.Context, spec containerSpec) (string, error) {
 	f.record("create")
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.network = network
-	f.mounts = mounts
-	f.image, f.limits, f.kind = image, limits, kind
+	f.network = spec.network
+	f.mounts = spec.mounts
+	f.image, f.limits, f.kind = spec.image, spec.limits, spec.kind
 	if f.createErr != nil {
 		return "", f.createErr
 	}
@@ -176,7 +176,7 @@ func TestDockerContainerCreateArgs(t *testing.T) {
 		DiskMB:     1024,
 	}
 
-	got := dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerNoEgressNetwork, limits, true, sandboxKindGeneric, []string{"1.1.1.1", "8.8.8.8"}, false, nil)
+	got := dockerContainerCreateArgs(containerSpec{sandboxID: "sandbox-id", name: "sandbox-name", image: "sandbox-image", network: runnerNoEgressNetwork, limits: limits, enableCgroups: true, kind: sandboxKindGeneral}, []string{"1.1.1.1", "8.8.8.8"}, false)
 	want := []string{
 		"container", "create",
 		"--name", "sandbox-name",
@@ -186,7 +186,7 @@ func TestDockerContainerCreateArgs(t *testing.T) {
 		"--network", runnerNoEgressNetwork,
 		"--label", containerLabelManaged + "=" + containerLabelManagedVal,
 		"--label", containerLabelSandboxID + "=sandbox-id",
-		"--label", containerLabelKind + "=generic",
+		"--label", containerLabelKind + "=general",
 		"--user", "1000:1000",
 		"--env", "HOME=/home/user",
 		"--env", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
@@ -224,7 +224,7 @@ func TestDockerContainerCreateArgsSkipIPv6SysctlsOnIPv4OnlyHost(t *testing.T) {
 		return got
 	}
 
-	got := sysctls(dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerBridgeNetwork, nil, false, sandboxKindGeneric, nil, false, nil))
+	got := sysctls(dockerContainerCreateArgs(containerSpec{sandboxID: "sandbox-id", name: "sandbox-name", image: "sandbox-image", network: runnerBridgeNetwork, kind: sandboxKindGeneral}, nil, false))
 	want := []string{
 		"net.ipv6.conf.all.disable_ipv6=1",
 		"net.ipv6.conf.default.disable_ipv6=1",
@@ -234,7 +234,7 @@ func TestDockerContainerCreateArgsSkipIPv6SysctlsOnIPv4OnlyHost(t *testing.T) {
 		t.Fatalf("sysctls by default = %#v, want %#v", got, want)
 	}
 
-	if got := sysctls(dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerBridgeNetwork, nil, false, sandboxKindGeneric, nil, true, nil)); got != nil {
+	if got := sysctls(dockerContainerCreateArgs(containerSpec{sandboxID: "sandbox-id", name: "sandbox-name", image: "sandbox-image", network: runnerBridgeNetwork, kind: sandboxKindGeneral}, nil, true)); got != nil {
 		t.Fatalf("sysctls on IPv4-only host = %#v, want nil", got)
 	}
 }
@@ -306,7 +306,7 @@ func TestDockerContainerCreateArgsAlwaysApplySecurityPolicy(t *testing.T) {
 	}
 
 	for _, enableCgroups := range []bool{false, true} {
-		gotArgs := dockerContainerCreateArgs("sandbox-id", "sandbox-name", "sandbox-image", runnerBridgeNetwork, nil, enableCgroups, sandboxKindGeneric, nil, false, nil)
+		gotArgs := dockerContainerCreateArgs(containerSpec{sandboxID: "sandbox-id", name: "sandbox-name", image: "sandbox-image", network: runnerBridgeNetwork, enableCgroups: enableCgroups, kind: sandboxKindGeneral}, nil, false)
 		var got []string
 		for i := 0; i < len(gotArgs); i++ {
 			if gotArgs[i] != "--cap-drop" && gotArgs[i] != "--cap-add" && gotArgs[i] != "--security-opt" {

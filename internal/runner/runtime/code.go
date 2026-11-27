@@ -5,6 +5,8 @@ package runtime
 import (
 	"errors"
 	"fmt"
+
+	"github.com/n8n-io/sandbox-service/internal/codetask"
 )
 
 // ErrCodeSandboxesUnsupported is returned when CreateSandbox refuses a code
@@ -16,10 +18,6 @@ var ErrCodeSandboxesUnsupported = errors.New("runner does not support code sandb
 // because the code image is not pulled yet. Nothing is created.
 var ErrCodeImageNotReady = errors.New("code image not yet available")
 
-// MinCodeMemoryMB is the smallest memory limit of a code sandbox. Docker
-// refuses less than 6 MB, and the daemon and runtime need more to start.
-const MinCodeMemoryMB = 64
-
 // CodeOptions makes a sandbox a code sandbox: it starts from the code image
 // and runs the code daemon.
 type CodeOptions struct {
@@ -30,8 +28,8 @@ func validateCodeSandboxOptions(options *CodeOptions, egress Egress, volumes Vol
 	if options == nil {
 		return nil
 	}
-	if options.MemoryMB < MinCodeMemoryMB {
-		return fmt.Errorf("code_options: memory_mb must be at least %d", MinCodeMemoryMB)
+	if options.MemoryMB < codetask.MinSandboxMemoryMB {
+		return fmt.Errorf("code_options: memory_mb must be at least %d", codetask.MinSandboxMemoryMB)
 	}
 	if egress != EgressNone {
 		return errors.New("code_options: a code sandbox must have egress none")

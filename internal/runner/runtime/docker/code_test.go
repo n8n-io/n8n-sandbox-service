@@ -77,8 +77,8 @@ func TestCreateGeneralSandboxIgnoresCodeSettings(t *testing.T) {
 		t.Fatalf("CreateSandbox() failed: %v", err)
 	}
 	want := ResourceLimits{MemoryMB: 512, CPUPercent: 100, PidsMax: 256}
-	if backend.image != "sandbox-image" || backend.kind != sandboxKindGeneric || *backend.limits != want {
-		t.Fatalf("created image = %q, kind = %q, limits = %+v; want sandbox-image, generic, %+v", backend.image, backend.kind, *backend.limits, want)
+	if backend.image != "sandbox-image" || backend.kind != sandboxKindGeneral || *backend.limits != want {
+		t.Fatalf("created image = %q, kind = %q, limits = %+v; want sandbox-image, general, %+v", backend.image, backend.kind, *backend.limits, want)
 	}
 }
 
@@ -114,24 +114,24 @@ func TestNewRequiresCodeImageWhenEnabled(t *testing.T) {
 }
 
 func TestDockerContainerCreateArgsLabelTheKind(t *testing.T) {
-	for _, kind := range []sandboxKind{sandboxKindGeneric, sandboxKindCode} {
-		args := dockerContainerCreateArgs("sandbox-id", "sandbox-name", "image", runnerBridgeNetwork, nil, false, kind, nil, false, nil)
+	for _, kind := range []sandboxKind{sandboxKindGeneral, sandboxKindCode} {
+		args := dockerContainerCreateArgs(containerSpec{sandboxID: "sandbox-id", name: "sandbox-name", image: "image", network: runnerBridgeNetwork, kind: kind}, nil, false)
 		if label := containerLabelKind + "=" + string(kind); !slices.Contains(args, label) {
 			t.Fatalf("%s sandbox args %v do not have the label %s", kind, args, label)
 		}
 	}
 }
 
-// A container from before the kind label is generic.
+// A container from before the kind label is general.
 func TestKindOf(t *testing.T) {
 	for _, tc := range []struct {
 		labels map[string]string
 		want   sandboxKind
 	}{
-		{nil, sandboxKindGeneric},
-		{map[string]string{containerLabelKind: "generic"}, sandboxKindGeneric},
+		{nil, sandboxKindGeneral},
+		{map[string]string{containerLabelKind: "general"}, sandboxKindGeneral},
 		{map[string]string{containerLabelKind: "code"}, sandboxKindCode},
-		{map[string]string{containerLabelKind: "unknown"}, sandboxKindGeneric},
+		{map[string]string{containerLabelKind: "unknown"}, sandboxKindGeneral},
 	} {
 		inspect := &containerInspect{}
 		inspect.Config.Labels = tc.labels

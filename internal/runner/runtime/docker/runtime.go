@@ -202,9 +202,8 @@ func (m *Runtime) SetMetricsRecorder(rec *metrics.RunnerRecorder) {
 	m.metrics = rec
 }
 
-// EnsureSandboxImage pulls the sandbox image with retries. It is intended to
-// run in a goroutine after the HTTP server is listening.
-func (m *Runtime) EnsureSandboxImage(ctx context.Context) {
+// ensureSandboxImage pulls the sandbox image with retries.
+func (m *Runtime) ensureSandboxImage(ctx context.Context) {
 	if !m.pullImageWithRetry(ctx, m.config.SandboxImage) {
 		return
 	}
@@ -266,7 +265,7 @@ func (m *Runtime) Prepare(ctx context.Context) {
 	if m.runnerConfig.CodeSandboxesEnabled {
 		go m.ensureCodeImage(ctx)
 	}
-	m.EnsureSandboxImage(ctx)
+	m.ensureSandboxImage(ctx)
 }
 
 // Ready reports whether the Docker-backed runtime can accept sandbox work.
@@ -383,7 +382,7 @@ func (m *Runtime) createContainer(ctx context.Context, sandboxID string, opts *C
 
 	containerName := "sandbox-" + sandboxID[:12]
 	image, limits := m.config.SandboxImage, m.defaultLimits()
-	kind := sandboxKindGeneric
+	kind := sandboxKindGeneral
 	if opts.CodeOpts != nil {
 		kind = sandboxKindCode
 		image = m.config.CodeImage
@@ -392,7 +391,16 @@ func (m *Runtime) createContainer(ctx context.Context, sandboxID string, opts *C
 	}
 	n := m.networkFor(opts.BlockEgress())
 
-	containerID, err := m.docker.createContainer(ctx, sandboxID, containerName, image, n.networkName, limits, m.config.EnableCgroups, kind, mounts)
+	containerID, err := m.docker.createContainer(ctx, containerSpec{
+		sandboxID:     sandboxID,
+		name:          containerName,
+		image:         image,
+		network:       n.networkName,
+		limits:        limits,
+		enableCgroups: m.config.EnableCgroups,
+		kind:          kind,
+		mounts:        mounts,
+	})
 	if err != nil {
 		return nil, false, fmt.Errorf("create container: %w", err)
 	}
@@ -751,19 +759,19 @@ func canStartContainer(state containerState) bool {
 type sandboxKind string
 
 const (
-	// sandboxKindGeneric runs the sandbox daemon from the sandbox image.
-	sandboxKindGeneric sandboxKind = "generic"
+	// sandboxKindGeneral runs the sandbox daemon from the sandbox image.
+	sandboxKindGeneral sandboxKind = "general"
 	// sandboxKindCode runs the code daemon from the code image.
 	sandboxKindCode sandboxKind = "code"
 )
 
 // kindOf reads the kind of a container from its label. A container without
-// the label is generic.
+// the label is general.
 func kindOf(inspect *containerInspect) sandboxKind {
 	if sandboxKind(inspect.Config.Labels[containerLabelKind]) == sandboxKindCode {
 		return sandboxKindCode
 	}
-	return sandboxKindGeneric
+	return sandboxKindGeneral
 }
 
 // waitReady waits for the daemon of a sandbox of the kind.
