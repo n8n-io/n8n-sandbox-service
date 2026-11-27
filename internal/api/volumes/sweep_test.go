@@ -152,7 +152,9 @@ func TestSweepLeavesLiveVolumesAlone(t *testing.T) {
 
 func TestSweepRunsUntilItsContextEnds(t *testing.T) {
 	env := newTestEnv(t)
-	env.service.timing.sweepEvery = 10 * time.Millisecond
+	// sweepOnce uses sweepEvery as its own timeout; 200 ms gives SQLite and
+	// disk cleanup room under -race on loaded CI runners.
+	env.service.timing.sweepEvery = 200 * time.Millisecond
 	env.service.timing.purgeGrace = 0
 	data := validTar(t)
 	if _, err := env.publish(t, data, ""); err != nil {
@@ -168,6 +170,11 @@ func TestSweepRunsUntilItsContextEnds(t *testing.T) {
 		env.service.RunSweeps(ctx)
 		close(stopped)
 	}()
+	// Stop RunSweeps before newTestEnv's Cleanup closes SQLite, even on failure.
+	t.Cleanup(func() {
+		cancel()
+		<-stopped
+	})
 	waitFor(t, func() bool {
 		env.records.mutex.Lock()
 		defer env.records.mutex.Unlock()
