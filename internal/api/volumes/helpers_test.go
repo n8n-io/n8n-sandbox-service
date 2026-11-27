@@ -263,7 +263,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		lease: time.Minute, renewEvery: time.Hour, giveUpAfter: time.Hour, cleanupTimeout: 5 * time.Second,
 		builderWait: 200 * time.Millisecond, retryFirst: 10 * time.Millisecond, retryMax: 50 * time.Millisecond,
 		buildCall:  10 * time.Second,
-		sweepEvery: time.Hour, failedGrace: 10 * time.Minute,
+		sweepEvery: time.Hour, purgeGrace: 20 * time.Minute,
 	}
 	return env
 }
