@@ -104,6 +104,10 @@ func (f *fakeSandboxControl) DeleteSandbox(ctx context.Context, req *pb.DeleteSa
 	if f.deleteHook != nil {
 		f.deleteHook(ctx)
 	}
+	// Like a stop, a delete that ran out of time did not happen.
+	if err := ctx.Err(); err != nil {
+		return nil, status.FromContextError(err).Err()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.deleteErr != nil {

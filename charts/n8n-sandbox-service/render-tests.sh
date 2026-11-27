@@ -5,6 +5,10 @@
 #   charts/n8n-sandbox-service/render-tests.sh
 #
 # The tests only render templates with helm; they need no cluster.
+#
+# Never let a reader stop early on a pipe (grep -q, awk with exit): under
+# pipefail the writer can die of SIGPIPE and fail the run at random. Use
+# grep PATTERN >/dev/null, which reads to the end, or grep -q <<<"$var".
 set -euo pipefail
 
 CHART_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -22,7 +26,7 @@ must_fail() {
 		echo "expected the render to fail: $*" >&2
 		exit 1
 	fi
-	if ! printf '%s' "$out" | grep -q "$message"; then
+	if ! printf '%s' "$out" | grep "$message" >/dev/null; then
 		echo "expected failure message [$message] for: $*" >&2
 		printf '%s\n' "$out" >&2
 		exit 1
@@ -55,7 +59,7 @@ done
 # Empty falls back to the runner default and 0 means unlimited, as before 0.15.0.
 render --set-string "runner.config.capacityTotal=" >/dev/null
 render --set "runner.config.capacityTotal=0" --show-only templates/configmap.yaml |
-	grep -q 'SANDBOX_RUNNER_CAPACITY_TOTAL: "0"'
+	grep 'SANDBOX_RUNNER_CAPACITY_TOTAL: "0"' >/dev/null
 # An external data plane renders no runner, so the value is not checked.
 render --set dataPlane.mode=external --set "runner.config.capacityTotal=abc" >/dev/null
 
@@ -88,8 +92,8 @@ echo "==> quota pool image lands on the bounded volume"
 manifests=$(render "${privileged[@]}" \
 	--set runner.config.defaultDiskQuotaMb=2048 \
 	--set runner.config.diskQuotaPoolSizeGb=60)
-echo "$manifests" | grep -q 'mountPath: "/var/lib/docker-pool"'
-echo "$manifests" | grep -q 'SANDBOX_RUNNER_DISK_QUOTA_POOL_PATH: "/var/lib/docker-pool/docker.img"'
+echo "$manifests" | grep 'mountPath: "/var/lib/docker-pool"' >/dev/null
+echo "$manifests" | grep 'SANDBOX_RUNNER_DISK_QUOTA_POOL_PATH: "/var/lib/docker-pool/docker.img"' >/dev/null
 
 # Privileged isolation: the quota pool can live on a PVC.
 manifests=$(render "${privileged[@]}" \
@@ -97,8 +101,8 @@ manifests=$(render "${privileged[@]}" \
 	--set runner.config.diskQuotaPoolSizeGb=60 \
 	--set runner.dockerDataRoot.persistence.enabled=true \
 	--set runner.dockerDataRoot.persistence.size=64Gi)
-echo "$manifests" | grep -q 'mountPath: "/var/lib/docker-pool"'
-echo "$manifests" | grep -q 'SANDBOX_RUNNER_DISK_QUOTA_POOL_PATH: "/var/lib/docker-pool/docker.img"'
+echo "$manifests" | grep 'mountPath: "/var/lib/docker-pool"' >/dev/null
+echo "$manifests" | grep 'SANDBOX_RUNNER_DISK_QUOTA_POOL_PATH: "/var/lib/docker-pool/docker.img"' >/dev/null
 
 # A pool larger than the volume must fail the render.
 must_fail "must not exceed the docker data root size" "${privileged[@]}" \
@@ -118,17 +122,17 @@ must_fail "positive whole number" "${privileged[@]}" \
 # Sysbox isolation gets the bounded emptyDir data root when persistence is off,
 # the same as privileged isolation. This is the default configuration.
 manifests=$(render)
-echo "$manifests" | grep -q 'mountPath: "/var/lib/docker"'
-echo "$manifests" | grep -q 'sizeLimit: 64Gi'
+echo "$manifests" | grep 'mountPath: "/var/lib/docker"' >/dev/null
+echo "$manifests" | grep 'sizeLimit: 64Gi' >/dev/null
 
 # Persistence replaces the emptyDir with a volume claim, and the claim is the
 # only data-root volume.
 manifests=$(render "${privileged[@]}" \
 	--show-only templates/runner-statefulset.yaml \
 	--set runner.dockerDataRoot.persistence.enabled=true)
-echo "$manifests" | grep -q 'mountPath: "/var/lib/docker"'
-echo "$manifests" | grep -q "volumeClaimTemplates"
-if echo "$manifests" | grep -q 'emptyDir:'; then
+echo "$manifests" | grep 'mountPath: "/var/lib/docker"' >/dev/null
+echo "$manifests" | grep "volumeClaimTemplates" >/dev/null
+if echo "$manifests" | grep 'emptyDir:' >/dev/null; then
 	echo "expected no emptyDir when persistence is enabled" >&2
 	exit 1
 fi
@@ -181,16 +185,16 @@ manifests=$(render "${privileged[@]}" \
 	--set runner.config.defaultDiskQuotaMb=2048 \
 	--set runner.config.diskQuotaPoolSizeGb=100 \
 	--set runner.config.diskQuotaPoolPath=/mnt/pool/docker.img)
-echo "$manifests" | grep -q 'SANDBOX_RUNNER_DISK_QUOTA_POOL_PATH: "/mnt/pool/docker.img"'
+echo "$manifests" | grep 'SANDBOX_RUNNER_DISK_QUOTA_POOL_PATH: "/mnt/pool/docker.img"' >/dev/null
 
 # Default sysbox isolation now holds the pool image on its bounded emptyDir,
 # so quotas render without persistence.
 manifests=$(render \
 	--set runner.config.defaultDiskQuotaMb=2048 \
 	--set runner.config.diskQuotaPoolSizeGb=60)
-echo "$manifests" | grep -q 'mountPath: "/var/lib/docker-pool"'
-echo "$manifests" | grep -q 'SANDBOX_RUNNER_DISK_QUOTA_POOL_PATH: "/var/lib/docker-pool/docker.img"'
-echo "$manifests" | grep -q 'sizeLimit: 64Gi'
+echo "$manifests" | grep 'mountPath: "/var/lib/docker-pool"' >/dev/null
+echo "$manifests" | grep 'SANDBOX_RUNNER_DISK_QUOTA_POOL_PATH: "/var/lib/docker-pool/docker.img"' >/dev/null
+echo "$manifests" | grep 'sizeLimit: 64Gi' >/dev/null
 # The pool size is still mandatory, and still checked against that volume.
 must_fail "positive whole number" \
 	--set runner.config.defaultDiskQuotaMb=2048
@@ -203,8 +207,8 @@ manifests=$(render \
 	--set runner.config.defaultDiskQuotaMb=2048 \
 	--set runner.config.diskQuotaPoolSizeGb=60 \
 	--set runner.config.diskQuotaPoolPath=/mnt/pool/docker.img)
-echo "$manifests" | grep -q 'SANDBOX_RUNNER_DISK_QUOTA_POOL_PATH: "/mnt/pool/docker.img"'
-echo "$manifests" | grep -q 'SANDBOX_RUNNER_DISK_QUOTA_POOL_SIZE_GB: "60"'
+echo "$manifests" | grep 'SANDBOX_RUNNER_DISK_QUOTA_POOL_PATH: "/mnt/pool/docker.img"' >/dev/null
+echo "$manifests" | grep 'SANDBOX_RUNNER_DISK_QUOTA_POOL_SIZE_GB: "60"' >/dev/null
 
 echo "==> volume cache"
 # Defaults leave the runner's cache settings alone and add no volume.
@@ -300,7 +304,7 @@ statefulset_name() {
 	helm template "$release_name" "$CHART_DIR" \
 		--set auth.existingSecret=n8n-sandbox-auth "$@" \
 		--show-only templates/runner-statefulset.yaml |
-		awk '/^  name:/{print $2; exit}'
+		awk '/^  name:/ && !name {name = $2} END {print name}'
 }
 release_name=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 other_release_name=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab
@@ -336,7 +340,7 @@ api_only=(--set dataPlane.mode=external --set monitoring.serviceMonitor.enabled=
 config=$(render "${api_only[@]}" --show-only templates/configmap.yaml)
 grep -q 'SANDBOX_API_METRICS_ENABLED: "true"' <<<"$config"
 grep -q 'SANDBOX_API_METRICS_LISTEN_ADDR: ""' <<<"$config"
-render "${api_only[@]}" --show-only templates/servicemonitor.yaml | grep -q 'port: http'
+render "${api_only[@]}" --show-only templates/servicemonitor.yaml | grep 'port: http' >/dev/null
 # Render first, then test the captured output: set -e is suspended inside an if
 # condition, so a broken template would look like a correctly absent port.
 default_service=$(render "${api_only[@]}" --show-only templates/api-service.yaml)
@@ -351,12 +355,12 @@ separate=("${api_only[@]}" --set-string api.config.metricsListenAddr=:9100)
 # Without the env var the API keeps /metrics on its HTTP port, and every port
 # assertion below would still pass against a dead scrape target.
 render "${separate[@]}" --show-only templates/configmap.yaml |
-	grep -q 'SANDBOX_API_METRICS_LISTEN_ADDR: ":9100"'
-render "${separate[@]}" --show-only templates/api-deployment.yaml | grep -q 'containerPort: 9100'
-render "${separate[@]}" --show-only templates/api-service.yaml | grep -q 'port: 9100'
-render "${separate[@]}" --show-only templates/servicemonitor.yaml | grep -q 'port: metrics'
+	grep 'SANDBOX_API_METRICS_LISTEN_ADDR: ":9100"' >/dev/null
+render "${separate[@]}" --show-only templates/api-deployment.yaml | grep 'containerPort: 9100' >/dev/null
+render "${separate[@]}" --show-only templates/api-service.yaml | grep 'port: 9100' >/dev/null
+render "${separate[@]}" --show-only templates/servicemonitor.yaml | grep 'port: metrics' >/dev/null
 render "${separate[@]}" --set networkPolicy.enabled=true \
-	--show-only templates/networkpolicy.yaml | grep -q 'port: metrics'
+	--show-only templates/networkpolicy.yaml | grep 'port: metrics' >/dev/null
 
 echo "==> a metrics addr on the API port keeps the shared listener"
 # Wildcard spellings and a padded port included: the chart must not split a
@@ -368,7 +372,7 @@ for addr in :8080 0.0.0.0:8080 "[::]:8080" :08080; do
 		echo "metricsListenAddr=$addr must not add a Service port" >&2
 		exit 1
 	fi
-	render "${shared[@]}" --show-only templates/servicemonitor.yaml | grep -q 'port: http'
+	render "${shared[@]}" --show-only templates/servicemonitor.yaml | grep 'port: http' >/dev/null
 done
 
 echo "==> conflicting metrics addresses fail the render"
@@ -387,7 +391,7 @@ must_fail "leave it empty to serve /metrics on the API listener" \
 must_fail "must be host:port with a numeric port" \
 	--set-string api.config.metricsListenAddr=::1:9100
 render "${api_only[@]}" --set-string 'api.config.metricsListenAddr=[::]:9100' \
-	--show-only templates/api-service.yaml | grep -q 'port: 9100'
+	--show-only templates/api-service.yaml | grep 'port: 9100' >/dev/null
 # Helm cannot resolve a service name, so it must not guess at one.
 must_fail "must use a numeric port when api.config.metricsListenAddr is set" \
 	--set-string api.config.listenAddr=:http \
@@ -403,7 +407,7 @@ must_fail "repeats an API Service port" \
 # A custom Service port that does not collide still renders.
 render "${api_only[@]}" --set api.service.httpPort=8090 \
 	--set-string api.config.metricsListenAddr=:9100 \
-	--show-only templates/api-service.yaml | grep -q 'port: 9100'
+	--show-only templates/api-service.yaml | grep 'port: 9100' >/dev/null
 # A loopback bind is unreachable from a ServiceMonitor scraping the pod IP.
 must_fail "binds loopback" \
 	--set monitoring.serviceMonitor.enabled=true \
@@ -412,17 +416,17 @@ must_fail "binds loopback" \
 render --set monitoring.serviceMonitor.enabled=true \
 	--set monitoring.serviceMonitor.api.enabled=false \
 	--set-string api.config.metricsListenAddr=127.0.0.1:9100 \
-	--show-only templates/api-service.yaml | grep -q 'port: 9100'
+	--show-only templates/api-service.yaml | grep 'port: 9100' >/dev/null
 # A loopback address on the shared port is listenAddr's business, not the
 # metrics port's: the scrape follows the http port, so this must still render
 # rather than send the operator to advice that trips the host-mismatch guard.
 render --set monitoring.serviceMonitor.enabled=true \
 	--set-string api.config.listenAddr=127.0.0.1:8080 \
 	--set-string api.config.metricsListenAddr=127.0.0.1:8080 \
-	--show-only templates/configmap.yaml | grep -q 'SANDBOX_API_METRICS_LISTEN_ADDR: "127.0.0.1:8080"'
+	--show-only templates/configmap.yaml | grep 'SANDBOX_API_METRICS_LISTEN_ADDR: "127.0.0.1:8080"' >/dev/null
 # An unset address must not read as one that was set ("<nil>").
 render "${api_only[@]}" --set api.config.metricsListenAddr=null \
-	--show-only templates/configmap.yaml | grep -q 'SANDBOX_API_METRICS_LISTEN_ADDR: ""'
+	--show-only templates/configmap.yaml | grep 'SANDBOX_API_METRICS_LISTEN_ADDR: ""' >/dev/null
 
 echo "==> the runner scrape verifies TLS by default"
 # The default must pin serverName to a name the runner certificate actually
@@ -435,7 +439,7 @@ cert_manager=(
 )
 monitor=$(render --set monitoring.serviceMonitor.enabled=true "${cert_manager[@]}" \
 	--show-only templates/servicemonitor.yaml)
-echo "$monitor" | grep -q 'key: "ca.crt"'
+echo "$monitor" | grep 'key: "ca.crt"' >/dev/null
 server_name=$(echo "$monitor" | sed -n 's/.*serverName: "\(.*\)"/\1/p')
 test -n "$server_name"
 # Strip the list markers and match the whole value as a fixed string: the dots
@@ -443,12 +447,12 @@ test -n "$server_name"
 # SAN that differs from serverName wherever a dot sits.
 render "${cert_manager[@]}" --show-only templates/cert-manager.yaml |
 	sed -n 's/^[[:space:]]*- //p' |
-	grep -Fxq "$server_name"
+	grep -Fx "$server_name" >/dev/null
 
 echo "==> the runner scrape TLS config stays overridable"
 render --set monitoring.serviceMonitor.enabled=true \
 	--set monitoring.serviceMonitor.runner.tlsConfig.insecureSkipVerify=true \
-	--show-only templates/servicemonitor.yaml | grep -q 'insecureSkipVerify: true'
+	--show-only templates/servicemonitor.yaml | grep 'insecureSkipVerify: true' >/dev/null
 # A plaintext scrape must not carry a tlsConfig. Render first and test the
 # captured output: set -e is suspended inside an if condition, and a failed
 # render leaves grep with nothing to match, so a broken template would look
@@ -485,7 +489,7 @@ for blank in "" "  "; do
 	fi
 done
 render "${generated[@]}" --set auth.generated.provisionerKeys=prov-secret \
-	--show-only templates/secrets.yaml | grep -q 'provisioner-api-keys: "prov-secret"'
+	--show-only templates/secrets.yaml | grep 'provisioner-api-keys: "prov-secret"' >/dev/null
 must_fail "auth.generated.provisionerKeys must not be a placeholder" \
 	"${generated[@]}" --set auth.generated.provisionerKeys=changeme
 
@@ -501,7 +505,7 @@ for blank in "" "  "; do
 	fi
 done
 render "${generated[@]}" --set auth.generated.scalerKeys=scaler-secret \
-	--show-only templates/secrets.yaml | grep -q 'scaler-api-keys: "scaler-secret"'
+	--show-only templates/secrets.yaml | grep 'scaler-api-keys: "scaler-secret"' >/dev/null
 must_fail "auth.generated.scalerKeys must not be a placeholder" \
 	"${generated[@]}" --set auth.generated.scalerKeys=changeme
 
@@ -562,14 +566,14 @@ if grep -q 'replicas:' <<<"$scaled_api"; then
 fi
 hpa=$(render "${autoscaling[@]}" --show-only templates/api-hpa.yaml)
 api_name=$(awk '/^  name:/{print $2; exit}' <<<"$scaled_api")
-grep -A3 'scaleTargetRef:' <<<"$hpa" | grep -q "name: $api_name\$"
+grep -A3 'scaleTargetRef:' <<<"$hpa" | grep "name: $api_name\$" >/dev/null
 grep -q 'averageUtilization: 80' <<<"$hpa"
 if grep -q 'name: memory' <<<"$hpa"; then
 	echo "the memory metric must be opt-in" >&2
 	exit 1
 fi
 render "${autoscaling[@]}" --set api.autoscaling.targetMemoryAverageValue=700Mi \
-	--show-only templates/api-hpa.yaml | grep -q 'averageValue: "700Mi"'
+	--show-only templates/api-hpa.yaml | grep 'averageValue: "700Mi"' >/dev/null
 # A memory-only HPA needs no CPU request. Null and empty both drop the CPU metric.
 for cpu_off in null ""; do
 	memory_only=$(render "${postgres_api[@]}" --set api.autoscaling.enabled=true \
@@ -584,7 +588,7 @@ for cpu_off in null ""; do
 done
 # The API server accepts utilization above 100: use can exceed the request.
 render "${autoscaling[@]}" --set api.autoscaling.targetCPUUtilizationPercentage=150 \
-	--show-only templates/api-hpa.yaml | grep -q 'averageUtilization: 150'
+	--show-only templates/api-hpa.yaml | grep 'averageUtilization: 150' >/dev/null
 
 echo "==> API autoscaling values the API server would reject fail the render"
 must_fail "minReplicas must be a whole number of at least 1" \
@@ -655,7 +659,7 @@ grep -q 'serviceAccountName: "n8n-sandbox-service-api"' <<<"$created_api"
 grep -q '^      automountServiceAccountToken: false$' <<<"$created_api"
 # A name set alongside create names the created ServiceAccount.
 render "${created[@]}" --set api.serviceAccount.name=sandbox-api \
-	--show-only templates/api-serviceaccount.yaml | grep -q '^  name: "sandbox-api"$'
+	--show-only templates/api-serviceaccount.yaml | grep '^  name: "sandbox-api"$' >/dev/null
 
 echo "==> an existing API ServiceAccount is used, not created, and mounts no token"
 existing=$(render --set api.serviceAccount.name=sandbox-api-existing)
@@ -701,7 +705,7 @@ echo "==> api.terminationGracePeriodSeconds renders when set, including 0"
 for seconds in 300 0; do
 	render --set "api.terminationGracePeriodSeconds=$seconds" \
 		--show-only templates/api-deployment.yaml |
-		grep -q "^      terminationGracePeriodSeconds: $seconds\$"
+		grep "^      terminationGracePeriodSeconds: $seconds\$" >/dev/null
 done
 no_grace_period=$(render --set api.terminationGracePeriodSeconds=null \
 	--show-only templates/api-deployment.yaml)
@@ -720,15 +724,15 @@ echo "==> whole numbers from values files render as integers, not in exponent fo
 # --set-json reads numbers as float64, as values files do.
 render --set-json 'api.terminationGracePeriodSeconds=1000000' \
 	--show-only templates/api-deployment.yaml |
-	grep -q '^      terminationGracePeriodSeconds: 1000000$'
+	grep '^      terminationGracePeriodSeconds: 1000000$' >/dev/null
 must_fail "api.terminationGracePeriodSeconds must be a whole number of seconds" \
 	--set-json 'api.terminationGracePeriodSeconds=2.5'
 render --set-json 'runner.config.capacityTotal=1000000' --show-only templates/configmap.yaml |
-	grep -q 'SANDBOX_RUNNER_CAPACITY_TOTAL: "1000000"'
+	grep 'SANDBOX_RUNNER_CAPACITY_TOTAL: "1000000"' >/dev/null
 must_fail "runner.config.capacityTotal must be a whole number" \
 	--set-json 'runner.config.capacityTotal=2.5'
 render --set-json 'api.podLabels.build=20240101' \
-	--show-only templates/api-deployment.yaml | grep -q '^        build: "20240101"$'
+	--show-only templates/api-deployment.yaml | grep '^        build: "20240101"$' >/dev/null
 
 echo "==> the local volume store is off by default"
 # The golden covers this too; these checks survive a careless regeneration.
