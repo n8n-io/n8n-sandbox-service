@@ -360,3 +360,37 @@ func TestTryRunReleasesAfterFnReturns(t *testing.T) {
 	}
 	t.Fatal("lock not released after first TryRun completed")
 }
+
+func TestPostgresVolumesJSONB(t *testing.T) {
+	pgStore := openTestPostgresStore(t)
+	now := time.Now().Unix()
+
+	emptyID := uuid.New().String()
+	t.Cleanup(func() { _ = pgStore.Delete(emptyID) })
+	if err := pgStore.Create(&SandboxRecord{ID: emptyID, Status: "running", CreatedAt: now, LastActiveAt: now, Kind: KindGeneral}); err != nil {
+		t.Fatalf("create without volumes: %v", err)
+	}
+	if got, err := pgStore.GetGeneralSandbox(emptyID); err != nil || got.Volumes != "" {
+		t.Fatalf("sandbox without volumes = %+v, %v; want empty Volumes", got, err)
+	}
+
+	withVolID := uuid.New().String()
+	t.Cleanup(func() { _ = pgStore.Delete(withVolID) })
+	if err := pgStore.Create(&SandboxRecord{
+		ID: withVolID, Status: "running", CreatedAt: now, LastActiveAt: now, Kind: KindGeneral,
+		Volumes: `[{"name":"tools","mount_path":"/mnt/tools","attached":true}]`,
+	}); err != nil {
+		t.Fatalf("create with volumes: %v", err)
+	}
+	got, err := pgStore.GetGeneralSandbox(withVolID)
+	if err != nil || !strings.Contains(got.Volumes, `"tools"`) {
+		t.Fatalf("sandbox with volumes = %+v, %v; want tools volume", got, err)
+	}
+
+	if err := pgStore.Create(&SandboxRecord{
+		ID: uuid.New().String(), Status: "running", CreatedAt: now, LastActiveAt: now, Kind: KindGeneral,
+		Volumes: "not json",
+	}); err == nil {
+		t.Fatal("Create() accepted invalid JSON in JSONB column")
+	}
+}

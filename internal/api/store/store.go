@@ -150,6 +150,9 @@ type SandboxRecord struct {
 	IdleTimeoutMs         int64  // Code sandboxes: 0 = not set
 	MaxAgeMs              int64  // Code sandboxes: 0 = not set
 	DrainingSince         int64  // Unix seconds the sandbox started draining; 0 = not draining
+	// Volumes is the JSON of the volumes the create asked for and whether the
+	// sandbox has each, "" for none.
+	Volumes string
 }
 
 // Tenant is a provisioned consumer of the sandbox API (e.g. an n8n instance).
@@ -276,9 +279,13 @@ func scanRecord(row scanner) (*SandboxRecord, error) {
 		&r.IdleTimeoutMs,
 		&r.MaxAgeMs,
 		&r.DrainingSince,
+		&r.Volumes,
 	)
 	if err != nil {
 		return nil, err
+	}
+	if r.Volumes == "[]" {
+		r.Volumes = ""
 	}
 	return &r, nil
 }

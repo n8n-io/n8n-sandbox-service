@@ -12,7 +12,9 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/config"
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
+	"github.com/n8n-io/sandbox-service/internal/api/volumes"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
+	"github.com/n8n-io/sandbox-service/internal/volume"
 )
 
 const (
@@ -328,7 +330,7 @@ func TestSandboxHandlersRejectUnknownRoleWithoutMiddleware(t *testing.T) {
 
 	for name, h := range map[string]http.Handler{
 		"list":   handleListSandboxes(s),
-		"create": handleCreateSandbox(s, s, registry.New(45*time.Second), cfg, metrics.NewAPIRecorder(false), newTenantQuota(countTenantSandboxes(s))),
+		"create": handleCreateSandbox(s, s, registry.New(45*time.Second), cfg, metrics.NewAPIRecorder(false), newTenantQuota(countTenantSandboxes(s)), volumes.NewAttacher(nil, nil, volume.KindTar)),
 	} {
 		method := http.MethodGet
 		if name == "create" {

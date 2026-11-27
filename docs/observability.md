@@ -218,6 +218,13 @@ Related series:
   fails logs `shared volume sweep: purge failed` and is tried again on the next
   sweep; a sweep that runs out of its 5 minutes logs
   `shared volume sweep: out of time`.
+- `sandbox_create_volumes_total{result}` — the volumes of each create the API
+  saved: `attached`, or why one was left out, as `reason` in
+  [API.md](API.md#post-sandboxes). `create sandbox: volume left out` logs each
+  one left out. A runner that refuses volumes or echoes other ones fails the
+  create: `create sandbox failed: runner control create` or
+  `create sandbox failed: runner did not apply the requested volumes`. Check
+  that `SANDBOX_API_VOLUME_BUILD` matches the runners.
 - `sandbox_container_operation_duration_seconds{operation}` — the totals the
   steps add up to, a recovery's under `operation="recover"` like its steps.
 - `sandbox_http_request_duration_seconds{role,route,method}` — end-to-end per

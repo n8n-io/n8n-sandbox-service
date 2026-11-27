@@ -69,9 +69,20 @@ Output arrives in pieces of at most 64 KiB; there is no limit on total output.
 | File download | no limit | | |
 | File listing, copy, move | no limit | | |
 | `GET /sandboxes` | no paging | | |
-| Body of a create | 1 KiB | fixed | `400` |
+| Body of a create | 16 KiB | fixed | `400` |
 | Body of a tenant create or update | 4 KiB | fixed | `400` |
 | Body of an exec, copy or move | 1 MiB | fixed | `400` |
+
+## Sandbox volumes
+
+All fixed. [API.md](API.md#post-sandboxes) has the `volumes` field.
+
+| Limit | Value | When reached |
+| --- | --- | --- |
+| Volumes per sandbox, those left out included | 8 | `400` |
+| Mount path | absolute and clean, below `/mnt/`, at most 255 bytes; none the same as or below another of the sandbox | `400` |
+| Size of a sandbox's volumes on its runner: images by their size, tars by their size plus the room for their unpacked files | 10 GiB | a required volume: `422` `volume_too_large`; an optional one that doesn't fit after the required ones and the optional ones before it is left out (`too_large`) |
+| Download link a runner gets for a volume | valid 10 min | |
 
 ## Shared volumes
 
