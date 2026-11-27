@@ -137,6 +137,9 @@ func main() {
 		slog.Error("failed to create shared volume service", "error", err)
 		os.Exit(1)
 	}
+	if sharedVolumeService != nil {
+		go sharedVolumeService.RunSweeps(publishCtx)
+	}
 
 	handler, err := api.NewGatewayRouter(sandboxStore, cfg, runnerReg, mrec, activity, api.WithSharedVolumes(sharedVolumeService))
 	if err != nil {

@@ -212,6 +212,12 @@ Related series:
   `transport`, `error` (the volume store), or `unsupported` (a runner that
   can't build: `SANDBOX_API_VOLUME_BUILD` doesn't match the runners).
   `shared volume image built` logs the runner that built each image.
+- `sandbox_shared_volume_sweep_removals_total{state}` and
+  `sandbox_shared_volume_sweep_errors_total` — shared volumes the API's sweep
+  removed (`failed` or `deleted`), and errors during sweeps. A removal that
+  fails logs `shared volume sweep: purge failed` and is tried again on the next
+  sweep; a sweep that runs out of its 5 minutes logs
+  `shared volume sweep: out of time`.
 - `sandbox_container_operation_duration_seconds{operation}` — the totals the
   steps add up to, a recovery's under `operation="recover"` like its steps.
 - `sandbox_http_request_duration_seconds{role,route,method}` — end-to-end per

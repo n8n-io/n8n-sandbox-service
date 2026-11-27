@@ -335,6 +335,82 @@ func testSharedVolumes(t *testing.T, s SharedVolumes) {
 		}
 	})
 
+	t.Run("the sweep fails lapsed leases and lists what may be purged", func(t *testing.T) {
+		lapsed := publishingRow(randomSHA256(), "")
+		startPublish(t, s, lapsed, lapsedLease)
+		live := publishingRow(randomSHA256(), "")
+		startPublish(t, s, live, testLease)
+		ready := publishReady(t, s, randomSHA256(), "")
+		deleted := publishReady(t, s, randomSHA256(), "")
+		if _, err := s.MarkSharedVolumeDeleted(ctx, deleted.SHA256); err != nil {
+			t.Fatal(err)
+		}
+		failed := publishingRow(randomSHA256(), "")
+		startPublish(t, s, failed, testLease)
+		if ok, err := s.FailSharedVolumePublish(ctx, failed.ID); err != nil || !ok {
+			t.Fatalf("fail = %v, %v", ok, err)
+		}
+
+		count, err := s.FailLapsedSharedVolumePublishes(ctx)
+		if err != nil || count < 1 {
+			t.Fatalf("FailLapsedSharedVolumePublishes() = %d, %v; want the lapsed row at least", count, err)
+		}
+		if got, err := s.GetLiveSharedVolume(ctx, live.SHA256); err != nil || got == nil || got.State != SharedVolumePublishing {
+			t.Fatalf("the row with a live lease = %+v, %v; want it publishing", got, err)
+		}
+
+		purgeable := func(failedFor time.Duration) map[string]bool {
+			t.Helper()
+			rows, err := s.ListPurgeableSharedVolumes(ctx, failedFor, SharedVolumePosition{}, 1_000_000)
+			if err != nil {
+				t.Fatal(err)
+			}
+			listed := map[string]bool{}
+			for index, row := range rows {
+				listed[row.ID] = true
+				if index > 0 && row.UpdatedAt < rows[index-1].UpdatedAt {
+					t.Fatalf("row %d changed later than the one after it", index-1)
+				}
+			}
+			return listed
+		}
+		if early := purgeable(time.Hour); !early[deleted.ID] || early[failed.ID] || early[lapsed.ID] || early[live.ID] || early[ready.ID] {
+			t.Fatalf("purgeable an hour after failing = %v; want the deleted row only", early)
+		}
+		if now := purgeable(0); !now[deleted.ID] || !now[failed.ID] || !now[lapsed.ID] || now[live.ID] || now[ready.ID] {
+			t.Fatalf("purgeable at once = %v; want the deleted and the failed rows", now)
+		}
+		// Pages of one row, each after the last, list every row once.
+		all, err := s.ListPurgeableSharedVolumes(ctx, 0, SharedVolumePosition{}, 1_000_000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var paged []string
+		var after SharedVolumePosition
+		for {
+			page, err := s.ListPurgeableSharedVolumes(ctx, 0, after, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(page) == 0 {
+				break
+			}
+			if len(page) != 1 {
+				t.Fatalf("a page with a limit of 1 has %d rows", len(page))
+			}
+			paged = append(paged, page[0].ID)
+			after = SharedVolumePosition{UpdatedAt: page[0].UpdatedAt, ID: page[0].ID}
+		}
+		if len(paged) != len(all) {
+			t.Fatalf("paging listed %d rows, want %d as in one full list", len(paged), len(all))
+		}
+		for index, row := range all {
+			if paged[index] != row.ID {
+				t.Fatalf("paging listed %s at %d, want %s as in one full list", paged[index], index, row.ID)
+			}
+		}
+	})
+
 	t.Run("list is newest first", func(t *testing.T) {
 		older := publishReady(t, s, randomSHA256(), "")
 		// ready_at counts whole seconds of the database clock.

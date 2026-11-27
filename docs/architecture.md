@@ -90,6 +90,7 @@ The API gateway is the single public-facing service. It exposes a REST API for s
 | Store | `internal/api/store/` | Sandbox metadata (`sqlite` default, `postgres` for multi-pod) |
 | Sweeper lock | `internal/api/store/postgres.go` | Postgres advisory lock for idle sweeper leadership |
 | Idle sweeper | `internal/api/ttl.go` | Periodic scan to stop/delete idle sandboxes (ephemeral ones are deleted, never stopped), bounded concurrency with per-call runner deadlines |
+| Shared volume sweep | `internal/api/volumes/sweep.go` | Removes what failed shared volume publishes and deletes left, every 5 min in every API pod |
 | Activity recorder | `internal/api/activity.go` | Writes `last_active_at` in the background ([Sandbox activity](#sandbox-activity)) |
 | Key cache | `internal/api/apikey_cache.go` | Per-replica cache of tenant key lookups ([Tenant key cache](#tenant-key-cache)) |
 | Shared volumes | `internal/api/volumes/` | Publishes shared volumes into the volume store and has a runner build their images |
