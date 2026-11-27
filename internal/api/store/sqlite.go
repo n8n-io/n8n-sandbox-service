@@ -78,6 +78,7 @@ func NewSQLite(dbPath string, useWal bool) (*SQLiteStore, error) {
 		{sql: sqliteAddIdleTimeoutMsCol, name: "idle_timeout_ms"},
 		{sql: sqliteAddMaxAgeMsCol, name: "max_age_ms"},
 		{sql: sqliteAddDrainingSinceCol, name: "draining_since"},
+		{sql: sqliteAddVolumesCol, name: "volumes"},
 	} {
 		if _, err := db.Exec(stmt.sql); err != nil {
 			if strings.Contains(err.Error(), "duplicate column") ||

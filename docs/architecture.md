@@ -175,6 +175,7 @@ Each hop uses `httputil.ReverseProxy` with URL rewriting. The runner can wake a 
 ### Creating a Sandbox
 
 1. Client sends `POST /sandboxes` with API key
+   - With `volumes`, the API finds each one among the ready shared volumes and gets a read URL for its object from the volume store: an `ext4` image with `SANDBOX_API_VOLUME_BUILD=firecracker`, otherwise a `tar` with its entry and byte counts. The runner echoes what it attached. An echo that differs from the volumes sent, or leaves a required volume unattached, deletes the sandbox again
 2. API picks the eligible runner with the lowest reported `capacity_used`
 3. API calls `SandboxControl.CreateSandbox` on the selected runner (gRPC). A Firecracker runner with no free slot or under 5% free space on its data volume, or a runner of either kind with no room in its volume cache for a required volume, refuses before creating anything, with `ResourceExhausted` and an `ErrorInfo` detail (`sandbox-runner`/`CAPACITY_EXHAUSTED`) that tells the refusal from gRPC's own uses of that code. Only that refusal makes the API repeat steps 2–3 without the runner, up to three runners; it answers `503` when every runner tried refused or none is eligible. Any other runner error ends the create with `500`
 4. Runner creates the sandbox: a container from the sandbox image with resource limits and labels, or a microVM restored from the golden snapshot
@@ -227,7 +228,7 @@ Trust boundaries, the mechanism enforcing each, and the non-guarantees are in [s
 
 ### API store
 
-SQLite at `SANDBOX_API_DATA_DIR/api.db` (default) or Postgres. Tables: `sandboxes` (ID, tenant, status, timestamps, runner routing), `tenants`, `api_keys` (hashed), `shared_volumes`, and on Postgres `runners` (heartbeats; SQLite keeps the runner registry in memory). Migrations run automatically on startup. The SQLite file uses WAL with `synchronous=NORMAL` unless `SANDBOX_API_SQLITE_WAL=false`.
+SQLite at `SANDBOX_API_DATA_DIR/api.db` (default) or Postgres. Tables: `sandboxes` (ID, tenant, status, timestamps, runner routing, the volumes asked for at create), `tenants`, `api_keys` (hashed), `shared_volumes`, and on Postgres `runners` (heartbeats; SQLite keeps the runner registry in memory). Migrations run automatically on startup. The SQLite file uses WAL with `synchronous=NORMAL` unless `SANDBOX_API_SQLITE_WAL=false`.
 
 ### Runner stateless
 

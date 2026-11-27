@@ -183,6 +183,15 @@ func NewAttacher(records store.SharedVolumes, objects volumestore.Store, kind vo
 	return &Attacher{records: records, objects: objects, kind: kind}
 }
 
+// Attacher returns an Attacher for this service's volumes, of the kind its
+// runners attach.
+func (s *Service) Attacher() *Attacher {
+	if s.builds != nil {
+		return NewAttacher(s.records, s.objects, volume.KindExt4)
+	}
+	return NewAttacher(s.records, s.objects, volume.KindTar)
+}
+
 // PendingAttachment tracks the volume state of one sandbox create in progress:
 // planned by Prepare (marking pre-create left-outs), then updated with the
 // runner's echo by Apply.

@@ -19,7 +19,9 @@ import (
 	"github.com/n8n-io/sandbox-service/internal/api/config"
 	"github.com/n8n-io/sandbox-service/internal/api/registry"
 	"github.com/n8n-io/sandbox-service/internal/api/store"
+	"github.com/n8n-io/sandbox-service/internal/api/volumes"
 	"github.com/n8n-io/sandbox-service/internal/metrics"
+	"github.com/n8n-io/sandbox-service/internal/volume"
 )
 
 func mintTenantKey(t *testing.T, router http.Handler, body string) createTenantResponse {
@@ -439,7 +441,7 @@ func TestCreateSandboxCountsUnclearSaveAsSaved(t *testing.T) {
 			hold, _, _ := q.reserve(tenantID, 2)
 			defer hold(false)
 
-			h := handleCreateSandbox(createErrStore{SandboxStore: s, save: tc.save, err: tc.err}, s, reg, idleSweepConfig(), metrics.NewAPIRecorder(false), q)
+			h := handleCreateSandbox(createErrStore{SandboxStore: s, save: tc.save, err: tc.err}, s, reg, idleSweepConfig(), metrics.NewAPIRecorder(false), q, volumes.NewAttacher(nil, nil, volume.KindTar))
 			req := httptest.NewRequest(http.MethodPost, "/sandboxes", nil)
 			req = req.WithContext(withAuthIdentity(req.Context(), authIdentity{Role: roleTenant, TenantID: tenantID}))
 			rr := httptest.NewRecorder()

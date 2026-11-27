@@ -217,6 +217,7 @@ type APIRecorder struct {
 	httpLimited  *prometheus.CounterVec
 	sandboxOps   *prometheus.CounterVec
 	placements   *prometheus.CounterVec
+	volumes      *prometheus.CounterVec
 }
 
 // NewAPIRecorder builds the API recorder. If enabled is false, the returned
@@ -245,7 +246,16 @@ func NewAPIRecorder(enabled bool) *APIRecorder {
 		},
 		[]string{"result"},
 	)
-	reg.MustRegister(sandboxOps, placements)
+	volumes := prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   Namespace,
+			Name:        "create_volumes_total",
+			Help:        "Volumes of the sandbox creates the API saved, by result: attached, or why the volume was left out.",
+			ConstLabels: prometheus.Labels{"role": RoleAPI},
+		},
+		[]string{"result"},
+	)
+	reg.MustRegister(sandboxOps, placements, volumes)
 	return &APIRecorder{
 		reg:          reg,
 		httpRequests: httpReq,
@@ -254,6 +264,7 @@ func NewAPIRecorder(enabled bool) *APIRecorder {
 		httpLimited:  buildLimitMetrics(reg, RoleAPI),
 		sandboxOps:   sandboxOps,
 		placements:   placements,
+		volumes:      volumes,
 	}
 }
 
@@ -313,6 +324,27 @@ func (r *APIRecorder) PlacementCount(result string) float64 {
 		return 0
 	}
 	return testutil.ToFloat64(r.placements.WithLabelValues(result))
+}
+
+// VolumeAttached is the result of a volume a saved create attached; any other
+// result is why the volume was left out.
+const VolumeAttached = "attached"
+
+// ObserveCreateVolume records one volume of a saved create.
+func (r *APIRecorder) ObserveCreateVolume(result string) {
+	if r.reg == nil {
+		return
+	}
+	r.volumes.WithLabelValues(result).Inc()
+}
+
+// CreateVolumeCount returns the counter value for volumes with the result.
+// Intended for tests in other packages.
+func (r *APIRecorder) CreateVolumeCount(result string) float64 {
+	if r.reg == nil {
+		return 0
+	}
+	return testutil.ToFloat64(r.volumes.WithLabelValues(result))
 }
 
 // ObserveRequestLimited records a request turned away by the given limit
