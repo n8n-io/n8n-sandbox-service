@@ -188,8 +188,8 @@ func TestFileContentEndpoint(t *testing.T) {
 		t.Fatalf("missing file: expected 404, got %d: %s", code, body)
 	}
 
-	if code, body := get(dir); code != http.StatusInternalServerError || !strings.Contains(string(body), "file_read read "+dir) {
-		t.Fatalf("directory: expected 500, got %d: %s", code, body)
+	if code, body := get(dir); code != http.StatusBadRequest || !strings.Contains(string(body), "file_read read "+dir) {
+		t.Fatalf("directory: expected 400, got %d: %s", code, body)
 	}
 
 	// A recorder keeps what a real server drops on HEAD, so it shows whether the file was read.
@@ -201,8 +201,58 @@ func TestFileContentEndpoint(t *testing.T) {
 	if rr := head(file); rr.Code != http.StatusOK || rr.Body.Len() != 0 {
 		t.Fatalf("HEAD: expected 200 and no bytes read, got %d and %d bytes", rr.Code, rr.Body.Len())
 	}
-	if rr := head(dir); rr.Code != http.StatusInternalServerError {
-		t.Fatalf("HEAD of a directory: expected 500 as for GET, got %d", rr.Code)
+	if rr := head(dir); rr.Code != http.StatusBadRequest {
+		t.Fatalf("HEAD of a directory: expected 400 as for GET, got %d", rr.Code)
+	}
+}
+
+func TestFileEndpointsRejectDirectoryMismatch(t *testing.T) {
+	handler := NewHandler(DefaultExecConfig())
+	base := tempBaseDir(t)
+	directory := filepath.Join(base, "subdir")
+	if err := os.Mkdir(directory, 0o755); err != nil {
+		t.Fatalf("mkdir fixture: %v", err)
+	}
+	regularFile := filepath.Join(base, "file.txt")
+	if err := os.WriteFile(regularFile, []byte("hello"), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	nestedUnderFile := filepath.Join(regularFile, "child")
+	archiveBody := buildTar(t, tarFile("entry.txt", "data"))
+	copyFileToDirectory, err := json.Marshal(copyRequest{Src: regularFile, Dest: directory, Overwrite: true})
+	if err != nil {
+		t.Fatalf("marshal copy request: %v", err)
+	}
+	moveDirectoryToFile, err := json.Marshal(moveRequest{Src: directory, Dest: regularFile, Overwrite: true})
+	if err != nil {
+		t.Fatalf("marshal move request: %v", err)
+	}
+
+	cases := []struct {
+		name   string
+		method string
+		target string
+		body   []byte
+	}{
+		{"PUT file over directory", http.MethodPut, "/files?path=" + directory, []byte("data")},
+		{"POST append to directory", http.MethodPost, "/files?path=" + directory, []byte("data")},
+		{"GET list regular file", http.MethodGet, "/files?path=" + regularFile, nil},
+		{"GET content under regular file", http.MethodGet, "/files/content?path=" + nestedUnderFile, nil},
+		{"PUT file under regular file", http.MethodPut, "/files?path=" + nestedUnderFile, []byte("data")},
+		{"POST archive into regular file", http.MethodPost, "/files/archive?path=" + regularFile, archiveBody},
+		{"POST copy file over directory", http.MethodPost, "/files/copy", copyFileToDirectory},
+		{"POST move directory over file", http.MethodPost, "/files/move", moveDirectoryToFile},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			request := httptest.NewRequest(testCase.method, testCase.target, bytes.NewReader(testCase.body))
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d: %s", recorder.Code, recorder.Body.String())
+			}
+		})
 	}
 }
 

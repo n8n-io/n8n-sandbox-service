@@ -482,7 +482,8 @@ func fileOpStatusCode(err error) int {
 		return opErr.status
 	case errors.Is(err, fs.ErrNotExist):
 		return http.StatusNotFound
-	case errors.Is(err, syscall.EINVAL), errors.Is(err, syscall.ENOTEMPTY):
+	case errors.Is(err, syscall.EINVAL), errors.Is(err, syscall.ENOTEMPTY),
+		errors.Is(err, syscall.EISDIR), errors.Is(err, syscall.ENOTDIR):
 		return http.StatusBadRequest
 	default:
 		return http.StatusInternalServerError
